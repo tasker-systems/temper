@@ -10,7 +10,8 @@ generation step away from being a public heading. This script reads the
 there (utoipa doc comments, hand-authored spec, anything else). It checks what
 actually ships.
 
-Discipline, inherited verbatim from `scripts/register-coverage.py`:
+Discipline, inherited verbatim from `register-coverage.py` (now in
+tasker-systems/temper-artifacts):
 
     It detects; it does not decide.
     Coverage is never inferred from absence.

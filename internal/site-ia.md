@@ -542,8 +542,8 @@ Grounding for Surfaces 2 and 3, added with the scope widening:
   retire `docs/cognitive-maps/` in favour of `temperkb.io`.
 - **The derivation layer:** `scripts/docs-coverage.py`, `scripts/emit-cli-reference.py`,
   `scripts/emit-config-reference.py`, and the drift gates in `.github/scripts/check-*-drift.sh`.
-- **Discipline model:** `scripts/register-coverage.py` — detects-does-not-decide; never infers
-  coverage from absence.
+- **Discipline model:** `register-coverage.py` in `tasker-systems/temper-artifacts` —
+  detects-does-not-decide; never infers coverage from absence.
 
 ---
 

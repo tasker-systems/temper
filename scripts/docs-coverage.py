@@ -10,7 +10,8 @@ questions nothing else in the repo can:
 Discipline this script obeys, and why it matters here
 -----------------------------------------------------
 
-Inherited deliberately from `scripts/register-coverage.py`, which is the model.
+Inherited deliberately from `register-coverage.py` (now in
+tasker-systems/temper-artifacts), which is the model.
 
 **It detects; it does not decide.** An orphan page is not an error. A page may be
 legitimately unreachable from a door — reference material reached from the site's
