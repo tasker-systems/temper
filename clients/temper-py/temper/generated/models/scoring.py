@@ -18,7 +18,7 @@ import re  # noqa: F401
 import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt
-from typing import Any, ClassVar, Dict, List, Union
+from typing import Any, ClassVar, Dict, List, Optional, Union
 from temper.generated.models.score_kind import ScoreKind
 from typing import Optional, Set
 from typing_extensions import Self
@@ -28,7 +28,7 @@ class Scoring(BaseModel):
     """
     How one hit scored, and by what measure.  The kind travels WITH the number, which is what lets a row be understood on its own. Two hits whose `score_kind` differs hold values that must never be added, averaged, or sorted into one list — and unlike a bare field name, that is something a client can actually check.
     """ # noqa: E501
-    score: Union[StrictFloat, StrictInt] = Field(description="Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not carried per row because it is a property of the act, identical for every row of a stage.")
+    score: Optional[Union[StrictFloat, StrictInt]] = Field(default=None, description="Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not carried per row because it is a property of the act, identical for every row of a stage.  ABSENT rather than null, by the same absent-versus-null rule that keeps [`ResourceHit::via`] keyless while [`ResourceHit::located_at`] is PRESENT-null: a null and a missing key would both say \"this row carried no quantity\", so a null would add a third spelling of one fact. Absence is the row's own statement — its membership stands, its ordering value does not — and [`ScoreKind`] still names what a quantity WOULD be.")
     score_kind: ScoreKind
     __properties: ClassVar[List[str]] = ["score", "score_kind"]
 
@@ -74,6 +74,11 @@ class Scoring(BaseModel):
         # override the default output from pydantic by calling `to_dict()` of score_kind
         if self.score_kind:
             _dict['score_kind'] = self.score_kind.to_dict()
+        # set to None if score (nullable) is None
+        # and model_fields_set contains the field
+        if self.score is None and "score" in self.model_fields_set:
+            _dict['score'] = None
+
         return _dict
 
     @classmethod
