@@ -175,7 +175,10 @@ pub fn run(
     goals: Option<usize>,
     format: OutputFormat,
 ) -> Result<()> {
-    let global_cfg = temper_core::types::config::load_config().unwrap_or_default();
+    // An Err means the config file exists but could not be read or parsed (an
+    // absent file already defaults); surfacing it beats silently warming up
+    // with built-in limits the user configured away.
+    let global_cfg = crate::config::load_global_config_defaulting_when_absent()?;
     let limits = resolve_limits(&global_cfg.cli, sessions, goals);
     let result = build_warmup_result(config, context, limits)?;
     let rendered = render(&result, format)?;
@@ -949,6 +952,26 @@ mod tests {
             in_progress_tasks(vec![task]).is_empty(),
             "no stage is not `in-progress`"
         );
+    }
+
+    /// The filter decides on `stage` alone: a task that is in progress despite
+    /// missing `mode`/`effort` reaches the primer with those absences intact.
+    #[test]
+    fn modeless_and_effortless_tasks_survive_the_filter_carrying_their_absence() {
+        let mut row = view_with_stage("Bare Task", "in-progress");
+        row.managed_meta.mode = None;
+        row.managed_meta.effort = None;
+
+        let task = crate::actions::task::task_info_from_row(row, "@me/ctx");
+        let warm = in_progress_tasks(vec![task]);
+
+        assert_eq!(
+            warm.len(),
+            1,
+            "mode/effort are not filter criteria: {warm:?}"
+        );
+        assert_eq!(warm[0].mode, None);
+        assert_eq!(warm[0].effort, None);
     }
 
     fn cli_section(sessions: Option<usize>, goals: Option<usize>) -> CliSection {

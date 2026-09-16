@@ -9,6 +9,7 @@
 	let total = $state(0);
 	let focused = $state(0);
 	let loading = $state(false);
+	let failed = $state(false);
 	let debounceTimer: ReturnType<typeof setTimeout>;
 
 	export function toggle() {
@@ -18,6 +19,7 @@
 			results = [];
 			total = 0;
 			focused = 0;
+			failed = false;
 		}
 	}
 
@@ -25,15 +27,24 @@
 		if (!q.trim()) {
 			results = [];
 			total = 0;
+			failed = false;
 			return;
 		}
 		loading = true;
 		try {
 			const resp = await fetch(`/_internal/search?q=${encodeURIComponent(q)}`);
-			const data = await resp.json();
-			results = data.rows ?? [];
-			total = data.total ?? 0;
+			if (!resp.ok) {
+				failed = true;
+				results = [];
+				total = 0;
+			} else {
+				const data = await resp.json();
+				failed = false;
+				results = data.rows;
+				total = data.total;
+			}
 		} catch {
+			failed = true;
 			results = [];
 			total = 0;
 		}
@@ -90,7 +101,11 @@
 			autofocus
 		/>
 
-		{#if results.length > 0}
+		{#if failed && !loading}
+			<!-- Same register as FilterBar's "contexts unavailable": a read that failed is not
+			     a claim about what the vault contains, so it never renders as "No results". -->
+			<div class="px-4 py-6 text-sm text-zinc-500 text-center">Search unavailable</div>
+		{:else if results.length > 0}
 			<div class="max-h-80 overflow-y-auto">
 				{#each results as row, i}
 					<button

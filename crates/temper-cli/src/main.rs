@@ -50,7 +50,19 @@ fn main() {
 
     // Resolve global output settings once, before dispatch. Color is applied
     // before `run` so all output — including the error path below — obeys it.
-    let global_cfg = temper_core::types::config::load_config().unwrap_or_default();
+    //
+    // An Err here means the config file exists but could not be read or parsed
+    // (an absent file already defaults), so failing is the only honest outcome:
+    // substituting defaults would silently replace the user's configured
+    // format/color/limits.
+    let global_cfg = match temper_cli::config::load_global_config_defaulting_when_absent() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            temper_cli::output::error(format!("temper: {e}"));
+            temper_telemetry::shutdown_telemetry();
+            std::process::exit(1);
+        }
+    };
     temper_cli::color::apply_color_choice(cli.color.as_deref(), global_cfg.cli.color.as_deref());
     let output_format =
         OutputFormat::resolve_with(cli.format.as_deref(), global_cfg.cli.format.as_deref());

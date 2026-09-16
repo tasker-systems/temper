@@ -131,6 +131,18 @@ function refusalMessage(refusal: Extract<MintOutcome, { status: "refused" }>): s
       return "No temper credential is stored for this Slack identity; it must be re-linked.";
     case "standing":
       return `This Slack identity's temper principal is not admitted (${refusal.refusal.kind}); an admin must approve it.`;
+
+    default: {
+      // A FOURTH refusal reason. The `never` binding makes adding a variant to the Rust
+      // response a COMPILE error; this runtime arm is the backstop for a server that
+      // ships one before this agent redeploys — the same treatment `getTemperToken`'s
+      // status switch gives an unrecognized STATUS. Without it the switch falls out and
+      // the thrown error carries `undefined` where its message should be.
+      const unexpected: never = refusal;
+      return `The temper mint route returned an unrecognized refusal reason: ${String(
+        (unexpected as { reason?: unknown }).reason,
+      )}`;
+    }
   }
 }
 

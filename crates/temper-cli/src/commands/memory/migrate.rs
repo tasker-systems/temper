@@ -226,7 +226,7 @@ pub fn migrate(
 
     let index_path = super::resolve_index_path(mem, None);
     let scanned = scan_memory_dir(&index_path);
-    let titles = harvest_titles(&std::fs::read_to_string(&index_path).unwrap_or_default());
+    let titles = super::read_index_titles(&index_path)?;
 
     // Read phase — one runtime, everything the plan needs, before any write.
     let runtime = tokio::runtime::Runtime::new()

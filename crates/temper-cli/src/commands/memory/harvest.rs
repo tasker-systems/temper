@@ -35,9 +35,7 @@ use serde::Serialize;
 use temper_core::types::config::TemperConfig;
 
 use super::fetch::fetch_context_rows;
-use super::migrate::{
-    harvest_titles, resolve_run_mode, scan_memory_dir, FileDefect, RunMode, ScannedFile,
-};
+use super::migrate::{resolve_run_mode, scan_memory_dir, FileDefect, RunMode, ScannedFile};
 use crate::actions::runtime::build_config_store_and_client;
 use crate::error::{Result, TemperError};
 
@@ -292,7 +290,7 @@ pub fn harvest(global: &TemperConfig, dry_run: bool, unattended: bool) -> Result
         .ok_or_else(|| TemperError::Config(format!("{} has no parent", index_path.display())))?
         .to_path_buf();
     let scanned = scan_memory_dir(&index_path);
-    let titles = harvest_titles(&std::fs::read_to_string(&index_path).unwrap_or_default());
+    let titles = super::read_index_titles(&index_path)?;
 
     // A file already in Temper has its title in the store, which is authoritative — stamping a
     // second copy into the local file would create two that nothing keeps in step.
