@@ -257,28 +257,28 @@ jobs:
     # Blocking by ruling (E): a tap that silently lags its release is the
     # drifting-second-source the spec forbids. Recovery is this workflow's own
     # `workflow_dispatch` tag re-run — the publish lanes skip loudly on re-cut
-    # and the tap render is an idempotent no-op the second time. Needs
-    # HOMEBREW_TAP_TOKEN: a fine-grained PAT with contents:write on
-    # tasker-systems/homebrew-tap only. Feeder logic lives IN the tap
-    # (script/apply_release.py); this job downloads the release's own bytes
-    # and hands them over.
+    # and the tap render is an idempotent no-op the second time. The push
+    # credential is a WRITE DEPLOY KEY on tasker-systems/homebrew-tap
+    # (HOMEBREW_TAP_DEPLOY_KEY): repo-scoped by construction, no expiry, no
+    # user binding. Feeder logic lives IN the tap (script/apply_release.py);
+    # this job downloads the release's own bytes and hands them over.
     permissions:
       contents: read
     steps:
-      - name: Require the tap token
+      - name: Require the tap deploy key
         env:
-          TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
-          if [ -z "$TOKEN" ]; then
-            echo "::error::HOMEBREW_TAP_TOKEN is not set. Create a fine-grained PAT with contents:write on tasker-systems/homebrew-tap only, and add it as this repository's HOMEBREW_TAP_TOKEN secret. The tap push cannot proceed without it."
+          if [ -z "$KEY" ]; then
+            echo "::error::HOMEBREW_TAP_DEPLOY_KEY is not set. Generate an ed25519 keypair, add the PUBLIC half to tasker-systems/homebrew-tap → Settings → Deploy keys with Allow write access, and store the PRIVATE half (full file, including the BEGIN/END lines) as this repository's HOMEBREW_TAP_DEPLOY_KEY secret. The tap push cannot proceed without it."
             exit 1
           fi
 
-      - name: Checkout the tap (token-scoped, for the push)
+      - name: Checkout the tap (deploy-key-scoped, for the push)
         uses: actions/checkout@v7
         with:
           repository: tasker-systems/homebrew-tap
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           path: tap
 
       - name: Download the release's own artifacts
