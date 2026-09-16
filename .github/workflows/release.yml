@@ -249,6 +249,59 @@ jobs:
           VERSION: ${{ needs.determine-version.outputs.version }}
         run: bash tools/scripts/release/publish-py.sh "$VERSION"
 
+  update-homebrew-tap:
+    name: Update the homebrew tap
+    runs-on: macos-14
+    timeout-minutes: 15
+    needs: [determine-version, release-summary]
+    # Blocking by ruling (E): a tap that silently lags its release is the
+    # drifting-second-source the spec forbids. Recovery is this workflow's own
+    # `workflow_dispatch` tag re-run — the publish lanes skip loudly on re-cut
+    # and the tap render is an idempotent no-op the second time. The push
+    # credential is a WRITE DEPLOY KEY on tasker-systems/homebrew-tap
+    # (HOMEBREW_TAP_DEPLOY_KEY): repo-scoped by construction, no expiry, no
+    # user binding. Feeder logic lives IN the tap (script/apply_release.py);
+    # this job downloads the release's own bytes and hands them over.
+    permissions:
+      contents: read
+    steps:
+      - name: Require the tap deploy key
+        env:
+          KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::HOMEBREW_TAP_DEPLOY_KEY is not set. Generate an ed25519 keypair, add the PUBLIC half to tasker-systems/homebrew-tap → Settings → Deploy keys with Allow write access, and store the PRIVATE half (full file, including the BEGIN/END lines) as this repository's HOMEBREW_TAP_DEPLOY_KEY secret. The tap push cannot proceed without it."
+            exit 1
+          fi
+
+      - name: Checkout the tap (deploy-key-scoped, for the push)
+        uses: actions/checkout@v7
+        with:
+          repository: tasker-systems/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          path: tap
+
+      - name: Download the release's own artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.determine-version.outputs.version }}
+        run: |
+          mkdir -p dist
+          gh release download "v${VERSION}" --repo "${GITHUB_REPOSITORY}" --dir dist             --pattern 'temper-v'"${VERSION}"'-aarch64-apple-darwin.tar.gz'             --pattern 'temper-v'"${VERSION}"'-x86_64-unknown-linux-gnu.tar.gz'             --pattern 'temper-v'"${VERSION}"'-aarch64-apple-darwin.manifest.json'             --pattern 'temper-v'"${VERSION}"'-x86_64-unknown-linux-gnu.manifest.json'
+          ls -la dist/
+
+      - name: Apply the release to the tap (render, alias, commit)
+        id: apply
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+        run: |
+          python3 tap/script/apply_release.py --version "${VERSION}" --tap tap             --mac-archive "dist/temper-v${VERSION}-aarch64-apple-darwin.tar.gz"             --linux-archive "dist/temper-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz"             --mac-manifest "dist/temper-v${VERSION}-aarch64-apple-darwin.manifest.json"             --linux-manifest "dist/temper-v${VERSION}-x86_64-unknown-linux-gnu.manifest.json" | tee apply.log
+          echo "changed=$(sed -n 's/^changed=//p' apply.log | tail -n1)" >> "$GITHUB_OUTPUT"
+
+      - name: Push (idempotent no-ops push nothing)
+        if: steps.apply.outputs.changed == 'true'
+        run: git -C tap push origin HEAD:main
+
   release-summary:
     name: Release Summary
     runs-on: ubuntu-22.04

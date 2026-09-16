@@ -92,6 +92,11 @@ first release claims it — no local bootstrap upload.
    0.5 pin's README is the form). Until that lands, the previous pin stays current
    and the window's shape movement correctly reads red on
    `check-openapi-pin.sh` — the pin gate is what turns green with the discharge.
+   The release chain also feeds the [homebrew tap](https://github.com/tasker-systems/homebrew-tap)
+   automatically (the `update-homebrew-tap` job renders `temper@<M>` from the
+   release's own digests; a new minor adds the formula and moves the alias).
+   The tap README's inventory-table row for the new minor is the one manual
+   edit — include it in the release PR.
 
 4. **Verify the GitHub Release.** The Actions run should be green and the
    Release should list the three CLI binaries and the skill bundle; the npm,
