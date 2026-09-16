@@ -29,6 +29,43 @@ curl -fsSL https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/
 irm https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.ps1 | iex
 ```
 
+## Homebrew (macOS Apple Silicon, Linux x64)
+
+A versioned formula ships in the [`tasker-systems` tap](https://github.com/tasker-systems/homebrew-tap)
+— **one formula per minor**, mirroring the wire-contract pins, so a deploy base can hold a
+fleet on a minor the same way a client pins a contract:
+
+```sh
+brew install tasker-systems/tap/temper@0.5   # pinned to the 0.5 wire contract
+brew install tasker-systems/tap/temper       # alias — always the current minor
+```
+
+For fleet pinning, the Brewfile line:
+
+```ruby
+brew "tasker-systems/tap/temper@0.5"
+```
+
+Upgrade discipline:
+
+- **Patches** (`0.5.1 → 0.5.2`) update the formula in place; `brew upgrade` carries them.
+  Within a minor the wire contract is additive-only, so an upgrade never strands you.
+- **A new minor** ships a NEW formula (`temper@0.6`); moving to it is a deliberate
+  Brewfile edit, at your cadence.
+
+`temper update` **refuses** on a brew install — the install carries a `BREW-MANAGED`
+marker, and `brew upgrade` is the only updater there. `temper update --check` still
+reports what's newer.
+
+A brew install and a curl-script install can coexist on one machine (brew puts the binary
+at `/opt/homebrew/bin/temper`, the script at `~/.local/bin/temper`); PATH order decides
+which one runs, and the curl installer warns when a brew-managed temper is already on
+your PATH. `temper version --verify` works identically on both.
+
+```powershell
+irm https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.ps1 | iex
+```
+
 > If PowerShell warns about the execution policy, run:
 > ```powershell
 > powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.ps1 | iex"
@@ -95,7 +132,9 @@ temper update
 ```
 
 `temper update` verifies the release before installing and works for curl-script installs on
-macOS/Linux. For the verification it performs, see
+macOS/Linux. A **brew install is not self-updating** — `temper update` refuses there, and
+`brew upgrade tasker-systems/tap/temper@<minor>` is the updater (see the Homebrew section
+above). For the verification `temper update` performs, see
 [Release Verification](../concepts/release-verification.md); for the full flag reference, see
 [`temper update`](../reference/cli/update.md).
 
