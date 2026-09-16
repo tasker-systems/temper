@@ -14,6 +14,18 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.5.0 — unreleased
 
+- **Process-document relocation — 12 tracked docs moved to temper-artifacts, prose trims, citation repoints**
+  Twelve tracked process documents untrack from `internal/` and
+  `design-system/docs/` (they now live in the private temper-artifacts repo);
+  three prose spans trim; four citations repoint at their temper-artifacts
+  homes (one under `packages/agent-workflows/`). Copy and process only — no
+  contract shape moves, no runtime behavior change, no generated artifact
+  re-stales.
+pr: self
+classes: additive
+surfaces: internal
+status: signal-only
+
 - **Public-surface copy redaction — roadmap-voiced passages rewritten to present-tense**
   Eleven passages across five `docs/` pages and five temper-ui `(public)` pages
   are rewritten to state shipped behavior in present-tense. Copy only — no

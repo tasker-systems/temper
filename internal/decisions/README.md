@@ -54,7 +54,7 @@ is not yet a decision, however confidently it is held.
 | [Stored region aggregates are region-truth](./2026-08-26-stored-region-aggregates-are-region-truth.md) | Why region readouts are materialize-time, and what bounds the disclosure |
 | [The visibility verdict is computed once and carried](./2026-08-26-the-visibility-verdict-is-hoisted-once.md) | Why the verdict is hoisted, and what actually holds the invariant |
 | [Cogmap genesis owns its bootstrap trust](./2026-08-26-cogmap-genesis-owns-its-bootstrap-trust.md) | Why the genesis exception is one named type with one call site |
-| [The MCP surface's gate is its bearer token](./2026-08-26-the-mcp-surface-gate-is-its-bearer-token.md) | Why host validation is not the right control for this deployment shape |
+| The MCP surface's gate is its bearer token — `temper-artifacts:specs/2026-08-26-the-mcp-surface-gate-is-its-bearer-token.md` | Why host validation is not the right control for this deployment shape |
 | [The Slack mint gate — enablement checklist](./2026-08-26-slack-mint-enablement-checklist.md) | The preconditions an operator must satisfy before enabling the Slack surface |
 
 ### Rows from the sweep that are not recorded here
