@@ -113,6 +113,22 @@ classes: behavioral
 surfaces: http, internal
 status: signal-only
 
+- **`temper update` refuses on brew-managed installs (the `--check` carve-out reports); install.sh warns when the PATH temper is brew-managed**
+  The homebrew tap's authority boundary (D-H2): a `BREW-MANAGED` marker beside the binary —
+  or, belt-and-braces, an exe under a brew install prefix — makes the mutating path of
+  `temper update` refuse, naming the formula's own `brew upgrade` line from the marker;
+  `--check` keeps reporting with a note that upgrading is brew's job. The installer's face
+  is warn-only (an operator who invoked it deliberately has stated intent). Who observes:
+  an operator running `temper update` on a brew-managed install — previously an attempted
+  swap against a brew-owned tree, now a refusal naming the managed updater. Declared limit:
+  the tap has no installed population until its first formula ships, so this guards a
+  fleet, not a live defect. Behavioral — no committed shape moves; the CLI's own stdout
+  gains a refusal and a note.
+pr: self
+classes: behavioral
+surfaces: cli-stdout, internal
+status: signal-only
+
 ## Since v0.4.0 — unreleased
 
 - **This release — the 0.5.0 fleet alignment: VERSION 0.4.0 → 0.5.0 across crates, packages, and clients**

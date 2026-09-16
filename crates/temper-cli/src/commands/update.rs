@@ -54,6 +54,17 @@
 //! binary is detected (no `lib/libonnxruntime.*` beside it) and `update`
 //! refuses with an actionable hint rather than attempting a swap it can't do.
 //!
+//! # Authority: refuse brew-managed installs
+//!
+//! A Homebrew install (the `tasker-systems/tap` formulae) is not this binary's
+//! to update: the formula plants a `BREW-MANAGED` marker beside the tree, and
+//! `brew upgrade` is the only updater there. On the mutating path `update`
+//! refuses, naming the formula's own upgrade line when the marker carries one;
+//! `--check` still reports (it mutates nothing), with a note that upgrading is
+//! brew's job. Same refusal class as the `cargo install` guard: an install
+//! whose provenance this command does not own is not swapped.
+//! (`temper-artifacts:specs/2026-09-16-homebrew-tap-design.md`, D-H2.)
+//!
 //! # Scope
 //!
 //! Unix-first (macOS arm64, Linux x86_64), matching the self-update surface. A
@@ -86,6 +97,67 @@ const INSTALL_SH: &str = include_str!("../../../../scripts/install/install.sh");
 /// resolve "latest".
 const LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/tasker-systems/temper/releases/latest";
+
+/// The marker file a `tasker-systems/tap` formula plants beside the binary
+/// (`template/temper@MINOR.rb.template` in the homebrew-tap repo). Its
+/// presence is the authority signal: this install belongs to brew.
+const BREW_MARKER_FILE: &str = "BREW-MANAGED";
+
+/// Marker lines beginning with this carry the formula's own upgrade command —
+/// preferred over the generic remedy because it names the pinned minor.
+const BREW_UPGRADE_LINE_PREFIX: &str = "Update with: ";
+
+/// Fallback remedy when the marker carries no upgrade line (or the signal came
+/// from the prefix probe, which reads no marker at all). `@`-versioned
+/// formulae are the only ones this tap ships, so the pinned form is the
+/// expected read; the alias form is the always-valid generic.
+const BREW_DEFAULT_REMEDY: &str = "brew upgrade tasker-systems/tap/temper";
+
+/// Belt-and-braces install prefixes checked when no marker is present (a
+/// brew-managed tree that lost its marker, or a hand-copied one). The marker
+/// is the authority because it also covers custom `HOMEBREW_PREFIX` installs;
+/// `/usr/local` is deliberately absent — it is a legitimate custom
+/// `TEMPER_INSTALL_DIR` and must not read as brew on its own.
+const BREW_INSTALL_PREFIXES: [&str; 2] = ["/opt/homebrew", "/home/linuxbrew/.linuxbrew"];
+
+/// Why this install must not be self-updated — `None` when it may be.
+///
+/// The marker is the authority; the prefix probe is the belt. The returned
+/// text is the full refusal: it states the boundary and names the one action
+/// that does update the install, preferring the formula's own upgrade line.
+fn brew_managed_reason(dir: &Path, exe: &Path) -> Option<String> {
+    fn refusal(remedy: &str) -> String {
+        format!(
+            "`temper update` refused: this install is managed by Homebrew, and this \
+             binary is not authoritative for its own update. Update it with:\n  {remedy}"
+        )
+    }
+    if let Ok(marker) = std::fs::read_to_string(dir.join(BREW_MARKER_FILE)) {
+        let remedy = marker
+            .lines()
+            .find_map(|l| l.strip_prefix(BREW_UPGRADE_LINE_PREFIX))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(BREW_DEFAULT_REMEDY);
+        return Some(refusal(remedy));
+    }
+    let exe_str = exe.to_string_lossy();
+    if BREW_INSTALL_PREFIXES.iter().any(|p| exe_str.starts_with(p)) {
+        return Some(refusal(BREW_DEFAULT_REMEDY));
+    }
+    None
+}
+
+/// The note `--check` appends on a brew-managed install — `None` when
+/// unmanaged. The check still reports (it mutates nothing); the note says why
+/// updating is not this command's to do.
+fn brew_check_note(dir: &Path, exe: &Path) -> Option<String> {
+    brew_managed_reason(dir, exe).map(|_| {
+        "this install is managed by Homebrew — `brew upgrade` is the updater here; \
+         a plain `temper update` would refuse."
+            .to_string()
+    })
+}
 
 /// Shown when the running binary is a `cargo install` build we can't swap.
 const CARGO_REFUSAL: &str = "`temper update` manages curl-script installs only. This binary looks \
@@ -188,6 +260,12 @@ pub fn run(check: bool, version: Option<String>, force: bool, fmt: OutputFormat)
         #[cfg(windows)]
         InstallLayout::WindowsScript => return Err(CliError::Install(WINDOWS_REFUSAL.to_string())),
     };
+    // The resolved binary, shared by the brew checks — the same canonicalize
+    // `detect_install_layout` performs, which is what makes a bin symlink
+    // resolve to the install tree where the marker lives.
+    let current_exe = std::env::current_exe()
+        .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
+        .map_err(|e| TemperError::Config(format!("cannot resolve current executable: {e}")))?;
 
     // 2. Resolve the target tag. An explicit --version pin is a pass-through
     //    (the user asked for that exact release); otherwise resolve the latest
@@ -206,7 +284,9 @@ pub fn run(check: bool, version: Option<String>, force: bool, fmt: OutputFormat)
     // newer running build back to an older "latest".
     let up_to_date = pinned.is_none() && !is_strictly_newer(target_version, VERSION);
 
-    // 3. --check: report and exit, mutating nothing.
+    // 3. --check: report and exit, mutating nothing. A brew-managed install
+    //    still gets its report — it may know newer versions exist — with the
+    //    note that upgrading is brew's job (D-H2 rider).
     if check {
         let report = UpdateCheckReport {
             current: VERSION,
@@ -215,10 +295,21 @@ pub fn run(check: bool, version: Option<String>, force: bool, fmt: OutputFormat)
             install_dir: install_dir.display().to_string(),
         };
         crate::output::plain(crate::format::render(&report, fmt)?);
+        if let Some(note) = brew_check_note(&install_dir, &current_exe) {
+            crate::output::warning(note);
+        }
         return Ok(());
     }
 
-    // 4. No-op when there's nothing newer and no --force.
+    // 4. Authority boundary (D-H2): a brew-managed install is never
+    //    self-updated — including pinned downgrades and --force; the boundary
+    //    is not version-conditional. Placed after the check exit so only the
+    //    mutating path refuses.
+    if let Some(reason) = brew_managed_reason(&install_dir, &current_exe) {
+        return Err(CliError::Install(reason));
+    }
+
+    // 5. No-op when there's nothing newer and no --force.
     if up_to_date && !force {
         crate::output::success(format!(
             "already up to date (running v{VERSION}; latest release v{target_version})"
@@ -226,7 +317,7 @@ pub fn run(check: bool, version: Option<String>, force: bool, fmt: OutputFormat)
         return Ok(());
     }
 
-    // 5. Download the archive + manifest for the target tag into a scratch
+    // 6. Download the archive + manifest for the target tag into a scratch
     //    directory, verify the release attestation against the DOWNLOADED
     //    archive's own digest (mandatory — there is no bypass flag), then
     //    check every manifest file against that same archive's extracted
@@ -235,7 +326,7 @@ pub fn run(check: bool, version: Option<String>, force: bool, fmt: OutputFormat)
     //    not a second, later download of "the same" tag.
     let (_scratch_dir, archive_path, manifest_path) = download_and_verify_release(&target_tag)?;
 
-    // 6. Hand off to the embedded installer for extract → atomic swap →
+    // 7. Hand off to the embedded installer for extract → atomic swap →
     //    re-point symlink, passing the already-verified archive and manifest
     //    so the script performs no download of its own on this path. The
     //    installer refuses to finalize unless the new binary actually runs,
@@ -243,7 +334,7 @@ pub fn run(check: bool, version: Option<String>, force: bool, fmt: OutputFormat)
     //    exact recovery state to stderr).
     run_installer(&install_dir, &target_tag, &archive_path, &manifest_path)?;
 
-    // 7. Confirm the new version landed by running the installed binary. The
+    // 8. Confirm the new version landed by running the installed binary. The
     //    installer already gated on runnability, so this is a belt-and-braces
     //    confirmation — but a mismatch or an unrunnable read-back is surfaced
     //    loudly rather than swallowed.
@@ -879,6 +970,109 @@ mod tests {
     fn cargo_refusal_is_actionable() {
         assert!(CARGO_REFUSAL.contains("cargo install"));
         assert!(CARGO_REFUSAL.contains("--features embed,extract"));
+    }
+
+    /// The authority boundary bites and carries the formula's own upgrade
+    /// line: a `BREW-MANAGED` marker whose "Update with:" line names the
+    /// pinned formula must surface that exact command as the remedy.
+    /// Witness for the refusal — it fails while the guard is absent because
+    /// `brew_managed_reason` does not exist to return `Some`.
+    #[test]
+    fn brew_refusal_names_the_formulas_upgrade_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(BREW_MARKER_FILE),
+            "This temper install is managed by Homebrew.\n\
+             Update with: brew upgrade tasker-systems/tap/temper@0.5\n",
+        )
+        .unwrap();
+        let reason = brew_managed_reason(tmp.path(), Path::new("/Users/x/.local/bin/temper"))
+            .expect("a marked install must be brew-managed");
+        assert!(
+            reason.contains("brew upgrade tasker-systems/tap/temper@0.5"),
+            "the refusal must carry the formula's own upgrade line: {reason}"
+        );
+        assert!(
+            reason.contains("not authoritative for its own update"),
+            "the refusal must state the boundary, not just the remedy: {reason}"
+        );
+    }
+
+    /// A marker without an upgrade line still refuses, falling back to the
+    /// generic tap remedy — the boundary never depends on the marker being
+    /// well-formed.
+    #[test]
+    fn brew_refusal_falls_back_to_the_tap_remedy() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join(BREW_MARKER_FILE), "managed by brew\n").unwrap();
+        let reason = brew_managed_reason(tmp.path(), Path::new("/Users/x/.local/bin/temper"))
+            .expect("any marker must be brew-managed");
+        assert!(
+            reason.contains(BREW_DEFAULT_REMEDY),
+            "fallback remedy expected: {reason}"
+        );
+    }
+
+    /// The prefix probe is the belt: an exe under a brew install prefix reads
+    /// as managed even with no marker, but `/usr/local` (a legitimate custom
+    /// `TEMPER_INSTALL_DIR`) and `~/.local/bin` never do on their own.
+    #[test]
+    fn brew_prefix_probe_is_the_belt_not_the_authority() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(
+            brew_managed_reason(tmp.path(), Path::new("/opt/homebrew/libexec/temper")).is_some(),
+            "exe under /opt/homebrew must read as managed"
+        );
+        assert!(
+            brew_managed_reason(
+                tmp.path(),
+                Path::new("/home/linuxbrew/.linuxbrew/libexec/temper")
+            )
+            .is_some(),
+            "exe under the linuxbrew prefix must read as managed"
+        );
+        assert!(
+            brew_managed_reason(tmp.path(), Path::new("/usr/local/bin/temper")).is_none(),
+            "/usr/local alone must never read as brew-managed"
+        );
+        assert!(
+            brew_managed_reason(tmp.path(), Path::new("/Users/x/.local/bin/temper")).is_none(),
+            "a script-layout install must never read as brew-managed"
+        );
+    }
+
+    /// The unchanged-path witness: a genuine script install — ORT lib beside
+    /// the binary, no marker, exe under `~/.local/bin` — is not brew-managed,
+    /// so `update` proceeds exactly as before the guard existed.
+    #[test]
+    fn unmarked_script_layout_is_not_brew_managed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("libonnxruntime.dylib"), b"").unwrap();
+        assert!(
+            brew_managed_reason(tmp.path(), Path::new("/Users/x/.local/bin/temper")).is_none(),
+            "an unmarked script install must remain self-updatable"
+        );
+    }
+
+    /// The `--check` carve-out: on a brew-managed install the check still
+    /// reports, carrying the note that upgrading is brew's job — the
+    /// authority boundary governs the mutating path, not knowledge.
+    #[test]
+    fn check_note_reports_on_marked_installs() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(BREW_MARKER_FILE),
+            "Update with: brew upgrade x\n",
+        )
+        .unwrap();
+        let note = brew_check_note(tmp.path(), Path::new("/Users/x/.local/bin/temper"))
+            .expect("a marked install must carry the check note");
+        assert!(note.contains("brew upgrade"), "note: {note}");
+        // And the unmarked install carries no note — the report is untouched.
+        let clean = tempfile::tempdir().unwrap();
+        assert!(brew_check_note(clean.path(), Path::new("/Users/x/.local/bin/temper")).is_none());
     }
 
     /// The embedded installer is the real script, not a stub — guard against an

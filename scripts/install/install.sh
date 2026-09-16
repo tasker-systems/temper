@@ -99,6 +99,39 @@ EOF
         ;;
 esac
 
+# Warn (never fail) when the temper already on PATH is brew-managed: this
+# install lands in ${XDG_BIN_HOME:-$HOME/.local/bin}, and PATH order — not
+# this script — decides which binary runs. The operator invoked this script
+# deliberately, so we proceed; the marker beside the resolved binary is the
+# authority (the same signal `temper update` refuses on), the brew prefixes
+# are the belt.
+if command -v temper >/dev/null 2>&1; then
+    _existing="$(command -v temper)"
+    _dirs=""
+    if [ -L "$_existing" ]; then
+        _target="$(readlink "$_existing")"
+        case "$_target" in
+            /*) _real="$_target" ;;
+            *) _real="$(dirname "$_existing")/$_target" ;;
+        esac
+        _dirs="$(dirname "$_real") $(dirname "$_existing")"
+    else
+        _dirs="$(dirname "$_existing")"
+    fi
+    _brew=no
+    for _d in $_dirs; do
+        [ -f "$_d/BREW-MANAGED" ] && _brew=yes
+    done
+    case "$_existing" in
+        /opt/homebrew/*|/home/linuxbrew/.linuxbrew/*) _brew=yes ;;
+    esac
+    if [ "$_brew" = yes ]; then
+        echo "warning: the temper on your PATH ($_existing) is managed by Homebrew." >&2
+        echo "  This install lands in ${XDG_BIN_HOME:-$HOME/.local/bin}; PATH order decides which one runs." >&2
+        echo "  Update the Homebrew install with: brew upgrade tasker-systems/tap/temper" >&2
+    fi
+fi
+
 if [ -z "$REQUESTED_VERSION" ]; then
     VERSION=$(curl -fsSL --connect-timeout 10 --max-time 30 --retry 2 --retry-connrefused \
         "https://api.github.com/repos/${REPO}/releases/latest" \

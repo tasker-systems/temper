@@ -408,3 +408,31 @@ grep -q "refusing to install on a partial parse" "$BOTH_EMPTY_LOG" \
     || fail "the both-empty case was not refused by the cross-check: $(cat "$BOTH_EMPTY_LOG")"
 
 echo "PASS: an entry with both path and sha empty is refused by the parsed-vs-declared cross-check"
+
+# --- Brew-managed temper on PATH: warn and proceed ----------------------------
+# The marker (beside the resolved binary, through the bin symlink) is the same
+# authority signal `temper update` refuses on; the installer's face is
+# warn-only because the operator invoked it deliberately.
+BREWSIM="$TMP/brewsim"
+mkdir -p "$BREWSIM/bin" "$BREWSIM/libexec"
+printf '#!/bin/sh\necho "0.3.0"\n' > "$BREWSIM/libexec/temper"
+chmod +x "$BREWSIM/libexec/temper"
+printf 'This temper install is managed by Homebrew.\n\
+Update with: brew upgrade tasker-systems/tap/temper@0.5\n' > "$BREWSIM/libexec/BREW-MANAGED"
+ln -s ../libexec/temper "$BREWSIM/bin/temper"
+BREW_DIR="$TMP/install-brew-shadow"
+BREW_LOG="$TMP/brew-shadow.log"
+if ! PATH="$STUB_DIR:$BREWSIM/bin:$PATH" \
+     TEMPER_INSTALL_DIR="$BREW_DIR" XDG_BIN_HOME="$TMP/bin-brew" \
+     sh "$INSTALL" --archive "$TMP/archive.tar.gz" \
+        --manifest "$TMP/manifest.json" \
+        --version v0.3.0 >"$BREW_LOG" 2>&1; then
+    fail "a brew-managed PATH aborted the install — the installer warns, never fails: $(cat "$BREW_LOG")"
+fi
+[ -x "$BREW_DIR/temper" ] || fail "the brew-shadow install did not install the binary"
+grep -q "managed by Homebrew" "$BREW_LOG" \
+    || fail "the brew-managed PATH produced no warning: $(cat "$BREW_LOG")"
+grep -q "brew upgrade tasker-systems/tap/temper" "$BREW_LOG" \
+    || fail "the warning names no brew remedy: $(cat "$BREW_LOG")"
+
+echo "PASS: a brew-managed temper on PATH warns and the install proceeds"
