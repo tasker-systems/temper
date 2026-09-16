@@ -341,11 +341,14 @@ fi
 #   unchanged — identical (version stripped);
 #   grew      — the base contract survives INTACT and the head only adds. A surviving node may
 #               gain optional properties (new keys in `properties` never listed in `required` —
-#               the serde(default) tolerance the spec names) and may edit prose
-#               (description/summary/title/examples). Anything else on a surviving node — a
-#               property removed, a type changed, a requirement added (array `required` grown,
-#               boolean `required` tightened) — is breaking. Additions of whole paths/schemas
-#               are growth; removals are always breaking.
+#               the serde(default) tolerance the spec names), may edit prose
+#               (description/summary/title/examples), and may NOT touch `required` in either
+#               direction (corrected 2026-09-16: shrinkage is the omit-class — a field the
+#               server may now omit breaks clients that type it required, the PR #906 class;
+#               growth-from-absent and growth strand the other skew). Anything else on a
+#               surviving node — a property removed, a type changed, any `required` change —
+#               is breaking. Additions of whole paths/schemas are growth; removals are always
+#               breaking.
 #   moved     — the base contract changed or shrank anywhere: the M question.
 # Fail closed: anything undecidable computes as moved.
 derive_shape() {
@@ -368,7 +371,10 @@ derive_shape() {
     # The comparator is ONE definition (wire-shape.jq) shared with its harness — the #874
     # lesson: the derivation is where shape honesty is computed, so it is the part that
     # must be probeable, not only the verdict handling around it.
-    verdict="$(jq -n -r -f "${SCRIPT_DIR}/wire-shape.jq" \
+    # -L is required since the comparator split (2026-09-16): wire-shape.jq includes
+    # wire-shape-lib.jq, and jq does not resolve `include` relative to the program
+    # file's own directory (measured, jq 1.7.1).
+    verdict="$(jq -n -r -f "${SCRIPT_DIR}/wire-shape.jq" -L "$SCRIPT_DIR" \
         --slurpfile base "$tmp_base" --slurpfile head "$tmp_head" 2>/dev/null)" || verdict="moved"
     rm -f "$tmp_base" "$tmp_head"
     verdict="${verdict//\"/}"
