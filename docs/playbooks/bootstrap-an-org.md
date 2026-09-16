@@ -402,8 +402,7 @@ DATABASE_URL=postgresql://… system-bootstrap.sh --run-root
 It needs `yq` to read the profile and `temper` on PATH (authenticated).
 Because every step is idempotent, re-applying the profile **converges** rather
 than duplicating — pin the org-identity `cogmap_id` in the profile to keep
-genesis a no-op on re-runs. There is no state backend; plan/diff
-(Terraform-like) semantics are deferred.
+genesis a no-op on re-runs. There is no state backend.
 
 The SAML half of an install (provision the IdP, apply its row, map groups) is
 a **separate** applier, `saml-setup.sh` — kept out of `system-bootstrap.sh`

@@ -112,10 +112,9 @@
     <code>emitter_entity_id</code>, and the open <code>metadata jsonb</code> that
     can carry an agent's reasoning; the reinforcement effect is the provenance
     accretion behind <code>resource_blocks</code>' <code>reinforce_count</code>.
-    The <strong>cross-system query and the assembled provenance graph are
-    proposed</strong> — the columns exist to support them; the analytics layer
-    that reads them does not yet. Draw the chain as real, the dashboard around it
-    as proposed.
+    The <strong>ledger carries the threads; no analytics layer ships over
+    them</strong> — the columns exist to support one. The chain is drawn as the
+    data model's real shape; no dashboard is drawn because none ships.
   {/snippet}
 </VizFigure>
 

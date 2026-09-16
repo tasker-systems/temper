@@ -234,7 +234,7 @@ their chains in the same transaction (see [Deactivating an account](#deactivatin
 
 Temper reconciles team membership from SAML-asserted groups **on each login**. This is
 eventual, not immediate: a user removed from a group keeps access until their session expires
-and they next log in. For immediate deprovisioning use SCIM (not yet available).
+and they next log in.
 
 **Reconcile only ever manages `source='idp'` memberships. Native memberships (added in-app or
 by join-request approval) and auto-join teams are never touched — if a user is already a native
@@ -546,8 +546,8 @@ appliers interleave across the full install timeline.
 
 ## Limitations
 
-- **Reconcile-on-login only.** Profile attributes refresh when the user logs in; there is no
-  live deprovisioning. Automated deprovisioning (SCIM) is not yet available.
+- **Reconcile-on-login only.** Profile attributes refresh when the user logs in; there is
+  no live deprovisioning.
 
   **The bound to state is `AS_REFRESH_CHAIN_MAX_SECONDS`, not `AS_ACCESS_TTL_SECONDS`.** A session
   survives across access-token expiries by refreshing, so the access TTL describes how often a

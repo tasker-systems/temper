@@ -53,7 +53,7 @@
     {
       id: 'promo', component: PromotionDiagram,
       href: '/cognitive-maps/how-maps-relate', page: 'How maps relate',
-      line: 'Promotion — a curated concept sent forward across scopes (proposed).',
+      line: 'Promotion — a curated concept sent forward across scopes, drawn from the model.',
     },
     {
       id: 'dag', component: SeedDagDiagram,

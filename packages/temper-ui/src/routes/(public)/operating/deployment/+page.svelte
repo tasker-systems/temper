@@ -142,8 +142,9 @@
     <code>kb_topics</code> seeds topic bounds. The <strong>topology / tenancy /
     per-tenant-subscription / agent-platform choices are operational, not in the artifact</strong> —
     drawn as a range, with the temperkb.io point annotated from its actual stack (Vercel functions,
-    Neon, single-tenant). The contract and trigger mechanisms are designed, not yet built — drawn as
-    proposed.
+    Neon, single-tenant). The contract and trigger mechanisms are drawn at
+    model-level intent: the artifact fixes the event shape; the wake-up cadence
+    is a deployment choice.
   {/snippet}
 </VizFigure>
 
