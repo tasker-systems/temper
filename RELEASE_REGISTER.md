@@ -14,6 +14,16 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.5.0 — unreleased
 
+- **Public-surface copy redaction — roadmap-voiced passages rewritten to present-tense**
+  Eleven passages across five `docs/` pages and five temper-ui `(public)` pages
+  are rewritten to state shipped behavior in present-tense. Copy only — no
+  committed contract shape moves and no runtime behavior change; svelte-check
+  and biome pass unchanged.
+pr: self
+classes: additive
+surfaces: internal
+status: signal-only
+
 - **This release — the 0.5.1 fleet alignment: VERSION 0.5.0 → 0.5.1 across crates, packages, and clients**
   The release train's own wire delta is none: version fields and the generated
   cores re-stale with the bump (the D-S3 baseline — no shape movement); the

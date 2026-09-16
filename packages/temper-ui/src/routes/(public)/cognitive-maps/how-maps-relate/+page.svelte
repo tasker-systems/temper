@@ -153,9 +153,9 @@
     (<code>kb_team_cogmaps</code>, <code>cogmaps_share_a_team</code>); the
     cross-boundary salience signal is <code>cogmap_shape</code>
     (<strong>S6</strong>). The promotion <em>act</em> — the
-    both-scopes-membership gate and the curated send-event — is a
-    <strong>designed capability, not yet in the artifact</strong>; drawn as
-    proposed.
+    both-scopes-membership gate and the curated send-event — is drawn from the
+    model's capability; the artifact fixes the primitives and specifies no
+    protocol.
 {/snippet}
 
 <Section label="Promoting a concept across scopes">
@@ -230,8 +230,8 @@
     when? How far does an agent go on a salience signal — propose and leave the
     move to a person, or more? What exactly does "curate the send-event" put in
     the mover's hands? These are genuine forks, not settled mechanism, and they
-    want real use before they're frozen. The capability is grounded; the
-    choreography isn't drawn yet.
+    want real use before they're frozen. The model grounds the capability; it
+    specifies no choreography.
   </p>
 </Section>
 

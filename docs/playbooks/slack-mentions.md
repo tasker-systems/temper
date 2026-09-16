@@ -9,8 +9,6 @@ By the end of this playbook you will have a Slack bot that responds to `@temper`
 mentions. A user who mentions the bot for the first time receives a private
 connect link; completing it links their Slack identity to their Temper profile.
 A linked user who mentions the bot gets a confirmation that the link resolved.
-Standing up the link now provisions the durable identity binding so that future
-answer-delivery lands cleanly when it ships.
 
 ## Prerequisites
 

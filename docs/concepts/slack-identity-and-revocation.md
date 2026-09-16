@@ -91,8 +91,7 @@ derived from the refresh token and expires within the IdP's access-token TTL.
 
 The encryption key is a single AEAD key held in the platform's secret store,
 never in the database. Rotation is a flag day: changing the key makes every
-stored grant unreadable, and affected users re-link. A future zero-downtime
-keyring is reserved in the schema but not implemented today.
+stored grant unreadable, and affected users re-link.
 
 Three other secrets are in play but are **not retained** — they authenticate
 calls, not people:

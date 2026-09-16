@@ -268,21 +268,6 @@ from the happy path (SAML variant swaps, a failed step to re-run by hand, etc.).
 | 3, 6, 11, 12 | `saml-setup.sh` (`--apply-db` for 6, 11, 12) | Exists today |
 | 1–2, 4–5, 7, 14–15 | — (manual) | Platform-console and human-in-the-loop steps: provisioning Neon and the Okta app, setting Vercel env, deploying, the first SAML login, and the optional UI deploy/verify — none of these are things a script can safely do on an operator's behalf |
 
-**What's deferred beyond this playbook** — the roadmap tail, not steps to sequence here:
-
-- **Eve / machine-to-machine auth.** The `app` principal needs `client_credentials` (M2M) support
-  that doesn't exist yet; until then Eve can't reach temper-mcp unattended.
-- **`plan`/`diff` applier semantics.** `system-bootstrap.sh` has no state backend — re-applying a
-  profile converges because every step is idempotent, but there's no Terraform-like plan/diff
-  preview ([Bootstrap an Org](./bootstrap-an-org.md)).
-- **SCIM (Phase 3).** Group provisioning today is JIT on login; immediate deprovisioning needs
-  SCIM, not yet available. Until then an IdP-side removal takes effect within
-  `AS_REFRESH_CHAIN_MAX_SECONDS` (90 days by default), and an administrator's revoke is immediate
-  — see the Limitations in [Self-hosting with SAML](./self-host-with-saml.md).
-- **Cogmap-write-by-team-role.** Authorial (write) RBAC for team contexts and team cognitive maps
-  is still undefined — de facto, any team member can write, not just admins/owners. This playbook's
-  `is_system_admin` gate covers the L0 kernel only, not team-scoped cogmaps.
-
 ## Further reading
 
 - **The base deployment this playbook extends:**

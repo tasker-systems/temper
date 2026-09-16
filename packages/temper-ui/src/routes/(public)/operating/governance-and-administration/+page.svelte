@@ -142,8 +142,10 @@
     <code>kb_teams_parents</code>, <code>kb_team_members</code>,
     <code>kb_team_cogmaps</code>); the event ledger and producing-anchor shape
     that admin events would use are real (<code>kb_events</code>). The
-    <strong>administrative surface itself is unbuilt</strong> and its
-    <em>shape</em> is organization-specific — drawn as a proposed dial.
+    <strong>administrative CLI surface is real</strong>
+    (<code>temper admin</code>, <code>admin_ledger</code>) and its
+    <em>shape</em> is organization-specific — drawn here as the deployment's
+    dial.
   {/snippet}
 </VizFigure>
 
