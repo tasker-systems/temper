@@ -13,7 +13,7 @@ import type { AtlasEntry, AtlasSubgraph } from '$lib/types/generated/graph_atlas
 import type { Composition, QueryResponse } from '$lib/types/generated/query';
 import type { ContentResponse } from '$lib/types/generated/resource';
 import type { ResourceView } from '$lib/types/generated/resource_view';
-import { apiGet, apiPost } from './api';
+import { ApiError, apiGet, apiPost } from './api';
 
 /**
  * The successor graph surface's reads.
@@ -316,14 +316,22 @@ export async function readAnchorAnalysis(
 	// The kind is decided ONCE, here, and travels on the value. The alternative — re-deriving it
 	// downstream from which fields happen to be present — would make the presence of a charter the
 	// definition of being a map, and a map whose read was declined would then read as a context.
+	// Only a decline degrades to null, and a decline is a 404 deny on both anchor doors — any
+	// other failure is a failure and rejects, which is the third state the receiver renders.
 	const analyticsRead: Promise<AnchorAnalytics | null> =
 		anchor.kind === 'cogmap'
 			? apiGet<CogmapAnalyticsRow>(anchorAnalyticsPath(anchor), token)
 					.then((row): AnchorAnalytics => ({ kind: 'cogmap', ...row }))
-					.catch(() => null)
+					.catch((err: unknown) => {
+						if (err instanceof ApiError && err.status === 404) return null;
+						throw err;
+					})
 			: apiGet<CogmapStaleness>(anchorAnalyticsPath(anchor), token)
 					.then((staleness): AnchorAnalytics => ({ kind: 'context', staleness }))
-					.catch(() => null);
+					.catch((err: unknown) => {
+						if (err instanceof ApiError && err.status === 404) return null;
+						throw err;
+					});
 
 	const [shape, metrics, analytics] = await Promise.all([
 		apiGet<AnchorShape>(anchorShapePath(anchor), token),

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import * as jose from "jose";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { verifyToken } from "../src/auth.js";
 
 // Load the same Ed25519 test keys used by the Rust tests.
@@ -115,5 +115,172 @@ describe("verifyToken audience enforcement", () => {
     });
 
     await expect(verifyToken(token, publicKey, "test-issuer", TEST_AUDIENCE)).rejects.toThrow();
+  });
+});
+
+describe("verifyToken email_verified handling", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  // A token with no `email_verified` claim carries no verdict. `null` says "the IdP said
+  // nothing"; `false` would say "the IdP says not verified" — a verdict nobody gave.
+  it("returns null when the token omits the email_verified claim", async () => {
+    const token = await signTestJwt({
+      sub: "user-321",
+      email: "silent@example.com",
+    });
+
+    const claims = await verifyToken(token, publicKey, "test-issuer", TEST_AUDIENCE);
+    expect(claims.email_verified).toBeNull();
+  });
+
+  it("returns false when the token asserts email_verified false", async () => {
+    const token = await signTestJwt({
+      sub: "user-322",
+      email: "unverified@example.com",
+      email_verified: false,
+    });
+
+    const claims = await verifyToken(token, publicKey, "test-issuer", TEST_AUDIENCE);
+    expect(claims.email_verified).toBe(false);
+  });
+
+  it("carries an absent userinfo email_verified as null", async () => {
+    const token = await signTestJwt({ sub: "user-323" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ email: "userinfo@example.com" }), { status: 200 }),
+      ),
+    );
+
+    const claims = await verifyToken(token, publicKey, "test-issuer", TEST_AUDIENCE);
+    expect(claims.email).toBe("userinfo@example.com");
+    expect(claims.email_verified).toBeNull();
+  });
+
+  it("carries a userinfo email_verified false as false", async () => {
+    const token = await signTestJwt({ sub: "user-324" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ email: "userinfo@example.com", email_verified: false }), {
+            status: 200,
+          }),
+      ),
+    );
+
+    const claims = await verifyToken(token, publicKey, "test-issuer", TEST_AUDIENCE);
+    expect(claims.email_verified).toBe(false);
+  });
+});
+
+describe("verifyToken userinfo body validation", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("rejects a userinfo body whose email is not a string", async () => {
+    const token = await signTestJwt({ sub: "user-325" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ email: 123, email_verified: true }), { status: 200 }),
+      ),
+    );
+
+    await expect(verifyToken(token, publicKey, "test-issuer", TEST_AUDIENCE)).rejects.toThrow(
+      "non-string email",
+    );
+  });
+
+  it("rejects a userinfo body whose email_verified is not a boolean", async () => {
+    const token = await signTestJwt({ sub: "user-326" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ email: "userinfo@example.com", email_verified: "true" }), {
+            status: 200,
+          }),
+      ),
+    );
+
+    await expect(verifyToken(token, publicKey, "test-issuer", TEST_AUDIENCE)).rejects.toThrow(
+      "non-boolean email_verified",
+    );
+  });
+
+  it("rejects a userinfo body that is not a JSON object", async () => {
+    const token = await signTestJwt({ sub: "user-327" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify("not-an-object"), { status: 200 })),
+    );
+
+    await expect(verifyToken(token, publicKey, "test-issuer", TEST_AUDIENCE)).rejects.toThrow(
+      "not a JSON object",
+    );
+  });
+});
+
+describe("verifyToken JWT claim validation", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("rejects a JWT whose email claim is not a string", async () => {
+    const token = await signTestJwt({
+      sub: "user-328",
+      email: 123,
+      email_verified: true,
+    });
+
+    await expect(verifyToken(token, publicKey, "test-issuer", TEST_AUDIENCE)).rejects.toThrow(
+      "non-string email claim",
+    );
+  });
+
+  it("rejects a JWT whose sub claim is not a string", async () => {
+    const token = await signTestJwt({
+      sub: 123,
+      email: "stringy@example.com",
+      email_verified: true,
+    });
+
+    await expect(verifyToken(token, publicKey, "test-issuer", TEST_AUDIENCE)).rejects.toThrow(
+      "non-string sub claim",
+    );
+  });
+
+  it("rejects a JWT whose email_verified claim is not a boolean", async () => {
+    const token = await signTestJwt({
+      sub: "user-329",
+      email: "stringy@example.com",
+      email_verified: "true",
+    });
+
+    await expect(verifyToken(token, publicKey, "test-issuer", TEST_AUDIENCE)).rejects.toThrow(
+      "non-boolean email_verified claim",
+    );
+  });
+
+  it("rejects a token carrying neither email claim when userinfo yields no email either", async () => {
+    const token = await signTestJwt({ sub: "user-330" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })),
+    );
+
+    await expect(verifyToken(token, publicKey, "test-issuer", TEST_AUDIENCE)).rejects.toThrow(
+      "JWT missing email claim",
+    );
   });
 });

@@ -121,6 +121,20 @@ describe('the readout reads the disclosure the response actually carries', () =>
 
 		expect(r.groupings).toEqual([]);
 	});
+
+	test('a stage whose disclosure is missing fails loudly rather than reading as none', () => {
+		// `disclosed_regions` is required on every trace stage. A response that omits it is wire
+		// drift, and reading it as "not drawn from any grouping of your work" would be a claim
+		// about the answer the malformed stage never made.
+		const drifted = trace({
+			stage: 's1',
+			act: 'survey',
+			groupings: [{ id: 'g', score: 1 }],
+		}) as unknown as Record<string, unknown>;
+		delete drifted.disclosed_regions;
+
+		expect(() => buildReadout(response([drifted as unknown as StageTrace]))).toThrow();
+	});
 });
 
 describe('a score is never presented to the reader', () => {
@@ -383,6 +397,19 @@ describe('a stale grouping reference is re-derived — never an error, never the
 
 	test('nothing disclosed asks for no lookup at all', () => {
 		expect(disclosedRegionIds(response([trace({ stage: 'w', act: 'follow-from' })]))).toEqual([]);
+	});
+
+	test('a response whose trace is missing fails loudly rather than reading as none', () => {
+		// `trace` is required on every response. A response without one is wire drift, and
+		// reading it as "nothing was disclosed" would be a claim about groupings the malformed
+		// response never carried.
+		const drifted = response([trace({ stage: 's1', act: 'survey' })]) as unknown as Record<
+			string,
+			unknown
+		>;
+		delete drifted.trace;
+
+		expect(() => disclosedRegionIds(drifted as unknown as QueryResponse)).toThrow();
 	});
 });
 
