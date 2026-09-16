@@ -142,10 +142,7 @@ fn brew_managed_reason(dir: &Path, exe: &Path) -> Option<String> {
         return Some(refusal(remedy));
     }
     let exe_str = exe.to_string_lossy();
-    if BREW_INSTALL_PREFIXES
-        .iter()
-        .any(|p| exe_str.starts_with(p))
-    {
+    if BREW_INSTALL_PREFIXES.iter().any(|p| exe_str.starts_with(p)) {
         return Some(refusal(BREW_DEFAULT_REMEDY));
     }
     None
@@ -989,9 +986,8 @@ mod tests {
              Update with: brew upgrade tasker-systems/tap/temper@0.5\n",
         )
         .unwrap();
-        let reason =
-            brew_managed_reason(tmp.path(), Path::new("/Users/x/.local/bin/temper"))
-                .expect("a marked install must be brew-managed");
+        let reason = brew_managed_reason(tmp.path(), Path::new("/Users/x/.local/bin/temper"))
+            .expect("a marked install must be brew-managed");
         assert!(
             reason.contains("brew upgrade tasker-systems/tap/temper@0.5"),
             "the refusal must carry the formula's own upgrade line: {reason}"
@@ -1009,9 +1005,8 @@ mod tests {
     fn brew_refusal_falls_back_to_the_tap_remedy() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join(BREW_MARKER_FILE), "managed by brew\n").unwrap();
-        let reason =
-            brew_managed_reason(tmp.path(), Path::new("/Users/x/.local/bin/temper"))
-                .expect("any marker must be brew-managed");
+        let reason = brew_managed_reason(tmp.path(), Path::new("/Users/x/.local/bin/temper"))
+            .expect("any marker must be brew-managed");
         assert!(
             reason.contains(BREW_DEFAULT_REMEDY),
             "fallback remedy expected: {reason}"
@@ -1025,8 +1020,7 @@ mod tests {
     fn brew_prefix_probe_is_the_belt_not_the_authority() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(
-            brew_managed_reason(tmp.path(), Path::new("/opt/homebrew/libexec/temper"))
-                .is_some(),
+            brew_managed_reason(tmp.path(), Path::new("/opt/homebrew/libexec/temper")).is_some(),
             "exe under /opt/homebrew must read as managed"
         );
         assert!(
@@ -1068,8 +1062,11 @@ mod tests {
     #[test]
     fn check_note_reports_on_marked_installs() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join(BREW_MARKER_FILE), "Update with: brew upgrade x\n")
-            .unwrap();
+        std::fs::write(
+            tmp.path().join(BREW_MARKER_FILE),
+            "Update with: brew upgrade x\n",
+        )
+        .unwrap();
         let note = brew_check_note(tmp.path(), Path::new("/Users/x/.local/bin/temper"))
             .expect("a marked install must carry the check note");
         assert!(note.contains("brew upgrade"), "note: {note}");
@@ -1077,7 +1074,6 @@ mod tests {
         let clean = tempfile::tempdir().unwrap();
         assert!(brew_check_note(clean.path(), Path::new("/Users/x/.local/bin/temper")).is_none());
     }
-
 
     /// The embedded installer is the real script, not a stub — guard against an
     /// `include_str!` path drift silently shipping an empty/foreign file.
