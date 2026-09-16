@@ -2,7 +2,7 @@
 
 A repeatable procedure (for a human or an agent) to re-verify Temper's trust boundary. It
 encodes the method used in the 2026-07-18 audit
-([internal/code-reviews/2026-07-18-authn-authz-credential-flow-audit.md](../code-reviews/2026-07-18-authn-authz-credential-flow-audit.md))
+(`temper-artifacts:reviews/2026-07-18-authn-authz-credential-flow-audit.md`)
 **and the blind spot that audit initially fell into**, so the next run cannot repeat it.
 
 > **The one lesson that matters most.** A grant audit has **two independent axes**, and the
@@ -55,7 +55,7 @@ verdict`. Entry points to enumerate:
 - **The shared seam** — `temper-services/src/auth`. `classify` is a closed 3-variant sum (no
   fall-open default arm); machines are lookup-or-401; deactivated profiles gated post-resolve.
 
-Automatable slice: **`.github/scripts/audit-route-auth.sh`** (planned) — list every `.route(`
+Automatable slice: **`.github/scripts/audit-route-auth.sh`** — list every `.route(`
 / `routes!(` and the layer stack it sits under, flag any route with no auth layer and no
 self-gate.
 

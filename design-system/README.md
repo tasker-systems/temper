@@ -297,7 +297,7 @@ Colors come from `lib/graph/styling.ts` (with matching `--graph-*` CSS vars in `
 
 **`decision`** is deliberately distinct from goal's gold — amber reads as "sealed / preserved," which matches a decision's terminal character. The diagram-only `--decision-amber-lt/dk` pair in `colors_and_type.css` remains at `#fcd34d`/`#92400e` for status chips *inside* diagrams; the graph node hex sits between those two so it reads at 12–14px serif weight on obsidian without colliding with gold.
 
-**`memory`** is reserved for an upcoming doctype. It covers the substrate of how builders and agents work together in a system — plugin preferences, subagent guidance, tooling conventions, consistency rules — things currently scattered across per-installation `fundamentals.md` skill files and similar artifacts. Periwinkle sits between research's analytical steel and concept's abstract pink to signal "systemic" without claiming either of those roles.
+Periwinkle sits between research's analytical steel and concept's abstract pink to signal "systemic" without claiming either of those roles.
 
 These are the *only* place in Temper where the extended palette touches UI instead of illustrations. Treat them as diagram vocabulary.
 

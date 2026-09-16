@@ -531,7 +531,8 @@ a person has to write, and it is the part that has never been written for them.
 - **The middle-tier grounding (extensibility, the neutral contract):**
   `temper-artifacts:plans/2026-06-18-invocation-envelope-and-authorship-metadata.md` and
   `temper-artifacts:plans/2026-06-18-temper-agents-neutral-contract-crate.md`; the Eve/CMA
-  comparison research under `internal/research/`.
+  comparison research at
+  `temper-artifacts:reviews/2026-06-18-vercel-eve-and-claude-managed-agents-investigation.md`.
 - **Operator runbook (the deployment floor):** the self-hosting playbook under `docs/`.
 - **Superseded:** `docs/theory-ia-proposal.md` (removed; see the scar above).
 
