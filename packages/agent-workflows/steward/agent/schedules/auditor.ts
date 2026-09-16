@@ -2,6 +2,7 @@ import { defineSchedule } from "eve/schedules";
 import { TEMPER_TS_VERSION, type components } from "@tasker-systems/temper-ts";
 
 import auditorWorker from "../channels/auditor-worker.js";
+import { isAuditorDispatchResponse } from "../lib/dispatch-response.js";
 import { AUDITOR_ENABLED, agentEnabled, tokenIssuanceUnavailable } from "../lib/optional-agent.js";
 import {
   AUDITOR_CREDENTIALS,
@@ -263,10 +264,15 @@ export default defineSchedule({
 
           const dispatchVercelId = res.headers.get("x-vercel-id") ?? "unknown";
 
-          const { claimed, correlation_id: stampedId } = (await res.json()) as {
-            claimed: ClaimedAuditJob[];
-            correlation_id?: string;
-          };
+          // The body is held to the generated `AuditorDispatchTickResponse` contract at the
+          // boundary: the fan-out below iterates claimed jobs and their citations, so a response
+          // missing any of it fails here rather than reaching a session prompt incomplete. The
+          // claim has already happened, so per `workClaimed` above this surfaces loud.
+          const dispatch: unknown = await res.json();
+          if (!isAuditorDispatchResponse(dispatch)) {
+            throw new Error("auditor dispatch returned an unrecognized response");
+          }
+          const { claimed, correlation_id: stampedId } = dispatch;
 
           // The server echoes the correlation it parsed and stamped. A mismatch (or an absent echo)
           // means the tick's DB-side trace is broken even though the log trace is intact — the jobs

@@ -3,7 +3,15 @@ import * as jose from "jose";
 export interface AuthClaims {
   sub: string;
   email: string;
-  email_verified: boolean;
+  /**
+   * Three states, not two: `true` (the IdP verified the email), `false` (the IdP says it is not
+   * verified), and `null` (the token and userinfo said nothing about verification). Absence is
+   * carried, not collapsed: this mirrors the wire types (`ReconcileRequest` /
+   * `ResolvePrincipalRequest` take `boolean | null`) and the Rust `AuthClaims` (`Option<bool>`),
+   * whose verification gates test `== Some(true)` — a claim the IdP never asserted must not
+   * arrive downstream pre-answered as false.
+   */
+  email_verified: boolean | null;
 }
 
 /**
@@ -42,8 +50,25 @@ export async function verifyToken(
         );
 
   const sub = payload.sub;
-  let email = payload.email as string | undefined;
-  let emailVerified = payload.email_verified as boolean | undefined;
+  // jose verifies signature, issuer, audience, and expiry, but does not type-check claims. The
+  // email claims arrive from the IdP at runtime, so like the /userinfo body they are validated
+  // rather than asserted: present means conforming, absent means absent.
+  const rawEmail: unknown = payload.email;
+  const rawEmailVerified: unknown = payload.email_verified;
+  // `sub` arrives from the IdP at runtime like the email claims, so it is validated rather than
+  // asserted: a present-but-non-string sub is drift, and absence stays its own refusal.
+  if (sub !== undefined && typeof sub !== "string") {
+    throw new Error("JWT carried a non-string sub claim");
+  }
+  if (rawEmail !== undefined && typeof rawEmail !== "string") {
+    throw new Error("JWT carried a non-string email claim");
+  }
+  if (rawEmailVerified !== undefined && typeof rawEmailVerified !== "boolean") {
+    throw new Error("JWT carried a non-boolean email_verified claim");
+  }
+  let email: string | undefined = typeof rawEmail === "string" ? rawEmail : undefined;
+  let emailVerified: boolean | undefined =
+    typeof rawEmailVerified === "boolean" ? rawEmailVerified : undefined;
 
   if (!sub) {
     throw new Error("JWT missing sub claim");
@@ -63,10 +88,18 @@ export async function verifyToken(
   return {
     sub,
     email,
-    email_verified: emailVerified ?? false,
+    // Absence (`undefined` from both the token and userinfo) is carried as `null` — "the IdP said
+    // nothing" — rather than asserted as `false`, which would fabricate a verification verdict the
+    // IdP never gave.
+    email_verified: emailVerified ?? null,
   };
 }
 
+/**
+ * Fetches the OIDC `/userinfo` document for the token. The body arrives at runtime from an
+ * external IdP, so it is validated rather than asserted into shape: a body that is not a usable
+ * userinfo document throws, landing on the same failure path as any other userinfo failure.
+ */
 async function fetchUserinfo(
   accessToken: string,
   issuer: string,
@@ -78,7 +111,24 @@ async function fetchUserinfo(
   if (!resp.ok) {
     throw new Error(`userinfo returned status ${resp.status}`);
   }
-  return (await resp.json()) as { email?: string; email_verified?: boolean };
+  const parsed: unknown = await resp.json();
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new Error("userinfo returned a body that is not a JSON object");
+  }
+  const { email, email_verified } = parsed as {
+    email?: unknown;
+    email_verified?: unknown;
+  };
+  if (email !== undefined && typeof email !== "string") {
+    throw new Error("userinfo returned a non-string email");
+  }
+  if (email_verified !== undefined && typeof email_verified !== "boolean") {
+    throw new Error("userinfo returned a non-boolean email_verified");
+  }
+  return {
+    email: typeof email === "string" ? email : undefined,
+    email_verified: typeof email_verified === "boolean" ? email_verified : undefined,
+  };
 }
 
 let cachedJwks: jose.JWTVerifyGetKey | null = null;

@@ -300,7 +300,7 @@ export function analysisViewFor(bundle: AnalysisBundle, name: string): AnalysisV
 						kind: 'cogmap' as const,
 						telos: { id: s.analytics.telos_resource_id, title },
 						staleness: s.analytics.staleness,
-						regulation: s.analytics.regulation ?? [],
+						regulation: s.analytics.regulation,
 					}
 				: null,
 		),

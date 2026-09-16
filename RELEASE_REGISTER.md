@@ -64,6 +64,45 @@ classes: additive
 surfaces: clients
 status: signal-only
 
+- **The CLI stops reading malformed config and unreadable indexes as defaults; the mention agent runtime-checks its link-state response**
+  An existing-but-malformed global config refuses naming the file instead of silently
+  defaulting format/color/limits, and an unreadable memory index is refused instead of read
+  as empty (migrate no longer plans writes off a fabricated reading). The mention agent
+  runtime-checks the link-state response against its two arms and gives the slack narrowing
+  and the mint refusal switch their missing never arms. No committed contract shape moves.
+pr: self
+classes: behavioral
+surfaces: cli-stdout, internal
+status: signal-only
+
+- **temper-ui and temper-cloud stop presenting failure as success**
+  The command palette checks `resp.ok` and renders a distinct failure state where an API
+  error previously rendered "No results"; the internal search route logs its 5xx instead of
+  returning a body shaped like a valid empty result. temper-cloud's token verification
+  keeps an absent `email_verified` claim distinct from `false`, and validates the `/userinfo`
+  body at runtime instead of casting it (latent path — no live route today). No committed
+  contract shape moves.
+pr: self
+classes: behavioral
+surfaces: internal
+status: signal-only
+
+- **Query responses refuse rather than fabricate when a stage's tally row is missing; agent and UI boundaries validate temper-api responses instead of casting them**
+  Grounding ruled the tally absence a compile/execute contradiction — the planner emits one
+  tally arm per stage and each arm yields a row even over an empty CTE, so `tally() == None`
+  is compiler/executor disagreement, never "never ran" — and `0` is a real measured value
+  (a refused stage's CTE is `WHERE false`). Where the assembler previously rendered
+  `produced: 0` and derived `Extent::Complete` from it, it now fails the response; measured
+  zeros still render zeros. The steward/auditor dispatch consumers, the mention mint
+  outcome, and temper-cloud's JWT claims are runtime-checked at the boundary instead of
+  cast; temper-ui reads required wire fields as required and renders absence as absence. No
+  committed contract shape moves (behavioral only — the Option-shaped fix was ruled out by
+  the grounding).
+pr: self
+classes: behavioral
+surfaces: http, internal
+status: signal-only
+
 ## Since v0.4.0 — unreleased
 
 - **This release — the 0.5.0 fleet alignment: VERSION 0.4.0 → 0.5.0 across crates, packages, and clients**

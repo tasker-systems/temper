@@ -150,6 +150,30 @@ describe("requestLinkState", () => {
     await expect(requestLinkState(PRINCIPAL)).rejects.toThrow("link-state failed: 401");
   });
 
+  // FAILS IF: a 200 whose body matches neither link-state arm is returned to the caller as
+  // a `LinkState` anyway. The channel narrows with `status === "unlinked"`, so a drifted
+  // status fell through as `linked` — the one arm that mints and dispatches. Fails CLOSED:
+  // the channel's catch turns this throw into the generic retry ephemeral, which is the
+  // honest answer when the response is not an answer.
+  it("throws on a drifted status instead of returning it as a LinkState", async () => {
+    stubFetch(200, { status: "quarantined" });
+
+    await expect(requestLinkState(PRINCIPAL)).rejects.toThrow(
+      "link-state returned an unrecognized response (status: quarantined)",
+    );
+  });
+
+  // FAILS IF: the shape check tests the discriminant only. A `linked` body without its
+  // `handle` (or an `unlinked` one without `authorize_url`) deserializes fine in
+  // TypeScript's eyes and would reach the user copy as `undefined` interpolation.
+  it("throws when a known arm is missing its field", async () => {
+    stubFetch(200, { status: "linked" });
+
+    await expect(requestLinkState(PRINCIPAL)).rejects.toThrow(
+      "link-state returned an unrecognized response (status: linked)",
+    );
+  });
+
   it("throws when a required env var is missing", async () => {
     vi.stubEnv("SLACK_LINK_SECRET", "");
     stubFetch(200, { status: "linked", handle: "h" });

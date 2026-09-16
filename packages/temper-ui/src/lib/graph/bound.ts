@@ -144,7 +144,10 @@ export interface BoundDeclaration {
 	traversed: TraversedAxis | null;
 }
 
-const rowsOf = (stage: StageResult | undefined): number => stage?.produced?.hits?.length ?? 0;
+// `stage` is the only absentable link: `returned` maps caller-named stage names to results, and a
+// stage the response does not name is absent. `produced` and `hits` are required on every arm of
+// their types, so a present stage always carries them.
+const rowsOf = (stage: StageResult | undefined): number => stage?.produced.hits.length ?? 0;
 
 /**
  * Read the applied funnel width off the response.
@@ -157,7 +160,7 @@ const rowsOf = (stage: StageResult | undefined): number => stage?.produced?.hits
  */
 const appliedGroupings = (response: QueryResponse, stages: string[]): number | null => {
 	for (const name of stages) {
-		const applied = response.returned?.[name]?.terms_applied?.regions;
+		const applied = response.returned[name]?.terms_applied.regions;
 		if (applied !== undefined && applied !== null) return Number(applied);
 	}
 	return null;
@@ -169,7 +172,7 @@ export function declareBounds(
 	seeds: SeedAxis | null = null,
 ): BoundDeclaration {
 	const hasFunnelArm = plan.surveyStages.length > 0;
-	const walk = response.returned?.[plan.walkStage];
+	const walk = response.returned[plan.walkStage];
 
 	return {
 		places: { asked: plan.anchorsAsked.length, available: plan.anchorsAvailable },
@@ -178,7 +181,7 @@ export function declareBounds(
 			? { applicable: true, applied: appliedGroupings(response, plan.surveyStages) }
 			: { applicable: false },
 		fromYourPlaces: hasFunnelArm
-			? plan.surveyStages.reduce((n, s) => n + rowsOf(response.returned?.[s]), 0)
+			? plan.surveyStages.reduce((n, s) => n + rowsOf(response.returned[s]), 0)
 			: null,
 		followedOn: walk ? { rows: rowsOf(walk), extent: walk.extent } : null,
 		orientation: null,

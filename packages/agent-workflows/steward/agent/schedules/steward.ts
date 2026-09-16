@@ -2,6 +2,7 @@ import { defineSchedule } from "eve/schedules";
 import { TEMPER_TS_VERSION } from "@tasker-systems/temper-ts";
 
 import worker from "../channels/worker.js";
+import { isStewardDispatchResponse } from "../lib/dispatch-response.js";
 import { requireEnv, temperFetch } from "../lib/temper-auth.js";
 
 /**
@@ -78,10 +79,14 @@ export default defineSchedule({
           // Bridge to Vercel's own request id for the infra-side view of this hop (design item 3).
           const dispatchVercelId = res.headers.get("x-vercel-id") ?? "unknown";
 
-          const { claimed, correlation_id: stampedId } = (await res.json()) as {
-            claimed: { id: string; cogmap_id: string }[];
-            correlation_id?: string;
-          };
+          // The body is held to the generated `DispatchTickResponse` contract at the boundary: the
+          // fan-out below iterates `claimed` jobs, so a response missing them fails here instead of
+          // inside the fan-out.
+          const dispatch: unknown = await res.json();
+          if (!isStewardDispatchResponse(dispatch)) {
+            throw new Error("steward dispatch returned an unrecognized response");
+          }
+          const { claimed, correlation_id: stampedId } = dispatch;
 
           // The server echoes the correlation it parsed and stamped onto the claimed jobs. A mismatch
           // (or an absent echo) means the tick's DB-side trace is broken even though the log trace is

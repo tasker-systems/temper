@@ -106,14 +106,41 @@ export default slackChannel({
       // asking for a URL unconditionally is what re-prompted linked users forever.
       const link = await requestLinkState(decision.principalId);
 
-      if (link.status === "unlinked") {
-        // Deliver privately, at the CHANNEL ROOT. `deliverEphemeral` owns the why — the
-        // `thread_ts`-inheritance trap and the `{ ok, error }` failure surface — and is
-        // shared with the event overrides in `events.ts`.
-        await deliverEphemeral(ctx, userId, unlinkedPrompt(link.authorize_url));
-        // DROP: a turn here would run the model under no identity — no tools, nothing to
-        // ground an answer in. The prompt IS the reply.
-        return null;
+      switch (link.status) {
+        case "unlinked":
+          // Deliver privately, at the CHANNEL ROOT. `deliverEphemeral` owns the why — the
+          // `thread_ts`-inheritance trap and the `{ ok, error }` failure surface — and is
+          // shared with the event overrides in `events.ts`.
+          await deliverEphemeral(ctx, userId, unlinkedPrompt(link.authorize_url));
+          // DROP: a turn here would run the model under no identity — no tools, nothing to
+          // ground an answer in. The prompt IS the reply.
+          return null;
+
+        case "linked":
+          // The mint pre-flight below IS the linked arm's work; it stays at this level so
+          // the never arm above it reads as the fork it closes.
+          break;
+
+        default: {
+          // A THIRD link state. Without this arm a drifted status falls past the
+          // `"unlinked"` check and is treated as `linked` — the one arm that dispatches a
+          // turn under a minted token. The `never` binding makes adding a variant to the
+          // Rust response a COMPILE error here, so the runtime arm below should be
+          // unreachable: `requestLinkState` validates the body it parses, and this is the
+          // backstop for a value that reaches the fork any other way — same argument as
+          // the mint `never` below (the wire type is only as honest as the last person
+          // who regenerated it).
+          const unexpected: never = link;
+          console.error("unexpected link state", {
+            status: (unexpected as { status?: unknown }).status,
+          });
+          await deliverEphemeral(
+            ctx,
+            userId,
+            "I couldn't check your temper account just now. Please try again in a moment.",
+          );
+          return null;
+        }
       }
 
       // PRE-FLIGHT THE MINT, before dispatching. The connection's `getToken` would mint too,
