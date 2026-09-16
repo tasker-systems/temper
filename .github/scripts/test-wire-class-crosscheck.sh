@@ -244,7 +244,10 @@ shape_fixture() { # $1 = file, payload on stdin
   jq -S 'del(.info.version)' > "$1"
 }
 derive_with() { # $1 = base fixture, $2 = head fixture
-  jq -n -r -f "$SHAPE_JQ" --slurpfile base "$1" --slurpfile head "$2" 2>&1
+  # -L is required since the comparator split (2026-09-16): wire-shape.jq includes
+  # wire-shape-lib.jq, and jq does not resolve `include` relative to the program
+  # file's own directory (measured, jq 1.7.1).
+  jq -n -r -f "$SHAPE_JQ" -L "$SCRIPT_DIR" --slurpfile base "$1" --slurpfile head "$2" 2>&1
 }
 
 BASE_OAS="${WORK}/base.json"
@@ -285,7 +288,13 @@ if [ "$v" = "grew" ]; then
   ok "derivation: a born operation and a born schema alongside an untouched survivor compute as grew"
 else bad "derivation: a born operation and a born schema alongside an untouched survivor compute as grew" "verdict=$v"; fi
 
-# 15e — required GROWN inside allOf: moved; required SHRUNK: the tolerant direction, grew.
+# 15e — required GROWN inside allOf: moved. Required SHRUNK with the property retained:
+# ALSO moved — CORRECTED 2026-09-16 (the #906 lesson). The old probe pinned shrinkage as
+# "the tolerant direction"; that reading is wrong for the omit-class: a field leaving
+# `required` while staying in `properties` is a field the server may now OMIT (Option +
+# skip_serializing_if), and a client built against the old contract types it required —
+# Scoring.score in PR #906 is the founding case. Under §4 ("tolerant in both skew
+# directions") any required change is breaking; the comparator's arm is now symmetric.
 jq -S '.components.schemas.Example.allOf[0].required = ["peer_table","extra"]' "$BASE_OAS" > "$HEAD_OAS"
 v="$(derive_with "$BASE_OAS" "$HEAD_OAS")"
 if [ "$v" = "moved" ]; then
@@ -293,9 +302,9 @@ if [ "$v" = "moved" ]; then
 else bad "derivation: required grown inside allOf computes as moved" "verdict=$v"; fi
 jq -S '.components.schemas.Example.allOf[0].required = []' "$BASE_OAS" > "$HEAD_OAS"
 v="$(derive_with "$BASE_OAS" "$HEAD_OAS")"
-if [ "$v" = "grew" ]; then
-  ok "derivation: required shrunk (the tolerant direction) computes as grew"
-else bad "derivation: required shrunk (the tolerant direction) computes as grew" "verdict=$v"; fi
+if [ "$v" = "moved" ]; then
+  ok "derivation: required shrunk (the omit-class, the #906 lesson) computes as moved"
+else bad "derivation: required shrunk (the omit-class, the #906 lesson) computes as moved" "verdict=$v"; fi
 
 echo
 echo "  ${PASS} passed, ${FAIL} failed"

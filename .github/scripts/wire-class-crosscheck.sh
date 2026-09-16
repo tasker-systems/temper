@@ -368,7 +368,10 @@ derive_shape() {
     # The comparator is ONE definition (wire-shape.jq) shared with its harness — the #874
     # lesson: the derivation is where shape honesty is computed, so it is the part that
     # must be probeable, not only the verdict handling around it.
-    verdict="$(jq -n -r -f "${SCRIPT_DIR}/wire-shape.jq" \
+    # -L is required since the comparator split (2026-09-16): wire-shape.jq includes
+    # wire-shape-lib.jq, and jq does not resolve `include` relative to the program
+    # file's own directory (measured, jq 1.7.1).
+    verdict="$(jq -n -r -f "${SCRIPT_DIR}/wire-shape.jq" -L "$SCRIPT_DIR" \
         --slurpfile base "$tmp_base" --slurpfile head "$tmp_head" 2>/dev/null)" || verdict="moved"
     rm -f "$tmp_base" "$tmp_head"
     verdict="${verdict//\"/}"

@@ -37,6 +37,7 @@ dependencies = [
   "openapi-check",
   "openapi-routes-check",
   "wire-register-crosscheck",
+  "openapi-pin-check",
   "openapi-summary-lint",
   "tripwires",
   "openapi-rb-drift",
@@ -81,6 +82,22 @@ fi
 
 exec bash .github/scripts/wire-class-crosscheck.sh --base "${base}"
 '''
+
+[tasks.openapi-pin-check]
+description = "Fail if the committed openapi.json moves beyond the current pinned minor contract (additive-only within a pin)"
+# The pinned-contract gate (2026-09-16): each released minor pins its contract under
+# schemas/versions/<M.m>/openapi.json, and every patch-level change to the committed
+# contract must be additive against the current pin — a client built at the pin
+# interoperates with every later patch, in both skew directions. The genuinely breaking
+# change is not forbidden: it discharges through the batching window (spec §12, D-S5)
+# with an M bump, and the next pin is cut in the same release PR. Until then this gate
+# reads red, which is the discipline speaking.
+#
+# Unlike wire-register-crosscheck this NEVER skips: it needs only jq and files — no
+# git derivation, no toolchain — so local and CI semantics are identical. The verdict
+# is the shared comparator's (wire-shape.jq / wire-shape-lib.jq); the full discipline
+# (pin cutting, window discharge) is documented in RELEASING.md's versioning section.
+script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-openapi-pin.sh"]
 
 [tasks.skills-drift]
 description = "Fail if the committed agent-skills/ projection has drifted from the templates that produce it"

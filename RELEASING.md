@@ -86,6 +86,12 @@ first release claims it — no local bootstrap upload.
    site) → `release-prepare.sh` (pre-flight through release PR).
    [`release-tag.yml`](.github/workflows/release-tag.yml) derives and pushes the
    `v<VERSION>` tag, which invokes `release.yml`.
+   **When the bump is an M (a shape-breaking window discharging), the same release
+   PR cuts the next pin**: copy the release candidate's `openapi.json` to
+   `schemas/versions/<M.m>/openapi.json` with a provenance README beside it (the
+   0.5 pin's README is the form). Until that lands, the previous pin stays current
+   and the window's shape movement correctly reads red on
+   `check-openapi-pin.sh` — the pin gate is what turns green with the discharge.
 
 4. **Verify the GitHub Release.** The Actions run should be green and the
    Release should list the three CLI binaries and the skill bundle; the npm,
@@ -146,6 +152,26 @@ changed — a register entry, never silent; no version bump). CI verifies row pr
 and shape-diff honesty; it is structurally barred from certifying the behavioral
 class — that half is owned by review ("does this change the meaning behind an
 unchanged shape for any existing client?") and the merge decision.
+
+### The pinned contract (additive-only within a released minor)
+
+Since 2026-09-16 each released minor also **pins** its contract:
+`schemas/versions/<M.m>/openapi.json` plus a provenance README (the 0.5 pin,
+cut from `v0.5.1`, is the founding one). Between pins the committed
+`openapi.json` may only GROW — a client built at the pin (the deploy base's
+widest adoption: enterprise fleets current as of v0.5.1) interoperates with
+every later patch release, in both skew directions.
+
+The gate is [`check-openapi-pin.sh`](.github/scripts/check-openapi-pin.sh)
+(`cargo make openapi-pin-check`, and the Guard-Tests CI step), verdict from the
+same comparator the declared-class gate uses (`wire-shape-lib.jq` — one
+definition). A `moved` verdict names each movement and is the **M class**: the
+movement discharges through the batching window (spec §12, D-S5 — it merges to
+the window branch, the window closes with one M bump), and the release PR cuts
+the next pin, which turns the gate green. A window branch is therefore expected
+to read red against the current pin until its discharge — that red is the
+discipline saying the movement cannot merge to `main` and strand the pin's
+clients.
 
 ## Deploying a release
 

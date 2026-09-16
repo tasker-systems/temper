@@ -493,6 +493,16 @@ jobs:
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
         run: bash .github/scripts/wire-class-crosscheck.sh
 
+      # The pinned-contract gate (2026-09-16): the committed openapi.json stays inside
+      # the current pinned minor (schemas/versions/<M.m>/) — additive-only within a pin,
+      # so a client built at the pin interoperates with every later patch. Where the
+      # cross-check above makes a break SIGNALED, this makes it AVOIDABLE: a moved
+      # verdict is the M class and discharges through the batching window with the next
+      # pin cut in the release PR. Needs only jq (preinstalled on the runner), so it
+      # lives in this job; its harness runs below.
+      - name: The committed contract stays inside its pinned minor (additive-only within a pin)
+        run: bash .github/scripts/check-openapi-pin.sh
+
       - name: Guard test — sqlx-wire-diff
         run: bash .github/scripts/test-sqlx-wire-diff.sh
 
@@ -501,6 +511,9 @@ jobs:
 
       - name: Guard test — wire-class-crosscheck
         run: bash .github/scripts/test-wire-class-crosscheck.sh
+
+      - name: Guard test — check-openapi-pin
+        run: bash .github/scripts/test-check-openapi-pin.sh
 
       # The Ignored Build Step's polarity is inverted (exit 0 skips, exit 1 builds), so a
       # sign error there stops production deploying while every check stays green. This
