@@ -108,6 +108,17 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'schema changed: Example'; th
   ok "required grown: fails naming the schema"
 else bad "required grown: fails naming the schema" "exit=$rc" "$out"; fi
 
+# ── 5b. Required GAINED from absent: FAIL naming the schema ─────────────────────────────────────
+# The pin's schema has NO `required` key; the committed contract grows one. The
+# comparator's per-key loop iterates base keys only, so without the gain-from-absent
+# clause this computed grew — the independent review of the pin-gate commit caught it.
+reset_fixtures
+jq -S 'del(.components.schemas.Example.allOf[0].required)' "${PINDIR}/0.5/openapi.json" > "${PINDIR}/0.5/openapi.json.tmp" && mv "${PINDIR}/0.5/openapi.json.tmp" "${PINDIR}/0.5/openapi.json"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'schema changed: Example'; then
+  ok "required gained from absent (the review find): fails naming the schema"
+else bad "required gained from absent (the review find): fails naming the schema" "exit=$rc" "$out"; fi
+
 # ── 6. Movement plus tolerated growth: the fail names both halves ───────────────────────────────
 reset_fixtures
 jq -S 'del(.components.schemas.Example) | .components.schemas.BornAck = {"type":"object"}' "$EMIT" > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"

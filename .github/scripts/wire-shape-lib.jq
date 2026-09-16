@@ -36,7 +36,13 @@
 # definition ("tolerant in both skew directions") ANY change to `required` is
 # breaking: growth strands new-required-reading clients against old servers,
 # shrinkage strands old-required-reading clients against new servers. The arm is
-# therefore symmetric: required arrays that differ ⇒ moved.
+# therefore symmetric: required arrays that differ ⇒ moved. The arm also covers the
+# gain-from-absent face (a base node with NO `required` key that gains one in head —
+# the independent review of the pin-gate commit caught the base-keys-only loop
+# missing it): required-growth is checked before the key loop, on the head side.
+# Note `required` is compared as an array, so a pure REORDER computes moved —
+# deliberate fail-closed (the spec: anything undecidable computes as moved); utoipa's
+# deterministic ordering makes that a non-event in practice.
 def broke_node($b; $h):
   ($b | type) != ($h | type)
   or (
@@ -50,6 +56,15 @@ def broke_node($b; $h):
     ($b | type) == "object"
     and (
       ([ $b | keys[] ] - [ $h | keys[] ] | length > 0)
+      or (
+        # Required-gain-from-absent: the per-key loop below iterates BASE keys, so a
+        # `required` key that exists only in HEAD would never be visited — a node
+        # growing its first required members would compute grew. Caught here instead:
+        # a non-empty head-side `required` on a node that had none is the
+        # new-required-reading break, not growth.
+        (($h | has("required")) and (($b | has("required")) | not)
+          and (($h.required | length) > 0))
+      )
       or (
         [ $b | keys[] as $k
           | if (($b[$k] | type) == "object") and (($h[$k] | type) == "object")

@@ -306,6 +306,16 @@ if [ "$v" = "moved" ]; then
   ok "derivation: required shrunk (the omit-class, the #906 lesson) computes as moved"
 else bad "derivation: required shrunk (the omit-class, the #906 lesson) computes as moved" "verdict=$v"; fi
 
+# 15f — required GAINED from absent (base node has no `required` at all): moved.
+# The pin-gate commit's independent review caught the base-keys-only loop missing
+# this face; the comparator now checks head-side required-growth explicitly.
+jq -S 'del(.components.schemas.Example.allOf[0].required)' "$BASE_OAS" > "${WORK}/base_noreq.json"
+jq -S '.components.schemas.Example.allOf[0].required = ["peer_table"]' "$BASE_OAS" > "${WORK}/head_gain.json"
+v="$(derive_with "${WORK}/base_noreq.json" "${WORK}/head_gain.json")"
+if [ "$v" = "moved" ]; then
+  ok "derivation: required gained from absent computes as moved"
+else bad "derivation: required gained from absent computes as moved" "verdict=$v"; fi
+
 echo
 echo "  ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

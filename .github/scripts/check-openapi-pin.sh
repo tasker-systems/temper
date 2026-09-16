@@ -43,6 +43,9 @@
 # * The pin records the HTTP contract only. MCP output and CLI stdout are contract
 #   surface (spec §3) whose shape no committed artifact records — their classes are
 #   owned by review, exactly as in wire-class-crosscheck.sh (spec §4's residue).
+#   D-S6's other pinned surfaces — the three generated skins and the in-tree ts-rs
+#   trees — track this contract transitively through their drift gates in the same
+#   CI; they are not pinned separately.
 # * The comparator's whitelisted prose edits and its born-node tolerance are the
 #   spec's additive definition, not this script's opinion.
 #
@@ -83,14 +86,18 @@ command -v jq >/dev/null 2>&1 || fail "jq is not installed; the shape verdict ca
 
 VERSION_FILE="${VERSION_FILE_ARG:-VERSION}"
 [ -f "$VERSION_FILE" ] || fail "no VERSION file at ${VERSION_FILE} — the current minor is unknowable, so no pin can be selected."
-VMAYOR_MINOR="$(tr -d '[:space:]' < "$VERSION_FILE" | cut -d. -f1-2)"
-VMAJOR="${VMAYOR_MINOR%%.*}"
-VMINOR="${VMAYOR_MINOR##*.}"
-case "${VMAJOR}:${VMINOR}" in
-    *[!0-9]*:*) fail "VERSION does not read as <major>.<minor>.<patch> (read: '$(tr -d '[:space:]' < "$VERSION_FILE")')." ;;
-    *:*) : ;;
-    *) fail "VERSION does not read as <major>.<minor>.<patch> (read: '$(tr -d '[:space:]' < "$VERSION_FILE")')." ;;
+RAW_VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
+case "$RAW_VERSION" in
+    *.*.*) : ;;
+    *) fail "VERSION does not read as <major>.<minor>.<patch> of bare numbers (read: '${RAW_VERSION}')." ;;
 esac
+VMAJOR="${RAW_VERSION%%.*}"
+REM="${RAW_VERSION#*.}"
+VMINOR="${REM%%.*}"
+VPATCH="${REM#*.}"
+case "$VMAJOR" in ''|*[!0-9]*) fail "VERSION's major is not a bare number (read: '${RAW_VERSION}')." ;; esac
+case "$VMINOR" in ''|*[!0-9]*) fail "VERSION's minor is not a bare number (read: '${RAW_VERSION}')." ;; esac
+case "$VPATCH" in ''|*[!0-9]*|*.*) fail "VERSION does not read as <major>.<minor>.<patch> of bare numbers (read: '${RAW_VERSION}')." ;; esac
 
 PIN_DIR="${PIN_DIR_ARG:-schemas/versions}"
 [ -d "$PIN_DIR" ] || fail "no pin tree at ${PIN_DIR}/ — cut a pin for the current minor: schemas/versions/${VMAJOR}.${VMINOR}/openapi.json plus a provenance README.md (see the 0.5 pin's README for the form)."

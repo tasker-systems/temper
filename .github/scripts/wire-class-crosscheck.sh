@@ -341,11 +341,14 @@ fi
 #   unchanged — identical (version stripped);
 #   grew      — the base contract survives INTACT and the head only adds. A surviving node may
 #               gain optional properties (new keys in `properties` never listed in `required` —
-#               the serde(default) tolerance the spec names) and may edit prose
-#               (description/summary/title/examples). Anything else on a surviving node — a
-#               property removed, a type changed, a requirement added (array `required` grown,
-#               boolean `required` tightened) — is breaking. Additions of whole paths/schemas
-#               are growth; removals are always breaking.
+#               the serde(default) tolerance the spec names), may edit prose
+#               (description/summary/title/examples), and may NOT touch `required` in either
+#               direction (corrected 2026-09-16: shrinkage is the omit-class — a field the
+#               server may now omit breaks clients that type it required, the PR #906 class;
+#               growth-from-absent and growth strand the other skew). Anything else on a
+#               surviving node — a property removed, a type changed, any `required` change —
+#               is breaking. Additions of whole paths/schemas are growth; removals are always
+#               breaking.
 #   moved     — the base contract changed or shrank anywhere: the M question.
 # Fail closed: anything undecidable computes as moved.
 derive_shape() {
