@@ -393,6 +393,24 @@ jobs:
       - name: Guard test — check-no-process-artifacts
         run: bash .github/scripts/test-check-no-process-artifacts.sh
 
+      # THE GATE ITSELF — public-surface drift: fenced `temper …` invocations in
+      # README.md and docs/ must resolve against the committed cli-reference tree
+      # (kept binary-equal by check-cli-reference-drift in rust-quality — prose ==
+      # tree here and tree == binary there compose to prose == binary), stated
+      # route/cron/function counts must equal what vercel.json derives, and NEW
+      # tracked files under internal/ and design-system/ must carry no roadmap
+      # verbs. Pure bash + python3, no toolchain — it lives in this ungated job for
+      # the same reason the docs/ gate does. detect-ci-scope.sh summons this
+      # workflow for README.md, design-system/ and internal/ changes
+      # (DOCS_GATED_ROOTS), so the gate is reachable on exactly its own failure
+      # modes. Reports only: it never writes to the surface it reads, and a green
+      # run never means the SERVED surface matches.
+      - name: Check public-surface drift (cli claims, counts, roadmap sweep)
+        run: bash .github/scripts/check-public-surface-drift.sh
+
+      - name: Guard test — check-public-surface-drift
+        run: bash .github/scripts/test-check-public-surface-drift.sh
+
       - name: Guard test — audit-route-auth (per-builder layer wiring)
         run: bash .github/scripts/test-audit-route-auth.sh
 

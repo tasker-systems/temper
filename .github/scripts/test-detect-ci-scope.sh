@@ -575,9 +575,22 @@ packages/temper-cloud/src/x.ts" \
     "RUN_RUST_QUALITY=true" \
     "RUN_TEST_RUST=true"
 
-# docs-only leaves the new axes off too (RUST_INERT is a non-docs concept).
-run_test "docs-only: rust-inert false, rust-quality off" \
+# docs-only leaves the new axes off (RUST_INERT is a non-docs concept). README.md
+# is the one docs-only change class that still summons code-quality: the
+# public-surface drift gate reads it, so a README edit — the gate's own failure
+# mode — must invoke the workflow (DOCS_GATED_ROOTS). A gate that runs nowhere
+# passes everywhere; this expectation was `false` until that gate existed.
+run_test "README.md: docs-only, heavy jobs off, code-quality on for the drift gate" \
     "README.md" \
+    "DOCS_ONLY=true" \
+    "RUST_INERT=false" \
+    "RUN_CODE_QUALITY=true" \
+    "RUN_RUST_QUALITY=false" \
+    "RUN_TEST_RUST=false"
+
+# Every OTHER root-level doc keeps the old property: docs-only, everything off.
+run_test "other root doc: docs-only, rust-quality off, code-quality off" \
+    "CONTRIBUTING.md" \
     "DOCS_ONLY=true" \
     "RUST_INERT=false" \
     "RUN_CODE_QUALITY=false" \

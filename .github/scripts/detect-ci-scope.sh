@@ -385,7 +385,12 @@ fi
 # gate would have been present and unreachable on precisely its own failure mode.
 # Same one-second bash, same ungated guard-tests job, same single cost:
 # RUN_CODE_QUALITY=true with every heavy job still off.
-DOCS_GATED_ROOTS='^docs/|^internal/'
+# `^design-system/` and `^README\.md$` join with the same shape and the same
+# single cost: check-public-surface-drift.sh reads exactly those roots (the
+# roadmap sweep sweeps design-system/, the cli-claims check reads README.md),
+# so a change confined to them must still summon guard-tests or the gate sits
+# unreachable on its own failure mode.
+DOCS_GATED_ROOTS='^docs/|^internal/|^design-system/|^README\.md$'
 
 HAS_DOCS_GATED=false
 if changes_match "$DOCS_GATED_ROOTS"; then
