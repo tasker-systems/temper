@@ -31,15 +31,16 @@
       <pre><code>irm https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.ps1 | iex</code></pre>
     </div>
     <p>
-      Windows support is experimental in the 0.1.x line — file issues at
+      Supported platforms: macOS (Apple Silicon), Linux (x86_64), and Windows
+      (x86_64). File issues at
       <a href="https://github.com/tasker-systems/temper/issues">github.com/tasker-systems/temper/issues</a>
       if you hit problems.
     </p>
     <p>
       To pin a version, pass <code>--version vX.Y.Z</code> to the install
-      script. See
-      <a href="https://github.com/tasker-systems/temper/blob/main/docs/guides/install.md">docs/guides/install.md</a>
-      for uninstall instructions and Linux arm64 / Intel Mac notes.
+      script (<code>… | sh -s -- --version vX.Y.Z</code>). The
+      <a href="https://github.com/tasker-systems/temper/blob/main/docs/playbooks/install-temper.md">install playbook</a>
+      covers Homebrew, uninstalling, other platforms, and troubleshooting.
     </p>
 
     <h3>Build from source</h3>
@@ -50,13 +51,12 @@
     <div class="cli-block">
       <pre><code>git clone https://github.com/tasker-systems/temper.git
 cd temper
-cargo install --path crates/temper-cli --features embed,extract,hnsw</code></pre>
+cargo install --path crates/temper-cli --locked --features embed,extract</code></pre>
     </div>
     <p>
       The <code>embed</code> feature pulls in ONNX Runtime for local
       embeddings; <code>extract</code> enables document ingestion via
-      kreuzberg; <code>hnsw</code> enables the local vector index.
-      Drop any you don't need.
+      kreuzberg. Both are enabled by default.
     </p>
   </section>
 
@@ -72,9 +72,9 @@ cargo install --path crates/temper-cli --features embed,extract,hnsw</code></pre
     </p>
     <table>
       <tbody>
-        <tr><td><code>temper init</code></td><td>Initialise a new vault — asks how you work, writes config.</td></tr>
-        <tr><td><code>temper context add &lt;name&gt;</code></td><td>Subscribe to a context (project). Contexts keep resources scoped.</td></tr>
-        <tr><td><code>temper warmup --context &lt;ctx&gt;</code></td><td>Session primer — recent work, open tasks, recent decisions. Pipe into an agent's first prompt.</td></tr>
+        <tr><td><code>temper init</code></td><td>Initialise a new vault — walks vault location, contexts to create, and instance setup.</td></tr>
+        <tr><td><code>temper context create &lt;name&gt;</code></td><td>Create a context (project) on the server. The output carries its ref (<code>@you/&lt;slug&gt;</code>) — use that ref everywhere else.</td></tr>
+        <tr><td><code>temper warmup --context &lt;ctx-ref&gt;</code></td><td>Session primer — recent work, open tasks, recent decisions. Pipe into an agent's first prompt. The context is a ref (<code>@me/myapp</code>) — bare names are not addressable.</td></tr>
         <tr><td><code>temper pull &lt;ctx&gt;</code></td><td>Re-materialise a context's projection from the cloud into the local vault.</td></tr>
         <tr><td><code>temper status</code></td><td>Vault overview: contexts, resource counts, recent activity.</td></tr>
         <tr><td><code>temper check</code></td><td>Verify vault integrity and tool health.</td></tr>
@@ -135,20 +135,19 @@ cargo install --path crates/temper-cli --features embed,extract,hnsw</code></pre
   <section>
     <h2>Search</h2>
     <p>
-      <code>temper search</code> combines full-text and semantic search with
-      optional graph expansion — seeds spread along typed edges to surface
-      neighbors.
+      <code>temper search</code> combines full-text and semantic search — your
+      query is embedded locally and matched by meaning, not just keywords.
     </p>
     <table>
       <tbody>
         <tr><td><code>temper search &lt;query&gt;</code></td><td>Hybrid search across the vault.</td></tr>
-        <tr><td><code>--context &lt;ctx&gt;</code></td><td>Scope to one context.</td></tr>
+        <tr><td><code>--context &lt;ctx-ref&gt;</code></td><td>Scope to one context.</td></tr>
+        <tr><td><code>--cogmap &lt;ref&gt;</code></td><td>Scope to a single cognitive map (mutually exclusive with <code>--context</code>).</td></tr>
         <tr><td><code>--doc-type &lt;type&gt;</code></td><td>Filter by doc type.</td></tr>
         <tr><td><code>--limit &lt;n&gt;</code></td><td>Cap results (default 10).</td></tr>
+        <tr><td><code>--offset &lt;n&gt;</code></td><td>Skip this many results.</td></tr>
+        <tr><td><code>--within &lt;ref&gt;</code></td><td>Narrow to specific resources, by ref. Repeatable; composes with <code>--context</code> / <code>--cogmap</code>.</td></tr>
         <tr><td><code>--text-only</code></td><td>Skip semantic search (no local embedding needed).</td></tr>
-        <tr><td><code>--seed &lt;uuid&gt;</code></td><td>Explicit seed resource for graph expansion. Repeatable.</td></tr>
-        <tr><td><code>--edge-type &lt;kind&gt;</code></td><td>Restrict graph expansion to one or more edge kinds. Repeatable.</td></tr>
-        <tr><td><code>--depth &lt;n&gt;</code></td><td>Max hops for graph traversal (default 2, max 10).</td></tr>
       </tbody>
     </table>
   </section>
@@ -165,7 +164,7 @@ cargo install --path crates/temper-cli --features embed,extract,hnsw</code></pre
     </p>
     <table>
       <tbody>
-        <tr><td><code>temper edge assert &lt;source&gt; &lt;target&gt; --kind &lt;k&gt; --polarity &lt;p&gt; --label &lt;text&gt;</code></td><td>Assert a typed edge. Kinds: <code>express</code>, <code>contains</code>, <code>leads-to</code>, <code>near</code>. Polarity: <code>forward</code> or <code>inverse</code>. Optional <code>--weight</code> (default 1.0). Idempotent.</td></tr>
+        <tr><td><code>temper edge assert &lt;source&gt; &lt;target&gt; --kind &lt;k&gt; --polarity &lt;p&gt; --label &lt;text&gt;</code></td><td>Assert a typed edge. Kinds: <code>express</code>, <code>contains</code>, <code>leads-to</code>, <code>near</code>. Polarity: <code>forward</code> or <code>inverse</code>. Optional <code>--weight</code> (default 1.0).</td></tr>
         <tr><td><code>temper edge retype &lt;edge-handle&gt; --kind &lt;k&gt; --polarity &lt;p&gt;</code></td><td>Change an edge's kind and polarity.</td></tr>
         <tr><td><code>temper edge reweight &lt;edge-handle&gt; --weight &lt;n&gt;</code></td><td>Change an edge's weight.</td></tr>
         <tr><td><code>temper edge fold &lt;edge-handle&gt; [--reason &lt;text&gt;]</code></td><td>Fold (supersede) an edge — it stops contributing to projections, with the reason recorded.</td></tr>
@@ -201,9 +200,16 @@ cargo install --path crates/temper-cli --features embed,extract,hnsw</code></pre
     <h3>Teams</h3>
     <table>
       <tbody>
-        <tr><td><code>temper team join</code></td><td>Request to join a team — <code>--team</code> to name it, <code>--message</code> to attach a note.</td></tr>
-        <tr><td><code>temper team status</code></td><td>Check request or membership status.</td></tr>
-        <tr><td><code>temper team leave</code></td><td>Withdraw a pending request or leave a team.</td></tr>
+        <tr><td><code>temper team create &lt;slug&gt;</code></td><td>Create a team — you become its owner. <code>--name</code> sets the display name; <code>--parent &lt;ref&gt;</code> nests it.</td></tr>
+        <tr><td><code>temper team list</code></td><td>List the teams you are a member of.</td></tr>
+        <tr><td><code>temper team show &lt;slug&gt;</code></td><td>Show a team's detail and member roster.</td></tr>
+        <tr><td><code>temper team invite &lt;team&gt; &lt;email&gt; --role &lt;role&gt;</code></td><td>Invite an email (owner/maintainer). Prints the invitation with its token; no email is sent — the address is a correlator.</td></tr>
+        <tr><td><code>temper team join &lt;token&gt;</code></td><td>Accept a team invitation by its token.</td></tr>
+        <tr><td><code>temper team add-member &lt;team-id&gt; &lt;profile-id&gt; --role &lt;role&gt;</code></td><td>Add an existing profile directly (owner/maintainer). Takes UUIDs, not slugs.</td></tr>
+        <tr><td><code>temper team set-role &lt;team&gt; &lt;profile-id&gt; --role &lt;role&gt;</code></td><td>Change a member's role (owner/maintainer).</td></tr>
+        <tr><td><code>temper team remove-member &lt;team&gt; &lt;profile-id&gt;</code></td><td>Remove a member (owner/maintainer).</td></tr>
+        <tr><td><code>temper team leave &lt;team&gt;</code></td><td>Leave a team you are a member of.</td></tr>
+        <tr><td><code>temper team reassign &lt;team&gt; --from &lt;uuid&gt; --to &lt;uuid&gt;</code></td><td>Bulk-reassign a departing member's team-scoped resources (offboarding).</td></tr>
       </tbody>
     </table>
   </section>
@@ -216,23 +222,24 @@ cargo install --path crates/temper-cli --features embed,extract,hnsw</code></pre
       paths — a Claude Code skill file, or the remote MCP server.
     </p>
 
-    <h3>Claude Code skill</h3>
+    <h3>Skill file</h3>
     <p>
-      A skill file teaches an agent your vault's structure, doc types, and
-      workflow vocabulary. Temper generates one tailored to your vault:
+      A generated skill file teaches an agent your vault's structure, doc
+      types, and workflow vocabulary — for Claude Code, opencode, or any
+      <code>~/.agents</code>-compatible tool:
     </p>
     <div class="cli-block">
       <pre><code>temper skill install</code></pre>
     </div>
     <table>
       <tbody>
-        <tr><td><code>temper skill install</code></td><td>Install skill directory and command wrapper.</td></tr>
+        <tr><td><code>temper skill install</code></td><td>Install the skill (<code>--target agents|claude|opencode</code>, default <code>agents</code>; <code>--path &lt;dir&gt;</code> installs elsewhere).</td></tr>
         <tr><td><code>temper skill generate</code></td><td>Preview the skill content to stdout without installing.</td></tr>
         <tr><td><code>temper skill check</code></td><td>Report installation status.</td></tr>
       </tbody>
     </table>
     <p>
-      To automatically prime new Claude Code sessions with recent context,
+      To automatically prime new agent sessions with recent context,
       add a <code>SessionStart</code> hook:
     </p>
     <div class="cli-block">
@@ -241,7 +248,7 @@ cargo install --path crates/temper-cli --features embed,extract,hnsw</code></pre
     "SessionStart": [{
       "hooks": [{
         "type": "command",
-        "command": "temper warmup --context myapp"
+        "command": "temper warmup --context @me/myapp"
       }]
     }]
   }
@@ -251,8 +258,9 @@ cargo install --path crates/temper-cli --features embed,extract,hnsw</code></pre
     <h3>MCP server</h3>
     <p>
       The remote MCP server exposes vault operations as structured tools over
-      Streamable HTTP. Agents authenticate via Auth0 using the OAuth 2.1 +
-      PKCE flow. Connect Claude Desktop or Claude Code:
+      Streamable HTTP. Agents authenticate via OAuth 2.1 + PKCE — you'll be
+      prompted to log in on first connection. Connect Claude Desktop or
+      Claude Code:
     </p>
     <div class="cli-block">
       <pre><code>{`{
@@ -263,34 +271,32 @@ cargo install --path crates/temper-cli --features embed,extract,hnsw</code></pre
   }
 }`}</code></pre>
     </div>
-    <p>
-      The client handles OAuth automatically — you'll be prompted to log in
-      on first connection.
-    </p>
 
-    <h4>Available tools</h4>
+    <h4>Core tools</h4>
     <table>
       <tbody>
+        <tr><td><code>search</code></td><td>Full-text and semantic search across the knowledge base.</td></tr>
         <tr><td><code>list_resources</code></td><td>List resources, filtered by context and/or doc type. Most recent first.</td></tr>
-        <tr><td><code>get_resource</code></td><td>Get a resource by ID or slug, optionally with full markdown content.</td></tr>
+        <tr><td><code>get_resource</code></td><td>Get a resource by ref, optionally with full markdown content.</td></tr>
         <tr><td><code>create_resource</code></td><td>Create a resource with optional markdown content. Name-based context and doc type.</td></tr>
         <tr><td><code>update_resource</code></td><td>Update a resource's title, slug, or content. New content triggers re-indexing.</td></tr>
         <tr><td><code>update_resource_meta</code></td><td>Update a resource's managed/open frontmatter without touching the body.</td></tr>
         <tr><td><code>delete_resource</code></td><td>Soft-delete a resource by ID.</td></tr>
-        <tr><td><code>assert_relationship</code></td><td>Assert a typed edge between two resources. Idempotent.</td></tr>
-        <tr><td><code>retype_relationship</code></td><td>Change an edge's kind and polarity.</td></tr>
-        <tr><td><code>reweight_relationship</code></td><td>Change an edge's weight.</td></tr>
-        <tr><td><code>fold_relationship</code></td><td>Fold (supersede) an edge so it stops contributing to projections.</td></tr>
-        <tr><td><code>search</code></td><td>Full-text and semantic search across the knowledge base.</td></tr>
-        <tr><td><code>list_contexts</code></td><td>List available contexts (workspaces).</td></tr>
-        <tr><td><code>get_context</code></td><td>Get details of a specific context.</td></tr>
-        <tr><td><code>create_context</code></td><td>Create a new context (workspace).</td></tr>
-        <tr><td><code>list_doc_types</code></td><td>List available document types.</td></tr>
-        <tr><td><code>describe_doc_type</code></td><td>Describe a doc type's schema — required and optional frontmatter fields.</td></tr>
-        <tr><td><code>list_events</code></td><td>List events, optionally filtered by resource or type.</td></tr>
-        <tr><td><code>get_profile</code></td><td>Get the authenticated user's profile.</td></tr>
+        <tr><td><code>relationship</code></td><td>Assert, retype, reweight, or fold typed edges between resources (action discriminator).</td></tr>
+        <tr><td><code>context_read</code> / <code>context_manage</code></td><td>Read and manage contexts (workspaces).</td></tr>
+        <tr><td><code>describe_schema</code></td><td>Describe doc types and their schemas.</td></tr>
+        <tr><td><code>run_query</code></td><td>Run a composed query — a declared DAG of acts answered in one round trip.</td></tr>
+        <tr><td><code>element_trail</code></td><td>Read a resource's or edge's append-only event trail.</td></tr>
       </tbody>
     </table>
+    <p>
+      The tool surface also covers cognitive maps (<code>cogmap_*</code>),
+      blobs (<code>blob_*</code>), data artifacts
+      (<code>commit_data_artifact</code> and friends), and facets
+      (<code>facet_set</code> / <code>facets_read</code>) — the full list is
+      what the server advertises over MCP, so your client's tool list is the
+      reference.
+    </p>
   </section>
 
   <!-- ── Config ────────────────────────────────────────────────────── -->

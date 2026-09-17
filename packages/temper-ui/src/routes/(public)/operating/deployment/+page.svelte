@@ -51,7 +51,7 @@
     "Postgres + Temper serving its surfaces" as Vercel functions over a Neon database; a private
     deployment might run it as containers over a database it operates. The seed is the same; the
     ground it lands on is yours to pick. If that ground is the same one temperkb.io stands on, the
-    <a href="https://github.com/tasker-systems/temper/blob/main/docs/guides/self-hosting.md">self-hosting
+    <a href="https://github.com/tasker-systems/temper/blob/main/docs/playbooks/self-host-temper.md">self-hosting
     runbook</a> is the concrete floor beneath this page — the exact Vercel project, Neon database, and
     Auth0 tenant a near-minimal deployment needs.
   </p>

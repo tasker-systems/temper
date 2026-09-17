@@ -24,29 +24,27 @@
   <div class="cli-wrapper">
     <CliBlock>
       <div class="cli-prompt">
-        <span class="flag">$</span> <span class="cmd">temper warmup</span> <span class="flag">--context</span> myapp
+        <span class="flag">$</span> <span class="cmd">temper warmup</span> <span class="flag">--context</span> @me/myapp
       </div>
       <div class="cli-divider"></div>
       <div class="warmup-output">
         <div class="warmup-line">
-          <span class="warmup-label">Last session</span>
-          <span class="warmup-value">Mar 28 — Chose JWT rotation over session tokens</span>
+          <span class="warmup-label">Active goals</span>
+          <span class="warmup-value"><span class="dim">none yet</span></span>
         </div>
         <div class="warmup-line">
           <span class="warmup-label">In-progress</span>
           <span class="warmup-value"><span class="tag tag-mode">build</span> <span class="tag tag-effort">medium</span> api-auth-middleware</span>
         </div>
         <div class="warmup-line">
-          <span class="warmup-label">Deferred</span>
-          <span class="warmup-value"><span class="dim">rate limiting — blocked on load testing</span></span>
+          <span class="warmup-label">Recent sessions</span>
+          <span class="warmup-value">Sep 16 — Session: auth middleware progress</span>
         </div>
         <div class="warmup-line">
-          <span class="warmup-label">Open decisions</span>
-          <span class="warmup-value"><span class="dim">2 — token expiry window, refresh strategy</span></span>
+          <span class="warmup-label">Pending</span>
+          <span class="warmup-value"><span class="dim">0 invitations · 0 review requests</span></span>
         </div>
       </div>
-      <div class="cli-divider"></div>
-      <div class="warmup-ready">3 sessions of context loaded. Ready.</div>
     </CliBlock>
   </div>
 </section>
@@ -102,7 +100,7 @@
   <h2>Warm up. Work. <em>Save.</em></h2>
   <p>Every session follows a rhythm. Start with context. Do the work. Record what happened. The next session reads what you wrote. This is the core loop — and it's what turns a collection of documents into a living history of what you're building.</p>
   <div class="cycle">
-    <div class="cycle-step"><div class="cycle-num">1</div><div class="cycle-content"><span class="cycle-cmd">temper warmup</span><span class="cycle-desc">Injects active tasks, recent sessions, and the last session's full content. The agent resumes where you left off.</span></div></div>
+    <div class="cycle-step"><div class="cycle-num">1</div><div class="cycle-content"><span class="cycle-cmd">temper warmup</span><span class="cycle-desc">Surfaces active goals, in-progress tasks, recent sessions, and pending invitations. The agent resumes where you left off.</span></div></div>
     <div class="cycle-arrow">↓</div>
     <div class="cycle-step"><div class="cycle-num">2</div><div class="cycle-content"><span class="cycle-cmd">Work</span><span class="cycle-desc">Build or plan within a task. The mode and effort shape how the session unfolds — temper doesn't prescribe process, it carries context.</span></div></div>
     <div class="cycle-arrow">↓</div>
@@ -116,13 +114,11 @@
   <p>You don't remember the filename. You barely remember the date. But you know you made a decision about authentication strategy somewhere in the last two weeks. Temper embeds your vault using local ML models and searches by meaning, not keywords.</p>
   <div class="search-demo">
     <CliBlock>
-      <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper search</span> "how did we handle token expiry" <span class="flag">--limit 5</span></div>
+      <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper search</span> "how did we handle token expiry" <span class="flag">--context</span> @me/myapp <span class="flag">--limit 5</span></div>
       <div class="cli-results">
-        <div class="cli-result"><span>decision/jwt-rotation-strategy.md</span><span class="cli-score">0.94</span></div>
-        <div class="cli-result"><span>session/2026-03-28-auth-middleware.md</span><span class="cli-score">0.89</span></div>
-        <div class="cli-result"><span>research/token-refresh-patterns.md</span><span class="cli-score">0.85</span></div>
-        <div class="cli-result"><span>session/2026-03-26-auth-planning.md</span><span class="cli-score">0.79</span></div>
-        <div class="cli-result"><span>task/api-auth-middleware.md</span><span class="cli-score">0.72</span></div>
+        <div class="cli-result"><span>decision · JWT rotation over session tokens</span><span class="cli-score">0.845</span></div>
+        <div class="cli-result"><span>research · Token refresh patterns</span><span class="cli-score">0.831</span></div>
+        <div class="cli-result"><span>session · Auth middleware session</span><span class="cli-score">0.829</span></div>
       </div>
     </CliBlock>
     <p class="search-note">Results span decisions, sessions, research, and tasks — all ranked by relevance to what you actually meant, not what you happened to type.</p>
@@ -142,7 +138,7 @@
       <p>A unit of work toward a goal. Every task has a mode — <span class="tag-inline tag-mode">build</span> or <span class="tag-inline tag-plan">plan</span> — and expected effort — <span class="tag-inline tag-effort">small</span>, <span class="tag-inline tag-effort">medium</span>, or <span class="tag-inline tag-effort">large</span>. Code is the common case, but a research proposal, a slide deck, even a novel — the thing you're building is up to you.</p>
     </div>
   </div>
-  <p>When you run <span class="cmd-inline">temper init</span>, the setup asks how you work. Do you use superpowers? GSD? Something of your own? Temper adapts to your workflow rather than replacing it — it carries the throughline regardless of what tools and ceremonies you prefer.</p>
+  <p>When you run <span class="cmd-inline">temper init</span>, the setup asks where your vault should live, which contexts to create, and — for a private deployment — how to reach your instance. Temper adapts to your workflow rather than replacing it — it carries the throughline regardless of what tools and ceremonies you prefer.</p>
 </Section>
 
 <Section label="The vault">
@@ -180,13 +176,13 @@
     <div class="cli-prompt"><span class="flag">#</span> <span class="dim">Install — macOS / Linux (see the reference for all platforms)</span></div>
     <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">curl -fsSL https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.sh | sh</span></div>
     <div class="cli-spacer"></div>
-    <div class="cli-prompt"><span class="flag">#</span> <span class="dim">Initialise a vault, then subscribe to a project context</span></div>
+    <div class="cli-prompt"><span class="flag">#</span> <span class="dim">Initialise a vault, then create your project's context on the server</span></div>
     <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper init</span></div>
-    <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper context</span> add myapp</div>
+    <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper context</span> create myapp</div>
     <div class="cli-spacer"></div>
     <div class="cli-prompt"><span class="flag">#</span> <span class="dim">Teach your agent the vault, then warm up each session</span></div>
     <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper skill install</span></div>
-    <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper warmup</span> <span class="flag">--context</span> myapp</div>
+    <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper warmup</span> <span class="flag">--context</span> @me/myapp</div>
   </CliBlock>
   <p class="getstarted-ref">The full command reference — create, search, relationships, cloud, MCP — lives in <a href="/using-temper">Using Temper</a>.</p>
 </Section>
@@ -215,7 +211,6 @@
   .warmup-line { display: flex; gap: 1rem; font-size: 0.7rem; line-height: 1.6; }
   .warmup-label { color: var(--temper-blue-dim); min-width: 110px; flex-shrink: 0; }
   .warmup-value { color: rgba(255, 255, 255, 0.55); }
-  .warmup-ready { font-size: 0.7rem; color: var(--temper-blue); }
   .cli-divider { height: 1px; background: rgba(255, 255, 255, 0.04); margin: 0.6rem 0; }
   .tag { font-size: 0.6rem; padding: 0.1rem 0.4rem; border: 1px solid; letter-spacing: 0.05em; }
   .tag-mode { border-color: rgba(126, 184, 218, 0.3); color: var(--temper-blue); }
