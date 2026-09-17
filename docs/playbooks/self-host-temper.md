@@ -41,7 +41,7 @@ functions** from a single deployment:
  CLI / MCP client   │  api/mcp.rs        MCP server          │
  ──────────────────▶│  api/axum.rs       REST API            │
                     │  api/internal.rs   drains + crons      │
- Vercel cron (×7)   │  api/oauth/*.ts    OAuth + SAML        │
+ Vercel cron (×10)  │  api/oauth/*.ts    OAuth + SAML        │
  ──────────────────▶│                                        │
                     └────────────────────────────────────────┘
                                │                │
@@ -57,9 +57,9 @@ routes match in order:
 | Route | Function | What it is |
 |---|---|---|
 | `/mcp`, `/mcp/(.*)` | `api/mcp.rs` | The MCP server. |
-| `/api/embed/dispatch`, `/api/embed/warm`, `/api/region/dispatch`, `/api/slack/intents/reap` | `api/internal.rs` | Cron-driven work. **Not called by clients** — see below. |
+| `/api/embed/dispatch`, `/api/embed/warm`, `/api/region/dispatch`, `/api/slack/intents/reap`, `/api/as/reap`, `/api/internal-calls/health`, `/api/erasure/drain` | `api/internal.rs` | Cron-driven work. **Not called by clients** — see below. |
 | `/internal/(.*)` | `api/internal.rs` | Server-to-server, HMAC-gated (the SAML reconcile channel). |
-| `/oauth/token`, `/oauth/jwks`, `/oauth/authorize`, `/oauth/saml/{login,acs,metadata}`, `/.well-known/oauth-authorization-server` | `api/oauth/*.ts` | The authorization server. TypeScript, not Rust. |
+| `/oauth/token`, `/oauth/jwks`, `/oauth/authorize`, `/oauth/clients`, `/oauth/saml/{login,acs,metadata}`, `/.well-known/oauth-authorization-server` | `api/oauth/*.ts` | The authorization server. TypeScript, not Rust. |
 | `/oauth/(.*)`, `/.well-known/(.*)` | `api/mcp.rs` | Whatever the named OAuth routes above did not claim. |
 | `/(.*)` | `api/axum.rs` | The REST API (catch-all). |
 
@@ -70,20 +70,23 @@ committed `.sqlx/` cache rather than a live database.
 ### The drains are not optional
 
 `api/internal.rs` runs the background work, and **nothing invokes it unless the
-crons are configured**. `vercel.json` declares seven:
+crons are configured**. `vercel.json` declares ten:
 
 | Schedule | Path | What stalls without it |
 |---|---|---|
 | every minute | `/api/embed/dispatch?shard=0..3` (four entries) | Embedding: new and changed resources are never vectorised, so semantic search does not see them. |
 | every 2 minutes | `/api/embed/warm` | Cold-start latency on the embedding path. |
-| every minute | `/api/region/dispatch` | Region materialization: cognitive-map regions never form. |
 | hourly | `/api/slack/intents/reap` | Expired Slack link intents are never swept. |
+| every minute | `/api/region/dispatch` | Region materialization: cognitive-map regions never form. |
+| daily at 03:17 | `/api/as/reap` | Retention: the authorization server's tables and abandoned staged blob uploads are never reaped. |
+| every 15 minutes | `/api/internal-calls/health` | Reconcile-channel health: a fail-open internal call that never reached the instance produces no operator-visible signal. |
+| every minute | `/api/erasure/drain` | Erasure: deletion work is never processed off the request path. |
 
 A deployment that skips them accepts writes and looks healthy while search
 results and cogmap regions silently stop advancing. `api/internal.rs` is given
 `maxDuration: 300` for this reason — the drains are long-running relative to a
 request. The queries for checking that the drains are keeping up are in
-`drain-operator-queries`.
+`internal/development/drain-operator-queries.md` in the repository.
 
 ## Provision Neon
 
@@ -313,7 +316,7 @@ for why.
 
 The authoritative routing, function and cron configuration is `vercel.json` at
 the repo root. It declares three Rust functions (`api/axum.rs`, `api/mcp.rs`,
-`api/internal.rs`), eighteen routes and seven crons; the Topology section above
+`api/internal.rs`), 22 routes and 10 crons; the Topology section above
 summarises what each one is for.
 
 Do not hand-edit it without also updating the function it routes to.

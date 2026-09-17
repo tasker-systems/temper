@@ -14,6 +14,20 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.5.0 — unreleased
  
+- **Self-host route/cron table regeneration — counts and tables derived from `vercel.json`**
+  `docs/playbooks/self-host-temper.md`'s route table, cron table, topology
+  diagram, and routing-contract counts are regenerated from the current
+  `vercel.json` (22 routes, 10 crons, including the three drains the page
+  previously omitted); the drains-queries pointer names its repository path.
+  `/using-temper`'s doc-type statement states the fourteen-type platform
+  vocabulary and names the MCP `describe_schema` tool as its authority. Copy
+  only — no contract shape moves, no runtime behavior change, no generated
+  artifact re-stales.
+pr: self
+classes: additive
+surfaces: internal
+status: signal-only
+
 - **Get-started regeneration — /builders, /agents, /using-temper, README, two playbooks**
   Every command, flag, feature, and MCP tool named on the published
   get-started sequences is regenerated from the installed binary's real
