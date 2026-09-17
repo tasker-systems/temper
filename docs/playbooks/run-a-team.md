@@ -11,7 +11,7 @@ work, and know how to reassign ownership when someone leaves.
 ## Prerequisites
 
 - **Temper installed** — see [Install Temper](../playbooks/install-temper.md).
-- **Authenticated** — you have signed in and have a profile. Run `temper whoami`
+- **Authenticated** — you have signed in and have a profile. Run `temper auth status`
   to confirm.
 - **Familiar with contexts and refs** — team membership gates access to
   [contexts](../concepts/contexts-and-refs.md), and the sharing commands use
@@ -51,10 +51,12 @@ Temper profile.
 ### Already have a profile: add them directly
 
 If you know a person's profile UUID (from `temper team show` on a shared
-team), add them straight away:
+team), add them straight away. `add-member` takes IDs, not slugs — the team
+UUID is in `temper team show acme-eng` (or in the `team create` output), and
+the profile UUID comes from `team show`'s roster:
 
 ```bash
-temper team add-member acme-eng 019f41f3-74ab-7ec0-8b0d-cb21662c51cb --role member
+temper team add-member <team-uuid> 019f41f3-74ab-7ec0-8b0d-cb21662c51cb --role member
 ```
 
 ### Not in the system yet: invite by email

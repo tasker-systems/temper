@@ -508,20 +508,20 @@ claude mcp add --transport http temper https://<instance>/mcp
 ## Deactivating an account (authn control)
 
 Team membership is **authorization**; it does not control whether an account can log in. To
-stop an account from authenticating at all — regardless of what the IdP asserts — soft-delete
-the profile:
+stop an account from authenticating at all — regardless of what the IdP asserts — deactivate
+the principal's system access:
 
-```sql
-UPDATE kb_profiles SET is_active = false WHERE id = '<profile-uuid>';
+```bash
+temper admin access deactivate <profile-uuid>
 ```
 
-A deactivated profile is rejected by the API auth middleware (`401`) even with a valid token.
-This never deletes the profile or its history, and it is independent of SAML group provisioning
-(re-activating restores access). Reconcile/deprovisioning of a team never deactivates a
-profile.
+A deactivated principal is rejected by the API auth middleware (`401`) even with a valid
+token. This never deletes the profile or its history, and it is independent of SAML group
+provisioning (`temper admin access reactivate <profile-uuid>` restores the prior standing).
+Reconcile/deprovisioning of a team never deactivates a principal.
 
-> `is_active` is enforced by the shared authorization seam, so **both** surfaces — `temper-api`
-> and `temper-mcp` — reject a deactivated profile identically. See
+> Deactivation is enforced by the shared authorization seam, so **both** surfaces — `temper-api`
+> and `temper-mcp` — reject a deactivated principal identically. See
 > [The Trust Boundary](../concepts/trust-boundary.md).
 
 ## Running it as the applier

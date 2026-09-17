@@ -45,7 +45,7 @@ This isn't a ticketing system competing with Linear. It's a structured knowledge
 
 ## Session continuity
 
-Every new session starts with `temper warmup`, which injects active tasks, recent session summaries, and the last session's full content. The agent resumes where you left off instead of starting from scratch.
+Every new session starts with `temper warmup`, which surfaces active goals, in-progress tasks, recent sessions, and pending invitations. The agent resumes where you left off instead of starting from scratch.
 
 At the end of each session, a session note (`temper resource create --type session`) captures what happened — decisions made, tasks updated, next steps identified — written straight through the cloud to the substrate. The next session reads it. Context compounds instead of decaying.
 
@@ -87,10 +87,9 @@ curl -fsSL https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/
 irm https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.ps1 | iex
 ```
 
-> Windows support is experimental in v0.1.x — please file issues at
-> https://github.com/tasker-systems/temper/issues if you hit problems.
+Supported platforms: macOS (Apple Silicon), Linux (x86_64), and Windows (x86_64) — please file issues at https://github.com/tasker-systems/temper/issues if you hit problems.
 
-For version pinning, uninstall instructions, and building from source (including Linux arm64 and Intel Mac), see [docs/playbooks/install-temper.md](docs/playbooks/install-temper.md).
+For version pinning, uninstall instructions, and building from source (including Linux arm64 and Intel Mac), see the [install playbook](docs/playbooks/install-temper.md).
 
 ## Quick Start
 
@@ -150,9 +149,11 @@ Every command accepts the global flags `--format json|toon` and `--color auto|al
 |---------|-------------|
 | `temper search <query>` | Hybrid full-text + semantic search |
 | `temper search <query> --limit <n>` | Cap the result count (default 10) |
-| `temper search <query> --edge-type <k> --depth <n>` | Search with graph expansion along typed edges |
+| `temper search <query> --context <ctx-ref>` | Scope the search to one context |
 | `temper search <query> --cogmap <ref>` | Scope the search to a single cognitive map |
-| `temper search <query> --wayfind [--lens <ref>]` | Lens-driven region-salience search across your visible maps |
+| `temper search <query> --within <ref>` | Narrow to specific resources, by ref (repeatable) |
+| `temper search <query> --text-only` | Full-text only — no local embedding needed |
+| `temper graph` | Walk the knowledge graph — orient with no question, or move from where you are |
 
 ### Content
 
@@ -206,7 +207,7 @@ The table reads in authoring order: open an envelope, create nodes and facet the
 
 Every authored act carries the envelope flags `--invocation`, `--confidence`, `--reasoning`, and `--model`. An act missing them is still real, but it is orphaned from the audit chain. `--sources` records block-provenance on the body; adding `--sources-as-edges` also asserts a `derived_from` edge to each resource-valued source.
 
-Building one from a body of source material is its own discipline: [ingesting a corpus](docs/guides/corpus-ingestion.md), then [building a cognitive map](docs/guides/building-a-cognitive-map.md) from it. For the concept, see [cognitive maps](https://temperkb.io/cognitive-maps).
+Building one from a body of source material is its own discipline: [ingesting a corpus](docs/playbooks/ingest-a-corpus.md), then [building a cognitive map](docs/playbooks/build-a-cognitive-map.md) from it. For the concept, see [cognitive maps](https://temperkb.io/cognitive-maps).
 
 ### Contexts and Skills
 
@@ -215,7 +216,7 @@ Building one from a body of source material is its own discipline: [ingesting a 
 | `temper context create <name>` | Create a context on the server |
 | `temper context list` | List contexts visible to you on the server |
 | `temper context share <ctx-ref> <team>` | Share a context into a team's read-reach (system-admin, or you administer the context and manage the team; `@me` shorthand not accepted here) |
-| `temper skill generate` | Preview generated Claude Code skill |
+| `temper skill generate` | Preview the generated skill content |
 | `temper skill install` | Install skill file |
 
 ### Cloud and Auth
@@ -230,7 +231,7 @@ Building one from a body of source material is its own discipline: [ingesting a 
 | `temper team join <token>` | Accept a team invitation |
 | `temper resource delete <ref>` | Delete a resource from the cloud (soft-delete) |
 
-`temper team` also carries `create`, `invite`, `show`, `set-role`, `leave`, and offboarding `reassign`. Self-hosting an instance? `temper init` takes `--instance-url`, `--auth-domain`, `--auth-client-id`, `--auth-audience`, and `--idp` — see [docs/guides/self-hosting.md](docs/guides/self-hosting.md).
+`temper team` also carries `create`, `invite`, `show`, `set-role`, `leave`, and offboarding `reassign`. Self-hosting an instance? `temper init` takes `--instance-url`, `--auth-domain`, `--auth-client-id`, `--auth-audience`, and `--idp` — see [self-hosting](docs/playbooks/self-host-temper.md).
 
 ## Semantic Search
 
@@ -265,7 +266,7 @@ To automatically prime new Claude Code sessions with recent context, add a `Sess
 }
 ```
 
-This runs `temper warmup` on every new session, injecting active tasks, recent sessions, open decisions, and project events.
+This runs `temper warmup` on every new session, surfacing active goals, in-progress tasks, recent sessions, and pending invitations.
 
 ### Operational Memory
 
@@ -275,7 +276,7 @@ The working knowledge a session accumulates can live in Temper as `memory` resou
 temper memory status
 ```
 
-See [docs/guides/operational-memory.md](docs/guides/operational-memory.md) for adopting it, sharing it with a team, and the limits.
+See [adopting operational memory](docs/playbooks/adopt-operational-memory.md) for adopting it, sharing it with a team, and the limits.
 
 ## Temper Cloud
 
@@ -293,28 +294,24 @@ What cloud adds:
 
 The remote MCP server exposes knowledge-base operations as structured tools over [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http). Agents authenticate via Auth0 using the standard OAuth 2.1 + PKCE flow — the server advertises Auth0's endpoints through RFC 8414 / RFC 9728 discovery so MCP clients handle the flow automatically.
 
-**Available tools:**
+**Core tools:**
 
 | Tool | Description |
 |------|-------------|
-| `list_resources` | List resources, optionally filtered by context |
-| `get_resource` | Get a resource by ID, optionally with full content |
+| `search` | Full-text + semantic search across the knowledge base |
+| `list_resources` | List resources, optionally filtered by context and/or doc type |
+| `get_resource` | Get a resource by ref, optionally with full content |
 | `create_resource` | Create a new resource in a context |
 | `update_resource` | Update a resource's title, slug, or content |
 | `update_resource_meta` | Update frontmatter without touching the body |
 | `delete_resource` | Soft-delete a resource by ID |
-| `assert_relationship` | Assert a typed edge between two resources |
-| `retype_relationship` | Change an edge's kind and polarity |
-| `reweight_relationship` | Change an edge's weight |
-| `fold_relationship` | Fold (supersede) an edge |
-| `search` | Full-text + semantic search across the knowledge base |
-| `list_contexts` | List available contexts (workspaces) |
-| `get_context` | Get details of a specific context |
-| `create_context` | Create a new context |
-| `list_doc_types` | List available document types |
-| `describe_doc_type` | Describe a doc type's schema |
-| `list_events` | List events, optionally filtered by resource or type |
-| `get_profile` | Get the authenticated user's profile |
+| `relationship` | Assert, retype, reweight, or fold typed edges (action discriminator) |
+| `context_read` / `context_manage` | Read and manage contexts (workspaces) |
+| `describe_schema` | Describe doc types and their schemas |
+| `run_query` | Run a composed query — a declared DAG of acts answered in one round trip |
+| `element_trail` | Read a resource's or edge's append-only event trail |
+
+The tool surface also covers cognitive maps (`cogmap_*`), blobs (`blob_*`), data artifacts (`commit_data_artifact` and friends), and facets (`facet_set` / `facets_read`) — the full list is what the server advertises over MCP, so your client's tool list is the reference.
 
 **Connect from Claude Desktop or Claude Code:**
 

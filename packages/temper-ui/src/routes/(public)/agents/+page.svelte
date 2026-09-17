@@ -21,21 +21,21 @@
     <div class="transcript">
       <div class="message">
         <div class="role">agent <span class="role-via">via mcp</span></div>
-        <div class="content agent-code">temper.search("payment retry strategy")</div>
+        <div class="content agent-code">search({'{'} query: "payment retry strategy", context_ref: "@me/myapp", limit: 3 {'}'})</div>
       </div>
       <div class="message">
         <div class="role">vault</div>
         <div class="content">
           <div class="mcp-results">
-            <div class="mcp-result"><span>decision/retry-backoff-strategy.md</span><span class="mcp-score">0.96</span></div>
-            <div class="mcp-result"><span>session/2026-03-29-payment-service.md</span><span class="mcp-score">0.91</span></div>
-            <div class="mcp-result"><span>research/idempotency-patterns.md</span><span class="mcp-score">0.84</span></div>
+            <div class="mcp-result"><span>decision · Payment retry strategy: exponential backoff with jitter</span><span class="mcp-score">0.896</span></div>
+            <div class="mcp-result"><span>research · Idempotency patterns for payment retries</span><span class="mcp-score">0.848</span></div>
+            <div class="mcp-result"><span>session · Auth middleware session</span><span class="mcp-score">0.835</span></div>
           </div>
         </div>
       </div>
       <div class="message">
         <div class="role">agent</div>
-        <div class="content agent-text">I see we decided on exponential backoff with jitter (Mar 29). The research doc notes a P99 concern above 5 retries. I'll implement with a configurable <span class="hl">max_retries</span> defaulting to 4.</div>
+        <div class="content agent-text">I see we decided on exponential backoff with jitter (Sep 16). The research doc notes duplicate-charge risk above 3 attempts. I'll implement with a configurable <span class="hl">max_retries</span> defaulting to 3.</div>
       </div>
     </div>
   </div>
@@ -71,7 +71,7 @@
     <div class="pathway">
       <div class="pathway-icon">⟡</div>
       <div class="pathway-name">MCP Server</div>
-      <div class="pathway-desc">The Model Context Protocol server exposes vault operations as structured tools. Agents query <span class="cmd-inline">temper.search</span>, read resources, and write session notes through the protocol — no shell access required.</div>
+      <div class="pathway-desc">The Model Context Protocol server exposes vault operations as structured tools. Agents query <span class="cmd-inline">search</span>, read resources, and write session notes through the protocol — no shell access required.</div>
     </div>
     <div class="pathway">
       <div class="pathway-icon">◇</div>
@@ -93,7 +93,7 @@
       <div class="config-line" style="padding-left: 6ch"><span class="config-key">"matcher"</span>: <span class="config-val">"startup"</span>,</div>
       <div class="config-line" style="padding-left: 6ch"><span class="config-key">"hooks"</span>: [{'{'}</div>
       <div class="config-line" style="padding-left: 8ch"><span class="config-key">"type"</span>: <span class="config-val">"command"</span>,</div>
-      <div class="config-line" style="padding-left: 8ch"><span class="config-key">"command"</span>: <span class="config-val">"temper warmup --context myapp"</span></div>
+      <div class="config-line" style="padding-left: 8ch"><span class="config-key">"command"</span>: <span class="config-val">"temper warmup --context @me/myapp"</span></div>
       <div class="config-line" style="padding-left: 6ch">{'}'}]</div>
       <div class="config-line" style="padding-left: 4ch">{'}'}]</div>
       <div class="config-line" style="padding-left: 2ch">{'}'}</div>
@@ -103,9 +103,9 @@
   <div class="injects-list">
     <p>Every startup injects:</p>
     <div class="inject-items">
-      <div class="inject-item"><span class="inject-dot"></span>In-progress tasks with mode and effort</div>
-      <div class="inject-item"><span class="inject-dot"></span>Last 5 session summaries</div>
-      <div class="inject-item"><span class="inject-dot"></span>Full content of the most recent session</div>
+      <div class="inject-item"><span class="inject-dot"></span>Active goals and in-progress tasks with mode and effort</div>
+      <div class="inject-item"><span class="inject-dot"></span>Recent sessions (last 5)</div>
+      <div class="inject-item"><span class="inject-dot"></span>Pending invitations and review requests</div>
     </div>
   </div>
 </Section>
@@ -118,27 +118,25 @@
     <div class="transcript">
       <div class="message">
         <div class="role">agent <span class="role-via">via mcp</span></div>
-        <div class="content agent-code">list_resources({'{'} context: "myapp", doc_type: "session", limit: 4 {'}'})</div>
+        <div class="content agent-code">list_resources({'{'} context_ref: "@me/myapp", doc_type_name: "session", limit: 4 {'}'})</div>
       </div>
       <div class="message">
         <div class="role">vault</div>
         <div class="content">
           <div class="context-block">
-            <div class="context-line"><span class="context-key">session</span> auth-middleware <span class="dim">(Mar 28 — chose JWT rotation)</span></div>
-            <div class="context-line"><span class="context-key">session</span> api-v2-planning <span class="dim">(Mar 26 — REST over GraphQL)</span></div>
-            <div class="context-line"><span class="context-key">session</span> client-sdk-update <span class="dim">(Mar 25 — in progress)</span></div>
-            <div class="context-line"><span class="context-key">session</span> rate-limit-spike <span class="dim">(Mar 22 — deferred)</span></div>
+            <div class="context-line"><span class="context-key">session</span> Session: auth middleware progress <span class="dim">(Sep 16)</span></div>
+            <div class="context-line"><span class="context-key">session</span> Auth middleware session <span class="dim">(Sep 16)</span></div>
           </div>
         </div>
       </div>
       <div class="message">
         <div class="role">agent <span class="role-via">via mcp</span></div>
-        <div class="content agent-code">create_resource({'{'} doc_type: "session", context: "myapp", title: "Client SDK v2 migration", content: "## Decisions\nKept backward compat for v1 clients\n## Next\nIntegration tests for the v1 → v2 upgrade path" {'}'})</div>
+        <div class="content agent-code">create_resource({'{'} doc_type_name: "session", context_ref: "@me/myapp", title: "Client SDK v2 migration", content: "## Decisions\nKept backward compat for v1 clients\n## Next\nIntegration tests for the v1 → v2 upgrade path" {'}'})</div>
       </div>
       <div class="message">
         <div class="role">vault</div>
         <div class="content">
-          <div class="mcp-confirm">Resource created. Indexed and searchable — the next session's recall will include it.</div>
+          <div class="mcp-confirm">{ '{ "ref": "client-sdk-v2-migration-…", "ingest_state": "complete" }' }</div>
         </div>
       </div>
     </div>
@@ -147,18 +145,16 @@
 
 <Section label="Skill generation">
   <h2>Teach the agent your <em>workflow</em></h2>
-  <p>The generated skill file is a Claude Code skill that describes your vault's structure, your available commands, and your workflow conventions. The agent doesn't need to be told how to use temper — the skill makes it a first-class capability, the same way a plugin teaches an editor a new language.</p>
+  <p>The generated skill file describes your vault's structure, your available commands, and your workflow conventions. The agent doesn't need to be told how to use temper — the skill makes it a first-class capability, the same way a plugin teaches an editor a new language.</p>
   <CliBlock>
     <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper skill install</span></div>
     <div class="cli-output">
-      <div class="skill-line">Generating skill from vault structure...</div>
-      <div class="skill-line dim">  → 3 contexts, 8 goals, 47 tasks</div>
-      <div class="skill-line dim">  → Modes: build / plan · Effort: small / medium / large</div>
-      <div class="skill-line dim">  → Session template: goal / happened / decisions / next</div>
-      <div class="skill-line">Installed to ~/.claude/commands/temper.md</div>
+      <div class="skill-line">✓ Skill installed: ~/.agents/skills/temper (23 of 24 files updated)</div>
+      <div class="skill-line dim">  • SKILL.md · reference.md · querying.md</div>
+      <div class="skill-line dim">  • workflows/ …</div>
     </div>
   </CliBlock>
-  <p>The skill evolves with your vault. As you add projects, refine templates, and develop conventions, <span class="cmd-inline">temper skill install</span> regenerates to match. The agent always has current instructions.</p>
+  <p>Targets: <span class="cmd-inline">--target agents</span> (default, vendor-neutral), <span class="cmd-inline">claude</span>, or <span class="cmd-inline">opencode</span>. The skill evolves with your vault — <span class="cmd-inline">temper skill install</span> regenerates to match, so the agent always has current instructions.</p>
 </Section>
 
 <Section label="The philosophy">
