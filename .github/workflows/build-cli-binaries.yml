@@ -256,7 +256,7 @@ jobs:
             printf '  https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.ps1\n'
             printf '\n'
             printf 'See full install docs at:\n'
-            printf '  https://github.com/tasker-systems/temper/blob/main/docs/guides/install.md\n'
+            printf '  https://github.com/tasker-systems/temper/blob/main/docs/playbooks/install-temper.md\n'
           } > "$STAGING/README-INSTALL.txt"
 
           echo "Staging contents:"
