@@ -138,9 +138,9 @@ Every command accepts the global flags `--format json|toon` and `--color auto|al
 
 | Command | Description |
 |---------|-------------|
-| `temper init` | Initialize your config and default context |
-| `temper check` | Check cloud configuration and tool health |
-| `temper status` | Overview of your contexts and recent work |
+| `temper init` | Initialize a new vault |
+| `temper check` | Check vault integrity and tool health |
+| `temper status` | Show vault status overview |
 | `temper warmup [--context <ctx-ref>]` | Context primer for new sessions |
 
 ### Search

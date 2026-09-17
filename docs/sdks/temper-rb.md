@@ -12,7 +12,7 @@ taxonomy — plus the onboarding cliff you hit the first time a machine principa
 operator's side of a machine credential (who may mint one, reach containment, revocation) is
 [standing-up-a-machine-credential](../playbooks/standing-up-a-machine-credential.md); this guide points at it rather than restating it.
 
-Every pattern below is pinned by a passing spec in `clients/temper-rb/spec/`. Where a claim rests on
+Every pattern below is pinned by a spec in `clients/temper-rb/spec/`, and CI runs that suite (`rubocop`, `rspec`, codegen-drift checks) on every change to the gem. Where a claim rests on
 server behaviour rather than the gem's, this guide says so.
 
 ## Install and configure
