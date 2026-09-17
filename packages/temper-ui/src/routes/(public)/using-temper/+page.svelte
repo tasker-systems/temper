@@ -92,8 +92,13 @@ cargo install --path crates/temper-cli --locked --features embed,extract</code><
     <h2>Resources</h2>
     <p>
       Every piece of knowledge in temper is a <em>resource</em> — a markdown
-      file with typed frontmatter. Six doc types cover the vocabulary of
-      structured work:
+      file with typed frontmatter. The CLI's <code>--type</code> flag accepts
+      six workflow types; the platform's full vocabulary is fourteen doc types
+      — these six plus <code>fact</code>, <code>memory</code>,
+      <code>question</code>, <code>theme</code>, <code>concern</code>,
+      <code>principle</code>, <code>commitment</code>, and
+      <code>domain</code>. The MCP server's <code>describe_schema</code> tool
+      enumerates the live list. The six workflow types:
     </p>
     <table>
       <tbody>
