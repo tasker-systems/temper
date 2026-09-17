@@ -256,7 +256,11 @@ ROW
 if grep -q "This release — the ${NEXT_CORE_VERSION} fleet alignment" "$REGISTER_FILE"; then
     log_info "Register already carries this release's row"
 else
-    WINDOW_LINE="$(grep -n "^## Since v${CURRENT_CORE_VERSION}" "$REGISTER_FILE" | head -1 | cut -d: -f1)"
+    # `|| true`: a register whose window was not renamed at the previous
+    # release (no `## Since v<current>` section) makes grep exit 1 on no-match,
+    # and pipefail + set -e would kill the script silently before the empty
+    # case below is ever reached — the 0.5.2 prep died exactly there.
+    WINDOW_LINE="$(grep -n "^## Since v${CURRENT_CORE_VERSION}" "$REGISTER_FILE" | head -1 | cut -d: -f1 || true)"
     if [ -n "$WINDOW_LINE" ]; then
         awk -v n="$WINDOW_LINE" 'NR==n {print; while ((getline r < rowfile) > 0) print r; next} {print}' \
             rowfile="$REGISTER_TMP" "$REGISTER_FILE" > "$REGISTER_FILE.tmp" \
