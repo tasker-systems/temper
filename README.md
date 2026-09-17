@@ -90,7 +90,7 @@ irm https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install
 > Windows support is experimental in v0.1.x — please file issues at
 > https://github.com/tasker-systems/temper/issues if you hit problems.
 
-For version pinning, uninstall instructions, and building from source (including Linux arm64 and Intel Mac), see [docs/guides/install.md](docs/guides/install.md).
+For version pinning, uninstall instructions, and building from source (including Linux arm64 and Intel Mac), see [docs/playbooks/install-temper.md](docs/playbooks/install-temper.md).
 
 ## Quick Start
 
