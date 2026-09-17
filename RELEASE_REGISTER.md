@@ -13,6 +13,17 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 `satisfied`.
 
 ## Since v0.5.0 — unreleased
+ 
+- **Get-started regeneration — /builders, /agents, /using-temper, README, two playbooks**
+  Every command, flag, feature, and MCP tool named on the published
+  get-started sequences is regenerated from the installed binary's real
+  output; example outputs are pasted from real runs; one playbook's SQL block
+  is replaced with the shipped CLI command. Copy only — no contract shape
+  moves, no runtime behavior change, no generated artifact re-stales.
+pr: self
+classes: additive
+surfaces: internal
+status: signal-only
 
 - **Process-document relocation — 12 tracked docs moved to temper-artifacts, prose trims, citation repoints**
   Twelve tracked process documents untrack from `internal/` and
