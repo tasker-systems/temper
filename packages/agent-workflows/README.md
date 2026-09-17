@@ -3,7 +3,7 @@
 Deployed agent runtimes over the temper-mcp surface. **Eve** is the first runtime
 binding; **Claude Managed Agents (CMA)** is a planned second (the two runtimes are
 near-isomorphic — see
-`internal/research/2026-06-18-vercel-eve-and-claude-managed-agents-investigation.md`).
+`temper-artifacts:reviews/2026-06-18-vercel-eve-and-claude-managed-agents-investigation.md`).
 
 ## Agents
 

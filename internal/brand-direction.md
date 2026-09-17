@@ -228,7 +228,6 @@ $ temper warmup --project myapp
 
 Last session: Mar 28 — Chose JWT rotation over session tokens
 In-progress: api-auth-middleware (feature, 60% complete)
-Deferred: rate limiting (blocked on load testing)
 3 sessions of context loaded. Ready.
 ```
 
@@ -351,25 +350,3 @@ These are the diagrams that should appear on persona pages:
 - **No boxes for boxes' sake.** The current diagrams are box-heavy. For the site versions, use more open compositions — text with connecting lines, spatial relationships conveyed through position rather than containment.
 - **The throughline as a literal visual element.** A continuous line or thread that weaves through diagrams, connecting concepts. This becomes a recognizable motif across all diagrams.
 - **Animation potential.** The site runs SvelteKit — the SVGs can be animated. The throughline thread could draw itself on scroll. Session nodes could pulse as they're "warmed up." The context rot diagram could animate the degradation vs. compounding.
-
----
-
-## Part 6: Immediate Next Steps
-
-### Deliverables (prioritized)
-
-1. **Brand mark / favicon** — The threaded-t icon in SVG, at 32x32 and 64x64 sizes. Replaces the current placeholder.
-
-2. **GitHub social preview image** — 1280x640 with the brand mark, wordmark, and tagline on dark ground. This is what people see when the repo is shared.
-
-3. **Revised landing page copy** — Tighten the hero, sharpen the tagline for meta/social, refine section headings. The copy is already good; this is polish.
-
-4. **Builders page** — Full page with tailored hero, problem framing, feature showcase, and revised dark-mode diagrams.
-
-5. **Agents page** — Full page with MCP-focused narrative and agent integration diagrams.
-
-6. **Teams page** — Full page with sync/collaboration narrative and new diagrams.
-
-7. **Diagram refresh** — Dark-mode versions of the key SVGs for use on the site.
-
-8. **README refresh** — Updated to reflect the current state of the product, with the brand mark header and sharpened copy.
