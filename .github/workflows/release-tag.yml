@@ -83,3 +83,10 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.tag.outputs.tag }}
+    # Reusable workflows do not inherit repository secrets automatically — the
+    # called release.yml consumes one classic secret (HOMEBREW_TAP_DEPLOY_KEY
+    # for the homebrew tap push), and an unpassed `secrets` context reads it as
+    # empty. Pass NAMED, not `inherit`: the release chain should receive the
+    # one secret it consumes, nothing else.
+    secrets:
+      HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
