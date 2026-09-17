@@ -20,6 +20,7 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional, Union
 from uuid import UUID
+from temper.generated.models.search_arms import SearchArms
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -28,6 +29,7 @@ class SearchParams(BaseModel):
     """
     Request body for POST /api/search.
     """ # noqa: E501
+    arms: Optional[SearchArms] = Field(default=None, description="Which arms to compute and return ([`SearchArms`], default `all`).  `all` — the default — serializes as no key at all, so a request that never names the field is byte-identical for every existing client, from any vintage of client. An unknown value fails deserialization (a bounded vocabulary, not a string); an old server that does not know the field ignores it.")
     bound_ids: Optional[List[UUID]] = Field(default=None, description="Narrow to a set of resource ids. Composes with `context_ref` / `cogmap_id` rather than replacing them — the fragments apply bound and anchor conjunctively.  Reachable from every door: the MCP `search` tool takes this whole struct as its `Parameters`, so the field arrives there without a tool change.")
     cogmap_id: Optional[UUID] = Field(default=None, description="Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only). Mutually exclusive with `context_ref`. When set, the corpus is the map's homed participants the principal can see.  Retained for back-compat beside the plural `cogmap_ids`: an older client (temper-rb, a pre-multi-map CLI) still sends this scalar. When `cogmap_ids` is non-empty it wins; otherwise a set `cogmap_id` is treated as a one-element set.")
     cogmap_ids: Optional[List[UUID]] = Field(default=None, description="Multi-map scope. Additive beside `cogmap_id` — an older server ignores it and falls back to `cogmap_id`. Mutually exclusive with `context_ref`.  **A set larger than one is now a `400`.** Search scopes to a single anchor; asking several maps at once is a composition, which is `/api/query`'s job. The plural is kept because clients send it and a one-element set is still honoured.")
@@ -38,7 +40,7 @@ class SearchParams(BaseModel):
     offset: Optional[StrictInt] = Field(default=None, description="Offset for pagination.")
     query: Optional[StrictStr] = Field(default=None, description="Plain-text query for full-text search.")
     search_config: Optional[StrictStr] = Field(default=None, description="Postgres text-search configuration (default \"english\").  NOTE: reserved/inert — FTS is hardcoded `'english'` in the `search_exact` SQL function (Beat 1 kept multilingual storage-only); this param does not affect results yet.")
-    __properties: ClassVar[List[str]] = ["bound_ids", "cogmap_id", "cogmap_ids", "context_ref", "doc_type", "embedding", "limit", "offset", "query", "search_config"]
+    __properties: ClassVar[List[str]] = ["arms", "bound_ids", "cogmap_id", "cogmap_ids", "context_ref", "doc_type", "embedding", "limit", "offset", "query", "search_config"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -136,6 +138,7 @@ class SearchParams(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
+            "arms": obj.get("arms"),
             "bound_ids": obj.get("bound_ids"),
             "cogmap_id": obj.get("cogmap_id"),
             "cogmap_ids": obj.get("cogmap_ids"),

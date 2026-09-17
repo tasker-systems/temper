@@ -63,6 +63,31 @@ impl From<CliElementKind> for temper_core::types::element_trail::ElementKind {
     }
 }
 
+/// CLI-local enum mirroring `SearchArms` for clap `value_enum` parsing. Kept in
+/// `cli.rs` (not `temper-core`) to avoid adding a `clap` dependency there, mirroring
+/// `CliEdgeKind`/`CliPolarity`. The `From` mapping is exhaustive, so a variant added
+/// to the wire enum without updating it is a compile error, not a silent hole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum CliSearchArms {
+    /// Both arms — the default, byte-identical to every pre-arms invocation.
+    All,
+    /// Full-text only; no embedding is computed locally or server-side.
+    Exact,
+    /// Vector only.
+    Wide,
+}
+
+impl From<CliSearchArms> for temper_core::types::api::SearchArms {
+    fn from(a: CliSearchArms) -> Self {
+        use temper_core::types::api::SearchArms;
+        match a {
+            CliSearchArms::All => SearchArms::All,
+            CliSearchArms::Exact => SearchArms::Exact,
+            CliSearchArms::Wide => SearchArms::Wide,
+        }
+    }
+}
+
 /// Per-act agent-authorship + invocation-correlation flags shared by every authored-write CLI
 /// command (resource create, edge assert/fold) via `#[command(flatten)]`. All optional and
 /// available to any caller — agent-driven CLI is the *expected* case, not a restricted one.
@@ -331,6 +356,11 @@ pub enum Commands {
         /// Composes with --context / --cogmap rather than replacing them.
         #[arg(long = "within")]
         within: Vec<String>,
+        /// Which arms to ask for: all (default, both arms as always), exact (full-text only —
+        /// no embedding is computed locally and the server embeds nothing), or wide (vector only).
+        /// The response carries only the arms asked for.
+        #[arg(long, value_enum)]
+        arms: Option<CliSearchArms>,
         /// Use text-only search (no local embedding needed). The wide arm has no signal to run
         /// on without an embedding and will say so rather than returning an empty list.
         #[arg(long)]

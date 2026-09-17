@@ -32,6 +32,22 @@ resource: ResourceView,
 fts_norm: number, };
 
 /**
+ * Which arms `POST /api/search` computes and returns. Default [`SearchArms::All`]: a
+ * request without the field is byte-identical for every existing client.
+ *
+ * `Exact` skips the server-side embed entirely (`embed_query_if_missing` is never
+ * called) — the fast, cheap arm is reachable without paying for the arm the caller
+ * declined. `Wide` is vector-only; the embed is inherent to it.
+ *
+ * An arm the caller did not ask for is **absent** from the response — never an empty
+ * arm carrying a fabricated [`SearchReason`]: it was neither answered, refused, nor
+ * empty; it was not asked. `SearchReason` is therefore closed — the temper-rb gem
+ * `raise`s on an enum value it does not know, so a new disposition can never ride in
+ * as a new enum value. Absence is the only encoding for "not asked".
+ */
+export type SearchArms = "all" | "exact" | "wide";
+
+/**
  * Why a search result set is shaped as it is — the load-bearing signal for agents, which
  * otherwise cannot tell "rephrase the query" from "this tool can never see that content"
  * (issue #360). `Ok` ⇒ at least one hit. `NoMatch` ⇒ a non-empty scope with zero hits
@@ -49,13 +65,28 @@ export type SearchReason = "ok" | "no_match" | "out_of_scope";
  * ordered list into which they could be merged. That is the point — see decision
  * `019fd25a-ef4c-7473-b72e-265a7d36dd65`.
  *
+ * **An arm the request did not ask for ([`SearchArms`]) is ABSENT from the body** — the key is
+ * omitted, never an empty arm carrying a fabricated [`SearchReason`]: it was neither answered,
+ * refused, nor empty; it was not asked. `SearchReason` is never extended to carry the
+ * distinction — the temper-rb gem `raise`s on an enum value it does not know. The default
+ * request (`arms=all`) still returns both arms, so every pre-existing client reads the same
+ * body it always has.
+ *
  * Diagnostics live here in the body. They previously rode an additive
  * `x-temper-search-diagnostics` response header, whose stated reason was keeping the `200` contract
  * a bare `Vec<UnifiedSearchResultRow>`; this shape is an object, so that reason is gone, and the
  * per-arm dispositions belong beside the arms they describe rather than somewhere a reader of the
  * body cannot see.
  */
-export type SearchResponse = { exact: ExactArm, wide: WideArm, scope: SearchScopeInfo, };
+export type SearchResponse = { 
+/**
+ * The exact (full-text) arm — present when the request asked for it (`all` or `exact`).
+ */
+exact: ExactArm | null, 
+/**
+ * The wide (vector) arm — present when the request asked for it (`all` or `wide`).
+ */
+wide: WideArm | null, scope: SearchScopeInfo, };
 
 /**
  * A single search result.

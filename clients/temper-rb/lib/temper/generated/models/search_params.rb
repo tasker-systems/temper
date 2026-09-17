@@ -16,6 +16,9 @@ require 'time'
 module Temper::Generated
   # Request body for POST /api/search.
   class SearchParams < ApiModelBase
+    # Which arms to compute and return ([`SearchArms`], default `all`).  `all` — the default — serializes as no key at all, so a request that never names the field is byte-identical for every existing client, from any vintage of client. An unknown value fails deserialization (a bounded vocabulary, not a string); an old server that does not know the field ignores it.
+    attr_accessor :arms
+
     # Narrow to a set of resource ids. Composes with `context_ref` / `cogmap_id` rather than replacing them — the fragments apply bound and anchor conjunctively.  Reachable from every door: the MCP `search` tool takes this whole struct as its `Parameters`, so the field arrives there without a tool change.
     attr_accessor :bound_ids
 
@@ -46,9 +49,32 @@ module Temper::Generated
     # Postgres text-search configuration (default \"english\").  NOTE: reserved/inert — FTS is hardcoded `'english'` in the `search_exact` SQL function (Beat 1 kept multilingual storage-only); this param does not affect results yet.
     attr_accessor :search_config
 
+    class EnumAttributeValidator
+      attr_reader :datatype
+      attr_reader :allowable_values
+
+      def initialize(datatype, allowable_values)
+        @allowable_values = allowable_values.map do |value|
+          case datatype.to_s
+          when /Integer/i
+            value.to_i
+          when /Float/i
+            value.to_f
+          else
+            value
+          end
+        end
+      end
+
+      def valid?(value)
+        !value || allowable_values.include?(value)
+      end
+    end
+
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'arms' => :'arms',
         :'bound_ids' => :'bound_ids',
         :'cogmap_id' => :'cogmap_id',
         :'cogmap_ids' => :'cogmap_ids',
@@ -75,6 +101,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'arms' => :'SearchArms',
         :'bound_ids' => :'Array<String>',
         :'cogmap_id' => :'String',
         :'cogmap_ids' => :'Array<String>',
@@ -118,6 +145,10 @@ module Temper::Generated
         end
         h[k.to_sym] = v
       }
+
+      if attributes.key?(:'arms')
+        self.arms = attributes[:'arms']
+      end
 
       if attributes.key?(:'bound_ids')
         if (value = attributes[:'bound_ids']).is_a?(Array)
@@ -186,6 +217,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          arms == o.arms &&
           bound_ids == o.bound_ids &&
           cogmap_id == o.cogmap_id &&
           cogmap_ids == o.cogmap_ids &&
@@ -207,7 +239,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [bound_ids, cogmap_id, cogmap_ids, context_ref, doc_type, embedding, limit, offset, query, search_config].hash
+      [arms, bound_ids, cogmap_id, cogmap_ids, context_ref, doc_type, embedding, limit, offset, query, search_config].hash
     end
 
     # Builds the object from hash

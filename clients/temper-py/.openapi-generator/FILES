@@ -312,6 +312,7 @@ temper/generated/models/revoked.py
 temper/generated/models/reweight_relationship_request.py
 temper/generated/models/score_kind.py
 temper/generated/models/scoring.py
+temper/generated/models/search_arms.py
 temper/generated/models/search_params.py
 temper/generated/models/search_reason.py
 temper/generated/models/search_response.py

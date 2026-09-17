@@ -334,6 +334,7 @@ __all__ = [
     "ReweightRelationshipRequest",
     "ScoreKind",
     "Scoring",
+    "SearchArms",
     "SearchParams",
     "SearchReason",
     "SearchResponse",
@@ -712,6 +713,7 @@ from temper.generated.models.revoked import Revoked as Revoked
 from temper.generated.models.reweight_relationship_request import ReweightRelationshipRequest as ReweightRelationshipRequest
 from temper.generated.models.score_kind import ScoreKind as ScoreKind
 from temper.generated.models.scoring import Scoring as Scoring
+from temper.generated.models.search_arms import SearchArms as SearchArms
 from temper.generated.models.search_params import SearchParams as SearchParams
 from temper.generated.models.search_reason import SearchReason as SearchReason
 from temper.generated.models.search_response import SearchResponse as SearchResponse

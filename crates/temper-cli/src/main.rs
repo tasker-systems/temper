@@ -1625,12 +1625,17 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             limit,
             offset,
             within,
+            arms,
             text_only,
         } => {
             use temper_cli::actions::search as search_actions;
             // Resolve the query embedding at the call site, then bundle every
-            // CLI-derived search field into `CliSearchArgs` for `run`.
-            let embedding = if text_only {
+            // CLI-derived search field into `CliSearchArgs` for `run`. `--arms exact`
+            // never embeds: the whole point of the exact arm is that neither this
+            // machine nor the server pays ONNX for an arm the caller declined.
+            let arms: Option<temper_core::types::api::SearchArms> = arms.map(Into::into);
+            let embedding = if text_only || arms == Some(temper_core::types::api::SearchArms::Exact)
+            {
                 None
             } else {
                 Some(search_actions::embed_query(&query)?)
@@ -1645,6 +1650,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     limit,
                     offset,
                     within: &within,
+                    arms,
                 },
                 output_format,
             )

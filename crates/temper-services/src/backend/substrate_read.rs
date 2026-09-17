@@ -995,7 +995,22 @@ pub(crate) enum QueryEmbedBatch {
 /// query is embedded by the plain path the corpus was ingested with (no BGE query prefix) and lands
 /// in the stored chunks' vector space. There is one answer to *"which space is this vector in"*,
 /// and it did not move.
+/// Test-only attempt counter on the one server-side embed path. Incremented at the
+/// entry of [`embed_query_texts`] under `#[cfg(test)]`; read as a DELTA across a
+/// `search_select` call by `search_arms_tests`, so the witness observes the live call
+/// graph (was the attempt made?) and never the shape of the code.
+#[cfg(test)]
+pub(crate) static EMBED_QUERY_ATTEMPTS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 pub(crate) async fn embed_query_texts(queries: Vec<String>) -> QueryEmbedBatch {
+    // Test-only witness seam on the ONE server-side embed attempt path. `search_arms_tests`
+    // reads the DELTA across a `search_select` call to observe that `arms=exact` never
+    // invokes the embed path at all — the observation is of the live call graph, never of
+    // the code's shape. nextest runs each test in its own process, so no cross-test
+    // interference exists to wash the delta out.
+    #[cfg(test)]
+    EMBED_QUERY_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if queries.is_empty() {
         return QueryEmbedBatch::Embedded(Vec::new());
     }
@@ -1204,10 +1219,23 @@ pub async fn search_select(
     profile_id: ProfileId,
     mut params: SearchParams,
 ) -> ApiResult<SearchResponse> {
+    // Arm selection precedes everything the arms disagree about. The default (`All`)
+    // takes the same path every pre-existing request always took.
+    let want_exact = params.arms.wants_exact();
+    let want_wide = params.arms.wants_wide();
     reject_degenerate_embedding(params.embedding.as_deref())?;
     // `degraded` is the WIDE arm's property: a failed embed leaves the exact arm untouched and makes
     // the wide arm impossible. It is reported on that arm rather than on the response.
-    let degraded = embed_query_if_missing(&mut params).await;
+    //
+    // `arms=exact` never reaches the embed path at all — the attempt is not skipped, it is
+    // UNSHIPPED: `embed_query_if_missing` is not called, so no ONNX work is enqueued for an arm
+    // the caller declined. Witnessed by `arms_exact_observes_the_embed_path_is_never_invoked`,
+    // which counts the attempts the same call graph actually makes.
+    let degraded = if want_wide {
+        embed_query_if_missing(&mut params).await
+    } else {
+        false
+    };
     let scope = classify_scope(&params);
     let clamped = clamp_search_params(&params);
     // Offset and limit apply PER ARM, never to a merged list — each arm is paginated through its own
@@ -1242,20 +1270,38 @@ pub async fn search_select(
 
     let (exact_hits, wide_hits) = tokio::try_join!(
         async {
+            if !want_exact {
+                return Ok(None);
+            }
             readback::search_exact(pool, params.query.as_deref(), arm)
                 .await
+                .map(Some)
                 .map_err(|e| search_stage_err("search_exact", e))
         },
         async {
+            if !want_wide {
+                return Ok(None);
+            }
             readback::search_wide(pool, params.embedding.as_deref(), VECTOR_K, arm)
                 .await
+                .map(Some)
                 .map_err(|e| search_stage_err("search_wide", e))
         },
     )?;
 
     // Drop the probe row before anything else sees it, so enrichment pays for the page only.
-    let exact_hits: Vec<_> = exact_hits.into_iter().take(limit).collect();
-    let wide_hits: Vec<_> = wide_hits.into_iter().take(limit).collect();
+    // An unasked arm ran no SQL and carries `None` — it contributes no hits, no enrichment,
+    // and no arm-shaped empty result.
+    let exact_hits: Vec<_> = exact_hits
+        .unwrap_or_default()
+        .into_iter()
+        .take(limit)
+        .collect();
+    let wide_hits: Vec<_> = wide_hits
+        .unwrap_or_default()
+        .into_iter()
+        .take(limit)
+        .collect();
 
     // Enrichment is shared: both arms name resources, and a resource's identity does not depend on
     // which arm found it. One batched round-trip over the union, then each arm keeps its own order.
@@ -1294,17 +1340,17 @@ pub async fn search_select(
 
     let offset_i64 = i64::try_from(offset).unwrap_or(i64::MAX);
     Ok(SearchResponse {
-        exact: ExactArm {
+        exact: want_exact.then(|| ExactArm {
             hint: search_hint(scope, exact_reason, scope_size, false, offset_i64),
             reason: exact_reason,
             hits: exact,
-        },
-        wide: WideArm {
+        }),
+        wide: want_wide.then(|| WideArm {
             hint: search_hint(scope, wide_reason, scope_size, degraded, offset_i64),
             reason: wide_reason,
             hits: wide,
             degraded,
-        },
+        }),
         scope: SearchScopeInfo {
             kind: scope,
             size: scope_size,
@@ -2116,6 +2162,143 @@ mod clamp_tests {
         assert!(
             emitted > 0,
             "the enumeration produced no hints at all, so it asserted nothing"
+        );
+    }
+}
+
+/// The arms selector's behavioral witnesses, at the tier where the selector lives.
+///
+/// These observe the LIVE call graph, not the code's shape: whether the embed path ran
+/// is read off [`EMBED_QUERY_ATTEMPTS`] — a counter on the one server-side embed
+/// attempt — as the delta across a `search_select` call. Reading the gate out of the
+/// source would be a restatement of the change, not a witness of it; and the bite test
+/// below proves the counter actually counts, so a counter that stopped counting could
+/// never make the exact-skips-embed claim vacuously.
+#[cfg(all(test, feature = "test-db"))]
+mod search_arms_tests {
+    use super::*;
+    use temper_core::types::api::SearchArms;
+
+    async fn insert_profile(pool: &PgPool, handle: &str) -> ProfileId {
+        let id: uuid::Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_profiles (handle, display_name, email) VALUES ($1, $1, $1) RETURNING id",
+        )
+        .bind(handle)
+        .fetch_one(pool)
+        .await
+        .expect("insert profile");
+        ProfileId::from(id)
+    }
+
+    fn embed_attempts() -> usize {
+        EMBED_QUERY_ATTEMPTS.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// THE witness for `arms=exact`: a text-only request that names the exact arm
+    /// completes with the wide arm ABSENT and the embed attempt counter UNMOVED. If the
+    /// gate ever regresses — if `search_select` reaches `embed_query_if_missing` for an
+    /// exact-only request — the counter moves and this fails.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn arms_exact_observes_the_embed_path_is_never_invoked(pool: PgPool) {
+        let profile = insert_profile(&pool, "exact-only@example.com").await;
+        let before = embed_attempts();
+
+        let params = SearchParams {
+            query: Some("kubernetes deploys".into()),
+            embedding: None,
+            arms: SearchArms::Exact,
+            ..SearchParams::default()
+        };
+        let response = search_select(&pool, profile, params)
+            .await
+            .expect("an exact-only search answers");
+
+        assert!(response.exact.is_some(), "the asked arm is present");
+        assert!(
+            response.wide.is_none(),
+            "the unasked arm is ABSENT, not an empty arm with a fabricated reason: {response:?}"
+        );
+        assert_eq!(
+            embed_attempts(),
+            before,
+            "arms=exact must complete without a single embed attempt"
+        );
+    }
+
+    /// The bite: the same text-only request under the default arms DOES move the
+    /// counter. Without this, a counter that counted nothing (a broken seam) would make
+    /// the exact-skips-embed witness pass vacuously.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn arms_all_makes_the_embed_attempt_the_witness_counts(pool: PgPool) {
+        let profile = insert_profile(&pool, "all-arms@example.com").await;
+        let before = embed_attempts();
+
+        let params = SearchParams {
+            query: Some("kubernetes deploys".into()),
+            embedding: None,
+            ..SearchParams::default()
+        };
+        let response = search_select(&pool, profile, params)
+            .await
+            .expect("a default search answers");
+
+        // Both arms present — the pre-arms shape, unchanged for the default request.
+        assert!(response.exact.is_some() && response.wide.is_some());
+        assert!(
+            embed_attempts() > before,
+            "the seam must observe the default request's embed attempt, or the exact-only \
+             witness proves nothing"
+        );
+    }
+
+    /// `arms=wide` computes only the vector arm: the exact arm is absent from the body,
+    /// and the wide arm answers (empty here — the corpus is empty — but present, with
+    /// its own disposition rather than a fabricated one).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn arms_wide_returns_no_exact_arm(pool: PgPool) {
+        let profile = insert_profile(&pool, "wide-only@example.com").await;
+
+        // A real-direction vector: the wide arm needs no embed when one arrives.
+        let mut embedding = vec![0.05_f32; 768];
+        embedding[0] = 0.5;
+        let params = SearchParams {
+            query: Some("kubernetes deploys".into()),
+            embedding: Some(embedding),
+            arms: SearchArms::Wide,
+            ..SearchParams::default()
+        };
+        let response = search_select(&pool, profile, params)
+            .await
+            .expect("a wide-only search answers");
+
+        assert!(response.wide.is_some(), "the asked arm is present");
+        assert!(
+            response.exact.is_none(),
+            "the unasked exact arm is ABSENT from the body: {response:?}"
+        );
+    }
+
+    /// The default (`SearchParams::default()`, no `arms` field set) computes and returns
+    /// BOTH arms — the byte-identical behavior every pre-existing client gets. The
+    /// embedding is supplied so the assertion never depends on the ONNX feature.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_default_request_returns_both_arms(pool: PgPool) {
+        let profile = insert_profile(&pool, "default@example.com").await;
+
+        let mut embedding = vec![0.05_f32; 768];
+        embedding[0] = 0.5;
+        let params = SearchParams {
+            query: Some("kubernetes deploys".into()),
+            embedding: Some(embedding),
+            ..SearchParams::default()
+        };
+        let response = search_select(&pool, profile, params)
+            .await
+            .expect("the default search answers");
+
+        assert!(
+            response.exact.is_some() && response.wide.is_some(),
+            "a request without `arms` gets both arms, exactly as it always has: {response:?}"
         );
     }
 }

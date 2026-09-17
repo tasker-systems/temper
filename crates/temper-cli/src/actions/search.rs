@@ -39,6 +39,10 @@ pub struct CliSearchArgs<'a> {
     /// Composes with `context` / `cogmap` rather than replacing them. Empty ⇒ unbounded — see
     /// `build_search_params`, which is where empty-vs-populated becomes `None`-vs-`Some`.
     pub within: &'a [String],
+    /// Which arms to ask for. `None` (the flag was never passed) is the wire default
+    /// (`all`), which serializes as no key at all — a default invocation's request bytes
+    /// are identical to what they have always been.
+    pub arms: Option<temper_core::types::api::SearchArms>,
 }
 
 /// Build a SearchParams from CLI arguments.
@@ -101,6 +105,7 @@ pub fn build_search_params(args: CliSearchArgs<'_>) -> Result<SearchParams> {
         limit: args.limit,
         offset: args.offset,
         bound_ids,
+        arms: args.arms.unwrap_or_default(),
         ..SearchParams::default()
     })
 }
@@ -167,6 +172,7 @@ mod tests {
             context: None,
             cogmap: &[],
             doc_type: None,
+            arms: None,
             limit: Some(10),
             offset: Some(20),
             within: &[],
@@ -188,6 +194,7 @@ mod tests {
             context: Some("temper"),
             cogmap: &[],
             doc_type: None,
+            arms: None,
             limit: Some(5),
             offset: None,
             within: &[],
@@ -210,6 +217,7 @@ mod tests {
             context: None,
             cogmap: &two,
             doc_type: None,
+            arms: None,
             limit: None,
             offset: None,
             within: &[],
@@ -232,6 +240,7 @@ mod tests {
             context: None,
             cogmap: &[],
             doc_type: None,
+            arms: None,
             limit: None,
             offset: None,
             within: &[format!("some-stale-slug-{id}")],
@@ -250,6 +259,7 @@ mod tests {
             context: None,
             cogmap: &[],
             doc_type: None,
+            arms: None,
             limit: None,
             offset: None,
             within: &[],
@@ -266,6 +276,7 @@ mod tests {
             context: None,
             cogmap: &[],
             doc_type: None,
+            arms: None,
             limit: None,
             offset: None,
             within: &["not a valid ref!!".to_string()],
@@ -377,17 +388,17 @@ mod tests {
         };
 
         let response = SearchResponse {
-            exact: ExactArm {
+            exact: Some(ExactArm {
                 hits: vec![],
                 reason: SearchReason::Ok,
                 hint: None,
-            },
-            wide: WideArm {
+            }),
+            wide: Some(WideArm {
                 hits: vec![],
                 reason: SearchReason::Ok,
                 hint: None,
                 degraded: false,
-            },
+            }),
             scope: SearchScopeInfo {
                 kind: SearchScope::Global,
                 size: None,
@@ -408,17 +419,17 @@ mod tests {
         };
 
         let response = SearchResponse {
-            exact: ExactArm {
+            exact: Some(ExactArm {
                 hits: vec![],
                 reason: SearchReason::Ok,
                 hint: None,
-            },
-            wide: WideArm {
+            }),
+            wide: Some(WideArm {
                 hits: vec![],
                 reason: SearchReason::Ok,
                 hint: Some("try rephrasing".to_string()),
                 degraded: true,
-            },
+            }),
             scope: SearchScopeInfo {
                 kind: SearchScope::Global,
                 size: None,
@@ -439,17 +450,17 @@ mod tests {
         };
 
         let response = SearchResponse {
-            exact: ExactArm {
+            exact: Some(ExactArm {
                 hits: vec![],
                 reason: SearchReason::OutOfScope,
                 hint: None,
-            },
-            wide: WideArm {
+            }),
+            wide: Some(WideArm {
                 hits: vec![],
                 reason: SearchReason::Ok,
                 hint: None,
                 degraded: false,
-            },
+            }),
             scope: SearchScopeInfo {
                 kind: SearchScope::Global,
                 size: None,
@@ -469,17 +480,17 @@ mod tests {
         };
 
         let response = SearchResponse {
-            exact: ExactArm {
+            exact: Some(ExactArm {
                 hits: vec![],
                 reason: SearchReason::NoMatch,
                 hint: None,
-            },
-            wide: WideArm {
+            }),
+            wide: Some(WideArm {
                 hits: vec![],
                 reason: SearchReason::OutOfScope,
                 hint: None,
                 degraded: false,
-            },
+            }),
             scope: SearchScopeInfo {
                 kind: SearchScope::Global,
                 size: None,

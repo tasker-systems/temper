@@ -110,13 +110,23 @@ async fn server_embeds_text_only_query_surfaces_semantic_only_hit(pool: sqlx::Pg
 
     // THE POINT OF THIS TEST, restated for two arms: the caller sent no embedding, so the wide arm
     // can only run if the SERVER embedded the query. An empty wide arm here means it did not.
+    // The request names no `arms`, so the default (`all`) applies and both arms are present —
+    // a missing arm would mean the response shape broke, not that the arm was unasked.
+    let wide = resp
+        .wide
+        .as_ref()
+        .expect("the default request returns both arms");
+    let exact = resp
+        .exact
+        .as_ref()
+        .expect("the default request returns both arms");
     assert!(
-        !resp.wide.degraded,
+        !wide.degraded,
         "the server had to embed a text-only query and could not: {:?}",
-        resp.wide.hint
+        wide.hint
     );
     assert!(
-        !resp.wide.hits.is_empty(),
+        !wide.hits.is_empty(),
         "the wide arm must answer a text-only query once the server embeds it"
     );
 
@@ -124,20 +134,18 @@ async fn server_embeds_text_only_query_surfaces_semantic_only_hit(pool: sqlx::Pg
     // at all — which is now visible as absence from one arm rather than as a zero in a blended row.
     let title = "Container Scheduling Primer";
     assert!(
-        resp.wide.hits.iter().any(|r| r.resource.title == title),
+        wide.hits.iter().any(|r| r.resource.title == title),
         "the semantic-only resource must appear in the WIDE arm; got {:?}",
-        resp.wide
-            .hits
+        wide.hits
             .iter()
             .map(|r| (r.resource.title.as_str(), r.vec_norm))
             .collect::<Vec<_>>()
     );
     assert!(
-        !resp.exact.hits.iter().any(|r| r.resource.title == title),
+        !exact.hits.iter().any(|r| r.resource.title == title),
         "the semantic-only resource shares no query terms, so the exact arm must not carry it"
     );
-    let semantic_only = resp
-        .wide
+    let semantic_only = wide
         .hits
         .iter()
         .find(|r| r.resource.title == title)

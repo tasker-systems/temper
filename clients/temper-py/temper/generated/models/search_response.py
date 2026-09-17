@@ -17,8 +17,8 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict
-from typing import Any, ClassVar, Dict, List
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, ClassVar, Dict, List, Optional
 from temper.generated.models.exact_arm import ExactArm
 from temper.generated.models.search_scope_info import SearchScopeInfo
 from temper.generated.models.wide_arm import WideArm
@@ -28,11 +28,11 @@ from pydantic_core import to_jsonable_python
 
 class SearchResponse(BaseModel):
     """
-    The `POST /api/search` wire body: **two arms that are never combined**, plus the scope they share.  There is no field anywhere in this shape that ranks one arm against the other, and no single ordered list into which they could be merged. That is the point — see decision `019fd25a-ef4c-7473-b72e-265a7d36dd65`.  Diagnostics live here in the body. They previously rode an additive `x-temper-search-diagnostics` response header, whose stated reason was keeping the `200` contract a bare `Vec<UnifiedSearchResultRow>`; this shape is an object, so that reason is gone, and the per-arm dispositions belong beside the arms they describe rather than somewhere a reader of the body cannot see.
+    The `POST /api/search` wire body: **two arms that are never combined**, plus the scope they share.  There is no field anywhere in this shape that ranks one arm against the other, and no single ordered list into which they could be merged. That is the point — see decision `019fd25a-ef4c-7473-b72e-265a7d36dd65`.  **An arm the request did not ask for ([`SearchArms`]) is ABSENT from the body** — the key is omitted, never an empty arm carrying a fabricated [`SearchReason`]: it was neither answered, refused, nor empty; it was not asked. `SearchReason` is never extended to carry the distinction — the temper-rb gem `raise`s on an enum value it does not know. The default request (`arms=all`) still returns both arms, so every pre-existing client reads the same body it always has.  Diagnostics live here in the body. They previously rode an additive `x-temper-search-diagnostics` response header, whose stated reason was keeping the `200` contract a bare `Vec<UnifiedSearchResultRow>`; this shape is an object, so that reason is gone, and the per-arm dispositions belong beside the arms they describe rather than somewhere a reader of the body cannot see.
     """ # noqa: E501
-    exact: ExactArm
+    exact: Optional[ExactArm] = Field(default=None, description="The exact (full-text) arm — present when the request asked for it (`all` or `exact`).")
     scope: SearchScopeInfo
-    wide: WideArm
+    wide: Optional[WideArm] = Field(default=None, description="The wide (vector) arm — present when the request asked for it (`all` or `wide`).")
     __properties: ClassVar[List[str]] = ["exact", "scope", "wide"]
 
     model_config = ConfigDict(
@@ -83,6 +83,16 @@ class SearchResponse(BaseModel):
         # override the default output from pydantic by calling `to_dict()` of wide
         if self.wide:
             _dict['wide'] = self.wide.to_dict()
+        # set to None if exact (nullable) is None
+        # and model_fields_set contains the field
+        if self.exact is None and "exact" in self.model_fields_set:
+            _dict['exact'] = None
+
+        # set to None if wide (nullable) is None
+        # and model_fields_set contains the field
+        if self.wide is None and "wide" in self.model_fields_set:
+            _dict['wide'] = None
+
         return _dict
 
     @classmethod

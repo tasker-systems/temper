@@ -295,6 +295,7 @@ from temper.generated.models.revoked import Revoked
 from temper.generated.models.reweight_relationship_request import ReweightRelationshipRequest
 from temper.generated.models.score_kind import ScoreKind
 from temper.generated.models.scoring import Scoring
+from temper.generated.models.search_arms import SearchArms
 from temper.generated.models.search_params import SearchParams
 from temper.generated.models.search_reason import SearchReason
 from temper.generated.models.search_response import SearchResponse

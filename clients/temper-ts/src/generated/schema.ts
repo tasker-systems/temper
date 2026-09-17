@@ -7252,8 +7252,33 @@ export interface components {
             score: number;
             score_kind: components["schemas"]["ScoreKind"];
         };
+        /**
+         * @description Which arms `POST /api/search` computes and returns. Default [`SearchArms::All`]: a
+         *     request without the field is byte-identical for every existing client.
+         *
+         *     `Exact` skips the server-side embed entirely (`embed_query_if_missing` is never
+         *     called) — the fast, cheap arm is reachable without paying for the arm the caller
+         *     declined. `Wide` is vector-only; the embed is inherent to it.
+         *
+         *     An arm the caller did not ask for is **absent** from the response — never an empty
+         *     arm carrying a fabricated [`SearchReason`]: it was neither answered, refused, nor
+         *     empty; it was not asked. `SearchReason` is therefore closed — the temper-rb gem
+         *     `raise`s on an enum value it does not know, so a new disposition can never ride in
+         *     as a new enum value. Absence is the only encoding for "not asked".
+         * @enum {string}
+         */
+        SearchArms: "all" | "exact" | "wide";
         /** @description Request body for POST /api/search. */
         SearchParams: {
+            /**
+             * @description Which arms to compute and return ([`SearchArms`], default `all`).
+             *
+             *     `all` — the default — serializes as no key at all, so a request that never
+             *     names the field is byte-identical for every existing client, from any vintage
+             *     of client. An unknown value fails deserialization (a bounded vocabulary, not a
+             *     string); an old server that does not know the field ignores it.
+             */
+            arms?: components["schemas"]["SearchArms"];
             /**
              * @description Narrow to a set of resource ids. Composes with `context_ref` / `cogmap_id` rather than
              *     replacing them — the fragments apply bound and anchor conjunctively.
@@ -7326,6 +7351,13 @@ export interface components {
          *     ordered list into which they could be merged. That is the point — see decision
          *     `019fd25a-ef4c-7473-b72e-265a7d36dd65`.
          *
+         *     **An arm the request did not ask for ([`SearchArms`]) is ABSENT from the body** — the key is
+         *     omitted, never an empty arm carrying a fabricated [`SearchReason`]: it was neither answered,
+         *     refused, nor empty; it was not asked. `SearchReason` is never extended to carry the
+         *     distinction — the temper-rb gem `raise`s on an enum value it does not know. The default
+         *     request (`arms=all`) still returns both arms, so every pre-existing client reads the same
+         *     body it always has.
+         *
          *     Diagnostics live here in the body. They previously rode an additive
          *     `x-temper-search-diagnostics` response header, whose stated reason was keeping the `200` contract
          *     a bare `Vec<UnifiedSearchResultRow>`; this shape is an object, so that reason is gone, and the
@@ -7333,9 +7365,9 @@ export interface components {
          *     body cannot see.
          */
         SearchResponse: {
-            exact: components["schemas"]["ExactArm"];
+            exact?: null | components["schemas"]["ExactArm"];
             scope: components["schemas"]["SearchScopeInfo"];
-            wide: components["schemas"]["WideArm"];
+            wide?: null | components["schemas"]["WideArm"];
         };
         /** @description A single search result. */
         SearchResultRow: {

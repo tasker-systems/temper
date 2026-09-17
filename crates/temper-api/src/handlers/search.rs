@@ -18,7 +18,9 @@ use temper_services::state::AppState;
             status = 200,
             description = "Two arms that are never combined: `exact` (term matching, ordered by \
                 `fts_norm`) and `wide` (embedding proximity, ordered by `vec_norm`), each with its \
-                own `reason`, plus the `scope` they share. No field ranks one arm against the other.",
+                own `reason`, plus the `scope` they share. No field ranks one arm against the other. \
+                An arm the request's `arms` selector did not ask for is ABSENT from the body — \
+                never an empty arm with a fabricated reason; the default (`arms=all`) returns both.",
             body = SearchResponse,
         ),
         (status = 400, description = "Invalid request", body = ErrorBody),
@@ -34,7 +36,7 @@ use temper_services::state::AppState;
 // by relaxing it.
 /// Search resources by text or embedding
 ///
-/// Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe.
+/// Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe. The request's `arms` selector narrows the answer to one arm; an unasked arm is omitted from the body entirely.
 pub async fn search(
     State(state): State<AppState>,
     auth: AuthUser,

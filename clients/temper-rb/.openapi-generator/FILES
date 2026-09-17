@@ -310,6 +310,7 @@ lib/temper/generated/models/revoked.rb
 lib/temper/generated/models/reweight_relationship_request.rb
 lib/temper/generated/models/score_kind.rb
 lib/temper/generated/models/scoring.rb
+lib/temper/generated/models/search_arms.rb
 lib/temper/generated/models/search_params.rb
 lib/temper/generated/models/search_reason.rb
 lib/temper/generated/models/search_response.rb

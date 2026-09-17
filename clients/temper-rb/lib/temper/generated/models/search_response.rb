@@ -14,12 +14,14 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # The `POST /api/search` wire body: **two arms that are never combined**, plus the scope they share.  There is no field anywhere in this shape that ranks one arm against the other, and no single ordered list into which they could be merged. That is the point — see decision `019fd25a-ef4c-7473-b72e-265a7d36dd65`.  Diagnostics live here in the body. They previously rode an additive `x-temper-search-diagnostics` response header, whose stated reason was keeping the `200` contract a bare `Vec<UnifiedSearchResultRow>`; this shape is an object, so that reason is gone, and the per-arm dispositions belong beside the arms they describe rather than somewhere a reader of the body cannot see.
+  # The `POST /api/search` wire body: **two arms that are never combined**, plus the scope they share.  There is no field anywhere in this shape that ranks one arm against the other, and no single ordered list into which they could be merged. That is the point — see decision `019fd25a-ef4c-7473-b72e-265a7d36dd65`.  **An arm the request did not ask for ([`SearchArms`]) is ABSENT from the body** — the key is omitted, never an empty arm carrying a fabricated [`SearchReason`]: it was neither answered, refused, nor empty; it was not asked. `SearchReason` is never extended to carry the distinction — the temper-rb gem `raise`s on an enum value it does not know. The default request (`arms=all`) still returns both arms, so every pre-existing client reads the same body it always has.  Diagnostics live here in the body. They previously rode an additive `x-temper-search-diagnostics` response header, whose stated reason was keeping the `200` contract a bare `Vec<UnifiedSearchResultRow>`; this shape is an object, so that reason is gone, and the per-arm dispositions belong beside the arms they describe rather than somewhere a reader of the body cannot see.
   class SearchResponse < ApiModelBase
+    # The exact (full-text) arm — present when the request asked for it (`all` or `exact`).
     attr_accessor :exact
 
     attr_accessor :scope
 
+    # The wide (vector) arm — present when the request asked for it (`all` or `wide`).
     attr_accessor :wide
 
     # Attribute mapping from ruby-style variable name to JSON key.
@@ -53,6 +55,8 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'exact',
+        :'wide'
       ])
     end
 
@@ -74,8 +78,6 @@ module Temper::Generated
 
       if attributes.key?(:'exact')
         self.exact = attributes[:'exact']
-      else
-        self.exact = nil
       end
 
       if attributes.key?(:'scope')
@@ -86,8 +88,6 @@ module Temper::Generated
 
       if attributes.key?(:'wide')
         self.wide = attributes[:'wide']
-      else
-        self.wide = nil
       end
     end
 
@@ -96,16 +96,8 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @exact.nil?
-        invalid_properties.push('invalid value for "exact", exact cannot be nil.')
-      end
-
       if @scope.nil?
         invalid_properties.push('invalid value for "scope", scope cannot be nil.')
-      end
-
-      if @wide.nil?
-        invalid_properties.push('invalid value for "wide", wide cannot be nil.')
       end
 
       invalid_properties
@@ -115,20 +107,8 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @exact.nil?
       return false if @scope.nil?
-      return false if @wide.nil?
       true
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] exact Value to be assigned
-    def exact=(exact)
-      if exact.nil?
-        fail ArgumentError, 'exact cannot be nil'
-      end
-
-      @exact = exact
     end
 
     # Custom attribute writer method with validation
@@ -139,16 +119,6 @@ module Temper::Generated
       end
 
       @scope = scope
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] wide Value to be assigned
-    def wide=(wide)
-      if wide.nil?
-        fail ArgumentError, 'wide cannot be nil'
-      end
-
-      @wide = wide
     end
 
     # Checks equality by comparing each attribute.

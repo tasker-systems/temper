@@ -381,27 +381,119 @@ async fn both_arms_answer_when_both_signals_are_supplied(pool: sqlx::PgPool) {
         .await
         .expect("two-arm search failed");
 
+    // The request names no `arms`, so the default (`all`) applies and both arms answer.
+    let exact = resp
+        .exact
+        .as_ref()
+        .expect("the default request returns both arms");
+    let wide = resp
+        .wide
+        .as_ref()
+        .expect("the default request returns both arms");
     assert!(
-        !resp.exact.hits.is_empty(),
+        !exact.hits.is_empty(),
         "the exact arm must answer a query whose terms are in the corpus"
     );
     assert!(
-        resp.exact.hits[0].fts_norm > 0.0,
+        exact.hits[0].fts_norm > 0.0,
         "an exact hit carries a real fts_norm: got {}",
-        resp.exact.hits[0].fts_norm
+        exact.hits[0].fts_norm
     );
     assert!(
-        !resp.wide.hits.is_empty(),
+        !wide.hits.is_empty(),
         "the wide arm must answer once an embedding is supplied"
     );
     assert!(
-        resp.wide.hits[0].vec_norm > 0.0,
+        wide.hits[0].vec_norm > 0.0,
         "a wide hit carries a real vec_norm: got {}",
-        resp.wide.hits[0].vec_norm
+        wide.hits[0].vec_norm
     );
     assert!(
-        !resp.wide.degraded,
+        !wide.degraded,
         "the caller supplied an embedding, so nothing was degraded"
+    );
+}
+
+/// The arms selector, through the real door: `arms=exact` answers only the exact arm and
+/// `arms=wide` only the wide arm — the unasked arm is ABSENT from the response (typed as
+/// `None` here), never an empty arm carrying a fabricated reason. The embed skip itself is
+/// witnessed at the services tier (`arms_exact_observes_the_embed_path_is_never_invoked`,
+/// which counts the attempts the call graph makes); this test witnesses the wire shape the
+/// full HTTP stack produces and that every generated parser must accept.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_arms_selector_answers_only_the_asked_arm(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    app.client
+        .contexts()
+        .create("fts-arms", None)
+        .await
+        .expect("context create");
+
+    ingest_with_chunks(
+        &app,
+        "Observability Platform Design",
+        "observability-design",
+        "Distributed tracing with OpenTelemetry, metrics via Prometheus, and structured logging.",
+        "fts-arms",
+    )
+    .await;
+
+    use temper_core::types::api::SearchArms;
+
+    // `arms=exact`: the exact arm answers a query whose terms are in the corpus; the wide
+    // arm was not asked and is absent.
+    let exact_only = temper_core::types::api::SearchParams {
+        query: Some("observability tracing".into()),
+        context_ref: Some("@me/fts-arms".into()),
+        limit: Some(10),
+        arms: SearchArms::Exact,
+        ..Default::default()
+    };
+    let resp = app
+        .client
+        .search()
+        .search_with_params(&exact_only)
+        .await
+        .expect("exact-only search failed");
+    let exact = resp.exact.as_ref().expect("the asked arm is present");
+    assert!(
+        !exact.hits.is_empty(),
+        "the exact arm answers on its own — no embedding required"
+    );
+    assert!(
+        resp.wide.is_none(),
+        "the unasked wide arm is absent from the body, not an empty arm: {resp:?}"
+    );
+
+    // `arms=wide`: mirror image. The embedding is supplied, so no server-side embed is
+    // needed to answer.
+    let wide_only = temper_core::types::api::SearchParams {
+        query: Some("observability tracing".into()),
+        embedding: Some(vec![0.1_f32; 768]),
+        context_ref: Some("@me/fts-arms".into()),
+        limit: Some(10),
+        arms: SearchArms::Wide,
+        ..Default::default()
+    };
+    let resp = app
+        .client
+        .search()
+        .search_with_params(&wide_only)
+        .await
+        .expect("wide-only search failed");
+    assert!(
+        resp.wide.is_some(),
+        "the asked wide arm is present: {resp:?}"
+    );
+    assert!(
+        resp.exact.is_none(),
+        "the unasked exact arm is absent from the body, not an empty arm: {resp:?}"
     );
 }
 

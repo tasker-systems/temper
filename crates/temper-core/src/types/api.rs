@@ -36,8 +36,64 @@ fn default_search_config() -> String {
     "english".to_string()
 }
 
+/// Default arms selection — `All`, so a request that never names the field
+/// computes and returns both arms exactly as every client has always seen.
+fn default_search_arms() -> SearchArms {
+    SearchArms::default()
+}
+
+/// Which arms `POST /api/search` computes and returns. Default [`SearchArms::All`]: a
+/// request without the field is byte-identical for every existing client.
+///
+/// `Exact` skips the server-side embed entirely (`embed_query_if_missing` is never
+/// called) — the fast, cheap arm is reachable without paying for the arm the caller
+/// declined. `Wide` is vector-only; the embed is inherent to it.
+///
+/// An arm the caller did not ask for is **absent** from the response — never an empty
+/// arm carrying a fabricated [`SearchReason`]: it was neither answered, refused, nor
+/// empty; it was not asked. `SearchReason` is therefore closed — the temper-rb gem
+/// `raise`s on an enum value it does not know, so a new disposition can never ride in
+/// as a new enum value. Absence is the only encoding for "not asked".
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "search.ts"))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+// Inline into the MCP input schemas — Anthropic tool-use does not resolve `$ref`, so a
+// `$ref`-ed enum reaches the agent population as null (the scalar-enum metatest's law).
+#[cfg_attr(feature = "mcp", schemars(inline))]
+#[serde(rename_all = "snake_case")]
+pub enum SearchArms {
+    /// Both arms computed and returned — the behavior every pre-existing client gets.
+    #[default]
+    All,
+    /// Full-text only; the embed path is never invoked.
+    Exact,
+    /// Vector only; the full-text arm is not computed.
+    Wide,
+}
+
+impl SearchArms {
+    /// `true` for the default — the value a request that omits the field carries, and
+    /// the one case that serializes as no key at all, so even a new client's default
+    /// request is byte-identical on the wire.
+    pub fn is_all(&self) -> bool {
+        matches!(self, SearchArms::All)
+    }
+
+    /// Whether the **exact** arm is asked for — `All` or `Exact`.
+    pub fn wants_exact(&self) -> bool {
+        matches!(self, SearchArms::All | SearchArms::Exact)
+    }
+
+    /// Whether the **wide** arm is asked for — `All` or `Wide`.
+    pub fn wants_wide(&self) -> bool {
+        matches!(self, SearchArms::All | SearchArms::Wide)
+    }
+}
+
 /// Request body for POST /api/search.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct SearchParams {
@@ -86,6 +142,17 @@ pub struct SearchParams {
     /// `Parameters`, so the field arrives there without a tool change.
     #[serde(default)]
     pub bound_ids: Option<Vec<Uuid>>,
+    /// Which arms to compute and return ([`SearchArms`], default `all`).
+    ///
+    /// `all` — the default — serializes as no key at all, so a request that never
+    /// names the field is byte-identical for every existing client, from any vintage
+    /// of client. An unknown value fails deserialization (a bounded vocabulary, not a
+    /// string); an old server that does not know the field ignores it.
+    #[serde(
+        default = "default_search_arms",
+        skip_serializing_if = "SearchArms::is_all"
+    )]
+    pub arms: SearchArms,
 }
 
 impl Default for SearchParams {
@@ -101,6 +168,7 @@ impl Default for SearchParams {
             cogmap_id: None,
             cogmap_ids: None,
             bound_ids: None,
+            arms: default_search_arms(),
         }
     }
 }
@@ -280,6 +348,13 @@ pub struct SearchScopeInfo {
 /// ordered list into which they could be merged. That is the point — see decision
 /// `019fd25a-ef4c-7473-b72e-265a7d36dd65`.
 ///
+/// **An arm the request did not ask for ([`SearchArms`]) is ABSENT from the body** — the key is
+/// omitted, never an empty arm carrying a fabricated [`SearchReason`]: it was neither answered,
+/// refused, nor empty; it was not asked. `SearchReason` is never extended to carry the
+/// distinction — the temper-rb gem `raise`s on an enum value it does not know. The default
+/// request (`arms=all`) still returns both arms, so every pre-existing client reads the same
+/// body it always has.
+///
 /// Diagnostics live here in the body. They previously rode an additive
 /// `x-temper-search-diagnostics` response header, whose stated reason was keeping the `200` contract
 /// a bare `Vec<UnifiedSearchResultRow>`; this shape is an object, so that reason is gone, and the
@@ -291,8 +366,12 @@ pub struct SearchScopeInfo {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct SearchResponse {
-    pub exact: ExactArm,
-    pub wide: WideArm,
+    /// The exact (full-text) arm — present when the request asked for it (`all` or `exact`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact: Option<ExactArm>,
+    /// The wide (vector) arm — present when the request asked for it (`all` or `wide`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wide: Option<WideArm>,
     pub scope: SearchScopeInfo,
 }
 
@@ -353,6 +432,165 @@ mod tests {
         assert_eq!(params.query.as_deref(), Some("test query"));
         assert_eq!(params.embedding.unwrap(), vec![1.0, 2.0]);
         assert_eq!(params.search_config, "simple");
+    }
+
+    /// A request that never names `arms` carries `all`, and serializes back WITHOUT the
+    /// key — so the bytes an existing client sends and a new client sends by default are
+    /// identical, whichever direction the skew runs.
+    #[test]
+    fn a_request_without_arms_is_all_and_stays_off_the_wire() {
+        let params: SearchParams = serde_json::from_str(r#"{"query": "hello world"}"#)
+            .expect("a request without arms deserializes");
+        assert_eq!(params.arms, SearchArms::All);
+
+        let serialized = serde_json::to_string(&params).expect("serialize");
+        assert!(
+            !serialized.contains("arms"),
+            "the default must serialize as no key at all, not `\"arms\":\"all\"`: {serialized}"
+        );
+
+        // The explicit default round-trips to the same shape.
+        let round: SearchParams = serde_json::from_str(&serialized).expect("round-trip");
+        assert_eq!(round, params, "serde equality across the round-trip");
+    }
+
+    #[test]
+    fn an_explicit_arms_value_serializes_and_round_trips() {
+        for (value, expected) in [
+            ("\"exact\"", SearchArms::Exact),
+            ("\"wide\"", SearchArms::Wide),
+        ] {
+            let params: SearchParams =
+                serde_json::from_str(&format!(r#"{{"query": "q", "arms": {value}}}"#))
+                    .expect("the arms value deserializes");
+            assert_eq!(params.arms, expected);
+            let back: SearchParams =
+                serde_json::from_str(&serde_json::to_string(&params).expect("serialize"))
+                    .expect("round-trip");
+            assert_eq!(back, params);
+        }
+    }
+
+    /// The arms vocabulary is bounded, not a string. An unknown value is refused where
+    /// it arrives rather than silently ignored — the same raise-on-unknown discipline
+    /// the temper-rb gem applies to enum values it does not know.
+    #[test]
+    fn an_unknown_arms_value_is_refused_not_ignored() {
+        let result = serde_json::from_str::<SearchParams>(r#"{"query": "q", "arms": "sideways"}"#);
+        let err = result.expect_err("an unknown arms value must be refused");
+        assert!(
+            err.to_string().contains("sideways"),
+            "the refusal names the offending value: {err}"
+        );
+    }
+
+    /// The default response carries both arms; a partial one omits the unasked arm as an
+    /// ABSENT KEY — never `null`, never an empty arm with a fabricated reason.
+    #[test]
+    fn search_response_both_arms_round_trips() {
+        use crate::types::resource_view::ResourceView;
+        let hit = ExactHit {
+            resource: sample_resource_view(),
+            fts_norm: 0.5,
+        };
+        let response = SearchResponse {
+            exact: Some(ExactArm {
+                hits: vec![hit],
+                reason: SearchReason::Ok,
+                hint: None,
+            }),
+            wide: None,
+            scope: SearchScopeInfo {
+                kind: SearchScope::Global,
+                size: None,
+            },
+        };
+        let json = serde_json::to_string(&response).expect("serialize");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse");
+        assert!(
+            parsed.get("wide").is_none(),
+            "an unasked arm is an absent key, not null: {json}"
+        );
+        assert!(
+            parsed["exact"].is_object(),
+            "the asked arm is present: {json}"
+        );
+        assert!(parsed["scope"].is_object(), "scope stays required: {json}");
+
+        let back: SearchResponse = serde_json::from_str(&json).expect("round-trip");
+        assert!(back.exact.is_some() && back.wide.is_none());
+    }
+
+    #[test]
+    fn search_response_deserializes_the_full_default_body() {
+        // A client built against the pre-arms response (both keys always present) still
+        // parses: `Option` accepts present-and-full, and the generated parsers of every
+        // SDK must accept the default body unchanged.
+        let hit = WideHit {
+            resource: sample_resource_view(),
+            vec_norm: 0.8,
+        };
+        let response = SearchResponse {
+            exact: Some(ExactArm {
+                hits: vec![],
+                reason: SearchReason::NoMatch,
+                hint: Some("try rephrasing".into()),
+            }),
+            wide: Some(WideArm {
+                hits: vec![hit],
+                reason: SearchReason::Ok,
+                hint: None,
+                degraded: false,
+            }),
+            scope: SearchScopeInfo {
+                kind: SearchScope::Global,
+                size: None,
+            },
+        };
+        let json = serde_json::to_string(&response).expect("serialize");
+        assert!(json.contains("\"exact\"") && json.contains("\"wide\""));
+        let back: SearchResponse = serde_json::from_str(&json).expect("round-trip");
+        assert!(back.exact.is_some() && back.wide.is_some());
+        assert_eq!(
+            back.exact.expect("exact present").reason,
+            SearchReason::NoMatch
+        );
+    }
+
+    /// Minimal [`ResourceView`] stand-in for response round-trips.
+    fn sample_resource_view() -> ResourceView {
+        use crate::types::ids::{ProfileId, ResourceId};
+        use crate::types::managed_meta::ManagedMeta;
+        use chrono::{DateTime, Utc};
+
+        let epoch = DateTime::<Utc>::from_timestamp(0, 0).expect("epoch");
+        ResourceView {
+            id: ResourceId::from(uuid::Uuid::nil()),
+            r#ref: String::new(),
+            title: "Some Title".to_string(),
+            origin_uri: "test://some-title".to_string(),
+            kb_context_id: None,
+            context_name: None,
+            context_slug: None,
+            context_owner_ref: None,
+            context_ref: None,
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: "research".to_string(),
+            owner_handle: "someone".to_string(),
+            owner_profile_id: ProfileId::from(uuid::Uuid::nil()),
+            originator_profile_id: ProfileId::from(uuid::Uuid::nil()),
+            is_active: true,
+            created: epoch,
+            updated: epoch,
+            body_hash: None,
+            ingest_state: None,
+            body_storage: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            content: None,
+        }
+        .with_derived_refs()
     }
 }
 

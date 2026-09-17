@@ -26,7 +26,10 @@ use crate::format::OutputFormat;
 /// omitted entirely when every arm is `Ok` and neither is degraded.
 #[derive(Debug, serde::Serialize)]
 pub(crate) struct SearchResultsResponse {
-    /// The exact arm's hits — ordered by `fts_norm`.
+    /// The exact arm's hits — ordered by `fts_norm`. Also `[]` when the request asked
+    /// for a different arm and the API body omitted this one (an unasked arm is absent,
+    /// never an empty arm with a fabricated reason — the CLI's own envelope has no
+    /// disposition to fabricate).
     pub exact: Vec<ExactHit>,
     /// The wide arm's hits, likewise — ordered by `vec_norm`.
     ///
@@ -56,6 +59,7 @@ pub fn run(args: search_actions::CliSearchArgs<'_>, fmt: OutputFormat) -> Result
         limit: args.limit,
         offset: args.offset,
         within: args.within,
+        arms: args.arms,
     })?;
     let response = runtime::with_client(|client| {
         Box::pin(async move { search_actions::search_api(client, params).await })
@@ -64,10 +68,11 @@ pub fn run(args: search_actions::CliSearchArgs<'_>, fmt: OutputFormat) -> Result
     // Surface each arm's hint on stderr so it reaches a human watching the terminal without
     // polluting the stdout JSON a harness parses. Both arms can have something to say at once — a
     // degraded wide arm beside an exact arm that matched nothing is exactly the case a single
-    // rollup hint used to flatten into one sentence.
+    // rollup hint used to flatten into one sentence. An arm the request did not ask for is
+    // absent and says nothing — it was not asked.
     for hint in [
-        response.exact.hint.as_deref(),
-        response.wide.hint.as_deref(),
+        response.exact.as_ref().and_then(|arm| arm.hint.as_deref()),
+        response.wide.as_ref().and_then(|arm| arm.hint.as_deref()),
     ]
     .into_iter()
     .flatten()
@@ -84,8 +89,8 @@ pub fn run(args: search_actions::CliSearchArgs<'_>, fmt: OutputFormat) -> Result
     // wraps, filled by the server rather than injected here.
     let rendered = crate::format::render(
         &SearchResultsResponse {
-            exact: response.exact.hits,
-            wide: response.wide.hits,
+            exact: response.exact.map(|arm| arm.hits).unwrap_or_default(),
+            wide: response.wide.map(|arm| arm.hits).unwrap_or_default(),
             scope: response.scope,
             diagnostics,
         },
@@ -106,55 +111,59 @@ pub(crate) fn build_search_diagnostics(
 ) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
 
-    // Exact arm
-    if response.exact.reason != SearchReason::Ok {
-        let (code, message) = match response.exact.reason {
-            SearchReason::NoMatch => (
-                "exact-no-match",
-                "The exact arm found nothing — the scope was non-empty but nothing matched the query.",
-            ),
-            SearchReason::OutOfScope => (
-                "exact-out-of-scope",
-                "The exact arm's scope resolved to zero candidates — a different query phrasing will not help.",
-            ),
-            SearchReason::Ok => unreachable!(),
-        };
-        diags.push(Diagnostic {
-            level: DiagnosticLevel::Info,
-            code,
-            message: message.to_string(),
-            hint: response.exact.hint.clone(),
-        });
+    // Exact arm — absent when the request did not ask for it, contributing nothing.
+    if let Some(exact) = &response.exact {
+        if exact.reason != SearchReason::Ok {
+            let (code, message) = match exact.reason {
+                SearchReason::NoMatch => (
+                    "exact-no-match",
+                    "The exact arm found nothing — the scope was non-empty but nothing matched the query.",
+                ),
+                SearchReason::OutOfScope => (
+                    "exact-out-of-scope",
+                    "The exact arm's scope resolved to zero candidates — a different query phrasing will not help.",
+                ),
+                SearchReason::Ok => unreachable!(),
+            };
+            diags.push(Diagnostic {
+                level: DiagnosticLevel::Info,
+                code,
+                message: message.to_string(),
+                hint: exact.hint.clone(),
+            });
+        }
     }
 
-    // Wide arm
-    if response.wide.degraded {
-        diags.push(Diagnostic {
-            level: DiagnosticLevel::Warning,
-            code: "wide-degraded",
-            message: "The wide arm was degraded — the server could not embed the query. \
-                     Vector results may be incomplete or absent."
-                .to_string(),
-            hint: response.wide.hint.clone(),
-        });
-    } else if response.wide.reason != SearchReason::Ok {
-        let (code, message) = match response.wide.reason {
-            SearchReason::NoMatch => (
-                "wide-no-match",
-                "The wide arm found nothing — the scope was non-empty but nothing matched the query.",
-            ),
-            SearchReason::OutOfScope => (
-                "wide-out-of-scope",
-                "The wide arm's scope resolved to zero candidates — a different query phrasing will not help.",
-            ),
-            SearchReason::Ok => unreachable!(),
-        };
-        diags.push(Diagnostic {
-            level: DiagnosticLevel::Info,
-            code,
-            message: message.to_string(),
-            hint: response.wide.hint.clone(),
-        });
+    // Wide arm — same rule.
+    if let Some(wide) = &response.wide {
+        if wide.degraded {
+            diags.push(Diagnostic {
+                level: DiagnosticLevel::Warning,
+                code: "wide-degraded",
+                message: "The wide arm was degraded — the server could not embed the query. \
+                         Vector results may be incomplete or absent."
+                    .to_string(),
+                hint: wide.hint.clone(),
+            });
+        } else if wide.reason != SearchReason::Ok {
+            let (code, message) = match wide.reason {
+                SearchReason::NoMatch => (
+                    "wide-no-match",
+                    "The wide arm found nothing — the scope was non-empty but nothing matched the query.",
+                ),
+                SearchReason::OutOfScope => (
+                    "wide-out-of-scope",
+                    "The wide arm's scope resolved to zero candidates — a different query phrasing will not help.",
+                ),
+                SearchReason::Ok => unreachable!(),
+            };
+            diags.push(Diagnostic {
+                level: DiagnosticLevel::Info,
+                code,
+                message: message.to_string(),
+                hint: wide.hint.clone(),
+            });
+        }
     }
 
     diags

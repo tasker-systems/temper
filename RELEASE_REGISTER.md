@@ -789,6 +789,29 @@ status: signal-only
 
 ## Since 0.5.1 — unreleased
 
+- **The search door answers one arm — `arms` on `POST /api/search`, unasked arms absent from the body**
+  `SearchParams` gains `arms` (`all` | `exact` | `wide`, default `all`): `exact` skips the
+  server-side embed entirely (observed, via an attempt counter on the one embed path, not
+  inferred from the code's shape), `wide` skips full-text, and the default computes and
+  returns both arms byte-identically to every pre-existing client — a default request
+  serializes no `arms` key at all. The movement the pin comparator names: an arm the
+  request did not ask for is now ABSENT from `SearchResponse` (the key is omitted, never
+  an empty arm with a fabricated `SearchReason` — the enum is closed because temper-rb
+  raises on unknown values), so `exact`/`wide` leave `required` and a client built at the
+  0.5 pin types them as required. Who observes it: only a client that SENDS `arms` —
+  every existing client keeps receiving both arms and parses the body unchanged; the
+  first sender is the header palette's Arm B (web surface). The MCP `search` tool's
+  output and the three generated skins restale with the contract. The CLI's stdout shape
+  is unchanged (its own envelope has always rendered both arrays; an unasked arm renders
+  `[]` beside a diagnostic-free absence) and it gains `--arms` with the same vocabulary,
+  as does the MCP schema. Release-relevant as the M class: discharges through the
+  batching window with the next pin cut (schemas/versions/<M.m>/), until which the pin
+  gate holds this off main.
+pr: self
+classes: shape-breaking
+surfaces: http, mcp, clients
+status: blocked:M-batching-window
+
 - **This release — the 0.5.2 fleet alignment: VERSION 0.5.1 → 0.5.2 across crates, packages, and clients**
   The release train's own wire delta is none: version fields and the generated
   cores re-stale with the bump (the D-S3 baseline — no shape movement); the

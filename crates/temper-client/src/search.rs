@@ -40,7 +40,12 @@ impl<'a> SearchClient<'a> {
             limit,
             ..SearchParams::default()
         };
-        self.search_with_params(&params).await.map(|r| r.wide.hits)
+        // The default request asks for both arms, so the wide arm is present on any
+        // current server; `None` here means the server pre-dates the arms selector and
+        // is being asked to render an arm shape it always fills.
+        self.search_with_params(&params)
+            .await
+            .map(|r| r.wide.map(|arm| arm.hits).unwrap_or_default())
     }
 
     /// Run a full-text search with a plain text query, returning the **exact** arm.
@@ -77,7 +82,12 @@ impl<'a> SearchClient<'a> {
             limit,
             ..SearchParams::default()
         };
-        self.search_with_params(&params).await.map(|r| r.exact.hits)
+        // The default request asks for both arms, so the exact arm is present on any
+        // current server; `None` here means the server pre-dates the arms selector and
+        // is being asked to render an arm shape it always fills.
+        self.search_with_params(&params)
+            .await
+            .map(|r| r.exact.map(|arm| arm.hits).unwrap_or_default())
     }
 
     /// Run a search with full control over all parameters, returning **both arms unmerged** plus the
