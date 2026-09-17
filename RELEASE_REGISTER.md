@@ -786,3 +786,14 @@ pr: pre-policy
 classes: additive
 surfaces: http, mcp, cli-stdout, schema
 status: signal-only
+
+## Since 0.5.1 — unreleased
+
+- **This release — the 0.5.2 fleet alignment: VERSION 0.5.1 → 0.5.2 across crates, packages, and clients**
+  The release train's own wire delta is none: version fields and the generated
+  cores re-stale with the bump (the D-S3 baseline — no shape movement); the
+  P floor rides the additive rows already in this window.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
