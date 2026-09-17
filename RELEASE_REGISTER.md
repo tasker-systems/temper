@@ -141,6 +141,22 @@ classes: behavioral
 surfaces: cli-stdout, internal
 status: signal-only
 
+- **`temper version --verify --online` reports the Homebrew boundary instead of comparing brew-transformed bytes**
+  The homebrew formula plants a post-install manifest (computed from the actual installed
+  tree), so offline `--verify` proves brew-install self-consistency; the ONLINE path cannot
+  apply that comparison — brew finalizes Mach-O with per-install random re-signing
+  identifiers and relocates metadata — so a brew-managed install now resolves `unverifiable`
+  naming what carries provenance instead (the formula's archive digest, verified at
+  download). Who observes: an operator running `--verify --online` on a brew install —
+  previously a guaranteed dylib `mismatch`, now an honest `unverifiable`. Declared limit:
+  the tap has no installed fleet until its first formula release; this states the boundary
+  before one exists. Behavioral — the verdict JSON's shape is unchanged; its meaning for
+  one population changes.
+pr: self
+classes: behavioral
+surfaces: cli-stdout
+status: signal-only
+
 ## Since v0.4.0 — unreleased
 
 - **This release — the 0.5.0 fleet alignment: VERSION 0.4.0 → 0.5.0 across crates, packages, and clients**

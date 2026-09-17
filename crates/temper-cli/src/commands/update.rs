@@ -98,11 +98,6 @@ const INSTALL_SH: &str = include_str!("../../../../scripts/install/install.sh");
 const LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/tasker-systems/temper/releases/latest";
 
-/// The marker file a `tasker-systems/tap` formula plants beside the binary
-/// (`template/temper@MINOR.rb.template` in the homebrew-tap repo). Its
-/// presence is the authority signal: this install belongs to brew.
-const BREW_MARKER_FILE: &str = "BREW-MANAGED";
-
 /// Marker lines beginning with this carry the formula's own upgrade command —
 /// preferred over the generic remedy because it names the pinned minor.
 const BREW_UPGRADE_LINE_PREFIX: &str = "Update with: ";
@@ -112,6 +107,8 @@ const BREW_UPGRADE_LINE_PREFIX: &str = "Update with: ";
 /// formulae are the only ones this tap ships, so the pinned form is the
 /// expected read; the alias form is the always-valid generic.
 const BREW_DEFAULT_REMEDY: &str = "brew upgrade tasker-systems/tap/temper";
+
+use crate::brew_managed::MARKER_FILE as BREW_MARKER_FILE;
 
 /// Belt-and-braces install prefixes checked when no marker is present (a
 /// brew-managed tree that lost its marker, or a hand-copied one). The marker
