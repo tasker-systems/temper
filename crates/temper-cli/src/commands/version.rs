@@ -656,7 +656,31 @@ fn finish_online_verdict(
 /// attestation lookup on top of that would just blur one honest verdict
 /// with another (and would waste a network round-trip on a verdict that's
 /// already decided).
+/// Shown for `--verify --online` on a brew-managed install. Homebrew
+/// finalizes the keg after install — dynamic-linkage fixups and ad-hoc
+/// re-signing of Mach-O files with per-install random identifiers, plus
+/// metadata relocation — so comparing installed bytes against the
+/// published manifest cannot succeed, and pretending otherwise would be
+/// the false-guarantee class. The honest verdict: the online check cannot
+/// attest a brew install; artifact provenance there is brew's own chain
+/// (the formula pins the release's archive digest, verified at download),
+/// and offline `--verify` proves the tree matches what brew installed.
+const BREW_ONLINE_NOTE: &str = "this install is managed by Homebrew: brew finalizes \
+Mach-O files (re-signing them with per-install identifiers) and relocates metadata at \
+install time, so online comparison against the published manifest cannot apply. Artifact \
+provenance here is brew's own chain — the formula pins the release's archive digest, \
+verified at download — and offline `temper version --verify` proves the installed tree \
+matches what brew installed. Update with `brew upgrade`.";
+
 fn online_verdict(dir: &Path) -> OnlineOutcome {
+    // The brew boundary (D-H2 + the verify re-rule): gate before any network
+    // work — the comparison this path performs cannot apply to a
+    // brew-transformed tree, and the note says what carries provenance
+    // instead.
+    if crate::brew_managed::is_managed(dir) {
+        return OnlineOutcome::unverifiable(BREW_ONLINE_NOTE.to_string());
+    }
+
     let Some(target) = shipped_target_triple() else {
         return OnlineOutcome::unverifiable(unmapped_host_reason(
             std::env::consts::OS,
@@ -1563,5 +1587,47 @@ mod tests {
         // is what `online_verdict` passes to the attestation lookup.
         let (digest, _) = manifest_attestation_identity(&bytes);
         assert_eq!(digest, format!("{:x}", Sha256::digest(&bytes)));
+    }
+
+    /// The `--verify --online` brew boundary bites and reaches no network: a
+    /// marked install resolves to `Unverifiable` carrying the brew note (what
+    /// carries provenance instead), because Homebrew transforms the tree at
+    /// keg finalization and published-manifest byte comparison cannot apply.
+    /// Fails while the gate is absent — pre-gate, the path would attempt the
+    /// fetch/comparison and never name brew.
+    #[test]
+    fn online_verdict_on_a_marked_install_is_unverifiable_without_network() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(crate::brew_managed::MARKER_FILE),
+            "This temper install is managed by Homebrew.\n",
+        )
+        .unwrap();
+
+        let outcome = online_verdict(tmp.path());
+        let Verdict::Unverifiable { reason } = outcome.verdict else {
+            panic!("a brew-managed install must resolve to Unverifiable");
+        };
+        assert!(
+            reason.contains("managed by Homebrew"),
+            "the note must name the boundary: {reason}"
+        );
+        assert!(
+            reason.contains("brew upgrade"),
+            "the note must name the managed updater: {reason}"
+        );
+        assert!(
+            outcome.verified_manifest_bytes.is_none(),
+            "an unverifiable outcome carries no baseline bytes"
+        );
+    }
+
+    /// An unmarked install is not brew-managed — the gate stays open and the
+    /// online path proceeds exactly as before (network assertion is out of
+    /// scope here; the discriminator is what this pins).
+    #[test]
+    fn unmarked_install_is_not_brew_managed() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!crate::brew_managed::is_managed(tmp.path()));
     }
 }

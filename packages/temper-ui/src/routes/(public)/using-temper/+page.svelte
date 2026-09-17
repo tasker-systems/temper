@@ -40,7 +40,7 @@
       To pin a version, pass <code>--version vX.Y.Z</code> to the install
       script (<code>… | sh -s -- --version vX.Y.Z</code>). The
       <a href="https://github.com/tasker-systems/temper/blob/main/docs/playbooks/install-temper.md">install playbook</a>
-      covers uninstalling, other platforms, and troubleshooting.
+      covers Homebrew, uninstalling, other platforms, and troubleshooting.
     </p>
 
     <h3>Build from source</h3>

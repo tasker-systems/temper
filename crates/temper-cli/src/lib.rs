@@ -3,6 +3,7 @@ pub mod actions;
 pub mod attest;
 pub mod attestation_fetch;
 pub mod backend_select;
+pub mod brew_managed;
 pub mod cli;
 pub mod cloud_backend;
 pub mod color;
