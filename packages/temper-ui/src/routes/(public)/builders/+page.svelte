@@ -148,11 +148,11 @@
     <CliBlock>
       <div class="vault-file">
         <div class="vault-frontmatter">
-          <div class="vault-fm-line"><span class="vault-key">type:</span> decision</div>
-          <div class="vault-fm-line"><span class="vault-key">title:</span> JWT rotation over session tokens</div>
-          <div class="vault-fm-line"><span class="vault-key">date:</span> 2026-03-28</div>
-          <div class="vault-fm-line"><span class="vault-key">status:</span> accepted</div>
-          <div class="vault-fm-line"><span class="vault-key">relates:</span> [api-auth-middleware, oauth-research]</div>
+          <div class="vault-fm-line"><span class="vault-key">temper-type:</span> decision</div>
+          <div class="vault-fm-line"><span class="vault-key">temper-title:</span> JWT rotation over session tokens</div>
+          <div class="vault-fm-line"><span class="vault-key">temper-slug:</span> jwt-rotation-over-session-tokens</div>
+          <div class="vault-fm-line"><span class="vault-key">temper-context:</span> myapp</div>
+          <div class="vault-fm-line"><span class="vault-key">relates_to:</span> [api-auth-middleware, oauth-research]</div>
         </div>
         <div class="vault-body">
           <div class="vault-body-line"><span class="vault-h2">## Context</span></div>

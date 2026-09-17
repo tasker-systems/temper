@@ -797,3 +797,22 @@ pr: self
 classes: additive
 surfaces: http, clients
 status: signal-only
+
+- **Copy refresh — public-surface spans regenerated from their named authorities**
+  Six public-surface files refreshed at span level, each derived from its
+  authority: the /builders landing page's frontmatter demo now shows the
+  canonical vault frontmatter (`temper-*` keys, `relates_to`) matching the
+  decision schema; README's core-command descriptions match the CLI's
+  `--help` text; temper-rb.md names the spec suite and its CI workflow as the
+  pin behind its patterns; install-temper states the CLI's local-embedding
+  default (`embed`+`extract` features; ingestion posts pre-embedded chunks);
+  slack-mentions describes the linked-mention behavior as shipped (a model
+  turn dispatched under the linked user's identity) and its Verify step names
+  the observable reply classes; self-host-temper's `ENABLE_SWAGGER` row states
+  the real Swagger UI path (`/api-docs/ui`) and that the flag carries no
+  environment gate. Copy only — no contract shape moves, no runtime behavior
+  change, no generated artifact re-stales.
+pr: self
+classes: additive
+surfaces: internal
+status: signal-only

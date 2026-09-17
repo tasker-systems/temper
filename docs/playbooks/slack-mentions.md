@@ -8,7 +8,8 @@ deployment.
 By the end of this playbook you will have a Slack bot that responds to `@temper`
 mentions. A user who mentions the bot for the first time receives a private
 connect link; completing it links their Slack identity to their Temper profile.
-A linked user who mentions the bot gets a confirmation that the link resolved.
+A linked user who mentions the bot gets a real answer: the bot dispatches a full
+model turn under that user's Temper identity, so every lookup runs as them.
 
 ## Prerequisites
 
@@ -229,10 +230,11 @@ bot token if it changed.
    `SLACK_LINK_SECRET`.
 3. **Complete the link.** Click the link, sign in at your IdP. You should land
    on a Temper-branded "Account connected — Linked as @your-handle" page.
-4. **Linked mention.** Mention `@temper` again. Today you get "You're connected
-   as @your-handle. I can't answer questions yet" — that reply is proof the link
-   resolved from the database. A second connect link here means the link-state
-   lookup is not finding your row.
+4. **Linked mention.** Mention `@temper` again. You should get an answer to the
+   question — or, if your Temper access isn't approved yet, a reply that says so
+   and names who can fix it. The tell that the link resolved: the bot addresses
+   you as `@your-handle`, never with another connect link. A second connect link
+   here means the link-state lookup is not finding your row.
 
 ## Troubleshooting
 

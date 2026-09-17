@@ -90,8 +90,10 @@ irm https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install
    - macOS/Linux: symlinks `~/.local/bin/temper` → the extracted binary
    - Windows: appends the install directory to your user PATH
 
-The archive contains `temper[.exe]`, a bundled `libonnxruntime` for the local embedding
-pipeline (used server-side; CLI ingestion routes through the cloud API), and a copy of the
+The archive contains `temper[.exe]`, a bundled `libonnxruntime` for the CLI's local
+embedding pipeline (the CLI embeds locally by default — `embed` and `extract` are its
+default features, so ingestion posts pre-chunked, pre-embedded text rather than relying
+on the server), and a copy of the
 project `LICENSE`.
 
 ## Pinning to a specific version
