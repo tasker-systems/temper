@@ -999,8 +999,14 @@ export type Scoring = { score_kind: ScoreKind,
 /**
  * Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not
  * carried per row because it is a property of the act, identical for every row of a stage.
+ *
+ * ABSENT rather than null, by the same absent-versus-null rule that keeps
+ * [`ResourceHit::via`] keyless while [`ResourceHit::located_at`] is PRESENT-null: a null and
+ * a missing key would both say "this row carried no quantity", so a null would add a third
+ * spelling of one fact. Absence is the row's own statement — its membership stands, its
+ * ordering value does not — and [`ScoreKind`] still names what a quantity WOULD be.
  */
-score: number, };
+score: number | null, };
 
 /**
  * How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).

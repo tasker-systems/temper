@@ -891,17 +891,19 @@
       "description": "How one hit scored, and by what measure.\n\nThe kind travels WITH the number, which is what lets a row be understood on its own. Two hits\nwhose `score_kind` differs hold values that must never be added, averaged, or sorted into one\nlist — and unlike a bare field name, that is something a client can actually check.",
       "properties": {
         "score": {
-          "description": "Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not\ncarried per row because it is a property of the act, identical for every row of a stage.",
+          "description": "Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not\ncarried per row because it is a property of the act, identical for every row of a stage.\n\nABSENT rather than null, by the same absent-versus-null rule that keeps\n[`ResourceHit::via`] keyless while [`ResourceHit::located_at`] is PRESENT-null: a null and\na missing key would both say \"this row carried no quantity\", so a null would add a third\nspelling of one fact. Absence is the row's own statement — its membership stands, its\nordering value does not — and [`ScoreKind`] still names what a quantity WOULD be.",
           "format": "float",
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "score_kind": {
           "$ref": "#/$defs/ScoreKind"
         }
       },
       "required": [
-        "score_kind",
-        "score"
+        "score_kind"
       ],
       "type": "object"
     },

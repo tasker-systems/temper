@@ -111,6 +111,19 @@ classes: additive
 surfaces: clients
 status: signal-only
 
+- **Scoring.score becomes optional; TaskInfo.stage becomes nullable**
+  The query scoring DTO drops `score` from the response contract's `required` set and widens
+  its type to nullable — a hit whose row carries no ordering quantity omits the field
+  instead of serializing `0.0` — and the rb/py/ts client models regenerate with it
+  (shape-breaking; consumers reading `score` as an always-present number must handle
+  absence). The CLI's task projection follows the same Option discipline (`temper-stage`
+  serializes `null` where it emitted `""`). The M-class obligations (version bump, changelog
+  line, client-release plan) are owed at the merge/release boundary per spec §4.
+pr: self
+classes: shape-breaking
+surfaces: http, cli-stdout, clients
+status: signal-only
+
 - **The CLI stops reading malformed config and unreadable indexes as defaults; the mention agent runtime-checks its link-state response**
   An existing-but-malformed global config refuses naming the file instead of silently
   defaulting format/color/limits, and an unreadable memory index is refused instead of read

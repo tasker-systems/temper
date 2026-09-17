@@ -162,7 +162,7 @@ async fn load_tasks_returns_api_tasks_sorted_by_seq(pool: sqlx::PgPool) {
     let a = &tasks[0];
     assert_eq!(a.slug, "task-a");
     assert_eq!(a.title, "Task A");
-    assert_eq!(a.stage, "backlog");
+    assert_eq!(a.stage.as_deref(), Some("backlog"));
     assert_eq!(a.mode.as_deref(), Some("build"));
     assert_eq!(a.effort.as_deref(), Some("small"));
     assert_eq!(a.seq, Some(10));

@@ -582,7 +582,7 @@ fn collect_in_progress_tasks(config: &Config, context_ref: &str) -> Vec<WarmupTa
 fn in_progress_tasks(tasks: Vec<TaskInfo>) -> Vec<WarmupTask> {
     tasks
         .into_iter()
-        .filter(|t| t.stage == "in-progress")
+        .filter(|t| t.stage.as_deref() == Some("in-progress"))
         .map(|t| WarmupTask {
             title: t.title,
             slug: t.slug,
@@ -919,8 +919,8 @@ mod tests {
             .collect();
 
         // The value survived the trip from the managed tier onto `TaskInfo`.
-        assert_eq!(tasks[0].stage, "in-progress");
-        assert_eq!(tasks[1].stage, "backlog");
+        assert_eq!(tasks[0].stage.as_deref(), Some("in-progress"));
+        assert_eq!(tasks[1].stage.as_deref(), Some("backlog"));
 
         let warm = in_progress_tasks(tasks);
 
@@ -943,9 +943,10 @@ mod tests {
         row.managed_meta.stage = None;
 
         let task = crate::actions::task::task_info_from_row(row, "@me/ctx");
-        assert_eq!(
-            task.stage, "",
-            "an absent stage reads as empty, not as a stage"
+        assert!(
+            task.stage.is_none(),
+            "an absent stage must read as absent, not as a stage value: {:?}",
+            task.stage
         );
 
         assert!(
@@ -954,8 +955,10 @@ mod tests {
         );
     }
 
-    /// The filter decides on `stage` alone: a task that is in progress despite
-    /// missing `mode`/`effort` reaches the primer with those absences intact.
+    /// Absence is carried, never fabricated: the filter decides on `stage`
+    /// alone, and a task that is in progress despite missing `mode`/`effort`
+    /// reaches the primer with those absences intact — the same `None`s a
+    /// stage-less task carries once `stage` is an `Option` like its siblings.
     #[test]
     fn modeless_and_effortless_tasks_survive_the_filter_carrying_their_absence() {
         let mut row = view_with_stage("Bare Task", "in-progress");

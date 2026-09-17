@@ -16,7 +16,7 @@ require 'time'
 module Temper::Generated
   # How one hit scored, and by what measure.  The kind travels WITH the number, which is what lets a row be understood on its own. Two hits whose `score_kind` differs hold values that must never be added, averaged, or sorted into one list — and unlike a bare field name, that is something a client can actually check.
   class Scoring < ApiModelBase
-    # Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not carried per row because it is a property of the act, identical for every row of a stage.
+    # Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not carried per row because it is a property of the act, identical for every row of a stage.  ABSENT rather than null, by the same absent-versus-null rule that keeps [`ResourceHit::via`] keyless while [`ResourceHit::located_at`] is PRESENT-null: a null and a missing key would both say \"this row carried no quantity\", so a null would add a third spelling of one fact. Absence is the row's own statement — its membership stands, its ordering value does not — and [`ScoreKind`] still names what a quantity WOULD be.
     attr_accessor :score
 
     attr_accessor :score_kind
@@ -50,6 +50,7 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'score',
       ])
     end
 
@@ -71,8 +72,6 @@ module Temper::Generated
 
       if attributes.key?(:'score')
         self.score = attributes[:'score']
-      else
-        self.score = nil
       end
 
       if attributes.key?(:'score_kind')
@@ -87,10 +86,6 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @score.nil?
-        invalid_properties.push('invalid value for "score", score cannot be nil.')
-      end
-
       if @score_kind.nil?
         invalid_properties.push('invalid value for "score_kind", score_kind cannot be nil.')
       end
@@ -102,19 +97,8 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @score.nil?
       return false if @score_kind.nil?
       true
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] score Value to be assigned
-    def score=(score)
-      if score.nil?
-        fail ArgumentError, 'score cannot be nil'
-      end
-
-      @score = score
     end
 
     # Custom attribute writer method with validation

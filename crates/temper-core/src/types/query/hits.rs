@@ -109,7 +109,14 @@ pub struct Scoring {
     pub score_kind: ScoreKind,
     /// Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not
     /// carried per row because it is a property of the act, identical for every row of a stage.
-    pub score: f32,
+    ///
+    /// ABSENT rather than null, by the same absent-versus-null rule that keeps
+    /// [`ResourceHit::via`] keyless while [`ResourceHit::located_at`] is PRESENT-null: a null and
+    /// a missing key would both say "this row carried no quantity", so a null would add a third
+    /// spelling of one fact. Absence is the row's own statement — its membership stands, its
+    /// ordering value does not — and [`ScoreKind`] still names what a quantity WOULD be.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<f32>,
     // `located_at` is NOT here, and the reason is the one this contract already applied once.
     //
     // `Scoring` is shared by both hit types, so a field here exists on region hits too — and a

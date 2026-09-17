@@ -7248,8 +7248,14 @@ export interface components {
              * Format: float
              * @description Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not
              *     carried per row because it is a property of the act, identical for every row of a stage.
+             *
+             *     ABSENT rather than null, by the same absent-versus-null rule that keeps
+             *     [`ResourceHit::via`] keyless while [`ResourceHit::located_at`] is PRESENT-null: a null and
+             *     a missing key would both say "this row carried no quantity", so a null would add a third
+             *     spelling of one fact. Absence is the row's own statement — its membership stands, its
+             *     ordering value does not — and [`ScoreKind`] still names what a quantity WOULD be.
              */
-            score: number;
+            score?: number | null;
             score_kind: components["schemas"]["ScoreKind"];
         };
         /** @description Request body for POST /api/search. */
