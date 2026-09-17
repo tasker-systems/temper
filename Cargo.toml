@@ -4,7 +4,7 @@ members = ["crates/*", "tests/e2e"]
 
 [package]
 name = "temper-cloud"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 description = "Vercel deployment adapter for temper-api"
 

@@ -1,6 +1,6 @@
 {
   "name": "@tasker-systems/temper-telemetry-ts",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Shared OpenTelemetry span-export bootstrap + W3C trace-context helpers for Temper's Node hops (temper-ui, eve agents). The TS analog of the Rust temper-telemetry crate.",
   "type": "module",
   "main": "./dist/index.js",

@@ -8,4 +8,4 @@ alone: no import of anything under `temper`, and in particular nothing from
 `temper.generated`, which is not installed while the wheel is being built.
 """
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
