@@ -1,6 +1,6 @@
 [package]
 name = "temper-core"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 description = "Shared types, traits, and models for the temper knowledge base system"
 
