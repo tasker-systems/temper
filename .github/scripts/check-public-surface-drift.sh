@@ -12,6 +12,8 @@
 #      tree and needs no toolchain — and can live in the ungated guard-tests job. Excluded
 #      from scanning: the generated reference trees themselves (each owned by its own gate).
 #      Only long flags (`--flag`) are checked; short-flag claims are unchecked, stated here.
+#      What a fence claims is its temper SEGMENT: a pipe, separator, or redirection ends the
+#      invocation, and comments (quote-aware, via shlex) are not claims at all.
 #   2. counts — route/cron/function counts stated in the self-host playbook must equal what
 #      vercel.json actually derives (routes count `src`-entries; a `handle` directive is not
 #      a route). The page names vercel.json as its authority; this makes the numbers provable
@@ -105,25 +107,26 @@ line_re = re.compile(r"^\s*temper(\s+.*)$")
 checked = 0
 failures = []
 
-SHELL_BREAKS = {"|", "||", "&&", "&", ";", ">", ">>", "<", "#"}
-
-
 def check_invocation(path, lineno, line):
     global checked
     try:
-        tokens = shlex.split(line)
+        # comments=True: a `#` starts a comment only when UNQUOTED, so a trailing
+        # comment is not part of the invocation and a quoted "#…" argument is
+        # content — both decided by shlex, not by a split this function guesses at.
+        tokens = shlex.split(line, comments=True)
     except ValueError:
         failures.append((path, lineno, "unparseable invocation (unbalanced quote?)"))
         return
     if not tokens or tokens[0] != "temper":
         return
-    # A fenced line may pipe, chain, or comment (`temper x | jq`, `temper a && temper b`,
-    # `temper y # note`): walk each temper-leading segment between shell breaks.
-    # A '#' standing as its own token starts a comment to end of line — a '#' inside
-    # a word (file.md#anchor) does not, because shlex keeps it part of the token.
+    # A fenced line may CHAIN temper invocations (`temper a && temper b`): each
+    # temper-leading segment between shell breaks is its own claim — a break at the
+    # first metacharacter would silently under-check the second command. Redirections
+    # end a segment the same way; a non-temper segment (the jq side of a pipe) makes
+    # no claim about temper's surface and is skipped.
     segments = [[]]
     for tok in tokens:
-        if tok in SHELL_BREAKS:
+        if tok in ("|", "||", "&&", ";", "&") or tok[:1] in ("<", ">"):
             segments.append([])
         else:
             segments[-1].append(tok)
@@ -131,26 +134,24 @@ def check_invocation(path, lineno, line):
         _check_segment(path, lineno, seg)
 
 
-def _check_segment(path, lineno, tokens):
+def _check_segment(path, lineno, body):
     global checked
-    if not tokens or tokens[0] != "temper":
+    if not body or body[0] != "temper":
         return
-    body = tokens[1:]
     command = []
     flags = []
-    for tok in body:
+    for tok in body[1:]:
         if tok.startswith("--"):
             flags.append(tok.split("=", 1)[0])
         elif not tok.startswith("-") and not flags:
             command.append(tok)
     checked += 1
-    if not command:
-        # A flag-only invocation (`temper --version`) names no command path —
-        # nothing to walk against the reference tree. Counted as seen; it makes
-        # no claim the reference tree could contradict.
-        return
-    page = os.path.join(tree, command[0] + ".md")
-    label = " ".join(command)
+    if command:
+        page = os.path.join(tree, command[0] + ".md")
+        label = " ".join(command)
+    else:
+        page = root_page
+        label = "(root)"
     if not os.path.exists(page):
         failures.append((path, lineno, f"'temper {label}' — no reference page for '{command[0] if command else ''}'"))
         return
@@ -162,30 +163,35 @@ def _check_segment(path, lineno, tokens):
     # `Usage:` line shows a placeholder other than <COMMAND> — that one means a
     # subcommand is REQUIRED, so an unknown token there is drift). First positional
     # ends the path; everything after it is argument text.
-    prefix = [command[0]]
-    args_started = False
-    for tok in command[1:]:
-        if args_started:
-            continue
-        heading = "### `temper " + " ".join(prefix + [tok]) + "`"
-        if heading in page_text:
-            prefix.append(tok)
-            continue
-        usage = re.search(
-            rf"(?m)^Usage: temper {' '.join(re.escape(t) for t in prefix)}\s+(\S.*)$",
-            page_text,
-        )
-        remainder = usage.group(1) if usage else ""
-        placeholders = [t for t in remainder.split()
-                        if t.startswith("<") or t.startswith("[")]
-        positional = any(t != "[OPTIONS]" and t != "<COMMAND>" for t in placeholders)
-        if positional:
-            args_started = True
-            continue
-        failures.append((path, lineno,
-                         f"'temper {' '.join(prefix)} {tok}' — '{tok}' is neither a documented"
-                         f" subcommand nor a positional argument of '{' '.join(prefix)}'"))
-        return
+    # A flag-only invocation (`temper --help`) has NO command path: the page branch
+    # above already selected the root page for it, and only the flag check below
+    # applies. Indexing command[0] here was the crash a swallowed exit code turned
+    # into a clean banner.
+    if command:
+        prefix = [command[0]]
+        args_started = False
+        for tok in command[1:]:
+            if args_started:
+                continue
+            heading = "### `temper " + " ".join(prefix + [tok]) + "`"
+            if heading in page_text:
+                prefix.append(tok)
+                continue
+            usage = re.search(
+                rf"(?m)^Usage: temper {' '.join(re.escape(t) for t in prefix)}\s+(\S.*)$",
+                page_text,
+            )
+            remainder = usage.group(1) if usage else ""
+            placeholders = [t for t in remainder.split()
+                            if t.startswith("<") or t.startswith("[")]
+            positional = any(t != "[OPTIONS]" and t != "<COMMAND>" for t in placeholders)
+            if positional:
+                args_started = True
+                continue
+            failures.append((path, lineno,
+                             f"'temper {' '.join(prefix)} {tok}' — '{tok}' is neither a documented"
+                             f" subcommand nor a positional argument of '{' '.join(prefix)}'"))
+            return
     for flag in flags:
         if flag not in page_text and flag not in global_flags_text:
             failures.append((path, lineno, f"'temper {label} {flag}' — flag absent from its reference page"))
@@ -229,8 +235,9 @@ for path in files:
         try:
             check_invocation(rel, lineno, text)
         except Exception as exc:
-            # A checker crash is a FINDING, never a green run: record it as a
-            # failure and keep walking the rest of the tree.
+            # A per-line checker crash is a FINDING, never a green run: record it
+            # and keep walking. The missing-summary guard below still covers any
+            # crash this handler cannot see (the walk loop's own I/O, the root page).
             failures.append((rel, lineno, f"checker error: {exc!r}"))
 
 print(f"cli-claims: {checked} fenced invocations checked, {len(failures)} failures")
@@ -241,11 +248,14 @@ PYEOF
 
 echo "$CLI_OUT_FILE contents:" >/dev/null
 sed -n 's/^cli-claims: /cli-claims: /p' "$CLI_OUT_FILE"
-if ! grep -q '^cli-claims: ' "$CLI_OUT_FILE"; then
-    fail "cli-claims walk produced no summary — the scan crashed before reporting; refusing to report clean"
-fi
 grep '^FAIL:' "$CLI_OUT_FILE" >&2 || true
-if [ "$CLI_RC" -ne 0 ]; then
+# A completed checker ALWAYS reaches its summary line (printed before exit), and exits
+# non-zero only when it printed FAIL lines. RC≠0 with no summary is a CRASH — and
+# counting FAIL lines out of output a crashed process never wrote is exactly how a
+# crash used to read as a clean banner. Refuse: an incomplete scan checks nothing.
+if ! grep -q '^cli-claims: ' "$CLI_OUT_FILE"; then
+    fail "cli-claims checker did not complete (rc=${CLI_RC}) — refusing to report clean on a scan that may not have run"
+elif [ "$CLI_RC" -ne 0 ]; then
     FAILURES=$((FAILURES + $(grep -c '^FAIL:' "$CLI_OUT_FILE" || true)))
 fi
 fi
@@ -301,11 +311,12 @@ sys.exit(1 if failures else 0)
 PYEOF
 
 sed -n 's/^counts: /counts: /p' "$COUNTS_OUT_FILE"
-if ! grep -q '^counts: ' "$COUNTS_OUT_FILE"; then
-    fail "counts walk produced no summary — the scan crashed before reporting; refusing to report clean"
-fi
 grep '^FAIL:' "$COUNTS_OUT_FILE" >&2 || true
-if [ "$COUNTS_RC" -ne 0 ]; then
+# Same completion invariant as the cli-claims check: no summary line means the
+# checker died (a malformed vercel.json dies at json.load) — never a clean scan.
+if ! grep -q '^counts: ' "$COUNTS_OUT_FILE"; then
+    fail "counts checker did not complete (rc=${COUNTS_RC}) — refusing to report clean on a scan that may not have run"
+elif [ "$COUNTS_RC" -ne 0 ]; then
     FAILURES=$((FAILURES + $(grep -c '^FAIL:' "$COUNTS_OUT_FILE" || true)))
 fi
 fi

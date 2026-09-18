@@ -187,17 +187,10 @@ printf '```bash\ntemper context create \\\n  --bogus myapp\n```\n' >> "${TREE}/R
 git -C "$TREE" -c user.email=test@example.com -c user.name=test commit -aqm bite
 run_case "flag on a \\-continued line: still FAILS (continuations join)" 1 "--bogus"
 
-# A flag-only invocation names no command path: the walk must skip it AND still
-# report. Before the fix this crashed the walker and the crash reported as clean
-# (no summary line, zero FAIL lines, exit 0) — the needle proves the summary prints.
-make_tree flag-only-invocation
-printf '```sh\ntemper --version\n```\n' >> "${TREE}/README.md"
-git -C "$TREE" -c user.email=test@example.com -c user.name=test commit -aqm bite
-run_case "flag-only invocation: skipped, and the walk still reports" 0 "cli-claims: "
-
 # Piped / chained / commented invocations: only the temper-leading segments carry
 # claims. Before the segment fix each of these parsed the shell metacharacter as a
-# temper argument and failed the gate.
+# temper argument and failed the gate. (The flag-only shape is covered below by the
+# count-needled case — a summary line alone would pass a vacuous scan.)
 make_tree piped-invocation
 printf '```sh\ntemper context list | python3 -c "print(1)"\n```\n' >> "${TREE}/README.md"
 git -C "$TREE" -c user.email=test@example.com -c user.name=test commit -aqm bite
@@ -224,7 +217,7 @@ chmod 644 "${TREE}/docs/reference/cli/context.md"
 # summary line can print, so the gate must refuse to report clean.
 make_tree unreadable-walked-doc
 chmod 000 "${TREE}/docs/playbooks/self-host-temper.md"
-run_case "unreadable walked doc: no summary, gate refuses clean" 1 "no summary"
+run_case "unreadable walked doc: no summary, gate refuses clean" 1 "did not complete"
 chmod 644 "${TREE}/docs/playbooks/self-host-temper.md"
 
 make_tree page-count-mutated
@@ -257,6 +250,49 @@ make_tree missing-tree
 rm -r "${TREE}/docs/reference/cli"
 git -C "$TREE" -c user.email=test@example.com -c user.name=test commit -aqm bite
 run_case "cli reference tree absent: refuses rather than checking nothing" 1 "refusing to check nothing"
+
+# --- NEGATIVE: a checker that did not complete must FAIL the gate, never read clean ---
+#
+# Two defects shipped together once (found 2026-09-18, CI run of #923): the cli-claims
+# checker crashed (IndexError) on a flag-only `temper --help` fence, and the `|| RC=$?`
+# swallow turned that death into a clean banner. These two cases bite the two halves
+# independently — removing either fix reds exactly one of them.
+
+make_tree flag-only-invocation
+# `--help` is documented on the root page (the fixture's global options), so the
+# invocation is LEGAL: the checker must complete, count it, and stay clean. Without the
+# empty-command-path fix the checker dies here; without the completion check the death
+# reads as clean — in both regressions this case goes red.
+printf '```bash\ntemper --help\n```\n' >> "${TREE}/README.md"
+git -C "$TREE" -c user.email=test@example.com -c user.name=test commit -aqm bite
+run_case "flag-only invocation: checked and clean, not a crash" 0 "cli-claims: 3 fenced invocations checked"
+
+make_tree checker-dies
+# A crash vector unrelated to the flag walk: vercel.json that is not JSON kills the
+# counts checker at json.load. The predecessor swallowed it into a clean banner; the
+# gate must name the incomplete checker and fail.
+printf '{ not json' > "${TREE}/vercel.json"
+git -C "$TREE" -c user.email=test@example.com -c user.name=test commit -aqm bite
+run_case "a crashed checker FAILS the gate: counts checker did not complete" 1 "did not complete"
+
+# --- NEGATIVE: fence syntax that is not a claim about temper's surface ---
+#
+# Found the same day the crash was fixed: with the checker finally completing its
+# walk, three REAL docs lines went red — a pipeline and two trailing comments that
+# the checker was reading as subcommand tokens. A fence claims its temper SEGMENT;
+# these two cases pin that reading. The count needle forces each to be CHECKED as
+# an invocation, not skipped (a lazy fix that ignores piped/commented lines reds
+# here on the count).
+
+make_tree pipeline-invocation
+printf '```bash\ntemper context list | wc -l\n```\n' >> "${TREE}/README.md"
+git -C "$TREE" -c user.email=test@example.com -c user.name=test commit -aqm bite
+run_case "piped invocation: the temper segment is checked, the pipe is not a subcommand" 0 "cli-claims: 3 fenced invocations checked"
+
+make_tree trailing-comment
+printf '```bash\ntemper context list   # list the ones you can see\n```\n' >> "${TREE}/README.md"
+git -C "$TREE" -c user.email=test@example.com -c user.name=test commit -aqm bite
+run_case "trailing comment: not part of the invocation" 0 "cli-claims: 3 fenced invocations checked"
 
 # --- NEGATIVE: the roadmap sweep — new files only, every verb, case-insensitively ---
 

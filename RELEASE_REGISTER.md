@@ -14,6 +14,36 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.5.2 — unreleased
 
+- **Palette search rows read the home the row actually carries — cogmap-homed rows stop rendering an empty home**
+  The command palette's result sub-line read `context_name` alone, so a search
+  hit homed in a cognitive map — which carries `cogmap_name` and no
+  `context_name` key at all (`skip_serializing_if`) — rendered an empty home
+  before the separator ("· concept"). The sub-line now reads
+  `cogmap_name ?? context_name` and renders no home segment at all when a row
+  carries neither. `ResourceView` and every wire shape are untouched: render-only
+  behavior behind unchanged shapes, observed live from `POST /api/search`
+  (task `01a0b4d5-9c40-7c03-add9-0a498e49b31b`).
+pr: 925
+classes: behavioral
+surfaces: internal
+status: signal-only
+
+- **The palette asks the real door — one arm at a time on screen (UI-only)**
+  The header-search palette's read moves from the title-`ILIKE` list door to
+  `POST /api/search` through a new UI-server proxy (`/_internal/search`
+  GET→POST), and the command palette renders one arm of the answer at a time —
+  wide by default, an Exact switch selecting the other — with each arm's
+  disposition rendered in place and the `/vault/search` hand-off dropped for a
+  stated bound. Requests carry `{query, limit}` and nothing else: no `arms`
+  param, no embedding, byte-identical to any current client's request — the
+  arm selection never reaches the wire. The parked `arms` selector on
+  `jct/search-arms-selector` is the wire half, aligned to the 0.6.0 chain.
+pr: self
+classes: additive
+surfaces: internal
+status: signal-only
+
+
 - **Self-host route/cron table regeneration — counts and tables derived from `vercel.json`**
   `docs/playbooks/self-host-temper.md`'s route table, cron table, topology
   diagram, and routing-contract counts are regenerated from the current
