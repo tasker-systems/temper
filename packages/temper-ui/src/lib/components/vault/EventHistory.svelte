@@ -16,10 +16,27 @@
 
 	let rows = $derived(trailModel(trail));
 	let openEvent = $state<string | null>(null);
+
+	/**
+	 * The render bound. The trail read is whole — `rows` is every event this resource carries —
+	 * and this region renders the most recent `RENDER_BOUND` of them. The heading count, the
+	 * stated bound and the slice all read this one constant against the same `rows`, so heading,
+	 * statement and render cannot disagree about how much is shown.
+	 */
+	const RENDER_BOUND = 50;
 </script>
 
 <section>
 	<div class="label">History · {rows.length}</div>
+	<!--
+		The bound is stated chrome, not a warning that appears when it binds: a statement that
+		only appears past the bound is a second predicate over `rows` that can drift away from
+		the slice it describes. Deriving it here, from the same `rows` the heading counts, keeps
+		heading and bound one truth.
+	-->
+	<p class="bound">
+		The most recent {Math.min(rows.length, RENDER_BOUND)} of {rows.length} events.
+	</p>
 	<!--
 		The emptiness verdict stays HERE rather than in the page, because the count beside it comes
 		from the same `rows`: one derivation decides both what this heading says and whether the
@@ -37,7 +54,7 @@
 	{#if rows.length === 0}
 		<RegionState state="empty" label="history" />
 	{:else}
-		{#each rows.slice(0, 50) as row (row.id)}
+		{#each rows.slice(0, RENDER_BOUND) as row (row.id)}
 			<!-- summarizeEvent resolves relationship targets through an optional node
 			     map; the vault page loads no subgraph, so it is omitted and the
 			     summary line is skipped for the events that would need it. -->
@@ -83,6 +100,12 @@
 		text-transform: uppercase;
 		color: var(--color-quiet-dim);
 		margin-bottom: 6px;
+	}
+	.bound {
+		font-family: var(--font-mono);
+		font-size: 9px;
+		color: var(--color-quiet-dim);
+		margin: 0 0 6px;
 	}
 	.event {
 		padding: 4px 0;

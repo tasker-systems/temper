@@ -141,13 +141,14 @@ const data = (fill: Fill = {}): PageData =>
  * connections, and C3's whole content is that a failed region names itself.
  *
  * The rail's two are addressed by position because the page renders them in order and neither
- * carries a test id — history first, connections second, in all four states.
+ * carries a test id — the toggle bar (D-F6) is the rail's first child, then history, then
+ * connections, in all four states.
  */
 const documentRegion = (c: HTMLElement): Element | null => c.querySelector('.body');
 const historyRegion = (c: HTMLElement): Element | null =>
-	c.querySelector('.rail')?.children[0] ?? null;
-const connectionsRegion = (c: HTMLElement): Element | null =>
 	c.querySelector('.rail')?.children[1] ?? null;
+const connectionsRegion = (c: HTMLElement): Element | null =>
+	c.querySelector('.rail')?.children[2] ?? null;
 
 type Scope = (c: HTMLElement) => Element | null;
 
@@ -397,6 +398,218 @@ describe('the rail states its emptiness rather than rendering nothing', () => {
 		expect(region()?.querySelectorAll('.event')).toHaveLength(2);
 		expect(region()?.querySelector('[data-testid="region-empty"]')).toBeNull();
 		expect(region()?.querySelector('.label')?.textContent).toBe('History · 2');
+	});
+});
+
+/**
+ * D-F3 — the row states the relationship in the reader's terms, or states nothing.
+ *
+ * `label` is the reader's own word for their relationship; `edge_kind` is the system's structural
+ * name for it. An edge whose label is empty (the type is non-null and the wire `COALESCE`s the
+ * column to `''`) used to fall back to `edge_kind`, so a row rendered the system's vocabulary —
+ * 'near', 'contains' — as if the reader had written it. Weight and polarity are ledger metadata:
+ * they name how the edge was asserted, not what the reader is looking at, and they rendered on
+ * every row regardless.
+ */
+describe('a connection row reads in the reader’s terms', () => {
+	/** The unlabeled edge the system actually ships: `label` arrives `''`, never null. */
+	const unlabeled = (n: number): GraphEdgeRow => ({ ...edge(n), label: '', polarity: 'inverse' });
+
+	const rowWords = async (fill: Fill): Promise<string> => {
+		const { container, unmount } = render(Page, { data: data(fill), form: null });
+		await vi.waitFor(() => {
+			expect(connectionsRegion(container)?.querySelector('.edge')).not.toBeNull();
+		});
+		const words = connectionsRegion(container)?.textContent ?? '';
+		unmount();
+		return words;
+	};
+
+	it('an unlabeled edge states no relationship text — not the system’s edge kind', async () => {
+		const words = await rowWords({ edges: Promise.resolve([unlabeled(1)]) });
+
+		// 'near' is the fixture's `edge_kind`. Before D-F3 the fallback rendered it; a version
+		// that renders it again — or any placeholder prose in its place — fails here.
+		expect(words).not.toContain('near');
+	});
+
+	it('weight and polarity appear on no row', async () => {
+		const words = await rowWords({ edges: Promise.resolve([unlabeled(1)]) });
+
+		// The fixture carries `weight: 0.5` and `polarity: 'inverse'`; the current template
+		// renders both, so this bites only because the fixture polarity is non-forward.
+		expect(words).not.toContain('0.5');
+		expect(words).not.toContain('inverse');
+	});
+
+	it('a labeled edge renders its label verbatim — no translation table', async () => {
+		const words = await rowWords({ edges: Promise.resolve([edge(1)]) });
+
+		expect(words).toContain('relates to');
+	});
+
+	// An unlabeled row renders no relationship text at all, arrows included — the whole
+	// arrow-label-arrow span sits inside the label guard — so both arrows here come from the
+	// labeled rows. The assertion keeps the arrow arm alive without reading the unlabeled
+	// row's silence as the arrows being gone.
+	it('direction arrows stay on labeled rows — incoming and outgoing', async () => {
+		const incoming = (n: number): GraphEdgeRow => ({ ...edge(n), direction: 'incoming' });
+		const words = await rowWords({
+			edges: Promise.resolve([edge(1), unlabeled(2), incoming(3)]),
+		});
+
+		expect(words).toContain('→');
+		expect(words).toContain('←');
+	});
+
+	it('a blob peer states its peer and never links into /vault/r', async () => {
+		const blobPeer = (n: number): GraphEdgeRow => ({
+			...edge(n),
+			peer_table: 'kb_blobs',
+			peer_id: '01jabcdefghij00000000000k'.padEnd(26, '0'),
+		});
+		const { container, unmount } = render(Page, {
+			data: data({ edges: Promise.resolve([blobPeer(1)]) }),
+			form: null,
+		});
+		await vi.waitFor(() => {
+			expect(connectionsRegion(container)?.querySelector('.edge')).not.toBeNull();
+		});
+		const peer = connectionsRegion(container)?.querySelector('.edge .peer');
+
+		expect(peer?.tagName).toBe('SPAN');
+		expect(peer?.textContent).toContain('blob · 01jabcde');
+		unmount();
+	});
+});
+
+/**
+ * D-F5 — the render bound is stated chrome, not a silent slice.
+ *
+ * The region renders the most recent 50 events of whatever the trail read returned; the read is
+ * whole, so the true full count is known and stated in the heading. The bound between "read" and
+ * "rendered" used to sit nowhere on screen: a resource with 200 events said "History · 200" and
+ * then stopped without explanation, which reads as a rendering defect rather than as a stated
+ * bound. The statement is chrome — present whether or not the slice actually bit — because a
+ * warning that appears only when the bound binds is a second predicate that can drift away from
+ * the slice it describes.
+ */
+describe('the history region states its render bound', () => {
+	const historyWords = async (fill: Fill): Promise<string> => {
+		const { container, unmount } = render(Page, { data: data(fill), form: null });
+		await vi.waitFor(() => {
+			expect(historyRegion(container)?.querySelector('.event')).not.toBeNull();
+		});
+		const words = historyRegion(container)?.textContent ?? '';
+		unmount();
+		return words;
+	};
+
+	it('a trail beyond the bound states the most recent 50 of the true full count', async () => {
+		const words = await historyWords({ trail: Promise.resolve(trailOf(60)) });
+
+		expect(words).toContain('most recent 50 of 60');
+	});
+
+	it('the bound statement is present at or under the bound — chrome, not a warning', async () => {
+		const words = await historyWords({ trail: Promise.resolve(trailOf(2)) });
+
+		expect(words).toContain('most recent 2 of 2');
+	});
+
+	it('the slice still renders at most 50 events, and the heading keeps the true full count', async () => {
+		const { container, unmount } = render(Page, {
+			data: data({ trail: Promise.resolve(trailOf(60)) }),
+			form: null,
+		});
+		const region = () => historyRegion(container);
+		await vi.waitFor(() => {
+			expect(region()?.querySelector('.event')).not.toBeNull();
+		});
+
+		expect(region()?.querySelectorAll('.event')).toHaveLength(50);
+		expect(region()?.querySelector('.label')?.textContent).toBe('History · 60');
+		unmount();
+	});
+});
+
+/**
+ * D-F6 — the rail closes, and the closed state says what it withholds.
+ *
+ * The rail carried History and Connections unconditionally: there was no way to put them away,
+ * and the only way to stop seeing them was to stop rendering them, which would be the exact
+ * failed-vs-empty absence this page spent a whole block curing. So closed is a STATE — the rail
+ * stays on screen, names the two regions it is withholding, and offers them back — rather than a
+ * rail-shaped hole. The main column is untouched by it: nothing the reader was reading reflows
+ * because they put the rail away.
+ *
+ * This is presentation state in the page (an in-page `$state` toggle, the `openEvent` precedent
+ * in `EventHistory`), not address state: no URL carries it, and a fresh page arrives open.
+ */
+describe('the rail closes and says what it withholds', () => {
+	const toggle = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('.rail-toggle');
+
+	const openRail = async () => {
+		const { container, unmount } = render(Page, { data: data(), form: null });
+		await vi.waitFor(() => {
+			expect(historyRegion(container)?.querySelector('.event')).not.toBeNull();
+		});
+		return { container, unmount };
+	};
+
+	/** Closes the rail and proves the close happened, so no assertion below reads the open rail. */
+	const closedRail = async () => {
+		const { container, unmount } = await openRail();
+		toggle(container)?.click();
+		// Svelte 5 flushes the handler's DOM update on a microtask, so the close is awaited
+		// rather than assumed — the same reason `wordsOf` waits on its marker.
+		await vi.waitFor(() => {
+			expect(container.querySelector('.event'), 'the rail never closed').toBeNull();
+		});
+		return { container, unmount };
+	};
+
+	it('a control in the rail closes it', async () => {
+		const { container, unmount } = await openRail();
+
+		expect(toggle(container), 'the rail offers no control to close itself').not.toBeNull();
+		toggle(container)?.click();
+
+		await vi.waitFor(() => {
+			expect(container.querySelector('.rail')).not.toBeNull();
+			expect(container.querySelector('.event')).toBeNull();
+			expect(container.querySelector('.edge')).toBeNull();
+		});
+		unmount();
+	});
+
+	it('the closed state names the two regions it withholds', async () => {
+		const { container, unmount } = await closedRail();
+
+		const words = container.querySelector('.rail')?.textContent ?? '';
+		expect(words).toContain('History');
+		expect(words).toContain('Connections');
+		unmount();
+	});
+
+	it('closed is a state, not an absence — the rail reopens', async () => {
+		const { container, unmount } = await closedRail();
+
+		toggle(container)?.click();
+		await vi.waitFor(() => {
+			expect(historyRegion(container)?.querySelector('.event')).not.toBeNull();
+		});
+		expect(container.querySelector('.rail')?.querySelector('.event')).not.toBeNull();
+		unmount();
+	});
+
+	it('closing the rail leaves the main column untouched', async () => {
+		const { container, unmount } = await closedRail();
+
+		expect(container.querySelector('.title')?.textContent).toBe('The rendering approach');
+		expect(container.querySelectorAll('.props .row')).toHaveLength(PROPERTY_ROWS);
+		expect(container.querySelector('.body')).not.toBeNull();
+		unmount();
 	});
 });
 

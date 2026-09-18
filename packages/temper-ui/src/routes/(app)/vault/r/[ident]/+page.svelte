@@ -39,6 +39,11 @@
 	let refusal = $derived(
 		form && typeof form.message === 'string' ? { field: form.field, message: form.message } : null
 	);
+
+	// The rail's open/closed state is presentation, not address: nothing in the URL carries it,
+	// so a fresh page arrives open — the same in-page `$state` precedent `openEvent` sets in
+	// `EventHistory`. Closing withholds, it does not navigate.
+	let railOpen = $state(true);
 </script>
 
 <svelte:head>
@@ -132,33 +137,57 @@
 	{/snippet}
 
 	<aside class="rail">
-		{#await data.trail}
-			<div class="rail-region">
-				{@render railHeading('History')}
-				<RegionState state="arriving" label="history" />
-			</div>
-		{:then trail}
-			<EventHistory {trail} />
-		{:catch error}
-			<div class="rail-region">
-				{@render railHeading('History')}
-				<RegionState state={regionStateFor(error)} label="history" />
-			</div>
-		{/await}
+		<!--
+			The toggle stays when the rail is closed: a rail that merely vanished on close would be
+			the absence-of-history defect wearing a different shape — the reader could not tell a
+			region they put away from a region that failed or one that is empty. The closed state
+			therefore stays on screen and names the two regions it is withholding, and the grid
+			column does not collapse, so closing reflows nothing the reader was reading.
+		-->
+		<div class="rail-bar">
+			<button
+				type="button"
+				class="rail-toggle"
+				aria-expanded={railOpen}
+				onclick={() => (railOpen = !railOpen)}
+			>
+				{railOpen ? 'Hide rail' : 'Show rail'}
+			</button>
+		</div>
 
-		{#await data.edges}
-			<div class="rail-region">
-				{@render railHeading('Connections')}
-				<RegionState state="arriving" label="connections" />
+		{#if railOpen}
+			{#await data.trail}
+				<div class="rail-region">
+					{@render railHeading('History')}
+					<RegionState state="arriving" label="history" />
+				</div>
+			{:then trail}
+				<EventHistory {trail} />
+			{:catch error}
+				<div class="rail-region">
+					{@render railHeading('History')}
+					<RegionState state={regionStateFor(error)} label="history" />
+				</div>
+			{/await}
+
+			{#await data.edges}
+				<div class="rail-region">
+					{@render railHeading('Connections')}
+					<RegionState state="arriving" label="connections" />
+				</div>
+			{:then edges}
+				<EdgeList {edges} />
+			{:catch error}
+				<div class="rail-region">
+					{@render railHeading('Connections')}
+					<RegionState state={regionStateFor(error)} label="connections" />
+				</div>
+			{/await}
+		{:else}
+			<div class="rail-closed">
+				History and Connections are withheld while the rail is closed.
 			</div>
-		{:then edges}
-			<EdgeList {edges} />
-		{:catch error}
-			<div class="rail-region">
-				{@render railHeading('Connections')}
-				<RegionState state={regionStateFor(error)} label="connections" />
-			</div>
-		{/await}
+		{/if}
 	</aside>
 </div>
 
@@ -204,6 +233,32 @@
 	/* The rail's sections carry their own padding; a bare region needs the same gutter. */
 	.rail-region {
 		padding: 12px 14px;
+	}
+	.rail-bar {
+		display: flex;
+		justify-content: flex-end;
+		padding: 8px 10px;
+		border-bottom: 1px solid color-mix(in srgb, var(--hue) 12%, transparent);
+	}
+	.rail-toggle {
+		background: none;
+		border: 0;
+		padding: 0;
+		cursor: pointer;
+		font-family: var(--font-mono);
+		font-size: 9px;
+		letter-spacing: var(--track-label);
+		text-transform: uppercase;
+		color: var(--color-quiet-dim);
+	}
+	.rail-toggle:hover {
+		color: var(--color-quiet-mid);
+	}
+	.rail-closed {
+		padding: 12px 14px;
+		font-family: var(--font-mono);
+		font-size: 10.5px;
+		color: var(--color-quiet-dim);
 	}
 	/* Same treatment as `EventHistory`'s and `EdgeList`'s own heading, so a region's label does not
 	   change appearance depending on whether its read has answered. */
