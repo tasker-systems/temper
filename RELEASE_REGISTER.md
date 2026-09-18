@@ -27,7 +27,7 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
   region consumes the sibling and states the bound chrome in its heading.
   Additive only: one new response type, one new route, the generated SDK skins
   re-staled with the commit.
-pr: self
+pr: 929
 classes: additive
 surfaces: http, clients
 status: signal-only
