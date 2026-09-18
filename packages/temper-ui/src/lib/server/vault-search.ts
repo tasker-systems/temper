@@ -1,3 +1,4 @@
+import { SEARCH_PAGE_SIZE } from '$lib/search-page-size';
 import type { SearchResponse } from '$lib/types/generated/search';
 import { apiPost } from './api';
 
@@ -16,11 +17,8 @@ import { apiPost } from './api';
  *
  * @see CommandPalette.svelte — the arm the reader sees is chosen there, from the answer returned here
  */
-/**
- * The page size the proxy asks for — and the bound the palette states under a full page (D6).
- * One constant so the request and the stated bound cannot drift apart.
- */
-export const PAGE_SIZE = 10;
-
-export const runSearch = (token: string, q: string, limit = PAGE_SIZE): Promise<SearchResponse> =>
-	apiPost<SearchResponse>('/api/search', token, { query: q, limit });
+export const runSearch = (
+	token: string,
+	q: string,
+	limit = SEARCH_PAGE_SIZE,
+): Promise<SearchResponse> => apiPost<SearchResponse>('/api/search', token, { query: q, limit });

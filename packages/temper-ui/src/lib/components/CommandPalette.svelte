@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import type { ResourceView } from '$lib/types';
 	import type { SearchResponse } from '$lib/types/generated/search';
-	import { PAGE_SIZE, runSearch } from '$lib/server/vault-search';
+	import { SEARCH_PAGE_SIZE } from '$lib/search-page-size';
 	import { resourceHref } from '$lib/vault-url';
 
 	let open = $state(false);
@@ -193,12 +193,12 @@
 						</button>
 					{/each}
 				</div>
-				{#if hits.length >= PAGE_SIZE}
+				{#if hits.length >= SEARCH_PAGE_SIZE}
 					<!-- D6 — the palette states its bound instead of pretending the answer is whole. -->
 					<div
 						class="px-4 py-2 text-xs text-zinc-500 border-t border-zinc-800"
 					>
-						Showing the first {PAGE_SIZE}
+						Showing the first {SEARCH_PAGE_SIZE}
 					</div>
 				{/if}
 			{:else}

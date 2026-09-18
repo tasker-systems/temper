@@ -1,7 +1,7 @@
 import { fireEvent, render } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PAGE_SIZE, runSearch } from '$lib/server/vault-search';
+import { SEARCH_PAGE_SIZE } from '$lib/search-page-size';
 import type { ExactArm, SearchResponse, WideArm } from '$lib/types/generated/search';
 import { goto, resetAppContext } from '../../test/app-context';
 import { makeRow } from '../../test/fixtures';
@@ -189,7 +189,7 @@ describe('CommandPalette — the bound it states (D6)', () => {
 			200,
 			arms({
 				wide: {
-					hits: Array.from({ length: PAGE_SIZE }, (_, i) => wideHit(`Find ${i}`)),
+					hits: Array.from({ length: SEARCH_PAGE_SIZE }, (_, i) => wideHit(`Find ${i}`)),
 					reason: 'ok',
 					hint: null,
 				},
@@ -201,7 +201,7 @@ describe('CommandPalette — the bound it states (D6)', () => {
 
 		// The answer may be truncated at the page size; a palette that hides that fact
 		// reads as complete what is a first page.
-		expect(container.textContent).toContain(`Showing the first ${PAGE_SIZE}`);
+		expect(container.textContent).toContain(`Showing the first ${SEARCH_PAGE_SIZE}`);
 		expect(container.textContent).not.toContain('See all');
 	});
 
@@ -276,8 +276,6 @@ describe('CommandPalette — the request it makes', () => {
 		// No `arms` key, no embedding — byte-identical to any current client's request.
 		// The arm selection never reaches the wire.
 		expect(JSON.parse(String(init.body))).toEqual({ q: 'ledger' });
-		// The proxy module still owns the upstream shape.
-		expect(runSearch).toBeDefined();
 	});
 
 	it('renders the failure, never "No results", when the endpoint answers 503', async () => {

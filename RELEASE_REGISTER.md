@@ -13,7 +13,22 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 `satisfied`.
 
 ## Since v0.5.0 — unreleased
- 
+
+- **The palette asks the real door — one arm at a time on screen (UI-only)**
+  The header-search palette's read moves from the title-`ILIKE` list door to
+  `POST /api/search` through a new UI-server proxy (`/_internal/search`
+  GET→POST), and the command palette renders one arm of the answer at a time —
+  wide by default, an Exact switch selecting the other — with each arm's
+  disposition rendered in place and the `/vault/search` hand-off dropped for a
+  stated bound. Requests carry `{query, limit}` and nothing else: no `arms`
+  param, no embedding, byte-identical to any current client's request — the
+  arm selection never reaches the wire. The parked `arms` selector on
+  `jct/search-arms-selector` is the wire half, aligned to the 0.6.0 chain.
+pr: self
+classes: additive
+surfaces: internal
+status: signal-only
+
 - **Self-host route/cron table regeneration — counts and tables derived from `vercel.json`**
   `docs/playbooks/self-host-temper.md`'s route table, cron table, topology
   diagram, and routing-contract counts are regenerated from the current
