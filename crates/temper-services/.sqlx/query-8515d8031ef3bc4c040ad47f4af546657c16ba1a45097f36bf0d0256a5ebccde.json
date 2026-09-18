@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1, $2) ON CONFLICT (profile_id) DO UPDATE SET state = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8515d8031ef3bc4c040ad47f4af546657c16ba1a45097f36bf0d0256a5ebccde"
+}

@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id    AS \"id!\",\n               created AS \"created!\",\n               message AS \"message\"\n        FROM kb_join_requests\n        WHERE requesting_profile_id = $1 AND status = 'pending'\n        ORDER BY created DESC\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "created!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "message",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "f60de43f32710f857e1ba9e56c47b8bb6390e142d966b81c0685df0bd95cef8d"
+}

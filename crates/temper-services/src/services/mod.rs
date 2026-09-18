@@ -1,4 +1,5 @@
 pub mod access_service;
+pub mod admin_directory_service;
 pub mod admin_ledger_service;
 pub mod as_reap_service;
 pub mod auditor_service;
