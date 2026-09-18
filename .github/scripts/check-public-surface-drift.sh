@@ -105,6 +105,9 @@ line_re = re.compile(r"^\s*temper(\s+.*)$")
 checked = 0
 failures = []
 
+SHELL_BREAKS = {"|", "||", "&&", "&", ";", ">", ">>", "<", "#"}
+
+
 def check_invocation(path, lineno, line):
     global checked
     try:
@@ -114,9 +117,25 @@ def check_invocation(path, lineno, line):
         return
     if not tokens or tokens[0] != "temper":
         return
-    body = tokens[1:]
-    if body and body[0].startswith("#"):
+    # A fenced line may pipe, chain, or comment (`temper x | jq`, `temper a && temper b`,
+    # `temper y # note`): walk each temper-leading segment between shell breaks.
+    # A '#' standing as its own token starts a comment to end of line — a '#' inside
+    # a word (file.md#anchor) does not, because shlex keeps it part of the token.
+    segments = [[]]
+    for tok in tokens:
+        if tok in SHELL_BREAKS:
+            segments.append([])
+        else:
+            segments[-1].append(tok)
+    for seg in segments:
+        _check_segment(path, lineno, seg)
+
+
+def _check_segment(path, lineno, tokens):
+    global checked
+    if not tokens or tokens[0] != "temper":
         return
+    body = tokens[1:]
     command = []
     flags = []
     for tok in body:
@@ -125,12 +144,13 @@ def check_invocation(path, lineno, line):
         elif not tok.startswith("-") and not flags:
             command.append(tok)
     checked += 1
-    if command:
-        page = os.path.join(tree, command[0] + ".md")
-        label = " ".join(command)
-    else:
-        page = root_page
-        label = "(root)"
+    if not command:
+        # A flag-only invocation (`temper --version`) names no command path —
+        # nothing to walk against the reference tree. Counted as seen; it makes
+        # no claim the reference tree could contradict.
+        return
+    page = os.path.join(tree, command[0] + ".md")
+    label = " ".join(command)
     if not os.path.exists(page):
         failures.append((path, lineno, f"'temper {label}' — no reference page for '{command[0] if command else ''}'"))
         return
@@ -205,7 +225,13 @@ for path in files:
         text = text.strip()
         if text.endswith("\\"):
             text = text[:-1]
-        check_invocation(os.path.relpath(path, root), lineno, text)
+        rel = os.path.relpath(path, root)
+        try:
+            check_invocation(rel, lineno, text)
+        except Exception as exc:
+            # A checker crash is a FINDING, never a green run: record it as a
+            # failure and keep walking the rest of the tree.
+            failures.append((rel, lineno, f"checker error: {exc!r}"))
 
 print(f"cli-claims: {checked} fenced invocations checked, {len(failures)} failures")
 for path, lineno, msg in failures:
@@ -215,6 +241,9 @@ PYEOF
 
 echo "$CLI_OUT_FILE contents:" >/dev/null
 sed -n 's/^cli-claims: /cli-claims: /p' "$CLI_OUT_FILE"
+if ! grep -q '^cli-claims: ' "$CLI_OUT_FILE"; then
+    fail "cli-claims walk produced no summary — the scan crashed before reporting; refusing to report clean"
+fi
 grep '^FAIL:' "$CLI_OUT_FILE" >&2 || true
 if [ "$CLI_RC" -ne 0 ]; then
     FAILURES=$((FAILURES + $(grep -c '^FAIL:' "$CLI_OUT_FILE" || true)))
@@ -272,6 +301,9 @@ sys.exit(1 if failures else 0)
 PYEOF
 
 sed -n 's/^counts: /counts: /p' "$COUNTS_OUT_FILE"
+if ! grep -q '^counts: ' "$COUNTS_OUT_FILE"; then
+    fail "counts walk produced no summary — the scan crashed before reporting; refusing to report clean"
+fi
 grep '^FAIL:' "$COUNTS_OUT_FILE" >&2 || true
 if [ "$COUNTS_RC" -ne 0 ]; then
     FAILURES=$((FAILURES + $(grep -c '^FAIL:' "$COUNTS_OUT_FILE" || true)))
