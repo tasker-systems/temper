@@ -17,14 +17,19 @@ Both issuers mint **human and machine** tokens with the same signing key per iss
 `client_credentials` token is not a separate key family, only a separate claim shape.
 Verification is identical for both; the split happens one step later, in classification.
 
-## One audience, both surfaces
+## One audience check, both surfaces
 
-The HTTP API and the MCP server validate the **same audience**. There is no per-surface
-audience split. An instance has exactly one audience, parsed once at boot.
+Both surfaces run the same audience check, and the check reads a **set**, not a single value:
+the auth audience, plus — on the MCP surface — its own RFC 8707 resource audience when one is
+configured. A token naming either audience verifies; a token naming neither does not.
 
 This is enforced: the audience is a mandatory field (empty counts as unset), and the JWT must
 carry the `aud` claim — requiring the value to match without requiring the claim to exist
 would close only half the door. The server also requires `exp` (expiry) and `iss` (issuer).
+
+What each audience *is* — the auth audience, the optional MCP audience, the AS audience, and
+which of them must agree — is the auth-identity contract's to define, not this page's:
+[Auth identity](./auth-identity.md).
 
 ## What the surface hands the seam
 
@@ -50,7 +55,9 @@ The ladder is on the human arm only — a machine token has no email and no `/us
 These are enforced at boot, not operator discipline:
 
 - **One issuer per instance.** Setting the AS issuer flips the instance into AS mode.
-- **One audience per instance.** Both surfaces read the same value.
+- **Audiences are instance config, read as a set.** The auth audience is mandatory; the
+  optional MCP audience is per-instance, never per-request — the model is
+  [Auth identity](./auth-identity.md)'s.
 - **AS↔API shared values must agree.** If the AS audience, auth audience, or JWKS URL diverge,
   the instance refuses to start.
 
