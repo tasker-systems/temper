@@ -132,106 +132,37 @@ Markdown is deliberate:
 
 ## Commands
 
-Every command accepts the global flags `--format json|toon` and `--color auto|always|never`. Output defaults to TOON on a TTY and **JSON otherwise** — so an agent piping `temper` gets machine-readable output with no flag at all. Precedence runs flag → env (`TEMPER_FORMAT` / `TEMPER_COLOR`) → the `[cli]` section of your config → the TTY-aware default. Edit those defaults with `temper config edit`.
+The [CLI reference](docs/reference/cli/README.md) documents every command and flag, generated
+from the built binary's own `--help` — if a page there disagrees with the binary in your
+hands, the page is the defect. The global output flags (`--format json|toon`,
+`--color auto|always|never`) and their precedence live there too. Orientation by area:
 
-### Core
-
-| Command | Description |
-|---------|-------------|
-| `temper init` | Initialize a new vault |
-| `temper check` | Check vault integrity and tool health |
-| `temper status` | Show vault status overview |
-| `temper warmup [--context <ctx-ref>]` | Context primer for new sessions |
-
-### Search
-
-| Command | Description |
-|---------|-------------|
-| `temper search <query>` | Hybrid full-text + semantic search |
-| `temper search <query> --limit <n>` | Cap the result count (default 10) |
-| `temper search <query> --context <ctx-ref>` | Scope the search to one context |
-| `temper search <query> --cogmap <ref>` | Scope the search to a single cognitive map |
-| `temper search <query> --within <ref>` | Narrow to specific resources, by ref (repeatable) |
-| `temper search <query> --text-only` | Full-text only — no local embedding needed |
-| `temper graph` | Walk the knowledge graph — orient with no question, or move from where you are |
-
-### Content
-
-| Command | Description |
-|---------|-------------|
-| `temper resource create --type <type> --title <title>` | Create a resource (goal, task, session, research, decision, concept) |
-| `temper resource create --from <path\|url>` | Ingest a file or URL (extract, embed, store via the cloud pipeline) |
-| `temper resource list --type <type>` | List resources of a type |
-| `temper resource list --type <type> --with open-meta` | List with the open meta tier filled per row, no bodies — triage a context on metadata in one call |
-| `temper resource show <ref>` | Show a resource by ref |
-| `temper resource show <ref> --without body` | Everything `show` returns except the body — a cheap orientation read |
-| `temper resource show <ref> --edges` | Show a resource plus its graph edges |
-
-### Goals and Tasks
-
-| Command | Description |
-|---------|-------------|
-| `temper resource create --type task --title <title> --context <ctx-ref>` | Create a task |
-| `temper resource create --type goal --title <title> --context <ctx-ref>` | Create a goal |
-| `temper resource list --type task [--context <ctx-ref>]` | List tasks (or any doc type) |
-| `temper resource update <ref> --stage done` | Mark a task done |
+- **Core:** [`init`](docs/reference/cli/init.md), [`check`](docs/reference/cli/check.md),
+  [`status`](docs/reference/cli/status.md), [`warmup`](docs/reference/cli/warmup.md)
+- **Search:** [`search`](docs/reference/cli/search.md), [`graph`](docs/reference/cli/graph.md)
+- **Resources:** [`resource`](docs/reference/cli/resource.md) — create, list, show, update,
+  delete; and [`data-artifact`](docs/reference/cli/data-artifact.md)
+- **Relationships:** [`edge`](docs/reference/cli/edge.md)
+- **Cognitive maps:** [`cogmap`](docs/reference/cli/cogmap.md),
+  [`invocation`](docs/reference/cli/invocation.md), [`steward`](docs/reference/cli/steward.md)
+- **Contexts and skills:** [`context`](docs/reference/cli/context.md),
+  [`skill`](docs/reference/cli/skill.md)
+- **Cloud and auth:** [`auth`](docs/reference/cli/auth.md),
+  [`invitations`](docs/reference/cli/invitations.md), [`team`](docs/reference/cli/team.md),
+  [`pull`](docs/reference/cli/pull.md), [`config`](docs/reference/cli/config.md),
+  [`memory`](docs/reference/cli/memory.md), [`slack`](docs/reference/cli/slack.md)
+- **Admin and introspection:** [`admin`](docs/reference/cli/admin.md),
+  [`query`](docs/reference/cli/query.md), [`blob`](docs/reference/cli/blob.md),
+  [`trail`](docs/reference/cli/trail.md), [`version`](docs/reference/cli/version.md),
+  [`update`](docs/reference/cli/update.md)
 
 > `temper resource create` writes *into* a context (`--context`). `temper resource update`, `show`, and `delete` take a single **ref** — a UUID or the decorated `slug-<uuid>` form — and need no `--type`/`--context`.
 
-### Relationships
-
-| Command | Description |
-|---------|-------------|
-| `temper edge assert <source> <target> --kind <k> --polarity <p> --label <l>` | Assert a typed edge (kinds: express, contains, leads-to, near; polarity forward/inverse) |
-| `temper edge retype <edge-handle> --kind <k> --polarity <p>` | Change an edge's kind and polarity |
-| `temper edge reweight <edge-handle> --weight <n>` | Change an edge's weight |
-| `temper edge fold <edge-handle>` | Fold (supersede) an edge |
-
-### Cognitive Maps
-
-A cognitive map is a telos-seeded region of the substrate. Nodes are *distilled* resources — a map node is never the same row as its source. Authoring into a map happens under an **invocation envelope**, so every act is correlated and auditable.
-
-| Command | Description |
-|---------|-------------|
-| `temper invocation open --cogmap <ref> --trigger-kind manual` | Open an envelope; the server mints the id |
-| `temper resource create --cogmap <ref> --sources <refs> [--sources-as-edges]` | Author a node into a map, citing its sources |
-| `temper resource facet <ref> --values '<json>'` | Set a typed facet on a resource |
-| `temper invocation close <ref> --disposition completed` | Close an envelope (`completed`, `failed`, or `abandoned`) |
-| `temper cogmap materialize <ref> [--threshold <n>]` | Recompute the map's regions |
-| `temper cogmap shape <ref>` | Read a map's materialized regions |
-| `temper cogmap analytics <ref>` | Map-level analytics (telos, staleness, regulation) |
-| `temper cogmap region-metrics <ref>` | Per-region analytics metrics |
-| `temper invocation show <ref>` | Read one envelope plus its acts |
-
-The table reads in authoring order: open an envelope, create nodes and facet them, close, materialize, then read. **Regions only exist after a materialize** — an authoring pass that creates nodes but never materializes leaves the read tier unchanged.
-
-Every authored act carries the envelope flags `--invocation`, `--confidence`, `--reasoning`, and `--model`. An act missing them is still real, but it is orphaned from the audit chain. `--sources` records block-provenance on the body; adding `--sources-as-edges` also asserts a `derived_from` edge to each resource-valued source.
+A cognitive map is a telos-seeded region of the substrate. Nodes are *distilled* resources — a map node is never the same row as its source. Authoring into a map happens under an **invocation envelope**, so every act is correlated and auditable. The cogmap commands read in authoring order: open an envelope, create nodes and facet them, close, materialize, then read — and **regions only exist after a materialize**; an authoring pass that creates nodes but never materializes leaves the read tier unchanged.
 
 Building one from a body of source material is its own discipline: [ingesting a corpus](docs/playbooks/ingest-a-corpus.md), then [building a cognitive map](docs/playbooks/build-a-cognitive-map.md) from it. For the concept, see [cognitive maps](https://temperkb.io/cognitive-maps).
 
-### Contexts and Skills
-
-| Command | Description |
-|---------|-------------|
-| `temper context create <name>` | Create a context on the server |
-| `temper context list` | List contexts visible to you on the server |
-| `temper context share <ctx-ref> <team>` | Share a context into a team's read-reach (system-admin, or you administer the context and manage the team; `@me` shorthand not accepted here) |
-| `temper skill generate` | Preview the generated skill content |
-| `temper skill install` | Install skill file |
-
-### Cloud and Auth
-
-| Command | Description |
-|---------|-------------|
-| `temper auth login` | Log in via browser OAuth (PKCE flow) |
-| `temper auth status` | Show current auth status |
-| `temper auth export-token` | Export a refreshed access token (for CI) |
-| `temper auth request-access` | Request approved standing on an instance that has not granted you access |
-| `temper invitations` | List pending team invitations addressed to you |
-| `temper team join <token>` | Accept a team invitation |
-| `temper resource delete <ref>` | Delete a resource from the cloud (soft-delete) |
-
-`temper team` also carries `create`, `invite`, `show`, `set-role`, `leave`, and offboarding `reassign`. Self-hosting an instance? `temper init` takes `--instance-url`, `--auth-domain`, `--auth-client-id`, `--auth-audience`, and `--idp` — see [self-hosting](docs/playbooks/self-host-temper.md).
+`temper team` also carries `create`, `invite`, `show`, `set-role`, `leave`, and offboarding `reassign`. Self-hosting an instance? The [self-hosting playbook](docs/playbooks/self-host-temper.md) walks `temper init`'s instance flags.
 
 ## Semantic Search
 

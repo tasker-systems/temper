@@ -112,9 +112,10 @@ not need it, do not declare it.
 ## Choosing a number requires measurement, not judgment
 
 Operators own the execution layer, and it is the one place a genuinely runaway statement can be
-stopped. Postgres offers `statement_timeout` for this, and it can be attached at several grains:
+stopped. Postgres offers [`statement_timeout`](https://www.postgresql.org/docs/current/runtime-config-client.html) for this, and it can be attached at several grains:
 per-transaction with `SET LOCAL`, per-role with `ALTER ROLE … SET`, or per-function with
-`ALTER FUNCTION … SET`. Temper already uses the per-function grain to pin `hnsw.ef_search`, and it
+`ALTER FUNCTION … SET`. Temper already uses the per-function grain to pin `hnsw.ef_search`
+(migration `20260808000030`), and it
 is usually the right instrument here too, because it lets a read-heavy function carry a different
 budget from a long-running maintenance write without splitting pools or paths.
 
@@ -123,7 +124,8 @@ transaction-mode pooler, where a session is not pinned to a client for the life 
 
 **Do not pick the number.** A bound chosen without measurement is either theatre or an outage, and
 which one you got is not knowable in advance. The methodology matters more than any value this
-page could suggest:
+page could suggest — and the [`pg_stat_statements`](https://www.postgresql.org/docs/current/pgstatstatements.html) columns these bullets read are the
+Postgres documentation's to define:
 
 - **Install the instrument before you need it.** `pg_stat_statements` collects into shared memory
   from the moment the module is preloaded, and `CREATE EXTENSION` only makes it readable. A
@@ -157,7 +159,8 @@ page could suggest:
 
 Two properties of the execution environment matter more than they look, and both are worth
 checking before concluding that a query shape is at fault: the CPU actually available to the
-database, and whether the functions in the path are `PARALLEL SAFE`. A parallel-unsafe function
+database, and whether the functions in the path are
+[`PARALLEL SAFE`](https://www.postgresql.org/docs/current/parallel-safety.html). A parallel-unsafe function
 anywhere in a plan forces the whole statement serial no matter how many workers are configured.
 
 ## Verifying that a guard works
