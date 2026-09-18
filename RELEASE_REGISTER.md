@@ -29,7 +29,7 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
   wire shape is untouched — render-only behavior behind unchanged
   `GraphEdgeRow`/`EventTrail` shapes (task
   `01a0b56b-95fe-7af0-abf2-87fc1c23f249`).
-pr: self
+pr: 927
 classes: behavioral
 surfaces: internal
 status: signal-only
