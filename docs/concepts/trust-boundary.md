@@ -148,9 +148,10 @@ CLI. There is no separate "agent identity" — the agent is the human, through t
 The MCP server runs on a different base path (`/mcp`, no `/api` prefix) with a JSON-RPC
 transport, but the authentication is identical — same issuer, the MCP surface's own audience
 (`MCP_AUDIENCE`, plus the HTTP audience for machine and pre-split tokens), same two
-gates. The difference is transport and tool surface (~26 consolidated tools against 82 REST
-paths). An integrator writing a service targets HTTP; MCP is an agent-runtime target. The SDKs
-are generated from the OpenAPI spec, i.e. HTTP-only.
+gates. The difference is transport and tool surface (40 registered MCP tools against 105 REST
+paths — the REST count from the router's generated `openapi.json`, the tool count from the
+MCP server's registered tool list). An integrator writing a service targets HTTP; MCP is an
+agent-runtime target. The SDKs are generated from the OpenAPI spec, i.e. HTTP-only.
 
 ## Further reading
 
