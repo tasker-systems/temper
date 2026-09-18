@@ -2,7 +2,7 @@ import { render } from '@testing-library/svelte';
 import { describe, expect, it, vi } from 'vitest';
 import { describeFailure, GaveUp, GIVE_UP_AFTER_MS } from '$lib/server/bounded';
 import type { ElementEvent, EventTrail } from '$lib/types/generated/element_trail';
-import type { GraphEdgeRow } from '$lib/types/generated/graph';
+import type { GraphEdgeRow, ResourceConnections } from '$lib/types/generated/graph';
 import { makeRow } from '../../../../../test/fixtures';
 import { sentenceOf } from '../../../../../test/sentence';
 import Page from './+page.svelte';
@@ -83,6 +83,28 @@ const edge = (n: number): GraphEdgeRow => ({
 });
 
 /**
+ * The envelope the bounded connections read returns. `truncated` derives from the page
+ * exactly as the server's constructor derives it — `returned < total` — so a fixture that
+ * hides rows reads truncated for the same reason the wire one does.
+ */
+const connectionsOf = (
+	rows: GraphEdgeRow[],
+	total: number = rows.length,
+	limit = 50,
+): ResourceConnections =>
+	// The fixture models the WIRE — JSON, so numbers at runtime — while ts-rs types the i64
+	// columns `bigint` at the type level. The double cast is the honest spelling of that
+	// known mismatch; the vault-list.test.ts idiom sidesteps it by minting BigInt fixtures,
+	// which would make these witnesses lie about what actually crosses the fetch boundary.
+	({
+		rows,
+		total,
+		limit,
+		returned: rows.length,
+		truncated: rows.length < total,
+	}) as unknown as ResourceConnections;
+
+/**
  * The four fields this page reads, cast to `PageData` at the one place it is handed over.
  *
  * `PageData` also carries the `(app)` layout's `user`, `profile`, `entitlements` and nav rows,
@@ -91,7 +113,10 @@ const edge = (n: number): GraphEdgeRow => ({
  * real load rather than by a hand-written double.
  */
 type Fill = Partial<
-	Pick<PageData, 'content' | 'trail' | 'edges' | 'artifacts' | 'mayChange' | 'stateVocabulary'>
+	Pick<
+		PageData,
+		'content' | 'trail' | 'connections' | 'artifacts' | 'mayChange' | 'stateVocabulary'
+	>
 >;
 
 const RESOURCE = makeRow({
@@ -121,7 +146,7 @@ const data = (fill: Fill = {}): PageData =>
 		resource: RESOURCE,
 		content: fill.content ?? Promise.resolve('# A body\n\nWith a paragraph in it.'),
 		trail: fill.trail ?? Promise.resolve(trailOf(2)),
-		edges: fill.edges ?? Promise.resolve([edge(1)]),
+		connections: fill.connections ?? Promise.resolve(connectionsOf([edge(1)])),
 		// The default is the shape the overwhelming majority of resources arrive in — owning no
 		// artifacts — because every pre-existing assertion in this file is about that page, and
 		// the artifacts region's contract is that such a page renders exactly as it always did.
@@ -155,7 +180,7 @@ type Scope = (c: HTMLElement) => Element | null;
 const REGIONS: [name: string, scope: Scope, key: keyof Fill][] = [
 	['document', documentRegion, 'content'],
 	['history', historyRegion, 'trail'],
-	['connections', connectionsRegion, 'edges'],
+	['connections', connectionsRegion, 'connections'],
 ];
 
 /**
@@ -184,7 +209,7 @@ const wordsOf = async (fill: Fill, scope: Scope, testid: string): Promise<string
 describe('C1: the scaffold does not depend on the fill', () => {
 	it('paints the masthead, the doc type, the title and the home chip with all three reads in flight', () => {
 		const { container } = render(Page, {
-			data: data({ content: pending(), trail: pending(), edges: pending() }),
+			data: data({ content: pending(), trail: pending(), connections: pending() }),
 			form: null,
 		});
 
@@ -196,7 +221,7 @@ describe('C1: the scaffold does not depend on the fill', () => {
 
 	it('paints every property row with all three reads in flight', () => {
 		const { container } = render(Page, {
-			data: data({ content: pending(), trail: pending(), edges: pending() }),
+			data: data({ content: pending(), trail: pending(), connections: pending() }),
 			form: null,
 		});
 		const keys = [...container.querySelectorAll('.props dt')].map((dt) => dt.textContent);
@@ -207,7 +232,7 @@ describe('C1: the scaffold does not depend on the fill', () => {
 
 	it('shows an arriving marker in each of the three regions, and nowhere else', () => {
 		const { container } = render(Page, {
-			data: data({ content: pending(), trail: pending(), edges: pending() }),
+			data: data({ content: pending(), trail: pending(), connections: pending() }),
 			form: null,
 		});
 
@@ -234,7 +259,7 @@ describe('C2: an arriving region declares itself in words', () => {
 		string,
 	][])('the arriving %s region carries a sentence, not a bare shimmer', (_name, scope, sentence) => {
 		const { container } = render(Page, {
-			data: data({ content: pending(), trail: pending(), edges: pending() }),
+			data: data({ content: pending(), trail: pending(), connections: pending() }),
 			form: null,
 		});
 
@@ -270,7 +295,7 @@ describe('C3: a failure is a third state, not a stuck second one', () => {
 
 	it('a failed history read leaves the document and the connections arriving on their own', async () => {
 		const { container } = render(Page, {
-			data: data({ content: pending(), trail: broken(), edges: pending() }),
+			data: data({ content: pending(), trail: broken(), connections: pending() }),
 			form: null,
 		});
 		await vi.waitFor(() => {
@@ -305,7 +330,7 @@ describe('C4: an empty region does not present like a failed one', () => {
 		const emptyValue: Fill = {
 			content: Promise.resolve(''),
 			trail: Promise.resolve(trailOf(0)),
-			edges: Promise.resolve([]),
+			connections: Promise.resolve(connectionsOf([])),
 		};
 
 		const empty = await wordsOf({ [key]: emptyValue[key] }, scope, 'region-empty');
@@ -349,7 +374,10 @@ describe('a read the system stopped waiting for is not a read that failed', () =
  */
 describe('the rail states its emptiness rather than rendering nothing', () => {
 	it('EdgeList: a resource with no connections says so', async () => {
-		const { container } = render(Page, { data: data({ edges: Promise.resolve([]) }), form: null });
+		const { container } = render(Page, {
+			data: data({ connections: Promise.resolve(connectionsOf([])) }),
+			form: null,
+		});
 		const region = () => connectionsRegion(container);
 		await vi.waitFor(() => {
 			expect(region()?.querySelector('[data-testid="region-empty"]')).not.toBeNull();
@@ -361,6 +389,9 @@ describe('the rail states its emptiness rather than rendering nothing', () => {
 		expect(sentenceOf(region()?.querySelector('[data-testid="region-empty"]'))).toBe(
 			'No connections.',
 		);
+		// Chrome at zero too: `0 of 0` is the same bound line, stating completeness rather
+		// than leaving it to be inferred from the absence of a truncation marker.
+		expect(region()?.querySelector('.label')?.textContent).toBe('Connections · 0 of 0');
 	});
 
 	it('EventHistory: a resource with no history says so, in the shared vocabulary', async () => {
@@ -426,7 +457,7 @@ describe('a connection row reads in the reader’s terms', () => {
 	};
 
 	it('an unlabeled edge states no relationship text — not the system’s edge kind', async () => {
-		const words = await rowWords({ edges: Promise.resolve([unlabeled(1)]) });
+		const words = await rowWords({ connections: Promise.resolve(connectionsOf([unlabeled(1)])) });
 
 		// 'near' is the fixture's `edge_kind`. Before D-F3 the fallback rendered it; a version
 		// that renders it again — or any placeholder prose in its place — fails here.
@@ -434,7 +465,7 @@ describe('a connection row reads in the reader’s terms', () => {
 	});
 
 	it('weight and polarity appear on no row', async () => {
-		const words = await rowWords({ edges: Promise.resolve([unlabeled(1)]) });
+		const words = await rowWords({ connections: Promise.resolve(connectionsOf([unlabeled(1)])) });
 
 		// The fixture carries `weight: 0.5` and `polarity: 'inverse'`; the current template
 		// renders both, so this bites only because the fixture polarity is non-forward.
@@ -443,7 +474,7 @@ describe('a connection row reads in the reader’s terms', () => {
 	});
 
 	it('a labeled edge renders its label verbatim — no translation table', async () => {
-		const words = await rowWords({ edges: Promise.resolve([edge(1)]) });
+		const words = await rowWords({ connections: Promise.resolve(connectionsOf([edge(1)])) });
 
 		expect(words).toContain('relates to');
 	});
@@ -455,7 +486,7 @@ describe('a connection row reads in the reader’s terms', () => {
 	it('direction arrows stay on labeled rows — incoming and outgoing', async () => {
 		const incoming = (n: number): GraphEdgeRow => ({ ...edge(n), direction: 'incoming' });
 		const words = await rowWords({
-			edges: Promise.resolve([edge(1), unlabeled(2), incoming(3)]),
+			connections: Promise.resolve(connectionsOf([edge(1), unlabeled(2), incoming(3)])),
 		});
 
 		expect(words).toContain('→');
@@ -469,7 +500,7 @@ describe('a connection row reads in the reader’s terms', () => {
 			peer_id: '01jabcdefghij00000000000k'.padEnd(26, '0'),
 		});
 		const { container, unmount } = render(Page, {
-			data: data({ edges: Promise.resolve([blobPeer(1)]) }),
+			data: data({ connections: Promise.resolve(connectionsOf([blobPeer(1)])) }),
 			form: null,
 		});
 		await vi.waitFor(() => {
@@ -622,13 +653,17 @@ describe('the rail closes and says what it withholds', () => {
  */
 describe('a rail region keeps its heading in every state', () => {
 	/** Each state, with the selector that says the region has reached it. */
-	const stateOf = (key: 'trail' | 'edges'): [state: string, fill: Fill, settledOn: string][] => {
+	const stateOf = (
+		key: 'trail' | 'connections',
+	): [state: string, fill: Fill, settledOn: string][] => {
 		const present: Fill =
 			key === 'trail'
 				? { trail: Promise.resolve(trailOf(2)) }
-				: { edges: Promise.resolve([edge(1)]) };
+				: { connections: Promise.resolve(connectionsOf([edge(1)])) };
 		const empty: Fill =
-			key === 'trail' ? { trail: Promise.resolve(trailOf(0)) } : { edges: Promise.resolve([]) };
+			key === 'trail'
+				? { trail: Promise.resolve(trailOf(0)) }
+				: { connections: Promise.resolve(connectionsOf([])) };
 		return [
 			['arriving', { [key]: pending() }, '[data-testid="region-arriving"]'],
 			['present', present, key === 'trail' ? '.event' : '.edge'],
@@ -639,11 +674,11 @@ describe('a rail region keeps its heading in every state', () => {
 
 	it.each([
 		['history', historyRegion, 'trail', 'History'],
-		['connections', connectionsRegion, 'edges', 'Connections'],
+		['connections', connectionsRegion, 'connections', 'Connections'],
 	] as [
 		string,
 		Scope,
-		'trail' | 'edges',
+		'trail' | 'connections',
 		string,
 	][])('the %s heading is present while arriving, present, empty and failed', async (_name, scope, key, heading) => {
 		for (const [state, fill, settledOn] of stateOf(key)) {
@@ -694,7 +729,7 @@ describe('a state the system defines is changed where it is read', () => {
 		});
 		const { container } = render(Page, {
 			data: {
-				...data({ content: pending(), trail: pending(), edges: pending() }),
+				...data({ content: pending(), trail: pending(), connections: pending() }),
 				resource: readOnlyReader,
 			} as PageData,
 			form: null,
@@ -715,7 +750,7 @@ describe('a state the system defines is changed where it is read', () => {
 			data: data({
 				content: pending(),
 				trail: pending(),
-				edges: pending(),
+				connections: pending(),
 				mayChange: true,
 				stateVocabulary: {},
 			}),
@@ -732,7 +767,7 @@ describe('a state the system defines is changed where it is read', () => {
 			data: data({
 				content: pending(),
 				trail: pending(),
-				edges: pending(),
+				connections: pending(),
 				mayChange: true,
 				stateVocabulary: TASK_STATES,
 			}),
@@ -764,7 +799,7 @@ describe('a state the system defines is changed where it is read', () => {
 				data: data({
 					content: pending(),
 					trail: pending(),
-					edges: pending(),
+					connections: pending(),
 					mayChange: true,
 					stateVocabulary: TASK_STATES,
 				}),
@@ -785,7 +820,7 @@ describe('a state the system defines is changed where it is read', () => {
 			data: data({
 				content: pending(),
 				trail: pending(),
-				edges: pending(),
+				connections: pending(),
 				mayChange: true,
 				stateVocabulary: TASK_STATES,
 			}),
@@ -800,7 +835,7 @@ describe('a state the system defines is changed where it is read', () => {
 			data: data({
 				content: pending(),
 				trail: pending(),
-				edges: pending(),
+				connections: pending(),
 				mayChange: true,
 				stateVocabulary: { ...TASK_STATES, 'temper-mode': ['plan', 'build'] },
 			}),
@@ -825,7 +860,7 @@ describe('a state the system defines is changed where it is read', () => {
 			data: data({
 				content: pending(),
 				trail: pending(),
-				edges: pending(),
+				connections: pending(),
 				mayChange: true,
 				stateVocabulary: null,
 			}),
@@ -842,7 +877,7 @@ describe('a state the system defines is changed where it is read', () => {
 			data: data({
 				content: pending(),
 				trail: pending(),
-				edges: pending(),
+				connections: pending(),
 				mayChange: true,
 				stateVocabulary: TASK_STATES,
 			}),
@@ -864,7 +899,7 @@ describe('a reader attaches and revises their own descriptions where they read t
 	const offering = {
 		content: pending<string>(),
 		trail: pending<never>(),
-		edges: pending<never>(),
+		connections: pending<never>(),
 		mayChange: true,
 		stateVocabulary: {},
 	};
@@ -876,7 +911,7 @@ describe('a reader attaches and revises their own descriptions where they read t
 
 	it('offers no description control to a reader who may not change this', () => {
 		const { container } = render(Page, {
-			data: data({ content: pending(), trail: pending(), edges: pending() }),
+			data: data({ content: pending(), trail: pending(), connections: pending() }),
 			form: null,
 		});
 		expect(container.querySelector('.props input[type="text"]')).toBeNull();
@@ -1051,5 +1086,51 @@ describe('the data artifacts region', () => {
 	it('never renders a failed read as absence — the failure names itself', async () => {
 		const words = await wordsOf({ artifacts: broken() }, mainRegion, 'region-failed');
 		expect(words.toLowerCase()).toContain('data artifacts');
+	});
+});
+
+/**
+ * D-F4 — the connections bound line is chrome, not a warning.
+ *
+ * The heading reads `shown of total` off the one envelope the read returned: present when the
+ * read was clipped (stating what was withheld) and present when it was not (so complete is
+ * something the reader is TOLD, never something they infer from silence — the `bound.ts`
+ * SeedAxis form). A version that renders the bound only when it binds, or a count-only
+ * heading, fails here: either one makes a clipped view distinguishable from a complete one
+ * only by silence, which is the silent-slice defect one level down.
+ */
+describe('the connections bound line is chrome, not a warning', () => {
+	it('a clipped read states how much was withheld — the heading carries both halves', async () => {
+		const { container, unmount } = render(Page, {
+			data: data({
+				connections: Promise.resolve(connectionsOf([edge(1), edge(2), edge(3)], 12)),
+			}),
+			form: null,
+		});
+		await vi.waitFor(() => {
+			expect(connectionsRegion(container)?.querySelector('.edge')).not.toBeNull();
+		});
+
+		expect(connectionsRegion(container)?.querySelector('.label')?.textContent).toBe(
+			'Connections · 3 of 12',
+		);
+		unmount();
+	});
+
+	it('an unclipped read still states the bound — complete is told, not inferred', async () => {
+		const { container, unmount } = render(Page, {
+			data: data({ connections: Promise.resolve(connectionsOf([edge(1), edge(2)], 2)) }),
+			form: null,
+		});
+		await vi.waitFor(() => {
+			expect(connectionsRegion(container)?.querySelector('.edge')).not.toBeNull();
+		});
+
+		const heading = connectionsRegion(container)?.querySelector('.label')?.textContent;
+		expect(heading).toBe('Connections · 2 of 2');
+		// The `of total` half is the point — it is what makes completeness a stated fact
+		// rather than an absence.
+		expect(heading).toContain(' of 2');
+		unmount();
 	});
 });

@@ -287,6 +287,7 @@ lib/temper/generated/models/residual_context.rb
 lib/temper/generated/models/residual_groups.rb
 lib/temper/generated/models/residual_owned_reach.rb
 lib/temper/generated/models/resource_annotate_request.rb
+lib/temper/generated/models/resource_connections.rb
 lib/temper/generated/models/resource_create_request.rb
 lib/temper/generated/models/resource_facet_row.rb
 lib/temper/generated/models/resource_facets.rb

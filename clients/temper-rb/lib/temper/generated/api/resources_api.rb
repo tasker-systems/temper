@@ -545,6 +545,79 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # List a resource's relationships, bounded, with the filtered total stated
+    # The additive sibling of [`list`] — the same gate and the same rows under a server-side limit, plus the denominator the panel states. The incumbent endpoint is untouched.
+    # @param id [String] Resource ID
+    # @param [Hash] opts the optional parameters
+    # @option opts [Integer] :limit Max connections to return (default 50, clamped to 1..&#x3D;200).
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [ResourceConnections]
+    def list_resource_connections(id, opts = {})
+      data, _status_code, _headers = list_resource_connections_with_http_info(id, opts)
+      data
+    end
+
+    # List a resource&#39;s relationships, bounded, with the filtered total stated
+    # The additive sibling of [&#x60;list&#x60;] — the same gate and the same rows under a server-side limit, plus the denominator the panel states. The incumbent endpoint is untouched.
+    # @param id [String] Resource ID
+    # @param [Hash] opts the optional parameters
+    # @option opts [Integer] :limit Max connections to return (default 50, clamped to 1..&#x3D;200).
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(ResourceConnections, Integer, Hash)>] ResourceConnections data, response status code and response headers
+    def list_resource_connections_with_http_info(id, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: ResourcesApi.list_resource_connections ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling ResourcesApi.list_resource_connections"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/resources/{id}/connections'.sub('{id}', CGI.escape(id.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+      query_params[:'limit'] = opts[:'limit'] if !opts[:'limit'].nil?
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'ResourceConnections'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"ResourcesApi.list_resource_connections",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: ResourcesApi#list_resource_connections\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # List a resource's relationships
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters

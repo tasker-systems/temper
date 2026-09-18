@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const apiGet = vi.fn();
 const readTrail = vi.fn();
-const readResourceEdges = vi.fn();
+const readResourceConnections = vi.fn();
 const apiPatch = vi.fn();
 
 /**
@@ -32,7 +32,7 @@ vi.mock('$lib/server/api', () => ({
 }));
 vi.mock('$lib/server/graph-reads', () => ({
 	readTrail: (...a: unknown[]) => readTrail(...a),
-	readResourceEdges: (...a: unknown[]) => readResourceEdges(...a),
+	readResourceConnections: (...a: unknown[]) => readResourceConnections(...a),
 }));
 
 const { load, actions } = await import('./+page.server');
@@ -78,7 +78,7 @@ beforeEach(() => {
 		});
 	});
 	readTrail.mockReturnValue(new Promise(() => {}));
-	readResourceEdges.mockReturnValue(new Promise(() => {}));
+	readResourceConnections.mockReturnValue(new Promise(() => {}));
 });
 
 describe('the resource page does not block on its fill', () => {
@@ -89,7 +89,7 @@ describe('the resource page does not block on its fill', () => {
 		// this load never returns and the test times out — which is the regression to catch.
 		expect(data.resource).toMatchObject({ title: 'A resource' });
 		expect(data.trail).toBeInstanceOf(Promise);
-		expect(data.edges).toBeInstanceOf(Promise);
+		expect(data.connections).toBeInstanceOf(Promise);
 		expect(data.content).toBeInstanceOf(Promise);
 		expect(data.artifacts).toBeInstanceOf(Promise);
 	});

@@ -4,7 +4,7 @@ import { editableKind, revisedValue } from '$lib/descriptions';
 import { parseRef } from '$lib/ref';
 import { ApiError, apiGet, apiPatch } from '$lib/server/api';
 import { bounded } from '$lib/server/bounded';
-import { readResourceEdges, readTrail } from '$lib/server/graph-reads';
+import { readResourceConnections, readTrail } from '$lib/server/graph-reads';
 import type { ContentResponse, DocTypeDescription, ResourceView } from '$lib/types';
 import type { ArtifactView } from '$lib/types/generated/data_artifact';
 import type { Actions, PageServerLoad } from './$types';
@@ -131,7 +131,7 @@ export const load: PageServerLoad = async ({ locals, params, parent }) => {
 		'document',
 	);
 	const trail = bounded(readTrail(accessToken, 'node', id), 'history');
-	const edges = bounded(readResourceEdges(accessToken, id), 'connections');
+	const connections = bounded(readResourceConnections(accessToken, id), 'connections');
 	// Folded artifacts are INCLUDED, deliberately: whether an artifact is live is often the
 	// reader's question, and the default read (folded hidden) would answer it silently wrong.
 	// Like the other three fills, a failed read must reach the template as a failure — never
@@ -168,7 +168,7 @@ export const load: PageServerLoad = async ({ locals, params, parent }) => {
 		? await readStateVocabulary(resource.doc_type_name, accessToken)
 		: null;
 
-	return { resource, content, trail, edges, artifacts, mayChange, stateVocabulary };
+	return { resource, content, trail, connections, artifacts, mayChange, stateVocabulary };
 };
 
 export const actions: Actions = {

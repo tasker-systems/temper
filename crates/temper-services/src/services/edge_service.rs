@@ -18,7 +18,7 @@ use temper_core::types::facet_requests::{
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::ids::{EdgeId, ProfileId};
 use temper_core::types::provenance::{BlockProvenanceRow, BlockRead};
-use temper_workflow::types::graph::GraphEdgeRow;
+use temper_workflow::types::graph::{GraphEdgeRow, ResourceConnections};
 
 /// List the edges incident to a resource, scoped to profile visibility.
 ///
@@ -135,6 +135,122 @@ pub async fn list_resource_edges(
     .collect::<ApiResult<Vec<_>>>()?;
 
     Ok(edges)
+}
+
+/// The bounded sibling of [`list_resource_edges`] — the same listing, under a server-side
+/// `limit`, with the filtered total stated (spec D-F4: the bound lives at the read, with
+/// declared disclosure; the incumbent endpoint is untouched).
+///
+/// **The count rides the same gate as the rows — never a parallel predicate.** Both queries
+/// here share one FROM, one `edges_visible_to` join and one WHERE; the LEFT JOIN of the peer
+/// is the only clause the count omits, because the peer's title is selected, never filtered
+/// on. The duplication is textual (the `query!` macros need literals), so what holds it
+/// together is this paragraph plus the witness: an edge the gate excludes must be absent from
+/// `rows` AND from `total` (`tests/edge_service_test.rs`) — a count restated over a wider
+/// predicate would pass every other test here and still disclose rows the caller cannot see.
+///
+/// 404 parity is the incumbent's, verbatim: an invisible/absent resource is `NotFound` before
+/// either query runs, so a visible resource with no edges still answers a complete empty
+/// envelope.
+///
+/// Ordering is the sibling's own contract: newest first, `id` as the tiebreaker, so a bounded
+/// page is a deterministic slice rather than whatever the planner handed back that day.
+pub async fn list_resource_connections(
+    pool: &PgPool,
+    profile_id: Uuid,
+    resource_id: Uuid,
+    limit: i64,
+) -> ApiResult<ResourceConnections> {
+    // 404 parity: identical gate, identical message, before the count — an invisible
+    // resource must not be distinguishable from an absent one through either face.
+    // `visible!`: `EXISTS` yields TRUE or FALSE and never NULL (see `list_resource_edges`).
+    let visible: bool = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+            SELECT 1 FROM resources_visible_to($1) rv
+             WHERE rv.resource_id = $2
+        ) AS "visible!""#,
+        profile_id,
+        resource_id,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if !visible {
+        return Err(ApiError::NotFound(
+            "resource not found or not readable".to_string(),
+        ));
+    }
+
+    // The filtered total: the listing's FROM, JOIN and WHERE verbatim (peer LEFT JOIN aside —
+    // it selects columns, it never filters a row). `count(*)` needs the non-null override for
+    // the same reason the gate does: sqlx types every expression column nullable.
+    let total: i64 = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "total!"
+           FROM kb_edges e
+           JOIN edges_visible_to($1) v ON v.edge_id = e.id
+          WHERE (e.source_id = $2 OR e.target_id = $2)
+            AND (CASE WHEN e.source_id = $2 THEN e.target_table ELSE e.source_table END)
+                  IN ('kb_resources', 'kb_blobs')"#,
+        profile_id,
+        resource_id,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    // The page: the incumbent listing verbatim, plus ORDER BY and LIMIT. Any edit to one
+    // query's FROM/JOIN/WHERE is an edit to the other's — see the function doc.
+    let edges = sqlx::query!(
+        r#"SELECT
+            e.id AS edge_id,
+            (CASE WHEN e.source_id = $2 THEN e.target_table ELSE e.source_table END)
+                AS "peer_table!",
+            (CASE WHEN e.source_id = $2 THEN e.target_id ELSE e.source_id END) AS "peer_id!",
+            peer.title AS "peer_title?",
+            lower(regexp_replace(
+                regexp_replace(peer.title, '[^a-zA-Z0-9]+', '-', 'g'),
+                '(^-+|-+$)', '', 'g')) AS "peer_slug?",
+            e.edge_kind AS "edge_kind: EdgeKind",
+            e.polarity AS "polarity: Polarity",
+            COALESCE(e.label, '') AS "label!",
+            (CASE WHEN e.source_id = $2 THEN 'outgoing' ELSE 'incoming' END) AS "direction!",
+            e.weight AS weight,
+            e.created AS created
+          FROM kb_edges e
+          JOIN edges_visible_to($1) v ON v.edge_id = e.id
+          LEFT JOIN kb_resources peer
+            ON (CASE WHEN e.source_id = $2 THEN e.target_table ELSE e.source_table END)
+                = 'kb_resources'
+           AND peer.id = (CASE WHEN e.source_id = $2 THEN e.target_id ELSE e.source_id END)
+         WHERE (e.source_id = $2 OR e.target_id = $2)
+           AND (CASE WHEN e.source_id = $2 THEN e.target_table ELSE e.source_table END)
+                 IN ('kb_resources', 'kb_blobs')
+         ORDER BY e.created DESC, e.id
+         LIMIT $3"#,
+        profile_id,
+        resource_id,
+        limit,
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|r| {
+        Ok(GraphEdgeRow {
+            edge_id: EdgeId::from(r.edge_id),
+            peer_table: r.peer_table,
+            peer_id: r.peer_id,
+            peer_title: r.peer_title,
+            peer_slug: r.peer_slug,
+            edge_kind: r.edge_kind,
+            polarity: r.polarity,
+            label: r.label,
+            direction: parse_wire_relation_direction(&r.direction)?,
+            weight: r.weight,
+            created: r.created,
+        })
+    })
+    .collect::<ApiResult<Vec<_>>>()?;
+
+    Ok(ResourceConnections::new(edges, total, limit))
 }
 
 /// List the live properties owned by one edge, scoped to profile visibility.
