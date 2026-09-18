@@ -57,7 +57,7 @@
     <li>The <strong>convention-agnostic kernel</strong> — it never branches on a deployment's conventions.</li>
     <li><strong>Teams-RBAC over homed boundaries</strong> — access is scoped through team grants over owned regions.</li>
     <li><strong>Actors as entities</strong> — every writer, agent or integration, is an entity meeting the same event shape.</li>
-    <li><strong>Administration is event-sourced</strong> — governance acts are events, so the audit exists by construction.</li>
+    <li><strong>Grant administration is event-sourced</strong> — granting and revoking access land as admin events, so that audit exists by construction.</li>
     <li>The <strong>invocation envelope</strong> — an accountability-grain run with a telos/scope binding and a terminal outcome.</li>
     <li>The <strong>delegation launch-gate</strong> — a delegated run is authorized before it can act, never after.</li>
     <li><strong>Authorship invisible to affinity</strong> — who wrote a thing never tilts how concepts relate.</li>

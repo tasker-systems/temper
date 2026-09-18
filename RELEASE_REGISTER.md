@@ -47,6 +47,22 @@ classes: additive
 surfaces: internal
 status: signal-only
 
+- **Copy refresh — nine public-surface spans restated from their shipped authorities**
+  Nine spans across the cognitive-maps and operating pages now state the
+  shipped shape at each span: the materialize wake (a map re-materializes when
+  formation events since its last materialization clear the default threshold
+  of five, with the steward verbs to run it), the onboarding seed fixture
+  (`onboarding-cogmap.yaml`) named as the worked scenario, the access
+  scenarios named as YAML fixtures with S4 scoped to the charter-gating read,
+  the emitter entity described as the seed declares it, and the admin ledger
+  scoped to the grant family (team lifecycle stated as provisioning). Copy
+  only — no contract shape moves, no runtime behavior change, no generated
+  artifact re-stales.
+pr: self
+classes: additive
+surfaces: internal
+status: signal-only
+
 ## Shipped in v0.5.2
 
 - **This release — the 0.5.2 fleet alignment: VERSION 0.5.1 → 0.5.2 across crates, packages, and clients**

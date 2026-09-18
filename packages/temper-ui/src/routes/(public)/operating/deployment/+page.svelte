@@ -186,11 +186,15 @@
   </p>
   <p>
     <strong>What wakes an agent.</strong> A triage session is triggered by <em>something</em> —
-    event volume past a threshold, a time cadence, salience accumulating past a floor — and the
-    broader rhythm of sweeping a map to keep it coherent (a periodic <em>temper-system dreaming</em>)
-    is undecided on purpose. Too eager and the system thrashes; too lazy and maps go
-    stale. The right cadence depends on the map, the traffic, and the organization's tolerances —
-    which is why it's a dial you set and re-set, not a constant the project ships.
+    event volume past a threshold, a time cadence, salience accumulating past a floor. The
+    broader rhythm of sweeping a map to keep it coherent (a periodic <em>temper-system
+    dreaming</em>) is shipped, not undecided: a map's shape re-materializes when the formation
+    events landed on it since its last materialization clear a threshold — five, by default —
+    and the steward verbs (<code>temper steward delta</code>,
+    <code>temper steward advance-watermark</code>, <code>temper cogmap materialize
+    --threshold</code>) run that cadence. Too eager and the system thrashes; too lazy and maps
+    go stale — which is why the default ships as a dial the deployment re-sets, to fit its
+    maps, its traffic, and its tolerances.
   </p>
 </Section>
 
