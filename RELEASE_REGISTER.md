@@ -14,6 +14,26 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.5.0 — unreleased
 
+- **The follow-affordance panel reads in the reader's terms, states its bound, and closes (UI-only)**
+  The vault resource rail's connection rows read `label || edge_kind`, so an
+  edge whose label was empty (the wire `COALESCE`s the column to `''`) rendered
+  the system's structural name — 'near', 'contains' — as if the reader had
+  written it, with asserted weight and polarity appended to every row. Rows
+  now state the reader's own label verbatim or state nothing, and weight and
+  polarity leave the row entirely. The event region's silent 50-row render
+  slice is now stated chrome — "The most recent 50 of 60 events." — derived
+  from the same `rows` the heading counts, so heading, statement and slice
+  cannot disagree; the read stays whole. And the rail closes: the closed state
+  names History and Connections as the regions it withholds rather than
+  rendering as their absence, and the main column reflows not at all. Every
+  wire shape is untouched — render-only behavior behind unchanged
+  `GraphEdgeRow`/`EventTrail` shapes (task
+  `01a0b56b-95fe-7af0-abf2-87fc1c23f249`).
+pr: self
+classes: behavioral
+surfaces: internal
+status: signal-only
+
 - **Palette search rows read the home the row actually carries — cogmap-homed rows stop rendering an empty home**
   The command palette's result sub-line read `context_name` alone, so a search
   hit homed in a cognitive map — which carries `cogmap_name` and no

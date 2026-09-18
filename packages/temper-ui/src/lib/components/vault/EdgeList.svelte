@@ -21,11 +21,19 @@
 	{:else}
 		{#each edges as edge (edge.edge_id)}
 			<div class="edge">
+				<!--
+					The row states the relationship in the reader's terms — their `label`, verbatim —
+					or states nothing: an empty label renders no relationship text at all. No
+					`edge_kind` fallback and no placeholder prose, because the system's structural
+					name for the edge is not a word the reader wrote, and inventing one would be a
+					translation table pretending to be their vocabulary. The arrows are direction,
+					not relationship, and stay.
+				-->
 				<span class="rel">
-					{edge.direction === 'outgoing' ? '' : '← '}{edge.label || edge.edge_kind}{edge.direction ===
-					'outgoing'
+					{#if edge.label}{edge.direction === 'outgoing' ? '' : '← '}{edge.label}{edge.direction ===
+						'outgoing'
 						? ' →'
-						: ''}
+						: ''}{/if}
 				</span>
 				<!-- A blob peer is addressed by id alone (no title) and is not a resource: it
 				     never links into /vault/r, which would route a blob id into a resource page. -->
@@ -34,10 +42,6 @@
 				{:else}
 					<span class="peer">blob · {edge.peer_id.slice(0, 8)}</span>
 				{/if}
-				<span class="w">
-					· {edge.weight.toFixed(1)}{#if edge.polarity !== 'forward'}
-						· {edge.polarity}{/if}
-				</span>
 			</div>
 		{/each}
 	{/if}
@@ -71,9 +75,5 @@
 	.peer:hover {
 		color: var(--color-quiet-fg);
 		text-decoration: underline;
-	}
-	.w {
-		color: var(--color-quiet-dim);
-		font-size: 9px;
 	}
 </style>
