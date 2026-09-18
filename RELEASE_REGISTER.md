@@ -26,7 +26,7 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
   change, every wire shape untouched, and the traversal read keeps exactly one
   consumer: the link carries the question, the graph screen answers it (task
   `01a0b626-1182-7011-89d9-67e3a87880dd`).
-pr: self
+pr: 932
 classes: behavioral
 surfaces: internal
 status: signal-only
