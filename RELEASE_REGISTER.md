@@ -14,6 +14,26 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.5.2 — unreleased
 
+- **The operator directory — the admin surface's read-only principal inventory (operator-directory PR-1)**
+  Two new admin reads behind the sealed `&SystemAdmin` service gate:
+  `GET /api/access/admin/profiles` (human principals, default filter `needs-access` =
+  NOT-approved-including-absence, `email_contains` literal matching, team filter,
+  50/200 limit and 0..10000 offset clamps, `total` in the envelope) and
+  `GET /api/access/admin/profiles/{profile_id}` (the state card: admission,
+  governance, auth links with the default-link fallback, memberships, pending
+  invitations projected token-free from `vw_invitee_invitations`' attribution
+  rule, open queue state, existing-command hints). `?email=` resolves an address
+  EXACTLY (case-insensitive, verified) into the single matching card, refusing
+  ambiguity with a 404 that names the collision. New wire types
+  `AdminDirectoryEntry` / `AdminDirectoryListResponse` / `AdminProfileCard` and
+  MCP inputs in temper-core; the generated `admin.ts` re-stales additively. No
+  existing shape changes; both routes ride the existing plain-`.route()`
+  operator-only posture and its allowlist.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
+
 - **The connections read states its bound — a bounded sibling of the /edges listing**
   `GET /api/resources/{id}/connections` answers
   `ResourceConnections { rows, total, limit, returned, truncated }` — the same
