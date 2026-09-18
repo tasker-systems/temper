@@ -74,8 +74,9 @@ no-op and is left untouched.
 
 The same operation is reachable as the MCP tool `resource_reblock` (scope `resource`, `context`,
 or `all`; a context ref must be one you can read) and as `POST /api/resources/reblock` with a
-body naming `scope`, `dry_run`, `limit`, and `after_id`. The CLI prints the receipt as JSON by
-default. Flag details: [the CLI reference](../reference/cli/admin.md).
+body naming `scope`, `dry_run`, `limit`, and `after_id`. The CLI prints the receipt as TOON by
+default on a TTY, and as JSON otherwise (`--format` overrides). Flag details:
+[the CLI reference](../reference/cli/admin.md).
 
 ## Read the receipt
 

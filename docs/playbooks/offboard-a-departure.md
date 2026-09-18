@@ -65,12 +65,11 @@ every live state and reaches the same place:
 temper admin access deactivate <departing-uuid>
 ```
 
-**This is a standing act, not the `is_active` flag.** Two different things share the word
-"deactivate": this one moves the principal's *admission* to a deactivated state that
-`temper admin access reactivate` restores from, while
-[deactivating an account](./self-host-with-saml.md#deactivating-an-account-authn-control) is a
-`kb_profiles.is_active` change that stops the account *authenticating* at all. Neither implies
-the other; use this one for a departure.
+**This is a standing act.** It moves the principal's *admission* to a deactivated state that
+`temper admin access reactivate` restores from — and it is the same act the SAML playbook's
+[deactivating an account](./self-host-with-saml.md#deactivating-an-account-authn-control)
+describes as the authn control: a deactivated principal is rejected by the API auth middleware
+(`401`) even with a valid token, so a deactivated account stops *authenticating* at all.
 
 A revoked principal can still complete a sign-in, by design — contesting a revocation requires
 a token. Exactly what that token can and cannot do is stated in the SAML playbook's
@@ -171,8 +170,9 @@ in the SAML playbook's [Limitations](./self-host-with-saml.md#limitations).
 - **Automated de-provisioning.** SCIM is not available. There is no background poll of the IdP,
   and no catch-up pass over users who are not signing in.
 - **Stopping the sign-in itself.** That is your IdP's control. Temper's
-  [account deactivation](./self-host-with-saml.md#deactivating-an-account-authn-control)
-  (`is_active`) stops an account authenticating against the API, which is a different question
+  [account deactivation](./self-host-with-saml.md#deactivating-an-account-authn-control) —
+  `temper admin access deactivate <profile-uuid>` — stops an account authenticating against the
+  API, which is a different question
   from what its admission permits; note that reconcile never deactivates a profile.
 - **Deleting anything.** Every act here is reversible and preserves history:
   `temper admin access reactivate` restores a deactivated principal's prior standing, and
@@ -195,6 +195,6 @@ in the SAML playbook's [Limitations](./self-host-with-saml.md#limitations).
   [Run a Team](./run-a-team.md).
 - **The inverse of this playbook — turning a fresh deployment into one with people in it:**
   [Bootstrap an Org](./bootstrap-an-org.md).
-- **Where admission and `is_active` are enforced:**
+- **Where admission is enforced:**
   [The Trust Boundary](../concepts/trust-boundary.md).
 - **Every flag of every command used here:** [`temper admin`](../reference/cli/admin.md).
