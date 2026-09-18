@@ -448,7 +448,11 @@ describe('a connection row reads in the reader’s terms', () => {
 		expect(words).toContain('relates to');
 	});
 
-	it('direction arrows stay on labeled and unlabeled rows alike', async () => {
+	// An unlabeled row renders no relationship text at all, arrows included — the whole
+	// arrow-label-arrow span sits inside the label guard — so both arrows here come from the
+	// labeled rows. The assertion keeps the arrow arm alive without reading the unlabeled
+	// row's silence as the arrows being gone.
+	it('direction arrows stay on labeled rows — incoming and outgoing', async () => {
 		const incoming = (n: number): GraphEdgeRow => ({ ...edge(n), direction: 'incoming' });
 		const words = await rowWords({
 			edges: Promise.resolve([edge(1), unlabeled(2), incoming(3)]),
