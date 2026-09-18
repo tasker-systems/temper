@@ -87,9 +87,10 @@ Without at least one policy + rule, login will fail even when every URL and ID i
 
 ### Add an `email` claim to the access token (recommended)
 
-Temper resolves the user's email from the access token's `email` claim. When that claim is
-absent it falls back to the OIDC `/userinfo` endpoint, which Temper resolves via discovery
-(`{issuer}/.well-known/openid-configuration`), so the fallback works against Okta. Putting
+Temper resolves the user's email through a three-rung ladder, in order: the access token's
+`email` claim; the email cached on the profile's auth link (`kb_profile_auth_links`) from an
+earlier sign-in; and, last, the OIDC `/userinfo` endpoint, which Temper resolves via discovery
+(`{issuer}/.well-known/openid-configuration`), so the last rung works against Okta. Putting
 `email` directly on the access token is still **recommended** — it's the fast path and avoids a
 per-process discovery + userinfo round-trip — but it is not mandatory.
 
@@ -101,8 +102,9 @@ On the authorization server's **Claims** tab: **Add Claim** —
 - **Value:** `user.email`
 - **Include in:** the scopes/policies your apps use (or "Any scope")
 
-With neither the claim nor a reachable `/userinfo` (e.g. the token lacks the `email` scope),
-login fails with `Token missing email claim and userinfo lookup failed`.
+With no rung reachable (e.g. the token lacks the `email` claim and scope, nothing is cached from
+an earlier sign-in, and the `/userinfo` lookup fails), login fails with
+`Token missing email claim and userinfo lookup failed`.
 
 ## Provision the applications
 
@@ -188,12 +190,12 @@ provider-independent — set those exactly as the base deployment describes.
 ### UI project (Okta values)
 
 If you deploy the web UI, set these in its **separate** Vercel project. These are the
-Okta-specific values for the base deployment's
-[UI contract](./self-host-temper.md#environment-variable-contract-ui-project):
+Okta-specific values for the
+[UI contract](./deploy-the-web-ui.md#environment-variable-contract-ui-project):
 
 | Variable | Okta value |
 | -------- | ---------- |
-| `API_BASE_URL` | The API backend's **own** origin (not the UI's public origin — see the loop warning in the [base deployment](./self-host-temper.md#deploy-the-ui-optional)), e.g. `https://<api-host>` |
+| `API_BASE_URL` | The API backend's **own** origin (not the UI's public origin — see the loop warning in [Deploy the Web UI](./deploy-the-web-ui.md#two-couplings-both-env-driven)), e.g. `https://<api-host>` |
 | `OIDC_ISSUER` | `https://<okta-domain>/oauth2/<authServerId>` — **no trailing slash**. Discovery is served at `<issuer>/.well-known/openid-configuration` |
 | `OIDC_CLIENT_ID` | The UI web application's Client ID |
 | `OIDC_CLIENT_SECRET` | The UI web application's Client secret |
@@ -268,7 +270,7 @@ are listed as sign-in redirect URIs on that application.
 
 The web UI is provider-agnostic: its login is generic OIDC Authorization Code + PKCE resolved
 from `OIDC_ISSUER`'s discovery document, so it works against an Okta custom authorization server
-with no UI source changes. Follow the [base deployment's UI section](./self-host-temper.md#deploy-the-ui-optional)
+with no UI source changes. Follow the [web UI deployment](./deploy-the-web-ui.md)
 for the deployment mechanics (separate Vercel project, same-origin reverse proxy), using the
 [Okta UI env values](#ui-project-okta-values) above and the
 [confidential web application](#3-ui-web-application-optional) you registered.
@@ -302,7 +304,7 @@ the UI web application and that `APP_URL` exactly matches the UI origin.
 
 ## Not covered
 
-The exclusions from the [base deployment](./self-host-temper.md#not-covered--deferred) apply
+The exclusions from the [base deployment](./self-host-temper.md#not-covered) apply
 here too (multi-region Neon, alternative messaging backends).
 
 ## Further reading

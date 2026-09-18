@@ -187,6 +187,39 @@ printf '```bash\ntemper context create \\\n  --bogus myapp\n```\n' >> "${TREE}/R
 git -C "$TREE" -c user.email=test@example.com -c user.name=test commit -aqm bite
 run_case "flag on a \\-continued line: still FAILS (continuations join)" 1 "--bogus"
 
+# Piped / chained / commented invocations: only the temper-leading segments carry
+# claims. Before the segment fix each of these parsed the shell metacharacter as a
+# temper argument and failed the gate. (The flag-only shape is covered below by the
+# count-needled case — a summary line alone would pass a vacuous scan.)
+make_tree piped-invocation
+printf '```sh\ntemper context list | python3 -c "print(1)"\n```\n' >> "${TREE}/README.md"
+git -C "$TREE" -c user.email=test@example.com -c user.name=test commit -aqm bite
+run_case "piped invocation: the pipe is not a temper argument" 0 "cli-claims: "
+
+make_tree commented-invocation
+printf '```sh\ntemper resource create myapp          # load the body from disk\n```\n' >> "${TREE}/README.md"
+git -C "$TREE" -c user.email=test@example.com -c user.name=test commit -aqm bite
+run_case "trailing comment inside a fence: not a temper argument" 0 "cli-claims: "
+
+make_tree chained-second-segment-drift
+printf '```sh\ntemper context list && temper context add x\n```\n' >> "${TREE}/README.md"
+git -C "$TREE" -c user.email=test@example.com -c user.name=test commit -aqm bite
+run_case "drift in the SECOND segment of a chain: still FAILS" 1 "'add' is neither"
+
+# A reference page the walker cannot read is a checker crash INSIDE the per-line
+# path: it must land as a FAIL line (exit 1), never as a dead-then-green scan.
+make_tree unreadable-reference-page
+chmod 000 "${TREE}/docs/reference/cli/context.md"
+run_case "unreadable reference page: FAILS as a checker error, not clean" 1 "checker error"
+chmod 644 "${TREE}/docs/reference/cli/context.md"
+
+# A doc the WALK loop cannot read kills the scan outside the per-line handler: no
+# summary line can print, so the gate must refuse to report clean.
+make_tree unreadable-walked-doc
+chmod 000 "${TREE}/docs/playbooks/self-host-temper.md"
+run_case "unreadable walked doc: no summary, gate refuses clean" 1 "did not complete"
+chmod 644 "${TREE}/docs/playbooks/self-host-temper.md"
+
 make_tree page-count-mutated
 sed -i '' -e 's/2 crons/3 crons/' "${TREE}/docs/playbooks/self-host-temper.md" 2>/dev/null \
     || sed -i 's/2 crons/3 crons/' "${TREE}/docs/playbooks/self-host-temper.md"

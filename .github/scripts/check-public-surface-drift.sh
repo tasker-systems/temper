@@ -119,16 +119,28 @@ def check_invocation(path, lineno, line):
         return
     if not tokens or tokens[0] != "temper":
         return
-    body = tokens[1:]
+    # A fenced line may CHAIN temper invocations (`temper a && temper b`): each
+    # temper-leading segment between shell breaks is its own claim — a break at the
+    # first metacharacter would silently under-check the second command. Redirections
+    # end a segment the same way; a non-temper segment (the jq side of a pipe) makes
+    # no claim about temper's surface and is skipped.
+    segments = [[]]
+    for tok in tokens:
+        if tok in ("|", "||", "&&", ";", "&") or tok[:1] in ("<", ">"):
+            segments.append([])
+        else:
+            segments[-1].append(tok)
+    for seg in segments:
+        _check_segment(path, lineno, seg)
+
+
+def _check_segment(path, lineno, body):
+    global checked
+    if not body or body[0] != "temper":
+        return
     command = []
     flags = []
-    for tok in body:
-        # Shell metacharacters end the invocation: everything after a pipe,
-        # separator, or redirection is another command's business and makes no
-        # claim about temper's surface (`temper team list | jq …` claims
-        # `temper team list`, not `jq`).
-        if tok in ("|", "||", "&&", ";", "&") or tok[0] in "<>":
-            break
+    for tok in body[1:]:
         if tok.startswith("--"):
             flags.append(tok.split("=", 1)[0])
         elif not tok.startswith("-") and not flags:
@@ -219,7 +231,14 @@ for path in files:
         text = text.strip()
         if text.endswith("\\"):
             text = text[:-1]
-        check_invocation(os.path.relpath(path, root), lineno, text)
+        rel = os.path.relpath(path, root)
+        try:
+            check_invocation(rel, lineno, text)
+        except Exception as exc:
+            # A per-line checker crash is a FINDING, never a green run: record it
+            # and keep walking. The missing-summary guard below still covers any
+            # crash this handler cannot see (the walk loop's own I/O, the root page).
+            failures.append((rel, lineno, f"checker error: {exc!r}"))
 
 print(f"cli-claims: {checked} fenced invocations checked, {len(failures)} failures")
 for path, lineno, msg in failures:

@@ -180,30 +180,29 @@
     actor of record.
   </p>
   <p>
-    <code>onboarding-agent#1</code> is an entity. Its launch details —
-    <code>model: claude-opus-4-8</code>, <code>persona: steward</code>,
-    <code>bound_cogmap: onboarding-cogmap</code> — live in an <strong>open
-    <code>metadata jsonb</code></strong>, not in a frozen <code>entity_kind</code>
-    enum. That openness is the hinge into
+    <code>onboarding-agent#1</code> is an entity. The seed fixture that builds
+    the onboarding map declares it in exactly two places: the map's
+    <code>emitter</code> field names it, and the <code>world</code> defines the
+    entity — a name attached to the profile <code>dave</code>. An entity is
+    whatever emits. That openness is the hinge into
     <a href="/cognitive-maps/operating-temper">operating Temper</a>: a GitHub
     webhook or a Notion integration is <em>the same kind of entity</em>, writing
-    <em>the same ledger</em>, with its own launch metadata in the same open field.
+    <em>the same ledger</em>, declared in the same world.
     The system doesn't privilege "an agent" over "an integration" — both are
     entities that emit, and that's what lets external systems become first-class
     writers later.
   </p>
 </Section>
 
-<Section label="An open seam">
+<Section label="What wakes it">
   <p>
     What we've described is the agent's loop <em>once it's awake</em>. What
-    <strong>wakes it</strong> is genuinely unsettled — event volume, a time
-    cadence, salience crossing a floor. It's the same seam the opening raised
-    about re-materializing shape, and it matters enough to be one of the explicit
-    "help us decide" forks in
-    <a href="/operating/deployment">deployment</a> (the
-    <em>"temper-system dreaming"</em> question). We mark it here rather than
-    pretend the cadence is solved.
+    <strong>wakes it</strong> is shipped: the substrate counts the formation
+    events that have landed on a map since its last materialization, and once
+    that delta clears the default threshold of five, the map is due for
+    re-materialization — the steward tending it wakes on the cadence the
+    playbook teaches. The <a href="/operating/deployment">deployment</a> page
+    shows the dials. The loop runs on a wake, not a guess.
   </p>
 </Section>
 

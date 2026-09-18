@@ -122,7 +122,7 @@ data they retrieved conforms to anything the writer declared.
   size — a measurement, a plan, a computation output — that does not fit in a property value and
   must survive a round-trip whole.
 
-## The CLI surface
+## The MCP tool surface
 ```
 Tool: commit_data_artifact
 Input: {

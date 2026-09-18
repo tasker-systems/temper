@@ -28,7 +28,7 @@ idempotent no-op.
   `embed` feature. The default install bundles it; a non-`embed` build
   returns a clear `requires the 'embed' feature` error rather than running.
 - **An admin connection to the instance's Postgres** (admin role) for the
-  grant and re-lock steps.
+  verification SELECT and, on a fresh instance, the root bootstrap SQL.
 - **The operator's profile id.** Sign in once before the grant so the profile
   row exists; capture its UUID.
 - **A fork of the Temper repository.** Self-hosters run this playbook
@@ -86,22 +86,23 @@ inlined manifest below is saved into it.
 
 ### 1. Grant (temporary admin)
 
-Connect to the target database with an admin role — any admin connection to
-your instance's Postgres will do; the steps below are plain SQL. Point the
-gating slug at the root team and make the operator an `owner` of it:
+`is_system_admin` reads `kb_principal_governance` and nothing else, so the
+grant is a governance grant — made through the shipped admin surface, never by
+editing team rows. If the instance already has a system admin, promote the
+operator as that admin:
+
+```bash
+temper admin promote <operator-profile-uuid>
+```
+
+On a fresh instance nobody is admin yet, so the first grant is the SQL root
+step from
+[Bootstrap an Org](./bootstrap-an-org.md#0-the-irreducible-sql-root-step) —
+`SELECT principal_governance_set('<operator-profile-uuid>'::uuid, true, NULL,
+'root bootstrap');` — run over an admin connection to your instance's Postgres.
+Confirm the grant took either way:
 
 ```sql
-UPDATE kb_system_settings SET gating_team_slug = 'temper-system';
-
-INSERT INTO kb_team_members (team_id, profile_id, role)
-VALUES (
-  (SELECT id FROM kb_teams WHERE slug = 'temper-system'),
-  '<operator-profile-uuid>',
-  'owner'
-)
-ON CONFLICT (team_id, profile_id) DO UPDATE SET role = 'owner';
-
--- Confirm the grant took:
 SELECT is_system_admin('<operator-profile-uuid>');  -- expect: true
 ```
 
@@ -138,12 +139,8 @@ reports `unchanged` / `charter: unchanged`).
 
 Undo the grant so L0 returns to immutable:
 
-```sql
-UPDATE kb_system_settings SET gating_team_slug = NULL;
-
-DELETE FROM kb_team_members
-WHERE team_id = (SELECT id FROM kb_teams WHERE slug = 'temper-system')
-  AND profile_id = '<operator-profile-uuid>';
+```bash
+temper admin demote <operator-profile-uuid>
 ```
 
 Delivered content persists. The next lifecycle update repeats this same
@@ -369,8 +366,7 @@ L0 content evolves through two complementary mechanisms:
 - **Content delivery** (landmarks + telos charter) is **operator-directed
   reconciles** of the manifest, each gated by the temporary grant above.
 
-Both are operator-governed; neither is ambient or steward-driven. L0's charter
-declares its ambient steward wake = never.
+Both are operator-governed; neither is ambient or steward-driven.
 
 ## Further reading
 

@@ -124,11 +124,11 @@ curl -X POST https://temper.acme.com/oauth/token \
 
 The exact wire shape — content type, required params, the optional `audience`,
 and the refusal of anything that is not form encoding — is pinned as a
-cross-language contract (`m2m-token-request.json`). Three suites assert
-against that one file today: the Ruby gem's spec and temper-ts's contract test
-(the clients emit this shape) and the AS's own integration test (the server
-accepts it). A future client (temper-py) pins itself against it too; a
-contract asserted only against itself is not asserted at all.
+cross-language contract (`m2m-token-request.json`). Four suites assert
+against that one file today: the Ruby gem's spec, temper-ts's contract test,
+and temper-py's contract test (the clients emit this shape) and the AS's own
+integration test (the server accepts it); a contract asserted only against
+itself is not asserted at all.
 
 ### Token lifetime — short, and no refresh token
 
@@ -186,11 +186,11 @@ confer on a human themselves.**
 
 | Requested reach | You must hold |
 |---|---|
-| `--team <ref>[:role]` | `owner` or `maintainer` on that team (`can_manage`), and the role may not be `owner` |
+| `--team <ref>[:role]` | `owner` or `maintainer` on that team (`can_manage`), and the role may not exceed `member` — both `maintainer` and `owner` are refused |
 | `--cogmap <ref>[:ro]` | `can_grant` on that cognitive map |
 
-So a team owner can enroll a machine into any team they manage (at
-`member`/`maintainer`/`watcher`, never `owner`) and grant it write on any map
+So a team owner can enroll a machine into any team they manage (at `member` or
+`watcher` — the machine's role never exceeds `member`) and grant it write on any map
 they can already delegate — and nothing beyond that. A machine also never
 receives `can_grant` or `can_delete` on a map: it cannot re-delegate its own
 access.
@@ -199,10 +199,11 @@ A **system admin** is exempt from this check (they can already confer
 anything), so an admin may mint a machine with any reach.
 
 ```bash
-# Team owner: enroll the machine in a team they manage, grant write on a map they can delegate
+# Team owner: enroll the machine in a team they manage (default role: member), grant write on a map
+# they can delegate
 temper admin machine issue --label "acme steward" \
   --owner-team acme-eng \
-  --team acme-eng:maintainer \
+  --team acme-eng \
   --cogmap acme-roadmap
 ```
 

@@ -54,8 +54,10 @@ temper graph traverse --from <goal-ref> --depth 2
 ```
 {%- else %}
 
-The MCP surface has no traverse tool; hop by `get_resource` on the refs you already hold, and
-say so if the picture needs more than that.
+The MCP traversal door is `run_query`: its `follow-from` act walks outward from seed refs, with
+the `bound` relation keeping a walk inside a set you already found. Hop by `get_resource` on the
+refs you already hold when a one-off answer suffices, and say so if the picture needs more than
+that.
 {%- endif %}
 
 ## 2. Resume — return to the arc
@@ -67,9 +69,18 @@ will author or amend the register, read `outcome-registers.md` first; witness an
 declarations belong to it too.
 
 ## 3. Advance — task over task
+{%- if surface == "cli" %}
 
 Work the task per its `mode × effort` workflow (`workflows/{mode}-{effort}.md`); stages move as
-it progresses. When work moves a register criterion, amend the register — `outcome-registers.md`
+it progresses.
+{%- else %}
+
+Work the task per its `mode × effort` workflow; this packaging ships no per-cell workflow files —
+its SKILL.md states the CLI packaging carries them, written against CLI commands. Stages move as
+it progresses.
+{%- endif %}
+
+When work moves a register criterion, amend the register — `outcome-registers.md`
 governs the amendment, and the session note closes on the movement. The advances edge is asserted
 at create time; a task found unlinked at uptake gets linked then, not left for the next session
 to miss again.

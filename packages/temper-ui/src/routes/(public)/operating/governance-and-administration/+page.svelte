@@ -8,7 +8,7 @@
   <title>Governance & administration — temper</title>
   <meta
     name="description"
-    content="Authoring a map and reshaping the access graph beneath every map are different powers. Authoring is built; the administrative surface is org-shaped — how guarded it must be varies by organization. Administration is event-sourced (auditable by construction), with two deliberate boundaries."
+    content="Authoring a map and reshaping the access graph beneath every map are different powers. Authoring is built; the administrative surface is org-shaped — how guarded it must be varies by organization. Grant administration is event-sourced (auditable by construction), with two deliberate boundaries."
   />
 </svelte:head>
 
@@ -88,12 +88,13 @@
 
 <Section label="What administration is, on the ledger">
   <p>
-    Here's the part that's settled rather than open. Administrative acts are
-    <strong>events</strong> — creating a team, granting a team to a map, each
-    with an emitter and a producing anchor, exactly like every other change in
-    the system. So governance is auditable <em>by construction</em>: every "who
-    granted whom access to what, and when" is already on the ledger, no separate
-    audit log to bolt on.
+    Here's the part that's settled rather than open. Granting and revoking
+    access are <strong>events</strong> — each act lands on the admin ledger
+    with its actor, so that slice of governance is auditable <em>by
+    construction</em>: every "who granted whom access to what, and when" is
+    already on the ledger, no separate audit log to bolt on. Creating a team
+    sits outside that family — team lifecycle is provisioning, not a ledgered
+    act.
   </p>
   <p>Two boundaries make this precise, and they're deliberate:</p>
   <ul>

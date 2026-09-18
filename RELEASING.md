@@ -31,16 +31,20 @@ All three paths are token-free for consumers; no `read:packages` PAT, no
 `.npmrc` stanza, no Bundler credentials, no direct URL.
 
 **temper-ts / temper-telemetry-ts (npm)** — `npm install @tasker-systems/temper-ts`
-(telemetry-ts likewise), or pinned: `npm install @tasker-systems/temper-ts@0.5.1`.
+(telemetry-ts likewise), or pinned to the release being cut:
+`npm install @tasker-systems/temper-ts@<VERSION>` — `<VERSION>` is the repo-root
+`VERSION` file's value, as in the `v<VERSION>` tag below.
 
-**temper-rb (RubyGems)** — `gem install temper-rb`, or a plain `Gemfile` line:
+**temper-rb (RubyGems)** — `gem install temper-rb`, or a plain `Gemfile` line pinned
+to the release being cut:
 
 ```
-gem "temper-rb", "0.5.1"
+gem "temper-rb", "<VERSION>"
 ```
 
-**temperkb-py (PyPI)** — `pip install temperkb-py`, or pinned:
-`pip install temperkb-py==0.5.1`. The distribution is `temperkb-py`; the import
+**temperkb-py (PyPI)** — `pip install temperkb-py`, or pinned to the release
+being cut: `pip install temperkb-py==<VERSION>`. The distribution is
+`temperkb-py`; the import
 package stays `temper`. PyPI has no scopes, and both natural distribution names
 were taken by unrelated projects (a TEMPer USB-device reader under `temper-py`,
 an HTML DSL under `temper`), so the distribution carries the kb.

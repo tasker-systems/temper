@@ -51,9 +51,9 @@ The UI ships a restrictive content-security policy (set in `svelte.config.js`,
 `kit.csp`), on every page it renders. Operators do not need to configure
 anything: because the reverse proxy above keeps all browser API/MCP/OAuth
 traffic same-origin, `connect-src 'self'` is correct for every deployment
-shape — including one whose API lives on a different host. The only external
-origins admitted are Google Fonts (`fonts.googleapis.com` for the stylesheet,
-`fonts.gstatic.com` for the font files).
+shape — including one whose API lives on a different host. The fonts are
+self-hosted (`font-src 'self'`), and no directive in the policy admits any
+external origin: everything the page loads is same-origin.
 
 The one thing to know: **if you ever modify the UI so the browser talks
 directly to another origin** — bypassing the reverse proxy, e.g. client-side

@@ -76,7 +76,7 @@
     {
       id: 'admin', component: AdminFirewallDiagram,
       href: '/operating/governance-and-administration', page: 'Governance & administration',
-      line: 'Administration is event-sourced — and firewalled from cognition.',
+      line: 'Grant administration is event-sourced — and firewalled from cognition.',
     },
     {
       id: 'audit', component: AuditHomesDiagram,
