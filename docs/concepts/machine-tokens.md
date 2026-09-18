@@ -44,8 +44,10 @@ The machine-token exchange is a standard OAuth 2.0 `client_credentials` grant:
 | `audience` | Auth0 requires it; Temper's AS ignores it (mints with its own audience) |
 | JSON body | `invalid_request` — form-encoded only |
 
-A contract file pins this shape language-neutrally, so every client SDK and the AS's own
-integration suite assert against the same wire form.
+The shapes on this page are pinned, not authoritative here: the contract file
+(`internal/auth/machine-token-contract.md` in the repository) pins them language-neutrally, and
+every client SDK and the AS's own integration suite assert against that file — the table above
+describes the pin, it does not replace it.
 
 ## Agent principals ride the ordinary rails
 
