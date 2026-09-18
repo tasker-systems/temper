@@ -59,7 +59,7 @@ class SearchApi:
     ) -> SearchResponse:
         """Search resources by text or embedding
 
-        Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe.
+        Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe. The request's `arms` selector narrows the answer to one arm; an unasked arm is omitted from the body entirely.
 
         :param search_params: (required)
         :type search_params: SearchParams
@@ -132,7 +132,7 @@ class SearchApi:
     ) -> ApiResponse[SearchResponse]:
         """Search resources by text or embedding
 
-        Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe.
+        Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe. The request's `arms` selector narrows the answer to one arm; an unasked arm is omitted from the body entirely.
 
         :param search_params: (required)
         :type search_params: SearchParams
@@ -205,7 +205,7 @@ class SearchApi:
     ) -> RESTResponseType:
         """Search resources by text or embedding
 
-        Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe.
+        Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe. The request's `arms` selector narrows the answer to one arm; an unasked arm is omitted from the body entirely.
 
         :param search_params: (required)
         :type search_params: SearchParams

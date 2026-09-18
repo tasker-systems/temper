@@ -20,7 +20,7 @@ module Temper::Generated
       @api_client = api_client
     end
     # Search resources by text or embedding
-    # Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe.
+    # Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe. The request's `arms` selector narrows the answer to one arm; an unasked arm is omitted from the body entirely.
     # @param search_params [SearchParams] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -31,7 +31,7 @@ module Temper::Generated
     end
 
     # Search resources by text or embedding
-    # Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe.
+    # Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe. The request&#39;s &#x60;arms&#x60; selector narrows the answer to one arm; an unasked arm is omitted from the body entirely.
     # @param search_params [SearchParams] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

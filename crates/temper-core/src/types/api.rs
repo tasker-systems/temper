@@ -488,7 +488,6 @@ mod tests {
     /// ABSENT KEY — never `null`, never an empty arm with a fabricated reason.
     #[test]
     fn search_response_both_arms_round_trips() {
-        use crate::types::resource_view::ResourceView;
         let hit = ExactHit {
             resource: sample_resource_view(),
             fts_norm: 0.5,

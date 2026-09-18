@@ -2053,7 +2053,7 @@ export interface paths {
         put?: never;
         /**
          * Search resources by text or embedding
-         * @description Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe.
+         * @description Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe. The request's `arms` selector narrows the answer to one arm; an unasked arm is omitted from the body entirely.
          */
         post: operations["search"];
         delete?: never;
@@ -13662,7 +13662,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Two arms that are never combined: `exact` (term matching, ordered by `fts_norm`) and `wide` (embedding proximity, ordered by `vec_norm`), each with its own `reason`, plus the `scope` they share. No field ranks one arm against the other. */
+            /** @description Two arms that are never combined: `exact` (term matching, ordered by `fts_norm`) and `wide` (embedding proximity, ordered by `vec_norm`), each with its own `reason`, plus the `scope` they share. No field ranks one arm against the other. An arm the request's `arms` selector did not ask for is ABSENT from the body — never an empty arm with a fabricated reason; the default (`arms=all`) returns both. */
             200: {
                 headers: {
                     [name: string]: unknown;
