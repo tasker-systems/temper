@@ -1,7 +1,7 @@
 // graph-reads.paths.test.ts
 import { describe, expect, it } from 'vitest';
 import { traversePath } from './graph-query';
-import { resourceEdgesPath, resourceRowPath, teamsListPath, trailPath } from './graph-reads';
+import { resourceConnectionsPath, resourceRowPath, teamsListPath, trailPath } from './graph-reads';
 
 // The nine `/api/graph/*` path builders that lived here were deleted with their callers in
 // Beat D; the endpoints survive with none. See graph-reads.ts for why that leftover is named.
@@ -18,9 +18,9 @@ describe('graph API path builders', () => {
 			'/api/resources/019f420c-cf01-7bc1-87c9-09684b0fa69e',
 		);
 	});
-	it('builds the resource edges path', () => {
-		expect(resourceEdgesPath('019f420c-cf01-7bc1-87c9-09684b0fa69e')).toBe(
-			'/api/resources/019f420c-cf01-7bc1-87c9-09684b0fa69e/edges',
+	it('builds the resource connections path', () => {
+		expect(resourceConnectionsPath('019f420c-cf01-7bc1-87c9-09684b0fa69e')).toBe(
+			'/api/resources/019f420c-cf01-7bc1-87c9-09684b0fa69e/connections',
 		);
 	});
 });

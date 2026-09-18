@@ -1,8 +1,15 @@
 <script lang="ts">
-	import type { GraphEdgeRow } from '$lib/types/generated/graph';
+	import type { ResourceConnections } from '$lib/types/generated/graph';
 	import RegionState from '$lib/components/RegionState.svelte';
 
-	let { edges }: { edges: GraphEdgeRow[] } = $props();
+	/**
+	 * The bounded connections read, consumed whole. The heading IS the bound line: `rows.length`
+	 * of `total`, both read off the one envelope the server returned, so the count, the stated
+	 * denominator and the rendered slice cannot disagree — and the line is chrome, present
+	 * whether or not the read was clipped (spec D-F4 / `bound.ts` SeedAxis: complete is something
+	 * the reader is TOLD, never something they infer from silence).
+	 */
+	let { connections }: { connections: ResourceConnections } = $props();
 </script>
 
 <!--
@@ -15,11 +22,11 @@
 	<!-- "Connections", not "Edges": the region below says "No connections", and one region must not
 	     name the same thing two ways. "Edges" was this file's only reader-facing use of the word
 	     anywhere in the UI, so aligning it introduces no inconsistency elsewhere. -->
-	<div class="label">Connections · {edges.length}</div>
-	{#if edges.length === 0}
+	<div class="label">Connections · {connections.rows.length} of {connections.total}</div>
+	{#if connections.rows.length === 0}
 		<RegionState state="empty" label="connections" />
 	{:else}
-		{#each edges as edge (edge.edge_id)}
+		{#each connections.rows as edge (edge.edge_id)}
 			<div class="edge">
 				<!--
 					The row states the relationship in the reader's terms — their `label`, verbatim —

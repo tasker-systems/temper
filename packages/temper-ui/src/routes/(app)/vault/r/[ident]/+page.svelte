@@ -170,13 +170,13 @@
 				</div>
 			{/await}
 
-			{#await data.edges}
+			{#await data.connections}
 				<div class="rail-region">
 					{@render railHeading('Connections')}
 					<RegionState state="arriving" label="connections" />
 				</div>
-			{:then edges}
-				<EdgeList {edges} />
+			{:then connections}
+				<EdgeList {connections} />
 			{:catch error}
 				<div class="rail-region">
 					{@render railHeading('Connections')}

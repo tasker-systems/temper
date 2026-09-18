@@ -16,7 +16,7 @@
 
 import { apiGet } from '$lib/server/api';
 import type { ElementKind, EventTrail } from '$lib/types/generated/element_trail';
-import type { GraphEdgeRow } from '$lib/types/generated/graph';
+import type { ResourceConnections } from '$lib/types/generated/graph';
 import type { ResourceView } from '$lib/types/generated/resource_view';
 import type { TeamRow } from '$lib/types/generated/team';
 
@@ -27,7 +27,7 @@ export const teamsListPath = (): string => `/api/teams`;
 
 export const resourceRowPath = (id: string): string => `/api/resources/${id}`;
 
-export const resourceEdgesPath = (id: string): string => `/api/resources/${id}/edges`;
+export const resourceConnectionsPath = (id: string): string => `/api/resources/${id}/connections`;
 
 export const readTrail = (token: string, kind: ElementKind, id: string): Promise<EventTrail> =>
 	apiGet<EventTrail>(trailPath(kind, id), token);
@@ -38,6 +38,10 @@ export const listTeams = (token: string): Promise<TeamRow[]> =>
 export const readResourceRow = (token: string, id: string): Promise<ResourceView> =>
 	apiGet<ResourceView>(resourceRowPath(id), token);
 
-/** Edges incident to one resource. Rows are peer-denormalized — no subgraph load. */
-export const readResourceEdges = (token: string, id: string): Promise<GraphEdgeRow[]> =>
-	apiGet<GraphEdgeRow[]>(resourceEdgesPath(id), token);
+/**
+ * The bounded connections read: the incident-edge rows plus the bound the panel states —
+ * the filtered `total` and the applied `limit`, from which the envelope derives `truncated`.
+ * The unbounded `/edges` listing stays untouched; this is its additive sibling (spec D-F4).
+ */
+export const readResourceConnections = (token: string, id: string): Promise<ResourceConnections> =>
+	apiGet<ResourceConnections>(resourceConnectionsPath(id), token);
