@@ -62,8 +62,12 @@ refusal, never to silence.
 
 **Declared off-MCP (CLI door):** grants (`resource_grant`/`revoke`,
 `cogmap_grant`/`revoke`), `admin_ledger`, cogmap bind/unbind, team invitations,
-`get_profile`, `reassign`. Each capability stays at the CLI; its absence from
-MCP is a declaration, not a gap.
+`reassign`. Each capability stays at the CLI; its absence from MCP is a
+declaration, not a gap. `reassign` is the owner-moves: `temper resource reassign`
+and `temper team reassign` (offboarding), backed by the REST routes
+`POST /api/resources/{id}/reassign` and `POST /api/teams/{id}/reassign` — moving
+a context to a team rides `context_manage` (action: transfer) here. `get_profile`
+is neither CLI nor MCP: it is the REST route `GET /api/profile`.
 
 ## Resources vs Tools — Decision Table
 
@@ -87,7 +91,7 @@ MCP is a declaration, not a gap.
 | Read a resource with content via tool | Tool: `get_resource` with `include_content: true` | When resource browsing isn't available |
 | Delete a resource | Tool: `delete_resource` | Soft-delete, tools only |
 | Create a new context | Tool: `context_manage` (action: create) | Mutation — tools only |
-| Discover valid document types | Tool: `describe_schema` (view: doc_types) | Returns id and name for each type |
+| Discover valid document types | Tool: `describe_schema` (view: doc_types) | Returns name, has_schema, and required_fields for each type |
 | Get schema for a specific type | Tool: `describe_schema` (view: doc_type) | Returns JSON Schema and example_managed_meta |
 | Learn the recognized `open_meta` conventions | Tool: `describe_schema` (view: open_meta) | The keys agents may write and what each means, before inventing metadata |
 

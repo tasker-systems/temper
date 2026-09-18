@@ -63,6 +63,24 @@ classes: additive
 surfaces: internal
 status: signal-only
 
+- **Skill-copy refresh — the agent-skill surfaces' door names restated from their shipped authorities**
+  The shared skill templates behind the `agent-skills/temper-knowledge-base`
+  projection state each surface's doors as shipped: the data-artifacts surface
+  section's heading is surface-parameterized (the MCP render shows the MCP
+  tools, the CLI render the CLI door); working-a-goal's traversal paragraph
+  names the MCP `run_query` composition door — the `follow-from` act with its
+  `bound`/`seed` relations — beside the CLI's `temper graph traverse`, and its
+  advance-phase workflow pointer is surface-parameterized (the MCP packaging
+  ships no per-cell workflow files, as its SKILL.md states). The hand-written
+  `knowledge-base.md` names `get_profile` as the REST route `GET /api/profile`
+  and scopes `reassign` to the resource and team reassign doors. Copy only —
+  no contract shape moves, no runtime behavior change; the only generated
+  re-stale is the skill emit itself.
+pr: self
+classes: additive
+surfaces: internal
+status: signal-only
+
 ## Shipped in v0.5.2
 
 - **This release — the 0.5.2 fleet alignment: VERSION 0.5.1 → 0.5.2 across crates, packages, and clients**
