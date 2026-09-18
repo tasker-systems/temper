@@ -12,6 +12,8 @@
 #      tree and needs no toolchain — and can live in the ungated guard-tests job. Excluded
 #      from scanning: the generated reference trees themselves (each owned by its own gate).
 #      Only long flags (`--flag`) are checked; short-flag claims are unchecked, stated here.
+#      What a fence claims is its temper SEGMENT: a pipe, separator, or redirection ends the
+#      invocation, and comments (quote-aware, via shlex) are not claims at all.
 #   2. counts — route/cron/function counts stated in the self-host playbook must equal what
 #      vercel.json actually derives (routes count `src`-entries; a `handle` directive is not
 #      a route). The page names vercel.json as its authority; this makes the numbers provable
@@ -108,18 +110,25 @@ failures = []
 def check_invocation(path, lineno, line):
     global checked
     try:
-        tokens = shlex.split(line)
+        # comments=True: a `#` starts a comment only when UNQUOTED, so a trailing
+        # comment is not part of the invocation and a quoted "#…" argument is
+        # content — both decided by shlex, not by a split this function guesses at.
+        tokens = shlex.split(line, comments=True)
     except ValueError:
         failures.append((path, lineno, "unparseable invocation (unbalanced quote?)"))
         return
     if not tokens or tokens[0] != "temper":
         return
     body = tokens[1:]
-    if body and body[0].startswith("#"):
-        return
     command = []
     flags = []
     for tok in body:
+        # Shell metacharacters end the invocation: everything after a pipe,
+        # separator, or redirection is another command's business and makes no
+        # claim about temper's surface (`temper team list | jq …` claims
+        # `temper team list`, not `jq`).
+        if tok in ("|", "||", "&&", ";", "&") or tok[0] in "<>":
+            break
         if tok.startswith("--"):
             flags.append(tok.split("=", 1)[0])
         elif not tok.startswith("-") and not flags:
@@ -142,30 +151,35 @@ def check_invocation(path, lineno, line):
     # `Usage:` line shows a placeholder other than <COMMAND> — that one means a
     # subcommand is REQUIRED, so an unknown token there is drift). First positional
     # ends the path; everything after it is argument text.
-    prefix = [command[0]]
-    args_started = False
-    for tok in command[1:]:
-        if args_started:
-            continue
-        heading = "### `temper " + " ".join(prefix + [tok]) + "`"
-        if heading in page_text:
-            prefix.append(tok)
-            continue
-        usage = re.search(
-            rf"(?m)^Usage: temper {' '.join(re.escape(t) for t in prefix)}\s+(\S.*)$",
-            page_text,
-        )
-        remainder = usage.group(1) if usage else ""
-        placeholders = [t for t in remainder.split()
-                        if t.startswith("<") or t.startswith("[")]
-        positional = any(t != "[OPTIONS]" and t != "<COMMAND>" for t in placeholders)
-        if positional:
-            args_started = True
-            continue
-        failures.append((path, lineno,
-                         f"'temper {' '.join(prefix)} {tok}' — '{tok}' is neither a documented"
-                         f" subcommand nor a positional argument of '{' '.join(prefix)}'"))
-        return
+    # A flag-only invocation (`temper --help`) has NO command path: the page branch
+    # above already selected the root page for it, and only the flag check below
+    # applies. Indexing command[0] here was the crash a swallowed exit code turned
+    # into a clean banner.
+    if command:
+        prefix = [command[0]]
+        args_started = False
+        for tok in command[1:]:
+            if args_started:
+                continue
+            heading = "### `temper " + " ".join(prefix + [tok]) + "`"
+            if heading in page_text:
+                prefix.append(tok)
+                continue
+            usage = re.search(
+                rf"(?m)^Usage: temper {' '.join(re.escape(t) for t in prefix)}\s+(\S.*)$",
+                page_text,
+            )
+            remainder = usage.group(1) if usage else ""
+            placeholders = [t for t in remainder.split()
+                            if t.startswith("<") or t.startswith("[")]
+            positional = any(t != "[OPTIONS]" and t != "<COMMAND>" for t in placeholders)
+            if positional:
+                args_started = True
+                continue
+            failures.append((path, lineno,
+                             f"'temper {' '.join(prefix)} {tok}' — '{tok}' is neither a documented"
+                             f" subcommand nor a positional argument of '{' '.join(prefix)}'"))
+            return
     for flag in flags:
         if flag not in page_text and flag not in global_flags_text:
             failures.append((path, lineno, f"'temper {label} {flag}' — flag absent from its reference page"))
@@ -216,7 +230,13 @@ PYEOF
 echo "$CLI_OUT_FILE contents:" >/dev/null
 sed -n 's/^cli-claims: /cli-claims: /p' "$CLI_OUT_FILE"
 grep '^FAIL:' "$CLI_OUT_FILE" >&2 || true
-if [ "$CLI_RC" -ne 0 ]; then
+# A completed checker ALWAYS reaches its summary line (printed before exit), and exits
+# non-zero only when it printed FAIL lines. RC≠0 with no summary is a CRASH — and
+# counting FAIL lines out of output a crashed process never wrote is exactly how a
+# crash used to read as a clean banner. Refuse: an incomplete scan checks nothing.
+if ! grep -q '^cli-claims: ' "$CLI_OUT_FILE"; then
+    fail "cli-claims checker did not complete (rc=${CLI_RC}) — refusing to report clean on a scan that may not have run"
+elif [ "$CLI_RC" -ne 0 ]; then
     FAILURES=$((FAILURES + $(grep -c '^FAIL:' "$CLI_OUT_FILE" || true)))
 fi
 fi
@@ -273,7 +293,11 @@ PYEOF
 
 sed -n 's/^counts: /counts: /p' "$COUNTS_OUT_FILE"
 grep '^FAIL:' "$COUNTS_OUT_FILE" >&2 || true
-if [ "$COUNTS_RC" -ne 0 ]; then
+# Same completion invariant as the cli-claims check: no summary line means the
+# checker died (a malformed vercel.json dies at json.load) — never a clean scan.
+if ! grep -q '^counts: ' "$COUNTS_OUT_FILE"; then
+    fail "counts checker did not complete (rc=${COUNTS_RC}) — refusing to report clean on a scan that may not have run"
+elif [ "$COUNTS_RC" -ne 0 ]; then
     FAILURES=$((FAILURES + $(grep -c '^FAIL:' "$COUNTS_OUT_FILE" || true)))
 fi
 fi
