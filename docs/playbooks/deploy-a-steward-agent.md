@@ -69,6 +69,7 @@ The Vercel project manifest at the agent root directory is:
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "npm install",
+  "ignoreCommand": "sh \"$(git rev-parse --show-toplevel)/scripts/vercel-ignore-build.sh\" steward-agent",
   "buildCommand": "npm run build"
 }
 ```

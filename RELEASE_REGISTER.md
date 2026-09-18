@@ -12,7 +12,7 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 `schema`, `internal` · `status:` one of `open`, `signal-only`, `blocked:<release-class>`,
 `satisfied`.
 
-## Since v0.5.0 — unreleased
+## Since v0.5.2 — unreleased
 
 - **Palette search rows read the home the row actually carries — cogmap-homed rows stop rendering an empty home**
   The command palette's result sub-line read `context_name` alone, so a search
@@ -43,6 +43,7 @@ classes: additive
 surfaces: internal
 status: signal-only
 
+
 - **Self-host route/cron table regeneration — counts and tables derived from `vercel.json`**
   `docs/playbooks/self-host-temper.md`'s route table, cron table, topology
   diagram, and routing-contract counts are regenerated from the current
@@ -55,6 +56,70 @@ status: signal-only
 pr: self
 classes: additive
 surfaces: internal
+status: signal-only
+
+- **Copy refresh — public-surface spans regenerated from their named authorities**
+  Six public-surface files refreshed at span level, each derived from its
+  authority: the /builders landing page's frontmatter demo now shows the
+  canonical vault frontmatter (`temper-*` keys, `relates_to`) matching the
+  decision schema; README's core-command descriptions match the CLI's
+  `--help` text; temper-rb.md names the spec suite and its CI workflow as the
+  pin behind its patterns; install-temper states the CLI's local-embedding
+  default (`embed`+`extract` features; ingestion posts pre-embedded chunks);
+  slack-mentions describes the linked-mention behavior as shipped (a model
+  turn dispatched under the linked user's identity) and its Verify step names
+  the observable reply classes; self-host-temper's `ENABLE_SWAGGER` row states
+  the real Swagger UI path (`/api-docs/ui`) and that the flag carries no
+  environment gate. Copy only — no contract shape moves, no runtime behavior
+  change, no generated artifact re-stales.
+pr: self
+classes: additive
+surfaces: internal
+status: signal-only
+
+- **Copy refresh — nine public-surface spans restated from their shipped authorities**
+  Nine spans across the cognitive-maps and operating pages now state the
+  shipped shape at each span: the materialize wake (a map re-materializes when
+  formation events since its last materialization clear the default threshold
+  of five, with the steward verbs to run it), the onboarding seed fixture
+  (`onboarding-cogmap.yaml`) named as the worked scenario, the access
+  scenarios named as YAML fixtures with S4 scoped to the charter-gating read,
+  the emitter entity described as the seed declares it, and the admin ledger
+  scoped to the grant family (team lifecycle stated as provisioning). Copy
+  only — no contract shape moves, no runtime behavior change, no generated
+  artifact re-stales.
+pr: self
+classes: additive
+surfaces: internal
+status: signal-only
+
+- **Skill-copy refresh — the agent-skill surfaces' door names restated from their shipped authorities**
+  The shared skill templates behind the `agent-skills/temper-knowledge-base`
+  projection state each surface's doors as shipped: the data-artifacts surface
+  section's heading is surface-parameterized (the MCP render shows the MCP
+  tools, the CLI render the CLI door); working-a-goal's traversal paragraph
+  names the MCP `run_query` composition door — the `follow-from` act with its
+  `bound`/`seed` relations — beside the CLI's `temper graph traverse`, and its
+  advance-phase workflow pointer is surface-parameterized (the MCP packaging
+  ships no per-cell workflow files, as its SKILL.md states). The hand-written
+  `knowledge-base.md` names `get_profile` as the REST route `GET /api/profile`
+  and scopes `reassign` to the resource and team reassign doors. Copy only —
+  no contract shape moves, no runtime behavior change; the only generated
+  re-stale is the skill emit itself.
+pr: self
+classes: additive
+surfaces: internal
+status: signal-only
+
+## Shipped in v0.5.2
+
+- **This release — the 0.5.2 fleet alignment: VERSION 0.5.1 → 0.5.2 across crates, packages, and clients**
+  The release train's own wire delta is none: version fields and the generated
+  cores re-stale with the bump (the D-S3 baseline — no shape movement); the
+  P floor rides the additive rows already in this window.
+pr: self
+classes: additive
+surfaces: http, clients
 status: signal-only
 
 - **Get-started regeneration — /builders, /agents, /using-temper, README, two playbooks**
@@ -88,41 +153,6 @@ status: signal-only
 pr: self
 classes: additive
 surfaces: internal
-status: signal-only
-
-- **This release — the 0.5.1 fleet alignment: VERSION 0.5.0 → 0.5.1 across crates, packages, and clients**
-  The release train's own wire delta is none: version fields and the generated
-  cores re-stale with the bump (the D-S3 baseline — no shape movement); the
-  P floor rides the additive rows already in this window. The release exists to
-  restore the attestation chain (the v0.5.0 predicate names the tag-push door's
-  entry) and to carry the public-registry lanes' first publishes.
-pr: self
-classes: additive
-surfaces: http, clients
-status: signal-only
-
-- **The npm manifests' publishConfig points at the public registry**
-  Completes the public-registry flip: `publishConfig.registry` still named
-  `npm.pkg.github.com` in both TS manifests, so every `npm publish` inside those
-  directories targeted GitHub Packages (and failed ENEEDAUTH against it) no matter
-  where the operator logged in. Found by the first bootstrap publish, not by CI —
-  no harness or gate reads the manifest's publish target.
-pr: self
-classes: additive
-surfaces: clients
-status: signal-only
-
-- **The client publish lanes move to the public registries**
-  rubygems.org for the gem, registry.npmjs.org for the TS packages — token-free for
-  consumers (GitHub Packages gates reads even on a public repo, which walled every other
-  repository's CI off from the packages). Publish-side auth is OIDC trusted publishing on
-  both hosts, keyed to the chain's entry workflow; the GitHub Packages API-key machinery
-  and its refusal-text classifier are retired with the lanes they served. No client code
-  changes — distribution only. v0.5.0's GitHub Packages artifacts remain on their hosts,
-  frozen.
-pr: self
-classes: additive
-surfaces: clients
 status: signal-only
 
 - **The Python client's distribution becomes temperkb-py, published to pypi.org**
@@ -211,7 +241,44 @@ classes: behavioral
 surfaces: cli-stdout
 status: signal-only
 
-## Since v0.4.0 — unreleased
+## Shipped in v0.5.1
+
+- **This release — the 0.5.1 fleet alignment: VERSION 0.5.0 → 0.5.1 across crates, packages, and clients**
+  The release train's own wire delta is none: version fields and the generated
+  cores re-stale with the bump (the D-S3 baseline — no shape movement); the
+  P floor rides the additive rows already in this window. The release exists to
+  restore the attestation chain (the v0.5.0 predicate names the tag-push door's
+  entry) and to carry the public-registry lanes' first publishes.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
+
+- **The npm manifests' publishConfig points at the public registry**
+  Completes the public-registry flip: `publishConfig.registry` still named
+  `npm.pkg.github.com` in both TS manifests, so every `npm publish` inside those
+  directories targeted GitHub Packages (and failed ENEEDAUTH against it) no matter
+  where the operator logged in. Found by the first bootstrap publish, not by CI —
+  no harness or gate reads the manifest's publish target.
+pr: self
+classes: additive
+surfaces: clients
+status: signal-only
+
+- **The client publish lanes move to the public registries**
+  rubygems.org for the gem, registry.npmjs.org for the TS packages — token-free for
+  consumers (GitHub Packages gates reads even on a public repo, which walled every other
+  repository's CI off from the packages). Publish-side auth is OIDC trusted publishing on
+  both hosts, keyed to the chain's entry workflow; the GitHub Packages API-key machinery
+  and its refusal-text classifier are retired with the lanes they served. No client code
+  changes — distribution only. v0.5.0's GitHub Packages artifacts remain on their hosts,
+  frozen.
+pr: self
+classes: additive
+surfaces: clients
+status: signal-only
+
+## Shipped in v0.5.0
 
 - **This release — the 0.5.0 fleet alignment: VERSION 0.4.0 → 0.5.0 across crates, packages, and clients**
   The release train's own wire delta is none: openapi.json's `info.version` re-stales with
@@ -814,34 +881,4 @@ status: signal-only
 pr: pre-policy
 classes: additive
 surfaces: http, mcp, cli-stdout, schema
-status: signal-only
-
-## Since 0.5.1 — unreleased
-
-- **This release — the 0.5.2 fleet alignment: VERSION 0.5.1 → 0.5.2 across crates, packages, and clients**
-  The release train's own wire delta is none: version fields and the generated
-  cores re-stale with the bump (the D-S3 baseline — no shape movement); the
-  P floor rides the additive rows already in this window.
-pr: self
-classes: additive
-surfaces: http, clients
-status: signal-only
-
-- **Copy refresh — public-surface spans regenerated from their named authorities**
-  Six public-surface files refreshed at span level, each derived from its
-  authority: the /builders landing page's frontmatter demo now shows the
-  canonical vault frontmatter (`temper-*` keys, `relates_to`) matching the
-  decision schema; README's core-command descriptions match the CLI's
-  `--help` text; temper-rb.md names the spec suite and its CI workflow as the
-  pin behind its patterns; install-temper states the CLI's local-embedding
-  default (`embed`+`extract` features; ingestion posts pre-embedded chunks);
-  slack-mentions describes the linked-mention behavior as shipped (a model
-  turn dispatched under the linked user's identity) and its Verify step names
-  the observable reply classes; self-host-temper's `ENABLE_SWAGGER` row states
-  the real Swagger UI path (`/api-docs/ui`) and that the flag carries no
-  environment gate. Copy only — no contract shape moves, no runtime behavior
-  change, no generated artifact re-stales.
-pr: self
-classes: additive
-surfaces: internal
 status: signal-only

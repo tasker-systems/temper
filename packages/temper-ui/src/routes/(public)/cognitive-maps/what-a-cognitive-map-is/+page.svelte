@@ -138,19 +138,21 @@
   </p>
 </Section>
 
-<Section label="An open seam">
+<Section label="The wake, shipped">
   <p>
-    One thing this leaves unsettled: <strong>when</strong> a map's shape gets
+    One thing this settles: <strong>when</strong> a map's shape gets
     re-drawn. The regions are <em>materialized</em> — computed at a moment and
     then held — so a shape can sit slightly behind the events that have since
     touched the map. The system treats that as normal and reports it honestly
     rather than blocking on freshness (the staleness signal is real and
-    on-read). <em>What should wake an agent to re-materialize a shape</em> —
-    event volume? a cadence? salience crossing a floor? — is genuinely open. We
-    mark it as a seam and return to it in
-    <a href="/cognitive-maps/how-a-map-grows">how a map grows</a> and the
-    <a href="/operating/deployment">deployment</a> forks.
-    Naming a seam <em>as</em> a seam, instead of papering over it, is the
+    on-read). <em>What wakes an agent to re-materialize a shape</em> is
+    shipped, not open: the map grows by an event-count threshold — five
+    formation events on the anchor since its last materialization, by default —
+    and the agent tending it wakes on the steward cadence the
+    team-self-cognition playbook teaches. The
+    <a href="/cognitive-maps/how-a-map-grows">how a map grows</a> and
+    <a href="/operating/deployment">deployment</a> pages carry the answer
+    forward. Naming the cadence plainly, instead of papering over it, is the
     discipline the system applies to superseded thinking — and the one these
     pages try to keep.
   </p>

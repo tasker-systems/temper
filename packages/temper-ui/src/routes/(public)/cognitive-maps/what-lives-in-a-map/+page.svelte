@@ -131,8 +131,8 @@
     <code>kb_chunks</code>, <code>kb_cogmaps</code>, <code>kb_edges</code>,
     <code>kb_properties</code>; the reads — <code>resource_body_text</code> for the charter
     body and <code>resource_blocks</code> for its question blocks, both resolved through
-    <code>cogmap_telos</code>, plus <code>cogmap_regulation</code> — demonstrated by scenario
-    <strong>S4</strong>.
+    <code>cogmap_telos</code> (the charter-gating read that scenario
+    <strong>S4</strong> exercises), plus <code>cogmap_regulation</code>.
   {/snippet}
 </VizFigure>
 

@@ -151,9 +151,9 @@ control.
 **"Disconnected" means "cannot mint again." It does not mean "cannot act."**
 
 To actually cut someone off, **deactivate the profile** — that is enforced per
-request, at latency zero, on every surface. The mint path checks `is_active`
-before decrypting anything, and the auth seam refuses a token whose profile is
-deactivated.
+request, at latency zero, on every surface. The mint path checks the profile's
+principal standing (`kb_principal_standing`) before decrypting anything, and the
+auth seam refuses a token whose profile is deactivated.
 
 ### How long an issued token survives
 

@@ -9,10 +9,11 @@ happens after a blob exists, see [Deleting a blob](./blob-delete-and-erasure.md)
 
 A blob is a binary file — an image, a PDF, a diagram — stored outside the database at a
 content-addressed path, with a `kb_blobs` row carrying its hash, media type, and home. A
-blob homes in **one context** (or a map), the way a resource does: whoever can author into
-that home can commit there, and the blob inherits the home's visibility. Hashes are unique
-per home, so committing identical bytes twice in one home resolves to the same content,
-while the same bytes in someone else's home are their own row with their own lifecycle.
+blob homes in **one context** — a cognitive map is never a blob home. Whoever can author
+into that context can commit there, and the blob inherits the context's visibility. Hashes
+are unique per home, so committing identical bytes twice in one home resolves to the same
+content, while the same bytes in someone else's home are their own row with their own
+lifecycle.
 
 ## Committing a file
 

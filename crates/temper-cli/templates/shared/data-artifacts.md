@@ -122,7 +122,13 @@ data they retrieved conforms to anything the writer declared.
   size — a measurement, a plan, a computation output — that does not fit in a property value and
   must survive a round-trip whole.
 
+{%- if surface == "cli" %}
+
 ## The CLI surface
+{%- else %}
+
+## The MCP tool surface
+{%- endif %}
 
 {%- if surface == "cli" %}
 ```bash

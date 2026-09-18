@@ -242,11 +242,16 @@
 <Section label="Runnable proof">
   <p>
     None of the verdicts on this page are assertions to take on trust. S1, S2, and
-    S3 are labelled queries in <code>04_scenarios.sql</code> that run against the
-    seed and print exactly the behaviour described — alice's set, bob's set,
-    nomad's nothing, the intersection that drops team-a-private, the private edge
-    carol sees and alice doesn't. The model is meant to be <em>checked</em>, which
-    is exactly why the artifact gets built before the migration.
+    S3 are declarative checks in the YAML scenario fixtures under
+    <code>crates/temper-substrate/tests/fixtures/access-scenarios/</code>:
+    <code>epd-bridge-access.yaml</code>, the access spec's worked example
+    (S1 consumer reach, S2 producer intersection, S3 edge-home protection, each
+    check naming its expected verdict), and <code>context-share-access.yaml</code>,
+    the same invariants re-proven with a shared context in the topology —
+    alice's set, bob's set, nomad's nothing, the intersection that drops
+    team-a-private, the private edge carol sees and alice doesn't. The model is
+    meant to be <em>checked</em>, which is exactly why the artifact gets built
+    before the migration.
   </p>
 </Section>
 

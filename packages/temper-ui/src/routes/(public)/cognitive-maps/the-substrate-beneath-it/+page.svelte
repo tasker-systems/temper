@@ -162,7 +162,8 @@
     <code>shape_materialized_event_id</code> / <code>last_event_id</code>; the
     <code>edge_kind</code> enum (<code>express</code>, <code>contains</code>, <code>leads_to</code>,
     <code>near</code>); <code>cogmap_shape()</code> (salience / label / count, members withheld) and
-    <code>cogmap_staleness()</code>. The cast is the worked scenario in <code>03_seed.sql</code>.
+    <code>cogmap_staleness()</code>. The cast is the worked scenario in
+    <code>crates/temper-substrate/tests/fixtures/seeds/onboarding-cogmap.yaml</code>.
   {/snippet}
 </VizFigure>
 

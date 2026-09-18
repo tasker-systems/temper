@@ -42,9 +42,11 @@ they are not the same thing.
 commands that reject it, and the rejection is client-side. There is no `temper profile`
 command — to find your handle, run [`temper context list`](../reference/cli/context.md) and read the `owner_ref` column.
 
-**2. A malformed ref reports "not found", not a grammar error.** The share/unshare commands
-hand-roll their argument parsing rather than using the shared context-ref parser, so a syntax
-error looks like a permissions problem. If share fails unexpectedly, check the ref form first.
+**2. A malformed ref reports a grammar error with guidance, not a permissions problem.** The
+share/unshare commands hand-roll their argument parsing rather than using the shared
+context-ref parser, so a syntax error is refused client-side with an invalid-ref error naming
+the two accepted forms: a UUID, or `@handle/slug` / `+team-slug/slug`. It is a well-formed ref
+that matches nothing visible which reports "not found".
 
 **3. [`context create`](../reference/cli/context.md) is not idempotent.** Re-running it with the same name auto-suffixes:
 `my-project` becomes `my-project-2`. A re-run silently forks the context rather than returning
@@ -61,8 +63,10 @@ is the only path to shared authorship.**
 
 - A team's members can read contexts the team owns or is granted — membership confers read
   reach, automatically, through nested teams.
-- Writing into a context requires administering it (or being an instance admin). Membership
-  alone does not grant write.
+- Writing into a context does not require administering it. A direct member of the owning
+  team — owner, maintainer, or member — authors into a team-owned context, and a personal
+  context's owner authors it. What write does not do is inherit: nested or granted
+  membership reads without writing.
 - `context share` gives a team **read** access to a context you own. It does not let them
   write. The only way to share authorship is `context transfer`, which moves ownership.
 - Renaming a context re-addresses it: the slug changes and every stored ref that used the old

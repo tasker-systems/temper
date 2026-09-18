@@ -66,8 +66,8 @@ out-of-scope report than not hear about an in-scope one.
 
 | Version | Supported |
 |---|---|
-| 0.3.x | Yes |
-| < 0.3 | No |
+| 0.5.x | Yes |
+| < 0.5 | No |
 
 Temper is pre-1.0 and moves quickly. Fixes land on the current minor series; there are no backports
 to earlier ones. **If you self-host, staying current is part of your security posture** — see
@@ -118,12 +118,14 @@ a convention documented as though it were enforced is worse than one documented 
 - **Fail-closed authorization.** Absence denies. A principal with no standing row has no access, and
   a record type nobody has authorized as readable is not readable by default.
 - **Compile-time-checked SQL.** Queries go through `sqlx` macros verified against the real schema.
-- **Authorization tripwires in CI.** Twelve audit scripts under `.github/scripts/` freeze
+- **Authorization tripwires in CI.** The `audit-*.sh` scripts under `.github/scripts/` freeze
   security-relevant sets — grant write-sites, route auth coverage, ungated query fragments, signature
   secrets, elevation claims — against reviewed baselines, so the set cannot grow without someone
   acknowledging it. Each has its own test, and each states in its header what it does *not* catch.
 - **Signed, verifiable releases.** Build-provenance attestation against a pinned Sigstore trust root,
-  with sha256-pinned native dependencies. `temper attest` verifies an installed binary.
+  with sha256-pinned native dependencies. `temper version --verify` checks an installed release
+  against the manifest beside it; with `--online`, against the published manifest and its
+  build-provenance attestation.
 - **Dependency and secret scanning.** `cargo audit` blocking in CI, Dependabot, GitHub secret
   scanning with push protection.
 - **CodeQL** static analysis, scoped to the languages a change can reach, reporting into the same
