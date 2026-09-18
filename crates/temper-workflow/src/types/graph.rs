@@ -239,6 +239,62 @@ pub struct GraphEdgeRow {
     pub created: chrono::DateTime<chrono::Utc>,
 }
 
+/// The bounded connections envelope — the `/connections` read's response body, the additive
+/// sibling of the `/edges` listing (spec D-F4: the bound lives at the read, with declared
+/// disclosure; the incumbent array endpoint is untouched).
+///
+/// The envelope carries its own paging state, so a caller can tell a whole set from a bounded
+/// page without knowing what it asked for — the same property `ResourceListResponse` gives the
+/// resource list (`crates/temper-workflow/src/types/resource.rs:209`), built the same way: through
+/// [`ResourceConnections::new`], which derives `returned` and `truncated` from the page rather
+/// than trusting a caller to keep them consistent with `rows`.
+///
+/// `total` is the FILTERED count — every incident edge the visibility gate admits, before
+/// `limit`. It rides the same `edges_visible_to` join the rows do; the service constructs the
+/// count from the listing's own predicate (see `edge_service::list_resource_connections`), so a
+/// row hidden from the listing is hidden from the denominator too.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "graph.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceConnections {
+    /// The incident edges this page returns, in the same row shape the `/edges` listing
+    /// answers in. A single shape for the row, two shapes for the read.
+    pub rows: Vec<GraphEdgeRow>,
+    /// Every incident edge the caller can see — the filtered match count, before `limit`.
+    pub total: i64,
+    /// The effective limit the server applied after clamping. An echo of what ran, not
+    /// of what was asked.
+    pub limit: i64,
+    /// This page's row count. Always `rows.len()`; carried explicitly so the count
+    /// survives a projection that drops or summarizes the rows.
+    pub returned: i64,
+    /// Are there matching edges beyond this page? Derived as the resource-list read derives
+    /// its own: `offset + returned < total` (`resource.rs:254`, echoed in the SeedAxis doc
+    /// at `bound.ts:38-44`). This read pages from the top — there is no offset parameter —
+    /// so the derivation collapses to `returned < total` here; it is still computed from
+    /// the page in the constructor, never trusted to a caller, and still deliberately not
+    /// spelled `total > returned`, which is the form that lies on the last page of any walk
+    /// that ever grows an offset.
+    pub truncated: bool,
+}
+
+impl ResourceConnections {
+    /// Assemble the page and derive its paging state from it — the one place `returned` and
+    /// `truncated` are computed, mirroring [`crate::types::resource::ResourceListResponse::new`].
+    #[must_use]
+    pub fn new(rows: Vec<GraphEdgeRow>, total: i64, limit: i64) -> Self {
+        let returned = rows.len() as i64;
+        Self {
+            rows,
+            total,
+            limit,
+            returned,
+            truncated: returned < total,
+        }
+    }
+}
+
 /// A resolved edge ready for projection.
 #[derive(Debug, Clone)]
 pub struct ResolvedEdge {
@@ -268,6 +324,60 @@ pub struct EdgeReconciliation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── ResourceConnections::new ────────────────────────────────────────
+
+    /// `returned` comes from the page, not from a parameter — the constructor's whole point
+    /// is that it cannot disagree with `rows`.
+    #[test]
+    fn returned_is_the_page_row_count() {
+        let page = ResourceConnections::new(vec![edge_row("e1"), edge_row("e2")], 5, 50);
+        assert_eq!(page.returned, 2);
+        assert_eq!(page.rows.len(), 2);
+    }
+
+    /// A page that hides rows is truncated — the disclosure the panel states.
+    #[test]
+    fn truncated_is_true_when_the_page_hides_rows() {
+        let page = ResourceConnections::new(vec![edge_row("e1"), edge_row("e2")], 5, 50);
+        assert!(page.truncated);
+    }
+
+    /// The exact boundary is NOT truncated: `returned == total` means nothing is hidden.
+    /// This is the case the `total > returned` spelling would still get right today but
+    /// must not be rewritten into — the derivation is the page's, see the field's doc.
+    #[test]
+    fn truncated_is_false_at_the_exact_boundary() {
+        let page = ResourceConnections::new(vec![edge_row("e1"), edge_row("e2")], 2, 50);
+        assert!(!page.truncated);
+        assert_eq!(page.returned, page.total);
+    }
+
+    /// Zero visible edges is complete, not unknown — an empty envelope is an answer.
+    #[test]
+    fn an_empty_page_is_complete_not_truncated() {
+        let page = ResourceConnections::new(vec![], 0, 50);
+        assert!(!page.truncated);
+        assert_eq!(page.total, 0);
+    }
+
+    /// The wire type the panel consumes; constructed here so the constructor, not a test
+    /// double, is what the assertions above exercise.
+    fn edge_row(label: &str) -> GraphEdgeRow {
+        GraphEdgeRow {
+            edge_id: EdgeId::from(Uuid::now_v7()),
+            peer_table: "kb_resources".to_string(),
+            peer_id: Uuid::now_v7(),
+            peer_title: Some(label.to_string()),
+            peer_slug: Some(label.to_string()),
+            edge_kind: EdgeKind::Near,
+            polarity: Polarity::Forward,
+            label: label.to_string(),
+            direction: BlobRelationEdgeDirection::Outgoing,
+            weight: 0.5,
+            created: chrono::Utc::now(),
+        }
+    }
 
     // ── TargetRef::parse ────────────────────────────────────────────────
 

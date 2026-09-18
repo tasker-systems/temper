@@ -17,7 +17,7 @@ use temper_services::state::AppState;
 use temper_workflow::operations::{
     AssertRelationship, Backend, FoldRelationship, RetypeRelationship, ReweightRelationship,
 };
-use temper_workflow::types::graph::GraphEdgeRow;
+use temper_workflow::types::graph::{GraphEdgeRow, ResourceConnections};
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
@@ -74,6 +74,44 @@ pub async fn lineage(
 ) -> ApiResult<Json<ResourceLineage>> {
     let depth = q.depth.unwrap_or(16).clamp(1, 64);
     lineage_service::resource_lineage(&state.pool, auth.0.profile().id, resource_id, depth)
+        .await
+        .map(Json)
+}
+
+/// Query params for the bounded connections read — an optional limit on the page.
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+pub struct ConnectionsQuery {
+    /// Max connections to return (default 50, clamped to 1..=200).
+    pub limit: Option<i32>,
+}
+
+/// List a resource's relationships, bounded, with the filtered total stated
+///
+/// The additive sibling of [`list`] — the same gate and the same rows under a server-side
+/// limit, plus the denominator the panel states. The incumbent endpoint is untouched.
+#[utoipa::path(
+    get,
+    operation_id = "list_resource_connections",
+    path = "/api/resources/{id}/connections",
+    tag = "Resources",
+    params(("id" = Uuid, Path, description = "Resource ID"), ConnectionsQuery),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Bounded resource connections", body = ResourceConnections),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    )
+)]
+pub async fn list_connections(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(resource_id): Path<Uuid>,
+    axum::extract::Query(q): axum::extract::Query<ConnectionsQuery>,
+) -> ApiResult<Json<ResourceConnections>> {
+    // Default + clamp here, as `lineage` does below: the caller names a ceiling, the read
+    // reports what actually ran — `limit` in the envelope echoes the applied value.
+    let limit = i64::from(q.limit.unwrap_or(50).clamp(1, 200));
+    edge_service::list_resource_connections(&state.pool, auth.0.profile().id, resource_id, limit)
         .await
         .map(Json)
 }
