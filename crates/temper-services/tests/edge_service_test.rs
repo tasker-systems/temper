@@ -233,11 +233,7 @@ async fn an_edge_the_gate_excludes_is_absent_from_rows_and_total(pool: PgPool) -
         "blob gate: the edge to an unreadable blob is absent from rows"
     );
     // Folded: a retracted edge is not an edge, on either face.
-    assert_eq!(
-        page.rows.len(),
-        2,
-        "folded: only the two live edges render"
-    );
+    assert_eq!(page.rows.len(), 2, "folded: only the two live edges render");
     assert_eq!(
         page.total, 2,
         "folded: the retracted edge is absent from the total too"
@@ -259,7 +255,10 @@ async fn the_limit_bounds_rows_and_leaves_the_total_whole(pool: PgPool) -> sqlx:
     assert_eq!(page.limit, 1, "the envelope echoes the applied limit");
     assert_eq!(page.total, 2, "the total is not clipped by the limit");
     assert_eq!(page.returned, 1);
-    assert!(page.truncated, "rows are withheld, and the envelope says so");
+    assert!(
+        page.truncated,
+        "rows are withheld, and the envelope says so"
+    );
 
     Ok(())
 }
@@ -288,7 +287,9 @@ async fn the_exact_boundary_is_not_truncated(pool: PgPool) -> sqlx::Result<()> {
 /// A visible resource with no edges answers a complete empty envelope — zero is an answer,
 /// not a truncation and not a 404.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn a_visible_resource_with_no_edges_reports_a_complete_zero(pool: PgPool) -> sqlx::Result<()> {
+async fn a_visible_resource_with_no_edges_reports_a_complete_zero(
+    pool: PgPool,
+) -> sqlx::Result<()> {
     let fx = build(&pool).await;
 
     let page = edge_service::list_resource_connections(&pool, fx.p_in, fx.lonely, 50)

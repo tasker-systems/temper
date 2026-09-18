@@ -1760,6 +1760,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/resources/{id}/connections": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a resource's relationships, bounded, with the filtered total stated
+         * @description The additive sibling of [`list`] — the same gate and the same rows under a server-side
+         *     limit, plus the denominator the panel states. The incumbent endpoint is untouched.
+         */
+        get: operations["list_resource_connections"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/resources/{id}/content": {
         parameters: {
             query?: never;
@@ -6556,6 +6580,56 @@ export interface components {
              *     tagged enum the SvelteKit UI never sends (this is a CLI/agent write path).
              */
             sources?: components["schemas"]["ProvenanceSource"][];
+        };
+        /**
+         * @description The bounded connections envelope — the `/connections` read's response body, the additive
+         *     sibling of the `/edges` listing (spec D-F4: the bound lives at the read, with declared
+         *     disclosure; the incumbent array endpoint is untouched).
+         *
+         *     The envelope carries its own paging state, so a caller can tell a whole set from a bounded
+         *     page without knowing what it asked for — the same property `ResourceListResponse` gives the
+         *     resource list (`crates/temper-workflow/src/types/resource.rs:209`), built the same way: through
+         *     [`ResourceConnections::new`], which derives `returned` and `truncated` from the page rather
+         *     than trusting a caller to keep them consistent with `rows`.
+         *
+         *     `total` is the FILTERED count — every incident edge the visibility gate admits, before
+         *     `limit`. It rides the same `edges_visible_to` join the rows do; the service constructs the
+         *     count from the listing's own predicate (see `edge_service::list_resource_connections`), so a
+         *     row hidden from the listing is hidden from the denominator too.
+         */
+        ResourceConnections: {
+            /**
+             * Format: int64
+             * @description The effective limit the server applied after clamping. An echo of what ran, not
+             *     of what was asked.
+             */
+            limit: number;
+            /**
+             * Format: int64
+             * @description This page's row count. Always `rows.len()`; carried explicitly so the count
+             *     survives a projection that drops or summarizes the rows.
+             */
+            returned: number;
+            /**
+             * @description The incident edges this page returns, in the same row shape the `/edges` listing
+             *     answers in. A single shape for the row, two shapes for the read.
+             */
+            rows: components["schemas"]["GraphEdgeRow"][];
+            /**
+             * Format: int64
+             * @description Every incident edge the caller can see — the filtered match count, before `limit`.
+             */
+            total: number;
+            /**
+             * @description Are there matching edges beyond this page? Derived as the resource-list read derives
+             *     its own: `offset + returned < total` (`resource.rs:254`, echoed in the SeedAxis doc
+             *     at `bound.ts:38-44`). This read pages from the top — there is no offset parameter —
+             *     so the derivation collapses to `returned < total` here; it is still computed from
+             *     the page in the constructor, never trusted to a caller, and still deliberately not
+             *     spelled `total > returned`, which is the form that lies on the last page of any walk
+             *     that ever grows an offset.
+             */
+            truncated: boolean;
         };
         /** @description Request body for creating a resource. */
         ResourceCreateRequest: components["schemas"]["ActInput"] & {
@@ -12880,6 +12954,53 @@ export interface operations {
                 };
             };
             /** @description Not found — the finding is unreadable, the caller authored it (self-audit), or the block belongs to a different finding than {id} */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    list_resource_connections: {
+        parameters: {
+            query?: {
+                /** @description Max connections to return (default 50, clamped to 1..=200). */
+                limit?: number | null;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded resource connections */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceConnections"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found */
             404: {
                 headers: {
                     [name: string]: unknown;

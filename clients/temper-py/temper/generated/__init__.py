@@ -311,6 +311,7 @@ __all__ = [
     "ResidualGroups",
     "ResidualOwnedReach",
     "ResourceAnnotateRequest",
+    "ResourceConnections",
     "ResourceCreateRequest",
     "ResourceFacetRow",
     "ResourceFacets",
@@ -689,6 +690,7 @@ from temper.generated.models.residual_context import ResidualContext as Residual
 from temper.generated.models.residual_groups import ResidualGroups as ResidualGroups
 from temper.generated.models.residual_owned_reach import ResidualOwnedReach as ResidualOwnedReach
 from temper.generated.models.resource_annotate_request import ResourceAnnotateRequest as ResourceAnnotateRequest
+from temper.generated.models.resource_connections import ResourceConnections as ResourceConnections
 from temper.generated.models.resource_create_request import ResourceCreateRequest as ResourceCreateRequest
 from temper.generated.models.resource_facet_row import ResourceFacetRow as ResourceFacetRow
 from temper.generated.models.resource_facets import ResourceFacets as ResourceFacets

@@ -7424,6 +7424,94 @@
         "x-apidog-folder": "Reference/API Reference/Resources"
       }
     },
+    "/api/resources/{id}/connections": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Resources"
+        ],
+        "summary": "List a resource's relationships, bounded, with the filtered total stated",
+        "description": "The additive sibling of [`list`] — the same gate and the same rows under a server-side\nlimit, plus the denominator the panel states. The incumbent endpoint is untouched.",
+        "operationId": "list_resource_connections",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max connections to return (default 50, clamped to 1..=200).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded resource connections",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceConnections"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
+      }
+    },
     "/api/resources/{id}/content": {
       "parameters": [
         {
@@ -16603,6 +16691,45 @@
           }
         ],
         "description": "Request body for annotating a resource's block with provenance sources (issue #355) —\n`POST /api/resources/{id}/provenance`. The annotate-only write: attach sources WITHOUT a body\nrevise (no re-chunk/re-embed). Carries no content — that is the whole point."
+      },
+      "ResourceConnections": {
+        "type": "object",
+        "description": "The bounded connections envelope — the `/connections` read's response body, the additive\nsibling of the `/edges` listing (spec D-F4: the bound lives at the read, with declared\ndisclosure; the incumbent array endpoint is untouched).\n\nThe envelope carries its own paging state, so a caller can tell a whole set from a bounded\npage without knowing what it asked for — the same property `ResourceListResponse` gives the\nresource list (`crates/temper-workflow/src/types/resource.rs:209`), built the same way: through\n[`ResourceConnections::new`], which derives `returned` and `truncated` from the page rather\nthan trusting a caller to keep them consistent with `rows`.\n\n`total` is the FILTERED count — every incident edge the visibility gate admits, before\n`limit`. It rides the same `edges_visible_to` join the rows do; the service constructs the\ncount from the listing's own predicate (see `edge_service::list_resource_connections`), so a\nrow hidden from the listing is hidden from the denominator too.",
+        "required": [
+          "rows",
+          "total",
+          "limit",
+          "returned",
+          "truncated"
+        ],
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The effective limit the server applied after clamping. An echo of what ran, not\nof what was asked."
+          },
+          "returned": {
+            "type": "integer",
+            "format": "int64",
+            "description": "This page's row count. Always `rows.len()`; carried explicitly so the count\nsurvives a projection that drops or summarizes the rows."
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphEdgeRow"
+            },
+            "description": "The incident edges this page returns, in the same row shape the `/edges` listing\nanswers in. A single shape for the row, two shapes for the read."
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Every incident edge the caller can see — the filtered match count, before `limit`."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Are there matching edges beyond this page? Derived as the resource-list read derives\nits own: `offset + returned < total` (`resource.rs:254`, echoed in the SeedAxis doc\nat `bound.ts:38-44`). This read pages from the top — there is no offset parameter —\nso the derivation collapses to `returned < total` here; it is still computed from\nthe page in the constructor, never trusted to a caller, and still deliberately not\nspelled `total > returned`, which is the form that lies on the last page of any walk\nthat ever grows an offset."
+          }
+        }
       },
       "ResourceCreateRequest": {
         "allOf": [

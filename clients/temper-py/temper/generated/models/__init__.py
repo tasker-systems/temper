@@ -272,6 +272,7 @@ from temper.generated.models.residual_context import ResidualContext
 from temper.generated.models.residual_groups import ResidualGroups
 from temper.generated.models.residual_owned_reach import ResidualOwnedReach
 from temper.generated.models.resource_annotate_request import ResourceAnnotateRequest
+from temper.generated.models.resource_connections import ResourceConnections
 from temper.generated.models.resource_create_request import ResourceCreateRequest
 from temper.generated.models.resource_facet_row import ResourceFacetRow
 from temper.generated.models.resource_facets import ResourceFacets

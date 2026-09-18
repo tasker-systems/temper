@@ -14,6 +14,24 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.5.2 — unreleased
 
+- **The connections read states its bound — a bounded sibling of the /edges listing**
+  `GET /api/resources/{id}/connections` answers
+  `ResourceConnections { rows, total, limit, returned, truncated }` — the same
+  visibility gate and the same incident-edge rows as the incumbent listing,
+  under a server-side limit (default 50, clamped 1..=200), plus one gated
+  COUNT over the same `edges_visible_to` predicate for the filtered total: an
+  edge the caller cannot see is absent from `rows` and from `total` alike.
+  `truncated` derives from the page in the envelope constructor, as the
+  resource-list envelope derives it. The incumbent `/edges` array endpoint, its
+  shape and every client of it are untouched; the vault rail's Connections
+  region consumes the sibling and states the bound chrome in its heading.
+  Additive only: one new response type, one new route, the generated SDK skins
+  re-staled with the commit.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
+
 - **The follow-affordance panel reads in the reader's terms, states its bound, and closes (UI-only)**
   The vault resource rail's connection rows read `label || edge_kind`, so an
   edge whose label was empty (the wire `COALESCE`s the column to `''`) rendered
