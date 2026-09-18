@@ -176,6 +176,7 @@
 			{:else if hits.length > 0}
 				<div class="max-h-80 overflow-y-auto">
 					{#each hits as hit, i}
+						{@const home = hit.resource.cogmap_name ?? hit.resource.context_name}
 						<button
 							class="w-full text-left px-4 py-2.5 flex flex-col gap-0.5 transition-colors
 							       {i === focused ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'}"
@@ -185,9 +186,15 @@
 							}}
 						>
 							<span class="text-sm text-zinc-100">{hit.resource.title}</span>
+							<!-- A row is homed by exactly one anchor, so the name of the home it does
+							     NOT have is absent from the wire (`skip_serializing_if` — the rule
+							     `isCogmapHomed` owns). Read the home name the row actually carries;
+							     when it carries neither, render no home segment at all — never a
+							     dangling "· doc_type". The prefix is a JS string because the template
+							     trims a trailing text space at a block boundary, which is what made
+							     the separator collapse onto the doc type. -->
 							<span class="text-xs text-zinc-500"
-								>{hit.resource.context_name} &middot;
-								{hit.resource.doc_type_name}{#if hit.resource.managed_meta['temper-stage']}
+								>{home ? `${home} · ` : ''}{hit.resource.doc_type_name}{#if hit.resource.managed_meta['temper-stage']}
 									&nbsp;&middot; {hit.resource.managed_meta['temper-stage']}{/if}</span
 							>
 						</button>

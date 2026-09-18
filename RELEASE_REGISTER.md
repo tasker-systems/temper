@@ -14,6 +14,20 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.5.0 — unreleased
 
+- **Palette search rows read the home the row actually carries — cogmap-homed rows stop rendering an empty home**
+  The command palette's result sub-line read `context_name` alone, so a search
+  hit homed in a cognitive map — which carries `cogmap_name` and no
+  `context_name` key at all (`skip_serializing_if`) — rendered an empty home
+  before the separator ("· concept"). The sub-line now reads
+  `cogmap_name ?? context_name` and renders no home segment at all when a row
+  carries neither. `ResourceView` and every wire shape are untouched: render-only
+  behavior behind unchanged shapes, observed live from `POST /api/search`
+  (task `01a0b4d5-9c40-7c03-add9-0a498e49b31b`).
+pr: 925
+classes: behavioral
+surfaces: internal
+status: signal-only
+
 - **The palette asks the real door — one arm at a time on screen (UI-only)**
   The header-search palette's read moves from the title-`ILIKE` list door to
   `POST /api/search` through a new UI-server proxy (`/_internal/search`

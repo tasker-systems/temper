@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SEARCH_PAGE_SIZE } from '$lib/search-page-size';
 import type { ExactArm, SearchResponse, WideArm } from '$lib/types/generated/search';
 import { goto, resetAppContext } from '../../test/app-context';
-import { makeRow } from '../../test/fixtures';
+import { makeRow, withoutKey } from '../../test/fixtures';
 import CommandPalette from './CommandPalette.svelte';
 
 vi.mock('$app/navigation', () => import('../../test/app-context'));
@@ -316,5 +316,84 @@ describe('CommandPalette — the request it makes', () => {
 		// not to the palette forever.
 		await type(input, '');
 		expect(container.textContent).not.toContain('Search unavailable');
+	});
+});
+
+describe('CommandPalette — the home a row actually carries', () => {
+	/**
+	 * A row is homed by exactly one anchor, and the serializer omits a `None` Option key
+	 * entirely — so the map-homed wire shape carries `cogmap_*` present and NO `context_name`
+	 * key at all (`withoutKey`, not null — see `makeRow`'s note). This is the shape observed
+	 * live from `POST /api/search` on 2026-09-18.
+	 */
+	const mapHomed = (title: string) =>
+		withoutKey(
+			withoutKey(
+				makeRow({
+					title,
+					kb_context_id: null,
+					context_slug: null,
+					context_owner_ref: null,
+					context_ref: null,
+					cogmap_id: '019f2391-e001-7933-b88a-28fb92e56ac1',
+					cogmap_name: 'Temper — self-cognition',
+					doc_type_name: 'concept',
+				}),
+				'kb_context_id',
+			),
+			'context_name',
+		);
+
+	it('names the cogmap for a map-homed row — the wire carries no context_name key', async () => {
+		vi.useFakeTimers();
+		answer(
+			200,
+			arms({
+				wide: {
+					hits: [{ resource: mapHomed('Code quality'), vec_norm: 0.9 }],
+					reason: 'ok',
+					hint: null,
+				},
+			}),
+		);
+		const { getByPlaceholderText, container } = await mountOpen();
+
+		await type(getByPlaceholderText('Search the vault...'), 'self-cognition');
+
+		// A sub-line that reads `context_name` alone renders an empty home before the
+		// separator — "· concept" — which is exactly what shipped on prod.
+		expect(container.textContent).toContain('Temper — self-cognition · concept');
+	});
+
+	it('names the context for a context-homed row — the positive control', async () => {
+		vi.useFakeTimers();
+		// Without this, a palette that rendered no home at all would pass the test above.
+		answer(200, arms({ wide: { hits: [wideHit('Task row')], reason: 'ok', hint: null } }));
+		const { getByPlaceholderText, container } = await mountOpen();
+
+		await type(getByPlaceholderText('Search the vault...'), 'temper');
+
+		expect(container.textContent).toContain('Temper · task');
+	});
+
+	it('renders no home segment when the row carries neither name — never a dangling separator', async () => {
+		vi.useFakeTimers();
+		// One anchor per resource says this row cannot exist, but a hand-built fixture or an
+		// older serializer can still send it: the render must not show a home that is not
+		// there.
+		const neither = withoutKey(
+			withoutKey(makeRow({ title: 'Orphan row', doc_type_name: 'concept' }), 'cogmap_name'),
+			'context_name',
+		);
+		answer(
+			200,
+			arms({ wide: { hits: [{ resource: neither, vec_norm: 0.9 }], reason: 'ok', hint: null } }),
+		);
+		const { getByPlaceholderText, container } = await mountOpen();
+
+		await type(getByPlaceholderText('Search the vault...'), 'orphan');
+
+		expect(container.textContent).toContain('concept');
+		expect(container.textContent).not.toContain('·');
 	});
 });
