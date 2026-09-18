@@ -96,7 +96,13 @@ const connectionsOf = (
 	// columns `bigint` at the type level. The double cast is the honest spelling of that
 	// known mismatch; the vault-list.test.ts idiom sidesteps it by minting BigInt fixtures,
 	// which would make these witnesses lie about what actually crosses the fetch boundary.
-	({ rows, total, limit, returned: rows.length, truncated: rows.length < total }) as unknown as ResourceConnections;
+	({
+		rows,
+		total,
+		limit,
+		returned: rows.length,
+		truncated: rows.length < total,
+	}) as unknown as ResourceConnections;
 
 /**
  * The four fields this page reads, cast to `PageData` at the one place it is handed over.
@@ -107,7 +113,10 @@ const connectionsOf = (
  * real load rather than by a hand-written double.
  */
 type Fill = Partial<
-	Pick<PageData, 'content' | 'trail' | 'connections' | 'artifacts' | 'mayChange' | 'stateVocabulary'>
+	Pick<
+		PageData,
+		'content' | 'trail' | 'connections' | 'artifacts' | 'mayChange' | 'stateVocabulary'
+	>
 >;
 
 const RESOURCE = makeRow({
@@ -365,7 +374,10 @@ describe('a read the system stopped waiting for is not a read that failed', () =
  */
 describe('the rail states its emptiness rather than rendering nothing', () => {
 	it('EdgeList: a resource with no connections says so', async () => {
-		const { container } = render(Page, { data: data({ connections: Promise.resolve(connectionsOf([])) }), form: null });
+		const { container } = render(Page, {
+			data: data({ connections: Promise.resolve(connectionsOf([])) }),
+			form: null,
+		});
 		const region = () => connectionsRegion(container);
 		await vi.waitFor(() => {
 			expect(region()?.querySelector('[data-testid="region-empty"]')).not.toBeNull();
@@ -650,8 +662,8 @@ describe('a rail region keeps its heading in every state', () => {
 				: { connections: Promise.resolve(connectionsOf([edge(1)])) };
 		const empty: Fill =
 			key === 'trail'
-			? { trail: Promise.resolve(trailOf(0)) }
-			: { connections: Promise.resolve(connectionsOf([])) };
+				? { trail: Promise.resolve(trailOf(0)) }
+				: { connections: Promise.resolve(connectionsOf([])) };
 		return [
 			['arriving', { [key]: pending() }, '[data-testid="region-arriving"]'],
 			['present', present, key === 'trail' ? '.event' : '.edge'],
