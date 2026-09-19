@@ -244,8 +244,9 @@ async fn an_email_alone_resolves_the_state_card(pool: sqlx::PgPool) {
     );
     assert_eq!(card["standing"], "denied");
     assert!(
-        !card["hints"].as_array().expect("hints").is_empty(),
-        "a denied principal's card carries enablement hints\n{stdout}"
+        card["hints"].as_array().expect("hints").is_empty(),
+        "an absent-standing principal has no legal admin act — the card advertises nothing\
+         \n{stdout}"
     );
 }
 
@@ -440,9 +441,9 @@ async fn rendered_output_never_carries_the_invitation_token(pool: sqlx::PgPool) 
     let admin_id = provision(&app, &app.token).await;
     bootstrap_admin(&app, admin_id).await;
 
-    let _seeded = seed_never_requested(&app.pool, "token-pat", "token.pat@example.com").await;
+    let _seeded = seed_never_requested(&app.pool, "invite-pat", "invite.pat@example.com").await;
     let secret_token = format!("tok-{}", Uuid::now_v7());
-    seed_invitation(&app.pool, admin_id, "token.pat@example.com", &secret_token).await;
+    seed_invitation(&app.pool, admin_id, "invite.pat@example.com", &secret_token).await;
 
     // Non-vacuous first: the invitation itself IS on the card.
     let json_stdout = run_ok(
@@ -454,7 +455,7 @@ async fn rendered_output_never_carries_the_invitation_token(pool: sqlx::PgPool) 
             "json",
             "show",
             "--email",
-            "token.pat@example.com",
+            "invite.pat@example.com",
         ],
     )
     .await;
@@ -470,36 +471,41 @@ async fn rendered_output_never_carries_the_invitation_token(pool: sqlx::PgPool) 
     assert_eq!(invitations[0]["team_slug"], "acme-eng");
 
     // The clause, in json: neither the token value nor any `token` key reaches stdout.
+    // (No fixture string contains the substring "token", so the bare scan below is honest.)
     assert!(
         !json_stdout.contains(&secret_token),
         "the invitation token must not appear in rendered json output\n{json_stdout}"
     );
     assert!(
-        !json_stdout.contains("\"token\""),
-        "no `token` key may appear in rendered json output, in any object\n{json_stdout}"
+        !json_stdout.contains("token"),
+        "no token key or value may appear in rendered json output\n{json_stdout}"
     );
 
-    // The clause, in the default format — the format a human terminal shows.
-    let plain_stdout = run_ok(
+    // The clause, in Toon — the format a human terminal scrollback shows. Named explicitly:
+    // a piped run with no --format resolves to json (the TTY auto-pick never fires), so the
+    // Toon face is witnessed only when asked for by name (adversarial review F1).
+    let toon_stdout = run_ok(
         &app,
         &[
             "admin",
             "profiles",
             "show",
             "--email",
-            "token.pat@example.com",
+            "invite.pat@example.com",
+            "--format",
+            "toon",
         ],
     )
     .await;
     assert!(
-        !plain_stdout.contains(&secret_token),
-        "the invitation token must not appear in default-format output\n{plain_stdout}"
+        !toon_stdout.contains("token"),
+        "no token key or value may appear in toon output\n{toon_stdout}"
     );
 
     // And the list rows: the enumeration surface stays token-free too.
     let list_stdout = run_ok(&app, &["admin", "profiles", "--format", "json", "list"]).await;
     assert!(
-        !list_stdout.contains(&secret_token),
+        !list_stdout.contains("token"),
         "the invitation token must not appear in list output\n{list_stdout}"
     );
 }
@@ -591,9 +597,19 @@ async fn a_non_admin_is_refused_at_the_cli_door(pool: sqlx::PgPool) {
         .expect("preflight");
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
 
-    let output = common::run_temper_cli(&app, &["admin", "profiles", "list"])
-        .await
-        .expect("spawn temper");
+    // The stranger drives the REAL binary AS THEMSELVES (their own token in the spawn env),
+    // not as the app admin — the refusal witnessed is theirs.
+    let config_toml = toml::to_string(&app.config).expect("serialize test TemperConfig to TOML");
+    let config_path = app.vault_dir.path().join("stranger-temper-config.toml");
+    std::fs::write(&config_path, config_toml).expect("write stranger config TOML");
+    let output = common::run_temper_cli_with_token(
+        &app.base_url(),
+        &stranger_token,
+        &config_path,
+        &["admin", "profiles", "list"],
+    )
+    .await
+    .expect("spawn temper");
     assert!(
         !output.status.success(),
         "a non-admin must be refused at the CLI door\nstdout:\n{}\nstderr:\n{}",

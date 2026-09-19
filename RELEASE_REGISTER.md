@@ -425,10 +425,14 @@ status: signal-only
   `profile_card_by_email`, `show_profile`) over the unchanged routes — the
   card arm is its own method because its response SHAPE differs from the
   page's. No existing shape changes; card hints render verbatim and name only
-  existing commands; token-absence is asserted by e2e against the real
-  binary's rendered stdout.
+  existing commands AND are machine-legal for the standing class they target —
+  the approve hint is gated to denied/requested/revoked (it refused from
+  standing-row absence and deactivated), deactivated cards advertise
+  `reactivate` instead, and absence advertises no access act; token-absence is
+  asserted by e2e against the real binary's rendered stdout in both json and
+  toon.
 pr: self
-classes: additive
+classes: additive, behavioral
 surfaces: cli-stdout, clients
 status: signal-only
 

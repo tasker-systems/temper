@@ -468,15 +468,36 @@ pub async fn profile_card(
         created: row.created,
     });
 
+    // Absence (no standing row) renders `denied` via COALESCE, with `standing_updated` None
+    // exactly when no row exists — that pair is the absence discriminator. Approve refuses
+    // from true absence AND from deactivated, so neither class is advertised approve.
+    let standing_absent =
+        identity.standing_updated.is_none() && identity.standing == Standing::Denied.as_str();
     let (standing, standing_updated) =
         standing_wire(Some(identity.standing), identity.standing_updated);
     let (email, provisioned_via) = derive_default_identity(&links);
 
     // Hints, not doors (spec §6): existing commands, printed as text. They add no mutation
-    // path — each names an act that already exists.
+    // path — each names an act that already exists — and each is MACHINE-LEGAL for the class
+    // it targets, so the card never advertises a command that would refuse: approve applies
+    // from denied/requested/revoked only (standing-row ABSENCE and deactivated both refuse it,
+    // temper-principal/src/transition.rs); deactivated's door is reactivate (restoring the
+    // prior standing); a never-signed-in principal has no legal admin act at all until their
+    // first sign-in provisions them, so the card advertises nothing rather than a 400.
     let mut hints = Vec::new();
-    if standing != Standing::Approved.as_str() {
-        hints.push(format!("temper admin access approve {profile_id}"));
+    if !standing_absent {
+        match standing.as_str() {
+            s if s == Standing::Denied.as_str()
+                || s == Standing::Requested.as_str()
+                || s == Standing::Revoked.as_str() =>
+            {
+                hints.push(format!("temper admin access approve {profile_id}"));
+            }
+            s if s == Standing::Deactivated.as_str() => {
+                hints.push(format!("temper admin access reactivate {profile_id}"));
+            }
+            _ => {}
+        }
     }
     if let Some(request) = &open_join_request {
         hints.push(format!(
@@ -1297,15 +1318,81 @@ mod tests {
         assert_eq!(request.message.as_deref(), Some("let me in"));
         let review = card.open_reconsideration.expect("open reconsideration");
         assert_eq!(review.id, review_id);
-        // Hints, not doors: the enablement commands, copy-runnable.
-        assert!(card
-            .hints
-            .iter()
-            .any(|h| h.starts_with("temper admin access approve ")));
+        // Hints, not doors — and machine-legal: this fixture has NO standing row (absence),
+        // so approve would refuse from here and the card advertises no access act at all.
+        // The open join request still advertises its review command — the request is that
+        // hint's condition, not the standing.
         assert!(card
             .hints
             .iter()
             .any(|h| h.contains("admin requests review")));
+        assert!(
+            !card
+                .hints
+                .iter()
+                .any(|h| h.starts_with("temper admin access ")),
+            "absence has no legal admin act; the card must not advertise one: {:?}",
+            card.hints
+        );
+    }
+
+    /// Hints are machine-legal per standing class (adversarial review F2): approve is legal
+    /// from denied/requested/revoked; deactivated's door is reactivate (approve REFUSES from
+    /// deactivated); absence advertises nothing. A hint that 400s when copy-pasted is a
+    /// wrong-principal bridge, not an affordance.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn card_hints_are_machine_legal_for_the_standing_class(pool: PgPool) {
+        let admin = admin(&pool).await;
+
+        // Denied: approve runs.
+        let (denied_pid, _) = human(&pool, "hint-denied", "hint-denied@corp.example", true).await;
+        standing(&pool, *denied_pid, "denied").await;
+        let card = profile_card(&pool, &admin, denied_pid).await.expect("card");
+        assert!(
+            card.hints
+                .iter()
+                .any(|h| h.starts_with("temper admin access approve ")),
+            "denied must advertise approve: {:?}",
+            card.hints
+        );
+
+        // Deactivated: the legal door is reactivate, NOT approve.
+        let (deact_pid, _) = human(
+            &pool,
+            "hint-deactivated",
+            "hint-deactivated@corp.example",
+            true,
+        )
+        .await;
+        standing(&pool, *deact_pid, "deactivated").await;
+        let card = profile_card(&pool, &admin, deact_pid).await.expect("card");
+        assert!(
+            !card
+                .hints
+                .iter()
+                .any(|h| h.starts_with("temper admin access approve ")),
+            "approve refuses from deactivated; the card must not advertise it: {:?}",
+            card.hints
+        );
+        assert!(
+            card.hints
+                .iter()
+                .any(|h| h.starts_with("temper admin access reactivate ")),
+            "deactivated must advertise reactivate: {:?}",
+            card.hints
+        );
+
+        // Absence (never signed in): every admin act refuses; nothing is advertised.
+        let (absent_pid, _) = human(&pool, "hint-absent", "hint-absent@corp.example", true).await;
+        let card = profile_card(&pool, &admin, absent_pid).await.expect("card");
+        assert!(
+            !card
+                .hints
+                .iter()
+                .any(|h| h.starts_with("temper admin access ")),
+            "absence has no legal admin act: {:?}",
+            card.hints
+        );
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
