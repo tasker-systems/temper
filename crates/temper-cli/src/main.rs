@@ -1,9 +1,10 @@
 use clap::Parser;
 use temper_cli::cli::{
-    AdminAction, AdminConnectionAction, AdminMachineAction, AdminRequestsAction,
-    AdminReviewsAction, AdminSamlAction, AdminSlackAction, AdminSubscriptionAction, AuthAction,
-    Cli, CogmapCmd, Commands, ConfigAction, ContextAction, DataArtifactAction, InvocationCmd,
-    MemoryAction, ResourceAction, SchemaAction, SkillAction, SlackAction, StewardCmd, TeamAction,
+    AdminAction, AdminConnectionAction, AdminMachineAction, AdminProfilesAction,
+    AdminRequestsAction, AdminReviewsAction, AdminSamlAction, AdminSlackAction,
+    AdminSubscriptionAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction, ContextAction,
+    DataArtifactAction, InvocationCmd, MemoryAction, ResourceAction, SchemaAction, SkillAction,
+    SlackAction, StewardCmd, TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -960,6 +961,41 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                                 client,
                                 &id,
                                 note.as_deref(),
+                                output_format,
+                            )
+                            .await
+                        })
+                    })
+                }
+            },
+            AdminAction::Profiles { action } => match action {
+                AdminProfilesAction::List {
+                    standing,
+                    email_contains,
+                    team,
+                    limit,
+                    offset,
+                } => temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::admin::profiles_list_remote(
+                            client,
+                            standing.as_deref(),
+                            email_contains.as_deref(),
+                            team.as_deref(),
+                            limit,
+                            offset,
+                            output_format,
+                        )
+                        .await
+                    })
+                }),
+                AdminProfilesAction::Show { profile, email } => {
+                    temper_cli::actions::runtime::with_client(|client| {
+                        Box::pin(async move {
+                            temper_cli::commands::admin::profiles_show_remote(
+                                client,
+                                profile.as_deref(),
+                                email.as_deref(),
                                 output_format,
                             )
                             .await

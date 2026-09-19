@@ -10,7 +10,8 @@ use temper_core::types::access_gate::{
     SystemSettings,
 };
 use temper_core::types::admin::{
-    AdminLedgerQuery, AdminLedgerResponse, DemoteAdminRequest, PromoteAdminRequest, ReembedRequest,
+    AdminDirectoryListResponse, AdminLedgerQuery, AdminLedgerResponse, AdminProfileCard,
+    AdminProfilesListQuery, DemoteAdminRequest, PromoteAdminRequest, ReembedRequest,
     ReembedSummary, UpdateSettingsRequest,
 };
 use temper_core::types::reblock::{ReblockReceipt, ReblockRequest};
@@ -62,6 +63,55 @@ impl<'a> AdminClient<'a> {
         let req = self.http.get(path).query(query);
         self.http
             .send_json(&Method::GET, path, req, Some(&token))
+            .await
+    }
+
+    /// The operator directory — the list page (admin only). See [`AdminProfilesListQuery`].
+    ///
+    /// Note this method never carries `?email=`: when that parameter is present the route answers
+    /// a state card, not a page, and a method whose return type depended on its own arguments
+    /// would put that dispatch in every caller. [`Self::profile_card_by_email`] is the card arm.
+    pub async fn list_profiles(
+        &self,
+        query: &AdminProfilesListQuery,
+    ) -> Result<AdminDirectoryListResponse> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/access/admin/profiles";
+        let req = self.http.get(path).query(query);
+        self.http
+            .send_json(&Method::GET, path, req, Some(&token))
+            .await
+    }
+
+    /// The operator directory's identity-resolution arm — `?email=` on the list route (admin
+    /// only). Resolves the address EXACTLY (case-insensitive, over verified auth-link emails)
+    /// and answers the single matching profile's state card. Zero matches → `404`; more than one
+    /// profile verified-owns the address → `404` whose body names the collision — the system
+    /// refuses to pick (spec §6, review C1).
+    ///
+    /// This is the one place a human-controlled address becomes a target UUID, which is why it
+    /// resolves server-side: every downstream admin act is strict-UUID, and a client-side
+    /// substring resolution would let a lookalike address win (the wrong-principal enablement
+    /// bridge).
+    pub async fn profile_card_by_email(&self, email: &str) -> Result<AdminProfileCard> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/access/admin/profiles";
+        let req = self.http.get(path).query(&AdminProfilesListQuery {
+            email: Some(email.to_string()),
+            ..Default::default()
+        });
+        self.http
+            .send_json(&Method::GET, path, req, Some(&token))
+            .await
+    }
+
+    /// The principal state card (admin only) — the deep read behind the list row.
+    pub async fn show_profile(&self, profile_id: Uuid) -> Result<AdminProfileCard> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/access/admin/profiles/{profile_id}");
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
             .await
     }
 

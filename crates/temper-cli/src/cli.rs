@@ -1424,6 +1424,13 @@ pub enum AdminAction {
         #[command(subcommand)]
         action: AdminReviewsAction,
     },
+    /// The operator directory: who exists in this deployment, and their state.
+    /// Lists denied principals (the default `needs-access` view) and resolves an
+    /// email to a state card — the bridge into the strict-UUID admin acts
+    Profiles {
+        #[command(subcommand)]
+        action: AdminProfilesAction,
+    },
     /// Read the admin ledger: who granted what, to whom, and when
     ///
     /// Exactly one axis. `--subject` asks what was done TO a thing; `--actor` asks what a
@@ -1831,6 +1838,44 @@ pub enum AdminSamlAction {
         /// Also check kb_saml_idp via psql (needs DATABASE_URL).
         #[arg(long)]
         db: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AdminProfilesAction {
+    /// List the operator directory. The default filter is `needs-access` — every
+    /// non-approved admission state INCLUDING no standing row, i.e. the work queue
+    /// of principals who lack access
+    List {
+        /// Filter by admission state: denied|requested|approved|revoked|deactivated|needs-access|all.
+        /// Default `needs-access`; a principal with no standing row renders `denied`
+        #[arg(long)]
+        standing: Option<String>,
+        /// Literal case-insensitive substring over verified emails (`%`, `_` and `\` have
+        /// no wildcard meaning). Rows carry `matched_email` — why this person was enumerated
+        #[arg(long)]
+        email_contains: Option<String>,
+        /// Restrict to members of this team (slug or UUID)
+        #[arg(long)]
+        team: Option<String>,
+        /// Page size (server clamps: default 50, max 200)
+        #[arg(long)]
+        limit: Option<i64>,
+        /// Page offset (server clamps: floor 0, cap 10000)
+        #[arg(long)]
+        offset: Option<i64>,
+    },
+    /// Show one principal's state card — by UUID, or by exact verified email.
+    /// The card names the existing enablement commands; it never carries
+    /// invitation tokens
+    Show {
+        /// Profile ID (UUID). Omit when resolving --email instead
+        profile: Option<String>,
+        /// Exact verified email — the server resolves it to the single matching card.
+        /// Zero matches → not found; two or more profiles verified-own the address →
+        /// not found, with the collision named. The substring filter never resolves
+        #[arg(long, conflicts_with = "profile")]
+        email: Option<String>,
     },
 }
 
