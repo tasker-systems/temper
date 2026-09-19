@@ -11,6 +11,12 @@
 //! asking for a nonexistent profile gets the same plain 403 as for a real one, so absence never
 //! leaks below the gate (spec §7, pinned by test).
 //!
+//! That uniform-403 claim is scoped to WELL-FORMED requests, deliberately: axum's extractors
+//! reject a malformed query (`?limit=abc`) or a non-UUID path segment with 400/422 before the
+//! gate ever runs. An extractor rejection names only the caller's own malformed input — it
+//! carries no existence information — so the scope is a fact about request parsing, not a
+//! weakening of the gate.
+//!
 //! One contract subtlety lives here because it changes the response SHAPE: `?email=` on the
 //! list route resolves an address EXACTLY (case-insensitive, verified) and answers the single
 //! matching state card — the one place a human-controlled address becomes a target UUID

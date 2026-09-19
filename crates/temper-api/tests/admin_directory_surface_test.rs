@@ -111,6 +111,48 @@ async fn non_admin_getting_a_nonexistent_uuid_gets_the_uniform_403(pool: PgPool)
     assert_eq!(real_shaped, 403, "non-admin on a nonexistent uuid: {body}");
     let (list, body) = get_json(&app, &outsider, "/api/access/admin/profiles").await;
     assert_eq!(list, 403, "non-admin on the list: {body}");
+    // The ?email= identity-resolution door is the SAME gate, no side door.
+    let (by_email, body) = get_json(
+        &app,
+        &outsider,
+        "/api/access/admin/profiles?email=anyone%40corp.example",
+    )
+    .await;
+    assert_eq!(by_email, 403, "non-admin on ?email=: {body}");
+}
+
+/// The directory is GET-only by ROUTE REGISTRATION, not by handler-side checks: POST, PUT,
+/// PATCH and DELETE on both paths must meet 405 (method not allowed), NOT 403 — the point is
+/// that no write method door exists at all, so there is nothing a non-admin could even be
+/// refused. A 403 here would mean a door exists and only the gate is in front of it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_directory_routes_register_no_write_method(pool: PgPool) {
+    use reqwest::Method;
+
+    let app = common::setup_test_app(pool).await;
+    let admin = provision_and_make_operator(&app, "operator|1", "operator@test.example").await;
+    let human = seed_human(&app.pool, "ro-one", "ro@corp.example").await;
+    let paths = [
+        "/api/access/admin/profiles".to_string(),
+        format!("/api/access/admin/profiles/{human}"),
+    ];
+
+    for path in &paths {
+        for method in [Method::POST, Method::PUT, Method::PATCH, Method::DELETE] {
+            let resp = app
+                .client
+                .request(method.clone(), app.url(path))
+                .header("Authorization", format!("Bearer {admin}"))
+                .send()
+                .await
+                .expect("request");
+            let status = resp.status().as_u16();
+            assert_eq!(
+                status, 405,
+                "{method} {path} must have no door at all (got {status})"
+            );
+        }
+    }
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

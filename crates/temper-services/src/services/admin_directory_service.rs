@@ -14,7 +14,8 @@
 //!   by two or more profiles addresses nobody — is REUSED, never restated.
 //!
 //! The directory scopes to HUMAN principals (spec §4): a profile is human when it holds at
-//! least one `kb_profile_auth_links` row with `auth_provider <> 'auth0-m2m'`. Machine agents
+//! least one `kb_profile_auth_links` row with a provider other than the mint doors'
+//! [`MACHINE_PROVIDER_TAG`] (bound into the query from that constant, not restated). Machine agents
 //! carry links too (both mint doors insert them) and connection profiles carry none, so
 //! "has a link" would be the falsified discriminator; the positive form here is the pinned one.
 
@@ -30,7 +31,7 @@ use temper_core::types::admin::{
 use temper_core::types::ids::ProfileId;
 use temper_principal::Standing;
 
-use crate::auth::SystemAdmin;
+use crate::auth::{SystemAdmin, MACHINE_PROVIDER_TAG};
 use crate::error::{ApiError, ApiResult};
 
 /// Page size when the caller does not ask for one, and the ceiling when they ask for too much —
@@ -275,9 +276,11 @@ async fn fetch_directory_page(
             LIMIT 1
         ) m ON $1::text IS NOT NULL
         WHERE EXISTS (
-            -- §4, the pinned human discriminator: >=1 non-machine auth link.
+            -- §4, the pinned human discriminator: >=1 non-machine auth link. The provider tag
+            -- is BOUND, not inlined: it is the same constant the machine mint doors write, so
+            -- this denylist cannot drift from the doors that create the rows it excludes.
             SELECT 1 FROM kb_profile_auth_links al
-            WHERE al.profile_id = p.id AND al.auth_provider <> 'auth0-m2m'
+            WHERE al.profile_id = p.id AND al.auth_provider <> $8
         )
         AND (
             ($2 AND s.state IS DISTINCT FROM 'approved')
@@ -294,7 +297,7 @@ async fn fetch_directory_page(
             )
         )
         AND ($1::text IS NULL OR m.matched_email IS NOT NULL)
-        ORDER BY p.created DESC
+        ORDER BY p.created DESC, p.id DESC
         LIMIT $6 OFFSET $7
         "#,
         needle,
@@ -307,6 +310,7 @@ async fn fetch_directory_page(
         team_id,
         limit,
         offset,
+        MACHINE_PROVIDER_TAG,
     )
     .fetch_all(pool)
     .await?;
@@ -315,6 +319,12 @@ async fn fetch_directory_page(
 
 /// The principal state card (spec §6) by profile UUID. Reads existing tables only; composes
 /// the §6 default-link fallback in Rust from the same link rows the card renders.
+///
+/// **This door applies NO human discriminator, deliberately**: the caller already holds the
+/// target UUID, and an admin inspecting a known machine agent (or a connection profile's
+/// owner) gets the same composed view as for a human — machine links render, but a machine
+/// holds no secrets here and the act is sealed-gated. The DISCOVERY surface (the list) is
+/// where the discriminator binds; the card is addressability, not enumeration.
 pub async fn profile_card(
     pool: &PgPool,
     admin: &SystemAdmin,
@@ -544,24 +554,76 @@ pub async fn profile_card_by_email(
 
 #[cfg(test)]
 mod gate_tripwire {
-    /// Spec §7 (review finding L1): the F-3 pattern only holds for functions that DEMAND the
-    /// proof. This tripwire reads the module source and fails if any `pub fn` here can be
-    /// called without a sealed `&SystemAdmin` — a new function added without the proof fails
-    /// this test, not a review.
-    #[test]
-    fn every_public_fn_demands_the_sealed_admin_proof() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/services/admin_directory_service.rs"
-        );
-        let source = std::fs::read_to_string(path).expect("directory module source");
-        // Signatures span lines; accumulate from the `pub fn` marker to the body/closing brace
-        // and judge the WHOLE signature, not its first line.
+    //! Two tripwires over this module's own source, both from the spec's security posture:
+    //!
+    //! 1. (§7, review L1) the F-3 pattern only holds for functions that DEMAND the sealed
+    //!    [`SystemAdmin`] proof. Any function item with ANY `pub` visibility whose signature
+    //!    does not bind a `&SystemAdmin` PARAMETER fails here, at the commit that adds it —
+    //!    not at review.
+    //! 2. (review M2) the directory is read-only. The PRODUCTION half of the file (everything
+    //!    before the first `#[cfg(test)]`) must contain no statement-leading write SQL in its
+    //!    string literals. The cut at `#[cfg(test)]` is deliberate: test fixtures legitimately
+    //!    write, production must not.
+    //!
+    //! Both matchers are unit-tested against synthetic input below — a tripwire that cannot
+    //! bite is decoration, so the bite is part of the test suite.
+
+    /// True when `trimmed` STARTS a function item under ANY `pub` visibility form:
+    /// `pub fn`, `pub async fn`, `pub(crate) fn`, `pub(super) async fn`, `pub(in path) fn` —
+    /// the regex shape `^pub(\([^)]*\))? (async )?fn`, hand-rolled (no regex dependency).
+    fn is_pub_fn_decl(trimmed: &str) -> bool {
+        let Some(rest) = trimmed.strip_prefix("pub") else {
+            return false;
+        };
+        let rest = match rest.strip_prefix('(') {
+            // scoped form `pub(in crate::x)` — the path carries no nested parens
+            Some(scoped) => {
+                let Some(close) = scoped.find(')') else {
+                    return false;
+                };
+                scoped[close + 1..].trim_start()
+            }
+            // plain `pub` must be followed by whitespace (`publisher` is not a declaration)
+            None => {
+                if !rest.starts_with(char::is_whitespace) {
+                    return false;
+                }
+                rest.trim_start()
+            }
+        };
+        let rest = rest.strip_prefix("async ").unwrap_or(rest);
+        rest.starts_with("fn ")
+    }
+
+    /// True when the signature binds a parameter of EXACTLY `&SystemAdmin`: a `:` (whitespace-
+    /// tolerant) must sit immediately before the `&`, and the type must END at the word
+    /// boundary. So `admin: &SystemAdmin` and `admin:&SystemAdmin` pass, while
+    /// `Option<&SystemAdmin>` (the `&` is preceded by `<`, not `:`) and a trailing identifier
+    /// (`&SystemAdminFacade`) both fail. A RETURNED proof (`-> &SystemAdmin`) is not a demanded
+    /// parameter and fails too.
+    fn binds_sealed_proof(sig: &str) -> bool {
+        for (pos, _) in sig.match_indices("&SystemAdmin") {
+            let colon_ok = sig[..pos].trim_end().ends_with(':');
+            let boundary_ok = sig[pos + "&SystemAdmin".len()..]
+                .chars()
+                .next()
+                .map(|c| !(c.is_alphanumeric() || c == '_'))
+                .unwrap_or(true);
+            if colon_ok && boundary_ok {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Signatures span lines; accumulate from the declaration marker to the body/closing brace
+    /// and judge the WHOLE signature, not its first line.
+    fn unguarded_pub_fns(source: &str) -> Vec<String> {
         let mut offenders: Vec<String> = Vec::new();
         let mut current: Option<String> = None;
         for line in source.lines() {
             let trimmed = line.trim_start();
-            if trimmed.starts_with("pub fn ") || trimmed.starts_with("pub async fn ") {
+            if is_pub_fn_decl(trimmed) {
                 current = Some(trimmed.to_owned());
             } else if let Some(sig) = current.as_mut() {
                 sig.push(' ');
@@ -573,17 +635,220 @@ mod gate_tripwire {
                     || trimmed.ends_with(';')
                     || trimmed.contains(") ->");
                 if complete {
-                    if !sig.contains("&SystemAdmin") {
+                    if !binds_sealed_proof(sig) {
                         offenders.push(sig.clone());
                     }
                     current = None;
                 }
             }
         }
+        offenders
+    }
+
+    /// The production half of the file: everything before the first test-module gate. Test
+    /// fixtures legitimately write; the read-only invariant is about production.
+    fn production_source(source: &str) -> &str {
+        match source.find("#[cfg(test)]") {
+            Some(cut) => &source[..cut],
+            None => source,
+        }
+    }
+
+    /// Statement-leading write SQL inside a string literal: a keyword at the literal's start
+    /// or directly after a `;`. Mid-string prose (`"the UPDATE ran"`) and identifier
+    /// continuations (`UPDATED_AT`) do not match; a data-modifying CTE would slip past, which
+    /// is the accepted false-negative of a token scan.
+    fn statement_leading_write_sql(literal: &str) -> bool {
+        const KEYWORDS: [&str; 4] = ["INSERT INTO", "UPDATE", "DELETE FROM", "CALL"];
+        literal.split(';').any(|segment| {
+            let head = segment.trim_start();
+            KEYWORDS.iter().any(|kw| {
+                head.starts_with(kw)
+                    && head[kw.len()..]
+                        .chars()
+                        .next()
+                        .map(|c| c.is_whitespace() || c == '(')
+                        .unwrap_or(true)
+            })
+        })
+    }
+
+    /// Collect the file's string literals — plain `"…"` (with escapes) and raw `r#"…"#` —
+    /// the only places SQL can live.
+    fn string_literals(source: &str) -> Vec<String> {
+        let chars: Vec<char> = source.chars().collect();
+        let mut literals = Vec::new();
+        let mut i = 0;
+        while i < chars.len() {
+            // raw string: r, then 1+ '#', then opening quote
+            if chars[i] == 'r' && i + 1 < chars.len() && chars[i + 1] == '#' {
+                let mut hashes = 0;
+                let mut j = i + 1;
+                while j < chars.len() && chars[j] == '#' {
+                    hashes += 1;
+                    j += 1;
+                }
+                if j < chars.len() && chars[j] == '"' {
+                    let mut k = j + 1;
+                    let mut closed = false;
+                    while k < chars.len() {
+                        if chars[k] == '"' {
+                            let mut seen = 0;
+                            let mut m = k + 1;
+                            while m < chars.len() && chars[m] == '#' {
+                                seen += 1;
+                                m += 1;
+                            }
+                            if seen == hashes {
+                                literals.push(chars[j + 1..k].iter().collect());
+                                i = m;
+                                closed = true;
+                                break;
+                            }
+                        }
+                        k += 1;
+                    }
+                    if closed {
+                        continue;
+                    }
+                }
+                i += 1;
+                continue;
+            }
+            if chars[i] == '"' {
+                let mut j = i + 1;
+                let mut buf = String::new();
+                while j < chars.len() && chars[j] != '"' {
+                    if chars[j] == '\\' && j + 1 < chars.len() {
+                        buf.push(chars[j]);
+                        buf.push(chars[j + 1]);
+                        j += 2;
+                        continue;
+                    }
+                    buf.push(chars[j]);
+                    j += 1;
+                }
+                literals.push(buf);
+                i = j + 1;
+                continue;
+            }
+            i += 1;
+        }
+        literals
+    }
+
+    fn write_sql_offenders(source: &str) -> Vec<String> {
+        string_literals(source)
+            .into_iter()
+            .filter(|l| statement_leading_write_sql(l))
+            .collect()
+    }
+
+    // ── the tripwires over the real file ─────────────────────────────────────
+
+    #[test]
+    fn every_public_fn_demands_the_sealed_admin_proof() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/services/admin_directory_service.rs"
+        );
+        let source = std::fs::read_to_string(path).expect("directory module source");
+        let offenders = unguarded_pub_fns(&source);
         assert!(
             offenders.is_empty(),
             "directory service fn(s) taking no sealed &SystemAdmin proof: {offenders:#?}"
         );
+    }
+
+    #[test]
+    fn the_production_module_contains_no_write_sql() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/services/admin_directory_service.rs"
+        );
+        let source = std::fs::read_to_string(path).expect("directory module source");
+        let offenders = write_sql_offenders(production_source(&source));
+        assert!(
+            offenders.is_empty(),
+            "read-only invariant: statement-leading write SQL in the production module: \
+             {offenders:#?}"
+        );
+    }
+
+    // ── the bite: synthetic input must trip BOTH matchers ────────────────────
+
+    #[test]
+    fn the_gate_matcher_bites_on_its_escape_shapes() {
+        // The reviewer's exact escapes: a scoped visibility and an Option-wrapped proof.
+        assert!(!unguarded_pub_fns(
+            "pub(crate) fn unguarded(pool: &PgPool) -> ApiResult<()> {
+}
+"
+        )
+        .is_empty());
+        assert!(
+            !unguarded_pub_fns(
+                "pub async fn sneaky(pool: &PgPool, admin: Option<&SystemAdmin>) {
+}
+"
+            )
+            .is_empty(),
+            "Option<&SystemAdmin> must NOT count as demanding the proof"
+        );
+        assert!(
+            !unguarded_pub_fns(
+                "pub async fn facade(admin: &SystemAdminFacade) {
+}
+"
+            )
+            .is_empty(),
+            "a trailing identifier must NOT satisfy the binding check"
+        );
+        assert!(
+            !unguarded_pub_fns(
+                "pub fn returns_proof() -> &SystemAdmin {
+}
+"
+            )
+            .is_empty(),
+            "returning the proof is not demanding it"
+        );
+        // The honest shapes must pass.
+        assert!(unguarded_pub_fns(
+            "pub async fn guarded(pool: &PgPool, admin: &SystemAdmin) -> ApiResult<()> {
+}
+"
+        )
+        .is_empty());
+        assert!(unguarded_pub_fns(
+            "pub(super) fn tight(admin:&SystemAdmin) {
+}
+"
+        )
+        .is_empty());
+        assert!(unguarded_pub_fns(
+            "pub(in crate::services) async fn scoped(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+) -> ApiResult<()> {
+}
+"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn the_write_sql_scanner_bites_and_spares() {
+        assert!(!write_sql_offenders("sqlx::query(\"INSERT INTO kb_x VALUES (1)\")").is_empty());
+        assert!(!write_sql_offenders("\"SELECT 1; DELETE FROM kb_y\"").is_empty());
+        assert!(!write_sql_offenders("let q = r#\"UPDATE kb_z SET x = 1\"#;").is_empty());
+        assert!(!write_sql_offenders("\"CALL do_thing()\"").is_empty());
+        // The negatives: SELECT statements, mid-string prose, identifier continuations.
+        assert!(write_sql_offenders("\"SELECT * FROM kb_x WHERE updated_at > now()\"").is_empty());
+        assert!(write_sql_offenders("\"the UPDATE ran late\"").is_empty());
+        assert!(write_sql_offenders("\"UPDATED_AT, CALLED_AT, INSERTION_ORDER\"").is_empty());
+        // And the real production file proves the negative case end-to-end
+        // (`the_production_module_contains_no_write_sql` asserts this too).
     }
 }
 
