@@ -200,7 +200,7 @@ jobs:
           ruby-version: "3.4"
 
       - name: Configure RubyGems credentials (trusted publishing)
-        uses: rubygems/configure-rubygems-credentials@v1.0.0
+        uses: rubygems/configure-rubygems-credentials@v2.1.0
 
       - name: Publish the gem
         env:
