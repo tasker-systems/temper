@@ -14,6 +14,43 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.5.2 — unreleased
 
+- **The walk link — the resource rail offers walk-from-here as a deep link into the traversal door (UI-only)**
+  The vault resource view's rail offered nothing that starts a question from
+  the piece of work in front of the reader: reaching the traversal door meant
+  opening the graph surface and re-describing the resource being looked at.
+  The rail bar now carries "Walk out from here", a deep link to
+  `/graph/@me?from=<this resource's uuid>` — the existing traversal door under
+  its existing grammar, composed by the existing `graphHref` builder and
+  addressed at the reader's own door. Depth is not emitted (grammar-only,
+  ruled 2026-08-21 — its default lives in the read); no endpoint, no grammar
+  change, every wire shape untouched, and the traversal read keeps exactly one
+  consumer: the link carries the question, the graph screen answers it (task
+  `01a0b626-1182-7011-89d9-67e3a87880dd`).
+pr: 932
+classes: behavioral
+surfaces: internal
+status: signal-only
+
+- **The operator directory — the admin surface's read-only principal inventory (operator-directory PR-1)**
+  Two new admin reads behind the sealed `&SystemAdmin` service gate:
+  `GET /api/access/admin/profiles` (human principals, default filter `needs-access` =
+  NOT-approved-including-absence, `email_contains` literal matching, team filter,
+  50/200 limit and 0..10000 offset clamps, `total` in the envelope) and
+  `GET /api/access/admin/profiles/{profile_id}` (the state card: admission,
+  governance, auth links with the default-link fallback, memberships, pending
+  invitations projected token-free from `vw_invitee_invitations`' attribution
+  rule, open queue state, existing-command hints). `?email=` resolves an address
+  EXACTLY (case-insensitive, verified) into the single matching card, refusing
+  ambiguity with a 404 that names the collision. New wire types
+  `AdminDirectoryEntry` / `AdminDirectoryListResponse` / `AdminProfileCard` and
+  MCP inputs in temper-core; the generated `admin.ts` re-stales additively. No
+  existing shape changes; both routes ride the existing plain-`.route()`
+  operator-only posture and its allowlist.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
+
 - **The connections read states its bound — a bounded sibling of the /edges listing**
   `GET /api/resources/{id}/connections` answers
   `ResourceConnections { rows, total, limit, returned, truncated }` — the same
@@ -27,7 +64,7 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
   region consumes the sibling and states the bound chrome in its heading.
   Additive only: one new response type, one new route, the generated SDK skins
   re-staled with the commit.
-pr: self
+pr: 929
 classes: additive
 surfaces: http, clients
 status: signal-only

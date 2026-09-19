@@ -8,6 +8,7 @@
 	import ArtifactList from '$lib/components/vault/ArtifactList.svelte';
 	import RegionState from '$lib/components/RegionState.svelte';
 	import { mergeProperties } from '$lib/properties';
+	import { graphHref } from '$lib/vault-url';
 	import { docTypeHue } from '$lib/graph/palette';
 	import { regionStateFor } from '$lib/region';
 
@@ -44,6 +45,19 @@
 	// so a fresh page arrives open — the same in-page `$state` precedent `openEvent` sets in
 	// `EventHistory`. Closing withholds, it does not navigate.
 	let railOpen = $state(true);
+
+	// D-F1: the walk affordance is a deep link into the traversal door the reader already has —
+	// `/graph/@me?from=<this resource's uuid>` — composed by the one grammar author
+	// (`graphHref`), never formatted here. The door is the READER's (`@me`, as the sidebar's
+	// graph link and the server's `@me` → own-profile resolution both establish): the traversal
+	// read resolves the seed against what the caller can see, so what a walk finds is bounded by
+	// the reader's own visibility, not this resource's owner. Depth is not emitted — it is
+	// grammar-only (ruled 2026-08-21) and its default lives in the read; and no traversal read
+	// runs here (D-F2): the link carries the question, the graph screen answers it.
+	//
+	// The words claim the walk and nothing else: what the graph draws there belongs to the graph
+	// register, and saying anything about it would overstate what this control does.
+	let walkHref = $derived(graphHref('@me', { seeds: [data.resource.id] }));
 </script>
 
 <svelte:head>
@@ -143,8 +157,14 @@
 			region they put away from a region that failed or one that is empty. The closed state
 			therefore stays on screen and names the two regions it is withholding, and the grid
 			column does not collapse, so closing reflows nothing the reader was reading.
+
+			The walk link shares the bar because it withholds nothing: it is an affordance, not a
+			read region — it has no arriving, empty or failed state to hide, so it stays offered
+			whether the regions are shown or put away, and the closed state's copy remains exactly
+			true (it names History and Connections, and the walk is neither).
 		-->
 		<div class="rail-bar">
+			<a class="walk" href={walkHref}>Walk out from here</a>
 			<button
 				type="button"
 				class="rail-toggle"
@@ -236,11 +256,13 @@
 	}
 	.rail-bar {
 		display: flex;
-		justify-content: flex-end;
+		justify-content: space-between;
+		align-items: center;
 		padding: 8px 10px;
 		border-bottom: 1px solid color-mix(in srgb, var(--hue) 12%, transparent);
 	}
-	.rail-toggle {
+	.rail-toggle,
+	.walk {
 		background: none;
 		border: 0;
 		padding: 0;
@@ -250,8 +272,10 @@
 		letter-spacing: var(--track-label);
 		text-transform: uppercase;
 		color: var(--color-quiet-dim);
+		text-decoration: none;
 	}
-	.rail-toggle:hover {
+	.rail-toggle:hover,
+	.walk:hover {
 		color: var(--color-quiet-mid);
 	}
 	.rail-closed {

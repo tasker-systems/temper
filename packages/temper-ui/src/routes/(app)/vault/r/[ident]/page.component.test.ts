@@ -645,6 +645,100 @@ describe('the rail closes and says what it withholds', () => {
 });
 
 /**
+ * D-F1 — the walk affordance is a deep link into the traversal door, not a read of it.
+ *
+ * The rail offered no walk control before this: the question "what is near this, walked out
+ * from here?" needed the reader to open the graph surface and re-describe the thing they were
+ * looking at. The control composes the traversal address with the viewed resource as the `from`
+ * seed, through the one grammar author (`graphHref`) — no address is formatted on this page.
+ *
+ * `no-affordance-overstates-what-it-does` bites at the words/address join: the rendered words
+ * and the target address must agree, so both are asserted EXACTLY — the words carry only the
+ * walk (what the graph screen draws there belongs to the graph register), and the address
+ * carries only the seed (depth is grammar-only, ruled 2026-08-21 — its default lives in the
+ * read, and a `depth` here would claim a read the address did not ask for). A control that
+ * navigates anywhere but `/graph/@me?from=<id>` fails here.
+ */
+describe('the walk control deep-links the traversal door with the thing in front of the reader', () => {
+	/** A second, kind-distinct resource uuid — full, never a prefix (a prefix resolves to nothing). */
+	const OTHER_ROW_ID = '019f420c-cf01-7bc1-87c9-09684b0fa69f';
+
+	const walkControl = (c: HTMLElement): HTMLAnchorElement | null =>
+		c.querySelector<HTMLAnchorElement>('.rail-bar .walk');
+
+	it('the rail offers a walk control, and its words claim exactly the walk its address builds', async () => {
+		// The pre-change shape had no walk control at all — every assertion in this block fails
+		// against it by construction.
+		const { container, unmount } = render(Page, { data: data(), form: null });
+		const walk = walkControl(container);
+
+		expect(walk, 'the rail offers no walk control').not.toBeNull();
+		// Exact words: any copy that promises what the graph will draw, how far it reaches, or
+		// what kind of question it answers overstates what this control does.
+		expect(walk?.textContent).toBe('Walk out from here');
+		// Exact address: the traversal door, seeded with the viewed resource, and nothing else.
+		expect(walk?.getAttribute('href')).toBe(`/graph/@me?from=${RESOURCE.id}`);
+		unmount();
+	});
+
+	it('the address carries the viewed resource as its only seed — no depth, nothing else', async () => {
+		const { container, unmount } = render(Page, { data: data(), form: null });
+		const href = walkControl(container)?.getAttribute('href') ?? '';
+		const url = new URL(href, 'http://ui.test');
+
+		// The seed is the thing in front of the reader — the viewed resource's own uuid, so the
+		// reader describes nothing.
+		expect(url.pathname).toBe('/graph/@me');
+		expect(url.searchParams.getAll('from')).toEqual([RESOURCE.id]);
+		// Depth is grammar-only (2026-08-21): the default lives in the read, so the emission
+		// must not carry it.
+		expect(url.searchParams.get('depth')).toBeNull();
+		// And no second parameter rides along: no `in`, `q` or `sel` — the walk asks only
+		// "out from here".
+		expect([...url.searchParams.keys()]).toEqual(['from']);
+		unmount();
+	});
+
+	it('the control is offered with the rail open and with it closed', async () => {
+		// It is an affordance, not a region: closing withholds History and Connections, and the
+		// closed state's copy stays exactly true because the walk is neither.
+		const { container, unmount } = render(Page, { data: data(), form: null });
+		await vi.waitFor(() => {
+			expect(historyRegion(container)?.querySelector('.event')).not.toBeNull();
+		});
+		expect(walkControl(container)).not.toBeNull();
+
+		container.querySelector<HTMLButtonElement>('.rail-toggle')?.click();
+		await vi.waitFor(() => {
+			expect(container.querySelector('.event')).toBeNull();
+		});
+
+		const walk = walkControl(container);
+		expect(walk, 'the walk control vanished with the regions it never belonged to').not.toBeNull();
+		expect(walk?.getAttribute('href')).toBe(`/graph/@me?from=${RESOURCE.id}`);
+		expect(container.querySelector('.rail-closed')?.textContent).toContain(
+			'History and Connections are withheld',
+		);
+		unmount();
+	});
+
+	it('the seed is whatever resource the view is serving — the control does not branch on kind', async () => {
+		// The resource view only ever serves `kb_resources` rows, and seeds ARE `kb_resources`
+		// rows (the grammar's durable kind), so there is no kind the control must exclude: one
+		// unconditional control is the whole answer. This render is a task-typed row; the
+		// default fixture above is a design.
+		const other = makeRow({ id: OTHER_ROW_ID, title: 'A task, not a design' });
+		const { container, unmount } = render(Page, {
+			data: { ...data(), resource: other } as PageData,
+			form: null,
+		});
+
+		expect(walkControl(container)?.getAttribute('href')).toBe(`/graph/@me?from=${OTHER_ROW_ID}`);
+		unmount();
+	});
+});
+
+/**
  * `NodeRail.svelte:84-86` states this as a rule rather than a layout preference: *"The label sits
  * OUTSIDE the await."* Two sibling surfaces, one stated rule, and until now it was applied on one
  * of them — this rail dropped its heading for exactly the two states that most need naming.
