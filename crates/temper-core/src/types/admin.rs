@@ -98,6 +98,72 @@ mod tests {
         assert_eq!(back.profile_id, req.profile_id);
         assert!(back.team_id.is_none());
     }
+
+    /// The card's invitation rows are field-pinned to exclude the redemption `token` (spec §6
+    /// rule 1). Pinning it HERE at the type level means a future `token` field on any card
+    /// component fails this test at the wire, not at a review.
+    #[test]
+    fn profile_card_serializes_no_token_anywhere() {
+        let card = AdminProfileCard {
+            profile_id: Uuid::now_v7(),
+            handle: "alice".to_owned(),
+            display_name: "Alice".to_owned(),
+            standing: "denied".to_owned(),
+            standing_updated: None,
+            is_system_admin: false,
+            auth_links: vec![AdminProfileAuthLink {
+                auth_provider: "saml:okta".to_owned(),
+                email: Some("alice@corp.example".to_owned()),
+                email_verified: true,
+                is_default: true,
+                linked_at: chrono::Utc::now(),
+            }],
+            email: Some("alice@corp.example".to_owned()),
+            provisioned_via: Some("saml:okta".to_owned()),
+            teams: vec![AdminProfileTeamMembership {
+                team_slug: "platform".to_owned(),
+                role: "member".to_owned(),
+            }],
+            pending_invitations: vec![AdminProfileInvitation {
+                id: Uuid::now_v7(),
+                team_slug: "platform".to_owned(),
+                role: "member".to_owned(),
+                invited_by_profile_id: Uuid::now_v7(),
+                created: chrono::Utc::now(),
+                expires_at: chrono::Utc::now(),
+            }],
+            open_join_request: None,
+            open_reconsideration: None,
+            hints: vec!["temper admin access approve <uuid>".to_owned()],
+        };
+        let json = serde_json::to_string(&card).expect("serialize");
+        assert!(
+            !json.contains("token"),
+            "the state card must never serialize a token-bearing field"
+        );
+        let back: AdminProfileCard = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.handle, "alice");
+        assert_eq!(back.pending_invitations.len(), 1);
+    }
+
+    #[test]
+    fn matched_email_is_absent_from_json_when_unset() {
+        let entry = AdminDirectoryEntry {
+            profile_id: Uuid::now_v7(),
+            handle: "bob".to_owned(),
+            display_name: "Bob".to_owned(),
+            standing: "denied".to_owned(),
+            standing_updated: None,
+            is_system_admin: false,
+            email: None,
+            provisioned_via: None,
+            team_count: 0,
+            has_pending_request: false,
+            matched_email: None,
+        };
+        let json = serde_json::to_string(&entry).expect("serialize");
+        assert!(!json.contains("matched_email"));
+    }
 }
 
 // ── re-embed trigger (operator-only) ──────────────────────────────────────────
@@ -319,4 +385,228 @@ pub struct AdminLedgerInput {
     /// Page size. Clamped server-side to 200.
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+}
+
+// ── the operator directory (admin-operator-directory spec §5/§6) ─────────────
+//
+// Read-only over existing tables: no new state, no write path, GET-only routes. The directory
+// inventories HUMAN principals only — machines are inventoried by `admin machine list` and
+// connection profiles carry no standing row at all. Every response shape below is a projection;
+// none carries a capability, and the card's invitation rows are field-pinned to exclude the
+// redemption `token` (a leaked token converts this read into a mutation capability).
+
+/// Query parameters for `GET /api/access/admin/profiles` — one type, both directions:
+/// temper-client (PR-2) serializes it into the query string, temper-api deserializes it back out.
+///
+/// `email` and `email_contains` answer different questions (exact identity resolution vs
+/// display-adjacent search) with different response shapes (a state card vs a page), so they are
+/// separate parameters with separate semantics — never aliases. The server refuses a request
+/// naming both rather than picking one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AdminProfilesListQuery {
+    /// Filter by admission state: `denied|requested|approved|revoked|deactivated|needs-access|all`.
+    /// Default `needs-access` — every non-approved state INCLUDING no standing row (the
+    /// operator's work queue). Case-insensitive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standing: Option<String>,
+    /// Case-insensitive LITERAL substring matched over the profile's verified auth-link emails.
+    /// `%`, `_` and `\` have no wildcard meaning here. When set, each row carries `matched_email`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email_contains: Option<String>,
+    /// EXACT, case-insensitive match over verified auth-link emails. When present the route
+    /// answers with the single matching profile's state card (not a page): the one place a
+    /// human-controlled address becomes a target UUID. Zero matches → 404; more than one profile
+    /// verified-owns the address → 404 whose body names the collision. Mutually exclusive with
+    /// `email_contains`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    /// Restrict to members of this team, by slug or UUID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<String>,
+    /// Page size. Clamped server-side: default 50, capped at 200.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<i64>,
+    /// Page offset. Floor 0, capped at 10000 (depth protection).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<i64>,
+}
+
+/// One row of the directory list — minimal on purpose; the state card is the deep read.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "admin.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminDirectoryEntry {
+    pub profile_id: Uuid,
+    pub handle: String,
+    pub display_name: String,
+    /// Admission state as rendered: `denied|requested|approved|revoked|deactivated`. A profile
+    /// with no standing row renders `denied` (absence denies) rather than as an absent field.
+    pub standing: String,
+    /// When the standing row was last written; `None` exactly when no row exists.
+    pub standing_updated: Option<chrono::DateTime<chrono::Utc>>,
+    /// Reads the principal-governance grant and nothing else.
+    pub is_system_admin: bool,
+    /// The profile's default verified email (default link if verified, else earliest-verified),
+    /// `None` when no verified link exists. An unverified email never renders here.
+    pub email: Option<String>,
+    /// Auth-link provider of the link [`Self::email`] came from (or of the earliest link when no
+    /// verified link exists) — the "provisioned via Google / saml:idp-key" answer.
+    pub provisioned_via: Option<String>,
+    pub team_count: i64,
+    /// The profile holds an open (`pending`) join request — the direct bridge to
+    /// `admin requests review <id>`.
+    pub has_pending_request: bool,
+    /// Present only when the `email_contains` filter drove the match: the address that
+    /// satisfied it, so "why was this person enumerated" is answerable from the row itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_email: Option<String>,
+}
+
+/// A page of the directory. Carries `total` — the count of EVERY profile matching the filter,
+/// not just this page — so a paging agent is never silently incomplete.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "admin.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminDirectoryListResponse {
+    pub entries: Vec<AdminDirectoryEntry>,
+    /// Total profiles matching the filter across all pages.
+    pub total: i64,
+}
+
+/// One identity link on the card — the SAML-provenance answer. Rendered verbatim from
+/// `kb_profile_auth_links`; `email_verified` is what "verified" means throughout the directory.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "admin.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminProfileAuthLink {
+    pub auth_provider: String,
+    /// The linked address, `None` for machine-style links (which a human card will not carry,
+    /// but the projection stays total over the table).
+    pub email: Option<String>,
+    pub email_verified: bool,
+    pub is_default: bool,
+    pub linked_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A team membership on the card — including memberships held while denied, which is legal
+/// today and confers nothing until Approve.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "admin.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminProfileTeamMembership {
+    pub team_slug: String,
+    pub role: String,
+}
+
+/// A pending team invitation attributed to the profile. FIELD-PINNED: there is deliberately no
+/// `token` field — the token accepts the invitation, and leaking it here would hand every reader
+/// of a terminal scrollback or agent transcript a mutation capability. An invitation whose
+/// target email is verified-owned by two or more profiles is attributed to NEITHER card.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "admin.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminProfileInvitation {
+    pub id: Uuid,
+    pub team_slug: String,
+    pub role: String,
+    pub invited_by_profile_id: Uuid,
+    pub created: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// The profile's open join request, if any — the direct bridge to
+/// `admin requests review <id>`. Closed/rejected history is ledger territory and stays off v1.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "admin.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminOpenJoinRequest {
+    pub id: Uuid,
+    pub created: chrono::DateTime<chrono::Utc>,
+    pub message: Option<String>,
+}
+
+/// The profile's open reconsideration request, if any — the bridge to
+/// `admin reviews close <id>`.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "admin.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminOpenReviewRequest {
+    pub id: Uuid,
+    pub created: chrono::DateTime<chrono::Utc>,
+}
+
+/// The principal state card — one response composed from existing tables, the deep read behind
+/// `GET /api/access/admin/profiles/{profile_id}` and `?email=`. Hints name EXISTING commands;
+/// they are reads that print, not new mutation doors.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "admin.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminProfileCard {
+    // identity
+    pub profile_id: Uuid,
+    pub handle: String,
+    pub display_name: String,
+    // admission — absence of a standing row renders `denied`
+    pub standing: String,
+    pub standing_updated: Option<chrono::DateTime<chrono::Utc>>,
+    // governance
+    pub is_system_admin: bool,
+    // identity links — full list plus the §6 default-link fallback pair
+    pub auth_links: Vec<AdminProfileAuthLink>,
+    /// The default verified email (default link if it exists and is verified, else the
+    /// earliest-verified link), `None` when no verified link exists.
+    pub email: Option<String>,
+    /// Provider of the link [`Self::email`] came from, else of the earliest link overall.
+    pub provisioned_via: Option<String>,
+    // memberships (including held-while-denied)
+    pub teams: Vec<AdminProfileTeamMembership>,
+    // pending invitations addressed to any of the profile's verified emails — token-free
+    pub pending_invitations: Vec<AdminProfileInvitation>,
+    // queue state — open items only
+    pub open_join_request: Option<AdminOpenJoinRequest>,
+    pub open_reconsideration: Option<AdminOpenReviewRequest>,
+    /// The existing enablement commands, as copy-runnable text.
+    pub hints: Vec<String>,
+}
+
+/// MCP input for the `admin_profiles_list` tool (PR-3). Mirrors [`AdminProfilesListQuery`]'s
+/// filters with `standing` as a plain string; the server validates it either way.
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AdminProfilesListInput {
+    /// `denied|requested|approved|revoked|deactivated|needs-access|all`. Default `needs-access`.
+    pub standing: Option<String>,
+    /// Literal case-insensitive substring over verified emails.
+    pub email_contains: Option<String>,
+    /// Members of this team, by slug or UUID.
+    pub team: Option<String>,
+    /// Page size. Clamped server-side: default 50, capped at 200.
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+/// MCP input for the `admin_profiles_show` tool (PR-3). Exactly one of the two.
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AdminProfilesShowInput {
+    /// The profile to show, by UUID.
+    pub profile_id: Option<Uuid>,
+    /// The profile to show, by exact verified email. Ambiguous addresses are refused, not resolved.
+    pub email: Option<String>,
 }

@@ -274,6 +274,21 @@ fn gated_routes() -> OpenApiRouter<AppState> {
             "/api/access/admin/principals/{id}/reactivate",
             post(handlers::access::reactivate_principal),
         )
+        // The operator directory (admin-operator-directory spec §5/§6). Same operator-only
+        // convention as every neighbour above: plain `.route()`, out of the OpenAPI contract,
+        // allowlisted in `.github/scripts/check-openapi-routes.sh`. Both handlers mint the
+        // sealed `&SystemAdmin` here and dispatch immediately — the gate is the service
+        // signature, and it runs before any existence lookup, so absence never leaks to a
+        // non-admin. `?email=` on the list route is an identity-resolution act (exact,
+        // ambiguity-refusing) that answers a state card, not a page.
+        .route(
+            "/api/access/admin/profiles",
+            get(handlers::admin_directory::list_profiles),
+        )
+        .route(
+            "/api/access/admin/profiles/{profile_id}",
+            get(handlers::admin_directory::show_profile),
+        )
         // The admin ledger's read surface — operator-only, so plain `.route()` and OUT of the
         // OpenAPI contract like its neighbours above. Authorization is in
         // `admin_ledger_service`, which gates per act family rather than with a prelude, and

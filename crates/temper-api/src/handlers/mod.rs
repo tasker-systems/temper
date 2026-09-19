@@ -1,4 +1,5 @@
 pub mod access;
+pub mod admin_directory;
 pub mod admin_ledger;
 pub mod as_reap;
 pub mod auditor;

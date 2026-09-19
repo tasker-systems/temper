@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_principal_governance (profile_id) VALUES ($1) ON CONFLICT (profile_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8b4a35d5aeb2197f97252fe566ee2fcddb372f002cb230da6f133bd7bfb1ea91"
+}
