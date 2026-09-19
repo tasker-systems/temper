@@ -413,7 +413,23 @@ status: signal-only
   contract.
 pr: self
 classes: additive
-surfaces: http, mcp, clients
+surfaces: http, clients
+status: signal-only
+
+- **The operator directory reaches the operator — `admin profiles {list,show}` (operator-directory PR-2)**
+  The CLI group over PR-1's reads: `admin profiles list` (filters pass
+  through verbatim: `--standing`, literal `--email-contains`, `--team`,
+  clamped `--limit/--offset`) and `admin profiles show` by UUID or `--email`
+  (exactly one; ambiguity is refused server-side — the CLI never narrows
+  locally). Three typed AdminClient methods (`list_profiles`,
+  `profile_card_by_email`, `show_profile`) over the unchanged routes — the
+  card arm is its own method because its response SHAPE differs from the
+  page's. No existing shape changes; card hints render verbatim and name only
+  existing commands; token-absence is asserted by e2e against the real
+  binary's rendered stdout.
+pr: self
+classes: additive
+surfaces: cli-stdout, clients
 status: signal-only
 
 - **The erasure act gains a read-only survey door: `POST /api/admin/erasure/survey`**

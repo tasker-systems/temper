@@ -3,7 +3,9 @@
 
 use crate::error::{Result, TemperError};
 use temper_core::types::access_gate::JoinRequestStatus;
-use temper_core::types::admin::{AdminLedgerQuery, PromoteAdminRequest, UpdateSettingsRequest};
+use temper_core::types::admin::{
+    AdminLedgerQuery, AdminProfilesListQuery, PromoteAdminRequest, UpdateSettingsRequest,
+};
 
 /// Show settings when no flag is set; otherwise PATCH and render the result.
 ///
@@ -224,6 +226,90 @@ pub async fn requests_review_remote(
 
     let rendered = crate::format::render(&row, fmt)?;
     println!("{rendered}");
+    Ok(())
+}
+
+/// The operator directory — the list page (spec §5). The default filter lives server-side
+/// (`needs-access`), so a bare `admin profiles list` is already the work queue; the flags here
+/// pass through verbatim rather than re-validating, exactly as `ledger_remote` passes its axes
+/// through (the server owns the grammar and reports violations with the offending value).
+pub async fn profiles_list_remote(
+    client: &temper_client::TemperClient,
+    standing: Option<&str>,
+    email_contains: Option<&str>,
+    team: Option<&str>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let query = AdminProfilesListQuery {
+        standing: standing.map(str::to_owned),
+        email_contains: email_contains.map(str::to_owned),
+        team: team.map(str::to_owned),
+        limit,
+        offset,
+        ..Default::default()
+    };
+
+    let page = client
+        .admin()
+        .list_profiles(&query)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    let rendered = crate::format::render(&page, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
+/// The operator directory's deep read — the principal state card (spec §6), by UUID or by
+/// exact verified email. Exactly one target: clap's `conflicts_with` refuses `--email` beside
+/// a positional, and the belt-and-braces check below keeps that rule true for programmatic
+/// callers, the same belt-and-braces `ledger_remote` keeps for its two axes.
+///
+/// The email arm is the identity-resolution act: the SERVER resolves the address exactly and
+/// refuses ambiguity, so this command never narrows a candidate list client-side — the one
+/// place a human-controlled string becomes a target UUID must not grow a fuzzy local path
+/// (spec §6, review C1).
+pub async fn profiles_show_remote(
+    client: &temper_client::TemperClient,
+    profile: Option<&str>,
+    email: Option<&str>,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    match (profile, email) {
+        (Some(_), Some(_)) => {
+            // Belt and braces: clap's `conflicts_with` already refuses this. Kept so the rule
+            // survives a future caller that builds the args programmatically.
+            return Err(TemperError::Api(
+                "pass either a profile id or --email, not both".to_string(),
+            ));
+        }
+        (None, None) => {
+            return Err(TemperError::Api(
+                "pass a profile id or --email <address>".to_string(),
+            ));
+        }
+        (Some(spec), None) => {
+            let profile_id = uuid::Uuid::parse_str(spec)
+                .map_err(|e| TemperError::Api(format!("invalid profile id '{spec}': {e}")))?;
+            let card = client
+                .admin()
+                .show_profile(profile_id)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            let rendered = crate::format::render(&card, fmt)?;
+            println!("{rendered}");
+        }
+        (None, Some(address)) => {
+            let card = client
+                .admin()
+                .profile_card_by_email(address)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            let rendered = crate::format::render(&card, fmt)?;
+            println!("{rendered}");
+        }
+    }
     Ok(())
 }
 
@@ -519,6 +605,65 @@ mod tests {
         assert!(
             matches!(err, TemperError::Network(_)),
             "a single scope must pass validation and fail at transport (Network), got: {err}"
+        );
+    }
+
+    /// `profiles show` with no target is not a default view — it refuses rather than
+    /// guessing. The refusal fires before any round-trip.
+    /// FAILS IF: show resolves some implicit target or dispatches on absence.
+    #[tokio::test]
+    async fn profiles_show_with_no_target_errors_before_dispatch() {
+        let err = profiles_show_remote(
+            &dead_client(),
+            None,
+            None,
+            crate::format::OutputFormat::Json,
+        )
+        .await
+        .expect_err("no target must error");
+        assert!(
+            matches!(err, TemperError::Api(ref m) if m.contains("--email")),
+            "the refusal must name the email arm, got: {err}"
+        );
+    }
+
+    /// Both targets is ambiguous — refused, not resolved by precedence. Against the dead
+    /// client the refusal (an Api error) must win over the transport failure, proving the
+    /// check ran before dispatch.
+    /// FAILS IF: the exclusivity check moves below the client call.
+    #[tokio::test]
+    async fn profiles_show_with_both_targets_errors_before_dispatch() {
+        let err = profiles_show_remote(
+            &dead_client(),
+            Some("019e84ab-26ba-7560-9d34-c60d74a9fbe2".to_string()).as_deref(),
+            Some("alice@example.com"),
+            crate::format::OutputFormat::Json,
+        )
+        .await
+        .expect_err("two targets must error");
+        assert!(
+            matches!(err, TemperError::Api(ref m) if m.contains("not both")),
+            "the belt-and-braces refusal must win over transport, got: {err}"
+        );
+    }
+
+    /// Exactly one target passes validation and proceeds to dispatch, failing at transport
+    /// against the dead endpoint — asserted POSITIVELY on the Network class, which
+    /// distinguishes "validated, then sent" from "refused".
+    /// FAILS IF: a valid UUID target is refused pre-dispatch.
+    #[tokio::test]
+    async fn profiles_show_with_exactly_one_target_reaches_dispatch() {
+        let err = profiles_show_remote(
+            &dead_client(),
+            Some("019e84ab-26ba-7560-9d34-c60d74a9fbe2"),
+            None,
+            crate::format::OutputFormat::Json,
+        )
+        .await
+        .expect_err("dead endpoint must fail at transport");
+        assert!(
+            matches!(err, TemperError::Network(_)),
+            "one target must pass validation and fail at transport (Network), got: {err}"
         );
     }
 }
