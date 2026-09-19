@@ -56,7 +56,7 @@ use temper_workflow::operations::{
 
 use temper_substrate::content::PreparedBlock;
 use temper_substrate::events::{fire_with, EventContext, SeedAction};
-use temper_substrate::keys::{key_fate, KeyFate};
+use temper_substrate::keys::{is_managed_property_key, key_fate, KeyFate};
 use temper_substrate::readback;
 use temper_substrate::writes;
 
@@ -526,6 +526,35 @@ fn validate_managed_meta_pipeline(
     Ok(managed)
 }
 
+/// The managed names the open tier refuses: `doc_type` plus every
+/// [`temper_substrate::keys::MANAGED_PROPERTY_KEYS`] member. `properties_from_meta` carries open
+/// keys verbatim into `kb_properties`, and §7 dissolves properties to a tierless
+/// `(owner, key, value)` grain — no column records which tier a row came from — so the readback
+/// restores the split **by name** (`is_managed_property_key`, plus `doc_type` peeled as the typed
+/// `doc_type_name`). A row arriving under a managed name is therefore read back as that managed
+/// field whatever tier wrote it, and it reached storage without meeting the managed tier's own
+/// validation (an open_meta `temper-stage` never sees the stage vocabulary's enum check). The
+/// refusal is total and unconditional — no introduce-vs-restate carve-out: the managed names are
+/// sorted OUT of the open tier on every read, so no caller can be legitimately echoing one back
+/// and the refusal wedges nobody (the corpus measurement found zero live violations, 2026-08-24).
+/// `facet` is deliberately NOT here: the readback merges facet marks into the open tier, so an
+/// unconditional refusal would wedge every read-modify-write caller of `PUT /meta` — that name
+/// wants its own examination, not symmetry.
+///
+/// Note the deliberate divergence from the web surface's attach guard, which declines the whole
+/// `temper-` prefix (over-declining: an unrecognized `temper-` name is an ordinary open key, and
+/// the `open_meta_names_outside_the_managed_vocabulary_still_pass` control holds that open). This
+/// gate is the rule the surfaces mirror, not the other way round.
+fn managed_names_in_open_meta(open_meta: &serde_json::Value) -> Vec<String> {
+    let Some(obj) = open_meta.as_object() else {
+        return Vec::new();
+    };
+    obj.keys()
+        .filter(|k| *k == "doc_type" || is_managed_property_key(k))
+        .cloned()
+        .collect()
+}
+
 /// Receive-side shape gate for the open (caller-defined) frontmatter tier, shared by BOTH
 /// `create_resource` and `update_resource` — the server twin of the CLI send-side check
 /// (symmetric defense). A *recognized* open_meta key carrying a wrong shape (e.g. `descriptor: 42`,
@@ -535,10 +564,24 @@ fn validate_managed_meta_pipeline(
 /// and version skew stays additive-safe. Discouraged keys (bare slug/title) are deliberately NOT gated
 /// here: they are a soft send-side (CLI) warning, not a wire rejection. Shape issues surface as a typed
 /// `BadRequest` (→ 400); a schema-compile failure is a programming error and stays `Config` (→ 500).
+///
+/// Managed names (`doc_type` + the managed property keys) are refused here too — see
+/// [`managed_names_in_open_meta`]. Every surface (api, mcp, cli — cloud and local alike) dispatches
+/// through this backend's create/update commands, so one gate binds every door; the third call
+/// (the `open_meta_add` union) flows through the same function, so the additive channel is bound
+/// with it.
 fn validate_open_meta_shape(open_meta: Option<&serde_json::Value>) -> Result<(), TemperError> {
     let Some(value) = open_meta else {
         return Ok(());
     };
+    let refused = managed_names_in_open_meta(value);
+    if !refused.is_empty() {
+        return Err(TemperError::BadRequest(format!(
+            "open_meta refuses managed-tier names: {}. These are not open-tier keys — write \
+             them through the managed tier, where their own validation applies",
+            refused.join(", ")
+        )));
+    }
     let issues = temper_workflow::schema::validate_open_meta(value)?;
     if issues.is_empty() {
         return Ok(());

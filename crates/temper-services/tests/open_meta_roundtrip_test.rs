@@ -9,10 +9,12 @@
 
 use sqlx::PgPool;
 
+use temper_core::error::TemperError;
 use temper_core::types::authorship::ActContext;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_services::backend::{substrate_read, DbBackend};
+use temper_substrate::keys::MANAGED_PROPERTY_KEYS;
 use temper_workflow::operations::{Backend, CreateResource, Surface, UpdateResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
@@ -404,5 +406,197 @@ async fn a_write_answers_with_the_open_tier_it_changed(pool: PgPool) {
     assert_eq!(
         updated.doc_type_name, "research",
         "the always-present half of the view survives the added section"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The managed-name gate — the shared create/update open-tier validation
+//
+// `doc_type` and the managed property keys (`MANAGED_PROPERTY_KEYS`) are not
+// open-tier names. The read path restores the managed/open split by NAME, so a
+// property row arriving under one of these names is read back as that managed
+// field whatever tier wrote it — and it never met the managed tier's own
+// validation on the way in. These probes run at the shared gate's own level
+// (the backend commands every surface dispatches through), never against any
+// one surface's guard.
+// ---------------------------------------------------------------------------
+
+fn probe_create(context: uuid::Uuid, open_meta: serde_json::Value, n: usize) -> CreateResource {
+    CreateResource {
+        idempotency_key: None,
+        slug: format!("zz-managed-name-probe-{n}"),
+        doctype: "research".to_string(),
+        home: HomeAnchor::Context(ContextId::from(context)),
+        title: "ZZ managed name probe".to_string(),
+        body: None,
+        managed_meta: ManagedMeta::default(),
+        open_meta: Some(open_meta),
+        goal: None,
+        origin_uri: None,
+        chunks_packed: None,
+        content_hash: None,
+        act: ActContext::default(),
+        origin: Surface::Mcp,
+    }
+}
+
+fn assert_refused(err: TemperError, key: &str) {
+    let TemperError::BadRequest(msg) = &err else {
+        panic!("expected BadRequest for open_meta key {key:?}, got: {err:?}")
+    };
+    assert!(
+        msg.contains(key),
+        "the refusal must name the offending key {key:?}; got: {msg:?}"
+    );
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn managed_names_in_open_meta_are_refused_on_create(pool: PgPool) {
+    let (profile, context) = seed_profile_with_context(&pool, "managed-name@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+
+    // `doc_type` plus every managed property key — one vocabulary, enumerated
+    // from its single source of truth so a key added there is born gated.
+    let refused = std::iter::once("doc_type").chain(MANAGED_PROPERTY_KEYS.iter().copied());
+    for (n, key) in refused.enumerate() {
+        let err = backend
+            .create_resource(probe_create(context, serde_json::json!({ key: "x" }), n))
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("open_meta key {key:?} was accepted; the gate did not fire"));
+        assert_refused(err, key);
+    }
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_refused_create_lands_nothing(pool: PgPool) {
+    let (profile, context) = seed_profile_with_context(&pool, "refused-create@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+
+    let err = backend
+        .create_resource(probe_create(
+            context,
+            serde_json::json!({ "temper-stage": "done" }),
+            0,
+        ))
+        .await
+        .expect_err("the refusal fired above; a green create here means the gate moved");
+    assert_refused(err, "temper-stage");
+
+    let landed: (i64,) =
+        sqlx::query_as("SELECT count(*) FROM kb_resources WHERE title = 'ZZ managed name probe'")
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+    assert_eq!(
+        landed.0, 0,
+        "the gate precedes every write; a resource under this title means the refusal \
+         came after something had already landed"
+    );
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn managed_names_in_open_meta_are_refused_on_update_including_the_add_channel(pool: PgPool) {
+    let (profile, context) =
+        seed_profile_with_context(&pool, "managed-name-update@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+
+    let created = backend
+        .create_resource(probe_create(
+            context,
+            serde_json::json!({ "tags": ["probe"] }),
+            0,
+        ))
+        .await
+        .expect("seed create")
+        .value;
+
+    // The replace channel: a managed name in open_meta on update.
+    let err = backend
+        .update_resource(UpdateResource {
+            resource: created.id,
+            title: None,
+            slug: None,
+            body: None,
+            managed_meta: None,
+            open_meta: Some(serde_json::json!({ "temper-status": "active" })),
+            open_meta_add: None,
+            goal: None,
+            move_to: None,
+            context_ref: None,
+            act: ActContext::default(),
+            origin: Surface::Mcp,
+        })
+        .await
+        .expect_err("the refusal fired above; a green update here means the gate moved");
+    assert_refused(err, "temper-status");
+
+    // The additive channel resolves its union through the same gate, so a
+    // managed name cannot arrive by the door that claims to only add.
+    let err = backend
+        .update_resource(UpdateResource {
+            resource: created.id,
+            title: None,
+            slug: None,
+            body: None,
+            managed_meta: None,
+            open_meta: None,
+            open_meta_add: Some(serde_json::json!({ "temper-pr": ["123"] })),
+            goal: None,
+            move_to: None,
+            context_ref: None,
+            act: ActContext::default(),
+            origin: Surface::Mcp,
+        })
+        .await
+        .expect_err(
+            "the refusal fired above; a green add here means the add channel bypassed the gate",
+        );
+    assert_refused(err, "temper-pr");
+
+    // And the seeded open key survived both refusals untouched.
+    let open = substrate_read::get_meta_select(&pool, ProfileId::from(profile), created.id)
+        .await
+        .expect("get_meta")
+        .open_meta
+        .expect("open_meta");
+    assert_eq!(
+        open.get("tags"),
+        Some(&serde_json::json!(["probe"])),
+        "a refused update must not disturb the tier it was refused for"
+    );
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn open_meta_names_outside_the_managed_vocabulary_still_pass(pool: PgPool) {
+    let (profile, context) = seed_profile_with_context(&pool, "open-still-open@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+
+    // `temper-invented` is an ordinary open key (the tier is open by name, not
+    // by the `temper-` prefix), and `date` is an open doc-type-schema field.
+    // A gate that over-declines the prefix reds here, not just at the
+    // refusals above.
+    let created = backend
+        .create_resource(probe_create(
+            context,
+            serde_json::json!({ "temper-invented": "legal open key", "date": "2026-08-24" }),
+            0,
+        ))
+        .await
+        .expect("an unrecognized temper- name stays an open-tier key")
+        .value;
+
+    let meta = substrate_read::get_meta_select(&pool, ProfileId::from(profile), created.id)
+        .await
+        .expect("get_meta");
+    let open = meta.open_meta.expect("open_meta");
+    assert_eq!(
+        open.get("temper-invented"),
+        Some(&serde_json::json!("legal open key")),
+        "the key must read back as OPEN — what the gate protects is the tier split itself"
+    );
+    assert!(
+        meta.managed_meta.stage.is_none(),
+        "an open key that looks managed must not become one on read"
     );
 }
