@@ -16,6 +16,7 @@ Commands:
   access        Admit, revoke, deactivate, or reactivate a principal's system access
   requests      Review pending join requests
   reviews       Read and close reconsideration requests from revoked principals
+  profiles      The operator directory: who exists in this deployment, and their state. Lists denied principals (the default `needs-access` view) and resolves an email to a state card — the bridge into the strict-UUID admin acts
   ledger        Read the admin ledger: who granted what, to whom, and when
   saml          SAML provisioning: generate keys + emit the consistent env bundle and SQL (operator tooling)
   machine       Register and rotate machine (client_credentials) principals
@@ -288,6 +289,75 @@ Arguments:
 
 Options:
       --note <NOTE>        Optional decision note, recorded against the review
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+### `temper admin profiles`
+
+```text
+The operator directory: who exists in this deployment, and their state. Lists denied principals (the default `needs-access` view) and resolves an email to a state card — the bridge into the strict-UUID admin acts
+
+Usage: temper admin profiles [OPTIONS] <COMMAND>
+
+Commands:
+  list  List the operator directory. The default filter is `needs-access` — every non-approved admission state INCLUDING no standing row, i.e. the work queue of principals who lack access
+  show  Show one principal's state card — by UUID, or by exact verified email. The card names the existing enablement commands; it never carries invitation tokens
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+#### `temper admin profiles list`
+
+```text
+List the operator directory. The default filter is `needs-access` — every non-approved admission state INCLUDING no standing row, i.e. the work queue of principals who lack access
+
+Usage: temper admin profiles list [OPTIONS]
+
+Options:
+      --standing <STANDING>
+          Filter by admission state: denied|requested|approved|revoked|deactivated|needs-access|all. Default `needs-access`; a principal with no standing row renders `denied`
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --email-contains <EMAIL_CONTAINS>
+          Literal case-insensitive substring over verified emails (`%`, `_` and `\` have no wildcard meaning). Rows carry `matched_email` — why this person was enumerated
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --team <TEAM>
+          Restrict to members of this team (slug or UUID)
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+      --limit <LIMIT>
+          Page size (server clamps: default 50, max 200)
+      --offset <OFFSET>
+          Page offset (server clamps: floor 0, cap 10000)
+  -h, --help
+          Print help
+```
+
+#### `temper admin profiles show`
+
+```text
+Show one principal's state card — by UUID, or by exact verified email. The card names the existing enablement commands; it never carries invitation tokens
+
+Usage: temper admin profiles show [OPTIONS] [PROFILE]
+
+Arguments:
+  [PROFILE]  Profile ID (UUID). Omit when resolving --email instead
+
+Options:
+      --email <EMAIL>      Exact verified email — the server resolves it to the single matching card. Zero matches → not found; two or more profiles verified-own the address → not found, with the collision named. The substring filter never resolves
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
       --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1

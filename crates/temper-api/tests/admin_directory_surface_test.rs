@@ -327,10 +327,14 @@ async fn show_by_uuid_returns_the_card_and_404s_an_absent_profile(pool: PgPool) 
         get_json(&app, &admin, &format!("/api/access/admin/profiles/{human}")).await;
     assert_eq!(status, 200, "{card}");
     assert_eq!(card["handle"].as_str(), Some("show-one"));
-    assert!(card["hints"].as_array().expect("hints").iter().any(|h| h
+    // Machine-legal hints (adversarial review F2): this fixture is standing-row ABSENCE —
+    // the card renders it `denied`, but approve refuses from absence and no other access
+    // act is legal there either, so the card advertises NO `temper admin access` command.
+    // Row-bearing classes keep their hints (pinned by the service class-table test).
+    assert!(card["hints"].as_array().expect("hints").iter().all(|h| !h
         .as_str()
         .expect("hint text")
-        .starts_with("temper admin access approve ")));
+        .starts_with("temper admin access ")));
 
     let (status, body) = get_json(
         &app,
