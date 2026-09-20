@@ -186,6 +186,24 @@ classes: additive
 surfaces: internal
 status: signal-only
 
+- **The MCP system-access denial renders the full remediation payload (operator-directory PR-3)**
+  A denied MCP caller now receives the same remediation-bearing denial a
+  browser caller does: the error's structured `data` carries the full
+  `SystemAccessDetails` — email, display_name, typed refusal, request_url,
+  cli_command — built by one shared constructor (`SystemAccessDetails::for_profile`
+  in temper-core) that temper-api's 403 middleware also renders, so the two
+  surfaces cannot disagree on the remediation. The message names the denied
+  identity, so an agent operating under a credential it does not read can tell
+  the human WHICH account needs approving. The previous `data` carried only
+  `{ refusal }` and dropped the identity; the `refusal` key and its serialized
+  shape are unchanged, so existing readers keep working. No tool inventory
+  change; the request URL is hoisted beside `REQUEST_ACCESS_COMMAND` as the
+  shared `REQUEST_ACCESS_URL` constant.
+pr: self
+classes: additive, behavioral
+surfaces: mcp
+status: signal-only
+
 ## Shipped in v0.5.2
 
 - **This release — the 0.5.2 fleet alignment: VERSION 0.5.1 → 0.5.2 across crates, packages, and clients**

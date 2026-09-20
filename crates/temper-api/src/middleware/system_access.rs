@@ -38,19 +38,16 @@ pub async fn require_system_access(
         Err(temper_services::auth::AuthzError::SystemAccessDenied { refusal, .. }) => {
             // Surface-side presentation: build the CLI-facing details payload. The typed
             // refusal was computed once at the gate (`require_system_access`) — this surface
-            // renders it and does not re-derive it, so MCP and the API cannot disagree.
-            // SECURITY NOTE: email and display_name are safe to return here because
-            // the caller already proved ownership of this identity through OAuth.
-            // We are reflecting their own profile data back to them.
-            let details = temper_core::types::access_gate::SystemAccessDetails {
-                email: authed.profile().email.clone(),
-                display_name: Some(authed.profile().display_name.clone()),
+            // renders it and does not re-derive it, so MCP and the API cannot disagree;
+            // the details themselves are built by the one shared constructor in
+            // temper-core, so neither surface can drift on the remediation either.
+            // SECURITY NOTE (on the type): email and display_name are safe to return
+            // here because the caller already proved ownership of this identity
+            // through OAuth. We are reflecting their own profile data back to them.
+            let details = temper_core::types::access_gate::SystemAccessDetails::for_profile(
+                authed.profile(),
                 refusal,
-                request_url: Some("https://temperkb.io/request-access".to_string()),
-                cli_command: Some(
-                    temper_core::types::access_gate::REQUEST_ACCESS_COMMAND.to_string(),
-                ),
-            };
+            );
             return Err(ApiError::SystemAccessRequired {
                 details: Box::new(details),
             });

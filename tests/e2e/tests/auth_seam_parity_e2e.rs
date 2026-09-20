@@ -275,6 +275,25 @@ async fn no_system_access_refused_on_both_surfaces(pool: sqlx::PgPool) {
     );
     assert_eq!(api_kind, "denied", "a minted profile is born denied");
 
+    // Five-field fidelity (operator-directory spec §8, PR-3): the API's 403 renders
+    // the full SystemAccessDetails — email, display_name, refusal, request_url,
+    // cli_command — and the MCP error must render the SAME details for the same
+    // denied principal, not just the refusal kind. Presence is asserted on the API
+    // side first: the fixture can only witness fidelity when the API surface
+    // actually carries identity, so a fixture that cannot express the invariant
+    // fails loudly instead of passing vacuously (both-null equality is not parity).
+    let api_details = &api_body["error"]["details"];
+    for field in ["email", "display_name", "request_url", "cli_command"] {
+        assert!(
+            !api_details[field].is_null(),
+            "precondition: the API details must carry {field} for this principal"
+        );
+        assert_eq!(
+            mcp_data[field], api_details[field],
+            "MCP denial must render {field} faithfully, matching the API's details"
+        );
+    }
+
     // Refusal-kind parity, case B — flip the standing to `requested` (the pending-review
     // state a denied principal reaches from the self-service door) directly at the
     // persistence layer, as the deactivation test above does. The kind must FOLLOW the
