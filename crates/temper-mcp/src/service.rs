@@ -708,13 +708,14 @@ fn map_authz_error(e: temper_services::auth::AuthzError) -> rmcp::ErrorData {
         // carries in `details.refusal` — Denied from Requested from Revoked — and
         // the `reason()` rides the message for a caller that reads only text.
         //
-        // This arm is UNREACHABLE from this crate's two `map_err` call sites: the
-        // Level-2 gate call in `ensure_profile_from_parts` maps the variant itself
-        // (see `map_system_access_denied`), where the resolved profile is in scope,
-        // and `authenticate_token` (Level 1) never constructs it. It exists for
-        // match exhaustiveness only, and refuses loudly: a silent degraded rendering
-        // here — identity dropped, remediation as prose only — is exactly the
-        // unfaithfulness this mapping exists to prevent.
+        // This arm is UNREACHABLE from every path into `map_authz_error` in this
+        // crate: both bare call sites (the `authenticate_token` mappings — Level 1,
+        // which never constructs the variant) and the forwarding `other =>` arm in
+        // `ensure_profile_from_parts` (the variant is intercepted above it, where the
+        // resolved profile is in scope — see `map_system_access_denied`). It exists
+        // for match exhaustiveness only, and refuses loudly: a silent degraded
+        // rendering here — identity dropped, remediation as prose only — is exactly
+        // the unfaithfulness this mapping exists to prevent.
         AuthzError::SystemAccessDenied { .. } => rmcp::ErrorData::internal_error(
             "system-access denial reached the bare authz mapping without a resolved \
              profile; render it at the gate call site instead"
