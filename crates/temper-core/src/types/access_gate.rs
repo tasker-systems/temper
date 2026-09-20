@@ -188,6 +188,36 @@ pub struct Entitlements {
 /// depends on temper-core and pins it against the real parser.
 pub const REQUEST_ACCESS_COMMAND: &str = "temper auth request-access --message \"...\"";
 
+/// The self-service page a rejected caller visits to request system access.
+///
+/// Same reasoning as [`REQUEST_ACCESS_COMMAND`]: the URL is part of the
+/// remediation the details payload advertises, so both surfaces that build
+/// `SystemAccessDetails` render one value — an MCP-authored copy drifting from
+/// the API's would tell two agents two different addresses.
+pub const REQUEST_ACCESS_URL: &str = "https://temperkb.io/request-access";
+
+impl SystemAccessDetails {
+    /// The one constructor of the denial payload both gated surfaces render.
+    ///
+    /// temper-api (the 403 middleware) and temper-mcp (the rmcp error) build the
+    /// details through this function, so "MCP and the API cannot disagree" is
+    /// structural: one construction, two renderings. `refusal` arrives typed from
+    /// the standing machine at the gate; `email` and `display_name` reflect the
+    /// caller's own profile (see the security note on [`Self`]).
+    pub fn for_profile(
+        profile: &crate::types::profile::Profile,
+        refusal: temper_principal::Refusal,
+    ) -> Self {
+        Self {
+            email: profile.email.clone(),
+            display_name: Some(profile.display_name.clone()),
+            refusal,
+            request_url: Some(REQUEST_ACCESS_URL.to_string()),
+            cli_command: Some(REQUEST_ACCESS_COMMAND.to_string()),
+        }
+    }
+}
+
 /// Details included in the SystemAccessRequired error response.
 ///
 /// SECURITY NOTE: The `email` and `display_name` fields are safe to include

@@ -6289,6 +6289,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "temper-core",
+ "temper-principal",
  "temper-services",
  "temper-substrate",
  "temper-telemetry",

@@ -103,10 +103,18 @@ impl TemperMcpService {
         // account id). A `profile_id` is inert outside temper. Decided 2026-08-01; see the task's §5.
         tracing::debug!(profile_id = %authed.profile().id, "Profile resolved");
 
-        // Level 2: system-access gate (shared seam).
+        // Level 2: system-access gate (shared seam). The denial is mapped HERE, not
+        // through `map_authz_error`, because the resolved profile must be in scope to
+        // render the remediation-bearing details — the same `SystemAccessDetails`
+        // temper-api's 403 carries (`map_system_access_denied`).
         temper_services::auth::require_system_access(&self.api_state.pool, &authed)
             .await
-            .map_err(map_authz_error)?;
+            .map_err(|e| match e {
+                temper_services::auth::AuthzError::SystemAccessDenied { refusal, .. } => {
+                    map_system_access_denied(authed.profile(), refusal)
+                }
+                other => map_authz_error(other),
+            })?;
 
         let mut guard = self.profile.lock().await;
         *guard = Some(authed.into_profile());
@@ -699,20 +707,20 @@ fn map_authz_error(e: temper_services::auth::AuthzError) -> rmcp::ErrorData {
         // surfaces), so an agent here can branch on the same `kind` the API's 403
         // carries in `details.refusal` — Denied from Requested from Revoked — and
         // the `reason()` rides the message for a caller that reads only text.
-        AuthzError::SystemAccessDenied { refusal, .. } => {
-            let reason = refusal.reason();
-            rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INVALID_REQUEST,
-                format!(
-                    "Access to this temper instance requires approval — {reason}. \
-                     Visit https://temperkb.io/request-access or run \
-                     `{}` in the CLI to request access. \
-                     This error is terminal and should not be retried.",
-                    temper_core::types::access_gate::REQUEST_ACCESS_COMMAND
-                ),
-                Some(serde_json::json!({ "refusal": refusal })),
-            )
-        }
+        //
+        // This arm is UNREACHABLE from this crate's two `map_err` call sites: the
+        // Level-2 gate call in `ensure_profile_from_parts` maps the variant itself
+        // (see `map_system_access_denied`), where the resolved profile is in scope,
+        // and `authenticate_token` (Level 1) never constructs it. It exists for
+        // match exhaustiveness only, and refuses loudly: a silent degraded rendering
+        // here — identity dropped, remediation as prose only — is exactly the
+        // unfaithfulness this mapping exists to prevent.
+        AuthzError::SystemAccessDenied { .. } => rmcp::ErrorData::internal_error(
+            "system-access denial reached the bare authz mapping without a resolved \
+             profile; render it at the gate call site instead"
+                .to_string(),
+            None,
+        ),
         // An `Unauthorized` here is a terminal authentication denial, not a transient
         // failure — most often the machine-principal registration gate rejecting an
         // unregistered or revoked `client_id` (G3 Phase A). It must surface as a terminal
@@ -736,6 +744,37 @@ fn map_authz_error(e: temper_services::auth::AuthzError) -> rmcp::ErrorData {
             rmcp::ErrorData::internal_error(format!("Failed to check system access: {err}"), None)
         }
     }
+}
+
+/// Render the Level-2 system-access denial faithfully to what the API's 403 carries.
+///
+/// The full [`temper_core::types::access_gate::SystemAccessDetails`] — email,
+/// display_name, refusal, request_url, cli_command — is built by the one shared
+/// constructor temper-core owns (the same construction temper-api's 403 middleware
+/// renders) and rides the structured `data`; the existing `data.refusal` key and its
+/// serialized shape are unchanged, so existing readers keep working. The message
+/// names the identity: an agent operating under a credential it does not read can
+/// tell the human WHICH account needs approving — the same remediation a browser
+/// caller receives, not a degraded prose-only copy of it.
+fn map_system_access_denied(
+    profile: &Profile,
+    refusal: temper_principal::Refusal,
+) -> rmcp::ErrorData {
+    let reason = refusal.reason();
+    let details =
+        temper_core::types::access_gate::SystemAccessDetails::for_profile(profile, refusal);
+    let who = details.email.as_deref().unwrap_or("your account");
+    rmcp::ErrorData::new(
+        rmcp::model::ErrorCode::INVALID_REQUEST,
+        format!(
+            "Access to this temper instance requires approval for {who} — {reason}. \
+             Visit {} or run `{}` in the CLI to request access. \
+             This error is terminal and should not be retried.",
+            temper_core::types::access_gate::REQUEST_ACCESS_URL,
+            temper_core::types::access_gate::REQUEST_ACCESS_COMMAND
+        ),
+        Some(serde_json::to_value(details).expect("SystemAccessDetails always serializes")),
+    )
 }
 
 /// The blob tools, spelled once — the `list_tools` advertisement filter and the router
