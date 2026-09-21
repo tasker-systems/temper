@@ -13,6 +13,14 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 `satisfied`.
 
 ## Since v0.5.2 — unreleased
+- **This release — the 0.5.3 fleet alignment: VERSION 0.5.2 → 0.5.3 across crates, packages, and clients**
+  The release train's own wire delta is none: version fields and the generated
+  cores re-stale with the bump (the D-S3 baseline — no shape movement); the
+  P floor rides the additive rows already in this window.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
 
 - **The open_meta key delete verb — an explicit `null` value on an update's `open_meta` deletes the key**
   A resource's open_meta key could be set but never removed: an explicit `null`

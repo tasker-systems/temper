@@ -1,6 +1,6 @@
 [package]
 name = "temper-macros"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 description = "Attribute macros for temper's span conventions — one declaration of a field set that many call sites would otherwise copy"
 
