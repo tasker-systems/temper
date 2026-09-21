@@ -73,7 +73,7 @@ Options:
           Work effort: small, medium, large (task only)
 
       --open-meta <OPEN_META>
-          Open (caller-defined) frontmatter as a JSON object string, e.g. --open-meta '{"marker":"x","reviewed":true}'. These are the free-form "bring-your-own" fields; the closed temper-* vocabulary uses the typed flags (--mode/--effort/…). Must be a JSON object
+          Open (caller-defined) frontmatter as a JSON object string, e.g. --open-meta '{"marker":"x","reviewed":true}'. These are the free-form "bring-your-own" fields; the closed temper-* vocabulary uses the typed flags (--mode/--effort/…). Must be a JSON object; a null value is refused on create (null deletes a key on update — omit the key here)
 
       --goal <GOAL>
           Link this resource to a goal by ref (UUID or decorated `slug-<uuid>`). Projects a live `advances`→goal edge from the new resource on create
@@ -378,7 +378,7 @@ Options:
           Add derived-from reference, keeping existing ones (repeatable)
 
       --open-meta <OPEN_META>
-          Open (caller-defined) frontmatter as a JSON object string, e.g. --open-meta '{"marker":"x","reviewed":true}'. REPLACES each key it names — including lists, so '{"tags":[]}' clears tags. The repeatable flags above ADD instead; when both name a key, this replace lands first and the additions union on top. Free-form "bring-your-own" fields; temper-* keys use the typed flags. Must be a JSON object
+          Open (caller-defined) frontmatter as a JSON object string, e.g. --open-meta '{"marker":"x","reviewed":true}'. REPLACES each key it names — including lists, so '{"tags":[]}' clears tags — and an explicit **null value DELETES the key**, e.g. --open-meta '{"word_count":null}' removes it (on create a null is refused: omit the key). The repeatable flags above ADD instead; when both name a key, this replace lands first and the additions union on top. Free-form "bring-your-own" fields; temper-* keys use the typed flags. Must be a JSON object
 
       --open-meta-add <OPEN_META_ADD>
           Open (caller-defined) frontmatter to ADD, as a JSON object string of list-valued keys, e.g. --open-meta-add '{"reinforced":["2026-08-02"]}'. Mirrors --open-meta exactly but UNIONS each key over the stored list instead of replacing it, so accumulated history survives. This is the only way to add to a key the repeatable flags above do not name; every value must be a list (a scalar is refused rather than replacing the stored list). Where both this and a repeatable flag name one key, the two sets union
