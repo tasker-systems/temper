@@ -347,6 +347,11 @@ pub struct UpdateParams<'a> {
     pub origin_uri: Option<&'a str>,
     /// Property pairs to (re)assert (stage/mode/effort/doc_type + meta keys).
     pub properties: &'a [(String, serde_json::Value)],
+    /// Property KEYS to unset — each fires one `property_unset`, folding the key's live rows
+    /// without asserting a replacement. The key-grain delete behind an explicit `null` value in
+    /// an update's `open_meta`. Disjoint from `properties` by construction: a key with a value
+    /// in the same update is a set, a key with `null` is an unset, never both.
+    pub unset_keys: &'a [String],
     /// Caller-supplied, already-embedded chunks for the body revise. When `Some` (and `body` is
     /// supplied), section chunks whose content_hash matches a caller chunk ride the caller's
     /// vector + `embedded_with` declaration; unmatched chunks fall to the async-embed backfill.
@@ -712,6 +717,18 @@ async fn finish_update(
     p: UpdateParams<'_>,
     ctx: EventContext,
 ) -> Result<()> {
+    for key in p.unset_keys {
+        fire_with(
+            &mut *conn,
+            SeedAction::PropertyUnset {
+                resource: p.resource,
+                key,
+                emitter: p.emitter,
+            },
+            ctx.clone(),
+        )
+        .await?;
+    }
     for (key, value) in p.properties {
         fire_with(
             &mut *conn,

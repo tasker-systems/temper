@@ -246,7 +246,10 @@ export type ResourceUpdateRequest = { title: string | null,
  */
 managed_meta: ManagedMeta | null, 
 /**
- * Partial open_meta — incoming keys win; absent keys preserved.
+ * Partial open_meta — incoming keys win; absent keys preserved. An explicit **`null`
+ * value deletes the key** (the in-band verb: the same in-band shape `{"tags": []}` has
+ * for clearing a list, and the RFC 7386 merge-patch convention). There is no whole-object
+ * replace: unnamed keys are never touched.
  */
 open_meta: JsonValue | null, 
 /**

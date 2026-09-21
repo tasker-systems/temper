@@ -578,11 +578,29 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     let slug_resolved = derive_create_slug(title, doctype_enum);
 
     // Parse the optional --open-meta JSON object (the free-form open tier) and validate its shape
-    // send-side (the server re-enforces the same gate — symmetric defense).
+    // send-side (the server re-enforces the same gate — symmetric defense). A null value names
+    // a key with nothing to delete — the verb belongs to update — so refuse here with the
+    // verb's own vocabulary rather than the generic shape error the schema gate would give.
     let open_meta_value = open_meta
         .map(|raw| parse_open_meta_flag("--open-meta", raw))
         .transpose()?;
     if let Some(om) = &open_meta_value {
+        let nulls: Vec<&str> = om
+            .as_object()
+            .map(|o| {
+                o.iter()
+                    .filter(|(_, v)| v.is_null())
+                    .map(|(k, _)| k.as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !nulls.is_empty() {
+            return Err(TemperError::BadRequest(format!(
+                "open_meta key(s) {} are null on create — omit the key (null deletes a key on \
+                 update; there is nothing to delete on create)",
+                nulls.join(", ")
+            )));
+        }
         validate_open_meta_send_side(om)?;
     }
 
@@ -2265,8 +2283,26 @@ fn build_open_meta_for_update(params: &UpdateParams<'_>) -> Result<Option<serde_
     };
     let parsed = parse_open_meta_flag("--open-meta", raw)?;
     // Shape hard-error + discouraged-key warning, send-side; the server re-enforces it.
-    validate_open_meta_send_side(&parsed)?;
+    // The gate runs on the SET half only: a null value is the delete verb, not a value,
+    // so a recognized key deleted via null (e.g. {"tags":null}) must not fail the
+    // "tags must be an array" check. The verbs ride the wire intact for the server to fold.
+    validate_open_meta_send_side(&strip_open_meta_nulls(&parsed))?;
     Ok(Some(parsed))
+}
+
+/// The SET half of an open_meta object: the null-valued entries (the delete verbs)
+/// removed, the rest in stored order. A non-object passes through untouched — the shape
+/// gate refuses it at the root path.
+fn strip_open_meta_nulls(parsed: &serde_json::Value) -> serde_json::Value {
+    match parsed.as_object() {
+        Some(obj) => serde_json::Value::Object(
+            obj.iter()
+                .filter(|(_, v)| !v.is_null())
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        ),
+        None => parsed.clone(),
+    }
 }
 
 /// The update surface's ADD channel: the repeatable list flags (`--tags`/`--relates-to`/…)
@@ -3354,6 +3390,40 @@ mod build_helpers_tests {
         assert!(parse_open_meta_flag("--open-meta", "42").is_err());
         // Malformed JSON → hard error (never a silent drop).
         assert!(parse_open_meta_flag("--open-meta", "{not json").is_err());
+    }
+
+    #[test]
+    fn a_null_valued_key_passes_the_update_send_side_gate_as_a_delete_verb() {
+        // {"tags":null} on UPDATE is the delete verb, not a non-array value — the shape
+        // gate must judge the SET half, so the recognized-key check cannot refuse it,
+        // and the verb rides the wire intact for the server to fold.
+        let mut params = empty_update_params("foo");
+        params.open_meta = Some(r#"{"tags":null}"#);
+        let built = build_open_meta_for_update(&params).expect("delete verb passes the gate");
+        assert_eq!(
+            built,
+            Some(serde_json::json!({"tags": null})),
+            "the verb rides the wire intact, un-refused by the recognized-key shape check"
+        );
+    }
+
+    #[test]
+    fn strip_open_meta_nulls_keeps_the_set_half_and_a_non_object() {
+        let stripped = strip_open_meta_nulls(&serde_json::json!({
+            "tags": null,
+            "marker": "keep",
+            "date": null
+        }));
+        assert_eq!(
+            stripped,
+            serde_json::json!({ "marker": "keep" }),
+            "nulls dropped, set values kept in order"
+        );
+        // A non-object passes through for the shape gate to refuse at the root.
+        assert_eq!(
+            strip_open_meta_nulls(&serde_json::json!("[1]")),
+            serde_json::json!("[1]")
+        );
     }
 
     /// The refusal names the flag the caller actually typed.

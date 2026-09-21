@@ -866,6 +866,23 @@ pub struct PropertyRetracted {
     pub property_id: PropertyId,
 }
 
+/// Unset one property KEY on a resource owner — the key-grain correction verb for
+/// resource-owned rows (`property_unset`). Resource-owned rows are addressed BY KEY, never by
+/// row id (they have no stable external id — the `facet_retract` door's refusal says exactly
+/// this), so the payload carries `(owner, property_key)` and the projector folds every live
+/// row for that key: the key vanishes from the projected meta, and a later `property_set`
+/// re-creates it fresh. Permissive (NULL `payload_schema`), the `property_set` /
+/// `property_retracted` precedent: typed struct, no registry schema stamp.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct PropertyUnset {
+    /// The owner the unset is bound to — `kb_resources` for this build. The projector's
+    /// predicate is owner-bound to this ref, so a foreign owner folds nothing.
+    pub owner: AnchorRef,
+    /// The key whose live rows fold. Addressed by key, not by row id.
+    pub property_key: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct LensWeights {

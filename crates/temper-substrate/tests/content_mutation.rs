@@ -332,6 +332,7 @@ async fn revise_accretes_a_second_source(pool: sqlx::PgPool) {
             title: None,
             origin_uri: None,
             properties: &[],
+            unset_keys: &[],
             chunks: None,
             sources: vec![Incorporation {
                 source: ProvenanceSource::Resource(src_b),
@@ -388,6 +389,7 @@ async fn revise_accretes_a_second_source(pool: sqlx::PgPool) {
             title: None,
             origin_uri: None,
             properties: &[],
+            unset_keys: &[],
             chunks: None,
             sources: vec![Incorporation {
                 source: ProvenanceSource::Resource(src_c),
@@ -469,6 +471,7 @@ async fn update_with_content_block_targets_named_block(pool: sqlx::PgPool) {
             title: None,
             origin_uri: None,
             properties: &[],
+            unset_keys: &[],
             chunks: None,
             sources: vec![Incorporation {
                 source: ProvenanceSource::Resource(src_b),
@@ -537,6 +540,7 @@ async fn update_with_foreign_content_block_is_rejected(pool: sqlx::PgPool) {
             title: None,
             origin_uri: None,
             properties: &[],
+            unset_keys: &[],
             chunks: None,
             sources: vec![],
             // a block id that belongs to no resource in this DB
@@ -609,6 +613,7 @@ async fn update_with_folded_content_block_is_rejected(pool: sqlx::PgPool) {
             title: None,
             origin_uri: None,
             properties: &[],
+            unset_keys: &[],
             chunks: None,
             sources: vec![],
             content_block: Some(block_id),

@@ -156,6 +156,7 @@ async fn update_body(pool: &PgPool, emitter: EntityId, resource: ResourceId, bod
             title: None,
             origin_uri: None,
             properties: &[],
+            unset_keys: &[],
             chunks: None,
             sources: vec![],
             content_block: None,

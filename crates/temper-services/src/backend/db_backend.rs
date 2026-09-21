@@ -416,6 +416,33 @@ fn properties_from_meta(
     out
 }
 
+/// Split an update's `open_meta` into the keys to SET and the keys to UNSET.
+///
+/// An explicit `null` value is key deletion — the in-band verb, the RFC 7386 merge-patch
+/// convention and the same in-band shape `{"tags": []}` already has for clearing a list.
+/// `open_meta` has never STORED a null — both create and update silently dropped null-valued
+/// entries, which is exactly the defect this verb replaces: the same payload now deletes the
+/// key instead of reporting success while changing nothing. The SET half carries the non-null
+/// entries in stored order; the UNSET half lists the null-valued keys. A non-object value
+/// passes through untouched — shape validation still refuses it at the root path.
+fn split_open_meta_nulls(
+    open_meta: Option<&serde_json::Value>,
+) -> (Option<serde_json::Value>, Vec<String>) {
+    let Some(obj) = open_meta.and_then(|o| o.as_object()) else {
+        return (open_meta.cloned(), Vec::new());
+    };
+    let mut sets = serde_json::Map::new();
+    let mut unsets = Vec::new();
+    for (k, v) in obj {
+        if v.is_null() {
+            unsets.push(k.clone());
+        } else {
+            sets.insert(k.clone(), v.clone());
+        }
+    }
+    (Some(serde_json::Value::Object(sets)), unsets)
+}
+
 /// Union one additive open_meta list onto the value it is accumulating over.
 ///
 /// Existing order is preserved and only genuinely new members are appended, so repeating
@@ -1516,6 +1543,7 @@ impl DbBackend {
                             title: None,
                             origin_uri: None,
                             properties: &[],
+                            unset_keys: &[],
                             chunks: Some(incoming_chunks),
                             // Corpus reconcile carries no provenance attribution (not a distillation).
                             sources: Vec::new(),
@@ -2063,6 +2091,23 @@ impl DbBackend {
         // shape before it lands as a property row (silent-search-miss prevention). Runs on every
         // surface (api + mcp) because both dispatch through this backend command.
         validate_open_meta_shape(cmd.open_meta.as_ref())?;
+        // A null value on CREATE is unambiguously a caller error — there is nothing to delete
+        // and null has never been a storable value — so refuse loudly instead of the silent
+        // drop an update used to perform. (On UPDATE null means delete; see the update arm.)
+        if let Some(obj) = cmd.open_meta.as_ref().and_then(|o| o.as_object()) {
+            let null_keys: Vec<String> = obj
+                .iter()
+                .filter(|(_, v)| v.is_null())
+                .map(|(k, _)| k.clone())
+                .collect();
+            if !null_keys.is_empty() {
+                return Err(TemperError::BadRequest(format!(
+                    "open_meta key(s) {} are null on create — omit the key (null deletes a key \
+                     on update; there is nothing to delete on create)",
+                    null_keys.join(", ")
+                )));
+            }
+        }
         let properties = properties_from_meta(&managed, cmd.open_meta.as_ref());
 
         // Map the surface-supplied ActContext → substrate EventContext (identical re-exported types).
@@ -2266,7 +2311,10 @@ impl Backend for DbBackend {
         // Receive-side symmetric-defense gate (twin of create's): reject a recognized open_meta key
         // carrying the wrong shape before it lands as a property row. Auth ran above; this is the
         // validate-before-write step. Covers both the managed+open and open-only branches below.
-        validate_open_meta_shape(cmd.open_meta.as_ref())?;
+        // Runs on the SET half only: a null-valued key is a delete verb, not a value, so
+        // `{"tags": null}` must not fail the recognized-key shape check that `tags` be an array.
+        let (open_sets, open_unsets) = split_open_meta_nulls(cmd.open_meta.as_ref());
+        validate_open_meta_shape(open_sets.as_ref())?;
         let mut properties: Vec<(String, serde_json::Value)> = Vec::new();
         // Validate whenever the caller touches managed_meta OR identity: a title change must
         // still satisfy the schema (e.g. non-empty `temper-title`), so a title-only PATCH runs
@@ -2346,9 +2394,9 @@ impl Backend for DbBackend {
             // asserts per key, so unsupplied keys are untouched — DON'T write the defaulted
             // validation set). `properties_from_meta` filters to §7-Property keys, so the
             // §7-Die identity keys + the §7-ReconcileToDocType `temper-type` never become rows.
-            properties = properties_from_meta(&incoming, cmd.open_meta.as_ref());
-        } else if cmd.open_meta.is_some() {
-            properties = properties_from_meta(&serde_json::Value::Null, cmd.open_meta.as_ref());
+            properties = properties_from_meta(&incoming, open_sets.as_ref());
+        } else if open_sets.is_some() {
+            properties = properties_from_meta(&serde_json::Value::Null, open_sets.as_ref());
         }
 
         // Additive open-tier keys. Read the stored open tier through the same visibility-gated
@@ -2364,6 +2412,9 @@ impl Backend for DbBackend {
                 .await
                 .map_err(map_readback_err)?
                 .open;
+            // `pending_replace` is the caller's ORIGINAL open_meta — nulls included, so a key
+            // deleted here and added on the same PATCH reads "delete, then add fresh": the null
+            // base resolves to an empty list, never to what is stored.
             let added = open_meta_add_properties(add, cmd.open_meta.as_ref(), &stored)?;
             // Shape-gate the union result on the same terms as a replace: a recognized open key
             // must still land with the right shape, however it was assembled.
@@ -2401,6 +2452,7 @@ impl Backend for DbBackend {
             title: title.as_deref(),
             origin_uri: None,
             properties: &properties,
+            unset_keys: &open_unsets,
             chunks: incoming_chunks,
             sources: body_sources(cmd.body.as_ref()),
             content_block: cmd.body.as_ref().and_then(|b| b.content_block),

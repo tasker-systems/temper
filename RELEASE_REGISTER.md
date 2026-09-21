@@ -14,6 +14,23 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.5.2 — unreleased
 
+- **The open_meta key delete verb — an explicit `null` value on an update's `open_meta` deletes the key**
+  A resource's open_meta key could be set but never removed: an explicit `null`
+  was silently dropped by every write surface — the update exited ok and the
+  key survived — so a metadata correction meant delete-and-recreate the whole
+  resource (ids, provenance, embeddings all move). An update PATCH (CLI
+  `--open-meta`, HTTP `open_meta`, MCP `update_resource`/`update_resource_meta`)
+  now treats `{"key": null}` as key deletion, folding the key's live property
+  rows via the new `property_unset` ledger event; on CREATE a null-valued key
+  is refused 400 naming the key instead of the silent drop. Callers observe it
+  on every write surface: same request class, success-changes-stored-state.
+  The openapi movement is description-only (`open_meta`'s field description
+  names the verb); no shape change.
+pr: self
+classes: additive, behavioral
+surfaces: http, mcp, cli-stdout
+status: satisfied
+
 - **The admin skill set behind `temper skill install --include-admin`**
   The admin surface gains installable skill packaging, gated: a default
   install ships no admin content at all — and stops carrying what it already

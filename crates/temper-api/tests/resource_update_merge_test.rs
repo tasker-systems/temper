@@ -323,6 +323,56 @@ async fn open_meta_partial_update_merges_by_key(pool: PgPool) {
     );
 }
 
+/// PATCH with an explicit `null` value DELETES the key (the in-band delete verb):
+/// the named key vanishes from the readback, unnamed keys survive, and a recognized
+/// key deleted via null must not fail the recognized-key shape check that `tags`
+/// be an array.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn open_meta_null_value_deletes_the_key(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+
+    let stored = json!({
+        "tags": ["rust"],
+        "aliases": ["temper-cli"]
+    });
+    let (token, resource_id) = setup_resource_with_open_meta(&app, &pool, stored).await;
+
+    let req_body = json!({
+        "open_meta": { "tags": null }
+    });
+
+    let resp = app
+        .client
+        .patch(app.url(&format!("/api/resources/{resource_id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&req_body)
+        .send()
+        .await
+        .expect("PATCH request failed");
+
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "null-valued key is a delete verb, not a value; body: {}",
+        resp.text().await.unwrap_or_default()
+    );
+
+    let merged = fetch_open_meta(&app, &token, &resource_id).await;
+    assert!(
+        merged.get("tags").is_none(),
+        "the deleted key must vanish from the readback, got {merged}"
+    );
+    assert_eq!(
+        merged["aliases"],
+        json!(["temper-cli"]),
+        "unnamed keys are never touched — there is no whole-object replace"
+    );
+}
+
+// The create-side null refusal is witnessed at the backend command level
+// (temper-services/tests/open_meta_roundtrip_test.rs) — the HTTP create door
+// carries no open_meta field at all, so there is nothing to refuse here.
+
 // `managed_hash_recomputes_after_merge` was DELETED: the substrate retired the
 // `managed_hash` (db_backend sets it `None`; GET /meta returns `managed_hash: ""`),
 // so there is no recomputed hash to assert. The managed_meta merge it leaned on is

@@ -479,7 +479,8 @@ pub enum ResourceAction {
         /// Open (caller-defined) frontmatter as a JSON object string, e.g.
         /// --open-meta '{"marker":"x","reviewed":true}'. These are the free-form
         /// "bring-your-own" fields; the closed temper-* vocabulary uses the typed
-        /// flags (--mode/--effort/…). Must be a JSON object.
+        /// flags (--mode/--effort/…). Must be a JSON object; a null value is
+        /// refused on create (null deletes a key on update — omit the key here).
         #[arg(long)]
         open_meta: Option<String>,
         /// Link this resource to a goal by ref (UUID or decorated `slug-<uuid>`).
@@ -757,7 +758,10 @@ pub enum ResourceAction {
         derived_from: Vec<String>,
         /// Open (caller-defined) frontmatter as a JSON object string, e.g.
         /// --open-meta '{"marker":"x","reviewed":true}'. REPLACES each key it
-        /// names — including lists, so '{"tags":[]}' clears tags. The repeatable
+        /// names — including lists, so '{"tags":[]}' clears tags — and an
+        /// explicit **null value DELETES the key**, e.g.
+        /// --open-meta '{"word_count":null}' removes it (on create a null is
+        /// refused: omit the key). The repeatable
         /// flags above ADD instead; when both name a key, this replace lands
         /// first and the additions union on top. Free-form "bring-your-own"
         /// fields; temper-* keys use the typed flags. Must be a JSON object.

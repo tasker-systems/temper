@@ -107,7 +107,8 @@ pub struct CreateResourceInput {
     pub managed_meta: Option<ManagedMeta>,
     /// Open (caller-defined) frontmatter as a free-form JSON **object**. Any key
     /// is allowed and stored; recognized keys (`tags`, `keywords`, `descriptor`,
-    /// `date`, …) are advertised for shape/ranking but not required.
+    /// `date`, …) are advertised for shape/ranking but not required. A `null`
+    /// value is refused on create (null deletes a key on update — omit the key here).
     #[serde(default)]
     #[schemars(schema_with = "open_meta_input_schema")]
     pub open_meta: Option<serde_json::Value>,
@@ -272,7 +273,9 @@ pub struct UpdateResourceInput {
     pub managed_meta: Option<ManagedMeta>,
     /// Open (caller-defined) frontmatter as a free-form JSON **object**. Any key
     /// is allowed and stored; recognized keys (`tags`, `keywords`, `descriptor`,
-    /// `date`, …) are advertised for shape/ranking but not required.
+    /// `date`, …) are advertised for shape/ranking but not required. An explicit
+    /// **`null` value deletes the key** (in-band verb; unnamed keys are never
+    /// touched — there is no whole-object replace).
     #[serde(default)]
     #[schemars(schema_with = "open_meta_input_schema")]
     pub open_meta: Option<serde_json::Value>,

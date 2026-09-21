@@ -150,6 +150,7 @@ async fn seed_finding_with_n_provenance(
                 title: None,
                 origin_uri: None,
                 properties: &[],
+                unset_keys: &[],
                 chunks: None,
                 sources: vec![Incorporation {
                     source: ProvenanceSource::Resource(base.uuid()),
@@ -334,6 +335,7 @@ async fn cite_again(
             title: None,
             origin_uri: None,
             properties: &[],
+            unset_keys: &[],
             chunks: None,
             sources: vec![Incorporation {
                 source: ProvenanceSource::Resource(source.uuid()),
