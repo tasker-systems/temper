@@ -68,6 +68,11 @@ pub struct DecisionTemplate<'a> {
 pub struct SkillTemplate<'a> {
     pub config_hash: &'a str,
     pub context_list: &'a str,
+    /// Whether the admin skill set was requested (`skill install --include-admin`). A `false`
+    /// render must carry no admin content at all — the flag's help text is the only disclosure —
+    /// so the template's admin arm sits behind this, and the router test derives the shipped
+    /// file set from the file map rather than restating it.
+    pub include_admin: bool,
 }
 
 #[derive(Template)]

@@ -2195,7 +2195,12 @@ pub enum StewardCmd {
 #[derive(Subcommand)]
 pub enum SkillAction {
     /// Generate skill content (preview to stdout)
-    Generate,
+    Generate {
+        /// Preview the admin-inclusive tree (`skill install --include-admin`'s output) rather
+        /// than the default one.
+        #[arg(long)]
+        include_admin: bool,
+    },
     /// Install skill directory and command wrapper
     Install {
         /// Which agent to install for. Determines the default skill directory and command
@@ -2210,6 +2215,14 @@ pub enum SkillAction {
         /// Override the skill install directory (overrides the target's default)
         #[arg(long)]
         path: Option<String>,
+
+        /// Also install the admin skill set (`admin.md` — the `temper admin` command tree:
+        /// system settings, principals, machine clients, connections, subscriptions). A
+        /// default install carries none of it; this flag is its only disclosure. A later
+        /// default install removes admin files the installer itself shipped (files you have
+        /// edited are left alone).
+        #[arg(long)]
+        include_admin: bool,
     },
     /// Check skill status
     Check {

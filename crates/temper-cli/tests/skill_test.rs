@@ -78,7 +78,7 @@ fn test_skill_generate_produces_valid_content() {
     let (config, env) = test_config_with_global(&dir);
 
     temp_env::with_vars(env, || {
-        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        let content = temper_cli::commands::skill::generate(&config, false).unwrap();
         // generate() now returns reference.md content (generated from clap)
         assert!(content.contains("temper"));
         assert!(content.contains("# CLI Reference"));
@@ -97,6 +97,7 @@ fn test_skill_install_writes_directory() {
             &config,
             &skill_dir,
             temper_cli::cli::SkillTarget::Claude,
+            false,
         )
         .unwrap();
         assert!(
@@ -135,12 +136,14 @@ fn test_skill_install_is_idempotent() {
             &config,
             &skill_dir,
             temper_cli::cli::SkillTarget::Claude,
+            false,
         )
         .unwrap();
         let second = temper_cli::commands::skill::install(
             &config,
             &skill_dir,
             temper_cli::cli::SkillTarget::Claude,
+            false,
         )
         .unwrap();
         assert!(
@@ -156,6 +159,7 @@ fn test_skill_install_is_idempotent() {
             &config,
             &skill_dir,
             temper_cli::cli::SkillTarget::Claude,
+            false,
         )
         .unwrap();
         assert_eq!(third.changed, vec!["subagent-guidance.md".to_string()]);
@@ -169,7 +173,7 @@ fn test_skill_generate_includes_reference_sections() {
 
     temp_env::with_vars(env, || {
         // generate() now returns reference.md with generated commands and footer
-        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        let content = temper_cli::commands::skill::generate(&config, false).unwrap();
         assert!(
             content.contains("## Invocation"),
             "should contain invocation section"
@@ -188,7 +192,7 @@ fn test_skill_generate_includes_command_table() {
 
     temp_env::with_vars(env, || {
         // generate() now returns reference.md with the generated command table
-        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        let content = temper_cli::commands::skill::generate(&config, false).unwrap();
         assert!(content.contains("| Command | Syntax |"));
         assert!(content.contains("| init |"));
         assert!(content.contains("| search |"));
@@ -202,7 +206,7 @@ fn test_skill_generate_includes_task_commands() {
 
     temp_env::with_vars(env, || {
         // generate() now returns reference.md with resource subcommands
-        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        let content = temper_cli::commands::skill::generate(&config, false).unwrap();
         assert!(content.contains("| resource create |"));
         assert!(content.contains("| resource list |"));
         assert!(content.contains("--mode"));
@@ -218,7 +222,7 @@ fn test_skill_generate_documents_list_truncation_and_sort_filter() {
     temp_env::with_vars(env, || {
         // The reference must teach the truncation footgun + escape hatches so
         // agents narrow/enumerate before asserting absence or completeness.
-        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        let content = temper_cli::commands::skill::generate(&config, false).unwrap();
         assert!(
             content.contains("## Listing: truncation, sort, and filters"),
             "reference.md should document the listing truncation/sort/filter mechanics"
@@ -246,7 +250,7 @@ fn test_skill_generate_documents_body_source_precedence() {
     temp_env::with_vars(env, || {
         // The reference must pin the body-source precedence and the loop-stdin
         // footgun so agents don't silently clobber a body via inherited stdin.
-        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        let content = temper_cli::commands::skill::generate(&config, false).unwrap();
         assert!(
             content.contains("## Body Source"),
             "reference.md should document the body-source precedence"
@@ -271,7 +275,7 @@ fn test_skill_generate_documents_block_grain_ingest() {
         // The reference must route agents to the block-grain / attribution
         // surface so they don't default to whole-body writes for citation-graded
         // or large documents.
-        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        let content = temper_cli::commands::skill::generate(&config, false).unwrap();
         assert!(
             content.contains("## Block-Grain Ingest & Attribution"),
             "reference.md should document the block-grain ingest/attribution surface"
@@ -309,6 +313,7 @@ fn test_skill_md_routes_to_block_grain_and_guards_stdin() {
             &config,
             &skill_dir,
             temper_cli::cli::SkillTarget::Claude,
+            false,
         )
         .unwrap();
         let skill_md = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
@@ -347,6 +352,7 @@ fn skill_md_carries_the_outcome_discipline_stanza_not_just_the_pointer() {
             &config,
             &skill_dir,
             temper_cli::cli::SkillTarget::Claude,
+            false,
         )
         .unwrap();
         let skill_md = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
@@ -381,7 +387,7 @@ fn test_skill_generate_includes_skill_only_commands() {
 
     temp_env::with_vars(env, || {
         // generate() now returns reference.md which includes skill-only commands in footer
-        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        let content = temper_cli::commands::skill::generate(&config, false).unwrap();
         assert!(
             content.contains("## Skill-Only Commands"),
             "should contain skill-only commands section"
@@ -407,7 +413,7 @@ fn test_skill_generate_uses_decorated_context_ref_form() {
     let (config, env) = test_config_with_global(&dir);
 
     temp_env::with_vars(env, || {
-        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        let content = temper_cli::commands::skill::generate(&config, false).unwrap();
         // reference.md should document the decorated ref form, not bare name
         assert!(
             content.contains("@me/"),
@@ -499,6 +505,7 @@ fn test_skill_md_contexts_section_addresses_by_ref() {
             &config,
             &skill_dir,
             temper_cli::cli::SkillTarget::Claude,
+            false,
         )
         .unwrap();
         let skill_md = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
