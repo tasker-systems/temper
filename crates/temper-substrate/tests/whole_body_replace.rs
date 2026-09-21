@@ -155,6 +155,7 @@ async fn update_body(
             title: None,
             origin_uri: None,
             properties: &[],
+            unset_keys: &[],
             chunks: None,
             sources,
             content_block: None,

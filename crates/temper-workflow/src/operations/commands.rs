@@ -133,6 +133,8 @@ pub struct UpdateResource {
     pub slug: Option<String>,
     pub body: Option<BodyUpdate>,
     pub managed_meta: Option<ManagedMeta>,
+    /// Partial open_meta merge — incoming keys win, absent keys preserved, and an explicit
+    /// **`null` value deletes the key** (in-band verb; there is no whole-object replace).
     pub open_meta: Option<Value>,
     /// Additive open_meta patch — each key's list is unioned with the stored value rather
     /// than replacing it. See `ResourceUpdateRequest::open_meta_add` for why the two

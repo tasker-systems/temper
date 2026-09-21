@@ -218,6 +218,7 @@ async fn superseded_revisions_keep_their_own_bytes(pool: sqlx::PgPool) {
             title: None,
             origin_uri: None,
             properties: &[],
+            unset_keys: &[],
             chunks: Some(incoming_chunks_for_body("v2 body\n")),
             sources: vec![],
             content_block: None,

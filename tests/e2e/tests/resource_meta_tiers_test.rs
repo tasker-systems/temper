@@ -212,3 +212,70 @@ async fn non_llm_create_is_stamped_user_created(pool: sqlx::PgPool) {
         "no invocation to record: {full}"
     );
 }
+
+/// An explicit `null` value on an `open_meta` key DELETES the key, through the real
+/// CLI → API → DB path. The behavior this replaces was a silent no-op: the update
+/// exited ok and the key survived, so "metadata fixes mean recreate" was the only
+/// recourse. A recognized key deleted via null must also not fail the recognized-key
+/// shape check that `tags` be an array — the verb is not a value.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_null_open_meta_value_deletes_the_key_through_the_cli(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("null-delete-ctx", None)
+        .await
+        .expect("ctx create");
+
+    let created = cli_json(
+        &app,
+        &[
+            "resource",
+            "create",
+            "--type",
+            "concept",
+            "--title",
+            "Null Delete Probe",
+            "--context",
+            "@me/null-delete-ctx",
+            "--open-meta",
+            r#"{"tags":["alpha"],"marker":"keep"}"#,
+            "--format",
+            "json",
+        ],
+    )
+    .await;
+    let id = created["id"].as_str().expect("id").to_string();
+
+    cli_json(
+        &app,
+        &[
+            "resource",
+            "update",
+            &id,
+            "--open-meta",
+            r#"{"tags":null}"#,
+            "--format",
+            "json",
+        ],
+    )
+    .await;
+
+    // Assert against a fresh read, so the delete is proven against stored state,
+    // not the update's own response payload.
+    let full = cli_json(&app, &["resource", "show", &id, "--format", "json"]).await;
+    assert!(
+        full["open_meta"].get("tags").is_none(),
+        "the null-deleted key must be gone from stored state, got {full}"
+    );
+    assert_eq!(
+        full["open_meta"]["marker"], "keep",
+        "unnamed keys are never touched"
+    );
+}

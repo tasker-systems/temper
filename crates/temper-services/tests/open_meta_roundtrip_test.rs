@@ -132,6 +132,201 @@ async fn open_meta_round_trips_on_create_and_update(pool: PgPool) {
     );
 }
 
+/// An explicit `null` value on an update's `open_meta` DELETES the key, and a
+/// null-valued key on CREATE is refused loudly naming the key.
+///
+/// The historical behavior was a silent no-op in both directions: create and
+/// update dropped null-valued entries, the update exited ok, and the key
+/// survived — so "metadata fixes mean recreate" was the only recourse. The verb
+/// is in-band (the RFC 7386 merge-patch convention, the same in-band shape
+/// `{"tags": []}` already has for clearing a list), and a recognized key deleted
+/// via null must not fail the recognized-key shape check that `tags` be an
+/// array. The delete+add interplay keeps the documented order: `{"tags":null}`
+/// plus `open_meta_add {"tags":["x"]}` reads "delete, then add fresh".
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn open_meta_null_deletes_on_update_and_is_refused_on_create(pool: PgPool) {
+    let (profile, context) = seed_profile_with_context(&pool, "open-meta-null@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+
+    // CREATE: null-valued key → 400 naming the key (there is nothing to delete).
+    let refused = backend
+        .create_resource(CreateResource {
+            idempotency_key: None,
+            slug: "zz-null-create-probe".to_string(),
+            doctype: "research".to_string(),
+            home: HomeAnchor::Context(ContextId::from(context)),
+            title: "ZZ null create probe".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: Some(serde_json::json!({ "word_count": null })),
+            goal: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            act: ActContext::default(),
+            origin: Surface::Mcp,
+        })
+        .await
+        .expect_err("a null-valued key on create must be refused");
+    let rendered = refused.to_string();
+    assert!(
+        rendered.contains("word_count"),
+        "the refusal must name the key, got {rendered}"
+    );
+
+    // UPDATE: `{"tags": null}` deletes the key; the unnamed sibling survives;
+    // the recognized-key shape check must not read the delete verb as a value.
+    let created = backend
+        .create_resource(CreateResource {
+            idempotency_key: None,
+            slug: "zz-null-delete-probe".to_string(),
+            doctype: "research".to_string(),
+            home: HomeAnchor::Context(ContextId::from(context)),
+            title: "ZZ null delete probe".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: Some(serde_json::json!({
+                "tags": ["alpha"],
+                "marker": "keep"
+            })),
+            goal: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            act: ActContext::default(),
+            origin: Surface::Mcp,
+        })
+        .await
+        .expect("create")
+        .value;
+
+    backend
+        .update_resource(UpdateResource {
+            open_meta_add: None,
+            resource: created.id,
+            title: None,
+            slug: None,
+            body: None,
+            managed_meta: None,
+            open_meta: Some(serde_json::json!({ "tags": null })),
+            goal: None,
+            move_to: None,
+            context_ref: None,
+            act: ActContext::default(),
+            origin: Surface::Mcp,
+        })
+        .await
+        .expect("null-valued key is a delete verb, not a value");
+
+    let meta = substrate_read::get_meta_select(&pool, ProfileId::from(profile), created.id)
+        .await
+        .expect("get_meta after delete");
+    let open = meta.open_meta.expect("open_meta present");
+    assert!(
+        open.get("tags").is_none(),
+        "the deleted key must vanish from the readback, got {open}"
+    );
+    assert_eq!(
+        open.get("marker"),
+        Some(&serde_json::json!("keep")),
+        "unnamed keys are never touched — there is no whole-object replace"
+    );
+
+    // Delete + add on the same PATCH: "delete, then add fresh" — the union must
+    // start from EMPTY, never from what is stored.
+    backend
+        .update_resource(UpdateResource {
+            open_meta_add: Some(serde_json::json!({ "tags": ["gamma"] })),
+            resource: created.id,
+            title: None,
+            slug: None,
+            body: None,
+            managed_meta: None,
+            open_meta: Some(serde_json::json!({ "tags": null })),
+            goal: None,
+            move_to: None,
+            context_ref: None,
+            act: ActContext::default(),
+            origin: Surface::Mcp,
+        })
+        .await
+        .expect("delete then add");
+
+    let meta3 = substrate_read::get_meta_select(&pool, ProfileId::from(profile), created.id)
+        .await
+        .expect("get_meta after delete+add");
+    let open3 = meta3.open_meta.expect("open_meta present");
+    assert_eq!(
+        open3.get("tags"),
+        Some(&serde_json::json!(["gamma"])),
+        "delete+add resets the list to the added items, got {open3}"
+    );
+}
+
+/// An unset arriving through the `open_meta` channel may target only open-tier keys:
+/// a managed vocabulary key or the `facet`/`doc_type` specials is refused naming the key,
+/// so the verb cannot fold rows the managed pipeline and the facet vocabulary police.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn open_meta_null_refuses_cross_tier_unsets(pool: PgPool) {
+    let (profile, context) = seed_profile_with_context(&pool, "open-meta-tier@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+    let created = backend
+        .create_resource(CreateResource {
+            idempotency_key: None,
+            slug: "zz-tier-probe".to_string(),
+            doctype: "task".to_string(),
+            home: HomeAnchor::Context(ContextId::from(context)),
+            title: "ZZ tier probe".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: Some(serde_json::json!({"marker": "here"})),
+            goal: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            act: ActContext::default(),
+            origin: Surface::Mcp,
+        })
+        .await
+        .expect("create")
+        .value;
+
+    for key in ["temper-stage", "facet", "doc_type", "temper-title"] {
+        let refused = backend
+            .update_resource(UpdateResource {
+                open_meta_add: None,
+                resource: created.id,
+                title: None,
+                slug: None,
+                body: None,
+                managed_meta: None,
+                open_meta: Some(serde_json::json!({ key: null })),
+                goal: None,
+                move_to: None,
+                context_ref: None,
+                act: ActContext::default(),
+                origin: Surface::Mcp,
+            })
+            .await
+            .expect_err("a cross-tier unset must be refused");
+        let rendered = refused.to_string();
+        assert!(
+            rendered.contains(key),
+            "the refusal must name the key {key}, got {rendered}"
+        );
+    }
+
+    // The resource is untouched by every refused attempt.
+    let meta = substrate_read::get_meta_select(&pool, ProfileId::from(profile), created.id)
+        .await
+        .expect("get_meta after refusals");
+    assert_eq!(
+        meta.open_meta.expect("open_meta present").get("marker"),
+        Some(&serde_json::json!("here")),
+        "refused verbs write nothing"
+    );
+}
+
 /// The additive open-tier channel must ADD to a list, not replace it.
 ///
 /// This is the regression guard for the `--tags` data-loss bug: `--tags docs` on a

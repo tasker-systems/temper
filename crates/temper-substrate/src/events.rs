@@ -64,6 +64,13 @@ pub enum EventKind {
     /// edge-bound fold in `project_property_retracted`, which replay re-runs (the payload
     /// carries the row id, so every replay retracts the same row).
     PropertyRetracted,
+    /// Unset one property KEY on a resource (`property_unset`) — the key-grain delete behind
+    /// an explicit `null` value in an update's `open_meta`. Registered permissive (NULL
+    /// `payload_schema`) by the `property_unset_event` migration, the `property_set` /
+    /// `property_retracted` precedent. Fires from `SeedAction::PropertyUnset`; projected by
+    /// the owner-bound fold in `project_property_unset`, which replay re-runs (the payload
+    /// carries the key, so every replay folds the same key's live set).
+    PropertyUnset,
     /// One data artifact committed to a resource (spec 2026-08-20). The payload carries the
     /// content HASH; the bytes ride a sidecar into `kb_data_artifact_content`.
     DataArtifactCommitted,
@@ -202,6 +209,7 @@ impl EventKind {
             EventKind::PropertyAsserted => "property_asserted",
             EventKind::PropertySet => "property_set",
             EventKind::PropertyRetracted => "property_retracted",
+            EventKind::PropertyUnset => "property_unset",
             EventKind::DataArtifactCommitted => "data_artifact_committed",
             EventKind::ShapeDeclared => "shape_declared",
             EventKind::LensCreated => "lens_created",
@@ -257,6 +265,7 @@ impl EventKind {
             "property_asserted" => EventKind::PropertyAsserted,
             "property_set" => EventKind::PropertySet,
             "property_retracted" => EventKind::PropertyRetracted,
+            "property_unset" => EventKind::PropertyUnset,
             "data_artifact_committed" => EventKind::DataArtifactCommitted,
             "shape_declared" => EventKind::ShapeDeclared,
             "lens_created" => EventKind::LensCreated,
@@ -414,6 +423,17 @@ pub enum SeedAction<'a> {
     PropertyRetract {
         edge: EdgeId,
         property_id: PropertyId,
+        emitter: EntityId,
+    },
+    /// Unset one property KEY on a resource — the key-grain delete verb. No SQL mutation
+    /// function: the event appends through the shared `_event_append` chokepoint and the
+    /// projection runs in Rust (`project_property_unset`), the `PropertyRetract` shape.
+    /// Idempotent: zero live rows (absent or already-unset key) folds nothing and succeeds —
+    /// delete semantics, and a modify-gated caller can already read the meta, so a silent
+    /// no-op discloses nothing a read would not.
+    PropertyUnset {
+        resource: ResourceId,
+        key: &'a str,
         emitter: EntityId,
     },
     /// Set a SINGLE-valued property: folds prior active `(owner, key)` rows then asserts this value, so
@@ -692,6 +712,7 @@ impl SeedAction<'_> {
             SeedAction::PropertyAssert { .. } => EventKind::PropertyAsserted,
             SeedAction::KeyedPropertyAssert { .. } => EventKind::PropertyAsserted,
             SeedAction::PropertyRetract { .. } => EventKind::PropertyRetracted,
+            SeedAction::PropertyUnset { .. } => EventKind::PropertyUnset,
             SeedAction::PropertySet { .. } => EventKind::PropertySet,
             SeedAction::DataArtifactCommit { .. } => EventKind::DataArtifactCommitted,
             SeedAction::ShapeDeclare { .. } => EventKind::ShapeDeclared,
@@ -782,6 +803,10 @@ pub enum Fired {
     /// The row a `PropertyRetract` fire folded — the caller's own property id, echoed. A fold
     /// mints nothing: zero rows folded is a refusal, never an empty success.
     PropertyRetract(PropertyId),
+    /// How many live rows a `PropertyUnset` fire folded. Zero is SUCCESS here — an absent or
+    /// already-unset key is an idempotent no-op, the delete-verb semantics (contrast
+    /// `PropertyRetract`, whose zero is a refusal because its caller addresses a row id).
+    PropertyUnset(u64),
 }
 
 impl Fired {
@@ -985,6 +1010,53 @@ where
     )
     .execute(executor)
     .await?;
+    Ok(res.rows_affected())
+}
+
+/// The projection half of `property_unset` — the key-grain delete verb's fold, with no SQL
+/// mutation function (fire and replay share THIS body, the `project_property_retracted`
+/// shape). Folds every live row for `(owner, property_key)` — the same predicate
+/// `_project_property_set` folds under (20260730000010, its newest definition), minus the
+/// insert. The FTS rebuild rides here under the same gate `_project_property_set` applies —
+/// owner table read from the payload, the same keys — because folding the last
+/// `keywords`/`descriptor`/`tags` row must not leave a stale search vector behind, and the
+/// rebuild runs AFTER the fold so it reads the post-fold live set. Idempotent under replay —
+/// a second application folds zero rows and the rebuild is a pure refresh.
+pub(crate) async fn project_property_unset(
+    conn: &mut sqlx::PgConnection,
+    event_id: Uuid,
+    payload: &serde_json::Value,
+) -> Result<u64> {
+    let res = sqlx::query!(
+        "UPDATE kb_properties \
+         SET is_folded = true, last_event_id = $1 \
+         WHERE owner_table = 'kb_resources' \
+           AND owner_id = ($2::jsonb->'owner'->>'id')::uuid \
+           AND property_key = ($2::jsonb->>'property_key') \
+           AND NOT is_folded",
+        event_id,
+        payload,
+    )
+    .execute(&mut *conn)
+    .await?;
+    let key = payload
+        .get("property_key")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let owner_is_resource = payload
+        .pointer("/owner/table")
+        .and_then(|v| v.as_str())
+        .is_some_and(|t| t == "kb_resources");
+    if owner_is_resource && (key == "keywords" || key == "descriptor" || key == "tags") {
+        let owner: Uuid = payload
+            .pointer("/owner/id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse().ok())
+            .context("property_unset payload carries no owner id")?;
+        sqlx::query!("SELECT _rebuild_resource_search_vector($1)", owner)
+            .execute(&mut *conn)
+            .await?;
+    }
     Ok(res.rows_affected())
 }
 
@@ -1294,6 +1366,50 @@ pub async fn fire_with(
                 }));
             }
             Ok(Fired::PropertyRetract(property_id))
+        }
+
+        SeedAction::PropertyUnset {
+            resource,
+            key,
+            emitter,
+        } => {
+            let payload = payloads::PropertyUnset {
+                owner: payloads::AnchorRef::resource(resource),
+                property_key: key.to_owned(),
+            };
+            let payload_value = serde_json::to_value(&payload)?;
+            // The event anchors the resource's home — the resolution the property_set wrapper
+            // gets from `_property_owner_anchor`, asked directly here because this event has no
+            // SQL mutation wrapper.
+            let anchor = sqlx::query!(
+                "SELECT a.anchor_table, a.anchor_id FROM _property_owner_anchor($1, $2) a",
+                "kb_resources",
+                resource.uuid(),
+            )
+            .fetch_one(&mut *conn)
+            .await?;
+            let anchor_table = anchor
+                .anchor_table
+                .context("_property_owner_anchor returned null anchor_table")?;
+            let anchor_id = anchor
+                .anchor_id
+                .context("_property_owner_anchor returned null anchor_id")?;
+            let event_id = sqlx::query_scalar!(
+                "SELECT _event_append('property_unset', $1, $2, $3, $4, \
+                    p_metadata => $5, p_invocation => $6, p_correlation => $7)",
+                emitter.uuid(),
+                anchor_table,
+                anchor_id,
+                payload_value,
+                ctx_meta,
+                ctx_inv,
+                ctx_corr,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("property_unset append returned null")?;
+            let folded = project_property_unset(&mut *conn, event_id, &payload_value).await?;
+            Ok(Fired::PropertyUnset(folded))
         }
 
         SeedAction::DataArtifactCommit {

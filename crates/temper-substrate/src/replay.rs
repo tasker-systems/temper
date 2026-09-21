@@ -15,8 +15,9 @@
 
 use crate::events::EventKind;
 use anyhow::{Context, Result};
-use sqlx::{PgPool, Row};
+use sqlx::{Connection, PgPool, Row};
 use std::collections::HashMap;
+use std::ops::DerefMut;
 use temper_core::types::home::HomeAnchor;
 use uuid::Uuid;
 
@@ -244,6 +245,9 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // The row-grain correction: payload-only (the row id rides the payload), no chunk
             // content — never selected by the content-bearing filter above.
             | EventKind::PropertyRetracted
+            // The key-grain delete verb: payload-only (owner + key), no chunk content — same
+            // posture.
+            | EventKind::PropertyUnset
             | EventKind::LensCreated
             | EventKind::RegionMaterialized
             | EventKind::RelationshipFolded
@@ -650,6 +654,20 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // `NOT is_folded` floor makes a re-application a zero-row no-op, never a resurrection.
             EventKind::PropertyRetracted => {
                 crate::events::project_property_retracted(pool, id, &payload).await?;
+            }
+            // property_unset (the key-grain delete verb): payload-only projector, no sidecar —
+            // the shared `project_property_unset`, fire and replay ONE implementation since this
+            // event has no `_project_*` SQL function. The payload carries (owner, key), so
+            // replay re-folds the SAME key's live set; the `NOT is_folded` floor makes a
+            // re-application a zero-row no-op, never a resurrection. The fold + FTS rebuild are
+            // TWO statements, so they run in one transaction here — the SQL-function arms get
+            // that atomicity from being single function calls, and this arm must not be the
+            // first multi-statement projection replay runs bare.
+            EventKind::PropertyUnset => {
+                let mut conn = pool.acquire().await?;
+                let mut tx = conn.deref_mut().begin().await?;
+                crate::events::project_property_unset(&mut tx, id, &payload).await?;
+                tx.commit().await?;
             }
             EventKind::LensCreated => {
                 sqlx::query("SELECT _project_lens_created($1,$2)")

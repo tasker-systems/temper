@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT _rebuild_resource_search_vector($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "_rebuild_resource_search_vector",
+        "type_info": "Void"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "e89460b1fddd4a044bbfc2287e870514de01026ca8d8df8929a11c6449322bc0"
+}
