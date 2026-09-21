@@ -14,6 +14,25 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.5.2 — unreleased
 
+- **The admin skill set behind `temper skill install --include-admin`**
+  The admin surface gains installable skill packaging, gated: a default
+  install ships no admin content at all — and stops carrying what it already
+  did, because the generated `reference.md` previously included every admin
+  command row (~40 of them) in a default install. The default skill's content
+  therefore changes behind unchanged file shapes: same filenames, fewer rows.
+  `--include-admin` restores the rows and ships `admin.md`; a later default
+  install retracts installer-shipped admin files (byte-matched; user-edited
+  files stay). Who observes: an operator running `temper skill generate` or
+  `temper skill install` — the preview/install output loses admin rows unless
+  they pass the flag, and the install report gains a retraction line when it
+  removes one. MCP emit untouched (config-free by design; skills-drift green).
+  Additive (new optional flag on install/generate) + behavioral (default
+  render content); no HTTP/MCP/schema movement.
+pr: self
+classes: additive, behavioral
+surfaces: cli-stdout
+status: signal-only
+
 - **The Level-3 ordering pin — approved non-admin × nonexistent UUID (operator-directory follow-up, review finding F-B2)**
   Test-only. The directory's uniform-403 ordering pin existed only for the
   born-Denied class, whose request the router's `require_system_access`
