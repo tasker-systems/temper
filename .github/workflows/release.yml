@@ -16,6 +16,17 @@ on:
         description: 'Tag to release (e.g. v0.1.0)'
         required: true
         type: string
+    # release-tag.yml passes this through its caller-side `secrets:` mapping, and
+    # GitHub validates that mapping against the secrets DECLARED here at workflow
+    # parse time — an unpassed/unmapped pair startup-fails the run ("Invalid
+    # secret, HOMEBREW_TAP_DEPLOY_KEY is not defined in the referenced workflow").
+    # Optional, not required: the tag-push and dispatch triggers never pass
+    # through this block at all, and the homebrew tap job surfaces its own
+    # actionable error when the secret is absent.
+    secrets:
+      HOMEBREW_TAP_DEPLOY_KEY:
+        description: 'Ed25519 deploy key (private half) for tasker-systems/homebrew-tap push'
+        required: false
 
 concurrency:
   group: release
