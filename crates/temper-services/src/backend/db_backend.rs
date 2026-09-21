@@ -450,8 +450,7 @@ fn split_open_meta_nulls(
 /// mass-fold facet rows in one stroke, so the refusal names the key and the rule.
 fn refuse_cross_tier_unsets(unset_keys: &[String]) -> Result<(), TemperError> {
     for key in unset_keys {
-        let system_key =
-            key.starts_with("temper-") || key == "facet" || key == "doc_type";
+        let system_key = key.starts_with("temper-") || key == "facet" || key == "doc_type";
         if system_key || temper_substrate::keys::is_managed_property_key(key) {
             return Err(TemperError::BadRequest(format!(
                 "open_meta key '{key}' is not open-tier state and cannot be unset through the \
