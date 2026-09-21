@@ -3,7 +3,10 @@
 //!
 //! * the gate runs BEFORE any existence lookup — a non-admin asking for a NONEXISTENT profile
 //!   UUID gets the same plain 403 as for a real one, so absence never leaks below the gate
-//!   (spec §7, pinned ordering);
+//!   (spec §7, pinned ordering). Pinned for BOTH refusal classes: a born-Denied outsider is
+//!   refused by the router's Level-2 `require_system_access` before any handler code runs, so
+//!   the approved non-admin class — the only one that reaches the handler body — carries its
+//!   own pin on the handler's Level-3 `require_system_admin`;
 //! * `?email=` is an identity-resolution act: exact, case-insensitive, over verified emails —
 //!   one match → the state card; zero → 404; two verified owners → 404 whose BODY NAMES the
 //!   collision; a lookalike address is a different identity, never a substring match (§6, C1);
@@ -82,6 +85,31 @@ async fn provision_non_operator(app: &common::TestApp, sub: &str, email: &str) -
     token
 }
 
+/// Provision `sub` and grant approved standing ONLY — clears the router's Level-2
+/// `require_system_access` but holds no governance, so the handler's own `require_system_admin`
+/// gate is what must refuse. This is the only refused caller class that reaches a gated
+/// handler body.
+async fn provision_and_approve(app: &common::TestApp, sub: &str, email: &str) -> String {
+    let token = common::generate_test_jwt(sub, email);
+    let resp = app
+        .client
+        .get(app.url("/api/profile"))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("provisioning request");
+    assert_eq!(resp.status().as_u16(), 200);
+    let profile: Uuid = sqlx::query_scalar(
+        "SELECT profile_id FROM kb_profile_auth_links WHERE auth_provider_user_id = $1",
+    )
+    .bind(sub)
+    .fetch_one(&app.pool)
+    .await
+    .expect("provisioned profile");
+    common::fixtures::approve_standing(&app.pool, profile).await;
+    token
+}
+
 async fn get_json(app: &common::TestApp, token: &str, path: &str) -> (u16, Value) {
     let resp = app
         .client
@@ -119,6 +147,33 @@ async fn non_admin_getting_a_nonexistent_uuid_gets_the_uniform_403(pool: PgPool)
     )
     .await;
     assert_eq!(by_email, 403, "non-admin on ?email=: {body}");
+}
+
+/// §7's ordering pin, second class. The born-Denied pin above is refused by the ROUTER's
+/// Level-2 `require_system_access` before any handler body runs, so its green proves nothing
+/// about the handler. An APPROVED non-admin is the only refused class that reaches the handler
+/// body: the show door's Level-3 `require_system_admin` must run before any lookup of the path
+/// UUID, or this caller could distinguish a real profile (404) from an absent one.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn approved_non_admin_getting_a_nonexistent_uuid_gets_the_uniform_403(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let approved = provision_and_approve(
+        &app,
+        "approved-outsider|1",
+        "approved-outsider@test.example",
+    )
+    .await;
+
+    let (status, body) = get_json(
+        &app,
+        &approved,
+        &format!("/api/access/admin/profiles/{}", Uuid::now_v7()),
+    )
+    .await;
+    assert_eq!(
+        status, 403,
+        "approved non-admin on a nonexistent uuid: {body}"
+    );
 }
 
 /// The directory is GET-only by ROUTE REGISTRATION, not by handler-side checks: POST, PUT,
