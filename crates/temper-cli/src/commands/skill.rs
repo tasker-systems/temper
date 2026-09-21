@@ -2392,7 +2392,7 @@ mod tests {
     /// admin *invocations* (`temper admin …`) — the surface this gating owns. Two pre-existing
     /// capability labels in the default tree are NOT admin-set disclosure and are allowed:
     /// `knowledge-base.md`'s declared-off-MCP list names `admin_ledger` (a statement that MCP
-    /// does NOT carry it), and `teams.md` says "instance admin" of a role. Reconciled, not
+    /// does NOT carry it), and `teams.md` names the deployment's administrator role. Reconciled, not
     /// overlooked: widening this to any "admin" substring would put those hand-written files
     /// under a gate this change does not own.
     #[test]
