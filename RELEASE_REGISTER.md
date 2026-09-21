@@ -26,7 +26,7 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
   on every write surface: same request class, success-changes-stored-state.
   The openapi movement is description-only (`open_meta`'s field description
   names the verb); no shape change.
-pr: self
+pr: 939
 classes: additive, behavioral
 surfaces: http, mcp, cli-stdout, clients
 status: satisfied
