@@ -14,6 +14,23 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.5.2 — unreleased
 
+- **The Level-3 ordering pin — approved non-admin × nonexistent UUID (operator-directory follow-up, review finding F-B2)**
+  Test-only. The directory's uniform-403 ordering pin existed only for the
+  born-Denied class, whose request the router's `require_system_access`
+  refuses before any handler code runs — a handler that 404s before its own
+  gate still passed it. The new witness provisions an APPROVED non-admin (the
+  only refused class that reaches the handler body) and pins the show door's
+  `require_system_admin` gate-before-existence: a nonexistent profile UUID
+  gets the same plain 403. Bite-probed per the consolidated pass's mutation.
+  No production file, no wire shape, no behavior changed; no openapi.json
+  movement. The row exists because the crosscheck matches the whole crate
+  directory, tests included — the vocabulary's shape-unchanged residual is
+  the closest class (the walk-link row's precedent).
+pr: self
+classes: behavioral
+surfaces: internal
+status: signal-only
+
 - **The walk link — the resource rail offers walk-from-here as a deep link into the traversal door (UI-only)**
   The vault resource view's rail offered nothing that starts a question from
   the piece of work in front of the reader: reaching the traversal door meant
