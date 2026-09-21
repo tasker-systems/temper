@@ -96,6 +96,12 @@ static TEAMS_MD: &str = include_str!("../../skill-content/teams.md");
 /// directory) exists only there. The MCP tree declares its absence rather than shipping an arm
 /// that names doors its client does not have.
 static PROJECT_SETUP_MD: &str = include_str!("../../skill-content/project-setup.md");
+/// The admin surface, CLI-packaging only behind `skill install --include-admin`. Two reasons it
+/// is not in the default tree, one per audience: a non-admin install must carry no signal the
+/// set exists (the flag is the disclosure), and the MCP surface deliberately has no admin tools
+/// — a tree teaching `temper admin …` to an MCP client points at doors that client cannot open.
+/// Gated at install time rather than templated per-user: the content itself is static.
+static ADMIN_MD: &str = include_str!("../../skill-content/admin.md");
 static KNOWLEDGE_BASE_MD: &str =
     include_str!("../../../../agent-skills/temper-knowledge-base/knowledge-base.md");
 static WF_BUILD_SMALL: &str = include_str!("../../skill-content/workflows/build-small.md");
@@ -690,10 +696,19 @@ fn json_type_label(prop: &serde_json::Value) -> String {
 }
 
 /// Generate the reference.md content from clap's command tree.
-pub fn generate_reference() -> String {
+///
+/// `include_admin` selects whether the `admin` subtree's rows appear. A default install's skill
+/// carries no admin content at all, and these rows ARE admin content — every row naming an
+/// admin verb is exactly the disclosure the flag is supposed to be — so they are filtered from
+/// the default render and restored under `--include-admin`. The rows are still clap-derived on
+/// both paths, so the admin render cannot name a verb the binary does not have.
+pub fn generate_reference(include_admin: bool) -> String {
     let cmd = Cli::command();
     let mut rows = Vec::new();
     collect_command_rows(&cmd, "", &mut rows);
+    if !include_admin {
+        rows.retain(|(name, _)| name != "admin" && !name.starts_with("admin "));
+    }
 
     let mut out = String::new();
     out.push_str("# CLI Reference\n\n");
@@ -828,15 +843,15 @@ fn build_syntax(full_name: &str, cmd: &clap::Command) -> String {
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
-/// Generate all skill files as a map of relative_path → content.
+/// Generate all skill files as a map of relative_path → content (the default, non-admin tree).
 pub fn generate_skill_files(config: &Config) -> Result<HashMap<String, String>> {
     let hash = compute_config_hash()?;
-    generate_skill_files_with_hash(config, &hash)
+    generate_skill_files_with_hash(config, &hash, false)
 }
 
 /// Returns the generated reference.md content for stdout preview.
-pub fn generate(_config: &Config) -> Result<String> {
-    Ok(generate_reference())
+pub fn generate(_config: &Config, include_admin: bool) -> Result<String> {
+    Ok(generate_reference(include_admin))
 }
 
 // ── The MCP surface: a committed projection ──────────────────────────────────
@@ -938,11 +953,15 @@ pub struct InstallReport {
     /// Installer-era duplicate files removed from `guidance/` (byte-matched against the exact
     /// revisions the old installer shipped — user-modified files are never touched).
     pub removed_legacy: Vec<String>,
+    /// Admin files removed because this install ran WITHOUT `--include-admin` over a tree that
+    /// had them. Byte-matched against what the installer ships — a file the user has edited is
+    /// theirs, not ours to delete.
+    pub removed_admin: Vec<String>,
 }
 
 impl InstallReport {
     pub fn is_no_op(&self) -> bool {
-        self.changed.is_empty() && self.removed_legacy.is_empty()
+        self.changed.is_empty() && self.removed_legacy.is_empty() && self.removed_admin.is_empty()
     }
 }
 
@@ -985,16 +1004,25 @@ impl SkillTarget {
 ///
 /// `target` selects the command-wrapper location (Claude vs opencode config home). `skill_dir` is
 /// already resolved by the caller (from `--path` or the target's default) — the install function
-/// itself is path-agnostic.
+/// itself is path-agnostic. `include_admin` selects whether the admin skill set rides along; a
+/// default install over a tree that has admin files removes the ones the installer itself shipped
+/// (byte-matched — see `remove_admin_files`), so the absence stays assertable after an upgrade
+/// path that once carried the flag.
 ///
 /// Skips writes when the destination already matches the generated content,
 /// returning an `InstallReport` that lists every file whose bytes changed.
-pub fn install(config: &Config, skill_dir: &Path, target: SkillTarget) -> Result<InstallReport> {
-    let files = generate_skill_files(config)?;
+pub fn install(
+    config: &Config,
+    skill_dir: &Path,
+    target: SkillTarget,
+    include_admin: bool,
+) -> Result<InstallReport> {
+    let files = generate_skill_files_with_hash(config, &compute_config_hash()?, include_admin)?;
     let mut report = InstallReport {
         total: files.len(),
         changed: Vec::new(),
         removed_legacy: Vec::new(),
+        removed_admin: Vec::new(),
     };
 
     // Ensure skill_dir and subdirectories exist
@@ -1043,8 +1071,34 @@ pub fn install(config: &Config, skill_dir: &Path, target: SkillTarget) -> Result
     }
 
     report.removed_legacy = remove_legacy_guidance_duplicates(skill_dir)?;
+    if !include_admin {
+        report.removed_admin = remove_admin_files(skill_dir)?;
+    }
 
     Ok(report)
+}
+
+/// Remove admin files from a tree installed without `--include-admin`, keyed by content hash —
+/// the same rule the legacy-guidance cleanup follows and for the same reason: a file whose bytes
+/// match what the installer ships is ours to retract (the tree must return to a no-admin state),
+/// while a file the user has since edited is theirs and stays.
+fn remove_admin_files(skill_dir: &Path) -> Result<Vec<String>> {
+    let mut removed = Vec::new();
+    for (rel_path, content) in admin_skill_files() {
+        let path = skill_dir.join(rel_path);
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            // Absent is the expected state; unreadable is not ours to judge by hash.
+            Err(_) => continue,
+        };
+        if bytes == content.as_bytes() {
+            std::fs::remove_file(&path).map_err(|e| {
+                TemperError::Config(format!("cannot remove {}: {}", path.display(), e))
+            })?;
+            removed.push(rel_path.to_string());
+        }
+    }
+    Ok(removed)
 }
 
 /// The pre-root-shipping installer wrote the grounding pair into `guidance/`. It now ships at the
@@ -1223,16 +1277,29 @@ fn check_command_wrapper(target: SkillTarget) {
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
+/// The files `--include-admin` adds to the tree, as `(path, content)` — the single source for
+/// both the install-with-flag write and the install-without-flag cleanup, so they cannot
+/// disagree about what an admin set is.
+fn admin_skill_files() -> Vec<(&'static str, &'static str)> {
+    vec![("admin.md", ADMIN_MD)]
+}
+
 /// Generate all skill files with a pre-computed config hash (for testability).
+///
+/// `include_admin` selects whether the admin skill set rides along. The default (`false`) is the
+/// install a non-admin gets: `reference.md` carries no admin rows, no admin file is shipped, and
+/// the router names none — the flag's help text is the only disclosure that the set exists.
 pub fn generate_skill_files_with_hash(
     config: &Config,
     hash: &str,
+    include_admin: bool,
 ) -> Result<HashMap<String, String>> {
     let context_list = format_context_list(&config.contexts);
 
     let skill_template = SkillTemplate {
         config_hash: hash,
         context_list: &context_list,
+        include_admin,
     };
 
     let wrapper_template = CommandWrapperTemplate { config_hash: hash };
@@ -1253,7 +1320,10 @@ pub fn generate_skill_files_with_hash(
             .map_err(|e| TemperError::Config(format!("template render error: {}", e)))?,
     );
 
-    files.insert("reference.md".to_string(), generate_reference());
+    files.insert(
+        "reference.md".to_string(),
+        generate_reference(include_admin),
+    );
     files.insert(
         "subagent-guidance.md".to_string(),
         SUBAGENT_GUIDANCE_MD.to_string(),
@@ -1333,6 +1403,15 @@ pub fn generate_skill_files_with_hash(
         WF_PLAN_LARGE.to_string(),
     );
 
+    // The admin set rides LAST and only under the flag: a default render's file map never
+    // carries an admin path, which is what makes "a default install ships no admin files"
+    // assertable from the map alone.
+    if include_admin {
+        for (path, content) in admin_skill_files() {
+            files.insert(path.to_string(), content.to_string());
+        }
+    }
+
     Ok(files)
 }
 
@@ -1400,7 +1479,7 @@ mod tests {
     #[test]
     fn every_shipped_guidance_file_is_named_by_the_router() {
         let config = test_config();
-        let files = generate_skill_files_with_hash(&config, "testhash").unwrap();
+        let files = generate_skill_files_with_hash(&config, "testhash", false).unwrap();
         let skill_md = files.get("SKILL.md").expect("SKILL.md");
 
         // Being named is the bar, not being named in a *numbered step*: `outcome-registers.md` is
@@ -1444,7 +1523,7 @@ mod tests {
     #[test]
     fn test_generate_skill_files_contains_expected_keys() {
         let config = test_config();
-        let files = generate_skill_files_with_hash(&config, "testhash").unwrap();
+        let files = generate_skill_files_with_hash(&config, "testhash", false).unwrap();
 
         assert!(files.contains_key("SKILL.md"));
         assert!(files.contains_key("reference.md"));
@@ -1473,7 +1552,7 @@ mod tests {
     #[test]
     fn test_generate_skill_md_has_contexts_and_no_local_vault_path() {
         let config = test_config();
-        let files = generate_skill_files_with_hash(&config, "testhash").unwrap();
+        let files = generate_skill_files_with_hash(&config, "testhash", false).unwrap();
         let skill_md = &files["SKILL.md"];
 
         assert!(skill_md.contains("alpha"));
@@ -1502,7 +1581,7 @@ mod tests {
     #[test]
     fn skill_md_frontmatter_starts_at_byte_zero() {
         let config = test_config();
-        let files = generate_skill_files_with_hash(&config, "testhash").unwrap();
+        let files = generate_skill_files_with_hash(&config, "testhash", false).unwrap();
         let skill_md = &files["SKILL.md"];
 
         assert!(
@@ -1519,7 +1598,7 @@ mod tests {
     #[test]
     fn test_reference_convention_is_stated_in_skill_and_reference() {
         let config = test_config();
-        let files = generate_skill_files_with_hash(&config, "testhash").unwrap();
+        let files = generate_skill_files_with_hash(&config, "testhash", false).unwrap();
 
         for name in ["SKILL.md", "reference.md"] {
             let body = files.get(name).unwrap_or_else(|| panic!("{name} missing"));
@@ -1750,7 +1829,7 @@ mod tests {
     #[test]
     fn memories_md_is_named_by_both_routers() {
         let cli_config = test_config();
-        let cli_files = generate_skill_files_with_hash(&cli_config, "testhash").unwrap();
+        let cli_files = generate_skill_files_with_hash(&cli_config, "testhash", false).unwrap();
         assert!(
             cli_files["SKILL.md"].contains("memories.md"),
             "the CLI SKILL.md never mentions memories.md, so no session will read it"
@@ -1777,7 +1856,7 @@ mod tests {
     /// all, which is why the guidance is about *verifying the write* rather than about locking.
     #[test]
     fn both_routers_warn_that_a_body_write_replaces_and_must_be_verified() {
-        let cli = generate_skill_files_with_hash(&test_config(), "testhash").unwrap();
+        let cli = generate_skill_files_with_hash(&test_config(), "testhash", false).unwrap();
         let mcp = generate_agent_skill_files().unwrap();
 
         for (surface, rendered) in [("CLI", &cli["SKILL.md"]), ("MCP", &mcp["SKILL.md"])] {
@@ -1969,7 +2048,7 @@ mod tests {
     #[test]
     fn test_generate_command_wrapper_contains_hash() {
         let config = test_config();
-        let files = generate_skill_files_with_hash(&config, "testhash").unwrap();
+        let files = generate_skill_files_with_hash(&config, "testhash", false).unwrap();
         let wrapper = &files["command-wrapper.md"];
 
         assert!(wrapper.contains("config-hash: testhash"));
@@ -2013,7 +2092,7 @@ mod tests {
 
     #[test]
     fn test_generate_reference_contains_all_commands() {
-        let reference = generate_reference();
+        let reference = generate_reference(false);
         assert!(
             reference.contains("| init |"),
             "should contain init command"
@@ -2036,7 +2115,7 @@ mod tests {
 
     #[test]
     fn test_generate_reference_shows_actual_flags() {
-        let reference = generate_reference();
+        let reference = generate_reference(false);
         // These flags were recently added - they MUST appear
         assert!(
             reference.contains("--stage"),
@@ -2050,7 +2129,7 @@ mod tests {
 
     #[test]
     fn test_generate_reference_excludes_hidden_args() {
-        let reference = generate_reference();
+        let reference = generate_reference(false);
         // --stdin is hidden in clap definitions
         assert!(
             !reference.contains("--stdin"),
@@ -2060,7 +2139,7 @@ mod tests {
 
     #[test]
     fn test_generate_reference_excludes_format_flag() {
-        let reference = generate_reference();
+        let reference = generate_reference(false);
         // --format is an implementation detail, should not appear in syntax column
         assert!(
             !reference.contains("--format"),
@@ -2070,7 +2149,7 @@ mod tests {
 
     #[test]
     fn test_generate_reference_has_footer_sections() {
-        let reference = generate_reference();
+        let reference = generate_reference(false);
         assert!(
             reference.contains("## Task Stages"),
             "should have Task Stages section"
@@ -2105,7 +2184,7 @@ mod tests {
     /// ship as literal text), and no retired type is named.
     #[test]
     fn reference_doc_type_table_is_derived_from_the_validator() {
-        let reference = generate_reference();
+        let reference = generate_reference(false);
         assert!(
             !reference.contains("{{ doc_type_table }}"),
             "the doc-type placeholder leaked into the rendered reference"
@@ -2127,7 +2206,7 @@ mod tests {
     #[test]
     fn test_generate_skill_files_uses_generated_reference() {
         let config = test_config();
-        let files = generate_skill_files_with_hash(&config, "testhash").unwrap();
+        let files = generate_skill_files_with_hash(&config, "testhash", false).unwrap();
         let reference = &files["reference.md"];
         // Should contain generated commands, not stale static content
         assert!(
@@ -2195,7 +2274,7 @@ mod tests {
 
         temp_env::with_vars(env, || {
             let skill_dir = SkillTarget::Agents.default_skill_dir(&home);
-            install(&config, &skill_dir, SkillTarget::Agents).unwrap();
+            install(&config, &skill_dir, SkillTarget::Agents, false).unwrap();
 
             assert!(
                 skill_dir.join("SKILL.md").exists(),
@@ -2209,7 +2288,7 @@ mod tests {
 
             // The comparison arm: the claude target does write its wrapper.
             let claude_dir = SkillTarget::Claude.default_skill_dir(&home);
-            install(&config, &claude_dir, SkillTarget::Claude).unwrap();
+            install(&config, &claude_dir, SkillTarget::Claude, false).unwrap();
             assert!(home.join(".claude/commands/temper.md").exists());
         });
     }
@@ -2221,7 +2300,7 @@ mod tests {
     /// cannot quietly grow back — a regression here costs every session on every machine.
     #[test]
     fn skill_md_files_stay_under_their_size_budgets() {
-        let cli = generate_skill_files_with_hash(&test_config(), "testhash").unwrap();
+        let cli = generate_skill_files_with_hash(&test_config(), "testhash", false).unwrap();
         let cli_skill_md = cli.get("SKILL.md").expect("SKILL.md").len();
         assert!(
             cli_skill_md <= 18_432,
@@ -2282,7 +2361,7 @@ mod tests {
         .unwrap();
 
         temp_env::with_vars(env, || {
-            install(&config, &skill_dir, SkillTarget::Agents).unwrap();
+            install(&config, &skill_dir, SkillTarget::Agents, false).unwrap();
 
             assert!(
                 !stale.exists(),
@@ -2294,10 +2373,326 @@ mod tests {
             );
 
             // Idempotent: a second install neither re-creates nor re-reports the removal.
-            let second = install(&config, &skill_dir, SkillTarget::Agents).unwrap();
+            let second = install(&config, &skill_dir, SkillTarget::Agents, false).unwrap();
             assert!(second.removed_legacy.is_empty());
             assert!(!stale.exists());
         });
+    }
+
+    // ── The admin set behind --include-admin ────────────────────────────────
+
+    /// **A default install carries no admin content, and absence is assertable.** No admin file
+    /// in the map, no admin row in the generated reference (those rows ARE admin content — a
+    /// table naming every admin verb is exactly the disclosure the flag is supposed to be), and
+    /// no "admin" in the router at all. Each half is asserted separately because each fails
+    /// differently: a stray file is shipping, a stray row is disclosure, a stray mention is a
+    /// leaked hint.
+    ///
+    /// Scope note, deliberate: the BODY scan across every shipped file asserts the absence of
+    /// admin *invocations* (`temper admin …`) — the surface this gating owns. Two pre-existing
+    /// capability labels in the default tree are NOT admin-set disclosure and are allowed:
+    /// `knowledge-base.md`'s declared-off-MCP list names `admin_ledger` (a statement that MCP
+    /// does NOT carry it), and `teams.md` names the deployment's administrator role. Reconciled, not
+    /// overlooked: widening this to any "admin" substring would put those hand-written files
+    /// under a gate this change does not own.
+    #[test]
+    fn a_default_render_carries_no_admin_content() {
+        let files = generate_skill_files_with_hash(&test_config(), "testhash", false).unwrap();
+
+        for name in files.keys() {
+            assert!(
+                !name.contains("admin"),
+                "the default render ships admin file `{name}` — the flag's help text is the \
+                 only disclosure, not the tree"
+            );
+        }
+        let skill_md = files.get("SKILL.md").expect("SKILL.md");
+        assert!(
+            !skill_md.contains("admin"),
+            "the default router names admin content; a non-admin install gets no signal the \
+             set exists"
+        );
+        for (name, body) in &files {
+            assert!(
+                !body.contains("temper admin"),
+                "{name} teaches a `temper admin` invocation in a default install — admin \
+                 surface teaching is gated behind --include-admin"
+            );
+        }
+        let reference = files.get("reference.md").expect("reference.md");
+        assert!(
+            !reference.contains("| admin"),
+            "the default reference carries admin rows; they are gated behind --include-admin. \
+             (The `skill install [--include-admin]` syntax row stays — the flag's own row IS \
+             the allowed disclosure.)"
+        );
+    }
+
+    /// The admin render is the complete tree: the file rides, the router routes to it (both the
+    /// Supporting Files entry and the routing-table row — a file named but never routed is the
+    /// dead-content failure `every_shipped_guidance_file_is_named_by_the_router` guards for all
+    /// files, asserted here at the routing row because that is the arm an admin question takes),
+    /// and the reference carries the admin rows again.
+    #[test]
+    fn the_admin_render_ships_routes_and_restores_the_reference_rows() {
+        let files = generate_skill_files_with_hash(&test_config(), "testhash", true).unwrap();
+
+        assert!(
+            files.contains_key("admin.md"),
+            "the admin render must ship admin.md"
+        );
+        let skill_md = files.get("SKILL.md").expect("SKILL.md");
+        assert!(
+            skill_md.contains("admin.md"),
+            "the admin router never names admin.md"
+        );
+        assert!(
+            skill_md.contains("Read `admin.md`"),
+            "the admin router has no routing row sending an admin question to admin.md"
+        );
+        let reference = files.get("reference.md").expect("reference.md");
+        for row in [
+            "admin machine provision",
+            "admin connection",
+            "admin reblock",
+        ] {
+            assert!(
+                reference.contains(row),
+                "the admin reference never names `{row}` — the clap-derived rows must be \
+                 restored under the flag"
+            );
+        }
+    }
+
+    /// **Every verb the admin content names must resolve against the real command tree.**
+    ///
+    /// Prose cannot be type-checked; its referents can (issue #330's lesson, applied here by
+    /// derivation rather than a hand list). Scanned set: every backtick-quoted span starting
+    /// with `admin` and built only of command-name characters — table cells and prose alike —
+    /// with EVERY segment resolved against the clap tree, not just the first. A renamed or
+    /// removed verb at any depth fails here pointing at the sentence that now lies.
+    #[test]
+    fn admin_content_names_only_verbs_the_binary_has() {
+        use clap::CommandFactory;
+
+        for line in ADMIN_MD.lines() {
+            let mut rest = line;
+            while let Some(start) = rest.find('`') {
+                let Some(end) = rest[start + 1..].find('`') else {
+                    break;
+                };
+                let span = &rest[start + 1..start + 1 + end];
+                rest = &rest[start + 1 + end + 1..];
+
+                // Command spans only: `admin` alone or a whitespace-separated chain of
+                // lowercase name tokens. Anything else that merely starts with "admin"
+                // (`admin.md`, a path) is prose, not an invocation, and is skipped.
+                let name_token = |s: &str| {
+                    !s.is_empty()
+                        && s.chars()
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+                };
+                if !(span == "admin"
+                    || (span.starts_with("admin ") && span.split_whitespace().all(name_token)))
+                {
+                    continue;
+                }
+
+                let mut cmd = Cli::command();
+                let mut resolved: Vec<&str> = Vec::new();
+                for segment in span.split_whitespace() {
+                    match cmd.find_subcommand(segment) {
+                        Some(sub) => {
+                            resolved.push(segment);
+                            cmd = sub.clone();
+                        }
+                        // Do NOT break: an unresolved segment at any depth is the defect
+                        // (breaking here would verify only the prefix).
+                        None => break,
+                    }
+                }
+                assert_eq!(
+                    resolved.join(" "),
+                    span,
+                    "admin.md names `{span}`, which does not fully resolve in the command \
+                     tree — the content invented or misnamed a verb"
+                );
+            }
+        }
+    }
+
+    /// **The floor is coverage: the content names every admin command group the binary ships.**
+    ///
+    /// The group set is derived from the clap tree, not restated — a group added to the binary
+    /// fails here until the content teaches it, which is the "teach what ships" acceptance
+    /// criterion enforced where it can actually fail.
+    #[test]
+    fn admin_content_names_every_shipped_command_group() {
+        use clap::CommandFactory;
+
+        let root = Cli::command();
+        let admin = root
+            .find_subcommand("admin")
+            .expect("the admin group exists");
+        for group in admin.get_subcommands() {
+            // Hidden commands are not on the dogfooded surface (`--help` omits them), so the
+            // content cannot teach what the binary does not show — the same rule the generated
+            // reference applies (`collect_command_rows`).
+            if group.get_name() == "help" || group.is_hide_set() {
+                continue;
+            }
+            assert!(
+                ADMIN_MD.contains(&format!("admin {}", group.get_name())),
+                "admin.md never names the shipped admin group `{}` — the content is thinner \
+                 than the surface it teaches",
+                group.get_name()
+            );
+        }
+    }
+
+    /// A default install's tree must return to a no-admin state even on a machine that once ran
+    /// `--include-admin`. Both arms: a byte-identical admin file is retracted by the later
+    /// default install; a user-edited one is theirs and stays. Without the first arm the
+    /// absence criterion degrades to "absent unless you ever used the flag".
+    #[test]
+    fn a_default_install_retracts_its_own_admin_files_but_not_edited_ones() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let config = test_config();
+        let skill_dir = dir.path().join("skill-output");
+
+        let global_config = dir.path().join("global-config.toml");
+        std::fs::write(&global_config, "[vault]\npath = \"/tmp/test-vault\"\n").unwrap();
+        let env = vec![
+            (
+                "TEMPER_GLOBAL_CONFIG".to_string(),
+                Some(global_config.to_string_lossy().into_owned()),
+            ),
+            (
+                "HOME".to_string(),
+                Some(dir.path().to_string_lossy().into_owned()),
+            ),
+        ];
+
+        temp_env::with_vars(env, || {
+            // Arm 1: flag install, then default install — the shipped bytes go away.
+            install(&config, &skill_dir, SkillTarget::Agents, true).unwrap();
+            assert!(skill_dir.join("admin.md").exists());
+            let report = install(&config, &skill_dir, SkillTarget::Agents, false).unwrap();
+            assert!(
+                !skill_dir.join("admin.md").exists(),
+                "a default install must retract the admin file the installer itself shipped"
+            );
+            assert_eq!(report.removed_admin, vec!["admin.md".to_string()]);
+
+            // Arm 2: flag install, the user edits admin.md, default install — it stays.
+            install(&config, &skill_dir, SkillTarget::Agents, true).unwrap();
+            let admin_path = skill_dir.join("admin.md");
+            std::fs::write(&admin_path, format!("{}\n\nmy local notes\n", ADMIN_MD)).unwrap();
+            let report = install(&config, &skill_dir, SkillTarget::Agents, false).unwrap();
+            assert!(
+                admin_path.exists(),
+                "an admin file the user has modified is theirs — install must not touch it"
+            );
+            assert!(report.removed_admin.is_empty());
+        });
+    }
+
+    /// **A fresh default install ships no admin file, and `guidance/` ships empty** — the
+    /// per-project fundamentals files are machine-local user data the installer never writes
+    /// (the two-level pointer scheme ships as prose, not as bundled content).
+    #[test]
+    fn a_fresh_default_install_ships_no_admin_file_and_no_guidance_content() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let config = test_config();
+        let skill_dir = dir.path().join("skill-output");
+
+        let global_config = dir.path().join("global-config.toml");
+        std::fs::write(&global_config, "[vault]\npath = \"/tmp/test-vault\"\n").unwrap();
+        let env = vec![
+            (
+                "TEMPER_GLOBAL_CONFIG".to_string(),
+                Some(global_config.to_string_lossy().into_owned()),
+            ),
+            (
+                "HOME".to_string(),
+                Some(dir.path().to_string_lossy().into_owned()),
+            ),
+        ];
+
+        temp_env::with_vars(env, || {
+            install(&config, &skill_dir, SkillTarget::Agents, false).unwrap();
+            assert!(
+                !skill_dir.join("admin.md").exists(),
+                "a fresh default install shipped an admin file"
+            );
+            assert!(
+                skill_dir.join("guidance").is_dir(),
+                "the guidance directory is created (the router's first hop)"
+            );
+            let shipped: Vec<_> = std::fs::read_dir(skill_dir.join("guidance"))
+                .unwrap()
+                .collect();
+            assert!(
+                shipped.is_empty(),
+                "install wrote into guidance/ — per-project fundamentals are user data, not \
+                 shipped content"
+            );
+        });
+    }
+
+    /// The two-level fundamentals resolution — index → per-project pointer → repo — must be
+    /// described where it is executed: the router's always-read Extension Files section and the
+    /// Task Start step both walk both hops, and the per-project file's name is part of the
+    /// scheme (`guidance/<project>/fundamentals.md`), not decoration.
+    #[test]
+    fn the_router_describes_the_two_level_fundamentals_resolution() {
+        let skill_md = generate_skill_files_with_hash(&test_config(), "testhash", false)
+            .unwrap()
+            .remove("SKILL.md")
+            .unwrap();
+
+        for fragment in [
+            "guidance/fundamentals.md",
+            "guidance/<project>/fundamentals.md",
+            "two levels of pointer",
+        ] {
+            assert!(
+                skill_md.contains(fragment),
+                "the router's fundamentals prose never states `{fragment}` — a cold machine \
+                 cannot resolve the scheme it does not describe"
+            );
+        }
+        let index_hop = skill_md.find("guidance/fundamentals.md").unwrap();
+        let project_hop = skill_md.find("guidance/<project>/fundamentals.md").unwrap();
+        assert!(
+            index_hop < project_hop,
+            "the router presents the index before the per-project hop — resolution order is \
+             part of the scheme"
+        );
+    }
+
+    /// `--include-admin` defaults to false at the parse layer: the default install is the
+    /// non-admin one, so a default that failed open would ship admin content to everyone.
+    #[test]
+    fn include_admin_defaults_to_false() {
+        use crate::cli::{Cli, Commands, SkillAction};
+        use clap::Parser as _;
+
+        let cli = Cli::try_parse_from(["temper", "skill", "install"]).unwrap();
+        let Commands::Skill {
+            action: SkillAction::Install { include_admin, .. },
+        } = cli.command
+        else {
+            panic!("expected `temper skill install`");
+        };
+        assert!(
+            !include_admin,
+            "the default install must not include the admin set"
+        );
     }
 
     /// The exact bytes the old installer wrote into `guidance/` for `plan-verification.md` —

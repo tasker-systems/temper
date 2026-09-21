@@ -1476,13 +1476,17 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 }
                 Ok(())
             }
-            SkillAction::Generate => {
+            SkillAction::Generate { include_admin } => {
                 let config = temper_cli::config::load(cli.vault.as_deref())?;
-                let content = temper_cli::commands::skill::generate(&config)?;
+                let content = temper_cli::commands::skill::generate(&config, include_admin)?;
                 print!("{}", content);
                 Ok(())
             }
-            SkillAction::Install { path, target } => {
+            SkillAction::Install {
+                path,
+                target,
+                include_admin,
+            } => {
                 let config = temper_cli::config::load(cli.vault.as_deref())?;
                 let home = dirs::home_dir().ok_or_else(|| {
                     temper_cli::error::TemperError::Config(
@@ -1494,7 +1498,12 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 } else {
                     target.default_skill_dir(&home)
                 };
-                let report = temper_cli::commands::skill::install(&config, &skill_dir, target)?;
+                let report = temper_cli::commands::skill::install(
+                    &config,
+                    &skill_dir,
+                    target,
+                    include_admin,
+                )?;
                 if report.is_no_op() || report.changed.is_empty() {
                     temper_cli::output::success(format!(
                         "Skill already up to date ({} files): {}",
@@ -1514,6 +1523,11 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 }
                 for path in &report.removed_legacy {
                     temper_cli::output::item(format!("removed stale guidance duplicate: {path}"));
+                }
+                for path in &report.removed_admin {
+                    temper_cli::output::item(format!(
+                        "removed admin file (no --include-admin): {path}"
+                    ));
                 }
                 Ok(())
             }

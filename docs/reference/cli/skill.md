@@ -32,6 +32,7 @@ Generate skill content (preview to stdout)
 Usage: temper skill generate [OPTIONS]
 
 Options:
+      --include-admin      Preview the admin-inclusive tree (`skill install --include-admin`'s output) rather than the default one
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
       --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
@@ -68,6 +69,9 @@ Options:
 
       --embed-threads <N>
           ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --include-admin
+          Also install the admin skill set (`admin.md` — the `temper admin` command tree: system settings, principals, machine clients, connections, subscriptions). A default install carries none of it; this flag is its only disclosure. A later default install removes admin files the installer itself shipped (files you have edited are left alone)
 
       --color <COLOR>
           Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto

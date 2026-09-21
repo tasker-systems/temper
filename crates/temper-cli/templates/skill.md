@@ -44,15 +44,28 @@ principle, never the scope of it.
 - `querying.md` — **Which door to ask through** (`search` vs `query`), compositions, reading a trace
 - `project-setup.md` — The `/temper init` flow: fundamentals authoring, and introducing the arc
   to a project
+{%- if include_admin %}
+- `admin.md` — The admin surface: gate model, command map, the UUID discipline, and the traps.
+  Installed only by `temper skill install --include-admin`
+{%- endif %}
 
 ### Workflow Files (`workflows/`)
 One file per mode/effort combination. Read only the one that matches the current task.
 
 ### Extension Files (`guidance/`)
-`guidance/fundamentals.md` is a **pointer file**: one entry per project, naming where that
-project's own fundamentals live (usually the repo's `AGENTS.md`). Read through it before
-substantive work in a project; no entry for the current project, or the file itself missing,
-and `/temper init` offers to set it up (read `project-setup.md` for that flow).
+Resolution is **two levels of pointer, and the repo is always the authority**:
+
+1. `guidance/fundamentals.md` — the **index**: one entry per project (matched by repo root),
+   naming that project's per-project pointer file beside it, `guidance/<project>/fundamentals.md`.
+2. The per-project file — **still a pointer**: it names where the project's own fundamentals
+   live (usually the repo's `AGENTS.md`, or a dedicated reference tree the repo carries).
+3. Read through to the repo and apply what it says. The deepest copy of any rule is in the
+   repo — a global copy of per-repo rules goes stale the day the repo moves; a pointer cannot.
+
+Read through both hops before substantive work in a project. No entry for the current project,
+or `guidance/fundamentals.md` itself missing, and `/temper init` offers to set it up (read
+`project-setup.md` for that flow). `guidance/` ships empty and stays machine-local: the skill
+ships prose only and never writes per-project files there.
 
 ## Outcome Discipline — applies to every task, whether or not you author a goal
 
@@ -82,8 +95,9 @@ There is no `task start` CLI command; the sequence is:
 1. Resolve the task's ref: `temper resource list --type task --context @me/<ctx>`, find the row matching `<slug>`, copy its `ref`. Read it via `temper resource show <ref>` — extract mode and effort
 2. Move the task to in-progress: `temper resource update <ref> --stage in-progress`
 3. If mode or effort is missing, ask: "What mode (plan/build) and effort (small/medium/large)?"
-4. Apply *Outcome Discipline* above. Check `guidance/fundamentals.md` — a pointer file; read
-   through it to the current project's fundamentals and apply them; no entry for this project,
+4. Apply *Outcome Discipline* above. Check `guidance/fundamentals.md` — the index hop of the
+   two-level pointer scheme (see *Extension Files* above); read through both hops to the
+   current project's fundamentals and apply them; no entry for this project,
    offer "This project has no fundamentals entry. Want to set it up? (`/temper init`)".
    If this task authors or amends a goal, read `outcome-registers.md` first
 5. Read `workflows/{mode}-{effort}.md` and follow it
@@ -165,6 +179,9 @@ session ritual performed before the purpose is known is effort spent on the wron
 | Anything touching a cognitive map (read/author a map, telos, nodes/edges, regions) | Read `cognitive-maps.md` |
 | Block-level / segmented / attributable writes (per-block provenance/sources, citation-grade docs, `annotate`, `segmented_ingest` lifecycle) | Read `reference.md` → *Block-Grain Ingest & Attribution* |
 | Asking a question of the knowledge base — deciding between `temper search` and `temper query`, writing or debugging a composition | Read `querying.md` |
+{%- if include_admin %}
+| Administering the deployment — principals, machine clients, connections, subscriptions, instance settings, or an admin refusal | Read `admin.md` |
+{%- endif %}
 | Other commands (search, session save, etc.) | Read `reference.md` for syntax |
 
 ## Listing Is Truncated — Enumerate Before Asserting
@@ -260,7 +277,7 @@ Before dispatching any subagent:
 1. Read `subagent-guidance.md`
 2. Include all applicable principles in the subagent prompt (verbatim, not summarized)
 3. Include the current project's fundamentals — read through the `guidance/fundamentals.md`
-   pointer if available
+   → `guidance/<project>/fundamentals.md` → repo pointers if available
 4. **If the subagent will write a plan, or write code from one, inject
    `implementation-grounding.md` verbatim.** That is what it exists for, and it is the
    guidance most often skipped.

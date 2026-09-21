@@ -15,10 +15,12 @@ below needs a working connection; none of it changes one.
 ## 2. Fundamentals — the project's own rules, in the project
 
 Fundamentals live **in the repo they describe** — the project's `AGENTS.md`/`CLAUDE.md`, or a
-dedicated file the repo already carries. The skill directory's `guidance/fundamentals.md` is a
-**pointer file**, not the fundamentals themselves: one entry per project, naming where that
-project's fundamentals live. A global copy of per-repo rules goes stale the day the repo moves;
-a pointer cannot.
+dedicated file the repo already carries. The skill directory resolves them through **two levels
+of pointer**, and the repo is always the authority: `guidance/fundamentals.md` is the **index**
+(one entry per project, naming that project's per-project pointer file beside it,
+`guidance/<project>/fundamentals.md`), and the per-project file **still a pointer** — it names
+where the project's fundamentals live. A global copy of per-repo rules goes stale the day the
+repo moves; a pointer cannot.
 
 Setting a project up, then:
 
@@ -29,9 +31,12 @@ Setting a project up, then:
    **in the repo**, beside the material it distilled (the repo decides where — match its own
    conventions). Write from the project's evidence, never from your assumptions about it, and
    show the result to the operator.
-3. Add or refresh the pointer entry in the skill directory's `guidance/fundamentals.md`:
-   project path → fundamentals location. Keep the file a bare index — if an entry grows
-   beyond one line, the content belongs in the repo it describes.
+3. Add the **two** pointer halves together: an index row in `guidance/fundamentals.md`
+   (project path → `./<project>/fundamentals.md`) **and** the per-project file
+   `guidance/<project>/fundamentals.md` (project root → the repo's fundamentals location).
+   An index row with no per-project file behind it is a broken pointer, not a stub. Keep the
+   per-project file a bare pointer — if it grows beyond pointing, the content belongs in the
+   repo it describes.
 
 Reading fundamentals before substantive work in a project goes through the pointer: no entry
 for the current project is exactly the `/temper init` offer. An entry whose target has moved
