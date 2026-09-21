@@ -28,7 +28,7 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
   removes one. MCP emit untouched (config-free by design; skills-drift green).
   Additive (new optional flag on install/generate) + behavioral (default
   render content); no HTTP/MCP/schema movement.
-pr: self
+pr: 938
 classes: additive, behavioral
 surfaces: cli-stdout
 status: signal-only
