@@ -6025,7 +6025,7 @@ dependencies = [
 
 [[package]]
 name = "temper-agents"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -6035,7 +6035,7 @@ dependencies = [
 
 [[package]]
 name = "temper-api"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6071,7 +6071,7 @@ dependencies = [
 
 [[package]]
 name = "temper-auth"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "base64 0.22.1",
  "rand 0.8.5",
@@ -6083,7 +6083,7 @@ dependencies = [
 
 [[package]]
 name = "temper-cli"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anstream 0.6.21",
  "anstyle",
@@ -6130,7 +6130,7 @@ dependencies = [
 
 [[package]]
 name = "temper-client"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -6158,7 +6158,7 @@ dependencies = [
 
 [[package]]
 name = "temper-cloud"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "sqlx",
  "temper-api",
@@ -6173,7 +6173,7 @@ dependencies = [
 
 [[package]]
 name = "temper-core"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6244,7 +6244,7 @@ dependencies = [
 
 [[package]]
 name = "temper-ingest"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -6270,11 +6270,11 @@ dependencies = [
 
 [[package]]
 name = "temper-macros"
-version = "0.5.2"
+version = "0.5.3"
 
 [[package]]
 name = "temper-mcp"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -6304,7 +6304,7 @@ dependencies = [
 
 [[package]]
 name = "temper-migrate"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -6315,7 +6315,7 @@ dependencies = [
 
 [[package]]
 name = "temper-principal"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "serde",
  "ts-rs",
@@ -6324,7 +6324,7 @@ dependencies = [
 
 [[package]]
 name = "temper-services"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6369,7 +6369,7 @@ dependencies = [
 
 [[package]]
 name = "temper-substrate"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6395,7 +6395,7 @@ dependencies = [
 
 [[package]]
 name = "temper-telemetry"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "axum",
  "http",
@@ -6417,7 +6417,7 @@ dependencies = [
 
 [[package]]
 name = "temper-workflow"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "async-trait",
  "chrono",
