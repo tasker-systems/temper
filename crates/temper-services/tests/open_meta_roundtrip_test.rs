@@ -263,6 +263,70 @@ async fn open_meta_null_deletes_on_update_and_is_refused_on_create(pool: PgPool)
     );
 }
 
+/// An unset arriving through the `open_meta` channel may target only open-tier keys:
+/// a managed vocabulary key or the `facet`/`doc_type` specials is refused naming the key,
+/// so the verb cannot fold rows the managed pipeline and the facet vocabulary police.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn open_meta_null_refuses_cross_tier_unsets(pool: PgPool) {
+    let (profile, context) = seed_profile_with_context(&pool, "open-meta-tier@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+    let created = backend
+        .create_resource(CreateResource {
+            idempotency_key: None,
+            slug: "zz-tier-probe".to_string(),
+            doctype: "task".to_string(),
+            home: HomeAnchor::Context(ContextId::from(context)),
+            title: "ZZ tier probe".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: Some(serde_json::json!({"marker": "here"})),
+            goal: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            act: ActContext::default(),
+            origin: Surface::Mcp,
+        })
+        .await
+        .expect("create")
+        .value;
+
+    for key in ["temper-stage", "facet", "doc_type", "temper-title"] {
+        let refused = backend
+            .update_resource(UpdateResource {
+                open_meta_add: None,
+                resource: created.id,
+                title: None,
+                slug: None,
+                body: None,
+                managed_meta: None,
+                open_meta: Some(serde_json::json!({ key: null })),
+                goal: None,
+                move_to: None,
+                context_ref: None,
+                act: ActContext::default(),
+                origin: Surface::Mcp,
+            })
+            .await
+            .expect_err("a cross-tier unset must be refused");
+        let rendered = refused.to_string();
+        assert!(
+            rendered.contains(key),
+            "the refusal must name the key {key}, got {rendered}"
+        );
+    }
+
+    // The resource is untouched by every refused attempt.
+    let meta = substrate_read::get_meta_select(&pool, ProfileId::from(profile), created.id)
+        .await
+        .expect("get_meta after refusals");
+    assert_eq!(
+        meta.open_meta.expect("open_meta present").get("marker"),
+        Some(&serde_json::json!("here")),
+        "refused verbs write nothing"
+    );
+}
+
 /// The additive open-tier channel must ADD to a list, not replace it.
 ///
 /// This is the regression guard for the `--tags` data-loss bug: `--tags docs` on a

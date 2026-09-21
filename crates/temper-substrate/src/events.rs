@@ -1016,8 +1016,9 @@ where
 /// The projection half of `property_unset` — the key-grain delete verb's fold, with no SQL
 /// mutation function (fire and replay share THIS body, the `project_property_retracted`
 /// shape). Folds every live row for `(owner, property_key)` — the same predicate
-/// `_project_property_set` folds under (20260815000030), minus the insert. The FTS rebuild
-/// rides here under the same gate `_project_property_set` applies: folding the last
+/// `_project_property_set` folds under (20260730000010, its newest definition), minus the
+/// insert. The FTS rebuild rides here under the same gate `_project_property_set` applies —
+/// owner table read from the payload, the same keys — because folding the last
 /// `keywords`/`descriptor`/`tags` row must not leave a stale search vector behind, and the
 /// rebuild runs AFTER the fold so it reads the post-fold live set. Idempotent under replay —
 /// a second application folds zero rows and the rebuild is a pure refresh.
@@ -1042,7 +1043,11 @@ pub(crate) async fn project_property_unset(
         .get("property_key")
         .and_then(|v| v.as_str())
         .unwrap_or_default();
-    if key == "keywords" || key == "descriptor" || key == "tags" {
+    let owner_is_resource = payload
+        .pointer("/owner/table")
+        .and_then(|v| v.as_str())
+        .is_some_and(|t| t == "kb_resources");
+    if owner_is_resource && (key == "keywords" || key == "descriptor" || key == "tags") {
         let owner: Uuid = payload
             .pointer("/owner/id")
             .and_then(|v| v.as_str())

@@ -15,8 +15,9 @@
 
 use crate::events::EventKind;
 use anyhow::{Context, Result};
-use sqlx::{PgPool, Row};
+use sqlx::{Connection, PgPool, Row};
 use std::collections::HashMap;
+use std::ops::DerefMut;
 use temper_core::types::home::HomeAnchor;
 use uuid::Uuid;
 
@@ -658,10 +659,15 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // the shared `project_property_unset`, fire and replay ONE implementation since this
             // event has no `_project_*` SQL function. The payload carries (owner, key), so
             // replay re-folds the SAME key's live set; the `NOT is_folded` floor makes a
-            // re-application a zero-row no-op, never a resurrection.
+            // re-application a zero-row no-op, never a resurrection. The fold + FTS rebuild are
+            // TWO statements, so they run in one transaction here — the SQL-function arms get
+            // that atomicity from being single function calls, and this arm must not be the
+            // first multi-statement projection replay runs bare.
             EventKind::PropertyUnset => {
                 let mut conn = pool.acquire().await?;
-                crate::events::project_property_unset(&mut conn, id, &payload).await?;
+                let mut tx = conn.deref_mut().begin().await?;
+                crate::events::project_property_unset(&mut tx, id, &payload).await?;
+                tx.commit().await?;
             }
             EventKind::LensCreated => {
                 sqlx::query("SELECT _project_lens_created($1,$2)")

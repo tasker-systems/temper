@@ -28,7 +28,7 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
   names the verb); no shape change.
 pr: self
 classes: additive, behavioral
-surfaces: http, mcp, cli-stdout
+surfaces: http, mcp, cli-stdout, clients
 status: satisfied
 
 - **The admin skill set behind `temper skill install --include-admin`**

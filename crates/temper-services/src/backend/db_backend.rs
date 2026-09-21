@@ -443,6 +443,25 @@ fn split_open_meta_nulls(
     (Some(serde_json::Value::Object(sets)), unsets)
 }
 
+/// An unset arriving through the `open_meta` channel may target only keys that channel
+/// could have SET — plain open-tier keys. A managed vocabulary key (`temper-*`), the
+/// edge-family `facet` key, and the authoritative `doc_type` property are not open-tier
+/// state: folding them through this verb would bypass the managed pipeline's gating and
+/// mass-fold facet rows in one stroke, so the refusal names the key and the rule.
+fn refuse_cross_tier_unsets(unset_keys: &[String]) -> Result<(), TemperError> {
+    for key in unset_keys {
+        let system_key =
+            key.starts_with("temper-") || key == "facet" || key == "doc_type";
+        if system_key || temper_substrate::keys::is_managed_property_key(key) {
+            return Err(TemperError::BadRequest(format!(
+                "open_meta key '{key}' is not open-tier state and cannot be unset through the \
+                 open_meta channel"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Union one additive open_meta list onto the value it is accumulating over.
 ///
 /// Existing order is preserved and only genuinely new members are appended, so repeating
@@ -2089,11 +2108,9 @@ impl DbBackend {
         // content yields a distinct resource by design.
         // Receive-side symmetric-defense gate: reject a recognized open_meta key carrying the wrong
         // shape before it lands as a property row (silent-search-miss prevention). Runs on every
-        // surface (api + mcp) because both dispatch through this backend command.
-        validate_open_meta_shape(cmd.open_meta.as_ref())?;
-        // A null value on CREATE is unambiguously a caller error — there is nothing to delete
-        // and null has never been a storable value — so refuse loudly instead of the silent
-        // drop an update used to perform. (On UPDATE null means delete; see the update arm.)
+        // surface (api + mcp) because both dispatch through this backend command. The null-verb
+        // refusal runs FIRST so a recognized key deleted-via-null on create answers with the
+        // verb's own vocabulary instead of a shape error about a value that is not a value.
         if let Some(obj) = cmd.open_meta.as_ref().and_then(|o| o.as_object()) {
             let null_keys: Vec<String> = obj
                 .iter()
@@ -2108,6 +2125,7 @@ impl DbBackend {
                 )));
             }
         }
+        validate_open_meta_shape(cmd.open_meta.as_ref())?;
         let properties = properties_from_meta(&managed, cmd.open_meta.as_ref());
 
         // Map the surface-supplied ActContext → substrate EventContext (identical re-exported types).
@@ -2315,6 +2333,7 @@ impl Backend for DbBackend {
         // `{"tags": null}` must not fail the recognized-key shape check that `tags` be an array.
         let (open_sets, open_unsets) = split_open_meta_nulls(cmd.open_meta.as_ref());
         validate_open_meta_shape(open_sets.as_ref())?;
+        refuse_cross_tier_unsets(&open_unsets)?;
         let mut properties: Vec<(String, serde_json::Value)> = Vec::new();
         // Validate whenever the caller touches managed_meta OR identity: a title change must
         // still satisfy the schema (e.g. non-empty `temper-title`), so a title-only PATCH runs

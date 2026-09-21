@@ -6,8 +6,9 @@
 -- `property_unset` completes the verb set: fold every live row for `(owner, property_key)`,
 -- assert nothing.
 --
--- THE FOLD PREDICATE IS NOT NEW — `_project_property_set` (20260815000030) already folds exactly
--- this live set; the unset is that clause without the INSERT. Projection runs in Rust
+-- THE FOLD PREDICATE IS NOT NEW — `_project_property_set` (20260730000010, its newest
+-- definition) already folds exactly this live set; the unset is that clause without the
+-- INSERT. Projection runs in Rust
 -- (`events::project_property_unset`, the `property_retracted` shape: no `_project_*` function,
 -- fire and replay share one body), and the resource-owned rows keep having no stable external
 -- id — the verb is addressed BY KEY, the way every surface already addresses open_meta.
