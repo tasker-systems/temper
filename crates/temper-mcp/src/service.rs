@@ -27,6 +27,7 @@ use tokio::sync::Mutex;
 use temper_core::types::Profile;
 use temper_services::auth::RawJwtClaims;
 use temper_services::state::AppState;
+use temper_workflow::operations::Surface;
 
 use crate::middleware::BearerToken;
 use crate::tools;
@@ -48,15 +49,24 @@ use crate::tools;
 #[derive(Clone)]
 pub struct TemperMcpService {
     pub api_state: AppState,
+    /// The API router this process also serves, held for the in-process door: the MCP
+    /// binding executes tool work through it via temper-client's in-process transport
+    /// (beat G3a of the one-seam goal). Built once from the SAME `AppState` — one pool,
+    /// one JWKS store, one auth seam — so the MCP door and the API door are two faces of
+    /// one process, never two stacks.
+    router: axum::Router,
     /// Cached profile resolved from the Auth0 `sub` claim.
     profile: Arc<Mutex<Option<Profile>>>,
+    /// The raw bearer of the current request, cached beside the profile so the
+    /// in-process client can present the CALLER's token at the router's own gate.
+    token: Arc<Mutex<Option<String>>>,
 }
 
 impl std::fmt::Debug for TemperMcpService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TemperMcpService")
             .field("api_state", &self.api_state)
-            .field("profile", &self.profile)
+            .field("router", &self.router)
             .finish_non_exhaustive()
     }
 }
@@ -65,8 +75,10 @@ impl std::fmt::Debug for TemperMcpService {
 impl TemperMcpService {
     pub fn new(api_state: AppState) -> Self {
         Self {
+            router: temper_api::create_app(api_state.clone()),
             api_state,
             profile: Arc::new(Mutex::new(None)),
+            token: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -118,6 +130,12 @@ impl TemperMcpService {
 
         let mut guard = self.profile.lock().await;
         *guard = Some(authed.into_profile());
+        drop(guard);
+        // Cache the raw bearer beside the profile: the in-process client presents THIS
+        // token at the router, so the act is authorized — and attributed — under the
+        // caller's own credential, never the server's.
+        let mut token_guard = self.token.lock().await;
+        *token_guard = Some(token.0.clone());
         Ok(())
     }
 
@@ -127,6 +145,27 @@ impl TemperMcpService {
         guard
             .clone()
             .ok_or_else(|| rmcp::ErrorData::internal_error("Not authenticated".to_string(), None))
+    }
+
+    /// An in-process temper-client whose requests cross the API router inside this
+    /// process, carrying the CALLER's bearer under the trusted `Surface::Mcp` extension.
+    ///
+    /// This is the one seam (the goal's own name for it): the tool's act is authorized
+    /// by the router's auth middleware against the caller's token — the exact token the
+    /// MCP middleware already validated — and attributed by the router's surface
+    /// middleware to `@mcp` via the trusted extension no remote caller can set.
+    /// Requires `ensure_profile_from_parts` to have run first (it caches the token).
+    pub async fn in_process_client(&self) -> Result<temper_client::TemperClient, rmcp::ErrorData> {
+        let token = self.token.lock().await.clone().ok_or_else(|| {
+            rmcp::ErrorData::internal_error("Not authenticated".to_string(), None)
+        })?;
+        temper_client::TemperClient::in_process_with_token(
+            self.router.clone(),
+            Surface::Mcp,
+            token,
+            std::sync::Arc::new(temper_client::auth::MemoryTokenStore::empty()),
+        )
+        .map_err(|e| rmcp::ErrorData::internal_error(format!("in-process door: {e}"), None))
     }
 
     // ── Tools (consolidated: 64 → 26) ─────────────────────────────────

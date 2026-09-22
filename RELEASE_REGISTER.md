@@ -13,6 +13,23 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 `satisfied`.
 
 ## Since v0.5.2 — unreleased
+- **First family migration — the resources family executes through the in-process door (one-seam goal, beat G3a)**
+  temper-mcp gains temper-api and temper-client as dependencies, and the resources
+  family's 12 tools execute through the API router in-process — temper-client's
+  in-process transport carrying the CALLER's bearer under the trusted
+  `Surface::Mcp` extension — instead of calling shared services directly. Who
+  observes: an MCP-calling agent, whose tool names, wire schemas, response
+  shapes, and refusal kinds are byte-identical to the direct-service binding
+  (parity suite authored green pre-swap, mutation-proven); one named refusal-
+  prose delta, where a doubled "context not found:" prefix collapses to the
+  service's own sentence. The embedding-status enrichment crosses a new
+  deliberately-unregistered internal read (`GET /api/embed/status`, bearer-
+  authenticated, on the operator-only allowlist). No MCP wire shape, tool
+  inventory, or openapi.json entry moves.
+pr: self
+classes: behavioral
+surfaces: http, mcp, clients
+status: signal-only
 - **The in-process door — temper-client transport, audience-acceptance parity, surface-through-the-door attribution (one-seam goal, beat G1)**
   The MCP door's migration onto the API's own execution path begins: temper-client
   gains an in-process transport (`Router::oneshot`, no socket) whose requests carry

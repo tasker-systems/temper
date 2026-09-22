@@ -64,9 +64,16 @@ CURRENT_REQUESTS="$(request_subjects)"
 CONTEXT_REQUESTS="$(printf '%s\n' "$CURRENT_REQUESTS" | grep ' kb_contexts$' || true)"
 DOOR_COUNT="$(printf '%s\n' "$CURRENT_REQUESTS" | grep -c . || true)"
 
-if [[ "$DOOR_COUNT" -lt 4 ]]; then
+# Decision (beat G3a, 2026-09-22): the canary floor drops 4 → 3 because a door was
+# deliberately CONSOLIDATED, not lost to a scan break — temper-mcp's resource_grant
+# tool no longer constructs `GrantCapabilityRequest { kb_resources }` inline; it now
+# sends `ResourceGrantBody` through the in-process door, and the API resources
+# handler's construction (still counted below) is the one door for that subject.
+# That convergence is the one-seam goal operating. Remaining doors: api/cognitive_maps
+# (kb_cogmaps), api/resources (kb_resources), mcp/cognitive_maps (kb_cogmaps).
+if [[ "$DOOR_COUNT" -lt 3 ]]; then
   echo "audit-context-write-grants: FAIL — the door scan found $DOOR_COUNT GrantCapabilityRequest" >&2
-  echo "  subject literals (expected ≥ 4). The scan broke; it did not find the doors gone." >&2
+  echo "  subject literals (expected ≥ 3). The scan broke; it did not find the doors gone." >&2
   echo "  Check CRATES_DIR=$CRATES_DIR." >&2
   fail=1
 fi

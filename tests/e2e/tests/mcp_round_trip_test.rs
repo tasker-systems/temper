@@ -879,7 +879,13 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
         // The MCP JWT middleware injects the raw bearer alongside the claims; the auth
         // seam needs it for the email ladder's /userinfo rung. Synthetic parts must
         // carry both or the service rejects the request as unwired.
-        .extension(temper_mcp::middleware::BearerToken("synthetic".to_string()))
+        .extension(temper_mcp::middleware::BearerToken(
+            // A REAL harness JWT, not a synthetic string: post-G3a the tool itself
+            // presents this bearer at the in-process router, where its signature,
+            // audience and issuer are validated like any client token.
+            common::generate_test_jwt("e2e-test-user", "e2e-test-user.com")
+                .to_string(),
+        ))
         .extension(temper_services::auth::RawJwtClaims {
             sub: "e2e-test-user".to_string(),
             email: None,
@@ -1055,7 +1061,12 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
         // The MCP JWT middleware injects the raw bearer alongside the claims; the auth
         // seam needs it for the email ladder's /userinfo rung. Synthetic parts must
         // carry both or the service rejects the request as unwired.
-        .extension(temper_mcp::middleware::BearerToken("synthetic".to_string()))
+        // A REAL harness JWT, not a synthetic string: post-G3a the tool itself
+        // presents this bearer at the in-process router, where its signature,
+        // audience and issuer are validated like any client token.
+        .extension(temper_mcp::middleware::BearerToken(
+            common::generate_test_jwt("e2e-test-user", "e2e-test-user@example.com").to_string(),
+        ))
         .extension(temper_services::auth::RawJwtClaims {
             sub: "e2e-test-user".to_string(),
             email: None,

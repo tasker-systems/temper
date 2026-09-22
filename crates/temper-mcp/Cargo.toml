@@ -4,7 +4,17 @@ version = "0.5.3"
 edition = "2021"
 description = "MCP server for agent access to the temper knowledge base"
 
+[features]
+# Gates the `#[sqlx::test]` suites in `tests/` — without it, `cargo make test`
+# (no database) compiles them out entirely. Same pattern as temper-api/temper-services.
+test-db = []
+
 [dependencies]
+# The in-process door: the MCP binding executes through the API router via
+# temper-client's in-process transport (beat G3a of the one-seam goal). Execution
+# only — declaration, schemas and inventory stay fixed.
+temper-api = { path = "../temper-api" }
+temper-client = { path = "../temper-client" }
 temper-services = { path = "../temper-services" }
 temper-principal = { path = "../temper-principal" }
 temper-core = { path = "../temper-core", features = ["web-api", "mcp"] }

@@ -13,6 +13,7 @@ pub mod config;
 pub mod connection;
 pub mod contexts;
 pub mod data_artifacts;
+pub mod embed;
 pub mod endpoint;
 pub mod error;
 pub mod events;
@@ -160,6 +161,11 @@ impl TemperClient {
     /// Resource CRUD sub-client.
     pub fn resources(&self) -> resources::ResourceClient<'_> {
         resources::ResourceClient::new(&self.http)
+    }
+
+    /// Embed-pipeline read sub-client (the batch status the MCP enrichment derives from).
+    pub fn embed(&self) -> embed::EmbedClient<'_> {
+        embed::EmbedClient::new(&self.http)
     }
 
     /// Data artifact read sub-client.
