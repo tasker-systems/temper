@@ -31,6 +31,26 @@ classes: behavioral
 surfaces: http, mcp, clients
 status: signal-only
 
+- **The honest-absence signals — `Scoring.score_present` beside the deprecated zero rendering, `temper-stage-present` beside the empty string**
+  A hit whose row carried no quantity, and a task carrying no stage, render
+  absence as values on the wire today (`score: 0.0`; `temper-stage: ""`). Both
+  renderings now carry the fact beside them: the wire keeps each legacy
+  rendering byte-for-byte — documented in the contract as the deprecated
+  rendering of absence, retired only at the reserved break level — while one
+  additive sibling per shape states which values are measurements
+  (`Scoring.score_present`, always emitted by current servers, optional in the
+  contract; `temper-stage-present` on task-shaped CLI stdout). Who observes it:
+  API consumers and the three generated skins reading `/query` responses, and
+  external parsers of task-shaped CLI stdout — old readers parse everything
+  unchanged, new readers can distinguish a measured zero from no quantity.
+  Additive on the wire (one new optional property per shape; nothing moved,
+  omitted, or nulled) + behavioral (the legacy renderings are now documented
+  deprecated in the contract — a meaning change behind an unchanged shape).
+pr: self
+classes: additive, behavioral
+surfaces: http, cli-stdout, clients
+status: signal-only
+
 - **This release — the 0.5.3 fleet alignment: VERSION 0.5.2 → 0.5.3 across crates, packages, and clients**
   The release train's own wire delta is none: version fields and the generated
   cores re-stale with the bump (the D-S3 baseline — no shape movement); the

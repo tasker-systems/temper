@@ -107,9 +107,30 @@ impl ScoreKind {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct Scoring {
     pub score_kind: ScoreKind,
+    /// The DEPRECATED legacy rendering of the row's ordering quantity: a required,
+    /// always-emitted number whose `0.0` means "this row carried no quantity" — a
+    /// value nobody measured. Kept byte-for-byte so every deployed client keeps
+    /// parsing; retires ONLY at the reserved break level. New readers use
+    /// [`Self::score_present`], which states the fact this rendering buries.
+    ///
     /// Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not
     /// carried per row because it is a property of the act, identical for every row of a stage.
-    pub score: f32,
+    #[cfg_attr(feature = "web-api", schema(value_type = f32))]
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
+    // The MCP view states the wire's truth: required, always a number — the legacy
+    // rendering is never omitted and never null, whatever the Rust-side `Option`
+    // (which exists for the canonical absence the serialization boundary renders).
+    #[cfg_attr(feature = "mcp", schemars(required, extend("type" = "number")))]
+    #[serde(serialize_with = "serialize_score_deprecated_rendering")]
+    pub score: Option<f32>,
+    /// Whether the row actually carried the ordering quantity that `score` renders.
+    /// `false` beside `score: 0.0` says the zero is the deprecated rendering of
+    /// absence, not a measurement; `true` says the number was measured — and may
+    /// legitimately be zero. Absent from a payload only when the server predates
+    /// the signal; current servers always emit it.
+    #[cfg_attr(feature = "mcp", schemars(extend("type" = "boolean")))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score_present: Option<bool>,
     // `located_at` is NOT here, and the reason is the one this contract already applied once.
     //
     // `Scoring` is shared by both hit types, so a field here exists on region hits too — and a
@@ -121,6 +142,25 @@ pub struct Scoring {
     // FILLABLE by the wide arm — which is the ordinary case `discloses` exists to declare in
     // advance. The distinction is between an act that does not fill a field and a shape that
     // cannot.
+}
+
+/// The deprecated wire rendering of [`Scoring::score`]: an absent quantity serializes as
+/// `0.0`, always emitted, never omitted — the number every deployed client's contract
+/// requires. This is the serialization boundary's rendering under [`Scoring::score`]'s
+/// deprecation record; the mapping seam upstream passes absence through as absence, and
+/// [`Scoring::score_present`] carries the fact this rendering buries. Retires only at the
+/// reserved break level.
+fn serialize_score_deprecated_rendering<S>(
+    score: &Option<f32>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match score {
+        Some(measured) => serializer.serialize_f32(*measured),
+        None => serializer.serialize_f32(0.0),
+    }
 }
 
 /// Where in a resource a chunk-grain match landed.
@@ -346,4 +386,69 @@ pub struct RegionDisclosure {
     pub region_id: uuid::Uuid,
     /// The blend this region matched at. See the type's own note: raw, unbounded, open ruling.
     pub region_score: f64,
+}
+
+#[cfg(test)]
+mod score_rendering_tests {
+    use super::Scoring;
+    use crate::types::query::hits::ScoreKind;
+
+    /// The deprecated rendering keeps its side of the contract: an absent quantity still
+    /// serializes as an always-present `0.0`, and the absence signal states which zeros
+    /// are measurements. Both facts asserted on the serialized payload, because the wire
+    /// is where the rendering and its signal must agree.
+    #[test]
+    fn an_absent_quantity_serializes_as_zero_beside_its_absence_signal() {
+        let json = serde_json::to_value(Scoring {
+            score_kind: ScoreKind::FtsNorm,
+            score: None,
+            score_present: Some(false),
+        })
+        .unwrap();
+
+        assert!(
+            json.get("score").is_some(),
+            "score is never omitted — the legacy rendering stays on the wire: {json}"
+        );
+        assert_eq!(
+            json["score"],
+            serde_json::json!(0.0),
+            "absence renders as the documented 0.0"
+        );
+        assert_eq!(
+            json["score_present"],
+            serde_json::json!(false),
+            "the signal names the zero"
+        );
+    }
+
+    /// A measured zero is a real measurement: same number, opposite signal — the
+    /// distinction the deprecated rendering could never carry on its own.
+    #[test]
+    fn a_measured_zero_serializes_with_the_signal_naming_it_measured() {
+        let json = serde_json::to_value(Scoring {
+            score_kind: ScoreKind::FtsNorm,
+            score: Some(0.0),
+            score_present: Some(true),
+        })
+        .unwrap();
+
+        assert_eq!(json["score"], serde_json::json!(0.0));
+        assert_eq!(json["score_present"], serde_json::json!(true));
+    }
+
+    /// A current payload round-trips: `score` parses back as the number it rendered,
+    /// and the signal survives.
+    #[test]
+    fn a_scored_payload_round_trips_through_the_legacy_rendering() {
+        let original = Scoring {
+            score_kind: ScoreKind::VecNorm,
+            score: Some(0.42),
+            score_present: Some(true),
+        };
+        let json = serde_json::to_value(&original).unwrap();
+        let parsed: Scoring = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.score, Some(0.42));
+        assert_eq!(parsed.score_present, Some(true));
+    }
 }

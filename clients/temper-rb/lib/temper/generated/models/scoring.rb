@@ -16,16 +16,20 @@ require 'time'
 module Temper::Generated
   # How one hit scored, and by what measure.  The kind travels WITH the number, which is what lets a row be understood on its own. Two hits whose `score_kind` differs hold values that must never be added, averaged, or sorted into one list — and unlike a bare field name, that is something a client can actually check.
   class Scoring < ApiModelBase
-    # Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not carried per row because it is a property of the act, identical for every row of a stage.
+    # The DEPRECATED legacy rendering of the row's ordering quantity: a required, always-emitted number whose `0.0` means \"this row carried no quantity\" — a value nobody measured. Kept byte-for-byte so every deployed client keeps parsing; retires ONLY at the reserved break level. New readers use [`Self::score_present`], which states the fact this rendering buries.  Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not carried per row because it is a property of the act, identical for every row of a stage.
     attr_accessor :score
 
     attr_accessor :score_kind
+
+    # Whether the row actually carried the ordering quantity that `score` renders. `false` beside `score: 0.0` says the zero is the deprecated rendering of absence, not a measurement; `true` says the number was measured — and may legitimately be zero. Absent from a payload only when the server predates the signal; current servers always emit it.
+    attr_accessor :score_present
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
         :'score' => :'score',
-        :'score_kind' => :'score_kind'
+        :'score_kind' => :'score_kind',
+        :'score_present' => :'score_present'
       }
     end
 
@@ -43,13 +47,15 @@ module Temper::Generated
     def self.openapi_types
       {
         :'score' => :'Float',
-        :'score_kind' => :'ScoreKind'
+        :'score_kind' => :'ScoreKind',
+        :'score_present' => :'Boolean'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'score_present'
       ])
     end
 
@@ -79,6 +85,10 @@ module Temper::Generated
         self.score_kind = attributes[:'score_kind']
       else
         self.score_kind = nil
+      end
+
+      if attributes.key?(:'score_present')
+        self.score_present = attributes[:'score_present']
       end
     end
 
@@ -133,7 +143,8 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           score == o.score &&
-          score_kind == o.score_kind
+          score_kind == o.score_kind &&
+          score_present == o.score_present
     end
 
     # @see the `==` method
@@ -145,7 +156,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [score, score_kind].hash
+      [score, score_kind, score_present].hash
     end
 
     # Builds the object from hash

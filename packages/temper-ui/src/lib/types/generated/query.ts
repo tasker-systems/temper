@@ -997,10 +997,24 @@ export type ScoreKind = "fts_norm" | "vec_norm" | "graph_score" | "region_score"
  */
 export type Scoring = { score_kind: ScoreKind, 
 /**
+ * The DEPRECATED legacy rendering of the row's ordering quantity: a required,
+ * always-emitted number whose `0.0` means "this row carried no quantity" — a
+ * value nobody measured. Kept byte-for-byte so every deployed client keeps
+ * parsing; retires ONLY at the reserved break level. New readers use
+ * [`Self::score_present`], which states the fact this rendering buries.
+ *
  * Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not
  * carried per row because it is a property of the act, identical for every row of a stage.
  */
-score: number, };
+score: number, 
+/**
+ * Whether the row actually carried the ordering quantity that `score` renders.
+ * `false` beside `score: 0.0` says the zero is the deprecated rendering of
+ * absence, not a measurement; `true` says the number was measured — and may
+ * legitimately be zero. Absent from a payload only when the server predates
+ * the signal; current servers always emit it.
+ */
+score_present: boolean | null, };
 
 /**
  * How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).
