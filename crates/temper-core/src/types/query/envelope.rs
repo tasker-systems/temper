@@ -395,7 +395,8 @@ mod tests {
             },
             scoring: Scoring {
                 score_kind: ScoreKind::RegionScore,
-                score: 0.42,
+                score: Some(0.42),
+                score_present: Some(true),
             },
         }
     }

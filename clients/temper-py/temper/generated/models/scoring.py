@@ -17,8 +17,8 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt
-from typing import Any, ClassVar, Dict, List, Union
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt
+from typing import Any, ClassVar, Dict, List, Optional, Union
 from temper.generated.models.score_kind import ScoreKind
 from typing import Optional, Set
 from typing_extensions import Self
@@ -28,9 +28,10 @@ class Scoring(BaseModel):
     """
     How one hit scored, and by what measure.  The kind travels WITH the number, which is what lets a row be understood on its own. Two hits whose `score_kind` differs hold values that must never be added, averaged, or sorted into one list — and unlike a bare field name, that is something a client can actually check.
     """ # noqa: E501
-    score: Union[StrictFloat, StrictInt] = Field(description="Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not carried per row because it is a property of the act, identical for every row of a stage.")
+    score: Union[StrictFloat, StrictInt] = Field(description="The DEPRECATED legacy rendering of the row's ordering quantity: a required, always-emitted number whose `0.0` means \"this row carried no quantity\" — a value nobody measured. Kept byte-for-byte so every deployed client keeps parsing; retires ONLY at the reserved break level. New readers use [`Self::score_present`], which states the fact this rendering buries.  Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not carried per row because it is a property of the act, identical for every row of a stage.")
     score_kind: ScoreKind
-    __properties: ClassVar[List[str]] = ["score", "score_kind"]
+    score_present: Optional[StrictBool] = Field(default=None, description="Whether the row actually carried the ordering quantity that `score` renders. `false` beside `score: 0.0` says the zero is the deprecated rendering of absence, not a measurement; `true` says the number was measured — and may legitimately be zero. Absent from a payload only when the server predates the signal; current servers always emit it.")
+    __properties: ClassVar[List[str]] = ["score", "score_kind", "score_present"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -74,6 +75,11 @@ class Scoring(BaseModel):
         # override the default output from pydantic by calling `to_dict()` of score_kind
         if self.score_kind:
             _dict['score_kind'] = self.score_kind.to_dict()
+        # set to None if score_present (nullable) is None
+        # and model_fields_set contains the field
+        if self.score_present is None and "score_present" in self.model_fields_set:
+            _dict['score_present'] = None
+
         return _dict
 
     @classmethod
@@ -87,7 +93,8 @@ class Scoring(BaseModel):
 
         _obj = cls.model_validate({
             "score": obj.get("score"),
-            "score_kind": ScoreKind.from_dict(obj["score_kind"]) if obj.get("score_kind") is not None else None
+            "score_kind": ScoreKind.from_dict(obj["score_kind"]) if obj.get("score_kind") is not None else None,
+            "score_present": obj.get("score_present")
         })
         return _obj
 

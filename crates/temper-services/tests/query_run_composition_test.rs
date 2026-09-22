@@ -292,7 +292,13 @@ async fn a_matched_resource_comes_back_hydrated_and_carries_its_acts_score_kind(
         "fts_norm",
         "the kind travels WITH the row so it can be read on its own"
     );
-    assert!(hits[0].scoring.score > 0.0);
+    assert!(
+        hits[0]
+            .scoring
+            .score
+            .expect("a scored hit carries the quantity its act ordered by")
+            > 0.0
+    );
 
     let stage = &r.returned[&StageName::parse("hits").unwrap()];
     assert_eq!(stage.disposition, StageDisposition::Answered);
@@ -945,8 +951,11 @@ mod server_side_embedding {
         assert_eq!(hits.len(), 1, "got: {hits:?}");
         assert_eq!(hits[0].resource.id.uuid(), id);
         assert!(
-            hits[0].scoring.score > 0.0,
-            "a real similarity, not a NULL bind reading as an answer"
+            hits[0]
+                .scoring
+                .score
+                .expect("a real similarity, not a NULL bind reading as an answer")
+                > 0.0
         );
     }
 

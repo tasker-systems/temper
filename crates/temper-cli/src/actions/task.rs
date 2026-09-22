@@ -108,12 +108,16 @@ pub(crate) fn task_info_from_row(
     row: temper_core::types::resource_view::ResourceView,
     context: &str,
 ) -> TaskInfo {
+    let stage_present = row.managed_meta.stage.is_some();
     TaskInfo {
         id: row.id,
         slug: sluggify(&row.title),
         title: row.title,
         context: context.to_string(),
+        // The empty string stays the wire's legacy rendering of an absent stage; the
+        // honest fact rides `stage_present`.
         stage: row.managed_meta.stage.unwrap_or_default(),
+        stage_present,
         mode: row.managed_meta.mode,
         effort: row.managed_meta.effort,
         seq: row.managed_meta.seq.and_then(|s| u32::try_from(s).ok()),
