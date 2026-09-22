@@ -11,6 +11,10 @@ temper-workflow = { path = "../temper-workflow" }
 temper-auth = { path = "../temper-auth" }
 temper-telemetry = { path = "../temper-telemetry" }
 reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls", "cookies"], default-features = false }
+# The in-process transport: prepared requests are driven through an assembled API router
+# (`Router::oneshot`) with no socket, so the per-route constraints at that router apply once.
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1", features = ["rt", "macros", "sync", "net"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

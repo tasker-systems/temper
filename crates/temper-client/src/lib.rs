@@ -113,6 +113,26 @@ impl TemperClient {
         })
     }
 
+    /// Create an in-process client with a pre-resolved token override.
+    ///
+    /// The wire-less counterpart of [`Self::with_token`]: every request is driven through
+    /// `router` — the API's own assembled router — so the per-route constraints at that
+    /// router (auth, rate, refusal mapping) are applied once, and the caller's `surface`
+    /// rides the door as the trusted in-process extension. This is the binding the MCP door
+    /// migrates onto: one execution path, parity by construction.
+    pub fn in_process_with_token(
+        router: axum::Router,
+        surface: temper_workflow::operations::Surface,
+        token: String,
+        store: Arc<dyn auth::TokenStore>,
+    ) -> crate::error::Result<Self> {
+        Ok(Self {
+            http: http::HttpClient::in_process_with_token_override(router, surface, token)?,
+            oauth_config: None,
+            store,
+        })
+    }
+
     /// Attach OAuth configuration for login and token refresh.
     pub fn with_oauth(mut self, config: login::OAuthConfig) -> Self {
         self.oauth_config = Some(config);

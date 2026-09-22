@@ -12,7 +12,7 @@
     },
     "packages/temper-cloud": {
       "name": "temper-cloud",
-      "version": "0.1.0",
+      "version": "0.5.3",
       "dependencies": {
         "@huggingface/hub": "^2.11.0",
         "@huggingface/transformers": "^3.8.1",
@@ -43,7 +43,7 @@
     },
     "packages/temper-ui": {
       "name": "@temper/ui",
-      "version": "0.1.0",
+      "version": "0.5.3",
       "dependencies": {
         "@fontsource-variable/jetbrains-mono": "^5.3.0",
         "@fontsource-variable/source-serif-4": "^5.3.0",

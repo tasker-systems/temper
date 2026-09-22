@@ -53,6 +53,30 @@ pub struct AuthConfig {
     pub mode: AuthMode,
 }
 
+impl AuthConfig {
+    /// The audiences a token may name and still verify at either door.
+    ///
+    /// Both doors accept the same set, from this one definition: the MCP surface validates its
+    /// own RFC 8707 resource audience — `mcp_audience`, the value its PRM advertises and what
+    /// conformant MCP clients request — and still accepts the API audience: machine tokens
+    /// (`client_credentials`) and sessions minted before `MCP_AUDIENCE` was introduced carry
+    /// it, and both surfaces are one instance, so a token naming either audience names us. The
+    /// audience split exists to satisfy MCP clients' client-side PRM check (resource must equal
+    /// the MCP server URL or its origin), not to separate trust domains. When `MCP_AUDIENCE` is
+    /// unset the two resolve to one value and this is the single-audience check it always was —
+    /// which is why the set is deduped.
+    ///
+    /// The HTTP door's `require_auth` and the MCP middleware both consume this, so the two
+    /// doors cannot drift about which tokens name this instance.
+    pub fn accepted_audiences(&self) -> Vec<&str> {
+        if self.mcp_audience == self.audience {
+            vec![self.audience.as_str()]
+        } else {
+            vec![self.mcp_audience.as_str(), self.audience.as_str()]
+        }
+    }
+}
+
 /// A boot-blocking configuration fault.
 ///
 /// Every message names the offending environment variable and states the relation it must satisfy.
@@ -329,6 +353,28 @@ mod tests {
         );
         let cfg = parse_auth_config(env(&e)).expect("valid");
         assert_eq!(cfg.audience, "https://temperkb.io/api");
+    }
+
+    // --- the accepted-audience set: the one definition both doors consume ---
+
+    #[test]
+    fn equal_audiences_collapse_to_a_single_element_set() {
+        // The dedupe the middleware's comment names: with `MCP_AUDIENCE` unset (or equal), the
+        // accepted set is the single-audience check it always was.
+        let cfg = parse_auth_config(env(&external_idp())).expect("valid config");
+        assert_eq!(cfg.accepted_audiences(), vec![cfg.audience.as_str()]);
+    }
+
+    #[test]
+    fn distinct_audiences_yield_the_mcp_audience_first_then_the_api_audience() {
+        // The live dedicated-MCP-resource shape: a token naming either audience names this
+        // instance. The MCP audience leads, matching the set the MCP middleware built by hand.
+        let e = with(external_idp(), "MCP_AUDIENCE", "https://temperkb.io/mcp");
+        let cfg = parse_auth_config(env(&e)).expect("valid config");
+        assert_eq!(
+            cfg.accepted_audiences(),
+            vec!["https://temperkb.io/mcp", "https://temperkb.io/api"]
+        );
     }
 
     // --- the security regression: this is the bug being closed ---

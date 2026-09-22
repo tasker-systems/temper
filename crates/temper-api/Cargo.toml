@@ -71,6 +71,9 @@ sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "migra
 # `multipart` — the blob witnesses POST a multipart upload through the real reqwest client,
 # so the request under test is the wire shape a caller actually sends.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart"] }
+# temper-client — the in-process door witness drives the real public client through
+# `create_app`'s router with no socket (the MCP binding G1 builds).
+temper-client = { path = "../temper-client" }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }

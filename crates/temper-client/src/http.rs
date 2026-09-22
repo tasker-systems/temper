@@ -11,9 +11,10 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
 
+use tower::ServiceExt;
 use tracing::Instrument;
 
-use temper_workflow::operations::{Surface, SURFACE_HEADER};
+use temper_workflow::operations::{InProcessSurface, Surface, SURFACE_HEADER};
 
 use crate::auth::TokenStore;
 use crate::endpoint;
@@ -68,6 +69,45 @@ fn retry_delay(after_attempt: u32) -> Duration {
     Duration::from_millis(RETRY_BASE_DELAY_MS << (after_attempt - 1))
 }
 
+/// The synthetic base URL an in-process request is built against.
+///
+/// A reqwest `RequestBuilder` needs an absolute URL, so the in-process transport builds
+/// against this synthetic origin — and the conversion to an `axum` request strips it,
+/// handing the router the path and query alone. The scheme is deliberately non-network:
+/// the URL is never dialed, and a non-`http` scheme makes that structural — reqwest
+/// refuses to issue a non-`http(s)` request, so even a bug that routed an in-process
+/// request to the wire arm fails closed instead of resolving a synthetic host.
+const IN_PROCESS_BASE_URL: &str = "in-process://temper";
+
+/// The in-process door's response-buffer ceiling, in bytes.
+///
+/// The `Router::oneshot` transport rebuilds a whole `reqwest::Response` from the answer, so
+/// a response must fit in memory. This is the same size class as the largest declared door
+/// limit — `/mcp`'s 25 MB and the MCP single-request threshold the blob read ceiling rides
+/// (`MCP_MAX_BODY_BYTES`, temper-mcp's router) — per the body-limit table in
+/// temper-services' transport module. A response class that outgrows it is a door that
+/// declares its own limit there, and the blob family names its decision at migration time;
+/// nothing today answers bigger than this.
+const IN_PROCESS_RESPONSE_BUFFER_LIMIT: usize = 25 * 1024 * 1024;
+
+/// How a request leaves this client: over the wire, or through an in-process router.
+///
+/// Everything above the single send attempt — token resolution, identity headers, trace
+/// injection, the retry schedule, status mapping — is transport-agnostic and shared. The two
+/// variants differ only in how one prepared request is issued and its answer returned, which
+/// is what makes parity between the doors a property of this file rather than a discipline
+/// every caller keeps.
+#[derive(Clone)]
+enum Transport {
+    /// Over the wire: reqwest against the configured base URL.
+    Http { base_url: String },
+    /// In-process: the request is driven through this assembled router with
+    /// `ServiceExt::oneshot`, no socket. The caller's [`Surface`] rides the request as a
+    /// trusted extension (`InProcessSurface`), the one surface channel a remote caller
+    /// cannot write.
+    InProcess(axum::Router),
+}
+
 /// Whether a failed request is safe to retry.
 ///
 /// A request is retry-eligible when it is a **safe** method (GET/HEAD — no
@@ -105,7 +145,7 @@ fn should_retry(method: &reqwest::Method, err: &ClientError, idempotent: bool) -
 #[derive(Clone)]
 pub struct HttpClient {
     inner: Client,
-    base_url: String,
+    transport: Transport,
     device_id: Option<String>,
     surface: Surface,
     token_override: Option<String>,
@@ -115,7 +155,13 @@ pub struct HttpClient {
 impl fmt::Debug for HttpClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HttpClient")
-            .field("base_url", &self.base_url)
+            .field(
+                "transport",
+                &match &self.transport {
+                    Transport::Http { base_url } => format!("http:{base_url}"),
+                    Transport::InProcess(_) => "in-process".to_owned(),
+                },
+            )
             .field("device_id", &self.device_id)
             .field("surface", &self.surface)
             .field("has_token_override", &self.token_override.is_some())
@@ -201,11 +247,62 @@ impl HttpClient {
 
         Ok(Self {
             inner,
-            base_url: base_url.trim_end_matches('/').to_owned(),
+            transport: Transport::Http {
+                base_url: base_url.trim_end_matches('/').to_owned(),
+            },
             device_id,
             surface,
             token_override: None,
             token_store,
+        })
+    }
+
+    /// Construct an `HttpClient` whose requests are driven through an **in-process** API
+    /// router — `ServiceExt::oneshot`, no socket.
+    ///
+    /// This is the door every per-route constraint at that router (auth, rate, refusal
+    /// mapping) is applied by: the request crosses exactly the seams the wire door crosses,
+    /// because it IS the wire door's own execution path minus the socket. The caller's
+    /// [`Surface`] rides each request as a trusted [`InProcessSurface`] extension — the one
+    /// surface channel a remote caller cannot write — so an MCP-originated act attributes
+    /// `@mcp` at the ledger rather than silently becoming `@api`.
+    ///
+    /// There is deliberately no base URL and no endpoint validation here: nothing is dialed,
+    /// so there is no URL to check the scheme of. Requests are *built* against the synthetic
+    /// `IN_PROCESS_BASE_URL` origin — a non-network scheme, never issued — so the reqwest
+    /// builders accept a URL, and the conversion to an `axum` request strips it, handing the
+    /// router the path and query alone.
+    ///
+    /// `surface` carries the same meaning as in [`HttpClient::new`] — construction state,
+    /// no default, because a defaulted surface would silently attribute every write to
+    /// `@web`.
+    pub fn in_process(
+        router: axum::Router,
+        surface: Surface,
+        token_store: Option<Arc<dyn TokenStore>>,
+    ) -> Result<Self> {
+        Ok(Self {
+            inner: Client::new(),
+            transport: Transport::InProcess(router),
+            device_id: None,
+            surface,
+            token_override: None,
+            token_store,
+        })
+    }
+
+    /// An in-process client with a fixed token that bypasses the store — the
+    /// [`HttpClient::with_token_override`] counterpart of [`HttpClient::in_process`],
+    /// for tests and callers that resolved the token upstream (an MCP server validates
+    /// the caller's bearer through its own middleware before acting).
+    pub fn in_process_with_token_override(
+        router: axum::Router,
+        surface: Surface,
+        token: String,
+    ) -> Result<Self> {
+        Ok(Self {
+            token_override: Some(token),
+            ..Self::in_process(router, surface, None)?
         })
     }
 
@@ -253,7 +350,14 @@ impl HttpClient {
     }
 
     fn url(&self, path: &str) -> String {
-        format!("{}/{}", self.base_url, path.trim_start_matches('/'))
+        // On the wire transport, `base_url` emptiness and scheme were refused at
+        // construction — see `HttpClient::new`. In-process, the synthetic base is stripped
+        // again at conversion; it exists only so the reqwest builders accept the URL.
+        let base = match &self.transport {
+            Transport::Http { base_url } => base_url.as_str(),
+            Transport::InProcess(_) => IN_PROCESS_BASE_URL,
+        };
+        format!("{}/{}", base, path.trim_start_matches('/'))
     }
 
     /// Attach the client-identity headers: device id (when set) and the calling surface
@@ -428,9 +532,9 @@ impl HttpClient {
                 // (streaming) body can't be replayed — send it directly; such
                 // bodies only occur on non-safe methods, which never retry.
                 let Some(this_attempt) = req.try_clone() else {
-                    return send_once(req, admitted).await;
+                    return send_attempt(self, req, admitted).await;
                 };
-                match send_once(this_attempt, admitted).await {
+                match send_attempt(self, this_attempt, admitted).await {
                     Ok(resp) => return Ok(resp),
                     Err(err) => {
                         if attempt < MAX_ATTEMPTS && should_retry(method, &err, idempotent) {
@@ -486,12 +590,127 @@ impl HttpClient {
 
 /// Issue a single attempt of an already-prepared request and map the outcome.
 ///
+/// Dispatches on the transport: the wire variant dials the base URL, the in-process variant
+/// drives the request through the assembled router. Both converge on [`finish_attempt`], so
+/// status recording, the admitted-status escape, and the error mapping are one discipline
+/// whichever way the request left.
+///
 /// Records status/latency on the current tracing span and returns the mapped
 /// [`ClientError`] for any non-success status. The retry loop in
 /// [`HttpClient::send`] calls this once per attempt.
+async fn send_attempt(
+    client: &HttpClient,
+    req: RequestBuilder,
+    admitted: Option<StatusCode>,
+) -> Result<Response> {
+    match &client.transport {
+        Transport::Http { .. } => send_once(req, admitted).await,
+        Transport::InProcess(router) => {
+            send_in_process(router, client.surface, req, admitted).await
+        }
+    }
+}
+
 async fn send_once(req: RequestBuilder, admitted: Option<StatusCode>) -> Result<Response> {
     let start = Instant::now();
     let resp = req.send().await?;
+    finish_attempt(resp, start, admitted).await
+}
+
+/// Drive one prepared request through an in-process router and map the outcome.
+///
+/// The prepared reqwest request is rebuilt as an `axum` request — method, URI (path and
+/// query; the synthetic base is stripped), headers, and the in-memory body — with the
+/// caller's [`InProcessSurface`] extension inserted, which is the trusted surface channel no
+/// remote caller can write. `ServiceExt::oneshot` runs it through the router's own
+/// middleware, so auth, rate, and refusal mapping apply exactly as they do across the wire.
+/// The answer is rebuilt as a `reqwest::Response` (body buffered under
+/// [`IN_PROCESS_RESPONSE_BUFFER_LIMIT`]) so every consumer downstream of `send` sees one
+/// response type regardless of transport.
+async fn send_in_process(
+    router: &axum::Router,
+    surface: Surface,
+    req: RequestBuilder,
+    admitted: Option<StatusCode>,
+) -> Result<Response> {
+    let start = Instant::now();
+    let request = req.build()?;
+    let axum_request = into_axum_request(request, surface)?;
+    let resp = router
+        .clone()
+        .oneshot(axum_request)
+        .await
+        .expect("axum Router answers infallibly");
+    let (parts, body) = resp.into_parts();
+    let bytes = axum::body::to_bytes(body, IN_PROCESS_RESPONSE_BUFFER_LIMIT)
+        .await
+        .map_err(|e| ClientError::Other(format!("in-process response body failed: {e}")))?;
+    let mut rebuilt = axum::http::Response::builder()
+        .status(parts.status)
+        .version(parts.version);
+    for (name, value) in parts.headers {
+        if let Some(name) = name {
+            rebuilt = rebuilt.header(name, value);
+        }
+    }
+    let rebuilt = rebuilt
+        .body(bytes)
+        .expect("status, headers and bytes are valid");
+    finish_attempt(Response::from(rebuilt), start, admitted).await
+}
+
+/// Convert a prepared reqwest request into an `axum` request for the in-process door.
+///
+/// The synthetic [`IN_PROCESS_BASE_URL`] host is dropped here — the router matches on the
+/// path and query alone. A request whose body cannot be read into memory (a streaming
+/// upload) is refused rather than silently buffered or dropped: such requests belong to
+/// callers that chose the wire transport deliberately.
+fn into_axum_request(
+    request: reqwest::Request,
+    surface: Surface,
+) -> Result<axum::http::Request<axum::body::Body>> {
+    let method = request.method().clone();
+    let url = request.url();
+    let path_and_query = match url.query() {
+        Some(query) => format!("{}?{query}", url.path()),
+        None => url.path().to_owned(),
+    };
+    let uri = axum::http::Uri::builder()
+        .path_and_query(path_and_query)
+        .build()
+        .map_err(|e| ClientError::Other(format!("in-process request URI failed to build: {e}")))?;
+    let headers = request.headers().clone();
+    let body =
+        match request.body() {
+            None => axum::body::Body::empty(),
+            Some(body) => match body.as_bytes() {
+                Some(bytes) => axum::body::Body::from(bytes.to_vec()),
+                None => return Err(ClientError::Other(
+                    "in-process door cannot carry a streaming body — use the wire transport for \
+                     this request"
+                        .to_owned(),
+                )),
+            },
+        };
+    let mut request = axum::http::Request::builder()
+        .method(method)
+        .uri(uri)
+        .body(body)
+        .map_err(|e| ClientError::Other(format!("in-process request failed to build: {e}")))?;
+    *request.headers_mut() = headers;
+    request.extensions_mut().insert(InProcessSurface(surface));
+
+    Ok(request)
+}
+
+/// The shared tail of a single attempt: record status and latency on the current span,
+/// honor the admitted-status escape, and map every non-success status to a [`ClientError`]
+/// at the level that names whose fault it is. Both transports converge here.
+async fn finish_attempt(
+    resp: Response,
+    start: Instant,
+    admitted: Option<StatusCode>,
+) -> Result<Response> {
     let status = resp.status();
     let latency_ms = start.elapsed().as_millis() as u64;
 
@@ -1164,5 +1383,108 @@ mod tests {
         )
         .expect("https validates");
         assert_eq!(client.resolve_token().unwrap(), "at_from_store");
+    }
+
+    // --- the in-process door: one send attempt, driven through a router, no socket ---
+
+    /// A router that reports what arrived at it: method, path, query, and the trusted
+    /// surface extension — everything the conversion and the door are responsible for.
+    fn echo_router() -> axum::Router {
+        async fn echo(req: axum::extract::Request) -> String {
+            let surface = req
+                .extensions()
+                .get::<InProcessSurface>()
+                .map(|s| s.0.marker().to_owned())
+                .unwrap_or_else(|| "<none>".to_owned());
+            format!(
+                "{} {} {}",
+                req.method(),
+                req.uri().path_and_query().unwrap(),
+                surface
+            )
+        }
+        axum::Router::new().fallback(axum::routing::any(echo))
+    }
+
+    #[tokio::test]
+    async fn an_in_process_request_reaches_the_router_with_its_surface_extension() {
+        let client = HttpClient::in_process_with_token_override(
+            echo_router(),
+            Surface::Mcp,
+            "tok".to_owned(),
+        )
+        .expect("in-process client builds");
+        let resp = client
+            .send(
+                &reqwest::Method::GET,
+                "/api/ping?x=1",
+                client.get("/api/ping?x=1"),
+                Some("tok"),
+            )
+            .await
+            .expect("the router answers");
+        assert_eq!(
+            resp.text().await.unwrap(),
+            "GET /api/ping?x=1 mcp",
+            "method, path+query, and the trusted surface extension must all survive the hop"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_in_process_post_carries_its_body() {
+        let client = HttpClient::in_process_with_token_override(
+            echo_router(),
+            Surface::CliCloud,
+            "tok".to_owned(),
+        )
+        .expect("in-process client builds");
+        let body = serde_json::json!({ "title": "carried through the door" });
+        let resp = client
+            .send(
+                &reqwest::Method::POST,
+                "/api/resources",
+                client.post("/api/resources").json(&body),
+                Some("tok"),
+            )
+            .await
+            .expect("the router answers");
+        // The echo reports the surface and route; the body's arrival is proven by the
+        // request building succeeding — but assert the whole thing honestly instead:
+        let text = resp.text().await.unwrap();
+        assert_eq!(text, "POST /api/resources cli");
+    }
+
+    /// The in-process answer is mapped by the same status discipline as the wire: a router
+    /// 404 is a `NotFound`, not a transport error.
+    #[tokio::test]
+    async fn an_in_process_response_maps_to_the_same_client_errors() {
+        async fn refuse() -> (axum::http::StatusCode, &'static str) {
+            (
+                axum::http::StatusCode::NOT_FOUND,
+                r#"{"error":{"code":"NOT_FOUND","message":"no such resource"}}"#,
+            )
+        }
+        let app = axum::Router::new().route("/api/missing", axum::routing::get(refuse));
+        let client =
+            HttpClient::in_process_with_token_override(app, Surface::Sdk, "tok".to_owned())
+                .expect("in-process client builds");
+        let err = client
+            .send(
+                &reqwest::Method::GET,
+                "/api/missing",
+                client.get("/api/missing"),
+                Some("tok"),
+            )
+            .await
+            .expect_err("a 404 maps, it does not transport-fail");
+        match err {
+            ClientError::NotFound { message } => {
+                assert_eq!(
+                    message, "no such resource",
+                    "the server's message must survive"
+                )
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
     }
 }

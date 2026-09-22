@@ -37,7 +37,7 @@ pub use refs::{
     decorated_ref, decorated_ref_bounded, is_remote_url, parse_ref, resolve_provenance_source,
     sluggify,
 };
-pub use surface::{Surface, SURFACE_HEADER};
+pub use surface::{InProcessSurface, Surface, SURFACE_HEADER};
 
 #[cfg(test)]
 mod smoke {

@@ -256,6 +256,15 @@ struct TestClaims {
 ///
 /// The token is valid for 1 hour from `now`, issued by `"test-issuer"`.
 pub fn generate_test_jwt(sub: &str, email: &str) -> String {
+    generate_test_jwt_with_audience(sub, email, TEST_AUDIENCE)
+}
+
+/// Like [`generate_test_jwt`] but the token names `aud` instead of [`TEST_AUDIENCE`].
+///
+/// The parity seam's witness: a token minted for the MCP surface's RFC 8707 resource
+/// audience (`aud = mcp_audience`) must authenticate at the HTTP door exactly as it does
+/// at the MCP middleware — same validated bearer token, same authority, either door.
+pub fn generate_test_jwt_with_audience(sub: &str, email: &str, aud: &str) -> String {
     let encoding_key = EncodingKey::from_rsa_pem(include_bytes!("test_rsa.key"))
         .expect("Failed to load test RSA private key");
 
@@ -265,7 +274,7 @@ pub fn generate_test_jwt(sub: &str, email: &str) -> String {
         email: email.to_string(),
         email_verified: true,
         iss: "test-issuer".to_string(),
-        aud: TEST_AUDIENCE.to_string(),
+        aud: aud.to_string(),
         iat: now,
         exp: now + 3600,
     };
@@ -412,12 +421,14 @@ pub async fn setup_test_app_with_state(
     }
 }
 
-/// Like [`setup_test_app`] but lets the caller mutate the `ApiConfig` before the app is built
-/// (e.g. to set `internal_reconcile_secret` / `auth_provider_name` for a specific test).
-pub async fn setup_test_app_with_config(
+/// Build a test `AppState` from a pool, letting the caller mutate the `ApiConfig` before
+/// the state is built — the same seam [`setup_test_app_with_config`] uses, for tests that
+/// want the **router itself** (via `create_app`) rather than a listening server: the
+/// in-process door test hands it to temper-client's `Router::oneshot` transport.
+pub async fn test_state_with_config(
     pool: PgPool,
     configure: impl FnOnce(&mut ApiConfig),
-) -> TestApp {
+) -> AppState {
     fixtures::clean_and_seed(&pool).await;
 
     let decoding_key = jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("test_rsa.pub"))
@@ -448,7 +459,16 @@ pub async fn setup_test_app_with_config(
     };
     configure(&mut config);
 
-    let state = AppState::new(pool.clone(), jwks_store, config);
+    AppState::new(pool, jwks_store, config)
+}
+
+/// Like [`setup_test_app`] but lets the caller mutate the `ApiConfig` before the app is built
+/// (e.g. to set `internal_reconcile_secret` / `auth_provider_name` for a specific test).
+pub async fn setup_test_app_with_config(
+    pool: PgPool,
+    configure: impl FnOnce(&mut ApiConfig),
+) -> TestApp {
+    let state = test_state_with_config(pool.clone(), configure).await;
     let app = create_app(state);
 
     let listener = TcpListener::bind("127.0.0.1:0")

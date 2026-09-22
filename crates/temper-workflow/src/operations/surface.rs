@@ -31,6 +31,20 @@ pub enum Surface {
     Sdk,
 }
 
+/// The surface of a request that arrived through the **in-process door**.
+///
+/// The in-process transport (temper-client's `Router::oneshot` binding) inserts this into
+/// request extensions after constructing the request server-side. Extensions cannot be
+/// written by a remote caller — no header reaches them — so this is the one trusted channel
+/// for a surface the `X-Temper-Surface` allowlist deliberately does not admit: an MCP act
+/// arriving over this door attributes `@mcp`, where the same claim sent as a header from
+/// across the wire is untrusted by construction. Surface is provenance, never
+/// authorization; this type moves provenance, and grants nothing.
+///
+/// The newtype exists so the extension map cannot confuse it with any other carried value.
+#[derive(Debug, Clone, Copy)]
+pub struct InProcessSurface(pub Surface);
+
 impl Surface {
     /// Every surface. `profile_service` provisions one `<handle>@<marker>` emitter entity per
     /// element, so adding a variant here also obliges an additive migration backfilling that
