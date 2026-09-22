@@ -45,6 +45,12 @@
 #      class, and the declaration must survive the actual diff:
 #        shape moved (anything beyond `.info.version`, jq-compared) and no `shape-breaking`
 #            declared: FAIL — the #858 class;
+#        shape moved and `shape-breaking` declared WITHOUT the `retirement-train` routing:
+#            FAIL — below the era level a shape-breaking declaration is a refusal, not a
+#            schedule (D-C2): convert to the deprecation path (re-declare the row `additive` +
+#            `behavioral`) or wait for the retirement release train;
+#        shape moved and `shape-breaking, retirement-train` declared: PASS, noted — the era
+#            release's own movement; this PR moves M and cuts the next pin;
 #        no shape movement and `additive` declared: PASS — the D-S3 baseline (a version bump
 #            re-stales the doc and the generated cores; that is what `additive` means);
 #        no shape movement and `shape-breaking` declared: PASS, noted — honest

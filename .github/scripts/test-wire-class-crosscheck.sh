@@ -130,6 +130,16 @@ if [ "$rc" -ne 0 ] \
   ok "parse: 'breaking' fails, naming the file and line"
 else bad "parse: 'breaking' fails, naming the file and line" "exit=$rc" "$out"; fi
 
+# ── 5b. PARSE — retirement-train without shape-breaking fails (a routing is never a class) ──────
+reset_fixtures
+printf '%s\n' "crates/temper-mcp/src/lib.rs" > "$WIRE"
+sed 's/^classes: behavioral$/classes: additive, retirement-train/' "$REG" > "${REG}.tmp" && mv "${REG}.tmp" "$REG"
+out="$(run_check unchanged)"; rc=$?
+if [ "$rc" -ne 0 ] \
+    && printf '%s' "$out" | grep -q "a routing, never a class on its own"; then
+  ok "parse: 'retirement-train' without 'shape-breaking' fails the co-occurrence rule"
+else bad "parse: 'retirement-train' without 'shape-breaking' fails the co-occurrence rule" "exit=$rc" "$out"; fi
+
 # ── 6. PARSE — a nameless blocker (empty after blocked:) fails ──────────────────────────────────
 reset_fixtures
 printf '%s\n' "crates/temper-mcp/src/lib.rs" > "$WIRE"
