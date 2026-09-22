@@ -11,10 +11,14 @@
 # (wire-class-crosscheck.sh) makes a break SIGNALLED; this gate makes it AVOIDABLE:
 # each released minor pins its contract under schemas/versions/<M.m>/openapi.json,
 # and every patch-level change to the committed contract must be ADDITIVE against
-# the current pin. A client built at the pin interoperates with every later patch,
-# in both skew directions. The genuinely breaking change is not forbidden — it
-# discharges through the batching window (spec §12, D-S5) with an M bump, and the
-# next pin is cut in the same release PR. Until then this gate reads red, which is
+# the current pin. A client built at the pin interoperates with every later
+# release of the era, in both skew directions. The genuinely breaking change is
+# not forbidden — but since the compat-deprecation regime (2026-09-22, spec of
+# record temper-artifacts/specs/2026-09-22-compat-semver-policy-amendment-design.md)
+# it has exactly two routes: the deprecation path — keep serving the existing
+# rendering under a record and land the corrected signal additively (D-C2/D-C3) —
+# or the retirement release train, where M moves and the next pin is cut in the
+# same release PR (D-C1/D-C4). Until one of those, this gate reads red, which is
 # the discipline speaking: that movement cannot merge to main.
 #
 # The additive standard is the declared-class gate's own (spec §4: shapes only
@@ -172,10 +176,14 @@ case "$VERDICT" in
             printf '%s\n' "$BORN" | sed 's/^/  /'
         fi
         echo
-        echo "This is the M class: the movement discharges through the batching window (spec §12, D-S5)"
-        echo "— it merges to the window branch, the window closes with one M bump, and the release PR"
-        echo "cuts the next pin (schemas/versions/<M.m>/ per RELEASING.md), which turns this gate green."
-        echo "Until then this red is the discipline speaking: this diff cannot merge to main."
+        echo "This movement is a shape break — below the era level it is a refusal, not a schedule"
+        echo "(D-C2). Convert it to the deprecation path: keep serving the existing rendering under a"
+        echo "record, land the corrected signal additively, and re-declare the register row"
+        echo "(additive + behavioral — the #906 pattern). Or wait for the retirement release train,"
+        echo "where M moves and this release PR cuts the next pin (schemas/versions/<M.m>/ per"
+        echo "RELEASING.md), which turns this gate green. A version bump alone never launders a break"
+        echo "into safety. Until one of those, this red is the discipline speaking: this diff cannot"
+        echo "merge to main."
         exit 1
         ;;
     *)
