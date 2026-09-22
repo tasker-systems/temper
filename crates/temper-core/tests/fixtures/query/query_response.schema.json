@@ -891,12 +891,16 @@
       "description": "How one hit scored, and by what measure.\n\nThe kind travels WITH the number, which is what lets a row be understood on its own. Two hits\nwhose `score_kind` differs hold values that must never be added, averaged, or sorted into one\nlist — and unlike a bare field name, that is something a client can actually check.",
       "properties": {
         "score": {
-          "description": "Read [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not\ncarried per row because it is a property of the act, identical for every row of a stage.",
+          "description": "The DEPRECATED legacy rendering of the row's ordering quantity: a required,\nalways-emitted number whose `0.0` means \"this row carried no quantity\" — a\nvalue nobody measured. Kept byte-for-byte so every deployed client keeps\nparsing; retires ONLY at the reserved break level. New readers use\n[`Self::score_present`], which states the fact this rendering buries.\n\nRead [`super::envelope::StageResult::orders_by`] for this quantity's RANGE. It is not\ncarried per row because it is a property of the act, identical for every row of a stage.",
           "format": "float",
           "type": "number"
         },
         "score_kind": {
           "$ref": "#/$defs/ScoreKind"
+        },
+        "score_present": {
+          "description": "Whether the row actually carried the ordering quantity that `score` renders.\n`false` beside `score: 0.0` says the zero is the deprecated rendering of\nabsence, not a measurement; `true` says the number was measured — and may\nlegitimately be zero. Absent from a payload only when the server predates\nthe signal; current servers always emit it.",
+          "type": "boolean"
         }
       },
       "required": [

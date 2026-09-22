@@ -284,7 +284,11 @@ mod tests {
     fn resource_hit(score_kind: ScoreKind, score: f32) -> ResourceHit {
         ResourceHit {
             resource: inert_resource(),
-            scoring: Scoring { score_kind, score },
+            scoring: Scoring {
+                score_kind,
+                score: Some(score),
+                score_present: Some(true),
+            },
             located_at: None,
             via: vec![],
         }
@@ -558,7 +562,8 @@ mod tests {
             },
             scoring: Scoring {
                 score_kind: ScoreKind::RegionScore,
-                score: 0.42,
+                score: Some(0.42),
+                score_present: Some(true),
             },
         })
         .unwrap();

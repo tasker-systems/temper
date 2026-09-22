@@ -611,7 +611,12 @@ fn stage_result(
                 resource,
                 scoring: Scoring {
                     score_kind: decl.as_ref().and_then(|d| d.score_kind())?,
-                    score: h.quantity.unwrap_or_default() as f32,
+                    // Absence maps to absence here — the row carried no ordering quantity.
+                    // The wire-level rendering of that absence (`0.0` under the deprecated
+                    // rendering, with `score_present` stating the fact) is serialization's,
+                    // never this seam's.
+                    score: h.quantity.map(|q| q as f32),
+                    score_present: Some(h.quantity.is_some()),
                 },
                 // Declared as fillable only by the wide arm, and nothing fills it yet: the
                 // fragments collapse to a per-resource score and the argmin that would recover the
@@ -2000,9 +2005,81 @@ mod tests {
                     "and the surviving hit carries ITS OWN view, never a neighbour's"
                 );
                 assert_eq!(
-                    hits[0].scoring.score, 0.5,
+                    hits[0].scoring.score,
+                    Some(0.5),
                     "with its own score — pairing a view with another row's quantity would be \
                      a confidently wrong answer"
+                );
+                assert_eq!(
+                    hits[0].scoring.score_present,
+                    Some(true),
+                    "a row that carried its quantity says so"
+                );
+            }
+            other => panic!("expected resources, got {other:?}"),
+        }
+    }
+
+    /// **A hit whose row carried no quantity signals absence beside the deprecated zero
+    /// rendering.**
+    ///
+    /// The row's quantity column is typed `Option` end to end, and a hit can reach the response
+    /// without one while still carrying its membership and its [`ScoreKind`]. The wire keeps the
+    /// legacy rendering — `score: 0.0`, always present, so every deployed client keeps parsing —
+    /// with `score_present: false` stating which zeros are measurements and which are absence;
+    /// internally the absence stays absence. Asserted on the SERIALIZED hit, because the wire is
+    /// where the rendering and its signal must agree.
+    #[test]
+    fn a_hit_whose_row_carried_no_quantity_signals_absence_beside_the_deprecated_zero() {
+        let id = Uuid::now_v7();
+        let v = plan(
+            vec![act_node("hits", ActName::FindExact, None)],
+            vec!["hits"],
+        );
+        let rows = QueryRows {
+            hits: vec![HitRow {
+                quantity: None,
+                ..hit("hits", id, 0.0)
+            }],
+            tallies: vec![tally("hits", 1, 0)],
+            refusals: vec![],
+        };
+        let hydrated = Hydrated {
+            views: HashMap::from([(id, view(id))]),
+            open_meta: HashMap::new(),
+        };
+
+        let r = assemble(&v, &rows, &hydrated).expect("every stage in the plan has a tally row");
+        match &r.returned[&name("hits")].produced {
+            StageOutput::Resources { hits } => {
+                assert_eq!(
+                    hits.len(),
+                    1,
+                    "the hit survives; only its quantity is absent"
+                );
+                assert_eq!(
+                    hits[0].scoring.score, None,
+                    "absence propagates as absence internally, never as a number"
+                );
+                let json = serde_json::to_value(&hits[0]).expect("the hit serializes");
+                assert!(
+                    json["scoring"].get("score").is_some(),
+                    "the legacy rendering stays on the wire — score is never omitted: {json}"
+                );
+                assert_eq!(
+                    json["scoring"]["score"],
+                    serde_json::json!(0.0),
+                    "the documented 0.0 rendering of absence"
+                );
+                assert_eq!(
+                    json["scoring"]["score_present"],
+                    serde_json::json!(false),
+                    "the absence signal names the zero for what it is: {json}"
+                );
+                assert_eq!(
+                    hits[0].scoring.score_kind.as_str(),
+                    "fts_norm",
+                    "the kind still names what a quantity would be"
                 );
             }
             other => panic!("expected resources, got {other:?}"),

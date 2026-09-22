@@ -947,6 +947,10 @@ mod tests {
             task.stage, "",
             "an absent stage reads as empty, not as a stage"
         );
+        assert!(
+            !task.stage_present,
+            "and the absence signal says so — the empty string is the legacy rendering, not a stage"
+        );
 
         assert!(
             in_progress_tasks(vec![task]).is_empty(),

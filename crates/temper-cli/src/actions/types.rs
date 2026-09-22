@@ -17,6 +17,13 @@ pub struct TaskInfo {
     pub context: String,
     #[serde(rename = "temper-stage")]
     pub stage: String,
+    /// Whether the managed tier carried `temper-stage` at all. `false` beside
+    /// `temper-stage: ""` says the empty string is the deprecated legacy rendering
+    /// of absence, not a stage value; `true` says the stage was set. Derived at
+    /// construction — never a frontmatter key — and always emitted on stdout so
+    /// new readers get the fact old renderings bury.
+    #[serde(rename = "temper-stage-present", skip_deserializing)]
+    pub stage_present: bool,
     #[serde(rename = "temper-mode")]
     pub mode: Option<String>,
     #[serde(rename = "temper-effort")]
@@ -106,4 +113,42 @@ pub struct NormalizeSummary {
     pub slugs_fixed: u32,
     pub frontmatter_fixed: u32,
     pub tasks_without_effort: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task_with(stage: Option<&str>) -> TaskInfo {
+        TaskInfo {
+            id: ResourceId::from(uuid::Uuid::nil()),
+            title: "a task".to_string(),
+            slug: "a-task".to_string(),
+            context: "@me/ctx".to_string(),
+            stage: stage.unwrap_or("").to_string(),
+            stage_present: stage.is_some(),
+            mode: None,
+            effort: None,
+            seq: None,
+            branch: None,
+            pr: None,
+        }
+    }
+
+    /// A stageless task keeps the legacy rendering — `temper-stage: ""` — so every
+    /// existing stdout parser keeps parsing, with `temper-stage-present: false`
+    /// naming the empty string as the deprecated rendering of absence.
+    #[test]
+    fn a_stageless_task_keeps_the_empty_string_rendering_beside_its_absence_signal() {
+        let json = serde_json::to_string(&task_with(None)).unwrap();
+        assert!(json.contains(r#""temper-stage":""#), "{json}");
+        assert!(json.contains(r#""temper-stage-present":false"#), "{json}");
+    }
+
+    #[test]
+    fn a_present_stage_serializes_under_its_canonical_name_with_its_signal() {
+        let json = serde_json::to_string(&task_with(Some("in-progress"))).unwrap();
+        assert!(json.contains(r#""temper-stage":"in-progress""#), "{json}");
+        assert!(json.contains(r#""temper-stage-present":true"#), "{json}");
+    }
 }
