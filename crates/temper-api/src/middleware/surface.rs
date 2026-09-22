@@ -5,11 +5,12 @@
 //! degrades — it never rejects, and it never 500s.
 
 use axum::extract::FromRequestParts;
-use axum::http::{request::Parts, HeaderMap};
+use axum::http::request::Parts;
+use axum::http::HeaderMap;
 use std::convert::Infallible;
 use std::future::Future;
 
-use temper_workflow::operations::{Surface, SURFACE_HEADER};
+use temper_workflow::operations::{InProcessSurface, Surface, SURFACE_HEADER};
 
 /// Parse a client-claimed surface marker into the surface it names.
 ///
@@ -29,12 +30,20 @@ fn parse_trusted(raw: &str) -> Option<Surface> {
     }
 }
 
-/// Resolve the surface of an inbound request, degrading to [`Surface::ApiHttp`] (`web`) whenever
-/// the header is absent, unreadable, or not on the allowlist.
+/// Resolve the surface of an inbound request.
+///
+/// The in-process door speaks first: an [`InProcessSurface`] extension was inserted
+/// server-side by the `Router::oneshot` transport, where no remote caller can write, so it
+/// is trusted outright and overrides any header. Without it, the `X-Temper-Surface` header
+/// allowlist decides, degrading to [`Surface::ApiHttp`] (`web`) whenever the header is
+/// absent, unreadable, or not on the allowlist.
 ///
 /// Never fails. An untrusted claim is logged at debug — it is ordinary traffic (every browser
 /// request omits the header), not an anomaly worth a warning.
-fn resolve_surface(headers: &HeaderMap) -> Surface {
+fn resolve_surface(in_process: Option<InProcessSurface>, headers: &HeaderMap) -> Surface {
+    if let Some(InProcessSurface(surface)) = in_process {
+        return surface;
+    }
     let Some(raw) = headers.get(SURFACE_HEADER) else {
         return Surface::ApiHttp;
     };
@@ -51,7 +60,8 @@ fn resolve_surface(headers: &HeaderMap) -> Surface {
     }
 }
 
-/// The surface this request was received on, resolved from `X-Temper-Surface`.
+/// The surface this request was received on — the in-process door's trusted extension when
+/// present, else `X-Temper-Surface`.
 ///
 /// Handlers take this extractor instead of hardcoding [`Surface::ApiHttp`], and pass the inner
 /// value as their command's `origin`. Extraction is infallible by design: an unparseable claim
@@ -69,7 +79,11 @@ where
         parts: &mut Parts,
         _state: &S,
     ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
-        std::future::ready(Ok(RequestSurface(resolve_surface(&parts.headers))))
+        let in_process = parts.extensions.get::<InProcessSurface>().copied();
+        std::future::ready(Ok(RequestSurface(resolve_surface(
+            in_process,
+            &parts.headers,
+        ))))
     }
 }
 
@@ -128,20 +142,29 @@ mod tests {
 
     #[test]
     fn absent_header_degrades_to_web() {
-        assert_eq!(resolve_surface(&HeaderMap::new()), Surface::ApiHttp);
+        assert_eq!(resolve_surface(None, &HeaderMap::new()), Surface::ApiHttp);
     }
 
     #[test]
     fn untrusted_header_degrades_to_web() {
-        assert_eq!(resolve_surface(&headers_with("mcp")), Surface::ApiHttp);
-        assert_eq!(resolve_surface(&headers_with("nonsense")), Surface::ApiHttp);
-        assert_eq!(resolve_surface(&headers_with("")), Surface::ApiHttp);
+        assert_eq!(
+            resolve_surface(None, &headers_with("mcp")),
+            Surface::ApiHttp
+        );
+        assert_eq!(
+            resolve_surface(None, &headers_with("nonsense")),
+            Surface::ApiHttp
+        );
+        assert_eq!(resolve_surface(None, &headers_with("")), Surface::ApiHttp);
     }
 
     #[test]
     fn trusted_header_resolves() {
-        assert_eq!(resolve_surface(&headers_with("cli")), Surface::CliCloud);
-        assert_eq!(resolve_surface(&headers_with("sdk")), Surface::Sdk);
+        assert_eq!(
+            resolve_surface(None, &headers_with("cli")),
+            Surface::CliCloud
+        );
+        assert_eq!(resolve_surface(None, &headers_with("sdk")), Surface::Sdk);
     }
 
     /// A header whose bytes are not valid ASCII cannot even be `to_str`'d. It degrades; it
@@ -153,6 +176,68 @@ mod tests {
             SURFACE_HEADER,
             axum::http::HeaderValue::from_bytes(&[0xff, 0xfe]).expect("opaque bytes"),
         );
-        assert_eq!(resolve_surface(&h), Surface::ApiHttp);
+        assert_eq!(resolve_surface(None, &h), Surface::ApiHttp);
+    }
+
+    // --- the in-process door: the trusted extension, which no header can reach ---
+
+    /// Build `request::Parts` the way the extractor sees them, from headers and extensions.
+    fn parts_with(
+        in_process: Option<InProcessSurface>,
+        headers: HeaderMap,
+    ) -> axum::http::request::Parts {
+        let mut builder = axum::http::Request::builder();
+        for (k, v) in headers.iter() {
+            builder = builder.header(k, v);
+        }
+        let mut request = builder.body(()).expect("headerless body request");
+        if let Some(surface) = in_process {
+            request.extensions_mut().insert(surface);
+        }
+        let (parts, _) = request.into_parts();
+        parts
+    }
+
+    /// The whole point of the extension: an MCP act arriving through the in-process door
+    /// attributes `@mcp`, where the same claim crossing the wire as a header is untrusted.
+    #[test]
+    fn the_in_process_extension_resolves_its_surface() {
+        for surface in Surface::ALL {
+            let parts = parts_with(Some(InProcessSurface(surface)), HeaderMap::new());
+            let in_process = parts.extensions.get::<InProcessSurface>().copied();
+            assert_eq!(resolve_surface(in_process, &parts.headers), surface);
+        }
+    }
+
+    /// The extension is the trusted channel and outranks the header: an in-process MCP
+    /// request carrying a spoofed `sdk` header still attributes `@mcp`.
+    #[test]
+    fn the_in_process_extension_outranks_any_header_claim() {
+        let parts = parts_with(Some(InProcessSurface(Surface::Mcp)), headers_with("sdk"));
+        let in_process = parts.extensions.get::<InProcessSurface>().copied();
+        assert_eq!(resolve_surface(in_process, &parts.headers), Surface::Mcp);
+    }
+
+    /// The extractor itself: an extension-less request resolves exactly as before, through
+    /// the header allowlist — the in-process door adds a channel, it does not rewire the old one.
+    #[test]
+    fn without_the_extension_the_extractor_resolves_headers_as_before() {
+        let untrusted = parts_with(None, headers_with("mcp"));
+        let resolved = tokio::runtime::Runtime::new().unwrap().block_on(async {
+            RequestSurface::from_request_parts(&mut untrusted.clone(), &())
+                .await
+                .expect("infallible")
+                .0
+        });
+        assert_eq!(resolved, Surface::ApiHttp);
+
+        let trusted = parts_with(None, headers_with("cli"));
+        let resolved = tokio::runtime::Runtime::new().unwrap().block_on(async {
+            RequestSurface::from_request_parts(&mut trusted.clone(), &())
+                .await
+                .expect("infallible")
+                .0
+        });
+        assert_eq!(resolved, Surface::CliCloud);
     }
 }

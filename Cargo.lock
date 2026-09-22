@@ -6051,6 +6051,7 @@ dependencies = [
  "serde_urlencoded",
  "sqlx",
  "temper-auth",
+ "temper-client",
  "temper-core",
  "temper-ingest",
  "temper-migrate",
@@ -6132,6 +6133,7 @@ dependencies = [
 name = "temper-client"
 version = "0.5.3"
 dependencies = [
+ "axum",
  "base64 0.22.1",
  "chrono",
  "dirs 5.0.1",
@@ -6150,6 +6152,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tower",
  "tracing",
  "url",
  "uuid",

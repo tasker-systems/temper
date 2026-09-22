@@ -92,6 +92,100 @@ async fn test_valid_jwt_auto_provisions_profile(pool: PgPool) {
     );
 }
 
+// --- one-trust-domain: the accepted-audience set is one definition, shared by both doors ---
+//
+// These three pin `require_auth` accepting the same audience set the MCP middleware accepts
+// (`AuthConfig::accepted_audiences`). The MCP-audience witness is the clause's test: the same
+// validated bearer token authorizes identically at either door, and door choice is never an
+// authorization input. Before the set was shared, `require_auth` validated the API audience
+// alone and these tokens took a 401 here.
+
+/// An instance running with a dedicated MCP audience accepts an `mcp_audience` token at the
+/// HTTP door — the same token the MCP middleware already accepts.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_mcp_audience_token_authenticates_at_the_api_door(pool: PgPool) {
+    const MCP_AUDIENCE: &str = "https://test.example/mcp";
+    let app = common::setup_test_app_with_config(pool, |config| {
+        config.auth.mcp_audience = MCP_AUDIENCE.to_string();
+    })
+    .await;
+
+    let sub = format!("mcp-aud-sub-{}", uuid::Uuid::new_v4());
+    let email = format!("mcp-aud-{}@example.com", uuid::Uuid::new_v4());
+    let token = common::generate_test_jwt_with_audience(&sub, &email, MCP_AUDIENCE);
+
+    let resp = app
+        .client
+        .get(app.url("/api/profile"))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("request failed");
+
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "an mcp_audience token must authenticate at the HTTP door; body: {}",
+        resp.text().await.unwrap_or_default()
+    );
+}
+
+/// Widening to the MCP audience must not drop the API audience: with the two distinct, a
+/// token carrying the API audience still authenticates (no-door-regression).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_api_audience_token_still_authenticates_when_mcp_audience_is_distinct(pool: PgPool) {
+    let app = common::setup_test_app_with_config(pool, |config| {
+        config.auth.mcp_audience = "https://test.example/mcp".to_string();
+    })
+    .await;
+
+    let sub = format!("api-aud-sub-{}", uuid::Uuid::new_v4());
+    let email = format!("api-aud-{}@example.com", uuid::Uuid::new_v4());
+    let token = common::generate_test_jwt_with_audience(&sub, &email, common::TEST_AUDIENCE);
+
+    let resp = app
+        .client
+        .get(app.url("/api/profile"))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("request failed");
+
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "the API audience must stay accepted when an MCP audience is configured"
+    );
+}
+
+/// Parity is not promiscuity: a token naming a third audience is refused at the HTTP door,
+/// exactly as the MCP middleware refuses it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_unknown_audience_is_still_refused_at_the_api_door(pool: PgPool) {
+    let app = common::setup_test_app_with_config(pool, |config| {
+        config.auth.mcp_audience = "https://test.example/mcp".to_string();
+    })
+    .await;
+
+    let sub = format!("other-aud-sub-{}", uuid::Uuid::new_v4());
+    let email = format!("other-aud-{}@example.com", uuid::Uuid::new_v4());
+    let token = common::generate_test_jwt_with_audience(&sub, &email, "https://other.example");
+
+    let resp = app
+        .client
+        .get(app.url("/api/profile"))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("request failed");
+
+    assert_eq!(
+        resp.status().as_u16(),
+        401,
+        "an audience neither door accepts must be refused at the HTTP door"
+    );
+}
+
 /// Auto-provisioned profile must have a "default" context.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn test_auto_provisioned_profile_has_default_context(pool: PgPool) {

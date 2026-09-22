@@ -13,6 +13,24 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 `satisfied`.
 
 ## Since v0.5.2 — unreleased
+- **The in-process door — temper-client transport, audience-acceptance parity, surface-through-the-door attribution (one-seam goal, beat G1)**
+  The MCP door's migration onto the API's own execution path begins: temper-client
+  gains an in-process transport (`Router::oneshot`, no socket) whose requests carry
+  the caller's surface as a trusted request extension — the one channel a remote
+  caller cannot write — and the API's `require_auth` accepts the same audience set
+  the MCP middleware accepts, from one shared definition
+  (`AuthConfig::accepted_audiences`), so an `mcp_audience` token authorizes
+  identically at either door. Who observes: a caller holding an mcp_audience
+  bearer, previously 401'd by the HTTP door, now authenticates there; every other
+  acceptance is unchanged (unknown audiences still refused; the `X-Temper-Surface`
+  header allowlist untouched — `mcp` stays untrusted as a wire claim). No wire
+  shape moves: no route, field, or schema changes; openapi.json static; the
+  header channel and its degradation rules are byte-identical.
+pr: self
+classes: behavioral
+surfaces: http, mcp, clients
+status: signal-only
+
 - **This release — the 0.5.3 fleet alignment: VERSION 0.5.2 → 0.5.3 across crates, packages, and clients**
   The release train's own wire delta is none: version fields and the generated
   cores re-stale with the bump (the D-S3 baseline — no shape movement); the

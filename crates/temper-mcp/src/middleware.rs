@@ -74,18 +74,15 @@ pub async fn require_mcp_auth(
     // was introduced carry it, and both surfaces are one instance, so a token naming either
     // audience names us. The audience split exists to satisfy MCP clients' client-side PRM check
     // (resource must equal the MCP server URL or its origin), not to separate trust domains.
-    // When `MCP_AUDIENCE` is unset the two resolve to one value and this is the single-audience
-    // check it always was — which is also why the set is deduped.
+    // The set is `AuthConfig::accepted_audiences` — the ONE definition both doors consume, so
+    // neither can drift about which tokens name this instance. With `MCP_AUDIENCE` unset the
+    // two resolve to one value and this is the single-audience check it always was.
     let auth = &state.api_state.config.auth;
-    let audiences: &[&str] = if auth.mcp_audience == auth.audience {
-        &[&auth.audience]
-    } else {
-        &[&auth.mcp_audience, &auth.audience]
-    };
+    let audiences = auth.accepted_audiences();
     let validation = state
         .api_state
         .jwks_store
-        .validation(&auth.issuer, audiences, vk.algorithm);
+        .validation(&auth.issuer, &audiences, vk.algorithm);
 
     match decode::<RawJwtClaims>(&token, &vk.key, &validation) {
         Ok(data) => {

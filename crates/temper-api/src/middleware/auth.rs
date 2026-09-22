@@ -82,12 +82,17 @@ pub async fn require_auth(
         })?;
 
     // 3. Decode and verify the JWT. The allow-list is scoped to exactly the
-    //    loaded key's algorithm (see `JwksKeyStore::validation`).
+    //    loaded key's algorithm (see `JwksKeyStore::validation`), and the accepted
+    //    audience set is the ONE definition both doors share — the API audience and
+    //    the MCP surface's RFC 8707 resource audience, deduped when they collapse.
+    //    A token naming either audience names this instance (see
+    //    `AuthConfig::accepted_audiences`); door choice is never an authorization
+    //    input.
     let issuer = &state.config.auth.issuer;
-    let audience = state.config.auth.audience.as_str();
+    let audiences = state.config.auth.accepted_audiences();
     let validation = state
         .jwks_store
-        .validation(issuer, &[audience], vk.algorithm);
+        .validation(issuer, &audiences, vk.algorithm);
 
     let token_data: TokenData<temper_services::auth::RawJwtClaims> =
         decode(&token, &vk.key, &validation).map_err(|e| {
