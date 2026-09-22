@@ -72,9 +72,12 @@ fn retry_delay(after_attempt: u32) -> Duration {
 /// The synthetic base URL an in-process request is built against.
 ///
 /// A reqwest `RequestBuilder` needs an absolute URL, so the in-process transport builds
-/// against this host — and the conversion to an `axum` request strips it, handing the router
-/// the path and query alone. It is never dialed; no socket exists on this transport.
-const IN_PROCESS_BASE_URL: &str = "http://in-process";
+/// against this synthetic origin — and the conversion to an `axum` request strips it,
+/// handing the router the path and query alone. The scheme is deliberately non-network:
+/// the URL is never dialed, and a non-`http` scheme makes that structural — reqwest
+/// refuses to issue a non-`http(s)` request, so even a bug that routed an in-process
+/// request to the wire arm fails closed instead of resolving a synthetic host.
+const IN_PROCESS_BASE_URL: &str = "in-process://temper";
 
 /// The in-process door's response-buffer ceiling, in bytes.
 ///
@@ -266,8 +269,9 @@ impl HttpClient {
     ///
     /// There is deliberately no base URL and no endpoint validation here: nothing is dialed,
     /// so there is no URL to check the scheme of. Requests are *built* against the synthetic
-    /// `IN_PROCESS_BASE_URL` host so the reqwest builders work, and the conversion to an
-    /// `axum` request strips it, handing the router the path and query alone.
+    /// `IN_PROCESS_BASE_URL` origin — a non-network scheme, never issued — so the reqwest
+    /// builders accept a URL, and the conversion to an `axum` request strips it, handing the
+    /// router the path and query alone.
     ///
     /// `surface` carries the same meaning as in [`HttpClient::new`] — construction state,
     /// no default, because a defaulted surface would silently attribute every write to
