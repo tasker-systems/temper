@@ -10,7 +10,10 @@
 # deltas the spec names: the declared classes since the last release are an
 # INPUT read from the register rows landing in the window (the register is in
 # the tree, so the calculator can read it — PR bodies are not); any
-# shape-breaking row forces the M question; behavioral rows change no number
+# shape-breaking row routed to the retirement train forces the M question (as
+# amended by the compat-deprecation regime, D-C1/D-C2 — a converted row's
+# re-declaration, additive + behavioral, is not a trigger); behavioral rows
+# change no number
 # but must be absent-or-satisfied for the surfaces being released; leaves
 # (client skins, npm packages) float with the max(bump, floor) rule.
 #
@@ -18,9 +21,14 @@
 #   - Default next core = bump_patch(VERSION) when any bump-forcing class
 #     changed (CORE / WIRE / CLIENTS / PACKAGES). SCHEMA and INFRA never force
 #     a move — orchestrator ruling, recorded in detect-changes.sh.
-#   - Any shape-breaking row in the window REQUIRES --minor (exit non-zero
-#     otherwise, naming the rows): M is always a decision, never an accident —
-#     the refusal is the forcing function. --minor hand-raises M (0.4.x -> 0.5.0).
+#   - Any shape-breaking row routed to the retirement train (the row's classes
+#     carry the retirement-train token) REQUIRES --minor (exit non-zero
+#     otherwise, naming the rows): M is the reserved era level and moves only
+#     in a retirement release Pete calls (D-C1) — the refusal is the forcing
+#     function. --minor raises M (0.4.x -> 0.5.0). A converted row's
+#     re-declaration (additive + behavioral) is not a trigger, and a
+#     shape-breaking row with no routing never reaches a window — the
+#     declared-class gate fails it on the PR.
 #   - Open register rows whose surfaces intersect the surfaces being released
 #     print the release-checklist warning (spec §4.1).
 #   - Blocked register rows print their blocked release-class always; they
@@ -128,6 +136,7 @@ fi
 # Register gates
 # ---------------------------------------------------------------------------
 SHAPE_BREAKING_ROWS=0
+RETIREMENT_TRAIN_ROWS=0
 BLOCKED_ROWS=0
 OPEN_ROWS=0
 SIGNAL_ONLY_ROWS=0
@@ -148,6 +157,9 @@ while IFS=$'\t' read -r r_pr r_classes r_surfaces r_status r_citation; do
     fi
     if field_has_token "$r_classes" "shape-breaking"; then
         SHAPE_BREAKING_ROWS=$((SHAPE_BREAKING_ROWS + 1))
+        if field_has_token "$r_classes" "retirement-train"; then
+            RETIREMENT_TRAIN_ROWS=$((RETIREMENT_TRAIN_ROWS + 1))
+        fi
     fi
 
     case "$r_status" in
@@ -177,15 +189,19 @@ echo "REGISTER_SIGNAL_ONLY=${SIGNAL_ONLY_ROWS}"
 echo "REGISTER_BLOCKED=${BLOCKED_ROWS}"
 echo "REGISTER_BLOCKED_CLASSES=\"${BLOCKED_CLASSES%; }\""
 
-# Gate 1: a shape-breaking row in the window forces the M question.
-if [[ "$SHAPE_BREAKING_ROWS" -gt 0 && "$MINOR" != "true" ]]; then
-    log_error "Shape-breaking rows in the release window require --minor (M is a decision, never an accident — spec §2):"
+# Gate 1: a shape-breaking row routed to the retirement train forces the M
+# question — M is the reserved era level and moves only in a retirement release
+# (D-C1/D-C2). A converted row's re-declaration (additive + behavioral) is not a
+# trigger, and a shape-breaking row with no routing never reaches a window (the
+# declared-class gate fails it on the PR); historical rows read as history.
+if [[ "$RETIREMENT_TRAIN_ROWS" -gt 0 && "$MINOR" != "true" ]]; then
+    log_error "Retirement-train rows in the release window require --minor (M is the reserved era level — it moves only in a retirement release, D-C1):"
     while IFS=$'\t' read -r r_pr r_classes r_surfaces r_status r_citation; do
-        if field_has_token "$r_classes" "shape-breaking"; then
+        if field_has_token "$r_classes" "shape-breaking" && field_has_token "$r_classes" "retirement-train"; then
             log_error "  pr:${r_pr} — ${r_citation}"
         fi
     done < "$REGISTER_ROWS_FILE"
-    die "Refusing to compute a patch next for a window containing shape-breaking rows. Re-run with --minor to hand-raise M."
+    die "Refusing to compute a patch next for a window carrying retirement-train rows. Re-run with --minor to raise M (the era release)."
 fi
 
 # Gate 2: blocked rows refuse a release that includes any client leaf

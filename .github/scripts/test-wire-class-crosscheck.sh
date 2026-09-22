@@ -170,14 +170,29 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'beyond .info.version'; then
   ok "shape moved + behavioral-only row: fails"
 else bad "shape moved + behavioral-only row: fails" "exit=$rc" "$out"; fi
 
-# ── 10. SHAPE — moved and shape-breaking declared: pass ─────────────────────────────────────────
+# ── 10. SHAPE — moved and shape-breaking declared without routing: FAIL (D-C2) ──────────────────
+# A shape-breaking declaration below the era level is a refusal, not a schedule: the
+# row must name its routing — convert to the deprecation path, or wait for the
+# retirement train.
 reset_fixtures
 printf '%s\n' "openapi.json" > "$WIRE"
 add_own_row self shape-breaking
 out="$(run_check moved)"; rc=$?
-if [ "$rc" -eq 0 ]; then
-  ok "shape moved + shape-breaking declared: passes"
-else bad "shape moved + shape-breaking declared: passes" "exit=$rc" "$out"; fi
+if [ "$rc" -ne 0 ] \
+    && printf '%s' "$out" | grep -q 'refusal, not a schedule' \
+    && printf '%s' "$out" | grep -q 'deprecation path'; then
+  ok "shape moved + unrouted shape-breaking declared: fails (D-C2's refusal)"
+else bad "shape moved + unrouted shape-breaking declared: fails (D-C2's refusal)" "exit=$rc" "$out"; fi
+
+# ── 10b. SHAPE — moved and shape-breaking routed to the retirement train: pass, NOTED ───────────
+# The era release's own movement (D-C4): the PR moves M and cuts the next pin.
+reset_fixtures
+printf '%s\n' "openapi.json" > "$WIRE"
+add_own_row self "shape-breaking, retirement-train"
+out="$(run_check moved)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'retirement train'; then
+  ok "shape moved + shape-breaking routed to the retirement train: passes (the era release's own movement)"
+else bad "shape moved + shape-breaking routed to the retirement train: passes (the era release's own movement)" "exit=$rc" "$out"; fi
 
 # ── 11. SHAPE — declared shape-breaking, diff shows no movement: pass, NOTED ────────────────────
 # The asymmetry probe: a break can hide from the only shape record CI has, and failing an
