@@ -24,7 +24,7 @@ script = [
 ]
 
 [tasks.release-prepare-minor]
-description = "Release-prepare with a hand-raised minor (0.5.0 -> 0.6.0) — required when the register window carries shape-breaking rows. A minor is a wire-moving release, so the WHOLE FLEET rides: every wire-dependent package aligns to the new VERSION (the policy this hardwiring encodes after the 0.5.0 cut left every package behind)."
+description = "Release-prepare with a raised minor (0.5.0 -> 0.6.0) — required when the register window carries retirement-train rows: M is the reserved era level and moves only in the retirement release. A minor is a wire-moving release, so the WHOLE FLEET rides: every wire-dependent package aligns to the new VERSION (the policy this hardwiring encodes after the 0.5.0 cut left every package behind)."
 category = "Release"
 script = [
     "./tools/scripts/release/release-prepare.sh --minor --rb --py --ts --telemetry --ui --cloud"
