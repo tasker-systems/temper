@@ -331,6 +331,7 @@ module Temper::Generated
     # Get one resource
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
+    # @option opts [String] :sections Comma-separated extra sections to fill on the view (kebab-case); &#x60;open-meta&#x60; is always included, &#x60;embedding-status&#x60; is the additive one
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [ResourceView]
     def get_resource(id, opts = {})
@@ -341,6 +342,7 @@ module Temper::Generated
     # Get one resource
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
+    # @option opts [String] :sections Comma-separated extra sections to fill on the view (kebab-case); &#x60;open-meta&#x60; is always included, &#x60;embedding-status&#x60; is the additive one
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(ResourceView, Integer, Hash)>] ResourceView data, response status code and response headers
     def get_resource_with_http_info(id, opts = {})
@@ -360,6 +362,7 @@ module Temper::Generated
 
       # query parameters
       query_params = opts[:query_params] || {}
+      query_params[:'sections'] = opts[:'sections'] if !opts[:'sections'].nil?
 
       # header parameters
       header_params = opts[:header_params] || {}

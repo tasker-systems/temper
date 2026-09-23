@@ -8,7 +8,6 @@ use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use temper_core::types::admin::{ReembedRequest, ReembedSummary};
 use temper_core::types::workflow_job::EmbedDispatchSummary;
@@ -236,59 +235,6 @@ pub async fn reembed(
 /// Default cap on resources enqueued per trigger call. Bounds blast radius: an operator who means to
 /// re-embed the whole index walks it in bounded steps rather than queueing thousands of jobs in one go.
 const DEFAULT_REEMBED_LIMIT: i32 = 100;
-
-/// Query params for the embedding-status batch read. A GET query string carries no
-/// arrays, so the ids ride as CSV — the same transport constraint the list endpoint's
-/// `tags` CSV carries.
-#[derive(Debug, Deserialize)]
-pub struct EmbeddingStatusQuery {
-    /// Comma-separated resource ids to report pipeline status for.
-    pub ids: String,
-}
-
-/// Embed-pipeline status for a caller-supplied id batch — the read the MCP resources
-/// tools derive each response's `embedding_status` from, moved onto the router for the
-/// one-seam migration (beat G3a).
-///
-/// Deliberately OUT of the OpenAPI contract (plain `.route()`, no `#[utoipa::path]`),
-/// the same posture as `reembed`: this is the wire the MCP binding crosses in-process,
-/// not a published capability, and registering it would add a response schema the
-/// public register does not carry.
-///
-/// Authenticated but NOT per-resource-gated, on purpose — the contract transfers
-/// verbatim from the direct call it replaces (`embedding_status_batch`'s own doc: the
-/// batch reports pipeline progress against ids the caller was ALREADY shown through a
-/// visibility-gated read, and a second profile argument "would look like a gate and be
-/// one"). The route discloses nothing about resources the caller cannot read, because
-/// the MCP layer only forwards ids a gated read returned.
-pub async fn embedding_status(
-    State(state): State<AppState>,
-    _auth: AuthUser,
-    Query(params): Query<EmbeddingStatusQuery>,
-) -> ApiResult<Json<serde_json::Map<String, serde_json::Value>>> {
-    let ids: Vec<Uuid> = params
-        .ids
-        .split(',')
-        .filter(|s| !s.trim().is_empty())
-        .map(|s| {
-            Uuid::parse_str(s.trim())
-                .map_err(|_| ApiError::BadRequest(format!("invalid resource id {s:?}")))
-        })
-        .collect::<ApiResult<Vec<_>>>()?;
-    let statuses = embed_service::embedding_status_batch(&state.pool, &ids).await?;
-    // Serialize the map keyed by the id STRING the caller sent: a JSON object's keys are
-    // strings anyway, and uuid's serde impl already renders the map keys lowercase-hyphenated.
-    let body = statuses
-        .into_iter()
-        .map(|(id, status)| {
-            (
-                id.to_string(),
-                serde_json::to_value(status).unwrap_or(serde_json::Value::Null),
-            )
-        })
-        .collect::<serde_json::Map<_, _>>();
-    Ok(Json(body))
-}
 
 #[cfg(test)]
 mod tests {

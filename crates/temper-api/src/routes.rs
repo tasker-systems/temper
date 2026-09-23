@@ -211,12 +211,6 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         // only the trigger. Admin-gated on the caller's own identity, so an operator uses their normal
         // login rather than holding the drain's deploy secret.
         .route("/api/embed/admin/reembed", post(handlers::embed::reembed))
-        // Embed-pipeline status for a caller-supplied id batch — the read the MCP
-        // resources tools derive `embedding_status` from, mounted on the router so the
-        // MCP binding crosses the one seam (beat G3a). Same undocumented posture as
-        // `reembed`: bearer-authenticated, no `#[utoipa::path]`, deliberately outside
-        // the OpenAPI contract.
-        .route("/api/embed/status", get(handlers::embed::embedding_status))
         // Operator-only access-gate admin surface — deliberately UNDOCUMENTED.
         // These handlers carry no `#[utoipa::path]`; plain `.route()` mounts them
         // without adding them to the OpenAPI contract.

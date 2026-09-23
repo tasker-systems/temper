@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use super::managed_meta::ManagedMeta;
 use super::resource::{BodyStorage, IngestState};
+use super::workflow_job::EmbeddingStatus;
 use crate::error::TemperError;
 use crate::refs::decorated_ref;
 use crate::types::ids::{ContextId, ProfileId, ResourceId};
@@ -168,6 +169,18 @@ pub struct ResourceView {
     /// the wire and after a round-trip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// Derived embedding-readiness — the `embedding-status` section.
+    ///
+    /// Absent means **not requested**, never "not embedded": whenever the section was
+    /// asked for, the value is `Some` and names one of [`EmbeddingStatus`]'s three
+    /// states. It rides the view rather than a response envelope (B1) so the wire shape
+    /// stays the one view: the standalone `GET /api/embed/status` read this field
+    /// replaced could not be made oracle-free — gating it leaked readability through map
+    /// presence, leaving it ungated leaked pipeline state past the gate — while a gated
+    /// read carrying the field discloses nothing about any row the gate did not
+    /// already admit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_status: Option<EmbeddingStatus>,
 }
 
 impl ResourceView {
@@ -268,6 +281,8 @@ pub enum ResourceSection {
     OpenMeta,
     /// The resource's graph edges, fetched alongside the view rather than carried on it.
     Edges,
+    /// Derived embedding-readiness — [`ResourceView::embedding_status`].
+    EmbeddingStatus,
 }
 
 impl ResourceSection {
@@ -275,11 +290,11 @@ impl ResourceSection {
     ///
     /// The **one** enumeration of the set: [`FromStr`] matches over it and the refusal
     /// message is built from it, so a section cannot be accepted without also being
-    /// named. Public so a surface's help text lists the same three rather than
-    /// hand-copying them into a fourth place that then drifts.
+    /// named. Public so a surface's help text lists the same set rather than
+    /// hand-copying it into a fourth place that then drifts.
     ///
     /// **This is the `show` door's vocabulary, not every door's** — see [`Self::LIST`].
-    pub const ALL: [Self; 3] = [Self::Body, Self::OpenMeta, Self::Edges];
+    pub const ALL: [Self; 4] = [Self::Body, Self::OpenMeta, Self::Edges, Self::EmbeddingStatus];
 
     /// The sections the **list** door accepts — the one definition, read by both the CLI's
     /// `--with`/`--without` parser and the server's `sections=` parse.
@@ -300,7 +315,11 @@ impl ResourceSection {
     /// *alongside* a view rather than carried on it ([`ResourceView`] has no edges field), and
     /// `list` composes no edge read — so accepting the word would be accepting it and then
     /// silently ignoring it.
-    pub const LIST: [Self; 1] = [Self::OpenMeta];
+    ///
+    /// **[`Self::EmbeddingStatus`] is present because it fills like `open-meta`, not like
+    /// `body`**: `embedding_status_batch` is ONE statement for the whole page (`fill_sections`),
+    /// so a page of statuses costs what one row costs and carries no body-style unboundedness.
+    pub const LIST: [Self; 2] = [Self::OpenMeta, Self::EmbeddingStatus];
 
     /// Parse a section name against a door's accepted set, naming **only that set** in the
     /// refusal.
@@ -333,6 +352,7 @@ impl ResourceSection {
             Self::Body => "body",
             Self::OpenMeta => "open-meta",
             Self::Edges => "edges",
+            Self::EmbeddingStatus => "embedding-status",
         }
     }
 }
@@ -363,8 +383,7 @@ impl FromStr for ResourceSection {
 ///
 /// A [`BTreeSet`] rather than a `HashSet` so iteration is deterministic: this set gets
 /// rendered — into a refusal, a log line, or a serialized request — and an order that
-/// varies run to run makes those unreadable and undiffable for no gain at a size of
-/// three.
+/// varies run to run makes those unreadable and undiffable for no gain at this size.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SectionSet(BTreeSet<ResourceSection>);
 
@@ -467,6 +486,7 @@ mod tests {
             managed_meta: ManagedMeta::default(),
             open_meta: None,
             content: None,
+            embedding_status: None,
         }
     }
 
@@ -652,6 +672,7 @@ mod tests {
             (ResourceSection::Body, "body"),
             (ResourceSection::OpenMeta, "open-meta"),
             (ResourceSection::Edges, "edges"),
+            (ResourceSection::EmbeddingStatus, "embedding-status"),
         ] {
             assert_eq!(
                 serde_json::to_value(section).expect("serialize"),
@@ -683,7 +704,7 @@ mod tests {
             .expect_err("`openMeta` is not a section name");
         let msg = err.to_string();
 
-        for valid in ["body", "open-meta", "edges"] {
+        for valid in ["body", "open-meta", "edges", "embedding-status"] {
             assert!(
                 msg.contains(valid),
                 "the refusal must name `{valid}` so the caller can recover from it alone: {msg}"
@@ -744,7 +765,8 @@ mod tests {
     /// legitimately serves it (MCP's `get_resource`) and would pass every assertion above.
     #[test]
     fn the_show_door_still_accepts_every_section() {
-        let all = SectionSet::parse_csv("body,open-meta,edges").expect("show takes all three");
+        let all = SectionSet::parse_csv("body,open-meta,edges,embedding-status")
+            .expect("show takes every section");
         for section in ResourceSection::ALL {
             assert!(
                 all.contains(section),

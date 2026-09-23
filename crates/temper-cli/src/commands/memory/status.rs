@@ -320,6 +320,7 @@ mod tests {
             managed_meta: ManagedMeta::default(),
             open_meta: Some(serde_json::Value::Object(open)),
             content: None,
+            embedding_status: None,
         }
         .with_derived_refs()
     }

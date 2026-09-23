@@ -662,7 +662,7 @@ pub async fn run_segmented_create(
 
     client
         .resources()
-        .get(resource_id)
+        .get(resource_id, None)
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)
 }
@@ -1127,6 +1127,7 @@ mod tests {
             managed_meta: temper_core::types::managed_meta::ManagedMeta::default(),
             open_meta: None,
             content: None,
+            embedding_status: None,
         }
         .with_derived_refs()
     }

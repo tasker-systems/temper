@@ -6491,6 +6491,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "sections",
+            "in": "query",
+            "description": "Comma-separated extra sections to fill on the view (kebab-case); `open-meta` is always included, `embedding-status` is the additive one",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -6500,6 +6509,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ResourceView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown section name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -13071,6 +13090,15 @@
           }
         }
       },
+      "EmbeddingStatus": {
+        "type": "string",
+        "description": "Derived embedding-readiness of a resource (issue #299, Phase 4). Computed — never a stored column —\nfrom the resource's current chunks plus its embed-job state (design §8), surfaced on\n[`super::resource_view::ResourceView`] as the `embedding-status` section (B1: it rode the MCP\nresponse envelope before the section did) so a caller can tell whether semantic (vector) search\nwill find a just-created resource yet. FTS is always immediate; only the vector is\neventually-consistent under async embed.",
+        "enum": [
+          "ready",
+          "pending",
+          "failed"
+        ]
+      },
       "EnforcementMode": {
         "type": "string",
         "description": "Whether a non-conforming commit is refused or merely recorded.\n\nThe closed vocabulary the register closes over (spec §6): `advisory` (default) or `enforcing`.\nMirrors `temper_substrate::payloads::EnforcementMode` in a temper-core-native shape so the wire\ntype does not depend on the substrate crate, with the full derive stack the wire surfaces require.\n`schemars(inline)` is required for MCP tool inputs (the same fix applied to `ConfidenceBand` and\nthe graph enums — a `$ref` into `$defs` reaches the Anthropic tool-use layer with no type signal).",
@@ -17136,7 +17164,8 @@
         "enum": [
           "body",
           "open-meta",
-          "edges"
+          "edges",
+          "embedding-status"
         ]
       },
       "ResourceSortField": {
@@ -17344,6 +17373,17 @@
           },
           "doc_type_name": {
             "type": "string"
+          },
+          "embedding_status": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EmbeddingStatus",
+                "description": "Derived embedding-readiness — the `embedding-status` section.\n\nAbsent means **not requested**, never \"not embedded\": whenever the section was\nasked for, the value is `Some` and names one of [`EmbeddingStatus`]'s three\nstates. It rides the view rather than a response envelope (B1) so the wire shape\nstays the one view: the standalone `GET /api/embed/status` read this field\nreplaced could not be made oracle-free — gating it leaked readability through map\npresence, leaving it ungated leaked pipeline state past the gate — while a gated\nread carrying the field discloses nothing about any row the gate did not\nalready admit."
+              }
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/ResourceId"

@@ -11,7 +11,6 @@
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use std::collections::HashMap;
 use uuid::Uuid;
 
 use temper_client::error::ClientError;
@@ -24,7 +23,8 @@ use temper_core::types::authorship::ActInput;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::provenance::ProvenanceSource;
-use temper_core::types::resource_view::{ResourceSection, ResourceView};
+use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSet};
+#[cfg(test)]
 use temper_core::types::workflow_job::EmbeddingStatus;
 use temper_services::services::context_service::resolve_context_ref;
 use temper_workflow::operations::{BodyUpdate, CreateResource, Surface};
@@ -361,9 +361,11 @@ pub enum CreateStatus {
 /// Typed response for create_resource.
 #[derive(Debug, serde::Serialize)]
 pub struct CreateResourceResponse {
-    pub resource: EnrichedResource,
+    pub resource: ResourceView,
     pub status: CreateStatus,
 }
+
+// ── Response shaping ───────────────────────────────────────────────
 
 /// Typed response for delete_resource.
 #[derive(Debug, serde::Serialize)]
@@ -377,30 +379,6 @@ pub struct DeleteResourceResponse {
 pub struct UpdateResourceMetaResponse {
     pub updated: bool,
     pub id: Uuid,
-}
-
-// ── Response enrichment ────────────────────────────────────────────
-
-/// A [`ResourceView`] plus the one thing a resource has that the view does not carry: whether its
-/// vector is searchable yet.
-///
-/// **The view is `#[serde(flatten)]`ed, so the wire shape IS `ResourceView` plus one key.** That is
-/// deliberate and is what makes this an enrichment rather than a seventh shape: an MCP caller reads
-/// the same `id`/`ref`/`managed_meta`/`context_ref` keys an HTTP caller reads, at the same depth,
-/// and `fields` projection (which filters TOP-LEVEL keys, anchored on `id`) keeps working
-/// unchanged. Nesting the view under a `resource` key would have moved every one of those a level
-/// down and silently broken the projection's anchor.
-///
-/// `embedding_status` is derived, never stored (issue #299, Phase 4 — see the async-embedding
-/// design §8): `ready` once the resource's vector is searchable, `pending` while an async embed is
-/// in flight, `failed` when it needs re-driving. FTS is always immediate; this tracks only the
-/// eventually-consistent vector. It is not on `ResourceView` because it is not a property of the
-/// resource — it is a property of the embed pipeline's progress against it.
-#[derive(Debug, serde::Serialize)]
-pub struct EnrichedResource {
-    #[serde(flatten)]
-    pub resource: ResourceView,
-    pub embedding_status: EmbeddingStatus,
 }
 
 /// MCP's `list_resources` envelope — the paging state a caller needs to know whether it is looking
@@ -419,7 +397,9 @@ pub struct EnrichedResource {
 ///
 /// `rows` is `Vec<serde_json::Value>` because the optional `fields` projection is dynamic by
 /// construction — it returns whichever top-level keys the caller named. With no `fields` the values
-/// are whole [`EnrichedResource`]s, serialized identically to the typed form.
+/// are whole [`ResourceView`]s with the `open-meta` and `embedding-status` sections filled
+/// (B1: the view itself carries the field, so the old flattened `EnrichedResource` envelope
+/// dissolved into it — the wire keys are the same, at the same depth).
 #[derive(Debug, serde::Serialize)]
 pub struct ListResourcesResponse {
     pub rows: Vec<serde_json::Value>,
@@ -437,57 +417,36 @@ pub struct ListResourcesResponse {
     pub facets: temper_workflow::types::resource::ResourceFacets,
 }
 
-/// Attach derived embedding readiness to a page of views, through the door.
+/// The sections every MCP single-resource read asks the door for.
 ///
-/// This is all that is left of "enrichment": the statuses come from
-/// `GET /api/embed/status` — the deliberately-unregistered read that crosses the same
-/// router the tools do (beat G3a) — so the response's one derived field is assembled
-/// from door answers, never a direct pool read.
-///
-/// Absent ids (which should not occur — the statuses come for ids a gated read already
-/// returned) default to `Ready`, matching the incumbent behaviour.
-async fn enrich_resources(
-    client: &TemperClient,
-    views: Vec<ResourceView>,
-) -> Result<Vec<EnrichedResource>, rmcp::ErrorData> {
-    let ids: Vec<Uuid> = views.iter().map(|view| Uuid::from(view.id)).collect();
-    let statuses = if ids.is_empty() {
-        HashMap::new()
-    } else {
-        client.embed().status(&ids).await.map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to get embedding status: {e}"), None)
-        })?
-    };
-
-    Ok(views
+/// `open-meta` is the incumbent ask (the view's open tier rode every response before the
+/// one-seam migration); `embedding-status` is B1's — the view itself carries the field now, so
+/// the response needs no second read and no wrapper shape. One constant, so `get`/`create`/
+/// `update` cannot drift on which sections a response carries.
+fn enriched_sections() -> SectionSet {
+    [ResourceSection::OpenMeta, ResourceSection::EmbeddingStatus]
         .into_iter()
-        .map(|view| {
-            let embedding_status = statuses
-                .get(&Uuid::from(view.id))
-                .copied()
-                .unwrap_or(EmbeddingStatus::Ready);
-            EnrichedResource {
-                resource: view,
-                embedding_status,
-            }
-        })
-        .collect())
+        .collect()
 }
 
-/// Read one resource back as the MCP surface answers it — the view with whatever the
-/// tool asked for, plus its derived embedding readiness, all through the door.
+/// Read one resource back as the MCP surface answers it — the view with the sections the
+/// tool asked for, through the door.
 ///
 /// The single-resource read for `create`/`update`/`get`, so those three cannot drift on
-/// which sections a response carries: the door's `GET /api/resources/{id}` carries both
-/// metadata tiers (the open tier the incumbent always asked for rides along), and the
-/// body — a SECTION in the direct-service binding — arrives from `/content` only when
-/// asked, as its own markdown part.
+/// which sections a response carries: the door's `GET /api/resources/{id}?sections=` fills
+/// both tiers plus the derived embedding readiness on the row the gate already admitted,
+/// and the body — a SECTION in the direct-service binding — arrives from `/content` only
+/// when asked, as its own markdown part.
 async fn enriched_view(
     client: &TemperClient,
     id: Uuid,
     include_content: bool,
-) -> Result<(EnrichedResource, Option<String>), rmcp::ErrorData> {
-    let view = client.resources().get(id).await.map_err(|e| {
+) -> Result<(ResourceView, Option<String>), rmcp::ErrorData> {
+    let view = client
+        .resources()
+        .get(id, Some(&enriched_sections()))
+        .await
+        .map_err(|e| {
         rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
     })?;
     let body_markdown = if include_content {
@@ -504,16 +463,7 @@ async fn enriched_view(
     } else {
         None
     };
-    let enriched = enrich_resources(client, vec![view])
-        .await?
-        .pop()
-        .ok_or_else(|| {
-            rmcp::ErrorData::internal_error(
-                "enrich_resources returns one row per input row".to_string(),
-                None,
-            )
-        })?;
-    Ok((enriched, body_markdown))
+    Ok((view, body_markdown))
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -947,7 +897,7 @@ pub async fn get_resource(
     let (mut enriched, body_markdown) = enriched_view(&client, id, include_content).await?;
     // `take` rather than a clone: `content: None` omits the key, which is the shape the
     // caller expects when it did not ask for a body.
-    let body_markdown = body_markdown.or_else(|| enriched.resource.content.take());
+    let body_markdown = body_markdown.or_else(|| enriched.content.take());
 
     let enriched_value = serde_json::to_value(&enriched)
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to serialize: {e}"), None))?;
@@ -1115,11 +1065,15 @@ pub async fn list_resources(
         cogmap_ids,
         limit: input.limit.or(Some(50)).map(|l| l.min(200)),
         offset: input.offset,
-        // Ask for the open tier on every row. The incumbent `EnrichedResource` carried it on the
-        // list surface (fetched per id, which is what made that path an N+1); asking for it as a
-        // SECTION gets the same answer in one statement for the whole page, via
-        // `readback::meta_batch`. The managed tier is not a section — it is always present.
-        sections: Some(ResourceSection::OpenMeta.to_string()),
+        // Ask for the open tier and the derived embedding readiness on every row. The incumbent
+        // response carried both on the list surface (the open tier fetched per id, which is what
+        // made that path an N+1; the readiness in a second read after the page) — asking for them
+        // as SECTIONS gets the same answer in one statement per section for the whole page, via
+        // `readback::meta_batch` and `embed_service::embedding_status_batch`. The managed tier is
+        // not a section — it is always present.
+        sections: Some(enriched_sections().to_csv().expect(
+            "the enriched vocabulary is never empty, so it renders as a `sections` param",
+        )),
         ..Default::default()
     };
     let list_result = client
@@ -1142,11 +1096,12 @@ pub async fn list_resources(
             }
         })?;
 
-    // The rows arrive as `ResourceView`s carrying both tiers — the managed one from
-    // `hit_identities`, the open one from the `open-meta` section asked for above — so enrichment
-    // is down to the one thing the view cannot carry.
+    // The rows arrive as `ResourceView`s carrying every section the response owes — the managed
+    // tier from `hit_identities`, the open tier and the derived embedding readiness from the
+    // `sections` asked for above — so there is no second read and no wrapper shape: the view
+    // itself is the wire answer (B1).
     let temper_workflow::types::resource::ResourceListResponse {
-        rows: views,
+        rows,
         total,
         facets,
         returned,
@@ -1154,17 +1109,16 @@ pub async fn list_resources(
         limit,
         offset,
     } = list_result;
-    let enriched = enrich_resources(&client, views).await?;
 
     // Project each ROW, never the envelope: `apply_top_level_filter` keeps the named top-level keys
     // of whatever object it is given, so handing it the envelope would strip `total`/`truncated`
     // and leave the caller with a page it cannot size.
-    let mut rows = Vec::with_capacity(enriched.len());
-    for row in &enriched {
+    let mut projected = Vec::with_capacity(rows.len());
+    for row in &rows {
         let value = serde_json::to_value(row).map_err(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to serialize: {e}"), None)
         })?;
-        rows.push(match input.fields.as_deref() {
+        projected.push(match input.fields.as_deref() {
             Some(fields) => temper_core::projection::apply_top_level_filter(value, fields, "id")
                 .map_err(map_projection_err)?,
             None => value,
@@ -1172,7 +1126,7 @@ pub async fn list_resources(
     }
 
     let response = ListResourcesResponse {
-        rows,
+        rows: projected,
         total,
         returned,
         truncated,
@@ -1793,46 +1747,44 @@ mod enriched_resource_tests {
             },
             open_meta: None,
             content: None,
+            embedding_status: None,
         }
         .with_derived_refs()
     }
 
-    /// The MCP response is the view's own keys at the top level, plus exactly one more.
+    /// The MCP response is the view itself, the `embedding-status` section asked for.
     ///
-    /// This is what `#[serde(flatten)]` buys and why it is not a stylistic choice: `fields`
-    /// projection filters TOP-LEVEL keys anchored on `id`, so nesting the view under a `resource`
-    /// key would move `id` a level down and make every projected response `{}`.
+    /// B1 dissolved the flattened `EnrichedResource` wrapper into the view that carries the
+    /// field, so the wire answer is the door's own `ResourceView` with `embedding_status`
+    /// filled — the same keys at the same depth the wrapper used to emit, which is what keeps
+    /// `fields` projection (TOP-LEVEL keys anchored on `id`) working unchanged.
     #[test]
-    fn enriched_resource_is_the_view_plus_embedding_status() {
-        let view = sample_view();
+    fn the_mcp_response_is_the_view_with_the_section_asked_for() {
+        let mut view = sample_view();
         let expected_ref = view.r#ref.clone();
-        let enriched = EnrichedResource {
-            resource: view.clone(),
-            embedding_status: EmbeddingStatus::Ready,
-        };
 
-        let enriched_json = serde_json::to_value(&enriched).expect("serialize enriched");
-        let view_json = serde_json::to_value(&view).expect("serialize view");
-        let obj = enriched_json.as_object().expect("object");
+        // Not requested: the key is absent — never a null, never a fourth state.
+        let not_asked = serde_json::to_value(&view).expect("serialize view");
+        assert!(
+            !not_asked
+                .as_object()
+                .expect("object")
+                .contains_key("embedding_status"),
+            "an unasked section omits the key: {not_asked}"
+        );
 
-        // Every key the view emits is emitted here, at the same depth and with the same value.
-        for (key, value) in view_json.as_object().expect("object") {
-            assert_eq!(
-                obj.get(key),
-                Some(value),
-                "`{key}` must ride at the top level"
-            );
-        }
-        // And exactly one key beyond them.
-        assert_eq!(obj.len(), view_json.as_object().expect("object").len() + 1);
-        assert_eq!(obj["embedding_status"], "ready");
+        // Requested (what `enriched_view` always asks): the key rides at the top level,
+        // beside the view's own keys.
+        view.embedding_status = Some(EmbeddingStatus::Ready);
+        let answered = serde_json::to_value(&view).expect("serialize view");
+        assert_eq!(answered["embedding_status"], "ready");
 
         // `ref` is the affordance this task exists to deliver to MCP callers. It is the decorated
         // form, derived once by `with_derived_refs`, never re-derived at render time.
         assert_eq!(
-            obj["ref"].as_str(),
+            answered["ref"].as_str(),
             Some(expected_ref.as_str()),
-            "every MCP resource response carries a decorated ref: {enriched_json}"
+            "every MCP resource response carries a decorated ref: {answered}"
         );
         assert_eq!(
             expected_ref,
@@ -1845,11 +1797,11 @@ mod enriched_resource_tests {
     /// surface too, not only on the HTTP one.
     #[test]
     fn workflow_metadata_reaches_the_mcp_caller_under_managed_meta() {
-        let enriched = EnrichedResource {
-            resource: sample_view(),
-            embedding_status: EmbeddingStatus::Ready,
+        let view = ResourceView {
+            embedding_status: Some(EmbeddingStatus::Ready),
+            ..sample_view()
         };
-        let v = serde_json::to_value(&enriched).expect("serialize");
+        let v = serde_json::to_value(&view).expect("serialize");
 
         assert_eq!(v["managed_meta"]["temper-stage"], "in-progress");
         assert!(
@@ -1925,11 +1877,11 @@ mod fields_projection_tests {
     /// assertion to the wire.
     #[test]
     fn enriched_resource_filtered_by_fields_preserves_id_and_managed_meta() {
-        let enriched = EnrichedResource {
-            resource: super::enriched_resource_tests::sample_view(),
-            embedding_status: EmbeddingStatus::Ready,
+        let view = ResourceView {
+            embedding_status: Some(EmbeddingStatus::Ready),
+            ..super::enriched_resource_tests::sample_view()
         };
-        let value = serde_json::to_value(&enriched).expect("serialize");
+        let value = serde_json::to_value(&view).expect("serialize");
         let filtered = temper_core::projection::apply_top_level_filter(
             value,
             &["managed_meta".to_string()],

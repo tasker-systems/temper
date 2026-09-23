@@ -4492,6 +4492,16 @@ export interface components {
             redriven: number;
         };
         /**
+         * @description Derived embedding-readiness of a resource (issue #299, Phase 4). Computed — never a stored column —
+         *     from the resource's current chunks plus its embed-job state (design §8), surfaced on
+         *     [`super::resource_view::ResourceView`] as the `embedding-status` section (B1: it rode the MCP
+         *     response envelope before the section did) so a caller can tell whether semantic (vector) search
+         *     will find a just-created resource yet. FTS is always immediate; only the vector is
+         *     eventually-consistent under async embed.
+         * @enum {string}
+         */
+        EmbeddingStatus: "ready" | "pending" | "failed";
+        /**
          * @description Whether a non-conforming commit is refused or merely recorded.
          *
          *     The closed vocabulary the register closes over (spec §6): `advisory` (default) or `enforcing`.
@@ -7003,7 +7013,7 @@ export interface components {
          *     `openapi.json` is unmoved.
          * @enum {string}
          */
-        ResourceSection: "body" | "open-meta" | "edges";
+        ResourceSection: "body" | "open-meta" | "edges" | "embedding-status";
         /**
          * @description Sort field for resource listing.
          * @enum {string}
@@ -7170,6 +7180,7 @@ export interface components {
             /** Format: date-time */
             created: string;
             doc_type_name: string;
+            embedding_status?: null | components["schemas"]["EmbeddingStatus"];
             id: components["schemas"]["ResourceId"];
             ingest_state?: null | components["schemas"]["IngestState"];
             is_active: boolean;
@@ -12418,7 +12429,10 @@ export interface operations {
     };
     get_resource: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Comma-separated extra sections to fill on the view (kebab-case); `open-meta` is always included, `embedding-status` is the additive one */
+                sections?: string;
+            };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
                 "X-Temper-Surface"?: "cli" | "sdk";
@@ -12438,6 +12452,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResourceView"];
+                };
+            };
+            /** @description Unknown section name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
             /** @description Unauthorized */

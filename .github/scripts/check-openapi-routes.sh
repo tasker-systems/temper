@@ -84,9 +84,6 @@ ALLOWLIST='/api/access/admin/requests
 /api/embed/dispatch
 /api/embed/warm
 /api/embed/admin/reembed
-# /api/embed/status — the MCP resources binding embedding-status enrichment read;
-# deliberately unregistered (beat G3a), the same operator-adjacent posture as reembed.
-/api/embed/status
 /api/slack/intents/reap
 /api/as/reap
 /api/internal-calls/health

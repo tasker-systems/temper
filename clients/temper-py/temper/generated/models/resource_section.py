@@ -29,6 +29,7 @@ class ResourceSection(str, Enum):
     BODY = 'body'
     OPEN_MINUS_META = 'open-meta'
     EDGES = 'edges'
+    EMBEDDING_MINUS_STATUS = 'embedding-status'
 
     @classmethod
     def from_json(cls, json_str: str) -> Self:

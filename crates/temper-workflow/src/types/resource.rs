@@ -644,6 +644,7 @@ mod list_paging_tests {
             managed_meta: ManagedMeta::default(),
             open_meta: None,
             content: None,
+            embedding_status: None,
         };
         vec![view; n]
     }

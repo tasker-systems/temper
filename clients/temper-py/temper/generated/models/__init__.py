@@ -131,6 +131,7 @@ from temper.generated.models.edge_kind import EdgeKind
 from temper.generated.models.element_event import ElementEvent
 from temper.generated.models.element_kind import ElementKind
 from temper.generated.models.embed_dispatch_summary import EmbedDispatchSummary
+from temper.generated.models.embedding_status import EmbeddingStatus
 from temper.generated.models.enforcement_mode import EnforcementMode
 from temper.generated.models.entitlements import Entitlements
 from temper.generated.models.entry_bounds import EntryBounds

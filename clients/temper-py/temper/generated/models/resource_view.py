@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from temper.generated.models.body_storage import BodyStorage
+from temper.generated.models.embedding_status import EmbeddingStatus
 from temper.generated.models.ingest_state import IngestState
 from temper.generated.models.managed_meta import ManagedMeta
 from typing import Optional, Set
@@ -43,6 +44,7 @@ class ResourceView(BaseModel):
     context_slug: Optional[StrictStr] = Field(default=None, description="Slug of the home context (the natural-key half of `@owner/slug`).")
     created: datetime
     doc_type_name: StrictStr
+    embedding_status: Optional[EmbeddingStatus] = Field(default=None, description="Derived embedding-readiness — the `embedding-status` section.  Absent means **not requested**, never \"not embedded\": whenever the section was asked for, the value is `Some` and names one of [`EmbeddingStatus`]'s three states. It rides the view rather than a response envelope (B1) so the wire shape stays the one view: the standalone `GET /api/embed/status` read this field replaced could not be made oracle-free — gating it leaked readability through map presence, leaving it ungated leaked pipeline state past the gate — while a gated read carrying the field discloses nothing about any row the gate did not already admit.")
     id: UUID = Field(description="A `kb_resources.id` value.")
     ingest_state: Optional[IngestState] = Field(default=None, description="Are all the bytes here? `Option` purely for version skew — the column is `NOT NULL` server-side, so `None` means the server predates W2 PR 1. Do not read `None` as \"incomplete\".")
     is_active: StrictBool
@@ -56,7 +58,7 @@ class ResourceView(BaseModel):
     ref: StrictStr = Field(description="The decorated, self-resolving address: `sluggify(title)-<uuid>`.  Not a column — derived by [`ResourceView::with_derived_refs`] from `title` + `id`. Until this task it was injected render-time by the CLI alone (`temper-cli/src/commands/resource.rs`), so MCP callers never received one even though the shipped skill instructs agents to use it.")
     title: StrictStr
     updated: datetime
-    __properties: ClassVar[List[str]] = ["body_hash", "body_storage", "cogmap_id", "cogmap_name", "content", "context_name", "context_owner_ref", "context_ref", "context_slug", "created", "doc_type_name", "id", "ingest_state", "is_active", "kb_context_id", "managed_meta", "open_meta", "origin_uri", "originator_profile_id", "owner_handle", "owner_profile_id", "ref", "title", "updated"]
+    __properties: ClassVar[List[str]] = ["body_hash", "body_storage", "cogmap_id", "cogmap_name", "content", "context_name", "context_owner_ref", "context_ref", "context_slug", "created", "doc_type_name", "embedding_status", "id", "ingest_state", "is_active", "kb_context_id", "managed_meta", "open_meta", "origin_uri", "originator_profile_id", "owner_handle", "owner_profile_id", "ref", "title", "updated"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -145,6 +147,11 @@ class ResourceView(BaseModel):
         if self.context_slug is None and "context_slug" in self.model_fields_set:
             _dict['context_slug'] = None
 
+        # set to None if embedding_status (nullable) is None
+        # and model_fields_set contains the field
+        if self.embedding_status is None and "embedding_status" in self.model_fields_set:
+            _dict['embedding_status'] = None
+
         # set to None if ingest_state (nullable) is None
         # and model_fields_set contains the field
         if self.ingest_state is None and "ingest_state" in self.model_fields_set:
@@ -183,6 +190,7 @@ class ResourceView(BaseModel):
             "context_slug": obj.get("context_slug"),
             "created": obj.get("created"),
             "doc_type_name": obj.get("doc_type_name"),
+            "embedding_status": obj.get("embedding_status"),
             "id": obj.get("id"),
             "ingest_state": obj.get("ingest_state"),
             "is_active": obj.get("is_active"),

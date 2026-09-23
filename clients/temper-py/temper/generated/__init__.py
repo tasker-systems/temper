@@ -170,6 +170,7 @@ __all__ = [
     "ElementEvent",
     "ElementKind",
     "EmbedDispatchSummary",
+    "EmbeddingStatus",
     "EnforcementMode",
     "Entitlements",
     "EntryBounds",
@@ -549,6 +550,7 @@ from temper.generated.models.edge_kind import EdgeKind as EdgeKind
 from temper.generated.models.element_event import ElementEvent as ElementEvent
 from temper.generated.models.element_kind import ElementKind as ElementKind
 from temper.generated.models.embed_dispatch_summary import EmbedDispatchSummary as EmbedDispatchSummary
+from temper.generated.models.embedding_status import EmbeddingStatus as EmbeddingStatus
 from temper.generated.models.enforcement_mode import EnforcementMode as EnforcementMode
 from temper.generated.models.entitlements import Entitlements as Entitlements
 from temper.generated.models.entry_bounds import EntryBounds as EntryBounds

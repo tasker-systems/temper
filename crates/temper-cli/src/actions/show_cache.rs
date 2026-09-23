@@ -107,7 +107,7 @@ async fn attempt_remote(params: &ShowCacheParams<'_>) -> Result<ShowCacheResult>
     let meta = params
         .client
         .resources()
-        .get(*params.resource_id.as_uuid())
+        .get(*params.resource_id.as_uuid(), None)
         .await
         .map_err(client_err_to_temper)?;
 
@@ -282,6 +282,7 @@ mod tests {
             managed_meta: temper_core::types::managed_meta::ManagedMeta::default(),
             open_meta: None,
             content: None,
+            embedding_status: None,
         }
         .with_derived_refs()
     }

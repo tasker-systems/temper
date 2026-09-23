@@ -11,7 +11,7 @@ use temper_core::types::lineage::ResourceLineage;
 use temper_core::types::provenance::{BlockProvenanceRow, BlockRead};
 use temper_core::types::reassign::{ReassignAck, ReassignResourceRequest};
 use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
-use temper_core::types::resource_view::{ResourceSection, ResourceView};
+use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSet};
 use temper_core::types::standing::StandingShape;
 use temper_workflow::types::graph::GraphEdgeRow;
 use temper_workflow::types::managed_meta::MetaUpdatePayload;
@@ -65,9 +65,17 @@ impl<'a> ResourceClient<'a> {
     ///
     /// The same [`ResourceView`] a `list` row is — `show` asks for the `open-meta` section, a
     /// default `list` does not, and that is the whole difference.
-    pub async fn get(&self, id: Uuid) -> Result<ResourceView> {
+    ///
+    /// `sections` is additive: the door unions the named sections onto its `open-meta`
+    /// baseline, so `None` (or an empty set) answers with the incumbent shape. The set renders
+    /// through [`SectionSet::to_csv`], whose `None` for the empty set is what keeps "no extra
+    /// sections" from becoming an empty `?sections=` parameter.
+    pub async fn get(&self, id: Uuid, sections: Option<&SectionSet>) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{id}");
+        let path = match sections.and_then(SectionSet::to_csv) {
+            Some(csv) => format!("/api/resources/{id}?sections={csv}"),
+            None => format!("/api/resources/{id}"),
+        };
         let req = self.http.get(&path);
         self.http
             .send_json(&Method::GET, &path, req, Some(&token))
