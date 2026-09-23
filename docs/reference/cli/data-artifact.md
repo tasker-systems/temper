@@ -79,10 +79,11 @@ Options:
       --kind <KIND>                The bare family name (e.g. `"measurement"`)
       --vault <VAULT>              Path to vault (overrides TEMPER_VAULT and auto-detection)
       --format <FORMAT>            Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
-      --intent <INTENT>            Selection intent: `"current"`, `"member"`, or `"pinned"`
+      --kind-owner <KIND_OWNER>    Namespace override for the family name: `kb_profiles:<uuid>` or `kb_teams:<uuid>`. Omit to let the server default it from the resource's home
       --embed-threads <N>          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
-      --precedence <PRECEDENCE>    Ordering among peers. Meaningful for `member`; carried for all. Default: 0.0 [default: 0]
+      --intent <INTENT>            Selection intent: `"current"`, `"member"`, or `"pinned"`
       --color <COLOR>              Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+      --precedence <PRECEDENCE>    Ordering among peers. Meaningful for `member`; carried for all. Default: 0.0 [default: 0]
       --content <CONTENT>          Content source: `@<path>` (file), `-` (stdin), or omitted for implicit stdin. The content must be valid JSON
       --supersedes <SUPERSEDES>    Artifact IDs this commit supersedes (UUIDs). Repeatable: `--supersedes <id> --supersedes <id>`
       --invocation <INVOCATION>    Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`)
@@ -170,6 +171,15 @@ Options:
       --vault <VAULT>
           Path to vault (overrides TEMPER_VAULT and auto-detection)
 
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --kind-owner <KIND_OWNER>
+          Namespace override for the family name: `kb_profiles:<uuid>` or `kb_teams:<uuid>`. Omit to let the server default it from the home — which refuses on an empty context (no homed resource to default from)
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
       --enforcement <ENFORCEMENT>
           Enforcement mode: `advisory` (default — non-conforming commits succeed and are recorded) or `enforcing` (non-conforming commits are refused)
 
@@ -179,17 +189,11 @@ Options:
           
           [default: advisory]
 
-      --format <FORMAT>
-          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
 
       --content <CONTENT>
           Content source: `@<path>` (file), `-` (stdin), or omitted for implicit stdin. The content must be valid JSON (a JSON Schema draft 2020-12 document)
-
-      --embed-threads <N>
-          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
-
-      --color <COLOR>
-          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
 
       --invocation <INVOCATION>
           Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`)

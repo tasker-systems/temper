@@ -1079,7 +1079,8 @@ fn classify_data_artifact_sql_error(e: sqlx::Error) -> anyhow::Error {
     e.into()
 }
 
-pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Result<Fired> {    fire_with(conn, action, EventContext::default()).await
+pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Result<Fired> {
+    fire_with(conn, action, EventContext::default()).await
 }
 
 /// Fire one seeding action under an explicit [`EventContext`] (authorship + invocation +
@@ -1684,29 +1685,34 @@ pub async fn fire_with(
             wire.as_object_mut()
                 .context("shape payload is not an object")?
                 .insert("home_anchor_id".to_string(), serde_json::json!(home.id));
-            if kind_owner.is_none() {
-                // Let the wrapper's default win. Serializing `KindOwner` unconditionally would put
-                // a nil profile id on the wire and the wrapper would honour it as an explicit
-                // choice — a silently wrong namespace, the same hazard DataArtifactCommit guards.
-                wire.as_object_mut()
-                    .context("shape payload is not an object")?
-                    .remove("kind_owner");
-            } else {
-                // An EXPLICIT namespace must reach the wrapper's defaulting arm, which reads the
-                // top-level `kind_owner_table`/`kind_owner_id` keys — the same flattened form
-                // `home_anchor` takes above. The typed enum alone serializes under `kind_owner`
-                // with variant-named keys the wrapper never reads, so leaving this flatten out
-                // silently drops the caller's choice back into the default arm: an empty context
-                // refuses, and a populated one is qualified with a namespace nobody named.
-                let ko = kind_owner.expect("checked Some above");
-                let obj = wire
-                    .as_object_mut()
-                    .context("shape payload is not an object")?;
-                obj.insert(
-                    "kind_owner_table".to_string(),
-                    serde_json::json!(ko.owner_table()),
-                );
-                obj.insert("kind_owner_id".to_string(), serde_json::json!(ko.owner_id()));
+            match kind_owner {
+                None => {
+                    // Let the wrapper's default win. Serializing `KindOwner` unconditionally would put
+                    // a nil profile id on the wire and the wrapper would honour it as an explicit
+                    // choice — a silently wrong namespace, the same hazard DataArtifactCommit guards.
+                    wire.as_object_mut()
+                        .context("shape payload is not an object")?
+                        .remove("kind_owner");
+                }
+                Some(ko) => {
+                    // An EXPLICIT namespace must reach the wrapper's defaulting arm, which reads the
+                    // top-level `kind_owner_table`/`kind_owner_id` keys — the same flattened form
+                    // `home_anchor` takes above. The typed enum alone serializes under `kind_owner`
+                    // with variant-named keys the wrapper never reads, so leaving this flatten out
+                    // silently drops the caller's choice back into the default arm: an empty context
+                    // refuses, and a populated one is qualified with a namespace nobody named.
+                    let obj = wire
+                        .as_object_mut()
+                        .context("shape payload is not an object")?;
+                    obj.insert(
+                        "kind_owner_table".to_string(),
+                        serde_json::json!(ko.owner_table()),
+                    );
+                    obj.insert(
+                        "kind_owner_id".to_string(),
+                        serde_json::json!(ko.owner_id()),
+                    );
+                }
             }
             // shape_version is a placeholder until the wrapper resolves the chain depth; remove it
             // so the wrapper's computed value is the only one written to the ledger.

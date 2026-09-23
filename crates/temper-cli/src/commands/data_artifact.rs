@@ -181,17 +181,31 @@ pub async fn schema_show_remote(
     Ok(())
 }
 
+/// Parameters for [`schema_declare_remote`] — the CLI `schema declare` invocation.
+pub struct SchemaDeclareParams<'a> {
+    pub context: &'a str,
+    pub kind: &'a str,
+    pub kind_owner: Option<&'a str>,
+    pub enforcement: EnforcementMode,
+    pub content_flag: Option<&'a str>,
+    pub act: temper_core::types::ActInput,
+    pub format: OutputFormat,
+}
+
 /// `temper data-artifact schema declare <ref> --kind <k>` — declare a shape for a context home.
 pub async fn schema_declare_remote(
     client: &temper_client::TemperClient,
-    context: &str,
-    kind: &str,
-    kind_owner: Option<&str>,
-    enforcement: EnforcementMode,
-    content_flag: Option<&str>,
-    act: temper_core::types::ActInput,
-    fmt: OutputFormat,
+    params: SchemaDeclareParams<'_>,
 ) -> crate::error::Result<()> {
+    let SchemaDeclareParams {
+        context,
+        kind,
+        kind_owner,
+        enforcement,
+        content_flag,
+        act,
+        format: fmt,
+    } = params;
     use std::io::IsTerminal;
 
     let context_id =

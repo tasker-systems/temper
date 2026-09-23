@@ -24,7 +24,9 @@ mod common;
 use serde_json::json;
 use sqlx::PgPool;
 use temper_client::error::ClientError;
-use temper_core::types::data_artifact::{ArtifactCommitRequest, ArtifactListParams, KindOwnerInput};
+use temper_core::types::data_artifact::{
+    ArtifactCommitRequest, ArtifactListParams, KindOwnerInput,
+};
 use temper_core::types::data_artifact_shape::{EnforcementMode, ShapeDeclareRequest};
 use temper_services::auth_config::{AuthConfig, AuthMode};
 use temper_services::config::ApiConfig;
@@ -106,10 +108,7 @@ async fn mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMcpServi
 }
 
 /// A context holding one resource — the minimal world where the defaulting arm resolves.
-async fn context_with_resource(
-    app: &common::E2eTestApp,
-    slug: &str,
-) -> (uuid::Uuid, uuid::Uuid) {
+async fn context_with_resource(app: &common::E2eTestApp, slug: &str) -> (uuid::Uuid, uuid::Uuid) {
     let context = app
         .client
         .contexts()
@@ -241,14 +240,15 @@ async fn sql_refusal_carries_its_vocabulary_over_http(pool: PgPool) {
         .await
         .expect_err("an empty context with no kind_owner must refuse");
 
+    // TYPED, not just "not a 500": the client discriminates the refusal by wire code and
+    // carries the wrapper's words verbatim.
+    let refusal = match err {
+        ClientError::DataArtifactRefusal { message } => message,
+        other => panic!("the SQL refusal must arrive typed, not as {other}"),
+    };
     assert!(
-        !matches!(err, ClientError::Server { status: 500, .. }),
-        "the SQL refusal must not surface as a 500 — that launders a caller fault into a server fault: {err}"
-    );
-    let rendered = err.to_string();
-    assert!(
-        rendered.contains(EMPTY_CONTEXT_VOCAB),
-        "the refusal must teach its vocabulary, got: {rendered}"
+        refusal.contains(EMPTY_CONTEXT_VOCAB),
+        "the refusal must teach its vocabulary, got: {refusal}"
     );
 }
 
@@ -257,7 +257,11 @@ async fn sql_refusal_carries_its_vocabulary_over_http(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn sql_refusal_carries_its_vocabulary_over_mcp(pool: PgPool) {
     let app = common::setup(pool.clone()).await;
-    app.client.profile().get().await.expect("profile pre-flight");
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
     let context = app
         .client
         .contexts()
@@ -343,18 +347,19 @@ async fn enforcing_refusal_names_the_violations_over_http(pool: PgPool) {
         .await
         .expect_err("a non-conforming commit under an enforcing shape must refuse");
 
+    // TYPED, not just "not a 500": the refusal names the conformance failure and the
+    // violating location, carried through the code-discriminated client variant.
+    let refusal = match err {
+        ClientError::DataArtifactRefusal { message } => message,
+        other => panic!("the enforcing refusal must arrive typed, not as {other}"),
+    };
     assert!(
-        !matches!(err, ClientError::Server { status: 500, .. }),
-        "the enforcing refusal must not surface as a 500: {err}"
+        refusal.contains("does not conform"),
+        "the refusal must name the conformance failure, got: {refusal}"
     );
-    let rendered = err.to_string();
     assert!(
-        rendered.contains("does not conform"),
-        "the refusal must name the conformance failure, got: {rendered}"
-    );
-    assert!(
-        rendered.contains("value"),
-        "the refusal must name the violating location, got: {rendered}"
+        refusal.contains("value"),
+        "the refusal must name the violating location, got: {refusal}"
     );
 
     // The refusal is atomic: nothing was recorded.
@@ -433,5 +438,84 @@ async fn enforcing_refusal_names_the_violations_over_mcp(pool: PgPool) {
         err.message.contains("does not conform"),
         "the refusal must name the conformance failure, got: {}",
         err.message
+    );
+}
+
+/// The CLI door: a bare declare on an empty context refuses with the wrapper's vocabulary
+/// in the error output, and `--kind-owner kb_profiles:<uuid>` declares on the same empty
+/// context — the flag is what makes an empty context declarable from the CLI. The spawned
+/// process runs with non-TTY stdout, so JSON output is the default on both runs.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cli_declare_refuses_with_vocabulary_then_succeeds_with_the_flag(pool: PgPool) {
+    let app = common::setup(pool).await;
+    let profile = app.client.profile().get().await.expect("profile").id;
+    let context = app
+        .client
+        .contexts()
+        .create("e2e-refusal-cli", None)
+        .await
+        .expect("context create failed");
+    let schema = string_schema().to_string();
+    let context_ref = context.id.to_string();
+
+    let output = common::run_temper_cli_with_stdin(
+        &app,
+        &schema,
+        &[
+            "data-artifact",
+            "schema",
+            "declare",
+            &context_ref,
+            "--kind",
+            "measurement",
+            "--content",
+            "-",
+        ],
+    )
+    .await
+    .expect("cli run");
+    assert!(
+        !output.status.success(),
+        "a bare declare on an empty context must fail: stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains(EMPTY_CONTEXT_VOCAB),
+        "the CLI must surface the refusal's vocabulary, got: {combined}"
+    );
+
+    let output = common::run_temper_cli_with_stdin(
+        &app,
+        &schema,
+        &[
+            "data-artifact",
+            "schema",
+            "declare",
+            &context_ref,
+            "--kind",
+            "measurement",
+            "--kind-owner",
+            &format!("kb_profiles:{profile}"),
+            "--content",
+            "-",
+        ],
+    )
+    .await
+    .expect("cli run");
+    assert!(
+        output.status.success(),
+        "the explicit-owner declare must succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("kb_profiles"),
+        "the declared shape must carry the named namespace, got: {stdout}"
     );
 }
