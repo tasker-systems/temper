@@ -534,6 +534,15 @@ jobs:
       - name: Guard test — check-openapi-pin
         run: bash .github/scripts/test-check-openapi-pin.sh
 
+      # The release calculator's Gate 1 — the retirement-train trigger (D-C1/D-C2):
+      # a routed row refuses a patch next and takes the era bump under --minor;
+      # bare shape-breaking and converted rows compute a patch. Pure bash: the
+      # harness sandboxes a fresh copy of the release tree, feeds fixture
+      # registers through the real window parser, and stubs only detect-changes
+      # (the git-diff seam) so the class booleans are fixed input.
+      - name: Guard test — calculate-versions (retirement-train trigger)
+        run: bash .github/scripts/test-calculate-versions.sh
+
       # The Ignored Build Step's polarity is inverted (exit 0 skips, exit 1 builds), so a
       # sign error there stops production deploying while every check stays green. This
       # harness asserts both directions, and that a path merely CONTAINING "migrations"
