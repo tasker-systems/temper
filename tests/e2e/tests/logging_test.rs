@@ -315,8 +315,8 @@ async fn mcp_requests_produce_a_root_span(pool: sqlx::PgPool) {
     let mcp_config = temper_mcp::McpConfig {
         mcp_base_url: "http://localhost".to_string(),
         mcp_client_id: None,
-            api_base_url: None,
-            mcp_service_secret: None,
+        api_base_url: None,
+        mcp_service_secret: None,
         oauth: temper_mcp::config::OAuthStaticConfig {
             redirect_uris: vec![],
             allow_localhost: true,

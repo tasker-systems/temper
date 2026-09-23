@@ -46,6 +46,102 @@ impl E2eTestApp {
     pub fn url(&self, path: &str) -> String {
         format!("{}{}", self.base_url(), path)
     }
+
+    /// Request parts whose `BearerToken` is THIS app's real minted JWT — the same
+    /// token `client` presents, so the API's own auth middleware resolves it against
+    /// the profile `approve_app_principal` provisioned. The synthetic tokens and
+    /// seeded claims the suites used to build never survive the wire: anything
+    /// forwarded from these parts is one hop the API fully adjudicates itself.
+    pub fn relay_parts(&self) -> axum::http::request::Parts {
+        axum::http::Request::builder()
+            .extension(temper_mcp::middleware::BearerToken(self.token.clone()))
+            .body(())
+            .expect("relay parts build")
+            .into_parts()
+            .0
+    }
+
+    /// A relay-READY [`temper_mcp::config::McpConfig`]: the API base URL pointed at
+    /// this app's real listener and the service credential at the harness secret, so
+    /// [`temper_mcp::service::TemperMcpService::relay_client`] forwards instead of
+    /// answering the typed refuse-to-forward error. The listener is BOUND HERE, in
+    /// the test process — temper-mcp never constructs one (the §8 trap).
+    pub fn mcp_relay_config(&self) -> temper_mcp::config::McpConfig {
+        temper_mcp::config::McpConfig {
+            mcp_base_url: "https://temper.invalid".to_string(),
+            mcp_client_id: None,
+            api_base_url: Some(self.base_url()),
+            mcp_service_secret: Some(TEST_MCP_SERVICE_SECRET.to_string()),
+            oauth: temper_mcp::config::OAuthStaticConfig {
+                redirect_uris: vec![],
+                allow_localhost: false,
+            },
+        }
+    }
+
+    /// The MCP service the resources-family suites drive. The relay config is ON
+    /// (this app's listener, the harness credential, the shared pool) beside the
+    /// interim direct-binding state over the same pool, and the profile cache is
+    /// seeded the way the not-yet-migrated direct families (`tools::ingest::*`)
+    /// still resolve their caller. The seeded identity is the same principal
+    /// [`Self::relay_parts`] presents to the API, so both paths execute as one
+    /// caller and the two disciplines hold side by side, neither half-migrated.
+    pub async fn mcp_relay_service(&self, pool: PgPool) -> temper_mcp::service::TemperMcpService {
+        let decoding_key =
+            jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("../fixtures/test_rsa.pub"))
+                .expect("decoding key");
+        let jwks_store = JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256);
+        let api_config = ApiConfig {
+            database_url: "unused".to_string(),
+            auth: AuthConfig {
+                issuer: "test-issuer".to_string(),
+                jwks_url: "unused".to_string(),
+                audience: TEST_AUDIENCE.to_string(),
+                mcp_audience: TEST_AUDIENCE.to_string(),
+                mode: AuthMode::ExternalIdp,
+            },
+            auth_provider_name: "test-provider".to_string(),
+            cors_origins: vec![],
+            port: 0,
+            enable_swagger: false,
+            internal_reconcile_secret: None,
+            embed_dispatch_secret: None,
+            mcp_service_secret: None,
+            vercel_connect: None,
+            slack_link: None,
+            slack_mint_secret: None,
+            rate_limit: None,
+            blob: None,
+            blob_disabled_by_policy: false,
+        };
+        let svc = temper_mcp::service::TemperMcpService::new(
+            AppState::new(pool, jwks_store, api_config),
+            self.mcp_relay_config(),
+            temper_mcp::service::shared_relay_pool(),
+        );
+
+        // Seed the profile cache from synthetic parts — the DIRECT families'
+        // caller path (`require_profile`). The resources family never reads this
+        // cache: its caller is adjudicated by the API from the bearer.
+        let req = axum::http::Request::builder()
+            .extension(temper_mcp::middleware::BearerToken("synthetic".to_string()))
+            .extension(temper_services::auth::RawJwtClaims {
+                sub: "e2e-test-user".to_string(),
+                email: None,
+                email_verified: None,
+                azp: None,
+                gty: None,
+                exp: (Utc::now() + Duration::hours(1)).timestamp(),
+                iat: 0,
+            })
+            .body(())
+            .expect("build request");
+        let (req_parts, ()) = req.into_parts();
+        svc.ensure_profile_from_parts(&req_parts)
+            .await
+            .expect("seed profile cache");
+        svc
+    }
 }
 
 /// Resolve the path to the compiled `temper` binary.
@@ -230,6 +326,14 @@ async fn spawn_temper(
 /// `validate_aud = false` — so these tokens carried no `aud` at all and the e2e suite never
 /// exercised audience validation on either surface. It does now.
 pub const TEST_AUDIENCE: &str = "test-audience";
+
+/// The service credential the relay harness configures on BOTH sides of the network
+/// door: the API's relay-trust middleware validates it constant-time, and the MCP
+/// relay presents it as `X-Temper-Service-Credential`. A test constant — production
+/// keeps this in the operator's environment (`TEMPER_MCP_SERVICE_SECRET`,
+/// injectable, §D6); the value exists so the harness can pin that the two sides
+/// must agree and that the API refuses any other.
+pub const TEST_MCP_SERVICE_SECRET: &str = "e2e-mcp-relay-service-credential";
 
 /// JWT claims for test tokens.
 #[derive(Debug, Serialize, Deserialize)]
@@ -651,6 +755,17 @@ pub async fn setup(pool: PgPool) -> E2eTestApp {
     setup_with_recorder(pool, None).await
 }
 
+/// [`setup`], with the MCP relay-trust side of the network door LIVE: the API config
+/// carries [`TEST_MCP_SERVICE_SECRET`], so the relay-trust middleware validates the
+/// service credential and honors the `mcp` attribution carrier beside it. The
+/// resources-family suites drive their tools through this app's real listener — the
+/// same requests the API would receive from the deployed relay. Requests that carry
+/// neither credential nor carrier behave exactly as under plain [`setup`], so only
+/// the suites that cross the door need this variant.
+pub async fn setup_relay(pool: PgPool) -> E2eTestApp {
+    setup_with_recorder_and_blob(pool, None, None, Some(TEST_MCP_SERVICE_SECRET)).await
+}
+
 /// Every request path the test server received, in order.
 ///
 /// A **wire-level** record: the CLI runs as a real subprocess against a real socket, so this is
@@ -683,7 +798,7 @@ async fn record_request_path(
 }
 
 async fn setup_with_recorder(pool: PgPool, recorder: Option<RequestLog>) -> E2eTestApp {
-    setup_with_recorder_and_blob(pool, recorder, None).await
+    setup_with_recorder_and_blob(pool, recorder, None, None).await
 }
 
 /// [`setup`], with the blob flow LIVE: a `BlobConfig` on the API config (the D9
@@ -710,7 +825,7 @@ pub async fn setup_with_blob_store(pool: PgPool) -> E2eTestApp {
     };
     let store: std::sync::Arc<dyn temper_substrate::blob_store::BlobStore> =
         std::sync::Arc::new(temper_substrate::blob_store::InMemoryBlobStore::default());
-    setup_with_recorder_and_blob(pool, None, Some((blob_config, store))).await
+    setup_with_recorder_and_blob(pool, None, Some((blob_config, store)), None).await
 }
 
 async fn setup_with_recorder_and_blob(
@@ -720,6 +835,7 @@ async fn setup_with_recorder_and_blob(
         temper_services::config::BlobConfig,
         std::sync::Arc<dyn temper_substrate::blob_store::BlobStore>,
     )>,
+    relay_secret: Option<&str>,
 ) -> E2eTestApp {
     clean_and_seed(&pool).await;
 
@@ -744,7 +860,7 @@ async fn setup_with_recorder_and_blob(
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
-        mcp_service_secret: None,
+        mcp_service_secret: relay_secret.map(str::to_string),
         vercel_connect: None,
         slack_link: None,
         slack_mint_secret: None,

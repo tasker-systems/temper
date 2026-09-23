@@ -57,7 +57,11 @@ fn mcp_app_state(pool: &sqlx::PgPool) -> AppState {
 /// (`ensure_profile_from_parts`) is the thing under test and is made by the
 /// test body.
 async fn build_mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMcpService {
-    temper_mcp::service::TemperMcpService::new(mcp_app_state(pool))
+    temper_mcp::service::TemperMcpService::new(
+        mcp_app_state(pool),
+        temper_mcp::service::relay_off_config(),
+        temper_mcp::service::shared_relay_pool(),
+    )
 }
 
 /// Spawn the **real** MCP router — `build_router`, the same one `api/mcp.rs` serves — on a random
@@ -71,8 +75,8 @@ async fn spawn_mcp_server(pool: &sqlx::PgPool) -> String {
     let mcp_config = temper_mcp::McpConfig {
         mcp_base_url: "http://localhost".to_string(),
         mcp_client_id: None,
-            api_base_url: None,
-            mcp_service_secret: None,
+        api_base_url: None,
+        mcp_service_secret: None,
         oauth: temper_mcp::config::OAuthStaticConfig {
             redirect_uris: vec![],
             allow_localhost: true,

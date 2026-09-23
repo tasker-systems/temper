@@ -1,11 +1,14 @@
 //! Segmented ingest driven the way an MCP caller drives it: through the production tool functions
-//! (`TemperMcpService` → `ensure_profile_from_parts` → `tools::ingest::*`), with no client-side
-//! chunks, no embedder, and no `.temper/` manifest.
+//! (`tools::ingest::*` on the interim direct binding, whose caller the service's own profile cache
+//! still resolves), with no client-side chunks, no embedder, and no `.temper/` manifest. The
+//! one-shot reference create crosses the network door (`relay_client` → the real `create_app`
+//! listener → the API's ingest door) on the same principal's bearer.
 //!
 //! The load-bearing assertion is `segmented_server_chunked_ingest_equals_a_one_shot_create`: a
 //! document ingested segment-by-segment must be indistinguishable from the same document created in
 //! one shot. That single equivalence covers breadcrumb continuity across block boundaries, segment
-//! reassembly, and merkle agreement at once.
+//! reassembly, and merkle agreement at once — and, since the two legs travel different doors, that
+//! the two doors write indistinguishable state.
 //!
 //! `test-embed` because the server chunks and embeds every segment (the caller cannot).
 #![cfg(all(feature = "test-db", feature = "test-embed"))]
@@ -37,65 +40,6 @@ fn corpus() -> Vec<&'static str> {
 
 fn sha(text: &str) -> String {
     temper_core::hash::sha256_hex(text.as_bytes())
-}
-
-/// Build an MCP service whose profile cache is seeded from synthetic JWT claims — the production
-/// caller path, mirroring `mcp_round_trip_test`.
-async fn mcp_service(pool: &sqlx::PgPool) -> TemperMcpService {
-    use temper_services::auth_config::{AuthConfig, AuthMode};
-    use temper_services::config::ApiConfig;
-    use temper_services::state::{AppState, JwksKeyStore};
-
-    let decoding_key =
-        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
-            .expect("decoding key");
-    let jwks_store = JwksKeyStore::with_static_key(decoding_key, jsonwebtoken::Algorithm::RS256);
-    let api_config = ApiConfig {
-        database_url: "unused".to_string(),
-        auth: AuthConfig {
-            issuer: "test-issuer".to_string(),
-            jwks_url: "unused".to_string(),
-            audience: common::TEST_AUDIENCE.to_string(),
-            mcp_audience: common::TEST_AUDIENCE.to_string(),
-            mode: AuthMode::ExternalIdp,
-        },
-        auth_provider_name: "test-provider".to_string(),
-        cors_origins: vec![],
-        port: 0,
-        enable_swagger: false,
-        internal_reconcile_secret: None,
-        embed_dispatch_secret: None,
-        mcp_service_secret: None,
-        vercel_connect: None,
-        slack_link: None,
-        slack_mint_secret: None,
-        rate_limit: None,
-        blob: None,
-        blob_disabled_by_policy: false,
-    };
-    let svc = TemperMcpService::new(AppState::new(pool.clone(), jwks_store, api_config));
-
-    let req = axum::http::Request::builder()
-        // The MCP JWT middleware injects the raw bearer alongside the claims; the auth
-        // seam needs it for the email ladder's /userinfo rung. Synthetic parts must
-        // carry both or the service rejects the request as unwired.
-        .extension(temper_mcp::middleware::BearerToken("synthetic".to_string()))
-        .extension(temper_services::auth::RawJwtClaims {
-            sub: "e2e-test-user".to_string(),
-            email: None,
-            email_verified: None,
-            azp: None,
-            gty: None,
-            exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
-            iat: 0,
-        })
-        .body(())
-        .expect("build request");
-    let (req_parts, ()) = req.into_parts();
-    svc.ensure_profile_from_parts(&req_parts)
-        .await
-        .expect("seed profile cache");
-    svc
 }
 
 /// The tool functions return `CallToolResult`, whose payload is the JSON text of the typed
@@ -249,10 +193,17 @@ async fn ingest_segmented(svc: &TemperMcpService, context_ref: &str, title: &str
 // ── The load-bearing assertion ─────────────────────────────────────────────────
 
 /// One-shot `create_resource` of the whole document, through the same MCP surface — an
-/// independent reference for the equivalence assertion. The server chunks it in a single pass.
-async fn one_shot_create(svc: &TemperMcpService, context_ref: &str, body: &str) -> uuid::Uuid {
+/// independent reference for the equivalence assertion. The create crosses the network door;
+/// the server chunks it in a single pass.
+async fn one_shot_create(
+    svc: &TemperMcpService,
+    parts: &axum::http::request::Parts,
+    context_ref: &str,
+    body: &str,
+) -> uuid::Uuid {
     let result = temper_mcp::tools::resources::create_resource(
         svc,
+        parts,
         CreateResourceInput {
             context_ref: Some(context_ref.to_string()),
             cogmap: None,
@@ -290,10 +241,11 @@ async fn segmented_server_chunked_ingest_equals_a_one_shot_create(pool: sqlx::Pg
         .await
         .expect("context create");
 
-    let svc = mcp_service(&pool).await;
+    let svc = app.mcp_relay_service(pool.clone()).await;
+    let parts = app.relay_parts();
 
     // The reference: one call, whole document, server chunks it in one pass.
-    let reference = one_shot_create(&svc, "@me/mcp-segmented", &corpus().concat()).await;
+    let reference = one_shot_create(&svc, &parts, "@me/mcp-segmented", &corpus().concat()).await;
 
     // The subject: begin + N appends + finalize, server chunks each segment independently and
     // carries the heading breadcrumb across every block boundary.
@@ -337,7 +289,7 @@ async fn an_interrupted_segmented_ingest_resumes_from_the_server_alone(pool: sql
         .await
         .expect("context create");
 
-    let svc = mcp_service(&pool).await;
+    let svc = app.mcp_relay_service(pool.clone()).await;
     let segments = corpus();
 
     let begin: SegmentedBeginResponse = parse_tool_json(
@@ -397,7 +349,7 @@ async fn re_appending_a_landed_segment_is_an_idempotent_no_op(pool: sqlx::PgPool
         .await
         .expect("context create");
 
-    let svc = mcp_service(&pool).await;
+    let svc = app.mcp_relay_service(pool.clone()).await;
     let segments = corpus();
 
     let begin: SegmentedBeginResponse = parse_tool_json(
@@ -438,7 +390,7 @@ async fn an_append_whose_content_does_not_hash_to_its_declared_hash_is_rejected(
         .await
         .expect("context create");
 
-    let svc = mcp_service(&pool).await;
+    let svc = app.mcp_relay_service(pool.clone()).await;
     let segments = corpus();
     let begin: SegmentedBeginResponse = parse_tool_json(
         temper_mcp::tools::ingest::ingest_begin(
@@ -502,7 +454,7 @@ async fn appended_segments_record_block_aligned_provenance(pool: sqlx::PgPool) {
         .await
         .expect("context create");
 
-    let svc = mcp_service(&pool).await;
+    let svc = app.mcp_relay_service(pool.clone()).await;
     let segments = corpus();
 
     // Begin carries no sources (block 0 is un-attributed).

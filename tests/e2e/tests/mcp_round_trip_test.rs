@@ -3,7 +3,6 @@
 mod common;
 
 use temper_core::types::ids::{ProfileId, ResourceId};
-use temper_services::auth_config::{AuthConfig, AuthMode};
 use temper_services::backend::{substrate_read, DbBackend};
 use temper_workflow::operations::{Backend, BodyUpdate, Surface, UpdateResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
@@ -791,15 +790,12 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
 
 /// Drive the production MCP `get_resource` tool fn end-to-end (identity, both meta tiers and the
 /// body all composed by `substrate_read::show_view_select` from one section set). Proves the
-/// contract through the *production caller* (`TemperMcpService` → `require_profile` →
-/// `get_resource`): the response carries managed_meta + open_meta, plus a second body part under
-/// `include_content`.
+/// contract through the *production caller* (`relay_client` → the real `create_app`
+/// listener → the gated read): the response carries managed_meta + open_meta, plus a second body
+/// part under `include_content`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
-    use temper_services::config::ApiConfig;
-    use temper_services::state::{AppState, JwksKeyStore};
-
-    let app = common::setup(pool.clone()).await;
+    let app = common::setup_relay(pool.clone()).await;
     // Provision the e2e-test-user profile (auto-created on first profile read).
     app.client
         .profile()
@@ -844,61 +840,14 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
         .await
         .expect("create resource");
 
-    // Build an MCP service and seed its profile cache from synthetic JWT claims — the
-    // production caller path (`ensure_profile_from_parts` → `require_profile`).
-    let decoding_key =
-        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
-            .expect("decoding key");
-    let jwks_store = JwksKeyStore::with_static_key(decoding_key, jsonwebtoken::Algorithm::RS256);
-    let api_config = ApiConfig {
-        database_url: "unused".to_string(),
-        auth: AuthConfig {
-            issuer: "test-issuer".to_string(),
-            jwks_url: "unused".to_string(),
-            audience: common::TEST_AUDIENCE.to_string(),
-            mcp_audience: common::TEST_AUDIENCE.to_string(),
-            mode: AuthMode::ExternalIdp,
-        },
-        auth_provider_name: "test-provider".to_string(),
-        cors_origins: vec![],
-        port: 0,
-        enable_swagger: false,
-        internal_reconcile_secret: None,
-        embed_dispatch_secret: None,
-        mcp_service_secret: None,
-        vercel_connect: None,
-        slack_link: None,
-        slack_mint_secret: None,
-        rate_limit: None,
-        blob: None,
-        blob_disabled_by_policy: false,
-    };
-    let state = AppState::new(pool.clone(), jwks_store, api_config);
-    let svc = temper_mcp::service::TemperMcpService::new(state, temper_mcp::service::relay_off_config(), temper_mcp::service::shared_relay_pool());
-
-    let req = axum::http::Request::builder()
-        // The MCP JWT middleware injects the raw bearer alongside the claims; the auth
-        // seam needs it for the email ladder's /userinfo rung. Synthetic parts must
-        // carry both or the service rejects the request as unwired.
-        .extension(temper_mcp::middleware::BearerToken("synthetic".to_string()))
-        .extension(temper_services::auth::RawJwtClaims {
-            sub: "e2e-test-user".to_string(),
-            email: None,
-            email_verified: None,
-            azp: None,
-            gty: None,
-            exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
-            iat: 0,
-        })
-        .body(())
-        .expect("build request");
-    let (req_parts, ()) = req.into_parts();
-    svc.ensure_profile_from_parts(&req_parts)
-        .await
-        .expect("seed profile cache");
+    // The network door: the relay client forwards on the caller's REAL bearer to this
+    // app's listener; the API adjudicates and the gated read answers.
+    let svc = app.mcp_relay_service(pool.clone()).await;
+    let parts = app.relay_parts();
 
     let result = temper_mcp::tools::resources::get_resource(
         &svc,
+        &parts,
         temper_mcp::tools::resources::GetResourceInput {
             id: (*resource.id).to_string(),
             include_content: Some(true),
@@ -949,15 +898,12 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
 /// Drive the production MCP `list_resources` tool fn end-to-end (rows via
 /// `substrate_read::list_select` filtered by `context_ref`, with the `open-meta` section asked for
 /// and embedding readiness attached by `enrich_resources`). Proves the contract through the
-/// *production caller* (`TemperMcpService` → `require_profile` → `list_resources`): the doctype
-/// filter narrows the envelope's rows to matching ones, and every row carries managed_meta + a
-/// non-empty context_name.
+/// *production caller* (`relay_client` → the real `create_app` listener → the gated list): the
+/// doctype filter narrows the envelope's rows to matching ones, and every row carries managed_meta
+/// + a non-empty context_name.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
-    use temper_services::config::ApiConfig;
-    use temper_services::state::{AppState, JwksKeyStore};
-
-    let app = common::setup(pool.clone()).await;
+    let app = common::setup_relay(pool.clone()).await;
     app.client
         .profile()
         .get()
@@ -1022,61 +968,16 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
             .expect("create resource");
     }
 
-    // Build an MCP service and seed its profile cache (the production caller path).
-    let decoding_key =
-        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
-            .expect("decoding key");
-    let jwks_store = JwksKeyStore::with_static_key(decoding_key, jsonwebtoken::Algorithm::RS256);
-    let api_config = ApiConfig {
-        database_url: "unused".to_string(),
-        auth: AuthConfig {
-            issuer: "test-issuer".to_string(),
-            jwks_url: "unused".to_string(),
-            audience: common::TEST_AUDIENCE.to_string(),
-            mcp_audience: common::TEST_AUDIENCE.to_string(),
-            mode: AuthMode::ExternalIdp,
-        },
-        auth_provider_name: "test-provider".to_string(),
-        cors_origins: vec![],
-        port: 0,
-        enable_swagger: false,
-        internal_reconcile_secret: None,
-        embed_dispatch_secret: None,
-        mcp_service_secret: None,
-        vercel_connect: None,
-        slack_link: None,
-        slack_mint_secret: None,
-        rate_limit: None,
-        blob: None,
-        blob_disabled_by_policy: false,
-    };
-    let state = AppState::new(pool.clone(), jwks_store, api_config);
-    let svc = temper_mcp::service::TemperMcpService::new(state, temper_mcp::service::relay_off_config(), temper_mcp::service::shared_relay_pool());
-
-    let req = axum::http::Request::builder()
-        // The MCP JWT middleware injects the raw bearer alongside the claims; the auth
-        // seam needs it for the email ladder's /userinfo rung. Synthetic parts must
-        // carry both or the service rejects the request as unwired.
-        .extension(temper_mcp::middleware::BearerToken("synthetic".to_string()))
-        .extension(temper_services::auth::RawJwtClaims {
-            sub: "e2e-test-user".to_string(),
-            email: None,
-            email_verified: None,
-            azp: None,
-            gty: None,
-            exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
-            iat: 0,
-        })
-        .body(())
-        .expect("build request");
-    let (req_parts, ()) = req.into_parts();
-    svc.ensure_profile_from_parts(&req_parts)
-        .await
-        .expect("seed profile cache");
+    // The network door: the relay client forwards on the caller's REAL bearer to this
+    // app's listener; the API adjudicates and the gated list answers. Context-ref
+    // resolution is absorbed server-side — the `@me/list-selector` string crosses as-is.
+    let svc = app.mcp_relay_service(pool.clone()).await;
+    let parts = app.relay_parts();
 
     // Filter by doctype=research → only the research row, enriched.
     let result = temper_mcp::tools::resources::list_resources(
         &svc,
+        &parts,
         temper_mcp::tools::resources::ListResourcesInput {
             goal: None,
             cogmap: None,
@@ -1139,6 +1040,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
     // "unmatched filter yields an empty list, no error".
     let empty = temper_mcp::tools::resources::list_resources(
         &svc,
+        &parts,
         temper_mcp::tools::resources::ListResourcesInput {
             goal: None,
             cogmap: None,

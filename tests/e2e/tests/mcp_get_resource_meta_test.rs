@@ -1,8 +1,8 @@
 #![cfg(feature = "test-db")]
 
 //! What an MCP caller receives back for a resource, driven through the production tool functions
-//! (`TemperMcpService` → `require_profile` → `tools::resources::*`) rather than through the
-//! enrichment helper underneath them.
+//! across the network door (`relay_client` → the real `create_app` listener → the API's gated
+//! reads) rather than through the enrichment helper underneath them.
 //!
 //! Two contracts live here. The older one is Gap 2 from `mcp-frontmatter-roundtrip-gaps`: both
 //! metadata tiers must reach the caller, on `get_resource` and on every row of `list_resources`, or
@@ -21,7 +21,6 @@
 mod common;
 
 use temper_core::types::ingest::{pack_chunks, IngestPayload};
-use temper_mcp::service::TemperMcpService;
 use temper_mcp::tools::resources::{GetResourceInput, ListResourcesInput};
 
 fn sha2_hex(content: &str) -> String {
@@ -29,62 +28,6 @@ fn sha2_hex(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     hex::encode(hasher.finalize())
-}
-
-/// Build an MCP service whose profile cache is seeded from synthetic JWT claims — the production
-/// caller path, mirroring `mcp_round_trip_test` and `mcp_segmented_ingest_test`.
-async fn mcp_service(pool: &sqlx::PgPool) -> TemperMcpService {
-    use temper_services::auth_config::{AuthConfig, AuthMode};
-    use temper_services::config::ApiConfig;
-    use temper_services::state::{AppState, JwksKeyStore};
-
-    let decoding_key =
-        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
-            .expect("decoding key");
-    let jwks_store = JwksKeyStore::with_static_key(decoding_key, jsonwebtoken::Algorithm::RS256);
-    let api_config = ApiConfig {
-        database_url: "unused".to_string(),
-        auth: AuthConfig {
-            issuer: "test-issuer".to_string(),
-            jwks_url: "unused".to_string(),
-            audience: common::TEST_AUDIENCE.to_string(),
-            mcp_audience: common::TEST_AUDIENCE.to_string(),
-            mode: AuthMode::ExternalIdp,
-        },
-        auth_provider_name: "test-provider".to_string(),
-        cors_origins: vec![],
-        port: 0,
-        enable_swagger: false,
-        internal_reconcile_secret: None,
-        embed_dispatch_secret: None,
-        mcp_service_secret: None,
-        vercel_connect: None,
-        slack_link: None,
-        slack_mint_secret: None,
-        rate_limit: None,
-        blob: None,
-        blob_disabled_by_policy: false,
-    };
-    let svc = TemperMcpService::new(AppState::new(pool.clone(), jwks_store, api_config));
-
-    let req = axum::http::Request::builder()
-        .extension(temper_mcp::middleware::BearerToken("synthetic".to_string()))
-        .extension(temper_services::auth::RawJwtClaims {
-            sub: "e2e-test-user".to_string(),
-            email: None,
-            email_verified: None,
-            azp: None,
-            gty: None,
-            exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
-            iat: 0,
-        })
-        .body(())
-        .expect("build request");
-    let (req_parts, ()) = req.into_parts();
-    svc.ensure_profile_from_parts(&req_parts)
-        .await
-        .expect("seed profile cache");
-    svc
 }
 
 /// The tool functions return a `CallToolResult`; the payload is the JSON text of the typed
@@ -155,13 +98,14 @@ async fn seed_resource(
 /// rather than carried forward ignored.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn mcp_get_resource_carries_both_meta_tiers(pool: sqlx::PgPool) {
-    let app = common::setup(pool.clone()).await;
+    let app = common::setup_relay(pool.clone()).await;
     app.client
         .profile()
         .get()
         .await
         .expect("profile pre-flight");
-    let svc = mcp_service(&pool).await;
+    let svc = app.mcp_relay_service(pool.clone()).await;
+    let parts = app.relay_parts();
 
     let seeded_open = serde_json::json!({"tags": ["alpha", "mcp"], "weight": 3});
     let id = seed_resource(
@@ -176,6 +120,7 @@ async fn mcp_get_resource_carries_both_meta_tiers(pool: sqlx::PgPool) {
     let v = tool_json(
         temper_mcp::tools::resources::get_resource(
             &svc,
+            &parts,
             GetResourceInput {
                 id: id.to_string(),
                 include_content: None,
@@ -212,13 +157,14 @@ async fn mcp_get_resource_carries_both_meta_tiers(pool: sqlx::PgPool) {
 /// would be a lie about the resource rather than about the request.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn mcp_get_resource_surfaces_empty_open_meta(pool: sqlx::PgPool) {
-    let app = common::setup(pool.clone()).await;
+    let app = common::setup_relay(pool.clone()).await;
     app.client
         .profile()
         .get()
         .await
         .expect("profile pre-flight");
-    let svc = mcp_service(&pool).await;
+    let svc = app.mcp_relay_service(pool.clone()).await;
+    let parts = app.relay_parts();
 
     let id = seed_resource(
         &app,
@@ -232,6 +178,7 @@ async fn mcp_get_resource_surfaces_empty_open_meta(pool: sqlx::PgPool) {
     let v = tool_json(
         temper_mcp::tools::resources::get_resource(
             &svc,
+            &parts,
             GetResourceInput {
                 id: id.to_string(),
                 include_content: None,
@@ -263,13 +210,14 @@ async fn mcp_get_resource_surfaces_empty_open_meta(pool: sqlx::PgPool) {
 /// no surface can emit a row without one.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn mcp_list_emits_ref_for_every_row(pool: sqlx::PgPool) {
-    let app = common::setup(pool.clone()).await;
+    let app = common::setup_relay(pool.clone()).await;
     app.client
         .profile()
         .get()
         .await
         .expect("profile pre-flight");
-    let svc = mcp_service(&pool).await;
+    let svc = app.mcp_relay_service(pool.clone()).await;
+    let parts = app.relay_parts();
 
     let id_a = seed_resource(
         &app,
@@ -291,6 +239,7 @@ async fn mcp_list_emits_ref_for_every_row(pool: sqlx::PgPool) {
     let v = tool_json(
         temper_mcp::tools::resources::list_resources(
             &svc,
+            &parts,
             ListResourcesInput {
                 goal: None,
                 cogmap: None,
@@ -340,13 +289,14 @@ async fn mcp_list_emits_ref_for_every_row(pool: sqlx::PgPool) {
 /// there is.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn mcp_list_envelope_carries_paging_state(pool: sqlx::PgPool) {
-    let app = common::setup(pool.clone()).await;
+    let app = common::setup_relay(pool.clone()).await;
     app.client
         .profile()
         .get()
         .await
         .expect("profile pre-flight");
-    let svc = mcp_service(&pool).await;
+    let svc = app.mcp_relay_service(pool.clone()).await;
+    let parts = app.relay_parts();
 
     for n in 0..3 {
         seed_resource(
@@ -361,10 +311,12 @@ async fn mcp_list_envelope_carries_paging_state(pool: sqlx::PgPool) {
 
     let page = |limit: Option<i64>| {
         let svc = &svc;
+        let parts = &parts;
         async move {
             tool_json(
                 temper_mcp::tools::resources::list_resources(
                     svc,
+                    parts,
                     ListResourcesInput {
                         goal: None,
                         cogmap: None,
@@ -417,13 +369,14 @@ async fn mcp_list_envelope_carries_paging_state(pool: sqlx::PgPool) {
 /// measured separately in `temper-services`' `list_page_open_meta_query_count_test`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn mcp_list_carries_both_meta_tiers_for_every_row(pool: sqlx::PgPool) {
-    let app = common::setup(pool.clone()).await;
+    let app = common::setup_relay(pool.clone()).await;
     app.client
         .profile()
         .get()
         .await
         .expect("profile pre-flight");
-    let svc = mcp_service(&pool).await;
+    let svc = app.mcp_relay_service(pool.clone()).await;
+    let parts = app.relay_parts();
 
     let id_a = seed_resource(
         &app,
@@ -445,6 +398,7 @@ async fn mcp_list_carries_both_meta_tiers_for_every_row(pool: sqlx::PgPool) {
     let v = tool_json(
         temper_mcp::tools::resources::list_resources(
             &svc,
+            &parts,
             ListResourcesInput {
                 goal: None,
                 cogmap: None,
