@@ -409,6 +409,26 @@ async fn create_refuses_an_unknown_context(pool: PgPool) {
     assert!(err.message.starts_with("context not found"), "got: {err}");
 }
 
+/// The create-side sources guard SURVIVES the door: the ingest path carries sources
+/// only inside the body update, so an empty body would silently DROP them — the tool
+/// refuses first, exactly as the direct binding's `provenance_body` did.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn create_refuses_sources_without_content(pool: PgPool) {
+    let (svc, email) = parity::caller(&pool, "create-sources").await;
+    let ctx = default_context_id(&pool, &email).await;
+    let mut body = parity::create_body(&ctx, "Sources with no body", None);
+    body["sources"] = json!(["https://example.com/origin-doc"]);
+
+    let err = temper_mcp::tools::resources::create_resource(&svc, input(body))
+        .await
+        .expect_err("sources without content is refused");
+    assert_eq!(code_of(&err), -32602);
+    assert_eq!(
+        err.message,
+        "sources supplied without content — there is no body block to attribute"
+    );
+}
+
 // ── get_resource ────────────────────────────────────────────────────
 
 /// The incumbent get: open-meta always present, body absent until asked, and the body
@@ -755,6 +775,25 @@ async fn delete_answers_the_ack_and_the_resource_stops_answering(pool: PgPool) {
         .expect_err("a second delete is a refusal");
     assert_eq!(code_of(&again), -32602);
     assert_eq!(again.message, "Resource not found or not modifiable");
+
+    // Act authorship rides the door's query string, and the door validates it —
+    // reasoning without a confidence band is a 400 CALLER error, mapped to
+    // invalid_params like the direct binding's client-side assembler did, never an
+    // internal error.
+    let bad_act = temper_mcp::tools::resources::delete_resource(
+        &svc,
+        input(json!({
+            "id": created["resource"]["id"],
+            "reasoning": "correlated but unconfident",
+        })),
+    )
+    .await
+    .expect_err("incomplete authorship is a refusal");
+    assert_eq!(code_of(&bad_act), -32602);
+    assert!(
+        bad_act.message.contains("confidence"),
+        "the door's own authorship sentence, got: {bad_act}"
+    );
 }
 
 // ── block reads ─────────────────────────────────────────────────────

@@ -18,11 +18,14 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
   family's 12 tools execute through the API router in-process — temper-client's
   in-process transport carrying the CALLER's bearer under the trusted
   `Surface::Mcp` extension — instead of calling shared services directly. Who
-  observes: an MCP-calling agent, whose tool names, wire schemas, response
-  shapes, and refusal kinds are byte-identical to the direct-service binding
-  (parity suite authored green pre-swap, mutation-proven); one named refusal-
-  prose delta, where a doubled "context not found:" prefix collapses to the
-  service's own sentence. The embedding-status enrichment crosses a new
+  observes: an MCP-calling agent, whose tool names, wire schemas, and response
+  shapes are unchanged; refusal kinds held arm-for-arm, pinned by a parity
+  suite authored green against the direct-service binding BEFORE the swap and
+  mutation-proven after (two post-review fixes restored the create-side
+  sources guard and delete's 400 authorship arm, which the first swap had
+  dropped); one named refusal-PROSE delta, where a doubled "context not
+  found:" prefix collapses to the service's own sentence. The embedding-status
+  enrichment crosses a new
   deliberately-unregistered internal read (`GET /api/embed/status`, bearer-
   authenticated, on the operator-only allowlist). No MCP wire shape, tool
   inventory, or openapi.json entry moves.

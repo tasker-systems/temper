@@ -636,8 +636,11 @@ fn provenance_parts(
 /// resolve the home anchor (running the cogmap producer gate before any write), derive the slug from
 /// the title, default `origin_uri`, assemble the act context, and resolve the optional goal ref.
 ///
-/// Shared by [`create_resource`] and `tools::ingest::ingest_begin` so the two cannot drift — a
-/// segmented begin creates a resource by exactly the same rules as a one-shot create.
+/// Sole caller since beat G3a: `tools::ingest::ingest_begin` (the ingest family) — a
+/// segmented begin creates a resource by exactly the same rules `create_resource` used
+/// to. `create_resource` itself now crosses the ingest door and builds its payload
+/// separately; when the ingest family migrates, this helper and its duplicate shaping
+/// die together.
 pub(crate) async fn build_create_command(
     svc: &TemperMcpService,
     profile_id: ProfileId,
@@ -817,10 +820,16 @@ pub async fn create_resource(
         .unwrap_or_else(|| format!("mcp://agent/{}", Uuid::new_v4()));
 
     let content = input.content.unwrap_or_default();
-    // The sources-without-body guard, carried over from the direct binding: sources
-    // without a body block have nothing to attribute, so that combination is an
-    // `invalid_params` error rather than a silent drop.
     let sources = resolve_sources(input.sources)?;
+    // The sources-without-body guard, carried over from the direct binding — and it
+    // must fire HERE: the ingest door carries sources only inside `BodyUpdate`, so an
+    // empty body would silently DROP them instead of refusing.
+    if content.is_empty() && !sources.is_empty() {
+        return Err(rmcp::ErrorData::invalid_params(
+            "sources supplied without content — there is no body block to attribute".to_owned(),
+            None,
+        ));
+    }
 
     // The caller-supplied managed_meta is a typed input; the wire payload carries the
     // JSON value the ingest door re-parses server-side (typed at both ends).
@@ -1386,6 +1395,13 @@ pub async fn delete_resource(
             ClientError::NotFound { message } => {
                 rmcp::ErrorData::invalid_params(format!("Resource not found: {message}"), None)
             }
+            // The door runs the act-authorship validation the direct binding ran
+            // client-side (e.g. reasoning without a confidence band) and answers 400 —
+            // a caller error, never a server fault.
+            ClientError::Server {
+                status: 400,
+                message,
+            } => rmcp::ErrorData::invalid_params(message, None),
             other => {
                 rmcp::ErrorData::internal_error(format!("Failed to delete resource: {other}"), None)
             }
