@@ -21,7 +21,7 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ContextId, EntityId, ProfileId, ShapeId};
 use temper_core::types::workflow_job::{AnchorJobPayload, DispatchType, Persona};
 use temper_substrate::payloads::{AnchorRef, EnforcementMode, KindOwner};
-use temper_substrate::writes::{self, DeclareShapeParams};
+use temper_substrate::writes::{self, DataArtifactRefusal, DeclareShapeParams};
 
 /// Lease for a claimed shape-reconcile job. Same reasoning as the region lease: MUST exceed the
 /// Vercel function timeout (300s) so a genuinely-running reconciliation never looks dead to the
@@ -58,7 +58,9 @@ pub async fn declare_shape(pool: &PgPool, p: DeclareShapeServiceParams<'_>) -> A
     // Authority gate — the two-arm branch from spec §5. Call the predicates, never restate them.
     check_home_authorable(pool, p.principal, &p.home).await?;
 
-    // Substrate declare (fires the event, projects the row).
+    // Substrate declare (fires the event, projects the row). A typed refusal (the wrapper's
+    // SQL vocabulary, or the declare gate itself) surfaces with its own words — never the
+    // internal-error class, which is for server faults.
     let shape_id = writes::declare_shape(
         pool,
         DeclareShapeParams {
@@ -71,7 +73,10 @@ pub async fn declare_shape(pool: &PgPool, p: DeclareShapeServiceParams<'_>) -> A
         },
     )
     .await
-    .map_err(|e| ApiError::Internal(e.to_string()))?;
+    .map_err(|e| match e.downcast_ref::<DataArtifactRefusal>() {
+        Some(r) => ApiError::DataArtifactRefusal(r.message.clone()),
+        None => ApiError::Internal(e.to_string()),
+    })?;
 
     // Enqueue a reconcile job on the anchor queue. The single-flight index collapses N
     // declarations into one job; the second enqueue returns None, not an error.
