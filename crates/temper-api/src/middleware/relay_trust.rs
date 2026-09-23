@@ -82,10 +82,18 @@ pub async fn require_relay_trust(
             // takes — but also the shape of a misconfigured relay mid-rotation. The degrade
             // detector (§D7) is the load-bearing signal, not this line; `debug` keeps an
             // internet-reachable log-volume lever out of reach.
-            tracing::debug!(
-                counter = "relayed_surface_degraded",
-                "carrier present without a service credential; ignoring carrier"
-            );
+            //
+            // Counted ONLY when a carrier is actually present. The event's trigger is the
+            // carrier (the §D7 signal is "a relay-shaped claim arrived uncredentialed");
+            // counting every plainly credential-less request — all direct traffic, the
+            // moment the API configures a secret — would drown the signal the alert keys
+            // on. No carrier, no event: a missing credential is inert, per face (a).
+            if request.headers().contains_key(RELAYED_SURFACE_HEADER) {
+                tracing::debug!(
+                    counter = "relayed_surface_degraded",
+                    "carrier present without a service credential; ignoring carrier"
+                );
+            }
             false
         }
         (Some(expected), Some(presented)) => {
