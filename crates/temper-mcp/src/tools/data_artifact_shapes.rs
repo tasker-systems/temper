@@ -167,6 +167,10 @@ pub async fn declare_shape(
         ),
         ApiError::NotFound(msg) => rmcp::ErrorData::invalid_params(msg, None),
         ApiError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
+        // A typed refusal travels as a caller error carrying its own words — never wrapped
+        // in the internal-error envelope, which would splice the raw database text into an
+        // internal error and read as a server fault.
+        ApiError::DataArtifactRefusal(msg) => rmcp::ErrorData::invalid_params(msg, None),
         other => rmcp::ErrorData::internal_error(format!("Failed to declare shape: {other}"), None),
     })?;
 

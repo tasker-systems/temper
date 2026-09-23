@@ -451,6 +451,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 DataArtifactAction::Commit {
                     r#ref,
                     kind,
+                    kind_owner,
                     intent,
                     precedence,
                     content,
@@ -461,6 +462,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     temper_cli::commands::data_artifact::CommitParams {
                         r#ref: &r#ref,
                         kind: &kind,
+                        kind_owner: kind_owner.as_deref(),
                         intent: &intent,
                         precedence,
                         content_flag: content.as_deref(),
@@ -497,6 +499,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     SchemaAction::Declare {
                         r#ref,
                         kind,
+                        kind_owner,
                         enforcement,
                         content,
                         act,
@@ -512,12 +515,15 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                             };
                             temper_cli::commands::data_artifact::schema_declare_remote(
                                 client,
-                                &r#ref,
-                                &kind,
-                                wire_enforcement,
-                                content.as_deref(),
-                                act.into_act_input()?,
-                                output_format,
+                                temper_cli::commands::data_artifact::SchemaDeclareParams {
+                                    context: &r#ref,
+                                    kind: &kind,
+                                    kind_owner: kind_owner.as_deref(),
+                                    enforcement: wire_enforcement,
+                                    content_flag: content.as_deref(),
+                                    act: act.into_act_input()?,
+                                    format: output_format,
+                                },
                             )
                             .await
                         })

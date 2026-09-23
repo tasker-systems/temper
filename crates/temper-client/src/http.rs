@@ -784,6 +784,15 @@ pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
                 },
             }
         }
+        400 if parse_error_field(body, "code").as_deref()
+            == Some(temper_core::error::DATA_ARTIFACT_REFUSAL_CODE) =>
+        {
+            // A declined data-artifact write: the refusal's own words are the message, keyed
+            // on the CODE exactly as the 403 and 422 arms above — never a message heuristic.
+            let message =
+                parse_error_field(body, "message").unwrap_or_else(|| "write refused".to_owned());
+            ClientError::DataArtifactRefusal { message }
+        }
         401 => ClientError::NotAuthenticated,
         403 => {
             if let Some(details) = parse_system_access_details(body) {

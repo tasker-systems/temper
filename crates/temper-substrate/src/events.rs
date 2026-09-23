@@ -1062,6 +1062,23 @@ pub(crate) async fn project_property_unset(
 
 /// Fire one seeding action: dispatch it to its SQL function (event + projection, one txn) and return the
 /// produced ids. The caller threads a transaction (`&mut *tx`) so a run of fires commits atomically.
+/// Classify one SQL error from a data-artifact wrapper call. A `RAISE EXCEPTION`
+/// (SQLSTATE `P0001`) whose message carries a `data_artifact_` prefix IS the wrapper's
+/// refusal — typed ([`crate::writes::DataArtifactRefusal`]) so the surfaces render its
+/// words instead of the 500-class bridge. The prefix is the boundary, and keying on it is
+/// the whole point: mapping by error CLASS alone would launder genuine server faults
+/// (connection loss, serialization failure, an unrelated `P0001`) into caller refusals.
+fn classify_data_artifact_sql_error(e: sqlx::Error) -> anyhow::Error {
+    if let sqlx::Error::Database(db) = &e {
+        if db.code().as_deref() == Some("P0001") && db.message().starts_with("data_artifact_") {
+            return anyhow::Error::new(crate::writes::DataArtifactRefusal {
+                message: db.message().to_string(),
+            });
+        }
+    }
+    e.into()
+}
+
 pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Result<Fired> {
     fire_with(conn, action, EventContext::default()).await
 }
@@ -1503,10 +1520,15 @@ pub async fn fire_with(
                             .map(|(path, msg)| format!("{path}: {msg}"))
                             .collect::<Vec<_>>()
                             .join("; ");
-                        anyhow::bail!(
-                            "data_artifact_commit: content does not conform to the enforcing \
-                             shape in force for this family — {detail}"
-                        );
+                        // TYPED, not a bare bail: this is a refusal the caller can satisfy, and
+                        // the surfaces must render the violations instead of the 500-class
+                        // bridge. The message names every violating location and reason.
+                        return Err(anyhow::Error::new(crate::writes::DataArtifactRefusal {
+                            message: format!(
+                                "data_artifact_commit: content does not conform to the enforcing \
+                                 shape in force for this family — {detail}"
+                            ),
+                        }));
                     } else {
                         (payloads::ShapeState::DeclaredNotSatisfied, Some(errors))
                     }
@@ -1538,6 +1560,16 @@ pub async fn fire_with(
                 wire.as_object_mut()
                     .context("artifact payload is not an object")?
                     .remove("kind_owner");
+            } else {
+                // An EXPLICIT namespace must reach the wrapper the same way — top-level
+                // `kind_owner_table`/`kind_owner_id`, the keys its defaulting arm and projector
+                // read. `ko_table`/`ko_id` above already resolved the same pair (for the
+                // shape-in-force lookup), so reuse them rather than re-derive.
+                let obj = wire
+                    .as_object_mut()
+                    .context("artifact payload is not an object")?;
+                obj.insert("kind_owner_table".to_string(), serde_json::json!(ko_table));
+                obj.insert("kind_owner_id".to_string(), serde_json::json!(ko_id));
             }
 
             // The bytes ride their OWN argument, exactly as `resource_create(p_payload, p_content, …)`
@@ -1555,7 +1587,8 @@ pub async fn fire_with(
                 ctx_corr,
             )
             .fetch_one(&mut *conn)
-            .await?
+            .await
+            .map_err(classify_data_artifact_sql_error)?
             .context("data_artifact_commit returned null")?;
             let artifact_uuid = ids.first().copied().ok_or_else(|| {
                 anyhow::anyhow!("data_artifact_commit returned an empty id array")
@@ -1652,13 +1685,34 @@ pub async fn fire_with(
             wire.as_object_mut()
                 .context("shape payload is not an object")?
                 .insert("home_anchor_id".to_string(), serde_json::json!(home.id));
-            if kind_owner.is_none() {
-                // Let the wrapper's default win. Serializing `KindOwner` unconditionally would put
-                // a nil profile id on the wire and the wrapper would honour it as an explicit
-                // choice — a silently wrong namespace, the same hazard DataArtifactCommit guards.
-                wire.as_object_mut()
-                    .context("shape payload is not an object")?
-                    .remove("kind_owner");
+            match kind_owner {
+                None => {
+                    // Let the wrapper's default win. Serializing `KindOwner` unconditionally would put
+                    // a nil profile id on the wire and the wrapper would honour it as an explicit
+                    // choice — a silently wrong namespace, the same hazard DataArtifactCommit guards.
+                    wire.as_object_mut()
+                        .context("shape payload is not an object")?
+                        .remove("kind_owner");
+                }
+                Some(ko) => {
+                    // An EXPLICIT namespace must reach the wrapper's defaulting arm, which reads the
+                    // top-level `kind_owner_table`/`kind_owner_id` keys — the same flattened form
+                    // `home_anchor` takes above. The typed enum alone serializes under `kind_owner`
+                    // with variant-named keys the wrapper never reads, so leaving this flatten out
+                    // silently drops the caller's choice back into the default arm: an empty context
+                    // refuses, and a populated one is qualified with a namespace nobody named.
+                    let obj = wire
+                        .as_object_mut()
+                        .context("shape payload is not an object")?;
+                    obj.insert(
+                        "kind_owner_table".to_string(),
+                        serde_json::json!(ko.owner_table()),
+                    );
+                    obj.insert(
+                        "kind_owner_id".to_string(),
+                        serde_json::json!(ko.owner_id()),
+                    );
+                }
             }
             // shape_version is a placeholder until the wrapper resolves the chain depth; remove it
             // so the wrapper's computed value is the only one written to the ledger.
@@ -1675,7 +1729,8 @@ pub async fn fire_with(
                 ctx_corr,
             )
             .fetch_one(&mut *conn)
-            .await?
+            .await
+            .map_err(classify_data_artifact_sql_error)?
             .context("data_artifact_shape_declare returned null")?;
             Ok(Fired::Shape(
                 ids.first().copied().map(ShapeId::from).ok_or_else(|| {

@@ -23,6 +23,22 @@ pub const FORBIDDEN_DETAIL_CODE: &str = "FORBIDDEN_DETAIL";
 /// `[decided — 2026-08-13, Pete]` The spec (§B) authorized "its own code" and named no string.
 pub const PLAN_REFUSED_CODE: &str = "PLAN_REFUSED";
 
+/// The wire `error.code` a declined data-artifact write travels under — a `400` carrying the
+/// refusal's own words: the SQL wrapper's vocabulary (a missing namespace, an unrecognized
+/// enforcement term) or the enforcing-shape verdict's per-violation detail.
+///
+/// **A code of its own rather than `BAD_REQUEST`** — for the same reason as
+/// [`PLAN_REFUSED_CODE`]: the client branches on the code to render the refusal bare and
+/// typed, and reusing the generic code would force a message-text heuristic. The refusal is
+/// a well-formed request the system says no to; the internal-error class is for server
+/// faults, and mapping the former onto the latter is the laundering this code exists to
+/// make un-necessary.
+///
+/// Spelled here for the same reason as its siblings — the producer (`temper-services`'
+/// `IntoResponse`) and the consumer (`temper-client`'s status mapper) name one constant
+/// rather than two literals nothing checks.
+pub const DATA_ARTIFACT_REFUSAL_CODE: &str = "DATA_ARTIFACT_REFUSAL";
+
 /// Details from a system access gate rejection (CLI error rendering).
 ///
 /// Distinct from `types::access_gate::SystemAccessDetails` which carries
@@ -101,6 +117,15 @@ pub enum TemperError {
     #[error("{0}")]
     ContentIntegrity(String),
 
+    /// A data-artifact write the system declined for reasons the caller can act on — the
+    /// SQL wrapper's refusal vocabulary or the enforcing-shape verdict's per-violation
+    /// detail. Travels the wire under [`DATA_ARTIFACT_REFUSAL_CODE`] so a client
+    /// discriminates it by code, never by sniffing the message. 400 on HTTP: a
+    /// well-formed request the system says no to — the internal-error class is for
+    /// server faults, and the two must not blur.
+    #[error("{0}")]
+    DataArtifactRefusal(String),
+
     #[error("Forbidden")]
     Forbidden,
 
@@ -165,6 +190,7 @@ impl TemperError {
             Self::BadRequest(_) => "bad-request",
             Self::Conflict(_) => "conflict",
             Self::ContentIntegrity(_) => "content-integrity",
+            Self::DataArtifactRefusal(_) => DATA_ARTIFACT_REFUSAL_CODE,
             Self::Forbidden => "forbidden",
             Self::ForbiddenDetail(_) => FORBIDDEN_DETAIL_CODE,
             Self::Unauthorized(_) => "unauthorized",

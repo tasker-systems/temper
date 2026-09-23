@@ -220,6 +220,9 @@ pub async fn commit_artifact(
             temper_core::error::TemperError::BadRequest(msg) => {
                 rmcp::ErrorData::invalid_params(msg, None)
             }
+            temper_core::error::TemperError::DataArtifactRefusal(msg) => {
+                rmcp::ErrorData::invalid_params(msg, None)
+            }
             other => {
                 rmcp::ErrorData::internal_error(format!("Failed to commit artifact: {other}"), None)
             }

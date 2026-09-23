@@ -23,6 +23,32 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.2 — unreleased
+- **The data-artifact refusal surface — declined writes travel as typed 400s, explicit `kind_owner` reaches the SQL layer, CLI `--kind-owner`**
+  A data-artifact write the system declines for reasons the caller can act on — the shape
+  registry's SQL refusals and the enforcing-shape commit verdict — was mapped onto the
+  internal-error class, so the refusal's vocabulary never reached any caller: HTTP answered
+  500 with the generic body, and the MCP commit tool spliced raw database text into an
+  internal error. Those writes now travel as `400` under a new wire code,
+  `DATA_ARTIFACT_REFUSAL`, carrying the refusal's own words; `temper-client` parses the code
+  into a typed error (rendered bare at the CLI), and the MCP tools render it as a caller
+  error. Alongside, an explicitly named `kind_owner` was silently dropped before the SQL
+  defaulting arm on both the shape-declare and artifact-commit wires — the SQL read
+  flattened keys the Rust layer never wrote — so an empty context was undeclarable with an
+  explicit owner; the flatten now rides both wires. The CLI gains `--kind-owner`
+  (`kb_profiles:<uuid>` | `kb_teams:<uuid>`) on `data-artifact commit` and `schema declare`,
+  the parameter the other two doors already accepted. Who observes: callers of the
+  data-artifact write routes — a refusal that was an opaque 500 now arrives as a 400 naming
+  what failed (an old temper-client still sees the text, under its generic non-2xx
+  rendering); a caller naming an explicit namespace has it honored instead of silently
+  defaulted; a CLI user can declare against an empty context. Genuine server faults on these
+  paths still answer 500 — classification keys on the refusal's SQLSTATE + message prefix
+  and the typed substrate error, never on the envelope. No route, field, or schema shape
+  moves; openapi.json and the ts-rs trees are static.
+pr: self
+classes: additive, behavioral
+surfaces: http, mcp, cli-stdout, clients
+status: signal-only
+
 - **The in-process door — temper-client transport, audience-acceptance parity, surface-through-the-door attribution (one-seam goal, beat G1)**
   The MCP door's migration onto the API's own execution path begins: temper-client
   gains an in-process transport (`Router::oneshot`, no socket) whose requests carry

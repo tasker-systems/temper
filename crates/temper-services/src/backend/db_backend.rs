@@ -67,10 +67,14 @@ fn api_err(e: impl std::fmt::Display) -> TemperError {
 }
 
 /// Map a substrate write error, TYPING the addressable refusals before the generic
-/// Display bridge: a folded target is `Gone` (410 — the row persists as history), an absent
-/// block or a refused facet retraction `NotFound` (404) — never the 500-class `Api` the
-/// plain bridge produced. Every other substrate error is unchanged.
+/// Display bridge: a data-artifact refusal carries its own words (400 under
+/// `DATA_ARTIFACT_REFUSAL_CODE` — the wrapper's vocabulary, not the 500 class), a folded
+/// target is `Gone` (410 — the row persists as history), an absent block or a refused
+/// facet retraction `NotFound` (404). Every other substrate error is unchanged.
 fn write_err(e: anyhow::Error) -> TemperError {
+    if let Some(r) = e.downcast_ref::<writes::DataArtifactRefusal>() {
+        return TemperError::DataArtifactRefusal(r.message.clone());
+    }
     match e.downcast_ref::<writes::BlockAddressError>() {
         Some(writes::BlockAddressError::Folded { .. }) => TemperError::Gone(e.to_string()),
         Some(writes::BlockAddressError::NotInResource { .. }) => {
@@ -2700,7 +2704,7 @@ impl Backend for DbBackend {
             act_ctx,
         )
         .await
-        .map_err(api_err)?;
+        .map_err(write_err)?;
         // Read back the committed artifact as an ArtifactView for the response.
         let view =
             crate::backend::substrate_read::get_artifact(&self.pool, self.profile_id, artifact_id)

@@ -91,6 +91,19 @@ pub enum ClientError {
     #[error("content integrity check failed: {message}")]
     ContentIntegrity { message: String },
 
+    /// A data-artifact write the system declined for reasons the caller can act on — the
+    /// SQL wrapper's refusal vocabulary (a missing namespace, an unrecognized enforcement
+    /// term) or the enforcing-shape verdict's per-violation detail. A `400` from the
+    /// data-artifact write routes, deliberately **not** routed through [`Self::Server`]:
+    /// before this variant the refusal surfaced as `Server { status: 500 }` with the
+    /// generic internal body — a caller fault reported as a server fault, and the refusal
+    /// teaching nothing. Discriminated by the wire `code` being
+    /// [`temper_core::error::DATA_ARTIFACT_REFUSAL_CODE`], exactly as the 403 and 422 arms
+    /// discriminate theirs — never by sniffing the message. Renders bare: the refusal's
+    /// own words are the whole message.
+    #[error("{message}")]
+    DataArtifactRefusal { message: String },
+
     #[error("rate limited — retry after {retry_after:?}")]
     RateLimited { retry_after: Duration },
 

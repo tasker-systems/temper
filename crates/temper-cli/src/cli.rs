@@ -987,6 +987,10 @@ pub enum DataArtifactAction {
         /// The bare family name (e.g. `"measurement"`)
         #[arg(long)]
         kind: String,
+        /// Namespace override for the family name: `kb_profiles:<uuid>` or
+        /// `kb_teams:<uuid>`. Omit to let the server default it from the resource's home.
+        #[arg(long)]
+        kind_owner: Option<String>,
         /// Selection intent: `"current"`, `"member"`, or `"pinned"`
         #[arg(long)]
         intent: String,
@@ -1038,6 +1042,11 @@ pub enum SchemaAction {
         /// The bare family name (e.g. `"measurement"`)
         #[arg(long)]
         kind: String,
+        /// Namespace override for the family name: `kb_profiles:<uuid>` or
+        /// `kb_teams:<uuid>`. Omit to let the server default it from the home — which
+        /// refuses on an empty context (no homed resource to default from).
+        #[arg(long)]
+        kind_owner: Option<String>,
         /// Enforcement mode: `advisory` (default — non-conforming commits succeed and are
         /// recorded) or `enforcing` (non-conforming commits are refused)
         #[arg(long, value_enum, default_value_t = CliEnforcementMode::Advisory)]

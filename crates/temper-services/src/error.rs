@@ -63,6 +63,14 @@ pub enum ApiError {
     /// are wrong and `block_append` refuses to overwrite a seq, so the caller must discard + re-upload.
     #[error("Content integrity check failed: {0}")]
     ContentIntegrity(String),
+    /// A data-artifact write the system declined for reasons the caller can act on — the SQL
+    /// wrapper's refusal vocabulary or the enforcing-shape verdict's per-violation detail.
+    /// 400 under [`temper_core::error::DATA_ARTIFACT_REFUSAL_CODE`]: the client discriminates
+    /// by code, never by sniffing the message (the rule [`Self::PlanRefused`] and
+    /// [`Self::ContentIntegrity`] already follow). The producer is the substrate's typed
+    /// `DataArtifactRefusal`, downcast at the write seams — never a 500 envelope.
+    #[error("{0}")]
+    DataArtifactRefusal(String),
     /// A request exceeding a chosen rate bound (the rate-limit seam,
     /// `crate::rate_limit`). This is the refusal face's *"a well-formed request the
     /// system says no to, not an error"*: a 429 with the house structured body, not a
@@ -188,6 +196,10 @@ impl IntoResponse for ApiError {
             ApiError::ContentIntegrity(_) => {
                 (StatusCode::UNPROCESSABLE_ENTITY, "CONTENT_INTEGRITY")
             }
+            ApiError::DataArtifactRefusal(_) => (
+                StatusCode::BAD_REQUEST,
+                temper_core::error::DATA_ARTIFACT_REFUSAL_CODE,
+            ),
             ApiError::TooManyRequests { .. } => {
                 (StatusCode::TOO_MANY_REQUESTS, "TOO_MANY_REQUESTS")
             }
@@ -237,6 +249,9 @@ impl IntoResponse for ApiError {
             }
             ApiError::BadRequest(_) => {
                 tracing::warn!(status_code, error_code = code, message = %bounded(&message), "bad request");
+            }
+            ApiError::DataArtifactRefusal(_) => {
+                tracing::warn!(status_code, error_code = code, message = %bounded(&message), "data artifact refused");
             }
             ApiError::Gone(_) => {
                 tracing::debug!(status_code, error_code = code, message = %bounded(&message), "gone (folded address)");
@@ -368,6 +383,7 @@ impl From<ApiError> for temper_core::error::TemperError {
             ),
             ApiError::Conflict(s) => TemperError::Conflict(s),
             ApiError::ContentIntegrity(s) => TemperError::ContentIntegrity(s),
+            ApiError::DataArtifactRefusal(s) => TemperError::DataArtifactRefusal(s),
             // Degrades to BadRequest text rather than earning a `TemperError` arm of its
             // own — the CLI renders errors as text, has no status to preserve, and the
             // retry value is exactly what the caller needs next, so it rides along. Same
@@ -405,6 +421,7 @@ impl From<temper_core::error::TemperError> for ApiError {
             TemperError::BadRequest(s) => ApiError::BadRequest(s),
             TemperError::Conflict(s) => ApiError::Conflict(s),
             TemperError::ContentIntegrity(s) => ApiError::ContentIntegrity(s),
+            TemperError::DataArtifactRefusal(s) => ApiError::DataArtifactRefusal(s),
             TemperError::Api(s) => ApiError::Internal(s),
             TemperError::SystemAccessRequired(details) => {
                 ApiError::SystemAccessRequired {
