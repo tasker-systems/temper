@@ -512,11 +512,12 @@ jobs:
         run: bash .github/scripts/wire-class-crosscheck.sh
 
       # The pinned-contract gate (2026-09-16): the committed openapi.json stays inside
-      # the current pinned minor (schemas/versions/<M.m>/) — additive-only within a pin,
-      # so a client built at the pin interoperates with every later patch. Where the
-      # cross-check above makes a break SIGNALED, this makes it AVOIDABLE: a moved
-      # verdict is the M class and discharges through the batching window with the next
-      # pin cut in the release PR. Needs only jq (preinstalled on the runner), so it
+      # the current pinned minor (schemas/versions/<M.m>/) — additive-only within the
+      # era, so a client built at the pin interoperates with every later release of the
+      # era. Where the cross-check above makes a break SIGNALED, this makes it
+      # AVOIDABLE: a moved verdict is a shape break, which converts to the deprecation
+      # path or waits for the retirement release train — the PR that moves M cuts the
+      # next pin. Needs only jq (preinstalled on the runner), so it
       # lives in this job; its harness runs below.
       - name: The committed contract stays inside its pinned minor (additive-only within a pin)
         run: bash .github/scripts/check-openapi-pin.sh

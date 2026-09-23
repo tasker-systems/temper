@@ -130,18 +130,21 @@ if [ "$rc" -ne 0 ] \
   ok "movement alongside growth: the fail names both, only the movement is red"
 else bad "movement alongside growth: the fail names both, only the movement is red" "exit=$rc" "$out"; fi
 
-# ── 7. Window-branch reality: the actual pin vs a window-shaped head — the gate is the M valve ──
+# ── 7. Era routing: the actual pin vs a shape-breaking head — the gate names the two routes ────
 # The founding movement (score leaving `required` on a survivor, the field going
-# absent-able) must read as pin-breaking, and the failure must carry the discharge
-# instruction (the window, the M bump, the next pin).
+# absent-able) must read as pin-breaking, and the failure must carry the era
+# instruction (D-C2): convert to the deprecation path, or wait for the retirement
+# release train.
 reset_fixtures
 jq -S '.paths["/api/blobs/{id}"].get.responses["200"].content["application/json"].schema.required = []' "$EMIT" > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"
 out="$(run_gate)"; rc=$?
 if [ "$rc" -ne 0 ] \
     && printf '%s' "$out" | grep -q 'path changed: /api/blobs/{id}' \
-    && printf '%s' "$out" | grep -q 'batching window'; then
-  ok "an absence-introducing movement fails, naming the path, with the window-discharge instruction"
-else bad "an absence-introducing movement fails, naming the path, with the window-discharge instruction" "exit=$rc" "$out"; fi
+    && printf '%s' "$out" | grep -q 'shape break' \
+    && printf '%s' "$out" | grep -q 'deprecation path' \
+    && printf '%s' "$out" | grep -q 'retirement release train'; then
+  ok "an absence-introducing movement fails, naming the path, with the convert-or-wait instruction"
+else bad "an absence-introducing movement fails, naming the path, with the convert-or-wait instruction" "exit=$rc" "$out"; fi
 
 # ── 8. SELECTION — the newest pin ≤ VERSION's minor is current ──────────────────────────────────
 reset_fixtures

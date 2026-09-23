@@ -1,7 +1,9 @@
 # Release-verdict register
 
 The durable home of the declared-class gate (shared semver policy, D-S4 — spec of record:
-`temper-artifacts/specs/2026-09-09-shared-semver-policy-design.md`, §4.1). Every wire-touching PR
+`temper-artifacts/specs/2026-09-09-shared-semver-policy-design.md`, §4.1, as amended by the
+compat-deprecation regime,
+`temper-artifacts/specs/2026-09-22-compat-semver-policy-amendment-design.md`). Every wire-touching PR
 lands its declaration row here, in the same PR. The release checklist consults this register
 before any release: a release whose surface class has an open gated entry waits.
 
@@ -11,6 +13,14 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 `shape-breaking`, `behavioral` · `surfaces:` a subset of `http`, `mcp`, `cli-stdout`, `clients`,
 `schema`, `internal` · `status:` one of `open`, `signal-only`, `blocked:<release-class>`,
 `satisfied`.
+
+Routing (D-C2): a `shape-breaking` row below the era level names its routing by adding
+`retirement-train` to `classes:` — the movement either converts to the deprecation path (re-declare
+the row `additive` + `behavioral`; the re-declaration is the record, so `converted` needs no token)
+or waits for the retirement release train. A bare `shape-breaking` row fails the declared-class
+gate on a main-bound PR. Deprecation rows (the D-C3 records) carry the retirement horizon — the
+era release the record names. Historical and pre-policy rows read as history: only new rows carry
+the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.2 — unreleased
 - **First family migration — the resources family executes through the in-process door (one-seam goal, beat G3a)**
