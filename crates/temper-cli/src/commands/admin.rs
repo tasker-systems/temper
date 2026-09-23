@@ -132,6 +132,23 @@ pub async fn access_remote(
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
             (id, "reactivated")
         }
+        // The reconcile verb takes no profile and answers with rows, so it reports for itself
+        // rather than flowing into the shared one-line tail below.
+        AdminAccessAction::ReconcileAutoJoin => {
+            let rows = admin
+                .reconcile_auto_join()
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            if rows.is_empty() {
+                println!("auto-join rosters converged — nothing to add");
+            } else {
+                for row in &rows {
+                    println!("{} {}", row.team_slug, row.profile_handle);
+                }
+                println!("{} pair(s) added", rows.len());
+            }
+            return Ok(());
+        }
     };
 
     println!("{profile_id} {verb}");

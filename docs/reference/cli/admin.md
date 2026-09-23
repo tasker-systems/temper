@@ -99,11 +99,12 @@ Admit, revoke, deactivate, or reactivate a principal's system access
 Usage: temper admin access [OPTIONS] <COMMAND>
 
 Commands:
-  approve     Admit a principal directly (legal from denied, revoked, or requested)
-  revoke      Revoke a principal's admission (legal only from approved)
-  deactivate  Deactivate a principal (legal from any live state)
-  reactivate  Reactivate a deactivated principal, restoring its prior standing
-  help        Print this message or the help of the given subcommand(s)
+  approve              Admit a principal directly (legal from denied, revoked, or requested)
+  revoke               Revoke a principal's admission (legal only from approved)
+  deactivate           Deactivate a principal (legal from any live state)
+  reactivate           Reactivate a deactivated principal, restoring its prior standing
+  reconcile-auto-join  Converge every auto-join team's roster to the standing-approved population
+  help                 Print this message or the help of the given subcommand(s)
 
 Options:
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
@@ -184,6 +185,32 @@ Options:
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
       --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
   -h, --help               Print help
+```
+
+#### `temper admin access reconcile-auto-join`
+
+```text
+Converge every auto-join team's roster to the standing-approved population
+
+Repairs an instance that drifted while enrollment lived only on the request-review door: profiles approved out-of-band were absent from the `everyone` pool. Prints one line per (team, profile) pair added; a converged instance reconciles to nothing.
+
+Usage: temper admin access reconcile-auto-join [OPTIONS]
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ### `temper admin requests`

@@ -1960,6 +1960,12 @@ pub enum AdminAccessAction {
         /// Profile ID (UUID) to reactivate
         profile: String,
     },
+    /// Converge every auto-join team's roster to the standing-approved population
+    ///
+    /// Repairs an instance that drifted while enrollment lived only on the request-review
+    /// door: profiles approved out-of-band were absent from the `everyone` pool. Prints one
+    /// line per (team, profile) pair added; a converged instance reconciles to nothing.
+    ReconcileAutoJoin,
 }
 
 #[derive(Subcommand)]

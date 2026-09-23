@@ -270,3 +270,19 @@ pub struct QueueCount {
     /// TypeScript as `bigint` and does not survive `JSON.stringify`.
     pub count: i32,
 }
+
+/// One (team, profile) pair an auto-join reconciliation added — the answer of
+/// `POST /api/access/admin/auto-join/reconcile` and `temper admin access reconcile-auto-join`.
+/// The roster drift it repairs was silent (profiles approved through the direct-grant door
+/// never joined the `everyone` pool); the repair names what it did.
+///
+/// No `utoipa` derive, matching [`QueueCount`] and every other type on this operator-only
+/// surface: those routes are mounted with a plain `.route(...)` and stay off the documented
+/// contract on purpose.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoJoinReconcileRow {
+    pub team_slug: String,
+    pub profile_handle: String,
+}
