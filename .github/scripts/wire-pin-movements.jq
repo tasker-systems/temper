@@ -27,7 +27,7 @@ include "wire-shape-lib";
 + [ (($base[0].components.schemas // {}) | keys[]) as $s
     | if (($head[0].components.schemas // {}) | has($s)) | not then "schema removed: \($s)"
       elif broke_node($base[0].components.schemas[$s]; $head[0].components.schemas[$s];
-                      (if (input_only_names($base[0]) | index($s)) != null then "input" else "mixed" end))
+                      (if (tolerant_input_names | index($s)) != null then "input" else "mixed" end))
       then "schema changed: \($s)"
       else empty end ]
 + [ (($head[0].components.schemas // {}) | keys[]) as $s

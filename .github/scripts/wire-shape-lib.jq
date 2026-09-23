@@ -57,19 +57,25 @@
 #    in both skew directions ⇒ additive by §4's own definition. A born REQUIRED
 #    parameter stays moved: old clients never send it, and the new server refuses
 #    requests without it.
-# 2. STRING-ENUM MEMBER GROWTH (head a strict superset of base) in INPUT position.
-#    Input vocabulary only: old clients never send the new member; a new client that
-#    sends it to an old server is answered by parameter ignorance (class 1's
-#    argument). Output-side enum growth stays moved — a server that may now EMIT a
-#    new member can strand an old client's exhaustive parse, which is exactly the
-#    "stricter than an older server's emissions" direction the compat amendment
-#    forbids. "Input position" is proven, not assumed: an operation's
-#    `parameters`/`requestBody` subtrees are input by construction, and a component
-#    schema is input when it is reachable via `$ref` from those positions and from
-#    NO response position (see `input_only_names` — reachability is computed against
-#    the BASE contract, the one whose verdict is being reasoned about). Anything
-#    ambiguous — orphaned schemas, refs from both sides — stays "mixed" and fails
-#    closed.
+# 2. STRING-ENUM MEMBER GROWTH in INPUT position — and "growth" means a strict
+#    SET-superset: exact membership (`unique` + `index`), never jq `contains`,
+#    which on string arrays is SUBSTRING-containment and would certify a rename
+#    (`pending` → `pending_recheck`) as growth (found in review, the B1 beat's
+#    reviewer, D1). The two transport faces differ and both are honest: at a query
+#    parameter, an old server silently ignores the unknown value; in a request
+#    body, an old server refuses it with a clean 400 naming the vocabulary — a
+#    visible capability boundary, never silent corruption — and old clients (which
+#    never send the new member) are untouched either way. What is NOT tolerated is
+#    the OUTPUT direction: a server that may now EMIT a new member can strand an
+#    old client's exhaustive parse — exactly the "stricter than an older server's
+#    emissions" skew the compat amendment forbids. "Input position" is proven, not
+#    assumed: an operation's `parameters`/`requestBody` subtrees are input by
+#    construction, and a component schema qualifies only while it is input-only in
+#    BOTH contracts (see `tolerant_input_names` — reachability computed against the
+#    base alone would let a schema that gains a response ref in the same diff keep
+#    its tolerance while its enum values gain an output channel; found in review,
+#    D2). Anything ambiguous — orphaned schemas, dual reachability on either end —
+#    stays "mixed" and fails closed.
 #
 # THIS SLIDE DOES NOT TOUCH the amendment's named residue: a head-GAINED constraint
 # key (`enum`/`minLength`/`maximum`/`pattern`/`format`/`default`/`nullable` on an
@@ -113,13 +119,25 @@ def response_refs($doc):
 # Input-only schemas: referenced from input positions and from no response position.
 # Referenced from both sides → excluded (fail-closed: an enum that grows under a
 # schema a response can carry is treated as output). Unreferenced → excluded the
-# same way. Computed against $base[0] by both callers (verdict, and the pin gate's
+# same way. Computed per contract by both callers (verdict, and the pin gate's
 # movement naming) so the naming can never disagree with the verdict.
 def input_only_names($doc):
   ($doc.components.schemas // {}) as $schemas
   | schema_closure(input_refs($doc); $schemas) as $in
   | schema_closure(response_refs($doc); $schemas) as $out
   | [ $in[] | select((. | IN($out[])) | not) ];
+
+# The schemas the input-side tolerance may consider: input-only in BOTH contracts.
+# Computed against the BASE alone, a schema that BECOMES response-reachable in the
+# same diff would keep its input tolerance while its enum values gain an output
+# channel — the exact "stricter than an older server's emissions" direction the
+# compat amendment forbids, found in review (the B1 beat's reviewer, D2). The
+# intersection is the honest proof: the side must be unambiguous on both ends of
+# the movement being judged.
+def tolerant_input_names:
+  input_only_names($base[0]) as $in_b
+  | input_only_names($head[0]) as $in_h
+  | [ $in_b[] | select(. | IN($in_h[])) ];
 
 # The side a descent into key $k inherits: parameters and request bodies are input;
 # responses are output; everything else keeps the side it arrived with.
@@ -136,16 +154,19 @@ def param_key: "\(.in)|\(.name)";
 def broke_node($b; $h; $side):
   if ($b | type) != ($h | type) then true
   elif ($b | type) == "array" then
-    # The side-aware tolerance: input-side string-enum member GROWTH (head a strict
-    # superset of base) is the one tolerant length change. Everything else — a
-    # shrink, a same-length permutation, a born enum where none was, any non-string
-    # element diff — falls through to the fail-closed generic arm. The arm is an
-    # EARLY FALSE for the tolerant case only; it must never decide breaking, or it
-    # would reclassify identical and equal-length arrays as breaks.
+    # The side-aware tolerance: input-side string-enum member GROWTH — a strict
+    # SET-superset (exact membership, never `contains`' substring semantics) — is
+    # the one tolerant length change. Everything else — a shrink, a same-length
+    # permutation, a born enum where none was, any non-string element diff — falls
+    # through to the fail-closed generic arm. The arm is an EARLY FALSE for the
+    # tolerant case only; it must never decide breaking, or it would reclassify
+    # identical and equal-length arrays as breaks.
     if (($side == "input")
         and (($b | all(type == "string"))) and (($h | all(type == "string")))
-        and (($h | length) > ($b | length))
-        and (($h | contains($b)))) then false
+        and ( ($h | unique) as $hu
+              | ($b | unique) as $bu
+              | (($hu | length) > ($bu | length))
+              and ($bu | all(. as $m | ($hu | index($m)) != null)) )) then false
     else
       (($b | length) != ($h | length))
       or ([ range(0; ($b | length)) as $i | broke_node($b[$i]; $h[$i]; $side) ] | any)
@@ -219,7 +240,7 @@ def broke_node($b; $h; $side):
   end;
 
 def verdict:
-  input_only_names($base[0]) as $in_only
+  tolerant_input_names as $in_only
   | [ ($base[0].paths | keys[]) as $p
       | if ($head[0].paths | has($p)) | not then "moved"
         elif broke_node($base[0].paths[$p]; $head[0].paths[$p]; "mixed") then "moved"
