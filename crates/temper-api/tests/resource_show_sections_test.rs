@@ -149,7 +149,10 @@ async fn an_unknown_section_name_is_a_400_naming_the_vocabulary(pool: PgPool) {
     let resource_id = create_resource(&app, &token, context_id).await;
 
     let (status, body) = get_with_sections(&app, &token, &resource_id, Some("bogus")).await;
-    assert_eq!(status, 400, "an unknown section is the caller's 400: {body}");
+    assert_eq!(
+        status, 400,
+        "an unknown section is the caller's 400: {body}"
+    );
     let message = body["error"]["message"].as_str().unwrap_or_default();
     for valid in ["body", "open-meta", "edges", "embedding-status"] {
         assert!(
