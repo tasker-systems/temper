@@ -71,8 +71,7 @@ async fn mcp_service(pool: &sqlx::PgPool) -> TemperMcpService {
             // A REAL harness JWT, not a synthetic string: post-G3a the tool itself
             // presents this bearer at the in-process router, where its signature,
             // audience and issuer are validated like any client token.
-            common::generate_test_jwt("e2e-test-user", "e2e-test-user.com")
-                .to_string(),
+            common::generate_test_jwt("e2e-test-user", "e2e-test-user.com").to_string(),
         ))
         .extension(temper_services::auth::RawJwtClaims {
             sub: "e2e-test-user".to_string(),
