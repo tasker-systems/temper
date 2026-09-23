@@ -450,6 +450,27 @@ impl std::fmt::Display for BlockAddressError {
 
 impl std::error::Error for BlockAddressError {}
 
+/// A data-artifact write the system DECLINED for reasons the caller can act on: the SQL
+/// wrapper's `RAISE EXCEPTION` refusals (SQLSTATE `P0001` under a `data_artifact_` message
+/// prefix — classified in `events`, beside the two wrapper calls) and the Rust-side
+/// enforcing-shape verdict. Typed so the surfaces render the refusal's own words instead
+/// of the 500-class bridge — the mapping of these refusals onto internal errors is the
+/// defect this type exists to close, and the prefix key is what keeps a genuine server
+/// fault from ever carrying it. The refusal text is the deliverable: it is what teaches
+/// the caller the family's vocabulary (a-declined-act-teaches-its-vocabulary).
+#[derive(Debug)]
+pub struct DataArtifactRefusal {
+    pub message: String,
+}
+
+impl std::fmt::Display for DataArtifactRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for DataArtifactRefusal {}
+
 /// The retraction's refusal: the addressed property id is not a live row owned by the addressed
 /// edge. A missing id, a foreign owner, and an already-retracted one are ONE error — the message
 /// names only what the caller already sent, so no arm of the refusal discloses more than another
