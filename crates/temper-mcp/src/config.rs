@@ -33,7 +33,7 @@ pub struct OAuthStaticConfig {
 ///
 /// Deliberately carries **no audience**. An instance has exactly one, parsed into
 /// `temper_services::auth_config::AuthConfig` and read by both surfaces.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct McpConfig {
     /// Public base URL of this MCP server, e.g. `https://temperkb.io`.
     /// Used in WWW-Authenticate headers and oauth-protected-resource responses.
@@ -61,6 +61,26 @@ pub struct McpConfig {
     /// the same posture as the base URL. Never shared with any other secret; the API's
     /// boot gate refuses a collision.
     pub mcp_service_secret: Option<String>,
+}
+
+/// Hand-written, not derived: `mcp_service_secret` is a live credential, and a derived
+/// `Debug` prints it verbatim — one `{:?}` away from the platform log, where it is
+/// retained, indexed, and not revoked by fixing the code afterwards (the
+/// `audit-credential-debug` tripwire's exact case). Presence, never value: whether the
+/// credential is configured is the operational fact worth seeing.
+impl std::fmt::Debug for McpConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpConfig")
+            .field("mcp_base_url", &self.mcp_base_url)
+            .field("mcp_client_id", &self.mcp_client_id)
+            .field("oauth", &self.oauth)
+            .field("api_base_url", &self.api_base_url)
+            .field(
+                "mcp_service_secret",
+                &self.mcp_service_secret.as_ref().map(|_| "redacted"),
+            )
+            .finish()
+    }
 }
 
 impl McpConfig {
