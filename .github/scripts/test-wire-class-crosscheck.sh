@@ -421,13 +421,19 @@ if [ "$v" = "moved" ]; then
   ok "derivation: input-only enum member shrink computes as moved"
 else bad "derivation: input-only enum member shrink computes as moved" "verdict=$v"; fi
 
-# 15n — the D1 shape (found in review): a RENAME whose old member is a SUBSTRING of the
-# new one. jq `contains` is substring-containment on string arrays, so `pending` →
-# `pending_recheck` would read as superset growth and certify a change that sends every
-# old client's still-valid `pending` request to a 400. The tolerance is exact-set
-# membership: this must be moved.
-jq -S '.components.schemas.InOnly.properties.kind.enum = ["pending_recheck","failed","queued"]' "${WORK}/side_base.json" > "${WORK}/side_head.json"
-v="$(derive_with "${WORK}/side_base.json" "${WORK}/side_head.json")"
+# 15n — the D1 shape (found in review): a RENAME whose old member is a SUBSTRING of a
+# new one, the rest a true superset. jq `contains` is substring-containment on string
+# arrays, so `pending` → `pending_recheck` reads as superset growth and certifies a
+# change that sends every old client's still-valid `pending` request to a 4xx. The
+# tolerance is exact-set membership: this must be moved. BITE-PROVEN: under the
+# unfixed `contains` arm this exact fixture computes `grew` — the probe reddens the
+# regression it exists for.
+jq -S '.components.schemas.InOnly.properties.kind.enum = ["alpha","pending_recheck","failed"]' "${WORK}/side_base.json" > "${WORK}/side_head.json"
+# side_base's kind enum must carry the substring member for the shape to exist; the
+# mutation writes a sibling file — redirecting onto the fixture itself would truncate
+# it before jq reads it.
+jq -S '.components.schemas.InOnly.properties.kind.enum = ["alpha","pending"]' "${WORK}/side_base.json" > "${WORK}/side_base_15n.json"
+v="$(derive_with "${WORK}/side_base_15n.json" "${WORK}/side_head.json")"
 if [ "$v" = "moved" ]; then
   ok "derivation: an enum rename whose old member is a substring of the new computes as moved (D1)"
 else bad "derivation: an enum rename whose old member is a substring of the new computes as moved (D1)" "verdict=$v"; fi

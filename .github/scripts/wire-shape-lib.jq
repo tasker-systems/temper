@@ -63,8 +63,9 @@
 #    (`pending` → `pending_recheck`) as growth (found in review, the B1 beat's
 #    reviewer, D1). The two transport faces differ and both are honest: at a query
 #    parameter, an old server silently ignores the unknown value; in a request
-#    body, an old server refuses it with a clean 400 naming the vocabulary — a
-#    visible capability boundary, never silent corruption — and old clients (which
+#    body, an old server refuses it with a clean 4xx naming the vocabulary (422 on
+#    this stack — axum's serde unknown-variant rejection, message naming the enum) —
+#    a visible capability boundary, never silent corruption — and old clients (which
 #    never send the new member) are untouched either way. What is NOT tolerated is
 #    the OUTPUT direction: a server that may now EMIT a new member can strand an
 #    old client's exhaustive parse — exactly the "stricter than an older server's
