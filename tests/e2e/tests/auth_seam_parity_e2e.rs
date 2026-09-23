@@ -41,6 +41,7 @@ fn mcp_app_state(pool: &sqlx::PgPool) -> AppState {
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        mcp_service_secret: None,
         vercel_connect: None,
         slack_link: None,
         slack_mint_secret: None,

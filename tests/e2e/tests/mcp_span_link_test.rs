@@ -55,6 +55,7 @@ async fn mcp_links_an_authenticated_callers_trace_and_no_one_elses(pool: sqlx::P
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        mcp_service_secret: None,
         vercel_connect: None,
         slack_link: None,
         slack_mint_secret: None,

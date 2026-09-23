@@ -15,6 +15,25 @@ use serde::{Deserialize, Serialize};
 /// Surface is provenance, never authorization.
 pub const SURFACE_HEADER: &str = "X-Temper-Surface";
 
+/// The HTTP header the MCP relay sets to carry the calling surface across the hop
+/// (the network door's attribution carrier — design §D5, ruling 6).
+///
+/// The relay sets it to the fixed value `mcp` on every forwarded request. At the API the
+/// header is trusted ONLY beside a valid service credential (`X-Temper-Service-Credential`
+/// naming `TEMPER_MCP_SERVICE_SECRET`): a valid credential plus a value on the relay
+/// allowlist — exactly `{mcp}` — inserts a server-side [`RelayedSurface`] extension; any
+/// other combination leaves the carrier ignored and the act attributed `@web`. The
+/// single-value allowlist is load-bearing: a stolen service secret cannot generalize to
+/// `cli` attribution, because the carrier's vocabulary is one value.
+pub const RELAYED_SURFACE_HEADER: &str = "X-Temper-Relayed-Surface";
+
+/// The HTTP header carrying the MCP relay's service credential (design §D2, ruling 6).
+///
+/// A bare secret — `Authorization` is taken by the caller's own bearer. Validates relay
+/// trust at the API; authorizes nothing. The value is `TEMPER_MCP_SERVICE_SECRET`'s
+/// contents, compared constant-time, fail-closed semantics per the network-door design.
+pub const SERVICE_CREDENTIAL_HEADER: &str = "X-Temper-Service-Credential";
+
 /// The originating surface of a command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,6 +63,23 @@ pub enum Surface {
 /// The newtype exists so the extension map cannot confuse it with any other carried value.
 #[derive(Debug, Clone, Copy)]
 pub struct InProcessSurface(pub Surface);
+
+/// The surface of a request that arrived through the **network door** — the MCP relay's
+/// forwarded call (design §D5).
+///
+/// temper-api's relay-trust middleware inserts this into request extensions AFTER the service
+/// credential validates — the one condition under which the carrier (`X-Temper-Relayed-Surface`)
+/// is trusted. Like [`InProcessSurface`], it moves provenance and grants nothing: the request
+/// still passes the auth middleware on the caller's own bearer, and an absent or invalid
+/// credential simply means this extension is never inserted (the act degrades to `@web` —
+/// mis-attribution of a provably-relayed act is what §D7's degrade detector watches for, not a
+/// state this design permits by default). The extension cannot be written by a remote caller:
+/// only middleware holds the credential it takes to insert it.
+///
+/// Priority: second, below [`InProcessSurface`] and above the public `X-Temper-Surface`
+/// allowlist — resolve_surface owns the order.
+#[derive(Debug, Clone, Copy)]
+pub struct RelayedSurface(pub Surface);
 
 impl Surface {
     /// Every surface. `profile_service` provisions one `<handle>@<marker>` emitter entity per

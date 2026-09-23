@@ -25,6 +25,24 @@ pub enum ClientError {
     #[error("not authenticated — run `temper auth login`")]
     NotAuthenticated,
 
+    /// A `401` whose body carried the API's error envelope, preserved verbatim.
+    ///
+    /// The stock `NotAuthenticated` discards the body — the right shape for the CLI,
+    /// whose only remedy is re-login, and the shape that destroyed the information the
+    /// MCP relay's tool layer needs to speak the right refusal sentence post-edge
+    /// (deactivated vs machine-credential refusal vs expired-in-flight all arrive as
+    /// 401s with distinct bodies; see the network-door design §3). The variant is an
+    /// EXTEND, not a re-voice: its `Display` is **byte-identical** to
+    /// [`Self::NotAuthenticated`], so every caller that does not pattern-match — the
+    /// CLI above all — renders exactly what it rendered before. The relay matches on
+    /// the variant to read `.message`; nobody else needs to know it exists.
+    ///
+    /// A 401 without a parseable envelope body (the MCP edge's own plain-text
+    /// refusal, a platform 401) stays [`Self::NotAuthenticated`] — the preserved-body
+    /// channel exists only where the API actually spoke.
+    #[error("not authenticated — run `temper auth login`")]
+    UnauthorizedDetails { message: String },
+
     #[error("token expired")]
     TokenExpired,
 

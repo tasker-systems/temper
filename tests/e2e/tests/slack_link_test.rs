@@ -178,6 +178,7 @@ async fn setup_slack_app_with_mint_secret(
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: Some(REAP_SECRET.to_string()),
+        mcp_service_secret: None,
         vercel_connect: None,
         slack_link: Some(SlackLinkConfig {
             client_id: CLIENT_ID.to_string(),

@@ -51,6 +51,7 @@ async fn mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMcpServi
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        mcp_service_secret: None,
         vercel_connect: None,
         slack_link: None,
         slack_mint_secret: None,

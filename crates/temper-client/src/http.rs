@@ -54,7 +54,7 @@ const RETRY_BASE_DELAY_MS: u64 = 200;
 /// one only catches a genuinely dead connection.
 ///
 /// **It compounds with retry, and that is the cost being accepted.** A timeout
-/// raises `ClientError::Network`, which `should_retry` treats as transient, so a
+/// raises `ClientError::Network`, which `HttpClient::may_retry` treats as transient, so a
 /// retry-eligible request (GET/HEAD, or an explicitly idempotent one) can spend
 /// `MAX_ATTEMPTS` deadlines before failing — worst case moves from ~90s to ~225s.
 /// Non-idempotent POSTs are unaffected: they are not retried, so a composed
@@ -108,28 +108,46 @@ enum Transport {
     InProcess(axum::Router),
 }
 
-/// Whether a failed request is safe to retry.
-///
-/// A request is retry-eligible when it is a **safe** method (GET/HEAD — no
-/// server-side effects) *or* it is an **idempotent write** (`idempotent`): a
-/// write carrying a client-minted create idempotency key, which the server
-/// dedups on `(owner, key)` so a replay converges on the already-committed
-/// resource instead of minting a duplicate (issue #581, spike rung 3-C). An
-/// unkeyed write is never retried, because replaying it could double-apply.
-///
-/// Within the eligible set, retries fire only on transient failures: a transport
-/// error (the cold serverless function never answered) or an HTTP 5xx (e.g. a
-/// cold-start / cold-DB-resume 500, or the apex proxy's synthetic 502 when it
-/// could not reach the upstream). Every 4xx, auth, conflict, and rate-limit error
-/// is permanent and propagates immediately.
-fn should_retry(method: &reqwest::Method, err: &ClientError, idempotent: bool) -> bool {
-    let eligible = matches!(*method, reqwest::Method::GET | reqwest::Method::HEAD) || idempotent;
-    eligible
-        && match err {
-            ClientError::Network(_) => true,
-            ClientError::Server { status, .. } => *status >= 500,
-            _ => false,
-        }
+impl HttpClient {
+    /// Total attempts this client spends on one request, and whether one failure
+    /// is the transient class a retry may answer.
+    ///
+    /// Safe methods (GET/HEAD — no server-side effects) and idempotent writes (a
+    /// write carrying a client-minted create idempotency key, which the server
+    /// dedups on `(owner, key)` so a replay converges on the already-committed
+    /// resource instead of minting a duplicate — issue #581, spike rung 3-C) get
+    /// [`MAX_ATTEMPTS`]: they cannot double-apply by construction. An unkeyed
+    /// write gets the configured `non_idempotent_attempts` budget — stock `1`,
+    /// never replayed, because the replay could double-apply.
+    ///
+    /// Retries fire only on transient failures: a transport error (the cold
+    /// serverless function never answered) or an HTTP 5xx (e.g. a cold-start /
+    /// cold-DB-resume 500, or the apex proxy's synthetic 502 when it could not
+    /// reach the upstream). Every 4xx, auth, conflict, and rate-limit error is
+    /// permanent and propagates immediately.
+    fn may_retry(
+        &self,
+        method: &reqwest::Method,
+        err: &ClientError,
+        idempotent: bool,
+        attempt: u32,
+    ) -> bool {
+        let budget =
+            if matches!(*method, reqwest::Method::GET | reqwest::Method::HEAD) || idempotent {
+                MAX_ATTEMPTS
+            } else {
+                self.non_idempotent_attempts
+            };
+        attempt < budget
+            && matches!(
+                err,
+                ClientError::Network(_)
+                    | ClientError::Server {
+                        status: 500..=599,
+                        ..
+                    }
+            )
+    }
 }
 
 /// Wraps a `reqwest::Client` with base URL and optional device identity.
@@ -150,6 +168,28 @@ pub struct HttpClient {
     surface: Surface,
     token_override: Option<String>,
     token_store: Option<Arc<dyn TokenStore>>,
+    /// Constructor-level default headers, appended to every request this client
+    /// sends — applied in `apply_identity_headers`, so they ride the retry loop's
+    /// `try_clone` in one place rather than per attempt. The relay's service
+    /// credential and attribution carrier ride here (network-door design §D6):
+    /// constructor-level, because a per-call header would give every tool body a
+    /// second way to forget them.
+    ///
+    /// Deliberately NOT applied over the wire identity headers: `SURFACE_HEADER`
+    /// and the bearer are set beside them, and a default that collided with either
+    /// would silently win or lose by append order. The relay sets only headers
+    /// this client does not otherwise touch.
+    default_headers: reqwest::header::HeaderMap,
+    /// Total attempts for a NON-idempotent request (an unkeyed write). The stock
+    /// value is `1` — a write is never replayed, because the replay could
+    /// double-apply. The relay's client raises it to `2` (the ruled "1 retry on
+    /// non-idempotent tool acts", network-door design §2.1/§11.6): a cold-start
+    /// 500 on the API function is the hop's common transient, and the caller's own
+    /// redrive has exactly the same double-apply property, so the single retry adds
+    /// no new replay surface while sparing the tool caller a full round trip. The
+    /// budget for safe/idempotent-keyed requests stays [`MAX_ATTEMPTS`] — those
+    /// cannot double-apply by construction.
+    non_idempotent_attempts: u32,
 }
 
 impl fmt::Debug for HttpClient {
@@ -166,6 +206,8 @@ impl fmt::Debug for HttpClient {
             .field("surface", &self.surface)
             .field("has_token_override", &self.token_override.is_some())
             .field("has_token_store", &self.token_store.is_some())
+            .field("default_headers", &self.default_headers.len())
+            .field("non_idempotent_attempts", &self.non_idempotent_attempts)
             .finish()
     }
 }
@@ -254,6 +296,8 @@ impl HttpClient {
             surface,
             token_override: None,
             token_store,
+            default_headers: reqwest::header::HeaderMap::new(),
+            non_idempotent_attempts: 1,
         })
     }
 
@@ -288,6 +332,8 @@ impl HttpClient {
             surface,
             token_override: None,
             token_store,
+            default_headers: reqwest::header::HeaderMap::new(),
+            non_idempotent_attempts: 1,
         })
     }
 
@@ -327,6 +373,45 @@ impl HttpClient {
         })
     }
 
+    /// Attach constructor-level default headers — appended to every request this
+    /// client sends, both transports, riding retries in one place (see the field's
+    /// doc). Consuming-builder style over an already-constructed client, so the
+    /// relay composes it onto [`Self::with_token_override`] without a second
+    /// constructor arity.
+    ///
+    /// Header VALUES are `HeaderValues` built by the caller; injection into an
+    /// http request refuses non-visible bytes, so a malformed value surfaces at
+    /// the first request rather than here.
+    pub fn with_default_headers(mut self, headers: reqwest::header::HeaderMap) -> Self {
+        self.default_headers = headers;
+        self
+    }
+
+    /// Raise the retry budget for non-idempotent requests (see the field's doc).
+    /// `1` — the stock value — means a write is never replayed. Values below `1`
+    /// are clamped to `1`; there is no "negative retry" to express.
+    pub fn with_non_idempotent_attempts(mut self, attempts: u32) -> Self {
+        self.non_idempotent_attempts = attempts.max(1);
+        self
+    }
+
+    /// Replace the per-request timeout. The stock ceiling (`HTTP_REQUEST_TIMEOUT_SECS`,
+    /// 75s) is sized ABOVE the server's 60s function budget — the right shape for a
+    /// CLI that must observe what the server did. The relay inverts it: it runs
+    /// INSIDE that budget, so its deadline must sit strictly below the function's
+    /// (`45s`, ruled — network-door design §2.1/§11.6), or a hung API call dies as a
+    /// platform timeout instead of surfacing as the rmcp-shaped refusal the tool
+    /// layer maps.
+    ///
+    /// Rebuilds the underlying client: the reqwest timeout is build-time state.
+    pub fn with_request_timeout(self, timeout: Duration) -> Result<Self> {
+        let inner = Client::builder()
+            .timeout(timeout)
+            .build()
+            .map_err(|e| ClientError::Other(format!("failed to build reqwest client: {e}")))?;
+        Ok(Self { inner, ..self })
+    }
+
     /// Return the token to use for authenticated requests.
     ///
     /// Returns the token override if one was set at construction time;
@@ -362,14 +447,22 @@ impl HttpClient {
 
     /// Attach the client-identity headers: device id (when set) and the calling surface
     /// (always). Both ride every request, including GETs — they describe the caller, not
-    /// the operation.
+    /// the operation. Constructor-level default headers append last: they name the
+    /// caller's transport role (the relay's service credential and attribution
+    /// carrier), never collide with the identity headers by contract, and must ride
+    /// every request for the same reason the surface does.
     fn apply_identity_headers(&self, req: RequestBuilder) -> RequestBuilder {
         let req = req.header(SURFACE_HEADER, self.surface.marker());
-        if let Some(id) = &self.device_id {
+        let req = if let Some(id) = &self.device_id {
             req.header("X-Temper-Device-Id", id.as_str())
         } else {
             req
+        };
+        let mut req = req;
+        for (name, value) in &self.default_headers {
+            req = req.header(name, value);
         }
+        req
     }
 
     pub fn get(&self, path: &str) -> RequestBuilder {
@@ -537,7 +630,7 @@ impl HttpClient {
                 match send_attempt(self, this_attempt, admitted).await {
                     Ok(resp) => return Ok(resp),
                     Err(err) => {
-                        if attempt < MAX_ATTEMPTS && should_retry(method, &err, idempotent) {
+                        if self.may_retry(method, &err, idempotent, attempt) {
                             let delay = retry_delay(attempt);
                             tracing::warn!(
                                 attempt,
@@ -739,7 +832,7 @@ async fn finish_attempt(
     // A `4xx` is a CALLER error the caller is about to be told about by whoever handles it, so it
     // is a `debug` — kept, because a library embedder with no renderer still wants it. A `5xx` or a
     // transport failure is a genuine observation about the SERVER that nothing else reports, and
-    // stays at `warn`; it is also the class `should_retry` acts on.
+    // stays at `warn`; it is also the class `HttpClient::may_retry` acts on.
     if status.as_u16() < 500 {
         tracing::debug!(
             status = status.as_u16(),
@@ -793,7 +886,15 @@ pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
                 parse_error_field(body, "message").unwrap_or_else(|| "write refused".to_owned());
             ClientError::DataArtifactRefusal { message }
         }
-        401 => ClientError::NotAuthenticated,
+        401 => match parse_error_field(body, "message") {
+            // The API's error envelope carried a message — preserve it. The stock
+            // variant threw this away, which made post-edge refusal-kind parity
+            // impossible: the distinguishing information (deactivated vs
+            // machine-credential refusal vs expired-in-flight) lives only in the
+            // body. Keyed on the envelope shape, never on message text.
+            Some(message) => ClientError::UnauthorizedDetails { message },
+            None => ClientError::NotAuthenticated,
+        },
         403 => {
             if let Some(details) = parse_system_access_details(body) {
                 ClientError::SystemAccessRequired(Box::new(temper_core::error::CliAccessDetails {
@@ -926,6 +1027,48 @@ mod tests {
     fn test_401_maps_to_not_authenticated() {
         let err = map_status_to_error(status(401), "");
         assert!(matches!(err, ClientError::NotAuthenticated));
+    }
+
+    /// The body-preserving 401 variant (network-door design §3, ruling 2): an API
+    /// envelope body is preserved verbatim so the relay's tool layer can map the
+    /// post-edge refusal arms (deactivated / machine-gate / expired-in-flight) that
+    /// are indistinguishable by status alone.
+    #[test]
+    fn test_401_with_api_envelope_preserves_the_message() {
+        let body = r#"{"error":{"code":"UNAUTHORIZED","message":"account is deactivated"}}"#;
+        match map_status_to_error(status(401), body) {
+            ClientError::UnauthorizedDetails { message } => {
+                assert_eq!(message, "account is deactivated");
+            }
+            other => panic!("expected UnauthorizedDetails, got {other:?}"),
+        }
+    }
+
+    /// A 401 without the envelope — the MCP edge's own plain-text refusal, a
+    /// platform 401 — keeps the stock variant: the preserved-body channel exists
+    /// only where the API actually spoke.
+    #[test]
+    fn test_401_without_an_envelope_stays_not_authenticated() {
+        for body in ["", "Authentication required", "not json at all"] {
+            let err = map_status_to_error(status(401), body);
+            assert!(
+                matches!(err, ClientError::NotAuthenticated),
+                "body {body:?} must stay the stock variant"
+            );
+        }
+    }
+
+    /// The EXTEND's CLI-unchanged guarantee is structural: the new variant's
+    /// `Display` is byte-identical to the stock one, so a caller that does not
+    /// pattern-match — the CLI above all — renders what it always rendered.
+    #[test]
+    fn unauthorized_details_renders_exactly_as_not_authenticated() {
+        let stock = ClientError::NotAuthenticated.to_string();
+        let preserved = ClientError::UnauthorizedDetails {
+            message: "account is deactivated".to_owned(),
+        }
+        .to_string();
+        assert_eq!(stock, preserved);
     }
 
     #[test]
@@ -1258,110 +1401,128 @@ mod tests {
         }
     }
 
-    #[test]
-    fn should_retry_safe_methods_on_5xx() {
-        assert!(should_retry(&reqwest::Method::GET, &server_err(500), false));
-        assert!(should_retry(&reqwest::Method::GET, &server_err(503), false));
-        assert!(should_retry(
-            &reqwest::Method::HEAD,
-            &server_err(502),
-            false
-        ));
+    fn stock_client() -> HttpClient {
+        HttpClient::new("https://api.example.com", None, TEST_SURFACE, None)
+            .expect("https validates")
     }
 
     #[test]
-    fn should_not_retry_safe_methods_below_500() {
+    fn retries_safe_methods_on_5xx() {
+        let client = stock_client();
+        assert!(client.may_retry(&reqwest::Method::GET, &server_err(500), false, 1));
+        assert!(client.may_retry(&reqwest::Method::GET, &server_err(503), false, 2));
+        assert!(client.may_retry(&reqwest::Method::HEAD, &server_err(502), false, 1));
+        // And the safe-method budget is the stock MAX_ATTEMPTS, not one attempt.
+        assert!(!client.may_retry(&reqwest::Method::GET, &server_err(500), false, MAX_ATTEMPTS));
+    }
+
+    #[test]
+    fn does_not_retry_safe_methods_below_500() {
         // 422 is mapped to ClientError::Server but is a permanent client error.
-        assert!(!should_retry(
+        let client = stock_client();
+        assert!(!client.may_retry(
             &reqwest::Method::GET,
-            &server_err(422),
-            false
+            &ClientError::Server {
+                status: 422,
+                message: "boom".to_owned()
+            },
+            false,
+            1
         ));
     }
 
     #[test]
-    fn should_not_retry_safe_methods_on_permanent_errors() {
-        assert!(!should_retry(
+    fn does_not_retry_safe_methods_on_permanent_errors() {
+        let client = stock_client();
+        assert!(!client.may_retry(
             &reqwest::Method::GET,
             &ClientError::NotFound {
                 message: "x not found".to_owned()
             },
-            false
+            false,
+            1
         ));
-        assert!(!should_retry(
-            &reqwest::Method::GET,
-            &ClientError::Forbidden,
-            false
-        ));
-        assert!(!should_retry(
+        assert!(!client.may_retry(&reqwest::Method::GET, &ClientError::Forbidden, false, 1));
+        assert!(!client.may_retry(
             &reqwest::Method::GET,
             &ClientError::NotAuthenticated,
-            false
+            false,
+            1
         ));
-        assert!(!should_retry(
+        assert!(!client.may_retry(
             &reqwest::Method::GET,
             &ClientError::RateLimited {
                 retry_after: Duration::from_secs(1)
             },
-            false
+            false,
+            1
         ));
     }
 
     #[test]
-    fn should_not_retry_unkeyed_writes_even_on_5xx() {
-        // Retrying an UNKEYED write could duplicate a server-side effect.
-        assert!(!should_retry(
-            &reqwest::Method::POST,
-            &server_err(500),
-            false
-        ));
-        assert!(!should_retry(
-            &reqwest::Method::PATCH,
-            &server_err(503),
-            false
-        ));
-        assert!(!should_retry(
-            &reqwest::Method::PUT,
-            &server_err(500),
-            false
-        ));
-        assert!(!should_retry(
-            &reqwest::Method::DELETE,
-            &server_err(500),
-            false
-        ));
+    fn does_not_retry_unkeyed_writes_even_on_5xx() {
+        // Retrying an UNKEYED write could duplicate a server-side effect: the stock
+        // budget is one attempt, so a transient 5xx on a write propagates.
+        let client = stock_client();
+        assert!(!client.may_retry(&reqwest::Method::POST, &server_err(500), false, 1));
+        assert!(!client.may_retry(&reqwest::Method::PATCH, &server_err(503), false, 1));
+        assert!(!client.may_retry(&reqwest::Method::PUT, &server_err(500), false, 1));
+        assert!(!client.may_retry(&reqwest::Method::DELETE, &server_err(500), false, 1));
+    }
+
+    /// The relay's client (ruled: "1 retry on non-idempotent tool acts", network-door
+    /// design §2.1/§11.6) spends TWO attempts on an unkeyed write — and exactly two.
+    #[test]
+    fn the_relay_budget_retries_an_unkeyed_write_once_and_only_once() {
+        let relay = stock_client().with_non_idempotent_attempts(2);
+        assert!(relay.may_retry(&reqwest::Method::POST, &server_err(500), false, 1));
+        assert!(!relay.may_retry(&reqwest::Method::POST, &server_err(500), false, 2));
+        // The raised budget does not leak into the safe/keyed class: that stays MAX_ATTEMPTS.
+        assert!(relay.may_retry(&reqwest::Method::GET, &server_err(500), false, 2));
+        assert!(!relay.may_retry(&reqwest::Method::GET, &server_err(500), false, MAX_ATTEMPTS));
+        // And a permanent failure is permanent at any budget.
+        assert!(!relay.may_retry(&reqwest::Method::POST, &ClientError::Forbidden, false, 1));
     }
 
     #[test]
-    fn should_retry_keyed_writes_on_transient_failures() {
+    fn a_non_idempotent_budget_below_one_clamps_to_one() {
+        let clamped = stock_client().with_non_idempotent_attempts(0);
+        assert!(!clamped.may_retry(&reqwest::Method::POST, &server_err(500), false, 1));
+    }
+
+    #[test]
+    fn retries_keyed_writes_on_transient_failures() {
         // A keyed write (idempotent = true) is as retry-safe as a GET: the server dedups on
         // `(owner, key)`, so a replay converges instead of duplicating (issue #581, rung 3-C).
-        assert!(should_retry(&reqwest::Method::POST, &server_err(500), true));
-        assert!(should_retry(&reqwest::Method::POST, &server_err(502), true));
-        assert!(should_retry(&reqwest::Method::PUT, &server_err(503), true));
+        let client = stock_client();
+        assert!(client.may_retry(&reqwest::Method::POST, &server_err(500), true, 1));
+        assert!(client.may_retry(&reqwest::Method::POST, &server_err(502), true, 2));
+        assert!(client.may_retry(&reqwest::Method::PUT, &server_err(503), true, 1));
     }
 
     #[test]
-    fn should_not_retry_keyed_writes_on_permanent_errors() {
+    fn does_not_retry_keyed_writes_on_permanent_errors() {
         // Idempotency lifts the *method* ban, not the transient/permanent distinction: a keyed
         // write still does not retry a 4xx, a conflict, or a rate-limit.
-        assert!(!should_retry(
+        let client = stock_client();
+        assert!(!client.may_retry(
             &reqwest::Method::POST,
-            &server_err(422),
-            true
+            &ClientError::Server {
+                status: 422,
+                message: "boom".to_owned()
+            },
+            true,
+            1
         ));
-        assert!(!should_retry(
+        assert!(!client.may_retry(
             &reqwest::Method::POST,
             &ClientError::Conflict {
                 message: "already exists".to_owned()
             },
-            true
+            true,
+            1
         ));
-        assert!(!should_retry(
-            &reqwest::Method::POST,
-            &ClientError::Forbidden,
-            true
-        ));
+        assert!(!client.may_retry(&reqwest::Method::POST, &ClientError::Forbidden, true, 1));
     }
 
     #[test]
@@ -1436,6 +1597,55 @@ mod tests {
             resp.text().await.unwrap(),
             "GET /api/ping?x=1 mcp",
             "method, path+query, and the trusted surface extension must all survive the hop"
+        );
+    }
+
+    /// A router that echoes the value of one request header, so the assertion is
+    /// about what ARRIVED at the receiving end, not what was set client-side.
+    fn header_echo_router(header: &'static str) -> axum::Router {
+        axum::Router::new().fallback(axum::routing::any(move |req: axum::extract::Request| {
+            let value = req
+                .headers()
+                .get(header)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("<absent>")
+                .to_owned();
+            std::future::ready(value)
+        }))
+    }
+
+    /// Constructor-level default headers ride every request the client sends —
+    /// the relay's service credential and attribution carrier depend on this
+    /// (network-door design §D6).
+    #[tokio::test]
+    async fn default_headers_ride_the_request() {
+        let client = HttpClient::in_process_with_token_override(
+            header_echo_router("x-probe-header"),
+            Surface::Mcp,
+            "tok".to_owned(),
+        )
+        .expect("in-process client builds")
+        .with_default_headers(
+            [(
+                reqwest::header::HeaderName::from_static("x-probe-header"),
+                reqwest::header::HeaderValue::from_static("from-constructor"),
+            )]
+            .into_iter()
+            .collect::<reqwest::header::HeaderMap>(),
+        );
+        let resp = client
+            .send(
+                &reqwest::Method::POST,
+                "/api/anything",
+                client.post("/api/anything"),
+                Some("tok"),
+            )
+            .await
+            .expect("the router answers");
+        assert_eq!(
+            resp.text().await.unwrap(),
+            "from-constructor",
+            "the constructor-level header must arrive at the receiving end"
         );
     }
 

@@ -5,11 +5,12 @@ use std::env;
 
 /// The instance's whole configuration.
 ///
-/// `Debug` is hand-written to REDACT `internal_reconcile_secret`, `embed_dispatch_secret` and
-/// `slack_mint_secret` — the three plaintext shared secrets behind three separate signature gates,
-/// the last of which vends a token acting as any linked human. A derived `Debug` would print all
-/// three verbatim wherever an `ApiConfig` is formatted. This is the same reasoning already spelled
-/// out on [`SlackLinkConfig`] below ("would print it verbatim wherever this or the enclosing
+/// `Debug` is hand-written to REDACT `internal_reconcile_secret`, `embed_dispatch_secret`,
+/// `slack_mint_secret` and `mcp_service_secret` — the plaintext shared secrets behind the
+/// signature and relay-trust gates, the last of which is what lets a caller claim MCP
+/// provenance at the ledger. A derived `Debug` would print them verbatim wherever an
+/// `ApiConfig` is formatted. This is the same reasoning already spelled out on
+/// [`SlackLinkConfig`] below ("would print it verbatim wherever this or the enclosing
 /// `ApiConfig` is formatted") — the nested config got the treatment before its parent did.
 ///
 /// Redaction is PRESENCE-PRESERVING: each secret prints as `Some("redacted")` or `None`, because
@@ -35,6 +36,12 @@ pub struct ApiConfig {
     /// Shared secret gating the internal embed-dispatch drain endpoint (issue #299), called by the
     /// Vercel cron. `None` disables the endpoint (a deployment with no drain configured).
     pub embed_dispatch_secret: Option<String>,
+    /// Shared secret validating the MCP relay's forwarded calls (the network door's
+    /// service-to-service credential — design §D2, ruling 6). `None` is a quiet degrade at the
+    /// API: the attribution carrier is never trusted and direct callers are unaffected. Never
+    /// shared with any other secret — `check_secret_distinctness` refuses the boot on a
+    /// collision, because sharing would let every holder of the other key forge relay trust.
+    pub mcp_service_secret: Option<String>,
     /// Vercel Connect broker credentials. `None` when the four env vars are not all
     /// set — the deployment then has a `NullBroker` and mints fail clearly. Never
     /// hardcoded; a self-hosted operator sets their own.
@@ -205,6 +212,10 @@ impl std::fmt::Debug for ApiConfig {
                 "embed_dispatch_secret",
                 &self.embed_dispatch_secret.as_ref().map(|_| "redacted"),
             )
+            .field(
+                "mcp_service_secret",
+                &self.mcp_service_secret.as_ref().map(|_| "redacted"),
+            )
             .field("vercel_connect", &self.vercel_connect)
             .field("slack_link", &self.slack_link)
             .field(
@@ -284,6 +295,7 @@ impl ApiConfig {
             internal_reconcile_secret: lookup("INTERNAL_RECONCILE_SECRET")
                 .filter(|s| !s.is_empty()),
             embed_dispatch_secret: lookup("EMBED_DISPATCH_SECRET").filter(|s| !s.is_empty()),
+            mcp_service_secret: lookup("TEMPER_MCP_SERVICE_SECRET").filter(|s| !s.is_empty()),
             vercel_connect: parse_vercel_connect(&lookup),
             slack_link: parse_slack_link(&lookup),
             slack_mint_secret: lookup("SLACK_MINT_SECRET").filter(|s| !s.is_empty()),
@@ -524,13 +536,14 @@ fn parse_slack_link(lookup: impl Fn(&str) -> Option<String>) -> Option<SlackLink
 /// stored grant. And `openssl rand -base64 32` is the documented generator for the vault key
 /// (`parse_slack_link` above says so), which makes "generate once, paste everywhere" the exact
 /// operator error this guards.
-const SHARED_SECRET_VARS: [&str; 6] = [
+const SHARED_SECRET_VARS: [&str; 7] = [
     "INTERNAL_RECONCILE_SECRET",
     "EMBED_DISPATCH_SECRET",
     "SLACK_LINK_SECRET",
     "SLACK_MINT_SECRET",
     "BLOB_READ_WRITE_TOKEN",
     "SLACK_VAULT_ENC_KEY",
+    "TEMPER_MCP_SERVICE_SECRET",
 ];
 
 /// Refuse to boot when two shared secrets hold the same value.
