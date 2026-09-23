@@ -78,7 +78,12 @@ async fn mcp_service(pool: &sqlx::PgPool) -> TemperMcpService {
         // The MCP JWT middleware injects the raw bearer alongside the claims; the auth
         // seam needs it for the email ladder's /userinfo rung. Synthetic parts must
         // carry both or the service rejects the request as unwired.
-        .extension(temper_mcp::middleware::BearerToken("synthetic".to_string()))
+        // A REAL harness JWT, not a synthetic string: post-G3a the resources tools
+        // present this bearer at the in-process router, where its signature,
+        // audience and issuer are validated like any client token.
+        .extension(temper_mcp::middleware::BearerToken(
+            common::generate_test_jwt("e2e-test-user", "e2e-test-user@example.com").to_string(),
+        ))
         .extension(temper_services::auth::RawJwtClaims {
             sub: "e2e-test-user".to_string(),
             email: None,
