@@ -889,9 +889,17 @@ pub(crate) fn map_post_edge_auth(refusal: &ClientError) -> Option<rmcp::ErrorDat
     let ClientError::UnauthorizedDetails { message } = refusal else {
         return None;
     };
+    // The preserved body is the API's RENDERED 401 voice: `ApiError::Unauthorized`'s
+    // Display is "Unauthorized: {cause}" (temper-services/src/error.rs:29), and the
+    // body carries that Display verbatim. The arms below split on the CAUSE — the
+    // body's distinguishing text — so the prefix comes off first; matching the raw
+    // body never hit any arm and every refusal fell through to the catch-all, a
+    // deactivation speaking the machine-gate's framing (witnessed by
+    // `resources_wire_arms_test` against the real listener).
+    let cause = message.strip_prefix("Unauthorized: ").unwrap_or(message);
     let terminal =
         |msg: String| rmcp::ErrorData::new(rmcp::model::ErrorCode::INVALID_REQUEST, msg, None);
-    if message.starts_with("machine credential refused:") {
+    if cause.starts_with("machine credential refused:") {
         // Terminal, like the direct binding's `AuthzError::Refused` arm: the token is
         // structurally incoherent, so retrying changes nothing.
         Some(terminal(
@@ -899,12 +907,12 @@ pub(crate) fn map_post_edge_auth(refusal: &ClientError) -> Option<rmcp::ErrorDat
              client_credentials grant. This error is terminal and should not be retried."
                 .to_string(),
         ))
-    } else if message == "account is deactivated" {
+    } else if cause == "account is deactivated" {
         Some(terminal(
             "This account has been deactivated. This error is terminal and should not be retried."
                 .to_string(),
         ))
-    } else if message == "Invalid or expired token" {
+    } else if cause == "Invalid or expired token" {
         // The expired-in-flight face. The bearer verified at the edge but no longer
         // decodes at the API — its lifetime ended inside the hop. The remedy is
         // re-authentication, the same one the edge's 401 advertises via
@@ -915,9 +923,9 @@ pub(crate) fn map_post_edge_auth(refusal: &ClientError) -> Option<rmcp::ErrorDat
              flow will refresh it) and retry the call."
                 .to_string(),
         ))
-    } else if message == "Missing Authorization header"
-        || message == "Authorization header must use Bearer scheme"
-        || message == "Invalid Authorization header encoding"
+    } else if cause == "Missing Authorization header"
+        || cause == "Authorization header must use Bearer scheme"
+        || cause == "Invalid Authorization header encoding"
     {
         // The bearer-scheme faces: the edge verified A token, so these mean the relay's
         // re-issued credential was mangled in transit — an operator-visible fault
@@ -932,7 +940,7 @@ pub(crate) fn map_post_edge_auth(refusal: &ClientError) -> Option<rmcp::ErrorDat
         // (unregistered or revoked client_id — G3 Phase A's gate); the direct binding
         // framed it terminal, so the framing carries.
         Some(terminal(format!(
-            "{message} This error is terminal and should not be retried."
+            "{cause} This error is terminal and should not be retried."
         )))
     }
 }
