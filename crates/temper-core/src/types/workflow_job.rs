@@ -190,9 +190,15 @@ pub struct EmbedDispatchSummary {
 }
 
 /// Derived embedding-readiness of a resource (issue #299, Phase 4). Computed — never a stored column —
-/// from the resource's current chunks plus its embed-job state (design §8), surfaced on the MCP
-/// `EnrichedResource` so a caller can tell whether semantic (vector) search will find a just-created
-/// resource yet. FTS is always immediate; only the vector is eventually-consistent under async embed.
+/// from the resource's current chunks plus its embed-job state (design §8), surfaced on
+/// [`super::resource_view::ResourceView`] as the `embedding-status` section (B1: it rode the MCP
+/// response envelope before the section did) so a caller can tell whether semantic (vector) search
+/// will find a just-created resource yet. FTS is always immediate; only the vector is
+/// eventually-consistent under async embed.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "EmbeddingStatus.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EmbeddingStatus {

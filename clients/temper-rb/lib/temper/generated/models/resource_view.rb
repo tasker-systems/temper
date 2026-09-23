@@ -46,6 +46,9 @@ module Temper::Generated
 
     attr_accessor :doc_type_name
 
+    # Derived embedding-readiness — the `embedding-status` section.  Absent means **not requested**, never \"not embedded\": whenever the section was asked for, the value is `Some` and names one of [`EmbeddingStatus`]'s three states. It rides the view rather than a response envelope (B1) so the wire shape stays the one view: the standalone `GET /api/embed/status` read this field replaced could not be made oracle-free — gating it leaked readability through map presence, leaving it ungated leaked pipeline state past the gate — while a gated read carrying the field discloses nothing about any row the gate did not already admit.
+    attr_accessor :embedding_status
+
     # A `kb_resources.id` value.
     attr_accessor :id
 
@@ -116,6 +119,7 @@ module Temper::Generated
         :'context_slug' => :'context_slug',
         :'created' => :'created',
         :'doc_type_name' => :'doc_type_name',
+        :'embedding_status' => :'embedding_status',
         :'id' => :'id',
         :'ingest_state' => :'ingest_state',
         :'is_active' => :'is_active',
@@ -156,6 +160,7 @@ module Temper::Generated
         :'context_slug' => :'String',
         :'created' => :'Time',
         :'doc_type_name' => :'String',
+        :'embedding_status' => :'EmbeddingStatus',
         :'id' => :'String',
         :'ingest_state' => :'IngestState',
         :'is_active' => :'Boolean',
@@ -184,6 +189,7 @@ module Temper::Generated
         :'context_owner_ref',
         :'context_ref',
         :'context_slug',
+        :'embedding_status',
         :'ingest_state',
         :'kb_context_id',
         :'open_meta',
@@ -252,6 +258,10 @@ module Temper::Generated
         self.doc_type_name = attributes[:'doc_type_name']
       else
         self.doc_type_name = nil
+      end
+
+      if attributes.key?(:'embedding_status')
+        self.embedding_status = attributes[:'embedding_status']
       end
 
       if attributes.key?(:'id')
@@ -521,6 +531,7 @@ module Temper::Generated
           context_slug == o.context_slug &&
           created == o.created &&
           doc_type_name == o.doc_type_name &&
+          embedding_status == o.embedding_status &&
           id == o.id &&
           ingest_state == o.ingest_state &&
           is_active == o.is_active &&
@@ -545,7 +556,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [body_hash, body_storage, cogmap_id, cogmap_name, content, context_name, context_owner_ref, context_ref, context_slug, created, doc_type_name, id, ingest_state, is_active, kb_context_id, managed_meta, open_meta, origin_uri, originator_profile_id, owner_handle, owner_profile_id, ref, title, updated].hash
+      [body_hash, body_storage, cogmap_id, cogmap_name, content, context_name, context_owner_ref, context_ref, context_slug, created, doc_type_name, embedding_status, id, ingest_state, is_active, kb_context_id, managed_meta, open_meta, origin_uri, originator_profile_id, owner_handle, owner_profile_id, ref, title, updated].hash
     end
 
     # Builds the object from hash

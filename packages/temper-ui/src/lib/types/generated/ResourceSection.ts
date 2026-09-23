@@ -30,4 +30,4 @@
  * speak is supposed to carry the generation derives — so it now does. No route references it, so
  * `openapi.json` is unmoved.
  */
-export type ResourceSection = "body" | "open-meta" | "edges";
+export type ResourceSection = "body" | "open-meta" | "edges" | "embedding-status";

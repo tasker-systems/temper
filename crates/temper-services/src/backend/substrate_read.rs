@@ -45,6 +45,7 @@ use temper_core::types::invocation::{
 };
 use temper_core::types::provenance::BlockProvenanceRow;
 use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSet};
+use temper_core::types::workflow_job::EmbeddingStatus;
 use temper_substrate::readback;
 use temper_workflow::types::resource::{
     ContentResponse, ResourceFacets, ResourceSortField, SortOrder,
@@ -528,6 +529,13 @@ pub struct ResourceViewPage {
 /// this function's whole job, and splitting it would give `body` a second home for the sake of a
 /// loop that runs once. What keeps it honest is the door, not the loop.
 ///
+/// **`embedding-status` costs ONE statement for the whole page**, via
+/// `embed_service::embedding_status_batch` on the ids the gated identity read already returned —
+/// the section is why the MCP response envelope's second enrichment read (beat G3a's
+/// `GET /api/embed/status`) could come out (B1): the derivation rides the read that admitted the
+/// rows, so no id the caller was not already shown is ever probed. An id absent from the batch's
+/// answer defaults to `Ready`, the incumbent MCP behaviour for an unreported id.
+///
 /// `content: None` and `open_meta: None` mean **not requested**, never "empty": an empty body is
 /// `Some(String::new())` and an empty open tier is `Some({})`. Both distinctions survive the wire
 /// (`ResourceView`'s `body_absent_is_distinguishable_from_body_empty`). A view whose id the batch
@@ -558,6 +566,17 @@ async fn fill_sections(
         for view in views.iter_mut() {
             let open = by_id.remove(&view.id).map(|rb| rb.open).unwrap_or_default();
             view.open_meta = Some(serde_json::Value::Object(open));
+        }
+    }
+    if sections.contains(ResourceSection::EmbeddingStatus) {
+        let ids: Vec<Uuid> = views.iter().map(|view| Uuid::from(view.id)).collect();
+        let mut by_id = crate::services::embed_service::embedding_status_batch(pool, &ids).await?;
+        for view in views.iter_mut() {
+            view.embedding_status = Some(
+                by_id
+                    .remove(&Uuid::from(view.id))
+                    .unwrap_or(EmbeddingStatus::Ready),
+            );
         }
     }
     if sections.contains(ResourceSection::Body) {

@@ -61,6 +61,7 @@ export function makeRow(partial: Partial<ResourceView> = {}): ResourceView {
 		managed_meta: { ...MANAGED },
 		open_meta: null,
 		content: null,
+		embedding_status: null,
 		...partial,
 	};
 }

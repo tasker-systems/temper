@@ -1650,6 +1650,7 @@ mod enriched_resource_tests {
             },
             open_meta: None,
             content: None,
+            embedding_status: None,
         }
         .with_derived_refs()
     }

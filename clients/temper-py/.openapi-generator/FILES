@@ -148,6 +148,7 @@ temper/generated/models/edge_kind.py
 temper/generated/models/element_event.py
 temper/generated/models/element_kind.py
 temper/generated/models/embed_dispatch_summary.py
+temper/generated/models/embedding_status.py
 temper/generated/models/enforcement_mode.py
 temper/generated/models/entitlements.py
 temper/generated/models/entry_bounds.py

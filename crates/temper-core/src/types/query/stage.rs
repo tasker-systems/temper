@@ -321,6 +321,7 @@ mod tests {
             managed_meta: Default::default(),
             open_meta: None,
             content: None,
+            embedding_status: None,
         }
     }
 

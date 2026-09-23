@@ -2194,9 +2194,10 @@ pub async fn hit_identities(
                 ingest_state: IngestState::from_wire(&row.ingest_state),
                 body_storage: BodyStorage::from_wire(&row.body_storage),
                 managed_meta,
-                // Both are sections this read does not serve — see the doc comment.
+                // All three are sections this read does not serve — see the doc comment.
                 open_meta: None,
                 content: None,
+                embedding_status: None,
             }
             .with_derived_refs())
         })

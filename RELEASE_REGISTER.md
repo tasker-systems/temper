@@ -23,6 +23,39 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.2 — unreleased
+- **The network door — the MCP resources family executes through the deployed API as a real HTTP relay; embedding readiness rides the gated reads**
+  The MCP function stops hosting any part of the API: it authenticates the caller at
+  its own edge (unchanged JWT verification, `list_tools` included), then forwards
+  every tool act over HTTPS to the API function as a `temper-client` HTTP call —
+  re-issuing the caller's bearer and presenting a NEW dedicated service-to-service
+  secret (`TEMPER_MCP_SERVICE_SECRET`, never shared with the embed-dispatch secret).
+  At the API, a relay-trust middleware validates that secret; beside a valid one, the
+  `X-Temper-Relayed-Surface: mcp` carrier inserts a server-side extension that
+  attributes relayed acts `@mcp` — trusted only with the credential, allowlisted to
+  the single value `mcp`, and never an authorization input. Who observes: an
+  MCP-calling agent, whose tool names, wire schemas, and response shapes are
+  unchanged; refusal kinds held arm-for-arm across the hop, pinned by a parity suite
+  re-harnessed across a real wire (the MCP function is stateless — no DB pool, no
+  router; per-request bearer from the request parts). Alongside, two refusal-voice
+  widenings, message strings only: the API's machine-credential 401 body names the
+  refusal it carries instead of the generic token sentence, and `temper-client` gains
+  a body-preserving 401 variant so the MCP surface can map post-edge refusals to
+  their own sentences (the CLI keeps its current 401 rendering). And the
+  embedding-status enrichment rides the gated resource reads themselves (B1): the
+  route, its client method, and its allowlist entry come OUT; `ResourceView` carries
+  `embedding_status` — absent unless the `embedding-status` section is requested —
+  and `GET /api/resources/{id}` gains an additive `?sections=` whose no-query answer
+  is byte-identical, with the MCP `EnrichedResource` wrapper dissolved into the view
+  that carries the field. Per-route body limits on the tool-carrying API endpoints
+  rise to the MCP edge's 25 MB contract, so the network door does not 413 work the
+  direct binding performed; the edge's 25 MB stays the one user-visible ceiling.
+  openapi.json moves additively only: a new `EmbeddingStatus` schema, a fourth
+  `ResourceSection` value, one optional view field, one optional query parameter; no
+  rename, no removal, no type change on any existing shape.
+pr: self
+classes: additive, behavioral
+surfaces: http, mcp, clients
+status: signal-only
 - **The data-artifact refusal surface — declined writes travel as typed 400s, explicit `kind_owner` reaches the SQL layer, CLI `--kind-owner`**
   A data-artifact write the system declines for reasons the caller can act on — the shape
   registry's SQL refusals and the enforcing-shape commit verdict — was mapped onto the

@@ -1650,7 +1650,7 @@ pub fn delete(
         Box::pin(async move {
             client
                 .resources()
-                .get(uuid::Uuid::from(id))
+                .get(uuid::Uuid::from(id), None)
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
@@ -1787,7 +1787,7 @@ pub fn show(_config: &Config, params: ShowParams<'_>) -> Result<()> {
             // strict subset of the full one.
             let detail = client
                 .resources()
-                .get(uuid::Uuid::from(id))
+                .get(uuid::Uuid::from(id), None)
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
 
@@ -2451,7 +2451,7 @@ fn resolve_update_target(
         Box::pin(async move {
             client
                 .resources()
-                .get(uuid::Uuid::from(id))
+                .get(uuid::Uuid::from(id), None)
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
@@ -2613,7 +2613,7 @@ pub fn annotate(config: &Config, params: AnnotateParams<'_>) -> Result<()> {
         Box::pin(async move {
             client
                 .resources()
-                .get(uuid::Uuid::from(id))
+                .get(uuid::Uuid::from(id), None)
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
@@ -3614,6 +3614,7 @@ mod action_result_tests {
             managed_meta: ManagedMeta::default(),
             open_meta: None,
             content: None,
+            embedding_status: None,
         }
         .with_derived_refs()
     }
@@ -4003,6 +4004,7 @@ mod resource_list_render_tests {
             managed_meta: ManagedMeta::default(),
             open_meta: None,
             content: None,
+            embedding_status: None,
         }
         .with_derived_refs()];
 

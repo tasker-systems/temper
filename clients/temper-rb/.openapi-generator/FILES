@@ -146,6 +146,7 @@ lib/temper/generated/models/edge_kind.rb
 lib/temper/generated/models/element_event.rb
 lib/temper/generated/models/element_kind.rb
 lib/temper/generated/models/embed_dispatch_summary.rb
+lib/temper/generated/models/embedding_status.rb
 lib/temper/generated/models/enforcement_mode.rb
 lib/temper/generated/models/entitlements.rb
 lib/temper/generated/models/entry_bounds.rb

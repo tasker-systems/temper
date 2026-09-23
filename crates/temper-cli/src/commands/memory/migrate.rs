@@ -903,6 +903,7 @@ Never ship code with \"for now\".
             managed_meta: ManagedMeta::default(),
             open_meta: Some(open_meta),
             content: None,
+            embedding_status: None,
         }
         .with_derived_refs()
     }
