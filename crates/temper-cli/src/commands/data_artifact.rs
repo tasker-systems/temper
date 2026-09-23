@@ -7,7 +7,9 @@ use crate::actions::body_source;
 use crate::actions::runtime;
 use crate::format::OutputFormat;
 use crate::output;
-use temper_core::types::data_artifact::{ArtifactCommitRequest, ArtifactListParams};
+use temper_core::types::data_artifact::{
+    ArtifactCommitRequest, ArtifactListParams, KindOwnerInput,
+};
 use temper_core::types::data_artifact_shape::{EnforcementMode, ShapeDeclareRequest, ShapeView};
 use temper_core::types::ids::DataArtifactId;
 use temper_workflow::operations::parse_ref;
@@ -74,6 +76,7 @@ pub struct ShowParams<'a> {
 pub struct CommitParams<'a> {
     pub r#ref: &'a str,
     pub kind: &'a str,
+    pub kind_owner: Option<&'a str>,
     pub intent: &'a str,
     pub precedence: f64,
     pub content_flag: Option<&'a str>,
@@ -116,7 +119,7 @@ pub fn commit(
 
     let request = ArtifactCommitRequest {
         kind: params.kind.to_string(),
-        kind_owner: None,
+        kind_owner: params.kind_owner.map(parse_kind_owner).transpose()?,
         intent: params.intent.to_string(),
         precedence: params.precedence,
         content,
@@ -183,6 +186,7 @@ pub async fn schema_declare_remote(
     client: &temper_client::TemperClient,
     context: &str,
     kind: &str,
+    kind_owner: Option<&str>,
     enforcement: EnforcementMode,
     content_flag: Option<&str>,
     act: temper_core::types::ActInput,
@@ -212,7 +216,7 @@ pub async fn schema_declare_remote(
 
     let request = ShapeDeclareRequest {
         kind: kind.to_string(),
-        kind_owner: None,
+        kind_owner: kind_owner.map(parse_kind_owner).transpose()?,
         schema,
         enforcement,
         act,
@@ -226,4 +230,23 @@ pub async fn schema_declare_remote(
     let rendered = crate::format::render(&shape, fmt)?;
     output::plain(rendered);
     Ok(())
+}
+
+/// Parse the `--kind-owner` value: `kb_profiles:<uuid>` or `kb_teams:<uuid>` — the same
+/// wire vocabulary [`KindOwnerInput`] carries, with the table named explicitly rather than
+/// inferred from shape.
+fn parse_kind_owner(s: &str) -> crate::error::Result<KindOwnerInput> {
+    let (table, id) = s.split_once(':').ok_or_else(|| {
+        crate::error::TemperError::Project(
+            "--kind-owner expects `kb_profiles:<uuid>` or `kb_teams:<uuid>`".to_string(),
+        )
+    })?;
+    let id = parse_ref(id)?;
+    match table {
+        "kb_profiles" => Ok(KindOwnerInput::Profile(uuid::Uuid::from(id))),
+        "kb_teams" => Ok(KindOwnerInput::Team(uuid::Uuid::from(id))),
+        other => Err(crate::error::TemperError::Project(format!(
+            "unrecognized kind-owner table '{other}'; expected kb_profiles or kb_teams"
+        ))),
+    }
 }
