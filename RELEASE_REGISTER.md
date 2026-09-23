@@ -35,12 +35,18 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   sources guard and delete's 400 authorship arm, which the first swap had
   dropped); one named refusal-PROSE delta, where a doubled "context not
   found:" prefix collapses to the service's own sentence. The embedding-status
-  enrichment crosses a new
-  deliberately-unregistered internal read (`GET /api/embed/status`, bearer-
-  authenticated, on the operator-only allowlist). No MCP wire shape, tool
-  inventory, or openapi.json entry moves.
+  enrichment now rides the gated resource reads themselves (B1, in this PR):
+  `ResourceView` carries `embedding_status` — absent unless the
+  `embedding-status` section is requested — `GET /api/resources/{id}` gains an
+  additive `?sections=` whose no-query answer is byte-identical, and the
+  in-PR standalone status read (`GET /api/embed/status`) comes OUT with the
+  MCP `EnrichedResource` wrapper dissolved into the view that carries the
+  field, so MCP tool response keys are unchanged. openapi.json moves
+  additively only: a new `EmbeddingStatus` schema, a fourth `ResourceSection`
+  value, one optional view field, one optional query parameter; no rename, no
+  removal, no type change on any existing shape.
 pr: self
-classes: behavioral
+classes: additive, behavioral
 surfaces: http, mcp, clients
 status: signal-only
 - **The in-process door — temper-client transport, audience-acceptance parity, surface-through-the-door attribution (one-seam goal, beat G1)**
