@@ -53,8 +53,15 @@ impl E2eTestApp {
     /// seeded claims the suites used to build never survive the wire: anything
     /// forwarded from these parts is one hop the API fully adjudicates itself.
     pub fn relay_parts(&self) -> axum::http::request::Parts {
+        self.relay_parts_for(&self.token)
+    }
+
+    /// [`Self::relay_parts`] for an ARBITRARY minted token — the second identity of
+    /// an owner/other test. Identity rides the bearer alone, so both identities can
+    /// share the one MCP service.
+    pub fn relay_parts_for(&self, token: &str) -> axum::http::request::Parts {
         axum::http::Request::builder()
-            .extension(temper_mcp::middleware::BearerToken(self.token.clone()))
+            .extension(temper_mcp::middleware::BearerToken(token.to_string()))
             .body(())
             .expect("relay parts build")
             .into_parts()
@@ -718,7 +725,7 @@ pub async fn approved_admin(pool: &PgPool, profile_id: uuid::Uuid) {
 /// response status; (2) grant it an `approved` standing so every subsequent gated request is
 /// admitted. Deliberately NOT governance: under open mode the app principal held the front door but
 /// was not a system admin (the gating slug was empty), and admin-deny tests depend on that.
-async fn approve_app_principal(addr: std::net::SocketAddr, token: &str, pool: &PgPool) {
+pub async fn approve_app_principal(addr: std::net::SocketAddr, token: &str, pool: &PgPool) {
     // `/api/profile` is on the auth-only router; `require_auth` provisions before any gate.
     let _ = reqwest::Client::new()
         .get(format!("http://{addr}/api/profile"))
