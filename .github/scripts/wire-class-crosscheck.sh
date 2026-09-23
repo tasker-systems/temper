@@ -45,6 +45,12 @@
 #      class, and the declaration must survive the actual diff:
 #        shape moved (anything beyond `.info.version`, jq-compared) and no `shape-breaking`
 #            declared: FAIL — the #858 class;
+#        shape moved and `shape-breaking` declared WITHOUT the `retirement-train` routing:
+#            FAIL — below the era level a shape-breaking declaration is a refusal, not a
+#            schedule (D-C2): convert to the deprecation path (re-declare the row `additive` +
+#            `behavioral`) or wait for the retirement release train;
+#        shape moved and `shape-breaking, retirement-train` declared: PASS, noted — the era
+#            release's own movement; this PR moves M and cuts the next pin;
 #        no shape movement and `additive` declared: PASS — the D-S3 baseline (a version bump
 #            re-stales the doc and the generated cores; that is what `additive` means);
 #        no shape movement and `shape-breaking` declared: PASS, noted — honest
@@ -196,8 +202,10 @@ if [ "$REGISTER_IN_DIFF" -eq 1 ] || [ "$REGISTER_EXPLICIT" -eq 1 ]; then
                 if (value == "") { flag("classes: is empty — silence is not a classification"); next }
                 n = split(value, toks, /[[:space:],]+/)
                 for (i = 1; i <= n; i++)
-                    if (toks[i] != "" && toks[i] !~ /^(additive|shape-breaking|behavioral)$/)
-                        flag("classes: \x27" toks[i] "\x27 is not one of: additive, shape-breaking, behavioral")
+                    if (toks[i] != "" && toks[i] !~ /^(additive|shape-breaking|behavioral|retirement-train)$/)
+                        flag("classes: \x27" toks[i] "\x27 is not one of: additive, shape-breaking, behavioral, retirement-train")
+                if (value ~ /retirement-train/ && value !~ /shape-breaking/)
+                    flag("classes: \x27retirement-train\x27 is a routing, never a class on its own — it rides a shape-breaking row (D-C2)")
             } else if (field == "surfaces") {
                 if (value == "") { flag("surfaces: is empty — name the surfaces this row speaks for"); next }
                 n = split(value, toks, /[[:space:],]+/)
@@ -395,15 +403,36 @@ if grep -qx "openapi.json" "$WIRE_FILES"; then
     case "$SHAPE_VERDICT" in
         moved)
             if classes_contain "$SELF_CLASSES" "shape-breaking"; then
-                SHAPE_NOTE="  shape moved and the register declares shape-breaking — the M question is on the record."
+                if classes_contain "$SELF_CLASSES" "retirement-train"; then
+                    SHAPE_NOTE="  shape moved and the row routes to the retirement train — this is the era release's"
+                    SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
+                    SHAPE_NOTE="${SHAPE_NOTE}  own movement (D-C4): this release PR moves M and cuts the next pin (RELEASING.md"
+                    SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
+                    SHAPE_NOTE="${SHAPE_NOTE}  step 3), which turns the pin gate green."
+                else
+                    PROBLEMS="${PROBLEMS}  openapi.json moved and this PR's row declares shape-breaking with no routing. Below"
+                    PROBLEMS="${PROBLEMS}"$'\n'
+                    PROBLEMS="${PROBLEMS}  the era level that declaration is a refusal, not a schedule (D-C2): convert the"
+                    PROBLEMS="${PROBLEMS}"$'\n'
+                    PROBLEMS="${PROBLEMS}  movement to the deprecation path — keep serving the existing rendering under a"
+                    PROBLEMS="${PROBLEMS}"$'\n'
+                    PROBLEMS="${PROBLEMS}  record, land the corrected signal additively, re-declare the row (additive +"
+                    PROBLEMS="${PROBLEMS}"$'\n'
+                    PROBLEMS="${PROBLEMS}  behavioral, the #906 pattern) — or wait for the retirement release train and name"
+                    PROBLEMS="${PROBLEMS}"$'\n'
+                    PROBLEMS="${PROBLEMS}  \"retirement-train\" in the row. A version bump alone never launders a break into safety."
+                    PROBLEMS="${PROBLEMS}"$'\n'
+                fi
             else
                 PROBLEMS="${PROBLEMS}  openapi.json moved beyond .info.version and this PR's register row(s) declare no"
                 PROBLEMS="${PROBLEMS}"$'\n'
                 PROBLEMS="${PROBLEMS}  shape-breaking class (declared:${SELF_CLASSES:- <none>}). A rename, removal, type change, or"
                 PROBLEMS="${PROBLEMS}"$'\n'
-                PROBLEMS="${PROBLEMS}  envelope change is the M class: the bump, the changelog, and the client-release plan are"
+                PROBLEMS="${PROBLEMS}  envelope change is a shape break: below the era level it converts to the deprecation"
                 PROBLEMS="${PROBLEMS}"$'\n'
-                PROBLEMS="${PROBLEMS}  owed before merge (spec §4; the PR #858 class)."
+                PROBLEMS="${PROBLEMS}  path (re-declare the row additive + behavioral) or waits for the retirement release"
+                PROBLEMS="${PROBLEMS}"$'\n'
+                PROBLEMS="${PROBLEMS}  train (D-C2) — the routing is owed, on the record, in this PR."
                 PROBLEMS="${PROBLEMS}"$'\n'
             fi
             ;;
@@ -415,7 +444,11 @@ if grep -qx "openapi.json" "$WIRE_FILES"; then
             elif classes_contain "$SELF_CLASSES" "shape-breaking"; then
                 SHAPE_NOTE="  shape grew, but the register declares shape-breaking: PASS, NOTED. Honest"
                 SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
-                SHAPE_NOTE="${SHAPE_NOTE}  over-declaration never fails here (the sqlx gate's asymmetry)."
+                SHAPE_NOTE="${SHAPE_NOTE}  over-declaration never fails here (the sqlx gate's asymmetry); the row's routing"
+                SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
+                SHAPE_NOTE="${SHAPE_NOTE}  — convert or wait for the retirement train (D-C2) — still governs the release"
+                SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
+                SHAPE_NOTE="${SHAPE_NOTE}  it lands in."
             else
                 PROBLEMS="${PROBLEMS}  openapi.json changed and this PR's register row(s) declare neither additive nor"
                 PROBLEMS="${PROBLEMS}"$'\n'
@@ -436,6 +469,10 @@ if grep -qx "openapi.json" "$WIRE_FILES"; then
                 SHAPE_NOTE="${SHAPE_NOTE}  diff is the only shape record CI has, so a genuine break can hide from it; failing an"
                 SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
                 SHAPE_NOTE="${SHAPE_NOTE}  honest over-declaration would train under-declaration (the sqlx gate's asymmetry)."
+                SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
+                SHAPE_NOTE="${SHAPE_NOTE}  The row's routing — convert or wait for the retirement train (D-C2) — is what"
+                SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
+                SHAPE_NOTE="${SHAPE_NOTE}  keeps the declaration from dangling."
             else
                 PROBLEMS="${PROBLEMS}  openapi.json changed and this PR's register row(s) declare neither additive nor"
                 PROBLEMS="${PROBLEMS}"$'\n'
@@ -463,7 +500,8 @@ if [ -n "$PROBLEMS" ]; then
     printf '%s' "$PROBLEMS"
     if [ -n "$SHAPE_NOTE" ]; then printf '%s\n' "$SHAPE_NOTE"; echo; fi
     echo
-    echo "The declared-class gate: spec of record temper-artifacts/specs/2026-09-09-shared-semver-policy-design.md §4."
+    echo "The declared-class gate: spec of record temper-artifacts/specs/2026-09-09-shared-semver-policy-design.md §4,"
+    echo "as amended by the compat-deprecation regime (temper-artifacts/specs/2026-09-22-compat-semver-policy-amendment-design.md, D-C2)."
     echo "The register header (RELEASE_REGISTER.md) documents the machine fields and the vocabularies."
     exit 1
 fi

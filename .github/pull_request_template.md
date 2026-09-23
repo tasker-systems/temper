@@ -23,7 +23,11 @@
      when no wire surface changes (HTTP/MCP shapes, CLI stdout, client skins). Schema-only PRs
      declare in the migration itself (`declare_migration`) — sqlx-schema-crosscheck owns that
      gate, the register is not read for migrations. CI checks the declaration against the diff;
-     the behavioral class is review's, not CI's. -->
+     the behavioral class is review's, not CI's. A main-bound `shape-breaking` declaration fails
+     by rule (D-C2): convert the movement to the deprecation path (keep serving the existing
+     rendering under a record, land the corrected signal additively, re-declare the row
+     `additive` + `behavioral`) or wait for the retirement release train — name `retirement-train`
+     in the row; the bump alone never launders a break into safety. -->
 
 <!-- ─────────────────────────────────────────────────────────────────────────────────────────
      Four rules. Full reasoning: internal/agents/conventions.md → "PR descriptions".
