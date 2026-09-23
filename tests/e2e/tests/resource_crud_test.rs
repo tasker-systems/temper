@@ -49,7 +49,7 @@ async fn resource_create_and_get(pool: sqlx::PgPool) {
     let fetched = app
         .client
         .resources()
-        .get(created.id.into())
+        .get(created.id.into(), None)
         .await
         .expect("resource get failed");
 
@@ -111,7 +111,7 @@ async fn resource_update(pool: sqlx::PgPool) {
     let fetched = app
         .client
         .resources()
-        .get(created.id.into())
+        .get(created.id.into(), None)
         .await
         .expect("resource get after update failed");
 
@@ -279,13 +279,13 @@ async fn resource_timestamps_are_real_and_stable(pool: sqlx::PgPool) {
     let first = app
         .client
         .resources()
-        .get(created.id.into())
+        .get(created.id.into(), None)
         .await
         .expect("first get failed");
     let second = app
         .client
         .resources()
-        .get(created.id.into())
+        .get(created.id.into(), None)
         .await
         .expect("second get failed");
 
@@ -313,7 +313,7 @@ async fn resource_timestamps_are_real_and_stable(pool: sqlx::PgPool) {
     let after = app
         .client
         .resources()
-        .get(created.id.into())
+        .get(created.id.into(), None)
         .await
         .expect("get after update failed");
     assert_eq!(
@@ -361,7 +361,7 @@ async fn resource_row_native_shape_drops_shim_fields(pool: sqlx::PgPool) {
     let fetched = app
         .client
         .resources()
-        .get(created.id.into())
+        .get(created.id.into(), None)
         .await
         .expect("get failed");
 
