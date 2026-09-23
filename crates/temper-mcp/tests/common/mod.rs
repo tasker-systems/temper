@@ -112,6 +112,8 @@ pub fn mcp_config() -> McpConfig {
     McpConfig {
         mcp_base_url: "https://temper.invalid".to_string(),
         mcp_client_id: None,
+        api_base_url: None,
+        mcp_service_secret: None,
         oauth: OAuthStaticConfig {
             redirect_uris: vec![],
             allow_localhost: false,

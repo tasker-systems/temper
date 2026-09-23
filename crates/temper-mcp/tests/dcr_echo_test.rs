@@ -33,6 +33,8 @@ fn router(allow_localhost: bool) -> axum::Router {
         McpConfig {
             mcp_base_url: "https://temper.invalid".to_string(),
             mcp_client_id: Some("temper-mcp".to_string()),
+            api_base_url: None,
+            mcp_service_secret: None,
             oauth: OAuthStaticConfig {
                 redirect_uris: vec![ALLOWED.to_string()],
                 allow_localhost,

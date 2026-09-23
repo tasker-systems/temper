@@ -166,6 +166,16 @@ impl TemperClient {
         })
     }
 
+    /// Swap in a shared connection pool (see
+    /// [`crate::http::HttpClient::with_connection_pool`] — the network door's
+    /// statelessness carve-out). The facade's token store still routes refresh /
+    /// logout / status; for a relay client built from
+    /// [`Self::with_token`] with an empty store there is nothing else to move.
+    pub fn with_connection_pool(mut self, inner: reqwest::Client) -> Self {
+        self.http = self.http.with_connection_pool(inner);
+        self
+    }
+
     /// Get a valid access token, refreshing via the token endpoint if needed.
     ///
     /// Requires OAuth config to have been set via [`with_oauth`](Self::with_oauth).

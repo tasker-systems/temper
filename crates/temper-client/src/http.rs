@@ -412,6 +412,21 @@ impl HttpClient {
         Ok(Self { inner, ..self })
     }
 
+    /// Swap in a shared connection pool. Everything else about this client —
+    /// base URL, identity headers, default headers, token resolution, retry
+    /// budget — is unchanged; only the `reqwest::Client` underneath moves.
+    ///
+    /// The network door's statelessness carve-out (design §D6, ruling 5): the relay
+    /// builds ONE pool at boot, and per-request `TemperClient` construction reuses
+    /// it — without this, every tool call pays a fresh TLS handshake plus a
+    /// possible API cold start. The shared client's own builder carries the relay's
+    /// request timeout, so construction order is: build the pool once (with
+    /// `Client::builder().timeout(..)`), then hand it to every per-request client.
+    pub fn with_connection_pool(mut self, inner: Client) -> Self {
+        self.inner = inner;
+        self
+    }
+
     /// Return the token to use for authenticated requests.
     ///
     /// Returns the token override if one was set at construction time;

@@ -1,26 +1,68 @@
 //! Resource tools — unified CRUD with name-based resolution and optional content.
+//!
+//! Execution crosses the DEPLOYED API over the wire (beat G3a-prime, the network door):
+//! every handler drives a per-request temper-client HTTP relay — built from the request's
+//! `Parts` (the edge-verified bearer re-issued, the service credential and attribution
+//! carrier set by the relay, design §D6) — and never touches the pool or a service
+//! function directly. What stays MCP-local is input validation, `fields` projection, and
+//! response shaping; the refusal-kind mapping below is carried over arm-for-arm from the
+//! direct-service binding, with the post-edge authentication arms (deactivated /
+//! machine-gate / expired-in-flight) split from the preserved 401 body by
+//! `service::map_post_edge_auth`.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
+use temper_client::error::ClientError;
+use temper_client::TemperClient;
 use temper_core::context_ref::parse_context_ref;
-use temper_core::error::TemperError;
+// Still direct ONLY inside `build_create_command`, whose remaining caller is the ingest
+// family's `ingest_begin` (not this beat's scope). The resources handlers below never
+// touch it — their execution crosses the door.
 use temper_core::types::authorship::ActInput;
-use temper_core::types::cognitive_maps::{GrantCapabilityRequest, RevokeCapabilityRequest};
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_core::types::provenance::ProvenanceSource;
 use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSet};
+#[cfg(test)]
 use temper_core::types::workflow_job::EmbeddingStatus;
-use temper_services::backend::{substrate_read, DbBackend};
-use temper_services::error::ApiError;
-use temper_services::services::access_service;
 use temper_services::services::context_service::resolve_context_ref;
-use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, Surface};
+use temper_workflow::operations::{BodyUpdate, CreateResource, Surface};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 use crate::service::TemperMcpService;
+
+/// Client results cross the post-edge auth mapping before any call-site mapping:
+/// a deactivated / machine-gate / expired-in-flight refusal speaks its own terminal
+/// sentence (the §3 arm-for-arm discipline), everything else falls through unchanged.
+trait AcrossAuth<T> {
+    fn across_auth(
+        self,
+        own: impl FnOnce(ClientError) -> rmcp::ErrorData,
+    ) -> Result<T, rmcp::ErrorData>;
+}
+
+impl<T> AcrossAuth<T> for Result<T, ClientError> {
+    fn across_auth(
+        self,
+        own: impl FnOnce(ClientError) -> rmcp::ErrorData,
+    ) -> Result<T, rmcp::ErrorData> {
+        self.map_err(|e| crate::service::map_post_edge_auth(&e).unwrap_or_else(|| own(e)))
+    }
+}
+
+/// Map one client error: a post-edge authentication refusal speaks FIRST, arm-for-arm
+/// from the preserved 401 body (`service::map_post_edge_auth` — design §3); anything
+/// else falls to the call site's own mapping, which stays the only author of the
+/// tool-voice sentences.
+fn map_across_auth(
+    e: ClientError,
+    own: impl FnOnce(ClientError) -> rmcp::ErrorData,
+) -> rmcp::ErrorData {
+    crate::service::map_post_edge_auth(&e).unwrap_or_else(|| own(e))
+}
 
 /// Schemars `schema_with` for every `open_meta` input field.
 ///
@@ -351,9 +393,11 @@ pub enum CreateStatus {
 /// Typed response for create_resource.
 #[derive(Debug, serde::Serialize)]
 pub struct CreateResourceResponse {
-    pub resource: EnrichedResource,
+    pub resource: ResourceView,
     pub status: CreateStatus,
 }
+
+// ── Response shaping ───────────────────────────────────────────────
 
 /// Typed response for delete_resource.
 #[derive(Debug, serde::Serialize)]
@@ -367,30 +411,6 @@ pub struct DeleteResourceResponse {
 pub struct UpdateResourceMetaResponse {
     pub updated: bool,
     pub id: Uuid,
-}
-
-// ── Response enrichment ────────────────────────────────────────────
-
-/// A [`ResourceView`] plus the one thing a resource has that the view does not carry: whether its
-/// vector is searchable yet.
-///
-/// **The view is `#[serde(flatten)]`ed, so the wire shape IS `ResourceView` plus one key.** That is
-/// deliberate and is what makes this an enrichment rather than a seventh shape: an MCP caller reads
-/// the same `id`/`ref`/`managed_meta`/`context_ref` keys an HTTP caller reads, at the same depth,
-/// and `fields` projection (which filters TOP-LEVEL keys, anchored on `id`) keeps working
-/// unchanged. Nesting the view under a `resource` key would have moved every one of those a level
-/// down and silently broken the projection's anchor.
-///
-/// `embedding_status` is derived, never stored (issue #299, Phase 4 — see the async-embedding
-/// design §8): `ready` once the resource's vector is searchable, `pending` while an async embed is
-/// in flight, `failed` when it needs re-driving. FTS is always immediate; this tracks only the
-/// eventually-consistent vector. It is not on `ResourceView` because it is not a property of the
-/// resource — it is a property of the embed pipeline's progress against it.
-#[derive(Debug, serde::Serialize)]
-pub struct EnrichedResource {
-    #[serde(flatten)]
-    pub resource: ResourceView,
-    pub embedding_status: EmbeddingStatus,
 }
 
 /// MCP's `list_resources` envelope — the paging state a caller needs to know whether it is looking
@@ -409,7 +429,9 @@ pub struct EnrichedResource {
 ///
 /// `rows` is `Vec<serde_json::Value>` because the optional `fields` projection is dynamic by
 /// construction — it returns whichever top-level keys the caller named. With no `fields` the values
-/// are whole [`EnrichedResource`]s, serialized identically to the typed form.
+/// are whole [`ResourceView`]s with the `open-meta` and `embedding-status` sections filled
+/// (B1: the view itself carries the field, so the old flattened `EnrichedResource` envelope
+/// dissolved into it — the wire keys are the same, at the same depth).
 #[derive(Debug, serde::Serialize)]
 pub struct ListResourcesResponse {
     pub rows: Vec<serde_json::Value>,
@@ -427,76 +449,60 @@ pub struct ListResourcesResponse {
     pub facets: temper_workflow::types::resource::ResourceFacets,
 }
 
-/// Attach derived embedding readiness to a page of views, in ONE batched read.
+/// The sections every MCP single-resource read asks the door for.
 ///
-/// This is all that is left of "enrichment". The names, the decorated `ref`, the composed
-/// `context_ref` and both metadata tiers used to be assembled here from a `ResourceRow` plus a
-/// per-id meta fetch; they are on the view now, filled by the read that produced it
-/// (`hit_identities` for the managed tier, the `open-meta` section for the open one). So this
-/// function has exactly one job, and it is the one job the view genuinely cannot do.
-///
-/// Absent ids (which should not occur — the statuses come from the same visible set) default to
-/// `Ready`, matching the incumbent behaviour.
-///
-/// Takes no principal: every view reaching here came from a visibility-gated read
-/// (`readback::hit_identities`), and `embedding_status_batch` reports pipeline progress against ids
-/// the caller has already been shown. A second profile argument would look like a gate and be one.
-pub async fn enrich_resources(
-    pool: &sqlx::PgPool,
-    views: Vec<ResourceView>,
-) -> Result<Vec<EnrichedResource>, rmcp::ErrorData> {
-    let raw_ids: Vec<Uuid> = views.iter().map(|view| view.id.into()).collect();
-    let statuses = temper_services::services::embed_service::embedding_status_batch(pool, &raw_ids)
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to get embedding status: {e}"), None)
-        })?;
-
-    Ok(views
+/// `open-meta` is the incumbent ask (the view's open tier rode every response before the
+/// one-seam migration); `embedding-status` is B1's — the view itself carries the field now, so
+/// the response needs no second read and no wrapper shape. One constant, so `get`/`create`/
+/// `update` cannot drift on which sections a response carries.
+fn enriched_sections() -> SectionSet {
+    [ResourceSection::OpenMeta, ResourceSection::EmbeddingStatus]
         .into_iter()
-        .map(|view| {
-            let embedding_status = statuses
-                .get(&Uuid::from(view.id))
-                .copied()
-                .unwrap_or(EmbeddingStatus::Ready);
-            EnrichedResource {
-                resource: view,
-                embedding_status,
-            }
-        })
-        .collect())
+        .collect()
 }
 
-/// Read one resource back as the MCP surface answers it — the view with whatever sections the tool
-/// asked for, plus its derived embedding readiness.
+/// Read one resource back as the MCP surface answers it — the view with the sections the
+/// tool asked for, through the door.
 ///
-/// The **one** single-resource read for `create`/`update`/`get`, so those three cannot drift on
-/// which sections a resource response carries. `open-meta` is always in the set: the incumbent
-/// `EnrichedResource` carried both tiers on every path, and dropping the open one here would be a
-/// silent removal rather than a convergence.
+/// The single-resource read for `create`/`update`/`get`, so those three cannot drift on
+/// which sections a response carries: the door's `GET /api/resources/{id}?sections=` fills
+/// both tiers plus the derived embedding readiness on the row the gate already admitted,
+/// and the body — a SECTION in the direct-service binding — arrives from `/content` only
+/// when asked, as its own markdown part.
 async fn enriched_view(
-    pool: &sqlx::PgPool,
-    profile_id: ProfileId,
-    id: ResourceId,
-    extra: &[ResourceSection],
-) -> Result<EnrichedResource, rmcp::ErrorData> {
-    let sections: SectionSet = std::iter::once(ResourceSection::OpenMeta)
-        .chain(extra.iter().copied())
-        .collect();
-    let view = substrate_read::show_view_select(pool, profile_id, id, &sections)
+    client: &TemperClient,
+    id: Uuid,
+    include_content: bool,
+) -> Result<(ResourceView, Option<String>), rmcp::ErrorData> {
+    let view = client
+        .resources()
+        .get(id, Some(&enriched_sections()))
         .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
+        .across_auth(|e| {
+            map_across_auth(e, |e| {
+                rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
+            })
         })?;
-    enrich_resources(pool, vec![view])
-        .await?
-        .pop()
-        .ok_or_else(|| {
-            rmcp::ErrorData::internal_error(
-                "enrich_resources returns one row per input row".to_string(),
-                None,
-            )
-        })
+    let body_markdown = if include_content {
+        Some(
+            client
+                .resources()
+                .content(id)
+                .await
+                .across_auth(|e| {
+                    map_across_auth(e, |e| {
+                        rmcp::ErrorData::internal_error(
+                            format!("Failed to get resource: {e}"),
+                            None,
+                        )
+                    })
+                })?
+                .markdown,
+        )
+    } else {
+        None
+    };
+    Ok((view, body_markdown))
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -510,6 +516,10 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
 /// downstream). Shared by create and update. Guards the parse-don't-validate invariant:
 /// sources without a body block have nothing to attribute, so that combination is an
 /// `invalid_params` error rather than a silent drop.
+///
+/// Direct-binding remnant: its only remaining caller is `build_create_command` (the
+/// ingest family). The migrated resources handlers use [`resolve_sources`] instead —
+/// the door carries content and sources as separate flat fields.
 fn provenance_body(
     content: Option<String>,
     sources: Option<Vec<String>>,
@@ -551,14 +561,75 @@ fn provenance_body(
     }
 }
 
+/// Classify each wire source (http/https URL → Remote, else ref → Resource) with the
+/// shared resolver the CLI uses; an unparseable value is a hard error, never a silent
+/// drop. The migrated handlers' version of `provenance_body`'s classification loop.
+fn resolve_sources(sources: Option<Vec<String>>) -> Result<Vec<ProvenanceSource>, rmcp::ErrorData> {
+    sources
+        .unwrap_or_default()
+        .iter()
+        .map(|s| temper_workflow::operations::resolve_provenance_source(s))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid sources value: {e}"), None))
+}
+
+/// The body-write pieces the PATCH-shaped update needs, in the door's flat form.
+struct BodyParts {
+    content: Option<String>,
+    sources: Vec<ProvenanceSource>,
+    content_block: Option<Uuid>,
+}
+
+/// The body-write guard, flat-field form for the door's PATCH shape: content and the
+/// provenance fields travel separately on `ResourceUpdateRequest`, so the
+/// sources/content_block-without-content refusals fire here, at the tool, exactly as
+/// they did in the direct binding.
+fn provenance_parts(
+    content: Option<String>,
+    sources: Option<Vec<String>>,
+    content_block: Option<Uuid>,
+) -> Result<BodyParts, rmcp::ErrorData> {
+    match content {
+        Some(content) if !content.is_empty() => Ok(BodyParts {
+            content: Some(content),
+            sources: resolve_sources(sources)?,
+            content_block,
+        }),
+        _ => {
+            if sources.as_ref().is_some_and(|s| !s.is_empty()) {
+                return Err(rmcp::ErrorData::invalid_params(
+                    "sources supplied without content — there is no body block to attribute"
+                        .to_owned(),
+                    None,
+                ));
+            }
+            if content_block.is_some() {
+                return Err(rmcp::ErrorData::invalid_params(
+                    "content_block supplied without content — there is no body revise to address"
+                        .to_owned(),
+                    None,
+                ));
+            }
+            Ok(BodyParts {
+                content: None,
+                sources: Vec::new(),
+                content_block: None,
+            })
+        }
+    }
+}
+
 // ── Tool handlers ──────────────────────────────────────────────────
 
 /// Build the shared `CreateResource` command from an MCP create input: validate the owner format,
 /// resolve the home anchor (running the cogmap producer gate before any write), derive the slug from
 /// the title, default `origin_uri`, assemble the act context, and resolve the optional goal ref.
 ///
-/// Shared by [`create_resource`] and `tools::ingest::ingest_begin` so the two cannot drift — a
-/// segmented begin creates a resource by exactly the same rules as a one-shot create.
+/// Sole caller since beat G3a: `tools::ingest::ingest_begin` (the ingest family) — a
+/// segmented begin creates a resource by exactly the same rules `create_resource` used
+/// to. `create_resource` itself now crosses the ingest door and builds its payload
+/// separately; when the ingest family migrates, this helper and its duplicate shaping
+/// die together.
 pub(crate) async fn build_create_command(
     svc: &TemperMcpService,
     profile_id: ProfileId,
@@ -687,46 +758,140 @@ pub(crate) async fn build_create_command(
 
 pub async fn create_resource(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: CreateResourceInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
+    let client = svc.relay_client(parts)?;
 
-    let cmd = build_create_command(svc, profile_id, input).await?;
-
-    let backend = DbBackend::new(pool.clone(), profile_id);
-    let out = backend.create_resource(cmd).await.map_err(|e| match e {
-        // F-2: placing a resource into a context requires WRITE on that context, and the backend now
-        // enforces it for both home kinds. A cogmap home is pre-checked above (so it never reaches
-        // here), but a context home has no surface pre-check — without this arm an authorization
-        // refusal would fall through to `other` and render as an internal error, telling an agent its
-        // permission problem was a server fault.
-        // The cogmap home reaches this match now that the surface pre-check is gone, and it
-        // arrives naming the capability it withheld — carry that sentence rather than the context
-        // arm's, which would describe the wrong container entirely.
-        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        TemperError::Forbidden => rmcp::ErrorData::invalid_params(
-            "Not authorized to create in this context: placing a resource requires write access, \
-             and read access alone (watcher role, a read-only grant, a shared context, or \
-             membership in an enclosing team) is not enough."
-                .to_string(),
-            None,
-        ),
-        // Carry the service's message. The constant this replaced named the context and the
-        // doc_type — but a create also fails when `goal` resolves to nothing, and that refusal
-        // then arrived as "verify your context and doc_type", sending the caller to check two
-        // things that were never wrong. Naming one cause is worse than naming none.
-        TemperError::NotFound(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        other => {
-            rmcp::ErrorData::internal_error(format!("Failed to create resource: {other}"), None)
+    // Validate owner format if provided (stub for R11) — input shaping stays MCP-local.
+    if let Some(ref owner) = input.owner {
+        if !owner.starts_with('@') && !owner.starts_with('+') {
+            return Err(rmcp::ErrorData::invalid_params(
+                "owner must start with @ (profile) or + (team)".to_string(),
+                None,
+            ));
         }
+    }
+
+    // Exactly one home, both expressed on the payload; precedence (cogmap beats
+    // context_ref) and bare-name rejection are the ingest handler's, word for word.
+    let home_cogmap_id = match input.cogmap.as_deref() {
+        Some(cogmap_ref) => {
+            if input.context_ref.is_some() {
+                return Err(rmcp::ErrorData::invalid_params(
+                    "context_ref and cogmap are mutually exclusive; supply exactly one home"
+                        .to_string(),
+                    None,
+                ));
+            }
+            Some(
+                temper_workflow::operations::parse_ref(cogmap_ref)
+                    .map_err(|e| {
+                        rmcp::ErrorData::invalid_params(format!("invalid cogmap ref: {e}"), None)
+                    })?
+                    .0,
+            )
+        }
+        None => {
+            if input.context_ref.is_none() {
+                return Err(rmcp::ErrorData::invalid_params(
+                    "no home specified — supply exactly one of context_ref or cogmap".to_string(),
+                    None,
+                ));
+            }
+            None
+        }
+    };
+
+    // Slug is §7-dissolved — the ingest door derives it from the title server-side.
+    // The `mcp://agent/{uuid}` origin default stays MCP-local (request shaping).
+    let origin_uri = input
+        .origin_uri
+        .unwrap_or_else(|| format!("mcp://agent/{}", Uuid::new_v4()));
+
+    let content = input.content.unwrap_or_default();
+    let sources = resolve_sources(input.sources)?;
+    // The sources-without-body guard, carried over from the direct binding — and it
+    // must fire HERE: the ingest door carries sources only inside `BodyUpdate`, so an
+    // empty body would silently DROP them instead of refusing.
+    if content.is_empty() && !sources.is_empty() {
+        return Err(rmcp::ErrorData::invalid_params(
+            "sources supplied without content — there is no body block to attribute".to_owned(),
+            None,
+        ));
+    }
+
+    // The caller-supplied managed_meta is a typed input; the wire payload carries the
+    // JSON value the ingest door re-parses server-side (typed at both ends).
+    let managed_meta = match input.managed_meta {
+        Some(m) => Some(serde_json::to_value(m).map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("managed_meta failed to serialize: {e}"), None)
+        })?),
+        None => None,
+    };
+
+    let payload = temper_core::types::ingest::IngestPayload {
+        title: input.title,
+        origin_uri,
+        context_ref: input.context_ref.unwrap_or_default(),
+        home_cogmap_id,
+        doc_type_name: input.doc_type_name,
+        goal: input
+            .goal
+            .as_deref()
+            .map(|r| {
+                temper_workflow::operations::parse_ref(r)
+                    .map(|parsed| parsed.0)
+                    .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))
+            })
+            .transpose()?,
+        content_hash: None,
+        idempotency_key: input.idempotency_key,
+        content,
+        metadata: None,
+        managed_meta,
+        open_meta: input.open_meta,
+        chunks_packed: None,
+        sources,
+        act: input.act,
+        segmented: None,
+    };
+
+    let view = client.ingest().create(&payload).await.across_auth(|e| {
+        map_across_auth(e, |e| {
+            match e {
+            // F-2: placing a resource into a context requires WRITE on that context, and the
+            // door's own gate enforces it for both home kinds. The sentences are the gate's,
+            // carried arm-for-arm from the direct binding's error mapping.
+            ClientError::ForbiddenDetail { message } => {
+                rmcp::ErrorData::invalid_params(message, None)
+            }
+            ClientError::Forbidden => rmcp::ErrorData::invalid_params(
+                "Not authorized to create in this context: placing a resource requires write access, \
+                 and read access alone (watcher role, a read-only grant, a shared context, or \
+                 membership in an enclosing team) is not enough."
+                    .to_string(),
+                None,
+            ),
+            // The service's own sentence, un-prefixed: the direct binding's tool wrapped the
+            // resolver's failure with "context not found: ", a prefix the door does not
+            // re-apply — the kind (invalid_params) and the gate are identical.
+            ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+            ClientError::Server {
+                status: 400,
+                message,
+            } => rmcp::ErrorData::invalid_params(message, None),
+            other => rmcp::ErrorData::internal_error(
+                format!("Failed to create resource: {other}"),
+                None,
+            ),
+        }
+        })
     })?;
-    // The trait already answers in `ResourceView`. It is read back with the `open-meta` section so
-    // a create response carries both tiers, exactly as the shape it replaced did; the write
-    // command's own return asks for no sections.
-    let enriched = enriched_view(pool, ProfileId::from(profile.id), out.value.id, &[]).await?;
+
+    // Read back through the same door `get_resource` uses so the response carries both
+    // tiers plus derived embedding status, exactly as the shape it replaced did.
+    let (enriched, _) = enriched_view(&client, Uuid::from(view.id), false).await?;
     let response = CreateResourceResponse {
         resource: enriched,
         status: CreateStatus::Created,
@@ -754,37 +919,28 @@ fn map_projection_err(e: temper_core::projection::ProjectionError) -> rmcp::Erro
     }
 }
 
-// `get_resource` routes the whole read through `substrate_read::show_view_select` — identity, the
-// managed tier, the open tier and (under `include_content`) the body all come from one composition,
-// which is what makes this door and `GET /api/resources/{id}` the same answer. Relationship
-// enrichment is a separate, post-floor concern not layered here. The MCP `search` tool is likewise
-// routed (see search.rs).
+// `get_resource` reads through the door's `GET /api/resources/{id}` — identity, the
+// managed tier and the open tier come from one router answer, which is what makes this
+// door and the HTTP one the same answer. `include_content` fetches the body from the
+// door's `/content` read; it leaves the JSON and becomes its own markdown content part —
+// an MCP client renders that, and inlining prose into the metadata object would make
+// both harder to read.
 pub async fn get_resource(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: GetResourceInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let pool = &svc.api_state.pool;
+    let client = svc.relay_client(parts)?;
 
     let id = temper_workflow::operations::parse_ref(&input.id)
-        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?
+        .0;
 
-    // The body is a SECTION now, so `include_content` is one more name in the section set rather
-    // than a second read — `show_view_select` composes identity, the open tier and the body from
-    // one place, which is what stops this door and `GET /api/resources/{id}` from drifting.
     let include_content = input.include_content.unwrap_or(false);
-    let extra: &[ResourceSection] = if include_content {
-        &[ResourceSection::Body]
-    } else {
-        &[]
-    };
-    let mut enriched = enriched_view(pool, ProfileId::from(profile.id), id, extra).await?;
-
-    // The body leaves the JSON and becomes its own markdown content part — an MCP client renders
-    // that, and inlining prose into the metadata object would make both harder to read. `take`
-    // rather than a clone: `content: None` omits the key, which is the shape the caller expects
-    // when it did not ask for a body.
-    let body_markdown = enriched.resource.content.take();
+    let (mut enriched, body_markdown) = enriched_view(&client, id, include_content).await?;
+    // `take` rather than a clone: `content: None` omits the key, which is the shape the
+    // caller expects when it did not ask for a body.
+    let body_markdown = body_markdown.or_else(|| enriched.content.take());
 
     let enriched_value = serde_json::to_value(&enriched)
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to serialize: {e}"), None))?;
@@ -805,55 +961,50 @@ pub async fn get_resource(
     Ok(CallToolResult::success(parts))
 }
 
-/// Itemized per-block provenance for a resource. Service-direct read (reads bypass the Backend
-/// trait); the access gate lives in the SQL function — an unreadable resource yields an empty list.
+/// Itemized per-block provenance for a resource, through the door. The access gate lives
+/// in the SQL function behind the route — an unreadable resource yields an empty list.
 pub async fn get_block_provenance(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: GetBlockProvenanceInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let pool = &svc.api_state.pool;
+    let client = svc.relay_client(parts)?;
 
-    let rows = substrate_read::resource_block_provenance_select(
-        pool,
-        ProfileId::from(profile.id),
-        input.resource,
-    )
-    .await
-    .map_err(|e| {
-        rmcp::ErrorData::internal_error(format!("Failed to read provenance: {e}"), None)
-    })?;
+    let rows = client
+        .resources()
+        .provenance(input.resource)
+        .await
+        .across_auth(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to read provenance: {e}"), None)
+        })?;
 
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&rows),
     )]))
 }
 
-/// Read one content block by address — the three-state resolution (D-D1). Service-direct
-/// read (reads bypass the Backend trait); the home-resource gate lives in the substrate
-/// readback. The two denial shapes are DIFFERENT here, and the tool description promises
-/// exactly this split: an absent address arrives as `Ok(BlockRead::Absent)` and renders as
-/// data (`state: "absent"`), while a not-visible home arrives as `ApiError::NotFound` and
-/// maps to `invalid_params` — denying existence, never 403. A folded successor is
-/// addressed by calling this again with its own block id.
+/// Read one content block by address — the three-state resolution (D-D1), through the
+/// door. The two denial shapes stay DIFFERENT here, exactly as the tool description
+/// promises: an absent address arrives as `Ok(BlockRead::Absent)` — the client
+/// synthesizes it from the route's own block-naming 404, never from a foreign one — and
+/// renders as data (`state: "absent"`), while a not-visible home arrives as
+/// `ClientError::NotFound` and maps to `invalid_params` — denying existence, never 403.
+/// A folded successor is addressed by calling this again with its own block id.
 pub async fn get_block(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: GetBlockInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let pool = &svc.api_state.pool;
+    let client = svc.relay_client(parts)?;
 
-    let read = substrate_read::block_read_select(
-        pool,
-        ProfileId::from(profile.id),
-        input.resource,
-        input.block_id,
-    )
-    .await
-    .map_err(|e| match e {
-        ApiError::NotFound(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        other => rmcp::ErrorData::internal_error(format!("block read failed: {other}"), None),
-    })?;
+    let read = client
+        .resources()
+        .read_block(input.resource, input.block_id)
+        .await
+        .across_auth(|e| match e {
+            ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+            other => rmcp::ErrorData::internal_error(format!("block read failed: {other}"), None),
+        })?;
 
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&read),
@@ -861,33 +1012,28 @@ pub async fn get_block(
 }
 
 /// Ledger L2 — a resource's bidirectional `derived_from` lineage: what it derives
-/// from (ancestors) and what derives from it (descendants), access-gated.
-/// Service-direct read; the walk + gate live in the `resource_lineage` SQL
-/// function. An unreadable/absent seed is a not-found error (not an empty leak).
+/// from (ancestors) and what derives from it (descendants), access-gated, through the
+/// door. An unreadable/absent seed is a not-found error (not an empty leak).
 pub async fn resource_lineage(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: ResourceLineageInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let pool = &svc.api_state.pool;
+    let client = svc.relay_client(parts)?;
 
     let id = temper_workflow::operations::parse_ref(&input.id)
-        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?
+        .0;
     let depth = input.depth.unwrap_or(16).clamp(1, 64);
 
-    let lineage = temper_services::services::lineage_service::resource_lineage(
-        pool,
-        profile.id,
-        Uuid::from(id),
-        depth,
-    )
-    .await
-    .map_err(|e| match e {
-        temper_services::error::ApiError::NotFound(msg) => {
-            rmcp::ErrorData::invalid_params(msg, None)
-        }
-        other => rmcp::ErrorData::internal_error(format!("lineage read failed: {other}"), None),
-    })?;
+    let lineage = client
+        .resources()
+        .lineage(id, Some(depth))
+        .await
+        .across_auth(|e| match e {
+            ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+            other => rmcp::ErrorData::internal_error(format!("lineage read failed: {other}"), None),
+        })?;
 
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&lineage),
@@ -896,18 +1042,21 @@ pub async fn resource_lineage(
 
 pub async fn list_resources(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: ListResourcesInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let pool = &svc.api_state.pool;
+    let client = svc.relay_client(parts)?;
 
     // Resolve the optional goal filter ref client-side (trailing-UUID-only, like the write path).
     let goal = input
         .goal
         .as_deref()
-        .map(temper_workflow::operations::parse_ref)
-        .transpose()
-        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+        .map(|r| {
+            temper_workflow::operations::parse_ref(r)
+                .map(|parsed| parsed.0)
+                .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))
+        })
+        .transpose()?;
 
     // Resolve the optional cogmap scope (each ref → UUID, trailing-UUID-only) into the CSV the list
     // params carry. Mutually exclusive with context_ref (a resource has one home).
@@ -953,45 +1102,54 @@ pub async fn list_resources(
 
     // Build list params — context_ref is resolved server-side by filtered_visible_page;
     // bare context names are rejected there (spec Decision 1).
-    let params = temper_workflow::types::resource::ResourceListParams {
-        context_ref: input.context_ref.clone(),
-        doc_type_name: input.doc_type_name.clone(),
-        stage: input.stage.clone(),
-        status: input.status.clone(),
-        tags,
-        goal: goal.map(uuid::Uuid::from),
-        cogmap_ids,
-        limit: input.limit.or(Some(50)).map(|l| l.min(200)),
-        offset: input.offset,
-        // Ask for the open tier on every row. The incumbent `EnrichedResource` carried it on the
-        // list surface (fetched per id, which is what made that path an N+1); asking for it as a
-        // SECTION gets the same answer in one statement for the whole page, via
-        // `readback::meta_batch`. The managed tier is not a section — it is always present.
-        sections: Some(ResourceSection::OpenMeta.to_string()),
-        ..Default::default()
-    };
-    let list_result = substrate_read::list_select(pool, ProfileId::from(profile.id), params)
+    let params =
+        temper_workflow::types::resource::ResourceListParams {
+            context_ref: input.context_ref.clone(),
+            doc_type_name: input.doc_type_name.clone(),
+            stage: input.stage.clone(),
+            status: input.status.clone(),
+            tags,
+            goal,
+            cogmap_ids,
+            limit: input.limit.or(Some(50)).map(|l| l.min(200)),
+            offset: input.offset,
+            // Ask for the open tier and the derived embedding readiness on every row. The incumbent
+            // response carried both on the list surface (the open tier fetched per id, which is what
+            // made that path an N+1; the readiness in a second read after the page) — asking for them
+            // as SECTIONS gets the same answer in one statement per section for the whole page, via
+            // `readback::meta_batch` and `embed_service::embedding_status_batch`. The managed tier is
+            // not a section — it is always present.
+            sections: Some(enriched_sections().to_csv().expect(
+                "the enriched vocabulary is never empty, so it renders as a `sections` param",
+            )),
+            ..Default::default()
+        };
+    let list_result = client
+        .resources()
+        .list(&params)
         .await
-        .map_err(|e| match e {
+        .across_auth(|e| match e {
             // A bare context name or invalid ref is rejected with BadRequest (spec Decision 1).
             // An unresolvable ref (not visible / not found) yields NotFound.
             // Both are caller errors → invalid_params (400-class).
-            temper_services::error::ApiError::BadRequest(msg) => {
-                rmcp::ErrorData::invalid_params(msg, None)
-            }
-            temper_services::error::ApiError::NotFound(msg) => {
-                rmcp::ErrorData::invalid_params(format!("unknown filter: {msg}"), None)
+            ClientError::Server {
+                status: 400,
+                message,
+            } => rmcp::ErrorData::invalid_params(message, None),
+            ClientError::NotFound { message } => {
+                rmcp::ErrorData::invalid_params(format!("unknown filter: {message}"), None)
             }
             other => {
                 rmcp::ErrorData::internal_error(format!("Failed to list resources: {other}"), None)
             }
         })?;
 
-    // The rows arrive as `ResourceView`s carrying both tiers — the managed one from
-    // `hit_identities`, the open one from the `open-meta` section asked for above — so enrichment
-    // is down to the one thing the view cannot carry.
+    // The rows arrive as `ResourceView`s carrying every section the response owes — the managed
+    // tier from `hit_identities`, the open tier and the derived embedding readiness from the
+    // `sections` asked for above — so there is no second read and no wrapper shape: the view
+    // itself is the wire answer (B1).
     let temper_workflow::types::resource::ResourceListResponse {
-        rows: views,
+        rows,
         total,
         facets,
         returned,
@@ -999,17 +1157,16 @@ pub async fn list_resources(
         limit,
         offset,
     } = list_result;
-    let enriched = enrich_resources(pool, views).await?;
 
     // Project each ROW, never the envelope: `apply_top_level_filter` keeps the named top-level keys
     // of whatever object it is given, so handing it the envelope would strip `total`/`truncated`
     // and leave the caller with a page it cannot size.
-    let mut rows = Vec::with_capacity(enriched.len());
-    for row in &enriched {
+    let mut projected = Vec::with_capacity(rows.len());
+    for row in &rows {
         let value = serde_json::to_value(row).map_err(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to serialize: {e}"), None)
         })?;
-        rows.push(match input.fields.as_deref() {
+        projected.push(match input.fields.as_deref() {
             Some(fields) => temper_core::projection::apply_top_level_filter(value, fields, "id")
                 .map_err(map_projection_err)?,
             None => value,
@@ -1017,7 +1174,7 @@ pub async fn list_resources(
     }
 
     let response = ListResourcesResponse {
-        rows,
+        rows: projected,
         total,
         returned,
         truncated,
@@ -1032,70 +1189,77 @@ pub async fn list_resources(
 
 pub async fn update_resource(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: UpdateResourceInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
-    let resource_id = ResourceId::from(input.id);
-
-    // Identity (title) travels first-class on the cmd; managed_meta is Property-only. The
-    // caller-supplied managed_meta passes through untouched — the DbBackend validation pipeline
-    // injects identity into the validation document from the effective title (cmd.title / current
-    // row). Slug is §7-dissolved and not a caller input; the backend derives it. (issue #307)
+    let client = svc.relay_client(parts)?;
+    // The caller-supplied managed_meta passes through untouched — identity injection and
+    // slug derivation stay the door's business (the backend validation pipeline).
     let managed_meta = input.managed_meta.unwrap_or_default();
-
-    let act = input
-        .act
-        .into_act_context()
-        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-    let body = provenance_body(input.content, input.sources, input.content_block)?;
+    let body = provenance_parts(input.content, input.sources, input.content_block)?;
     // Goal patch is tri-state: `goal` (set/replace, ref resolved client-side) wins over
     // `clear_goal` (retract); absent leaves the goal edge untouched.
-    let goal = match (input.goal.as_deref(), input.clear_goal) {
-        (Some(r), _) => Some(temper_workflow::operations::GoalPatch::Set(
-            temper_workflow::operations::parse_ref(r)
-                .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?,
-        )),
-        (None, Some(true)) => Some(temper_workflow::operations::GoalPatch::Clear),
-        _ => None,
+    let (goal, clear_goal) = match (input.goal.as_deref(), input.clear_goal) {
+        (Some(r), _) => (
+            Some(
+                temper_workflow::operations::parse_ref(r)
+                    .map(|parsed| parsed.0)
+                    .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?,
+            ),
+            None,
+        ),
+        (None, Some(true)) => (None, Some(true)),
+        _ => (None, None),
     };
-    let cmd = temper_workflow::operations::UpdateResource {
-        resource: resource_id,
+
+    let request = temper_workflow::types::resource::ResourceUpdateRequest {
         title: input.title.clone(),
-        slug: None,
-        body,
         managed_meta: Some(managed_meta),
         open_meta: input.open_meta,
         open_meta_add: input.open_meta_add,
+        content: body.content,
+        content_hash: None,
+        chunks_packed: None,
+        context_to: None,
+        type_to: None,
         goal,
-        move_to: None,
-        context_ref: None,
-        act,
-        origin: Surface::Mcp,
+        clear_goal,
+        sources: body.sources,
+        content_block: body.content_block,
+        act: input.act,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id);
-    backend.update_resource(cmd).await.map_err(|e| match e {
-        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        TemperError::Forbidden => rmcp::ErrorData::invalid_params(
-            "Resource not found or not modifiable".to_string(),
-            None,
-        ),
-        TemperError::NotFound(msg) => {
-            rmcp::ErrorData::invalid_params(format!("Resource not found: {msg}"), None)
-        }
-        // A folded content block under write addressing: the defined gone state, not a
-        // server fault — the row persists as history, the address is not writable.
-        TemperError::Gone(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        other => {
-            rmcp::ErrorData::internal_error(format!("Failed to update resource: {other}"), None)
-        }
-    })?;
+    client
+        .resources()
+        .update(input.id, &request)
+        .await
+        .across_auth(|e| match e {
+            // Arm-for-arm from the direct binding: the gate's sentence names the withheld
+            // capability; missing and not-modifiable share the Forbidden face on this path.
+            ClientError::ForbiddenDetail { message } => {
+                rmcp::ErrorData::invalid_params(message, None)
+            }
+            ClientError::Forbidden => rmcp::ErrorData::invalid_params(
+                "Resource not found or not modifiable".to_string(),
+                None,
+            ),
+            ClientError::NotFound { message } => {
+                rmcp::ErrorData::invalid_params(format!("Resource not found: {message}"), None)
+            }
+            // A folded content block under write addressing: the defined gone state, not a
+            // server fault — the row persists as history, the address is not writable.
+            ClientError::Gone { message } => rmcp::ErrorData::invalid_params(message, None),
+            ClientError::Server {
+                status: 400,
+                message,
+            } => rmcp::ErrorData::invalid_params(message, None),
+            other => {
+                rmcp::ErrorData::internal_error(format!("Failed to update resource: {other}"), None)
+            }
+        })?;
 
     // Return the enriched current state, read back through the same door `get_resource` uses.
-    let enriched = enriched_view(pool, profile_id, resource_id, &[]).await?;
+    let (enriched, _) = enriched_view(&client, input.id, false).await?;
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&enriched),
     )]))
@@ -1103,59 +1267,56 @@ pub async fn update_resource(
 
 pub async fn annotate_resource(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: AnnotateResourceInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
-    let resource_id = ResourceId::from(input.id);
+    let client = svc.relay_client(parts)?;
 
-    let act = input
-        .act
-        .into_act_context()
-        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
     // Classify each source (http/https URL → Remote, else ref → Resource) with the shared resolver;
     // an unparseable value is a hard error, never a silent drop.
-    let sources = input
-        .sources
-        .iter()
-        .map(|s| temper_workflow::operations::resolve_provenance_source(s))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| {
-            rmcp::ErrorData::invalid_params(format!("invalid sources value: {e}"), None)
-        })?;
-    let cmd = temper_workflow::operations::AnnotateResource {
-        resource: resource_id,
+    let sources = resolve_sources(Some(input.sources))?;
+    let request = temper_workflow::types::resource::ResourceAnnotateRequest {
         sources,
         content_block: input.content_block,
-        act,
-        origin: Surface::Mcp,
+        act: input.act,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id);
-    backend.annotate_resource(cmd).await.map_err(|e| match e {
-        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        TemperError::Forbidden => rmcp::ErrorData::invalid_params(
-            "Resource not found or not modifiable".to_string(),
-            None,
-        ),
-        TemperError::NotFound(msg) => {
-            rmcp::ErrorData::invalid_params(format!("Resource not found: {msg}"), None)
-        }
-        // A folded content block under write addressing: the defined gone state, not a
-        // server fault — the row persists as history, the address is not writable.
-        TemperError::Gone(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        other => {
-            rmcp::ErrorData::internal_error(format!("Failed to annotate resource: {other}"), None)
-        }
-    })?;
+    client
+        .resources()
+        .annotate(input.id, &request)
+        .await
+        .across_auth(|e| match e {
+            ClientError::ForbiddenDetail { message } => {
+                rmcp::ErrorData::invalid_params(message, None)
+            }
+            ClientError::Forbidden => rmcp::ErrorData::invalid_params(
+                "Resource not found or not modifiable".to_string(),
+                None,
+            ),
+            ClientError::NotFound { message } => {
+                rmcp::ErrorData::invalid_params(format!("Resource not found: {message}"), None)
+            }
+            // A folded content block under write addressing: the defined gone state, not a
+            // server fault — the row persists as history, the address is not writable.
+            ClientError::Gone { message } => rmcp::ErrorData::invalid_params(message, None),
+            ClientError::Server {
+                status: 400,
+                message,
+            } => rmcp::ErrorData::invalid_params(message, None),
+            other => rmcp::ErrorData::internal_error(
+                format!("Failed to annotate resource: {other}"),
+                None,
+            ),
+        })?;
 
     // Return the itemized provenance so the caller sees the rows it just recorded (the read that
-    // proves the annotate landed), rather than re-fetching the unchanged resource body.
-    let rows = substrate_read::resource_block_provenance_select(pool, profile_id, input.id)
+    // proves the annotate landed), rather than re-fetching the unchanged resource body — through
+    // the same door.
+    let rows = client
+        .resources()
+        .provenance(input.id)
         .await
-        .map_err(|e| {
+        .across_auth(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to read provenance: {e}"), None)
         })?;
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
@@ -1165,59 +1326,49 @@ pub async fn annotate_resource(
 
 pub async fn update_resource_meta(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: UpdateResourceMetaInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
-    let resource_id = ResourceId::from(input.id);
+    let client = svc.relay_client(parts)?;
 
-    // Dispatch through the unified DbBackend write path. The translator's
-    // meta-only branch runs resource_service::update with body=None, which
-    // merges managed_meta / open_meta into the manifest, cascades identity
-    // fields (doc_type / context), recomputes managed_hash / open_hash
-    // server-side (Phase 5: caller-supplied hashes are no longer trusted),
-    // emits the update_meta audit, and reconciles edges.
-    let act = input
-        .act
-        .into_act_context()
-        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-    let cmd = temper_workflow::operations::UpdateResource {
-        resource: resource_id,
-        // Meta-only path is Property-only (Fork 2): identity changes go through
-        // the full update_resource path, never here.
-        title: None,
-        slug: None,
-        body: None,
-        managed_meta: Some(input.managed_meta),
-        open_meta: Some(input.open_meta),
-        // Meta-only path states both tiers in full — that is what separates it from
-        // update_resource, which is where the additive channel belongs.
-        open_meta_add: None,
-        // Meta-only path is Property-only (Fork 2); goal links travel via update_resource.
-        goal: None,
-        move_to: None,
-        context_ref: None,
-        act,
-        origin: Surface::Mcp,
+    // The door's meta-only PUT runs the same translator's meta-only branch (body=None,
+    // both meta tiers stated in full, update_meta audit, edge reconciliation). The
+    // payload's resource_id/hash fields are vestigial wire baggage — the handler takes
+    // the id from the path and the backend dropped caller-supplied hashes (recomputed
+    // server-side, Phase 5) — so they carry named placeholders, not claims.
+    let payload = temper_core::types::managed_meta::MetaUpdatePayload {
+        resource_id: ResourceId::from(input.id),
+        managed_meta: input.managed_meta,
+        open_meta: input.open_meta,
+        managed_hash: String::new(),
+        open_hash: String::new(),
+        act: input.act,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id);
-    backend.update_resource(cmd).await.map_err(|e| match e {
-        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        TemperError::Forbidden => rmcp::ErrorData::invalid_params(
-            "Resource not found or not modifiable".to_string(),
-            None,
-        ),
-        TemperError::NotFound(msg) => {
-            rmcp::ErrorData::invalid_params(format!("Resource not found: {msg}"), None)
-        }
-        TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        other => rmcp::ErrorData::internal_error(
-            format!("Failed to update resource meta: {other}"),
-            None,
-        ),
-    })?;
+    client
+        .resources()
+        .update_meta(input.id, &payload)
+        .await
+        .across_auth(|e| match e {
+            ClientError::ForbiddenDetail { message } => {
+                rmcp::ErrorData::invalid_params(message, None)
+            }
+            ClientError::Forbidden => rmcp::ErrorData::invalid_params(
+                "Resource not found or not modifiable".to_string(),
+                None,
+            ),
+            ClientError::NotFound { message } => {
+                rmcp::ErrorData::invalid_params(format!("Resource not found: {message}"), None)
+            }
+            ClientError::Server {
+                status: 400,
+                message,
+            } => rmcp::ErrorData::invalid_params(message, None),
+            other => rmcp::ErrorData::internal_error(
+                format!("Failed to update resource meta: {other}"),
+                None,
+            ),
+        })?;
 
     let response = UpdateResourceMetaResponse {
         updated: true,
@@ -1230,44 +1381,46 @@ pub async fn update_resource_meta(
 
 pub async fn delete_resource(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: DeleteResourceInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
+    let client = svc.relay_client(parts)?;
 
-    let act = input
-        .act
-        .into_act_context()
-        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-    let cmd = temper_workflow::operations::DeleteResource {
-        resource: ResourceId::from(input.id),
-        // CLI-side concern; DbBackend ignores per spec (force=true is only
-        // relevant when a CLI surface presents a confirmation prompt).
-        force: false,
-        act,
-        origin: Surface::Mcp,
-    };
+    // DELETE has no body — per-act authorship rides the query string at the door. The
+    // CLI-side `force` concern stays false: the backend ignores it, as the direct
+    // binding's command did.
+    let response = client
+        .resources()
+        .delete(input.id, &input.act)
+        .await
+        .map(|_| ())
+        .map_err(|e| match e {
+            ClientError::ForbiddenDetail { message } => {
+                rmcp::ErrorData::invalid_params(message, None)
+            }
+            ClientError::Forbidden => rmcp::ErrorData::invalid_params(
+                "Resource not found or not modifiable".to_string(),
+                None,
+            ),
+            ClientError::NotFound { message } => {
+                rmcp::ErrorData::invalid_params(format!("Resource not found: {message}"), None)
+            }
+            // The door runs the act-authorship validation the direct binding ran
+            // client-side (e.g. reasoning without a confidence band) and answers 400 —
+            // a caller error, never a server fault.
+            ClientError::Server {
+                status: 400,
+                message,
+            } => rmcp::ErrorData::invalid_params(message, None),
+            other => {
+                rmcp::ErrorData::internal_error(format!("Failed to delete resource: {other}"), None)
+            }
+        })
+        .map(|_| DeleteResourceResponse {
+            deleted: true,
+            id: input.id,
+        })?;
 
-    let backend = DbBackend::new(pool.clone(), profile_id);
-    backend.delete_resource(cmd).await.map_err(|e| match e {
-        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        TemperError::Forbidden => rmcp::ErrorData::invalid_params(
-            "Resource not found or not modifiable".to_string(),
-            None,
-        ),
-        TemperError::NotFound(msg) => {
-            rmcp::ErrorData::invalid_params(format!("Resource not found: {msg}"), None)
-        }
-        other => {
-            rmcp::ErrorData::internal_error(format!("Failed to delete resource: {other}"), None)
-        }
-    })?;
-
-    let response = DeleteResourceResponse {
-        deleted: true,
-        id: input.id,
-    };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&response),
     )]))
@@ -1328,9 +1481,9 @@ fn resolve_grant_principal(
     }
 }
 
-fn map_grant_error(context: &str, err: ApiError) -> rmcp::ErrorData {
+fn map_grant_error(context: &str, err: ClientError) -> rmcp::ErrorData {
     match err {
-        ApiError::Forbidden => rmcp::ErrorData::invalid_params(
+        ClientError::Forbidden => rmcp::ErrorData::invalid_params(
             format!("{context}: caller may not administer grants on this resource"),
             None,
         ),
@@ -1338,13 +1491,15 @@ fn map_grant_error(context: &str, err: ApiError) -> rmcp::ErrorData {
     }
 }
 
-/// Grant a capability on a resource. SERVICE-DIRECT, gated by `is_system_admin OR can_grant OR
-/// owner`. `read` forced on when `write`/`grant` is set.
+/// Grant a capability on a resource, through the door. The gate is
+/// `is_system_admin OR can_grant OR owner`, and it lives server-side; `read` is forced
+/// on when `write`/`grant` is set.
 pub async fn resource_grant(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: ResourceGrantInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
+    let client = svc.relay_client(parts)?;
     let resource_id = uuid::Uuid::from(
         temper_workflow::operations::parse_ref(&input.resource)
             .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad resource ref: {e}"), None))?,
@@ -1356,9 +1511,7 @@ pub async fn resource_grant(
             None,
         ));
     }
-    let req = GrantCapabilityRequest {
-        subject_table: "kb_resources".to_string(),
-        subject_id: resource_id,
+    let body = temper_core::types::resource_grant::ResourceGrantBody {
         principal_table,
         principal_id,
         can_read: input.read || input.write || input.grant,
@@ -1366,38 +1519,40 @@ pub async fn resource_grant(
         can_delete: false,
         can_grant: input.grant,
     };
-    let outcome =
-        access_service::grant_capability(&svc.api_state.pool, ProfileId::from(profile.id), &req)
-            .await
-            .map_err(|e| map_grant_error("resource_grant", e))?;
+    let outcome = client
+        .resources()
+        .grant(resource_id, &body)
+        .await
+        .across_auth(|e| map_grant_error("resource_grant", e))?;
     let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         text,
     )]))
 }
 
-/// Revoke a capability grant on a resource. SERVICE-DIRECT, admin/can_grant/owner-gated. No-op safe.
+/// Revoke a capability grant on a resource, through the door. Admin/can_grant/owner-gated
+/// server-side. No-op safe.
 pub async fn resource_revoke(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: ResourceRevokeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
+    let client = svc.relay_client(parts)?;
     let resource_id = uuid::Uuid::from(
         temper_workflow::operations::parse_ref(&input.resource)
             .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad resource ref: {e}"), None))?,
     );
     let (principal_table, principal_id) =
         resolve_grant_principal(input.from_profile, input.from_team)?;
-    let req = RevokeCapabilityRequest {
-        subject_table: "kb_resources".to_string(),
-        subject_id: resource_id,
+    let body = temper_core::types::resource_grant::ResourceRevokeBody {
         principal_table,
         principal_id,
     };
-    let outcome =
-        access_service::revoke_capability(&svc.api_state.pool, ProfileId::from(profile.id), &req)
-            .await
-            .map_err(|e| map_grant_error("resource_revoke", e))?;
+    let outcome = client
+        .resources()
+        .revoke(resource_id, &body)
+        .await
+        .across_auth(|e| map_grant_error("resource_revoke", e))?;
     let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         text,
@@ -1655,42 +1810,39 @@ mod enriched_resource_tests {
         .with_derived_refs()
     }
 
-    /// The MCP response is the view's own keys at the top level, plus exactly one more.
+    /// The MCP response is the view itself, the `embedding-status` section asked for.
     ///
-    /// This is what `#[serde(flatten)]` buys and why it is not a stylistic choice: `fields`
-    /// projection filters TOP-LEVEL keys anchored on `id`, so nesting the view under a `resource`
-    /// key would move `id` a level down and make every projected response `{}`.
+    /// B1 dissolved the flattened `EnrichedResource` wrapper into the view that carries the
+    /// field, so the wire answer is the door's own `ResourceView` with `embedding_status`
+    /// filled — the same keys at the same depth the wrapper used to emit, which is what keeps
+    /// `fields` projection (TOP-LEVEL keys anchored on `id`) working unchanged.
     #[test]
-    fn enriched_resource_is_the_view_plus_embedding_status() {
-        let view = sample_view();
+    fn the_mcp_response_is_the_view_with_the_section_asked_for() {
+        let mut view = sample_view();
         let expected_ref = view.r#ref.clone();
-        let enriched = EnrichedResource {
-            resource: view.clone(),
-            embedding_status: EmbeddingStatus::Ready,
-        };
 
-        let enriched_json = serde_json::to_value(&enriched).expect("serialize enriched");
-        let view_json = serde_json::to_value(&view).expect("serialize view");
-        let obj = enriched_json.as_object().expect("object");
+        // Not requested: the key is absent — never a null, never a fourth state.
+        let not_asked = serde_json::to_value(&view).expect("serialize view");
+        assert!(
+            !not_asked
+                .as_object()
+                .expect("object")
+                .contains_key("embedding_status"),
+            "an unasked section omits the key: {not_asked}"
+        );
 
-        // Every key the view emits is emitted here, at the same depth and with the same value.
-        for (key, value) in view_json.as_object().expect("object") {
-            assert_eq!(
-                obj.get(key),
-                Some(value),
-                "`{key}` must ride at the top level"
-            );
-        }
-        // And exactly one key beyond them.
-        assert_eq!(obj.len(), view_json.as_object().expect("object").len() + 1);
-        assert_eq!(obj["embedding_status"], "ready");
+        // Requested (what `enriched_view` always asks): the key rides at the top level,
+        // beside the view's own keys.
+        view.embedding_status = Some(EmbeddingStatus::Ready);
+        let answered = serde_json::to_value(&view).expect("serialize view");
+        assert_eq!(answered["embedding_status"], "ready");
 
         // `ref` is the affordance this task exists to deliver to MCP callers. It is the decorated
         // form, derived once by `with_derived_refs`, never re-derived at render time.
         assert_eq!(
-            obj["ref"].as_str(),
+            answered["ref"].as_str(),
             Some(expected_ref.as_str()),
-            "every MCP resource response carries a decorated ref: {enriched_json}"
+            "every MCP resource response carries a decorated ref: {answered}"
         );
         assert_eq!(
             expected_ref,
@@ -1703,11 +1855,11 @@ mod enriched_resource_tests {
     /// surface too, not only on the HTTP one.
     #[test]
     fn workflow_metadata_reaches_the_mcp_caller_under_managed_meta() {
-        let enriched = EnrichedResource {
-            resource: sample_view(),
-            embedding_status: EmbeddingStatus::Ready,
+        let view = ResourceView {
+            embedding_status: Some(EmbeddingStatus::Ready),
+            ..sample_view()
         };
-        let v = serde_json::to_value(&enriched).expect("serialize");
+        let v = serde_json::to_value(&view).expect("serialize");
 
         assert_eq!(v["managed_meta"]["temper-stage"], "in-progress");
         assert!(
@@ -1783,11 +1935,11 @@ mod fields_projection_tests {
     /// assertion to the wire.
     #[test]
     fn enriched_resource_filtered_by_fields_preserves_id_and_managed_meta() {
-        let enriched = EnrichedResource {
-            resource: super::enriched_resource_tests::sample_view(),
-            embedding_status: EmbeddingStatus::Ready,
+        let view = ResourceView {
+            embedding_status: Some(EmbeddingStatus::Ready),
+            ..super::enriched_resource_tests::sample_view()
         };
-        let value = serde_json::to_value(&enriched).expect("serialize");
+        let value = serde_json::to_value(&view).expect("serialize");
         let filtered = temper_core::projection::apply_top_level_filter(
             value,
             &["managed_meta".to_string()],

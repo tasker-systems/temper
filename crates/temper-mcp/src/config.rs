@@ -48,6 +48,19 @@ pub struct McpConfig {
     /// OAuth config: compiled in from `mcp-server.toml`, with the redirect-URI list replaced by
     /// the authoritative one on AS-mode instances.
     pub oauth: OAuthStaticConfig,
+
+    /// Base URL of the deployed API this relay forwards tool acts to (the network door,
+    /// design §D6/§11.1). In production AND previews the deployment pins this to its own
+    /// URL, so rotation/rollback skew structurally cannot open; `TEMPER_API_BASE_URL` is
+    /// the override for local/self-hosted. `None` ⇒ the forwarding path refuses (dark tool
+    /// door beats silently mis-routed tool door); `/mcp/health` and discovery stay up.
+    pub api_base_url: Option<String>,
+
+    /// The service-to-service credential presented on every forwarded request
+    /// (`TEMPER_MCP_SERVICE_SECRET`, design §D2). `None` ⇒ refuse-to-forward only —
+    /// the same posture as the base URL. Never shared with any other secret; the API's
+    /// boot gate refuses a collision.
+    pub mcp_service_secret: Option<String>,
 }
 
 impl McpConfig {
@@ -119,6 +132,8 @@ pub fn parse_mcp_config(
         mcp_base_url,
         mcp_client_id,
         oauth,
+        api_base_url: get("TEMPER_API_BASE_URL"),
+        mcp_service_secret: get("TEMPER_MCP_SERVICE_SECRET"),
     })
 }
 

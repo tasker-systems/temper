@@ -24,12 +24,45 @@ use rmcp::{
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use temper_client::auth::MemoryTokenStore;
+use temper_client::error::ClientError;
+use temper_client::TemperClient;
 use temper_core::types::Profile;
 use temper_services::auth::RawJwtClaims;
 use temper_services::state::AppState;
+use temper_workflow::operations::{Surface, RELAYED_SURFACE_HEADER, SERVICE_CREDENTIAL_HEADER};
 
+use crate::config::McpConfig;
 use crate::middleware::BearerToken;
 use crate::tools;
+
+/// The relay's per-request client timeout, in seconds.
+///
+/// Strictly below the 60 s `maxDuration` this function runs inside (`vercel.json`), with
+/// shaping margin — a hung API call must surface as the rmcp-shaped refusal the tool layer
+/// maps, never as the platform killing the function mid-flight (design §2.1, ruling 6).
+/// The stock temper-client ceiling (75 s) is sized ABOVE the server's budget on purpose —
+/// for a CLI that must observe what the server did — and is exactly inverted here.
+pub(crate) const RELAY_REQUEST_TIMEOUT_SECS: u64 = 45;
+
+/// Build the relay's ONE connection pool: called once per process at router assembly,
+/// and handed (refcount-cloned) to every per-request client the service factory builds.
+/// This is the §D6 carve-out made structural — a pool built in `TemperMcpService::new`
+/// would be per-request, which is exactly the fresh-TLS-per-call cost the carve-out
+/// exists to avoid.
+pub fn shared_relay_pool() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(RELAY_REQUEST_TIMEOUT_SECS))
+        .build()
+        .expect("failed to build the relay's shared HTTP client")
+}
+
+/// Total attempts for a non-idempotent (unkeyed) tool act. The ruled "1 retry on
+/// non-idempotent tool acts" (design §2.1/§11.6): a cold-start 500 on the API function is
+/// the hop's common transient, and the CALLER's own redrive has the same double-apply
+/// property a retry would, so the single retry adds no new replay surface while sparing a
+/// round trip. Safe/idempotent-keyed requests keep temper-client's stock budget.
+const RELAY_NON_IDEMPOTENT_ATTEMPTS: u32 = 2;
 
 /// Central MCP service. One instance per client session.
 ///
@@ -50,6 +83,15 @@ pub struct TemperMcpService {
     pub api_state: AppState,
     /// Cached profile resolved from the Auth0 `sub` claim.
     profile: Arc<Mutex<Option<Profile>>>,
+    /// The relay's configuration — API base URL and service credential (injectable;
+    /// §D6). The resources family's tools cross the deployed API through a per-request
+    /// client built from these; every other family still executes direct against
+    /// `api_state` until its own beat.
+    pub mcp_config: McpConfig,
+    /// The shared connection pool (the statelessness carve-out, §D6/§11.5): built ONCE
+    /// at boot with the relay timeout, reused by every per-request client — without it
+    /// each tool call pays a fresh TLS handshake plus a possible API cold start.
+    shared_http: reqwest::Client,
 }
 
 impl std::fmt::Debug for TemperMcpService {
@@ -57,17 +99,121 @@ impl std::fmt::Debug for TemperMcpService {
         f.debug_struct("TemperMcpService")
             .field("api_state", &self.api_state)
             .field("profile", &self.profile)
+            .field(
+                "mcp_config.api_base_url",
+                &self.mcp_config.api_base_url.as_ref().map(|_| "set"),
+            )
+            .field(
+                "mcp_config.mcp_service_secret",
+                // Presence-preserving redaction: whether the credential is configured is
+                // exactly the operational fact; its value must never reach a sink.
+                &self
+                    .mcp_config
+                    .mcp_service_secret
+                    .as_ref()
+                    .map(|_| "redacted"),
+            )
+            .field("shared_http", &"reqwest::Client")
             .finish_non_exhaustive()
     }
 }
 
 #[tool_router]
 impl TemperMcpService {
-    pub fn new(api_state: AppState) -> Self {
+    pub fn new(api_state: AppState, mcp_config: McpConfig, shared_http: reqwest::Client) -> Self {
         Self {
             api_state,
             profile: Arc::new(Mutex::new(None)),
+            mcp_config,
+            shared_http,
         }
+    }
+
+    /// Build the per-request relay client: the caller's bearer re-issued by THIS
+    /// process (never the inbound header bytes copied — the relay parses and
+    /// re-issues), the service credential and attribution carrier as
+    /// constructor-level default headers so they ride retries in one place, the
+    /// shared pool underneath, and the ruled transport figures (§2.1/§11.6).
+    ///
+    /// The MCP edge drops any caller-supplied values of the credential and carrier
+    /// headers by never copying them: only the bearer crosses, and these two are
+    /// SET here. `device_id` is pinned absent — the relay is not a device.
+    ///
+    /// **Refuse-to-forward (ruling 4):** an unconfigured base URL or service secret
+    /// turns every tool act into a typed rmcp error naming the misconfiguration,
+    /// while `/mcp/health` and discovery stay up — a dark tool door beats a
+    /// silently mis-attributed one.
+    pub fn relay_client(
+        &self,
+        parts: &http::request::Parts,
+    ) -> Result<TemperClient, rmcp::ErrorData> {
+        let base_url = self.mcp_config.api_base_url.as_deref().ok_or_else(|| {
+            rmcp::ErrorData::internal_error(
+                "This MCP deployment is not configured to forward tool calls: \
+                 TEMPER_API_BASE_URL is unset. Health and discovery remain available; \
+                 contact the operator."
+                    .to_string(),
+                None,
+            )
+        })?;
+        let secret = self
+            .mcp_config
+            .mcp_service_secret
+            .as_deref()
+            .ok_or_else(|| {
+                rmcp::ErrorData::internal_error(
+                    "This MCP deployment is not configured to forward tool calls: \
+                     TEMPER_MCP_SERVICE_SECRET is unset. Health and discovery remain \
+                     available; contact the operator."
+                        .to_string(),
+                    None,
+                )
+            })?;
+        let bearer = parts
+            .extensions
+            .get::<BearerToken>()
+            .ok_or_else(|| rmcp::ErrorData::internal_error("Not authenticated".to_string(), None))?
+            .0
+            .clone();
+
+        let mut default_headers = reqwest::header::HeaderMap::new();
+        // HeaderName/Value construction refuses malformed bytes; both values here are
+        // constants or operator-configured ASCII, and a malformed secret surfaces at the
+        // first tool call rather than poisoning the pool.
+        let credential_name = reqwest::header::HeaderName::try_from(SERVICE_CREDENTIAL_HEADER)
+            .expect("the service credential header name is a valid header name");
+        let carrier_name = reqwest::header::HeaderName::try_from(RELAYED_SURFACE_HEADER)
+            .expect("the relayed surface header name is a valid header name");
+        default_headers.insert(
+            credential_name,
+            reqwest::header::HeaderValue::from_str(secret).map_err(|_| {
+                rmcp::ErrorData::internal_error(
+                    "TEMPER_MCP_SERVICE_SECRET is not a valid header value; refusing to \
+                     forward. Contact the operator."
+                        .to_string(),
+                    None,
+                )
+            })?,
+        );
+        default_headers.insert(
+            carrier_name,
+            reqwest::header::HeaderValue::from_static("mcp"),
+        );
+
+        TemperClient::with_token(
+            base_url,
+            None,
+            Surface::Mcp,
+            bearer,
+            Arc::new(MemoryTokenStore::empty()),
+        )
+        .map_err(|e| rmcp::ErrorData::internal_error(format!("relay client: {e}"), None))
+        .map(|client| {
+            client
+                .with_default_headers(default_headers)
+                .with_non_idempotent_attempts(RELAY_NON_IDEMPOTENT_ATTEMPTS)
+                .with_connection_pool(self.shared_http.clone())
+        })
     }
 
     /// Resolve the profile from HTTP request parts and cache it.
@@ -141,8 +287,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::resources::CreateResourceInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::create_resource(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::resources::create_resource(self, &parts, input).await
     }
 
     #[tool(
@@ -153,8 +300,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::resources::GetResourceInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::get_resource(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::resources::get_resource(self, &parts, input).await
     }
 
     #[tool(
@@ -165,8 +313,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::resources::ResourceLineageInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::resource_lineage(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::resources::resource_lineage(self, &parts, input).await
     }
 
     #[tool(
@@ -177,8 +326,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::resources::GetBlockProvenanceInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::get_block_provenance(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::resources::get_block_provenance(self, &parts, input).await
     }
 
     #[tool(
@@ -189,8 +339,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::resources::GetBlockInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::get_block(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::resources::get_block(self, &parts, input).await
     }
 
     #[tool(
@@ -201,8 +352,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::resources::ListResourcesInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::list_resources(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::resources::list_resources(self, &parts, input).await
     }
 
     #[tool(
@@ -213,8 +365,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::resources::UpdateResourceInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::update_resource(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::resources::update_resource(self, &parts, input).await
     }
 
     #[tool(
@@ -225,8 +378,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::resources::AnnotateResourceInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::annotate_resource(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::resources::annotate_resource(self, &parts, input).await
     }
 
     #[tool(
@@ -237,8 +391,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::resources::UpdateResourceMetaInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::update_resource_meta(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::resources::update_resource_meta(self, &parts, input).await
     }
 
     #[tool(
@@ -249,8 +404,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::resources::DeleteResourceInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::delete_resource(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::resources::delete_resource(self, &parts, input).await
     }
 
     #[tool(
@@ -261,6 +417,7 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::reblock::ResourceReblockInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::reblock::resource_reblock(self, input).await
     }
@@ -276,6 +433,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
+        self.ensure_profile_from_parts(&parts).await?;
         tools::search::search(self, input).await
     }
 
@@ -287,6 +445,7 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::query::QueryInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::query::run_query(self, input).await
     }
@@ -302,6 +461,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
+        self.ensure_profile_from_parts(&parts).await?;
         tools::trail::element_trail(self, input).await
     }
 
@@ -316,6 +476,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
+        self.ensure_profile_from_parts(&parts).await?;
         tools::blobs::blob_read(self, input).await
     }
 
@@ -327,6 +488,7 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::blobs::BlobManageInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::blobs::blob_manage(self, input).await
     }
@@ -342,6 +504,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
+        self.ensure_profile_from_parts(&parts).await?;
         tools::relationships::relationship(self, input).await
     }
 
@@ -355,6 +518,7 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::citation_audits::RecordCitationAuditInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::citation_audits::record_citation_audit(self, input).await
     }
@@ -370,6 +534,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
+        self.ensure_profile_from_parts(&parts).await?;
         tools::facets::facets_read(self, input).await
     }
 
@@ -382,6 +547,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
+        self.ensure_profile_from_parts(&parts).await?;
         tools::facets::facet_set_unified(self, input).await
     }
 
@@ -393,6 +559,7 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::facets::FacetRetractInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::facets::facet_retract(self, input).await
     }
@@ -408,6 +575,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
+        self.ensure_profile_from_parts(&parts).await?;
         tools::cognitive_maps::cogmap_read(self, input).await
     }
 
@@ -419,6 +587,7 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::cognitive_maps::CogmapListInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::cognitive_maps::cogmap_list(self, input).await
     }
@@ -432,6 +601,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
+        self.ensure_profile_from_parts(&parts).await?;
         tools::cognitive_maps::cogmap_create(self, input).await
     }
 
@@ -443,6 +613,7 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::materialize::MaterializeTriggerInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::cognitive_maps::cogmap_materialize(self, input).await
     }
@@ -458,6 +629,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
+        self.ensure_profile_from_parts(&parts).await?;
         tools::contexts::context_read(self, input).await
     }
 
@@ -470,6 +642,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
+        self.ensure_profile_from_parts(&parts).await?;
         tools::contexts::context_manage(self, input).await
     }
 
@@ -481,6 +654,7 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::materialize::ContextMaterializeInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::cognitive_maps::context_materialize(self, input).await
     }
@@ -496,6 +670,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
+        self.ensure_profile_from_parts(&parts).await?;
         tools::doc_types::describe_schema(self, input).await
     }
 
@@ -510,6 +685,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
+        self.ensure_profile_from_parts(&parts).await?;
         tools::invocations::invocation_read(self, input).await
     }
 
@@ -521,6 +697,7 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::invocations::InvocationManageInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::invocations::invocation_manage(self, input).await
     }
@@ -536,6 +713,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
+        self.ensure_profile_from_parts(&parts).await?;
         tools::ingest::segmented_ingest(self, input).await
     }
 
@@ -550,6 +728,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
+        self.ensure_profile_from_parts(&parts).await?;
         tools::steward::steward_ingest_delta(self, input).await
     }
 
@@ -561,6 +740,7 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::steward::StewardAdvanceWatermarkInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::steward::steward_advance_watermark(self, input).await
     }
@@ -574,6 +754,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
+        self.ensure_profile_from_parts(&parts).await?;
         tools::data_artifacts::list_artifacts(self, input).await
     }
 
@@ -585,6 +766,7 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifacts::GetArtifactInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::data_artifacts::get_artifact(self, input).await
     }
@@ -598,6 +780,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
+        self.ensure_profile_from_parts(&parts).await?;
         tools::data_artifacts::commit_artifact(self, input).await
     }
 
@@ -609,6 +792,7 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifact_shapes::ListShapesInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::data_artifact_shapes::list_shapes(self, input).await
     }
@@ -622,6 +806,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
+        self.ensure_profile_from_parts(&parts).await?;
         tools::data_artifact_shapes::get_shape(self, input).await
     }
 
@@ -633,6 +818,7 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifact_shapes::DeclareShapeInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::data_artifact_shapes::declare_shape(self, input).await
     }
@@ -656,6 +842,80 @@ fn authed_request(
         rmcp::ErrorData::internal_error("Not authenticated".to_string(), None)
     })?;
     Ok((claims, token))
+}
+
+/// Map a post-edge authentication refusal onto the rmcp sentence that refusal's arm
+/// speaks (design §3 — the arm-for-arm mapping ruling 7 completed).
+///
+/// Through the network door, Level 1 and Level 2 run at the API, and their refusals
+/// arrive as 401/403 responses whose bodies temper-client preserves
+/// ([`ClientError::UnauthorizedDetails`]). The distinguishing information lives in the
+/// body, so THIS is where the arms split — one sentence per refusal kind, each carried
+/// over word-for-word from the direct binding's mapping (`map_authz_error`):
+///
+/// - **Deactivated** ("account is deactivated") → the terminal deactivation sentence.
+/// - **Machine-credential refusal** (the API's `machine credential refused: {why}`,
+///   ruling 7) → the terminal machine-gate sentence.
+/// - **Machine-principal gate** (the registration gate's own 401 message riding
+///   `ProfileResolution`'s wire voice) → the same terminal framing the direct binding
+///   gave it.
+/// - **Expired-in-flight** ("Invalid or expired token" — a face the direct binding
+///   could not produce: expiry used to die at the edge) → the NEW re-authenticate
+///   sentence, consistent with the `WWW-Authenticate` remediation the edge emits
+///   (design §10's named parity arm).
+///
+/// `None` for every other error — only authentication refusals speak here; the tool's
+/// own mapping owns the rest.
+pub(crate) fn map_post_edge_auth(refusal: &ClientError) -> Option<rmcp::ErrorData> {
+    let ClientError::UnauthorizedDetails { message } = refusal else {
+        return None;
+    };
+    let terminal =
+        |msg: String| rmcp::ErrorData::new(rmcp::model::ErrorCode::INVALID_REQUEST, msg, None);
+    if message.starts_with("machine credential refused:") {
+        // Terminal, like the direct binding's `AuthzError::Refused` arm: the token is
+        // structurally incoherent, so retrying changes nothing.
+        Some(terminal(
+            "This token is machine-shaped but does not declare a valid \
+             client_credentials grant. This error is terminal and should not be retried."
+                .to_string(),
+        ))
+    } else if message == "account is deactivated" {
+        Some(terminal(
+            "This account has been deactivated. This error is terminal and should not be retried."
+                .to_string(),
+        ))
+    } else if message == "Invalid or expired token" {
+        // The expired-in-flight face. The bearer verified at the edge but no longer
+        // decodes at the API — its lifetime ended inside the hop. The remedy is
+        // re-authentication, the same one the edge's 401 advertises via
+        // `WWW-Authenticate`; this sentence names it because the hop's 401 body cannot
+        // carry that header's meaning through a JSON-RPC answer.
+        Some(terminal(
+            "This session's token has expired. Re-authenticate (the MCP client's OAuth \
+             flow will refresh it) and retry the call."
+                .to_string(),
+        ))
+    } else if message == "Missing Authorization header"
+        || message == "Authorization header must use Bearer scheme"
+        || message == "Invalid Authorization header encoding"
+    {
+        // The bearer-scheme faces: the edge verified A token, so these mean the relay's
+        // re-issued credential was mangled in transit — an operator-visible fault
+        // phrased as the re-authentication it reduces to.
+        Some(terminal(
+            "This call's credentials did not survive the hop. Re-authenticate and retry; \
+             if it recurs, contact the operator."
+                .to_string(),
+        ))
+    } else {
+        // The machine-principal registration gate rejects with its own 401 message
+        // (unregistered or revoked client_id — G3 Phase A's gate); the direct binding
+        // framed it terminal, so the framing carries.
+        Some(terminal(format!(
+            "{message} This error is terminal and should not be retried."
+        )))
+    }
 }
 
 /// Map the shared seam's refusal vocabulary onto rmcp transport errors.
@@ -851,33 +1111,13 @@ impl rmcp::ServerHandler for TemperMcpService {
             context.peer.set_peer_info(request);
         }
 
-        // Resolve the session's principal through the shared seam, from the HTTP request
-        // parts injected by the StreamableHttpService transport.
-        //
-        // This used to call `resolve_from_claims` directly, which skipped Level 1's
-        // `is_active` gate: a deactivated account was refused on every *tool call* but
-        // still opened a session. `authenticate_token` closes that — refusals here are
-        // authentication decisions and propagate, rather than being warned past as the
-        // old best-effort cache seed was.
-        if let Some(parts) = context.extensions.get::<http::request::Parts>() {
-            let (claims, token) = authed_request(parts)?;
-            let authed =
-                temper_services::auth::authenticate_token(&self.api_state, claims, &token.0)
-                    .await
-                    .map_err(map_authz_error)?;
-
-            // Carry `profile_id` only — never the raw OAuth `sub`. This event was the specific one
-            // that surfaced the decision: it exported `profile_id` *and* `sub: google-oauth2|…`, and
-            // the `sub` was read by an LLM into a chat transcript during triage. The profile has
-            // resolved here, so `sub` is redundant for attribution and its only remaining effect is
-            // cross-boundary linkability. Decided 2026-08-01; see the task's §5.
-            tracing::info!(
-                profile_id = %authed.profile().id,
-                "MCP session initialized"
-            );
-            let mut guard = self.profile.lock().await;
-            *guard = Some(authed.into_profile());
-        }
+        // **No principal resolution here** — the network door's named delta (design §3,
+        // §10). `initialize` used to run `authenticate_token` (Level 1, DB-backed) at
+        // this function; the door moves Level 1 + 2 to the API, and re-running them at
+        // the edge would be the duplicate resolution the door removes. The edge's JWT
+        // verification is the only gate `initialize` passes; a deactivated caller now
+        // learns at FIRST TOOL CALL, when the API refuses and the tool layer maps the
+        // sentence — accepted on the record (§10, named deltas).
 
         Ok(self.get_info())
     }
@@ -890,10 +1130,15 @@ impl rmcp::ServerHandler for TemperMcpService {
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ListResourcesResult, rmcp::ErrorData> {
         if let Some(parts) = context.extensions.get::<http::request::Parts>() {
-            self.ensure_profile_from_parts(parts).await?;
+            // The network door: the browse read crosses the wire on the caller's own
+            // bearer; visibility is decided at the API (design §3).
+            let client = self.relay_client(parts)?;
+            return crate::resources::list_resources(&client, request).await;
         }
-        let profile = self.require_profile().await?;
-        crate::resources::list_resources(&self.api_state, &profile, request).await
+        Err(rmcp::ErrorData::internal_error(
+            "Not authenticated".to_string(),
+            None,
+        ))
     }
 
     async fn list_resource_templates(
@@ -910,10 +1155,13 @@ impl rmcp::ServerHandler for TemperMcpService {
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ReadResourceResult, rmcp::ErrorData> {
         if let Some(parts) = context.extensions.get::<http::request::Parts>() {
-            self.ensure_profile_from_parts(parts).await?;
+            let client = self.relay_client(parts)?;
+            return crate::resources::read_resource(&client, request).await;
         }
-        let profile = self.require_profile().await?;
-        crate::resources::read_resource(&self.api_state, &profile, request).await
+        Err(rmcp::ErrorData::internal_error(
+            "Not authenticated".to_string(),
+            None,
+        ))
     }
 }
 
@@ -1417,25 +1665,33 @@ mod tests {
         );
     }
 
-    /// **Every `#[tool]` method must call `ensure_profile_from_parts` before dispatching.**
+    /// **Every `#[tool]` method must authenticate before dispatching — one gate per binding.**
     ///
-    /// The MCP surface authenticates per-request from the JWT claims injected into the HTTP
-    /// extensions. A `#[tool]` method that skips `ensure_profile_from_parts` compiles fine and
-    /// is advertised by the router — it just runs unauthenticated, silently. The consolidation
-    /// that restructured every tool body could have dropped the call in any one of them; this
-    /// gate catches that.
+    /// The MCP surface authenticates per-request. Under the network door there are TWO
+    /// disciplines, per binding, and this gate holds each tool to its own:
     ///
-    /// It parses this file's own source rather than reflecting on the router, because the
-    /// router's `Tool` entries carry only the description + schema + a function pointer — there
-    /// is no way to inspect the function body at runtime to see whether it calls
-    /// `ensure_profile_from_parts`. Source parsing is the cheapest faithful check.
+    /// - **Direct-binding families** (still calling shared services through `api_state`)
+    ///   call `ensure_profile_from_parts` before dispatching — Level 1 + 2 run HERE, in
+    ///   the MCP function. A method that skips it compiles fine and is advertised by the
+    ///   router; it just runs unauthenticated, silently.
+    /// - **Network-door families** (dispatching to `tools::resources::`) call
+    ///   `svc.relay_client(parts)` and the API's own auth middleware performs Level 1 + 2
+    ///   on the caller's bearer — running the seam at the MCP function too would be the
+    ///   duplicate-resolution the door exists to remove, and the post-edge refusals are
+    ///   mapped arm-for-arm from the preserved bodies (`map_post_edge_auth`). Their gate
+    ///   is the wire crossing itself; what the gate asserts is that the Parts reached the
+    ///   relay client (no bearer ⇒ no forward).
+    ///
+    /// It parses this file's own source rather than reflecting on the router, because
+    /// the router's `Tool` entries carry only the description + schema + a function
+    /// pointer — there is no way to inspect the function body at runtime. Source parsing
+    /// is the cheapest faithful check.
     ///
     /// **What it covers:** every `#[tool]` method body in this file. The split is on
-    /// `#[tool(`, and each segment runs from the attribute to the next `#[tool(` or end of
-    /// file — so a method that calls `ensure_profile_from_parts` anywhere in its body passes.
-    /// A method that calls it conditionally (inside an `if`) would also pass; the invariant is
-    /// "the call is present", not "the call is unconditional", and every existing call IS
-    /// unconditional (the first line of every method body).
+    /// `#[tool(`, and each segment runs from the attribute to the next `#[tool(` or end
+    /// of file. A family migrating to the door moves BETWEEN arms in the same commit as
+    /// its handler change — a tool satisfying neither arm fails here, which is the
+    /// half-migrated state this gate exists to refuse.
     #[test]
     fn every_tool_method_calls_ensure_profile_from_parts() {
         let source = std::fs::read_to_string(
@@ -1466,23 +1722,28 @@ mod tests {
 
         let mut missing: Vec<String> = Vec::new();
         for segment in &tool_segments {
-            if !segment.contains("ensure_profile_from_parts") {
+            let direct_gate = segment.contains("ensure_profile_from_parts");
+            let network_door = segment.contains("tools::resources::");
+            if !direct_gate && !network_door {
                 let fn_name = segment
                     .split("async fn ")
                     .nth(1)
                     .and_then(|s| s.split('(').next())
                     .unwrap_or("<unknown>")
                     .trim();
-                missing.push(fn_name.to_string());
+                missing.push(format!(
+                    "{fn_name} (neither `ensure_profile_from_parts` nor a `tools::resources::` \
+                     network-door dispatch)"
+                ));
             }
         }
 
         assert!(
             missing.is_empty(),
-            "these #[tool] methods do not call ensure_profile_from_parts — every tool must \
-             authenticate before dispatching:\n  {}\n\
-             The call is the first line of every existing tool body; a new tool that omits it \
-             runs unauthenticated.",
+            "these #[tool] methods authenticate under neither binding — every tool must \
+             either gate directly (ensure_profile_from_parts) or cross the network door \
+             (tools::resources::, whose gate runs at the API):\n  {}\n\
+             A tool satisfying neither arm runs unauthenticated or half-migrated.",
             missing.join("\n  ")
         );
     }
