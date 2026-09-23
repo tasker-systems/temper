@@ -341,6 +341,86 @@ if [ "$v" = "moved" ]; then
   ok "derivation: required gained from absent computes as moved"
 else bad "derivation: required gained from absent computes as moved" "verdict=$v"; fi
 
+# 15g–15m — the SIDE-AWARE tolerance arm (2026-09-23, beat G3a's B1): two length-change
+# classes are provably tolerant in both skew directions (§4's own definition) and were
+# fail-closed before: a born OPTIONAL parameter on a surviving operation (old clients
+# never send it; a new client's param against an old server is answered by param
+# ignorance), and input-side string-enum member growth. Each tolerance probe has its
+# boundary probe — the same shape one nudge past the tolerance must stay moved.
+# The fixture: a surviving operation with one required path param; one component schema
+# referenced ONLY from the request body; one referenced from a response; one referenced
+# from both (the ambiguous side fails closed).
+cat > "${WORK}/side_base.json" <<'JSON'
+{"paths":{"/api/things/{id}":{"get":{"parameters":[{"in":"path","name":"id","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"ok"}}},
+           "post":{"requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/InOnly"}}}},"responses":{"200":{"description":"ok"}}},
+           "delete":{"responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"$ref":"#/components/schemas/OutSide"}}}}}}},
+ "/api/things":{"get":{"responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"$ref":"#/components/schemas/BothSides"}}}}}}}},
+ "components":{"schemas":{
+   "InOnly":{"type":"object","properties":{"kind":{"type":"string","enum":["alpha","beta"]}}},
+   "OutSide":{"type":"object","properties":{"kind":{"type":"string","enum":["alpha","beta"]}}},
+   "BothSides":{"type":"object","properties":{"reply":{"$ref":"#/components/schemas/OutSide"}}}}}}
+JSON
+
+# 15g — born OPTIONAL query parameter on a surviving operation: grew.
+jq -S '.paths["/api/things/{id}"].get.parameters += [{"in":"query","name":"sections","required":false,"schema":{"type":"string"}}]' "${WORK}/side_base.json" > "${WORK}/side_head.json"
+v="$(derive_with "${WORK}/side_base.json" "${WORK}/side_head.json")"
+if [ "$v" = "grew" ]; then
+  ok "derivation: a born optional parameter on a surviving operation computes as grew"
+else bad "derivation: a born optional parameter on a surviving operation computes as grew" "verdict=$v"; fi
+
+# 15h — born REQUIRED parameter on a surviving operation: moved (old clients never send
+# what the new server refuses).
+jq -S '.paths["/api/things/{id}"].get.parameters += [{"in":"query","name":"mode","required":true,"schema":{"type":"string"}}]' "${WORK}/side_base.json" > "${WORK}/side_head.json"
+v="$(derive_with "${WORK}/side_base.json" "${WORK}/side_head.json")"
+if [ "$v" = "moved" ]; then
+  ok "derivation: a born required parameter on a surviving operation computes as moved"
+else bad "derivation: a born required parameter on a surviving operation computes as moved" "verdict=$v"; fi
+
+# 15i — a REMOVED parameter: moved.
+jq -S '.paths["/api/things/{id}"].get.parameters = [.paths["/api/things/{id}"].get.parameters[0]] | .paths["/api/things/{id}"].get.parameters += [{"in":"query","name":"sections","required":false,"schema":{"type":"string"}}]' "${WORK}/side_base.json" > "${WORK}/side_head.json"
+jq -S 'del(.paths["/api/things/{id}"].get.parameters[0])' "${WORK}/side_head.json" > "${WORK}/side_head.json"
+v="$(derive_with "${WORK}/side_base.json" "${WORK}/side_head.json")"
+if [ "$v" = "moved" ]; then
+  ok "derivation: a removed parameter computes as moved"
+else bad "derivation: a removed parameter computes as moved" "verdict=$v"; fi
+
+# 15j — input-only component schema: string-enum member GROWTH (strict superset): grew.
+jq -S '.components.schemas.InOnly.properties.kind.enum += ["gamma"]' "${WORK}/side_base.json" > "${WORK}/side_head.json"
+v="$(derive_with "${WORK}/side_base.json" "${WORK}/side_head.json")"
+if [ "$v" = "grew" ]; then
+  ok "derivation: input-only enum member growth computes as grew"
+else bad "derivation: input-only enum member growth computes as grew" "verdict=$v"; fi
+
+# 15k — output-reachable component schema: the same growth stays moved (a server that
+# may now EMIT a member can strand an old client's exhaustive parse — the compat
+# amendment's own worry).
+jq -S '.components.schemas.OutSide.properties.kind.enum += ["gamma"]' "${WORK}/side_base.json" > "${WORK}/side_head.json"
+v="$(derive_with "${WORK}/side_base.json" "${WORK}/side_head.json")"
+if [ "$v" = "moved" ]; then
+  ok "derivation: output-side enum member growth computes as moved"
+else bad "derivation: output-side enum member growth computes as moved" "verdict=$v"; fi
+
+# 15l — BOTH-sides-reachable component schema (a response echoes a request shape): the
+# ambiguity fails closed.
+jq -S '.components.schemas.BothSides.properties = {"echo":{"$ref":"#/components/schemas/InOnly"},"reply":{"$ref":"#/components/schemas/OutSide"}}' "${WORK}/side_base.json" > "${WORK}/side_head.json"
+v="$(derive_with "${WORK}/side_base.json" "${WORK}/side_head.json")"
+if [ "$v" = "grew" ]; then
+  ok "derivation: both-sides fixture baseline stays grew (the 15k–15m probe substrate)"
+else bad "derivation: both-sides fixture baseline stays grew (the 15k–15m probe substrate)" "verdict=$v"; fi
+jq -S '.components.schemas.InOnly.properties.kind.enum += ["gamma"]' "${WORK}/side_head.json" > "${WORK}/side_head2.json"
+v="$(derive_with "${WORK}/side_head.json" "${WORK}/side_head2.json")"
+if [ "$v" = "moved" ]; then
+  ok "derivation: enum growth under a both-sides-reachable schema computes as moved"
+else bad "derivation: enum growth under a both-sides-reachable schema computes as moved" "verdict=$v"; fi
+
+# 15m — input-only enum SHRINK: moved (a member only the old contract accepted leaving
+# is a removal, not growth).
+jq -S '.components.schemas.InOnly.properties.kind.enum = ["alpha"]' "${WORK}/side_base.json" > "${WORK}/side_head.json"
+v="$(derive_with "${WORK}/side_base.json" "${WORK}/side_head.json")"
+if [ "$v" = "moved" ]; then
+  ok "derivation: input-only enum member shrink computes as moved"
+else bad "derivation: input-only enum member shrink computes as moved" "verdict=$v"; fi
+
 echo
 echo "  ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
