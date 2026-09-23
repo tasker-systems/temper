@@ -572,8 +572,11 @@ async fn fill_sections(
         let ids: Vec<Uuid> = views.iter().map(|view| Uuid::from(view.id)).collect();
         let mut by_id = crate::services::embed_service::embedding_status_batch(pool, &ids).await?;
         for view in views.iter_mut() {
-            view.embedding_status =
-                Some(by_id.remove(&Uuid::from(view.id)).unwrap_or(EmbeddingStatus::Ready));
+            view.embedding_status = Some(
+                by_id
+                    .remove(&Uuid::from(view.id))
+                    .unwrap_or(EmbeddingStatus::Ready),
+            );
         }
     }
     if sections.contains(ResourceSection::Body) {

@@ -294,7 +294,12 @@ impl ResourceSection {
     /// hand-copying it into a fourth place that then drifts.
     ///
     /// **This is the `show` door's vocabulary, not every door's** — see [`Self::LIST`].
-    pub const ALL: [Self; 4] = [Self::Body, Self::OpenMeta, Self::Edges, Self::EmbeddingStatus];
+    pub const ALL: [Self; 4] = [
+        Self::Body,
+        Self::OpenMeta,
+        Self::Edges,
+        Self::EmbeddingStatus,
+    ];
 
     /// The sections the **list** door accepts — the one definition, read by both the CLI's
     /// `--with`/`--without` parser and the server's `sections=` parse.

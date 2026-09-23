@@ -447,8 +447,8 @@ async fn enriched_view(
         .get(id, Some(&enriched_sections()))
         .await
         .map_err(|e| {
-        rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
-    })?;
+            rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
+        })?;
     let body_markdown = if include_content {
         Some(
             client
@@ -1055,27 +1055,28 @@ pub async fn list_resources(
 
     // Build list params — context_ref is resolved server-side by filtered_visible_page;
     // bare context names are rejected there (spec Decision 1).
-    let params = temper_workflow::types::resource::ResourceListParams {
-        context_ref: input.context_ref.clone(),
-        doc_type_name: input.doc_type_name.clone(),
-        stage: input.stage.clone(),
-        status: input.status.clone(),
-        tags,
-        goal,
-        cogmap_ids,
-        limit: input.limit.or(Some(50)).map(|l| l.min(200)),
-        offset: input.offset,
-        // Ask for the open tier and the derived embedding readiness on every row. The incumbent
-        // response carried both on the list surface (the open tier fetched per id, which is what
-        // made that path an N+1; the readiness in a second read after the page) — asking for them
-        // as SECTIONS gets the same answer in one statement per section for the whole page, via
-        // `readback::meta_batch` and `embed_service::embedding_status_batch`. The managed tier is
-        // not a section — it is always present.
-        sections: Some(enriched_sections().to_csv().expect(
-            "the enriched vocabulary is never empty, so it renders as a `sections` param",
-        )),
-        ..Default::default()
-    };
+    let params =
+        temper_workflow::types::resource::ResourceListParams {
+            context_ref: input.context_ref.clone(),
+            doc_type_name: input.doc_type_name.clone(),
+            stage: input.stage.clone(),
+            status: input.status.clone(),
+            tags,
+            goal,
+            cogmap_ids,
+            limit: input.limit.or(Some(50)).map(|l| l.min(200)),
+            offset: input.offset,
+            // Ask for the open tier and the derived embedding readiness on every row. The incumbent
+            // response carried both on the list surface (the open tier fetched per id, which is what
+            // made that path an N+1; the readiness in a second read after the page) — asking for them
+            // as SECTIONS gets the same answer in one statement per section for the whole page, via
+            // `readback::meta_batch` and `embed_service::embedding_status_batch`. The managed tier is
+            // not a section — it is always present.
+            sections: Some(enriched_sections().to_csv().expect(
+                "the enriched vocabulary is never empty, so it renders as a `sections` param",
+            )),
+            ..Default::default()
+        };
     let list_result = client
         .resources()
         .list(&params)
