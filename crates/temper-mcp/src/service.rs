@@ -57,6 +57,25 @@ pub fn shared_relay_pool() -> reqwest::Client {
         .expect("failed to build the relay's shared HTTP client")
 }
 
+/// An [`McpConfig`] with the relay OFF — no base URL, no service credential.
+///
+/// The e2e suites that exercise the DIRECT-binding families (everything not yet
+/// through the door) build their service with this: those tests never forward, so a
+/// relay-less config is their honest shape, and an accidental forwarding attempt
+/// answers the typed refuse-to-forward error instead of half-working.
+pub fn relay_off_config() -> McpConfig {
+    McpConfig {
+        mcp_base_url: "https://temper.invalid".to_string(),
+        mcp_client_id: None,
+        api_base_url: None,
+        mcp_service_secret: None,
+        oauth: crate::config::OAuthStaticConfig {
+            redirect_uris: vec![],
+            allow_localhost: false,
+        },
+    }
+}
+
 /// Total attempts for a non-idempotent (unkeyed) tool act. The ruled "1 retry on
 /// non-idempotent tool acts" (design §2.1/§11.6): a cold-start 500 on the API function is
 /// the hop's common transient, and the CALLER's own redrive has the same double-apply

@@ -874,7 +874,7 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
         blob_disabled_by_policy: false,
     };
     let state = AppState::new(pool.clone(), jwks_store, api_config);
-    let svc = temper_mcp::service::TemperMcpService::new(state);
+    let svc = temper_mcp::service::TemperMcpService::new(state, temper_mcp::service::relay_off_config(), temper_mcp::service::shared_relay_pool());
 
     let req = axum::http::Request::builder()
         // The MCP JWT middleware injects the raw bearer alongside the claims; the auth
@@ -1051,7 +1051,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
         blob_disabled_by_policy: false,
     };
     let state = AppState::new(pool.clone(), jwks_store, api_config);
-    let svc = temper_mcp::service::TemperMcpService::new(state);
+    let svc = temper_mcp::service::TemperMcpService::new(state, temper_mcp::service::relay_off_config(), temper_mcp::service::shared_relay_pool());
 
     let req = axum::http::Request::builder()
         // The MCP JWT middleware injects the raw bearer alongside the claims; the auth

@@ -71,6 +71,8 @@ async fn spawn_mcp_server(pool: &sqlx::PgPool) -> String {
     let mcp_config = temper_mcp::McpConfig {
         mcp_base_url: "http://localhost".to_string(),
         mcp_client_id: None,
+            api_base_url: None,
+            mcp_service_secret: None,
         oauth: temper_mcp::config::OAuthStaticConfig {
             redirect_uris: vec![],
             allow_localhost: true,

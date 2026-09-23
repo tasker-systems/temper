@@ -67,6 +67,8 @@ async fn mcp_links_an_authenticated_callers_trace_and_no_one_elses(pool: sqlx::P
     let mcp_config = temper_mcp::McpConfig {
         mcp_base_url: "http://localhost".to_string(),
         mcp_client_id: None,
+            api_base_url: None,
+            mcp_service_secret: None,
         oauth: temper_mcp::config::OAuthStaticConfig {
             redirect_uris: vec![],
             allow_localhost: true,
