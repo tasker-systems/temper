@@ -13,14 +13,13 @@
 //!    (the relay's exact wire shape at the listener) reads back
 //!    `<handle>@mcp` from `kb_events`.
 //!
-//! The bite: drop `relay_trust`'s extension planting and BOTH halves redden —
-//! the trusted event vanishes and the ledger read lands `@web`.
+//! The bite: drop the `RelayedSurface` planting in `relay_trust` and BOTH halves
+//! redden — the trusted event vanishes and the ledger read lands `@web`.
 
 mod common;
 
 use serde_json::json;
 use sqlx::PgPool;
-use temper_mcp::service::TemperMcpService;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -49,10 +48,10 @@ async fn handle_of_only_profile(pool: &PgPool) -> String {
         .expect("a profile exists")
 }
 
-/// The relay's exact wire shape at the real listener: bearer + service credential
-/// + the one allowed carrier. A write landing this way is the write a relayed
-/// tool act IS, as far as the door can tell — which is the whole point of the
-/// credential.
+/// The relay's exact wire shape at the real listener: the bearer, the service
+/// credential, and the one allowed carrier. A write landing this way is the
+/// write a relayed tool act IS, as far as the door can tell — which is the whole
+/// point of the credential's confidentiality.
 async fn relayed_ingest(app: &common::E2eTestApp, title: &str) -> u16 {
     let ctx: uuid::Uuid = sqlx::query_scalar(
         "SELECT c.id FROM kb_contexts c \
