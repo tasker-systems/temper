@@ -1183,9 +1183,7 @@ impl rmcp::ServerHandler for TemperMcpService {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        advertise_blob_tools, map_post_edge_auth, TemperMcpService, BLOB_TOOL_NAMES,
-    };
+    use super::{advertise_blob_tools, map_post_edge_auth, TemperMcpService, BLOB_TOOL_NAMES};
     use temper_client::error::ClientError;
 
     /// The JWKS-outage 401 ("Authentication service unavailable") is TRANSIENT — the

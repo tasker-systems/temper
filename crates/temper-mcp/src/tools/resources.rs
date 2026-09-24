@@ -488,10 +488,7 @@ async fn enriched_view(
                 .content(id)
                 .await
                 .across_auth(|e| {
-                    rmcp::ErrorData::internal_error(
-                        format!("Failed to get resource: {e}"),
-                        None,
-                    )
+                    rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
                 })?
                 .markdown,
         )

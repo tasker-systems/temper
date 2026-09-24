@@ -285,7 +285,8 @@ async fn a_post_edge_401_on_delete_speaks_the_arm_not_the_fault(pool: PgPool) {
     .expect_err("a deactivated principal does not answer");
 
     assert_eq!(
-        code_of(&err), -32600,
+        code_of(&err),
+        -32600,
         "the arm's terminal sentence, never an internal fault: {err}"
     );
     assert_eq!(
