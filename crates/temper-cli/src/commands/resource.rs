@@ -1780,6 +1780,21 @@ pub fn show(_config: &Config, params: ShowParams<'_>) -> Result<()> {
     )?;
     let want_body = sections.contains(ResourceSection::Body);
 
+    // The requested sections RIDE the view call (RG-1 F3): `--with embedding-status`
+    // used to parse, print in help, and then silently never be requested. `body` is
+    // excluded — this command fetches content through `GET /content` below, and the
+    // view call is not where it comes from — and so is `edges`, which has its own
+    // request and output block here; the `?sections=` parameter is additive onto the
+    // open-meta baseline, so what remains lands on the view this command already
+    // renders.
+    let metadata_sections = SectionSet::from_iter(
+        ResourceSection::ALL
+            .iter()
+            .copied()
+            .filter(|s| sections.contains(*s))
+            .filter(|s| !matches!(s, ResourceSection::Body | ResourceSection::Edges)),
+    );
+
     let (mut metadata, body) = crate::actions::runtime::with_client(move |client| {
         Box::pin(async move {
             // `get` returns a `ResourceView` — the same shape a `list` row is, with the
@@ -1787,7 +1802,7 @@ pub fn show(_config: &Config, params: ShowParams<'_>) -> Result<()> {
             // strict subset of the full one.
             let detail = client
                 .resources()
-                .get(uuid::Uuid::from(id), None)
+                .get(uuid::Uuid::from(id), Some(&metadata_sections))
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
 
