@@ -13,8 +13,9 @@
 //!    (the relay's exact wire shape at the listener) reads back
 //!    `<handle>@mcp` from `kb_events`.
 //!
-//! The bite: drop the `RelayedSurface` planting in `relay_trust` and BOTH halves
-//! redden — the trusted event vanishes and the ledger read lands `@web`.
+//! The bite, probe-proven: drop ONLY the `RelayedSurface` planting in
+//! `relay_trust` and the ledger read reddens (the act lands `@web`); drop the
+//! whole honor branch and the trusted-path witness reddens with it.
 
 mod common;
 
