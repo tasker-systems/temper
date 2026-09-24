@@ -1870,8 +1870,7 @@ mod tests {
             // signature), which the bite probe exploited: a method with neither gate
             // nor dispatch passed the old arm. The `(self, &parts` call shape is the
             // discriminator — parts exist on the dispatch path to be forwarded.
-            let network_door =
-                segment.contains("tools::") && segment.contains("(self, &parts");
+            let network_door = segment.contains("tools::") && segment.contains("(self, &parts");
             if !direct_gate && !network_door {
                 let fn_name = segment
                     .split("async fn ")
