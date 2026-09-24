@@ -292,13 +292,12 @@ impl ApiConfig {
             cors_origins,
             port: lookup("PORT").and_then(|p| p.parse().ok()).unwrap_or(3000),
             enable_swagger,
-            internal_reconcile_secret: lookup("INTERNAL_RECONCILE_SECRET")
-                .filter(|s| !s.is_empty()),
-            embed_dispatch_secret: lookup("EMBED_DISPATCH_SECRET").filter(|s| !s.is_empty()),
-            mcp_service_secret: lookup("TEMPER_MCP_SERVICE_SECRET").filter(|s| !s.is_empty()),
+            internal_reconcile_secret: shared_secret(&lookup, "INTERNAL_RECONCILE_SECRET"),
+            embed_dispatch_secret: shared_secret(&lookup, "EMBED_DISPATCH_SECRET"),
+            mcp_service_secret: shared_secret(&lookup, "TEMPER_MCP_SERVICE_SECRET"),
             vercel_connect: parse_vercel_connect(&lookup),
             slack_link: parse_slack_link(&lookup),
-            slack_mint_secret: lookup("SLACK_MINT_SECRET").filter(|s| !s.is_empty()),
+            slack_mint_secret: shared_secret(&lookup, "SLACK_MINT_SECRET"),
             rate_limit: crate::rate_limit::parse_rate_limit(&lookup)?,
             blob,
             blob_disabled_by_policy,
@@ -566,12 +565,28 @@ const SHARED_SECRET_VARS: [&str; 7] = [
 ///
 /// Only [`ApiConfig::from_lookup`] runs this, so the in-process test harnesses that build an
 /// `ApiConfig` by struct literal are unaffected — correctly, since they are not deployments.
+/// A shared secret read from the environment. Compared against a header PRESENTED as
+/// its value, so the stored value and the presentation must agree byte-for-byte —
+/// surrounding whitespace is an operator artifact (a pasted value, a trailing newline
+/// from `$(cat /run/secrets/…)` or an env_file), never part of the secret. Trimming
+/// here keeps the gate from silently failing every presentation of an
+/// otherwise-correct secret, and keeps `check_secret_distinctness`'s compare on
+/// trimmed values honest about collisions like `"X"` vs `"X␣"`.
+fn shared_secret(lookup: &impl Fn(&str) -> Option<String>, name: &str) -> Option<String> {
+    lookup(name)
+        .map(|v| v.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 fn check_secret_distinctness(lookup: impl Fn(&str) -> Option<String>) -> Result<(), ConfigError> {
     // Empty is absent (the `.filter(|s| !s.is_empty())` convention every field above uses). Two
     // unset variables both reading "" are not a collision — they are two disabled endpoints.
+    // Comparison is over TRIMMED values (see `shared_secret`): the consumption gates compare
+    // against what a holder's PROCESS env contains; two values equal only after trimming are
+    // the same secret with whitespace paste skew, and their holders cross-authenticate.
     let present: Vec<(&'static str, String)> = SHARED_SECRET_VARS
         .iter()
-        .filter_map(|&name| lookup(name).filter(|v| !v.is_empty()).map(|v| (name, v)))
+        .filter_map(|&name| shared_secret(&lookup, name).map(|v| (name, v)))
         .collect();
 
     for (i, (a_name, a_value)) in present.iter().enumerate() {
@@ -698,11 +713,54 @@ mod tests {
     }
 
     // FAILS IF: only ONE of a colliding pair is set — that is a single secret, not a shared one.
+
     #[test]
     fn a_lone_secret_never_collides() {
         assert_eq!(
             check_secret_distinctness(env(&[("SLACK_MINT_SECRET", "only-one-set")])),
             Ok(())
+        );
+    }
+
+    // FAILS IF: two secrets differing only by surrounding whitespace pass the gate.
+    // Each consumption gate compares a holder PRESENTATION against the stored value —
+    // and a presentation trimmed on one side of the wire means `"X"` and `"X␣"` are
+    // the same secret with paste skew: their holders cross-authenticate, which is the
+    // exact operator error this gate exists to refuse.
+    #[test]
+    fn whitespace_skewed_values_are_one_secret() {
+        assert_eq!(
+            check_secret_distinctness(env(&[
+                ("TEMPER_MCP_SERVICE_SECRET", "shared-secret "),
+                ("INTERNAL_RECONCILE_SECRET", "shared-secret"),
+            ])),
+            // The pair's report order is the iteration order of SHARED_SECRET_VARS —
+            // the file's own comment pins that as the deterministic property.
+            Err(ConfigError::SecretCollision(
+                "INTERNAL_RECONCILE_SECRET",
+                "TEMPER_MCP_SERVICE_SECRET"
+            )),
+            "the distinctness gate must compare trimmed values"
+        );
+        // Whitespace-only is as absent as empty (the e2e harness's None case).
+        assert_eq!(
+            check_secret_distinctness(env(&[("EMBED_DISPATCH_SECRET", "   ")])),
+            Ok(())
+        );
+    }
+
+    // FAILS IF: a gate secret stored by the API keeps its surrounding whitespace — a
+    // trailing newline from `$(cat /run/secrets/…)` would make the stored value differ
+    // from the value the other function (which trims at parse) presents, silently
+    // failing every presentation of an otherwise-correct secret.
+    #[test]
+    fn the_mcp_service_secret_is_stored_trimmed_like_its_presentation() {
+        assert_eq!(
+            shared_secret(
+                &env(&[("TEMPER_MCP_SERVICE_SECRET", "  relay-secret\n")]),
+                "TEMPER_MCP_SERVICE_SECRET"
+            ),
+            Some("relay-secret".to_string())
         );
     }
 
