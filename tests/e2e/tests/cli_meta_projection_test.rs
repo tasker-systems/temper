@@ -95,6 +95,85 @@ async fn show_without_body_returns_the_view_minus_the_body(pool: sqlx::PgPool) {
     assert!(stdout.get("markdown").is_none(), "should not include body");
 }
 
+/// `--with embedding-status` is a section `show` actually REQUESTS, not one it parses
+/// and silently drops (RG-1 F3): the resolved sections ride the view call's
+/// `?sections=` parameter, so the derived field lands on the rendered JSON. Before the
+/// fix the flag charged the caller a valid word and returned neither the field nor an
+/// error.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn show_with_embedding_status_returns_the_derived_field(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("meta-cli", None)
+        .await
+        .expect("ctx create");
+
+    let payload = IngestPayload {
+        idempotency_key: None,
+        segmented: None,
+        goal: None,
+        title: "Show Embedding Status".to_string(),
+        origin_uri: "test://e2e/show-embedding-status".to_string(),
+        context_ref: "@me/meta-cli".to_string(),
+        home_cogmap_id: None,
+        doc_type_name: "task".to_string(),
+        content_hash: Some(
+            "showembed000000000000000000000000000000000000000000000000000".to_string(),
+        ),
+        content: "# Show Embedding\n\nBody here.".to_string(),
+        metadata: None,
+        managed_meta: None,
+        open_meta: None,
+        chunks_packed: Some(
+            pack_chunks(&common::chunked("# Show Embedding\n\nBody here.", 0.1)).unwrap(),
+        ),
+        act: Default::default(),
+        sources: Vec::new(),
+    };
+
+    let created = app.client.ingest().create(&payload).await.expect("ingest");
+    let id = created.id.as_uuid().to_string();
+
+    let output = common::run_temper_cli(
+        &app,
+        &[
+            "resource",
+            "show",
+            id.as_str(),
+            "--with",
+            "embedding-status",
+            "--without",
+            "body",
+            "--format",
+            "json",
+        ],
+    )
+    .await
+    .expect("cli run");
+
+    assert!(
+        output.status.success(),
+        "cli failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: Value = serde_json::from_slice(&output.stdout).expect("json parse");
+    let status = stdout
+        .get("embedding_status")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("the requested section must be requested: {stdout}"));
+    assert!(
+        ["pending", "deriving", "ready"].contains(&status),
+        "one of the three states, got {status}"
+    );
+}
+
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn show_without_body_with_fields_filters_response(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
