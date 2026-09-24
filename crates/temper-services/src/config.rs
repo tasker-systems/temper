@@ -109,7 +109,17 @@ pub struct BlobConfig {
     /// env-var races.
     pub oidc_token_source: std::sync::Arc<dyn Fn() -> Option<String> + Send + Sync>,
     /// The D9 per-blob size cap — the vocabulary a declined commit teaches from.
-    /// Default 100 MB (`BLOB_MAX_BYTES`).
+    /// Default 64 MB (`BLOB_MAX_BYTES`).
+    ///
+    /// The default rests on a stated memory posture (ruled 2026-09-24, task
+    /// 01a0723f-283c-7dd3-b047-d3d077520839): peak resident during a segmented
+    /// finalize is ~1.2× the cap argued from the code path — `assemble_body`
+    /// materializes the whole once (segment rows + the assembled vec overlap
+    /// transiently), `Bytes::from` moves it, the provider `put` consumes it by
+    /// value, and the only clones are `Bytes` refcount bumps. At 64 MB that is
+    /// ~80 MB per concurrent finalize; the deployed function holds 3009 MB, so
+    /// roughly 30+ concurrent finalizes compose before memory pressure, with
+    /// head-room for concurrent non-upload traffic and allocator overhead.
     pub max_bytes: i64,
     /// The D9 content-type allowlist — same passage as `max_bytes`.
     /// Default the spec's six (`BLOB_CONTENT_TYPE_ALLOWLIST`, comma-separated).
@@ -403,7 +413,7 @@ fn parse_blob(lookup: impl Fn(&str) -> Option<String>) -> (Option<BlobConfig>, b
     }
 
     let max_bytes = match lookup("BLOB_MAX_BYTES") {
-        None => 100 * 1024 * 1024,
+        None => 64 * 1024 * 1024,
         Some(raw) => match raw.trim().parse::<i64>() {
             Ok(n) if n > 0 => n,
             _ => {
@@ -1039,9 +1049,10 @@ mod tests {
         assert!(!explicit_on.blob_disabled_by_policy);
     }
 
-    // FAILS IF: the D9 vocabulary drifts from the plan-pulled values — cap 100 MB
-    // (Vercel's multipart-guidance boundary), the spec's six content types, and a
-    // single-request threshold under the platform's hard 4.5 MB request-body cap.
+    // FAILS IF: the D9 vocabulary drifts from the ruled values — cap 64 MB (the memory
+    // posture ruled 2026-09-24: ~1.2× per concurrent finalize against the 3009 MB
+    // function), the spec's six content types, and a single-request threshold under the
+    // platform's hard 4.5 MB request-body cap.
     #[test]
     fn blob_defaults_are_the_plan_pulled_values() {
         let cfg =
@@ -1049,7 +1060,7 @@ mod tests {
                 .unwrap()
                 .blob
                 .unwrap();
-        assert_eq!(cfg.max_bytes, 100 * 1024 * 1024);
+        assert_eq!(cfg.max_bytes, 64 * 1024 * 1024);
         assert_eq!(
             cfg.allowlist,
             vec![

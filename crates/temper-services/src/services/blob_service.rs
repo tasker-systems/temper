@@ -670,6 +670,15 @@ pub async fn upload_progress(
 /// own words, so a refused finalize never costs a provider object. Staging dies on
 /// finalize success; every failure keeps it resumable, and the staging TTL reaper
 /// (`blob_reap_service`) sweeps what stays untouched past the configured TTL.
+///
+/// Memory posture (task 01a0723f-283c-7dd3-b047-d3d077520839): peak resident is ~1.2×
+/// `BlobConfig::max_bytes`, argued from this path — `assemble_body` materializes the
+/// whole once (the fetched segment rows and the assembled vec overlap transiently during
+/// the extend), `Bytes::from` moves it, the provider put consumes it by value, and the
+/// only clones taken (`body.clone()` on the dedup path, the `Some(&body)` restore
+/// hand-off) are `Bytes` refcount bumps, never copies. A change that materializes the
+/// whole a second time — or clones it into a fresh buffer — breaks this posture and must
+/// restate the multiple beside the config default it multiplies.
 pub async fn finalize_upload(
     pool: &PgPool,
     store: &dyn temper_substrate::blob_store::BlobStore,

@@ -50,7 +50,7 @@ named in the record. Bytes release only when no live record carries the same has
 | Knob | Default | Purpose |
 |---|---|---|
 | `BLOB_ENABLED` | unset (enabled) | `false` closes the blob doors deliberately — fails closed even with credentials present; the MCP tools are not advertised |
-| `BLOB_MAX_BYTES` | 100 MB | per-blob cap |
+| `BLOB_MAX_BYTES` | 64 MB | per-blob cap |
 | `BLOB_CONTENT_TYPE_ALLOWLIST` | png, jpeg, webp, svg, gif, pdf | media types the doors admit |
 | `BLOB_SINGLE_REQUEST_MAX_BYTES` | 4 MB | above this the CLI segments automatically |
 | `BLOB_UPLOAD_STAGING_TTL_SECONDS` | 24 hours | how long a stalled staged upload survives before the reaper sweeps it |
@@ -59,7 +59,6 @@ named in the record. Bytes release only when no live record carries the same has
 
 Open work, stated so absence is never read as coverage:
 
-- **No per-owner aggregate bounds** — nothing caps open staged sessions or total staged
-  bytes per principal (task `01a0723e-cfe5-7080-9e0e-9b3323c25080` in the temper vault).
-- **Finalize assembles the whole body in memory** and clones it for the put — peak
-  resident is 2–3× the blob at the 100 MB cap.
+- **No per-owner aggregate bounds** — resolved: shipped in PR #950 (merged 2026-09-24) —
+  a principal holds at most 8 open sessions and stages at most 5 × the cap
+  (task `01a0723e-cfe5-7080-9e0e-9b3323c25080` in the temper vault).

@@ -35,7 +35,7 @@ Every write surface reaches the same doors:
 
 | Limit | Default | Knob |
 |---|---|---|
-| Per-blob size cap | 100 MB | `BLOB_MAX_BYTES` |
+| Per-blob size cap | 64 MB | `BLOB_MAX_BYTES` |
 | Single-request threshold | 4 MB | `BLOB_SINGLE_REQUEST_MAX_BYTES` |
 | Media types admitted | png, jpeg, webp, svg, gif, pdf | `BLOB_CONTENT_TYPE_ALLOWLIST` |
 | Staged-upload lifetime | 24 hours | `BLOB_UPLOAD_STAGING_TTL_SECONDS` |
