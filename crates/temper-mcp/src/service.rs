@@ -53,6 +53,13 @@ pub(crate) const RELAY_REQUEST_TIMEOUT_SECS: u64 = 45;
 pub fn shared_relay_pool() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(RELAY_REQUEST_TIMEOUT_SECS))
+        // Redirects are refused, never followed (RG-2 F1): the pool's clients carry the
+        // shared service credential and the caller's bearer as default headers, and
+        // reqwest replays default headers on every redirect hop — a 3xx answered by
+        // anything in front of the pinned `api_base_url` must not be able to re-send
+        // either secret to an origin of its choosing. No API route emits a 3xx; this
+        // makes the relay's behavior independent of that fact.
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("failed to build the relay's shared HTTP client")
 }
