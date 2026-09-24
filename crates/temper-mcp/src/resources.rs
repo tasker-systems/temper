@@ -133,10 +133,11 @@ pub async fn read_resource(
         .strip_prefix("temper://resources/")
         .and_then(|id| Uuid::try_parse(id).ok())
     {
-        // The gated identity read with no sections: the browse surface returns the metadata
-        // object and the markdown as two separate content parts, so the body is fetched
-        // below rather than asked for as a section (the `…/content` read is the same door
-        // a `…/content` URI uses).
+        // The gated identity read with its default section set — `get(id, None)` is the
+        // door's open-meta baseline, so the browse metadata part carries `open_meta`
+        // (and the managed tier, which is always present on a view). The markdown is
+        // fetched below as its own part rather than asked for as a section (the
+        // `…/content` read is the same door a `…/content` URI uses).
         let row = client.resources().get(id, None).await.map_err(|e| {
             crate::service::map_post_edge_auth(&e).unwrap_or_else(|| {
                 rmcp::ErrorData::internal_error(format!("Failed to read resource: {e}"), None)
