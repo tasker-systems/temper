@@ -112,8 +112,13 @@ pub async fn get(
     let mut names: BTreeSet<ResourceSection> = BTreeSet::new();
     names.insert(ResourceSection::OpenMeta);
     if let Some(csv) = query.sections.as_deref() {
-        let extra = SectionSet::parse_csv(csv).map_err(ApiError::from)?;
-        for section in ResourceSection::ALL {
+        // The show door parses against ITS accepted set: `edges` is not one — edges are
+        // fetched alongside a view, never carried on it, so accepting the word was
+        // answering 200 with less than was asked for (the accept-and-ignore shape the
+        // LIST door's ruling refuses; residual SEC-4 F3).
+        let extra =
+            SectionSet::parse_csv_accepting(csv, &ResourceSection::SHOW).map_err(ApiError::from)?;
+        for section in ResourceSection::SHOW {
             if extra.contains(section) {
                 names.insert(section);
             }

@@ -301,6 +301,15 @@ impl ResourceSection {
         Self::EmbeddingStatus,
     ];
 
+    /// The sections the **show** door accepts — `ALL` minus [`Self::Edges`].
+    ///
+    /// Edges are fetched *alongside* a view, never carried on it, so a show-door
+    /// `?sections=edges` request used to parse and then be silently ignored — the
+    /// accept-and-ignore shape the LIST door's ruling refuses. Accepting the word on
+    /// show is the same shape one door over; the refusal now names the door's own
+    /// vocabulary rather than answering 200 with less than was asked for.
+    pub const SHOW: [Self; 3] = [Self::Body, Self::OpenMeta, Self::EmbeddingStatus];
+
     /// The sections the **list** door accepts — the one definition, read by both the CLI's
     /// `--with`/`--without` parser and the server's `sections=` parse.
     ///
@@ -778,6 +787,44 @@ mod tests {
                 "`{section}` must still be reachable on the show door"
             );
         }
+    }
+
+    /// The show door's *handled* vocabulary excludes `edges` — the name still parses
+    /// (it is a section; list's edge-composition test above reads it), but the show
+    /// door's `?sections=` parse refuses it with the door's own accept set listed,
+    /// because nothing fills it there (accept-and-ignore is the shape that justified
+    /// excluding it from LIST, and show had the same hole one door over).
+    ///
+    /// The name/parse asymmetry is the point: `FromStr` answers the global "is this a
+    /// section name?" and keeps `edges` — a CLI `--with edges` on show composes the
+    /// edge read itself, off this parameter. The door-scoped parse answers "does THIS
+    /// door serve it?"
+    #[test]
+    fn the_show_door_refuses_edges_and_names_only_what_it_serves() {
+        assert_eq!(
+            ResourceSection::SHOW,
+            ResourceSection::ALL
+                .iter()
+                .copied()
+                .filter(|s| *s != ResourceSection::Edges)
+                .collect::<Vec<_>>()
+                .as_slice(),
+            "SHOW is ALL minus edges, by construction"
+        );
+
+        let err = SectionSet::parse_csv_accepting("edges", &ResourceSection::SHOW)
+            .expect_err("the show door refuses `edges`");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("open-meta"),
+            "the refusal names what this door does serve: {msg}"
+        );
+        assert!(
+            !msg.contains("expected one of: edges")
+                && !msg.contains(", edges")
+                && !msg.contains("edges,"),
+            "and must NOT offer `edges` back as a valid choice — it just declined it: {msg}"
+        );
     }
 
     /// [`SectionSet::contains`] answers for a member and for a non-member.
