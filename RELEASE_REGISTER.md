@@ -51,10 +51,17 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   direct binding performed; the edge's 25 MB stays the one user-visible ceiling.
   openapi.json moves additively only: a new `EmbeddingStatus` schema, a fourth
   `ResourceSection` value, one optional view field, one optional query parameter; no
-  rename, no removal, no type change on any existing shape.
+  rename, no removal, no type change on any existing shape. The arc-boundary review
+  pass (RG-1 + RG-2) tightened four voices inside those declared surfaces, no new
+  shape: `delete`'s post-edge 401s speak the arm sentences (previously an internal
+  fault with a CLI login hint), the JWKS-outage 401 maps to a retryable internal
+  voice (previously the catch-all's terminal framing), the relay pool refuses
+  redirects (reqwest's default would replay the service credential and bearer to any
+  3xx target), and the CLI `show --with embedding-status` actually requests the
+  section (previously parsed, documented, silently dropped).
 pr: self
 classes: additive, behavioral
-surfaces: http, mcp, clients
+surfaces: http, mcp, clients, cli-stdout
 status: signal-only
 - **The data-artifact refusal surface — declined writes travel as typed 400s, explicit `kind_owner` reaches the SQL layer, CLI `--kind-owner`**
   A data-artifact write the system declines for reasons the caller can act on — the shape
