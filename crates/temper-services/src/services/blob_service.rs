@@ -505,13 +505,29 @@ pub struct BlobUploadFinalizeOutcome {
     pub estate_scope_disclosure: Option<String>,
 }
 
+/// The per-owner staging bounds (ruled 2026-09-24 on task `01a0723e-cfe5-7080-9e0e-
+/// 9b3323c25080`): a principal holds at most [`MAX_OPEN_UPLOAD_SESSIONS`] open upload
+/// sessions, and stages at most [`STAGING_BUDGET_MULTIPLE`] × the per-blob cap across
+/// them. Zero new env keys — the byte budget derives from the ONE operator knob
+/// (`BLOB_MAX_BYTES`), so raising the cap is one deliberate operator act and the budget
+/// scales with it; the session limit is a flat constant beside it, and a misconfigured
+/// `BLOB_MAX_BYTES` fails closed at parse (`parse_blob` disables the whole flow). Both
+/// bounds refuse at `begin_upload` only: an append to an already-open session is
+/// governed by the per-session ceiling, never by these.
+pub const MAX_OPEN_UPLOAD_SESSIONS: i64 = 8;
+pub const STAGING_BUDGET_MULTIPLE: i64 = 5;
+
 /// Begin a staged upload: standing two-step on the declared home (fail fast — no orphan
-/// session for the unauthorized), then the server-minted session row. The allowlist is
-/// restated here as the begin-time courtesy (a session begun for a media type that can
-/// never commit would fill to the staging ceiling before finalize refused it — the same
-/// fail-fast spirit as the standing check), in the wrapper's own vocabulary; the wrapper
-/// stays the sole allowlist AUTHORITY at finalize (D9), where the check runs again —
-/// configuration can change mid-upload, and the begin-time answer is not the commit's.
+/// session for the unauthorized), then the server-minted session row under the per-owner
+/// bounds. The allowlist is restated here as the begin-time courtesy (a session begun for
+/// a media type that can never commit would fill to the staging ceiling before finalize
+/// refused it — the same fail-fast spirit as the standing check), in the wrapper's own
+/// vocabulary; the wrapper stays the sole allowlist AUTHORITY at finalize (D9), where the
+/// check runs again — configuration can change mid-upload, and the begin-time answer is
+/// not the commit's. The bounds refuse in the incumbent `blob_upload:` vocabulary,
+/// naming the bound in force and the remedy — the knob's name, since raising
+/// `BLOB_MAX_BYTES` raises the budget with it and the staging TTL reaper clears
+/// abandoned sessions.
 pub async fn begin_upload(
     pool: &PgPool,
     config: &crate::config::BlobConfig,
@@ -523,9 +539,34 @@ pub async fn begin_upload(
     if !allowlist_admits(&content_type, &config.allowlist) {
         return Err(allowlist_refusal(&content_type, &config.allowlist));
     }
-    temper_substrate::uploads::create_session(pool, caller, &home, &content_type)
-        .await
-        .map_err(|e| ApiError::internal_scrubbed("blob upload begin failed", e))
+    let outcome = temper_substrate::uploads::create_session(
+        pool,
+        caller,
+        &home,
+        &content_type,
+        MAX_OPEN_UPLOAD_SESSIONS,
+        STAGING_BUDGET_MULTIPLE.saturating_mul(config.max_bytes),
+    )
+    .await
+    .map_err(|e| ApiError::internal_scrubbed("blob upload begin failed", e))?;
+    match outcome {
+        temper_substrate::uploads::BeginOutcome::Began { upload_id } => Ok(upload_id),
+        temper_substrate::uploads::BeginOutcome::OverOpenSessions { open, limit } => {
+            Err(ApiError::BadRequest(format!(
+                "blob_upload: you hold {open} open upload sessions against a limit of {limit} \
+                 — finalize or abandon one before beginning another (the staging TTL reaper \
+                 sweeps untouched sessions)"
+            )))
+        }
+        temper_substrate::uploads::BeginOutcome::OverStagingBudget { staged, budget } => {
+            Err(ApiError::BadRequest(format!(
+                "blob_upload: your open uploads stage {staged} bytes against a staging \
+                 budget of {budget} — 5 × the per-blob cap of {} (BLOB_MAX_BYTES); finalize \
+                 an existing upload or raise BLOB_MAX_BYTES to raise this budget with it",
+                config.max_bytes
+            )))
+        }
+    }
 }
 
 /// The landed set as the wire sees it. `None` from the substrate means the session is

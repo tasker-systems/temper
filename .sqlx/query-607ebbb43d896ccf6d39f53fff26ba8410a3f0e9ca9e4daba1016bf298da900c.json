@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n             (SELECT count(*) FROM kb_blob_uploads WHERE owner_profile_id = $1)::bigint\n               AS \"open!\",\n             COALESCE((\n               SELECT SUM(octet_length(s.bytes))\n                 FROM kb_blob_upload_segments s\n                 JOIN kb_blob_uploads u ON u.id = s.upload_id\n                WHERE u.owner_profile_id = $1\n             ), 0)::bigint AS \"staged!\"\n           ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "open!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "staged!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "607ebbb43d896ccf6d39f53fff26ba8410a3f0e9ca9e4daba1016bf298da900c"
+}
