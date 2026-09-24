@@ -69,8 +69,11 @@ status: signal-only
   the single value `mcp`, and never an authorization input. Who observes: an
   MCP-calling agent, whose tool names, wire schemas, and response shapes are
   unchanged; refusal kinds held arm-for-arm across the hop, pinned by a parity suite
-  re-harnessed across a real wire (the MCP function is stateless — no DB pool, no
-  router; per-request bearer from the request parts). Alongside, two refusal-voice
+  re-harnessed across a real wire (the relay side of the MCP function is stateless —
+  no router, per-request bearer from the request parts; it STILL holds a small DB
+  pool for the not-yet-migrated direct families and the edge's profile resolution,
+  so "the MCP function" today carries both shapes — the pool's blast radius belongs
+  to those families' migration, not the door). Alongside, two refusal-voice
   widenings, message strings only: the API's machine-credential 401 body names the
   refusal it carries instead of the generic token sentence, and `temper-client` gains
   a body-preserving 401 variant so the MCP surface can map post-edge refusals to
