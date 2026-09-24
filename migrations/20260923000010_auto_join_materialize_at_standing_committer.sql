@@ -34,9 +34,20 @@
 --         silently resurrect or silently lose them
 --         (machine_client_service::revoke);
 --       * IdP provenance: `source = 'idp'` rows are owned by
---         reconcile_idp_memberships (20260702000001), which skips teams where
---         a native row exists — deleting one silently converts SAML
---         authority into a native row the IdP never reasserts.
+--         reconcile_idp_memberships (20260702000001), which skips any
+--         (team, profile) pair the profile holds natively — deleting one
+--         silently converts SAML authority into a native row the IdP never
+--         reasserts. The mirror holds at INSERT time: enrollment writes
+--         NATIVE rows, so on a team that also carries a SAML group mapping,
+--         the first approval — or one reconcile run over a drifted
+--         instance — permanently pre-empts the IdP's later role assertions
+--         for that pair (native-wins-skip: the IdP can neither set nor
+--         revoke that membership again; team role drives reach). This is
+--         the decided DO-NOTHING posture made legible, not new semantics —
+--         the request-review door always had this property; this fix
+--         widens it to every door and mass-creates the conversion at
+--         reconcile time. An operator mapping IdP groups onto an
+--         auto-join team should read the reconcile report against that.
 --     The invariant is therefore one-directional by design: every
 --     standing-approved profile is a member (this fix); the converse holds
 --     only among transitions this committer saw. Stale rows for revoked or

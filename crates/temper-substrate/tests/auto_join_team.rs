@@ -436,8 +436,9 @@ async fn committer_invariant_sweep(pool: PgPool) {
 
 /// An IdP-authored row at the team's `auto_join_role` survives every standing transition —
 /// the pool is append-only, and SAML owns its rows outright (`reconcile_idp_memberships`
-/// skips teams where a native row exists): a standing transition deleting one would
-/// silently convert IdP authority into a native row the IdP never reasserts.
+/// skips any (team, profile) pair the profile holds natively): a standing transition
+/// deleting one would silently convert IdP authority into a native row the IdP never
+/// reasserts.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn demotion_preserves_idp_authored_rows(pool: PgPool) {
     let root = temper_system_id(&pool).await;
@@ -456,7 +457,7 @@ async fn demotion_preserves_idp_authored_rows(pool: PgPool) {
     assert_eq!(
         role_in(&pool, root, kate).await.as_deref(),
         Some("watcher"),
-        "an IdP-authored row must survive the committer's delete arm"
+        "an IdP-authored row must survive every standing transition — the pool is append-only"
     );
 }
 

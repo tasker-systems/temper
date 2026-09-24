@@ -883,6 +883,13 @@ pub async fn reconcile_auto_join(
     )
     .fetch_all(pool)
     .await?;
+    // The verb mutates rosters across every auto-join team; its only record must not be the
+    // HTTP response body a lost terminal scrollback erases. Same discipline as the SAML
+    // reconcile channel (internal_saml::reconcile) — structured fields, one line.
+    tracing::info!(
+        pairs_added = rows.len(),
+        "auto-join reconcile complete (operator verb)"
+    );
     Ok(rows)
 }
 
