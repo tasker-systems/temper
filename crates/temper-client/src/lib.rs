@@ -156,16 +156,6 @@ impl TemperClient {
         self
     }
 
-    /// Replace the per-request timeout (see [`crate::http::HttpClient::with_request_timeout`]).
-    /// The relay's client sets the ruled 45 s — strictly below the 60 s function
-    /// budget it runs inside.
-    pub fn with_request_timeout(self, timeout: std::time::Duration) -> crate::error::Result<Self> {
-        Ok(Self {
-            http: self.http.with_request_timeout(timeout)?,
-            ..self
-        })
-    }
-
     /// Swap in a shared connection pool (see
     /// [`crate::http::HttpClient::with_connection_pool`] — the network door's
     /// statelessness carve-out). The facade's token store still routes refresh /

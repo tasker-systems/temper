@@ -395,23 +395,6 @@ impl HttpClient {
         self
     }
 
-    /// Replace the per-request timeout. The stock ceiling (`HTTP_REQUEST_TIMEOUT_SECS`,
-    /// 75s) is sized ABOVE the server's 60s function budget — the right shape for a
-    /// CLI that must observe what the server did. The relay inverts it: it runs
-    /// INSIDE that budget, so its deadline must sit strictly below the function's
-    /// (`45s`, ruled — network-door design §2.1/§11.6), or a hung API call dies as a
-    /// platform timeout instead of surfacing as the rmcp-shaped refusal the tool
-    /// layer maps.
-    ///
-    /// Rebuilds the underlying client: the reqwest timeout is build-time state.
-    pub fn with_request_timeout(self, timeout: Duration) -> Result<Self> {
-        let inner = Client::builder()
-            .timeout(timeout)
-            .build()
-            .map_err(|e| ClientError::Other(format!("failed to build reqwest client: {e}")))?;
-        Ok(Self { inner, ..self })
-    }
-
     /// Swap in a shared connection pool. Everything else about this client —
     /// base URL, identity headers, default headers, token resolution, retry
     /// budget — is unchanged; only the `reqwest::Client` underneath moves.
