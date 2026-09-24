@@ -27,6 +27,19 @@ use temper_services::{
 };
 
 /// A running e2e test environment with in-process API server and injected client.
+/// Holds the serve task alive for the app's life and aborts it on drop. Without this,
+/// every `#[sqlx::test]`'s listener and serve task outlived its test and its database
+/// — a bound loopback socket per test for the binary's whole run (found in the
+/// arc-boundary review, 2026-09-24; the door's canary probe already aborts, the
+/// shared harness did not).
+pub struct ServeGuard(tokio::task::JoinHandle<()>);
+
+impl Drop for ServeGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 pub struct E2eTestApp {
     pub addr: SocketAddr,
     pub pool: PgPool,
@@ -36,6 +49,7 @@ pub struct E2eTestApp {
     pub cli_config: temper_cli::config::Config,
     pub token: String,
     pub vault_dir: TempDir,
+    pub _serve: ServeGuard,
 }
 
 impl E2eTestApp {
@@ -896,11 +910,11 @@ async fn setup_with_recorder_and_blob(
         .expect("Failed to bind test listener");
     let addr = listener.local_addr().expect("Failed to get local addr");
 
-    tokio::spawn(async move {
+    let serve = ServeGuard(tokio::spawn(async move {
         axum::serve(listener, app)
             .await
             .expect("Test server failed");
-    });
+    }));
 
     // --- Config + client setup (no disk reads) ---
     let token = generate_test_jwt("e2e-test-user", "e2e@test.example.com");
@@ -956,6 +970,7 @@ async fn setup_with_recorder_and_blob(
         cli_config,
         token,
         vault_dir,
+        _serve: serve,
     }
 }
 
@@ -1010,11 +1025,11 @@ pub async fn setup_eddsa_with_provider(pool: PgPool, provider: &str) -> E2eTestA
         .expect("Failed to bind test listener");
     let addr = listener.local_addr().expect("Failed to get local addr");
 
-    tokio::spawn(async move {
+    let serve = ServeGuard(tokio::spawn(async move {
         axum::serve(listener, app)
             .await
             .expect("Test server failed");
-    });
+    }));
 
     // --- Config + client setup (no disk reads) ---
     let token = generate_test_jwt_eddsa("e2e-test-user", "e2e@test.example.com");
@@ -1069,6 +1084,7 @@ pub async fn setup_eddsa_with_provider(pool: PgPool, provider: &str) -> E2eTestA
         cli_config,
         token,
         vault_dir,
+        _serve: serve,
     }
 }
 
