@@ -198,13 +198,14 @@ async fn resolve_human_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiRes
 ///
 /// `resolve_human_from_claims`'s steps 1-4 verbatim, minus step 5's create. It exists because
 /// connecting Slack is NOT a registration route: `create_new_profile_and_link` INSERTs
-/// `kb_profiles`, and that INSERT alone fires `trg_sync_system_membership` →
-/// `ensure_auto_join_memberships`, which in `open` mode (production's default) joins the new
-/// profile to EVERY auto-join team. That reach would be backed by no approved auth flow. There
-/// is no way to create the profile without it — the enrollment is a trigger, not a decision.
+/// `kb_profiles`, and a profile INSERT must never reach beyond itself — a birthed profile has
+/// no standing row, so `has_system_access` is false and the auto-join mirror (materialized at
+/// the standing committer, `20260923000010`) enrolls it nowhere. An enrollment at create would
+/// be reach backed by no approved auth flow; today nothing enrolls a profile that was never
+/// approved, and keeping this path create-free keeps that property structural.
 ///
 /// Steps 3-4 (`reconcile_by_email`) are KEPT: they attach a link to an EXISTING profile,
-/// creating nothing and firing no trigger. Refusing them would make Slack-connect behave
+/// creating nothing and enrolling nothing. Refusing them would make Slack-connect behave
 /// differently from every other login for no safety gain.
 ///
 /// Mirrors the machine arm, which is already lookup-or-reject (`resolve_machine_from_claims`).

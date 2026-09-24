@@ -274,6 +274,13 @@ fn gated_routes() -> OpenApiRouter<AppState> {
             "/api/access/admin/principals/{id}/reactivate",
             post(handlers::access::reactivate_principal),
         )
+        // The auto-join roster repair: converge every `auto_join_role` team to the
+        // standing-approved population and report what it added. Same operator-only
+        // convention: plain `.route()`, out of the OpenAPI contract, allowlisted.
+        .route(
+            "/api/access/admin/auto-join/reconcile",
+            post(handlers::access::reconcile_auto_join),
+        )
         // The operator directory (admin-operator-directory spec §5/§6). Same operator-only
         // convention as every neighbour above: plain `.route()`, out of the OpenAPI contract,
         // allowlisted in `.github/scripts/check-openapi-routes.sh`. Both handlers mint the

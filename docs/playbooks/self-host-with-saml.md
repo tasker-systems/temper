@@ -237,9 +237,14 @@ eventual, not immediate: a user removed from a group keeps access until their se
 and they next log in.
 
 **Reconcile only ever manages `source='idp'` memberships. Native memberships (added in-app or
-by join-request approval) and auto-join teams are never touched — if a user is already a native
-member of a team, the IdP reconcile skips that team for them entirely.** Group provisioning is
-purely authorization; it never creates, deletes, or deactivates the profile itself.
+by any approval door — join-request review, direct grant, promotion, reactivation — and by
+`temper admin access reconcile-auto-join`) are never touched — if a user is already a native
+member of a team, the IdP reconcile skips that (team, user) pair for them entirely.** Group
+provisioning is purely authorization; it never creates, deletes, or deactivates the profile
+itself. Note the inverse direction on a team that is *also* an auto-join team: approval (and
+reconcile) writes a *native* row there, and from then on the IdP's role assertion for that
+(team, user) pair is skipped — a group-mapped role change will not apply until the native row
+is removed.
 
 1. Tell the SP which assertion attribute carries the group list:
 
