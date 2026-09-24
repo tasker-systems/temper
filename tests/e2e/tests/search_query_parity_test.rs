@@ -111,8 +111,11 @@ mod parity {
     }
 }
 
+use common::tracing_layer::TestTracingLayer;
 use common::E2eTestApp;
 use parity::{code_of, one_text};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 /// The parity harness, once per test: the relay-ready service over this app's real
 /// listener, and parts carrying the harness principal's REAL bearer.
@@ -559,5 +562,118 @@ async fn query_denied_standing_speaks_the_system_access_arm(pool: PgPool) {
             "Access to this temper instance requires approval for e2e@test.example.com — "
         ),
         "the sentence names the identity: {err}"
+    );
+}
+
+// ── the composition-shape metric: one act, one door ─────────────────
+
+/// The `door` field of every captured composition-shape event — the metric's
+/// discriminator, and the only production events carrying it.
+fn shape_event_doors(events: &[common::tracing_layer::CapturedEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| e.fields.get("door").cloned())
+        .collect()
+}
+
+/// A plan the route refuses (empty outcome) — which still MEASURES, because the
+/// shape is recorded before `prepare` decides anything. The measurement's whole
+/// point is counting the traffic the ceilings refuse.
+fn empty_composition() -> serde_json::Value {
+    json!({ "stages": [], "outcome": { "returns": [] } })
+}
+
+/// A direct HTTP query measures `door=http` exactly ONCE — the route's own event.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_direct_http_query_measures_the_http_door_once(pool: PgPool) {
+    let (layer, captured) = TestTracingLayer::new();
+    let _guard = tracing_subscriber::registry().with(layer).set_default();
+    let app = common::setup_relay(pool).await;
+
+    let resp = app
+        .reqwest_client
+        .post(app.url("/api/query"))
+        .bearer_auth(&app.token)
+        .json(&empty_composition())
+        .send()
+        .await
+        .expect("the wire answers");
+    assert_eq!(resp.status().as_u16(), 400, "the empty plan is refused");
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(
+        shape_event_doors(&captured.lock().unwrap()),
+        vec!["http".to_string()],
+        "one act, one measurement, the door it arrived on"
+    );
+}
+
+/// A relayed-shaped act never measures `door=http`: the `RelayedSurface`
+/// extension (planted by `relay_trust` ONLY beside a valid service credential
+/// AND the honored carrier) suppresses the route's own event, because the MCP
+/// edge records the same composition as `door=mcp` BEFORE it forwards. A forged
+/// carrier without the credential degrades to measurement, not to suppression.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_relayed_query_never_measures_the_http_door(pool: PgPool) {
+    let (layer, captured) = TestTracingLayer::new();
+    let _guard = tracing_subscriber::registry().with(layer).set_default();
+    let app = common::setup_relay(pool).await;
+
+    // The relay's exact wire shape: credential + the one allowed carrier.
+    let resp = app
+        .reqwest_client
+        .post(app.url("/api/query"))
+        .bearer_auth(&app.token)
+        .header(
+            temper_workflow::operations::SERVICE_CREDENTIAL_HEADER,
+            common::TEST_MCP_SERVICE_SECRET,
+        )
+        .header(temper_workflow::operations::RELAYED_SURFACE_HEADER, "mcp")
+        .json(&empty_composition())
+        .send()
+        .await
+        .expect("the wire answers");
+    assert_eq!(resp.status().as_u16(), 400);
+
+    // The credential-less forgery: carrier only — the carrier is inert, the
+    // measurement stands.
+    let resp = app
+        .reqwest_client
+        .post(app.url("/api/query"))
+        .bearer_auth(&app.token)
+        .header(temper_workflow::operations::RELAYED_SURFACE_HEADER, "mcp")
+        .json(&empty_composition())
+        .send()
+        .await
+        .expect("the wire answers");
+    assert_eq!(resp.status().as_u16(), 400);
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(
+        shape_event_doors(&captured.lock().unwrap()),
+        vec!["http".to_string()],
+        "the credentialed relay shape is suppressed; the carrier-only forgery still measures"
+    );
+}
+
+/// An MCP query measures `door=mcp` exactly ONCE — the edge's own event, recorded
+/// pre-relay (before the swap: in-process where the direct binding runs; after it:
+/// before the forward). The API's skip keeps the count at one across the swap.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_mcp_query_measures_the_mcp_door_once(pool: PgPool) {
+    let (layer, captured) = TestTracingLayer::new();
+    let _guard = tracing_subscriber::registry().with(layer).set_default();
+    let (_app, svc, parts) = harness(pool).await;
+
+    let err = run_query(&svc, &parts, json!({ "plan": empty_composition() }))
+        .await
+        .expect_err("an empty outcome is refused");
+    assert_eq!(code_of(&err), -32602);
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(
+        shape_event_doors(&captured.lock().unwrap()),
+        vec!["mcp".to_string()],
+        "one act, one measurement, door=mcp"
     );
 }

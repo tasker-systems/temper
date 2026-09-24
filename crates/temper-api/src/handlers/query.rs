@@ -1,5 +1,5 @@
 use axum::extract::State;
-use axum::Json;
+use axum::{Extension, Json};
 
 use crate::middleware::auth::AuthUser;
 use temper_core::types::ids::ProfileId;
@@ -8,6 +8,7 @@ use temper_core::types::query::envelope::QueryResponse;
 use temper_services::backend::query_read;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::state::AppState;
+use temper_workflow::operations::RelayedSurface;
 
 #[utoipa::path(
     post,
@@ -59,13 +60,22 @@ use temper_services::state::AppState;
 pub async fn query(
     State(state): State<AppState>,
     auth: AuthUser,
+    relayed: Option<Extension<RelayedSurface>>,
     Json(composition): Json<Composition>,
 ) -> ApiResult<Json<QueryResponse>> {
     // **Measured before anything decides whether to answer it**, which is the entire design. A
     // shape emitted after validation would show only the traffic that already passes — never the
     // traffic a ceiling refuses — and the question this exists to answer is whether the ceilings
     // sit above what callers actually send. See `CompositionShape`.
-    CompositionShape::of(&composition).record("http");
+    //
+    // **Skip when the act arrived relayed** (Pete's ruling, beat G3b): the MCP edge records the
+    // same composition as `door=mcp` BEFORE it forwards, so recording here too would double-count
+    // one act across two doors. The extension is planted by `relay_trust` ONLY beside a valid
+    // service credential AND the honored carrier, so a forged carrier degrades to measurement, not
+    // to trust — a caller cannot suppress their own `http` measurement with headers.
+    if relayed.is_none() {
+        CompositionShape::of(&composition).record("http");
+    }
 
     let validated = query_read::prepare(composition)
         .await
