@@ -912,6 +912,18 @@ pub(crate) fn map_post_edge_auth(refusal: &ClientError) -> Option<rmcp::ErrorDat
              if it recurs, contact the operator."
                 .to_string(),
         ))
+    } else if cause == "Authentication service unavailable" {
+        // The API's JWKS-retrieval-failure 401 (auth middleware's `error!` arm): a
+        // transient infrastructure fault whose honest remedy is exactly a retry — the
+        // one 401 cause that must NOT take the terminal framing. It cannot be produced
+        // on demand at the listener (it needs the key store to fail, not the caller),
+        // so this arm is witnessed at the mapping's unit grain rather than on the wire.
+        Some(rmcp::ErrorData::internal_error(
+            "The authentication service is temporarily unavailable. Retry the call; if \
+             it recurs, contact the operator."
+                .to_string(),
+            None,
+        ))
     } else {
         // The machine-principal registration gate rejects with its own 401 message
         // (unregistered or revoked client_id — G3 Phase A's gate); the direct binding
@@ -1171,7 +1183,36 @@ impl rmcp::ServerHandler for TemperMcpService {
 
 #[cfg(test)]
 mod tests {
-    use super::{advertise_blob_tools, TemperMcpService, BLOB_TOOL_NAMES};
+    use super::{
+        advertise_blob_tools, map_post_edge_auth, TemperMcpService, BLOB_TOOL_NAMES,
+    };
+    use temper_client::error::ClientError;
+
+    /// The JWKS-outage 401 ("Authentication service unavailable") is TRANSIENT — the
+    /// one post-edge cause whose remedy is a retry (RG-1 F4). The catch-all would
+    /// frame it terminal; this arm must map it to an internal, retryable voice. The
+    /// face needs the key store to FAIL, not the caller, so it cannot be produced on
+    /// demand at the listener — the mapping's other arms carry the wire witnesses.
+    #[test]
+    fn the_jwks_outage_401_maps_retryable_never_terminal() {
+        let err = map_post_edge_auth(&ClientError::UnauthorizedDetails {
+            message: "Unauthorized: Authentication service unavailable".to_string(),
+        })
+        .expect("the arm maps");
+
+        assert_eq!(
+            err.code.0, -32603,
+            "an infrastructure fault is an internal error, never a caller refusal: {err}"
+        );
+        assert!(
+            !err.message.contains("terminal"),
+            "the one retryable 401 must not be framed terminal: {err}"
+        );
+        assert!(
+            err.message.contains("Retry the call"),
+            "the sentence names its remedy: {err}"
+        );
+    }
 
     /// A `#[tool]` written into the wrong impl block compiles fine and is simply never advertised.
     /// Assert the router actually carries the consolidated segmented-ingest tool, rather than
