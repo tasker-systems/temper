@@ -52,6 +52,9 @@ serde_json = "1"
 toml = "0.8"
 schemars = { version = "1", features = ["uuid1"] }
 tracing = "0.1"
+# Host-exact localhost checks in DCR — the prefix match it replaced blessed
+# "http://localhost.evil.com/…" as a loopback callback.
+url = "2"
 uuid = { version = "1", features = ["v7", "serde"] }
 
 [dev-dependencies]

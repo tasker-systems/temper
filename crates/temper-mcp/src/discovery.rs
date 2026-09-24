@@ -130,7 +130,10 @@ pub async fn register_client(
         })
         .collect();
 
-    tracing::info!(
+    // Requester-supplied content on a public, unauthenticated route: `info` here is a
+    // log-volume lever anyone can pull — the repo's `UnknownKid` precedent
+    // (temper-api/src/middleware/auth.rs) demotes exactly this class to `debug`.
+    tracing::debug!(
         client_name = %client_name,
         redirect_uris = ?redirect_uris,
         "MCP dynamic client registration (returning static client_id)"
@@ -149,10 +152,21 @@ pub async fn register_client(
     ))
 }
 
-/// Returns true if the URI is an `http://localhost` or `http://127.0.0.1` callback.
-/// These are used by desktop/CLI MCP clients that run local OAuth servers.
+/// Returns true if the URI is an `http://localhost`, `http://127.0.0.1`, or
+/// `http://[::1]` callback. These are used by desktop/CLI MCP clients that run local
+/// OAuth servers.
+///
+/// The host is COMPARED, never prefix-matched: `starts_with("http://localhost")` also
+/// matches `http://localhost.evil.com/…` and `http://127.0.0.1.evil.com/…` — echoing a
+/// non-loopback URI back as blessed is the first link of the redirect-to-code-capture
+/// chain this filter exists to refuse. The AS's own allowlist
+/// (`packages/temper-cloud/src/oauth/clients.ts` LOOPBACK_HOSTS) already parses hosts
+/// this way; the two doors must apply the SAME rule or the drift is the hole.
 fn is_localhost_uri(uri: &str) -> bool {
-    uri.starts_with("http://localhost") || uri.starts_with("http://127.0.0.1")
+    let Ok(url) = url::Url::parse(uri) else {
+        return false;
+    };
+    url.scheme() == "http" && matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
 }
 
 #[cfg(test)]
@@ -196,5 +210,12 @@ mod tests {
     fn is_localhost_uri_rejects_remote_uris() {
         assert!(!is_localhost_uri("https://temperkb.io/callback"));
         assert!(!is_localhost_uri("https://localhost.evil.com/callback"));
+        // The shapes the prefix match USED to bless: scheme is http, the host is not
+        // loopback. Blessed echo turns a "loopback" redirect into a code-capture target.
+        assert!(!is_localhost_uri("http://localhost.evil.com/callback"));
+        assert!(!is_localhost_uri("http://127.0.0.1.evil.com/callback"));
+        // Sibling bypass shapes across the same door.
+        assert!(!is_localhost_uri("localhost/callback"), "scheme absent");
+        assert!(!is_localhost_uri("http://localhost%2f.evil.com/"));
     }
 }
