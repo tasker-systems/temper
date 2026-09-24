@@ -362,7 +362,19 @@ function deployments.
 
 | Variable | Where | Purpose |
 | --- | --- | --- |
-| `TEMPER_MCP_SERVICE_SECRET` | API + MCP function (shared) | Shared secret gating MCP attribution: only requests carrying it may claim the relay's attribution carrier. Unset on the API ⇒ the carrier is never trusted — relaying still works, but every relayed act attributes to the direct (`@web`) surface. Must differ from every other shared secret the API configures (the API refuses to boot on overlap). |
+| `TEMPER_MCP_SERVICE_SECRET` | API + MCP function (shared) | Shared secret gating MCP attribution: only requests carrying it may claim the relay's attribution carrier. Unset on the API ⇒ the carrier is never trusted — relaying still works, but every relayed act attributes to the direct (`@web`) surface. Must differ from every other shared secret the API configures (the API refuses to boot on overlap), and must be at least 16 characters (the API refuses to boot on a weak one). Generate with `openssl rand -base64 32`. |
+
+**Pin the relay's target.** The MCP function relays to whatever `TEMPER_API_BASE_URL` names; that
+variable should be pinned to this deployment's own API URL in the function's environment (and ideally
+unset everywhere else). The relay sends the caller's bearer *plus* the service credential to that
+origin on every tool act, and while the pool refuses redirects, the origin it was pointed at is
+trusted by construction — treat the variable as a credential-adjacent value, not a tuning knob.
+
+**Scope the MCP function's env.** The function parses the API's config (`api/mcp.rs` builds an
+`ApiConfig`), so wherever env is declared per-project rather than per-function, the MCP process also
+holds the API's other shared secrets (`INTERNAL_RECONCILE_SECRET`, `SLACK_*`, the blob store token).
+Declare per-function env if your platform supports it (Vercel: per-function environment variables) so
+a compromise of the MCP function yields only the relay credential, not the whole secret set.
 
 ### Group provisioning
 
