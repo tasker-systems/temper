@@ -680,7 +680,15 @@ fn blob_commit_body_limit(state: &AppState) -> usize {
 /// `the_largest_legal_composition_fits_inside_the_declared_body_limit` holds that, and fails
 /// against the inherited number rather than merely describing it.
 ///
-/// # Why 4 MB and not the sum
+/// # Why a raised number and not the sum
+///
+/// The 4 MB this constant carried from 2026-08-28 to the network door was the same argument in
+/// miniature: the measured largest legal composition (2,455,972 bytes — the test named below
+/// holds it against the number) fits 1.71x under it. The network-door ruling (design §D4) then
+/// re-sized the backstop to the transport contract: `/api/query` is a tool-carrying endpoint,
+/// and a second, smaller opinion about body size is exactly the invisible gate ruling 3
+/// removes. The declaration caps above remain the real bound; this number catches only the
+/// cost they cannot see.
 ///
 /// **Every COUNT the contract admits is now bounded, and what remains unbounded is LENGTH.**
 /// `[narrowed — 2026-08-28, after review]` This paragraph first named only the length half, which
@@ -693,7 +701,8 @@ fn blob_commit_body_limit(state: &AppState) -> usize {
 ///
 /// So the coherence property below holds over every field whose COUNT the contract fixes, and
 /// `the_largest_legal_composition_fits_inside_the_declared_body_limit` measures that maximum at
-/// **2,455,972 bytes** — 1.71x under this number.
+/// **2,455,972 bytes** — under this number at either size it has carried (4 MB: 1.71x under;
+/// 25 MB: 10.6x under).
 ///
 /// What it does not bound is SIZE, and there are two kinds `[both named — 2026-08-28, after review]`:
 /// the LENGTH of a string inside a counted list (a facet key, a label, a `title_contains`), and the
@@ -704,7 +713,24 @@ fn blob_commit_body_limit(state: &AppState) -> usize {
 /// rather than one byte, which is the difference between a caller and an adversary. Through a
 /// `Contains` value it takes a single field. That second one is the thing to bound next, and it is
 /// why this limit is a backstop and not a sum.
-pub const QUERY_MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
+pub const QUERY_MAX_BODY_BYTES: usize = 25 * 1024 * 1024;
+
+/// The body ceiling the gated router inherits (the network door's ruling 3, design §D4).
+///
+/// Axum's 2 MiB default was this router's operative limit on every route that never chose
+/// one of its own — an invisible second gate the MCP relay's callers could not see: the MCP
+/// edge accepts 25 MB (`MCP_MAX_BODY_BYTES`, temper-mcp's router), so through the network
+/// door a legal create died 413 at the API — work the direct binding performed. Raised to
+/// the edge's contract so the 25 MB ceiling stays the ONE user-visible limit on the tool
+/// surface and the API's per-route defaults stop being a second, silent one. 25 MB matches
+/// `GITHUB_MAX_WEBHOOK_BYTES`, the repo's existing generous transport bound, which puts the
+/// number on an in-repo precedent rather than on a guess.
+///
+/// The doors that DID choose — `/api/query`'s 4 MB composition backstop, the blob segment
+/// door's platform-derived 4.5 MB, the commit door's config-derived threshold — merge with
+/// their own `DefaultBodyLimit` layers INNER to this one, so their decisions win on their
+/// routes and this number changes nothing there.
+const GATED_MAX_BODY_BYTES: usize = 25 * 1024 * 1024;
 
 pub fn create_app(state: AppState) -> Router {
     // Register documented sub-routers, then apply the same middleware layers as
@@ -736,7 +762,18 @@ pub fn create_app(state: AppState) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
-        ));
+        ))
+        // INNERMOST: the relay-trust gate precedes only `RequestSurface` extraction, and
+        // inserts the `RelayedSurface` extension beside a valid service credential (the
+        // network door's attribution carrier — see `middleware::relay_trust`). It rejects
+        // nothing; authorization stays with `require_auth` on the caller's bearer.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::relay_trust::require_relay_trust,
+        ))
+        // Ruling 3 (above): the inherited default stops being an invisible second gate —
+        // the doors that chose their own limits stay inner and win.
+        .layer(axum::extract::DefaultBodyLimit::max(GATED_MAX_BODY_BYTES));
 
     // The documented sub-routers only contribute axum routes here; the OpenAPI
     // half is reconstructed DB-free by `openapi_spec()`.

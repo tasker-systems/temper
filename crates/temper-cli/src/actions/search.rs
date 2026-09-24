@@ -318,6 +318,7 @@ mod tests {
             managed_meta: ManagedMeta::default(),
             open_meta: None,
             content: None,
+            embedding_status: None,
         }
         .with_derived_refs()
     }

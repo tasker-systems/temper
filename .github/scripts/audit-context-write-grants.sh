@@ -6,11 +6,20 @@
 # ---------------
 # `context_authorable_by_profile` admits an explicit write-grant arm (the
 # `profile_explicit_grant` delegation, floored on context liveness by 20260826000110). No
-# production surface mints such a row: each of the four grant doors bakes a non-context subject
-# kind into `GrantCapabilityRequest`, and the other three `GrantWarrant` arms pin their subject
+# production surface mints such a row: each grant door bakes a non-context subject
+# kind into `GrantCapabilityRequest`, and the other `GrantWarrant` arms pin their subject
 # kinds in the enum, where a fifth arm is a compile error. The arm is therefore a guardrail for
 # a delegation act no design has been written for — authoring into a context without owning it,
 # belonging to its team, or holding a minting design.
+#
+# DOOR COUNT, AND WHY IT MOVED — three, not four. The fourth door was the MCP
+# resources family's DIRECT grant (`temper-mcp/src/tools/resources.rs`, subject
+# `kb_resources`). It died at that family's own beat — the network door
+# (G3a-prime, 2026-09-23): the family's grant act now crosses the wire to the
+# API's door, which this scan still watches, so the invariant loses no surface
+# and gains none. The MCP cogmaps grant door (`tools/cognitive_maps.rs`) is
+# still direct and still in view; when the cogmaps family crosses at ITS beat,
+# the floor below drops to 2 by this same edit-with-a-named-decision rule.
 #
 # This script keeps that state observable: the first surface that can light the arm fails CI
 # until a human records the design decision. There is deliberately no UPDATE_BASELINE and no
@@ -47,9 +56,10 @@ fail=0
 # `GrantCapabilityRequest`, and each door bakes its subject kind as a string
 # literal. Flag any door whose literal is kb_contexts.
 #
-# Canary: the scan must see the four known doors. Zero subject literals inside
-# request blocks means the scan stopped matching (renamed struct, changed
-# formatting) — an empty result must fail rather than pass.
+# Canary: the scan must see the three known doors (see DOOR COUNT above — the
+# fourth died with the MCP resources family's direct binding). Zero subject
+# literals inside request blocks means the scan stopped matching (renamed
+# struct, changed formatting) — an empty result must fail rather than pass.
 # ---------------------------------------------------------------------------
 request_subjects() {
   grep -rn --include='*.rs' -A12 'GrantCapabilityRequest {' "$CRATES_DIR" 2>/dev/null \
@@ -64,10 +74,10 @@ CURRENT_REQUESTS="$(request_subjects)"
 CONTEXT_REQUESTS="$(printf '%s\n' "$CURRENT_REQUESTS" | grep ' kb_contexts$' || true)"
 DOOR_COUNT="$(printf '%s\n' "$CURRENT_REQUESTS" | grep -c . || true)"
 
-if [[ "$DOOR_COUNT" -lt 4 ]]; then
+if [[ "$DOOR_COUNT" -lt 3 ]]; then
   echo "audit-context-write-grants: FAIL — the door scan found $DOOR_COUNT GrantCapabilityRequest" >&2
-  echo "  subject literals (expected ≥ 4). The scan broke; it did not find the doors gone." >&2
-  echo "  Check CRATES_DIR=$CRATES_DIR." >&2
+  echo "  subject literals (expected ≥ 3 — see DOOR COUNT in the header). The scan broke;" >&2
+  echo "  it did not find the doors gone. Check CRATES_DIR=$CRATES_DIR." >&2
   fail=1
 fi
 

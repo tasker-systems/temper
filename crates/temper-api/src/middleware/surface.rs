@@ -10,7 +10,7 @@ use axum::http::HeaderMap;
 use std::convert::Infallible;
 use std::future::Future;
 
-use temper_workflow::operations::{InProcessSurface, Surface, SURFACE_HEADER};
+use temper_workflow::operations::{InProcessSurface, RelayedSurface, Surface, SURFACE_HEADER};
 
 /// Parse a client-claimed surface marker into the surface it names.
 ///
@@ -32,16 +32,29 @@ fn parse_trusted(raw: &str) -> Option<Surface> {
 
 /// Resolve the surface of an inbound request.
 ///
-/// The in-process door speaks first: an [`InProcessSurface`] extension was inserted
-/// server-side by the `Router::oneshot` transport, where no remote caller can write, so it
-/// is trusted outright and overrides any header. Without it, the `X-Temper-Surface` header
-/// allowlist decides, degrading to [`Surface::ApiHttp`] (`web`) whenever the header is
-/// absent, unreadable, or not on the allowlist.
+/// The trusted channels speak first, in priority order; the header allowlist decides only
+/// when neither spoke:
+///
+/// 1. **`InProcessSurface`** — inserted server-side by the `Router::oneshot` transport, where
+///    no remote caller can write. Trusted outright, overrides everything.
+/// 2. **`RelayedSurface`** — inserted by the relay-trust middleware ONLY beside a valid service
+///    credential (the network door's attribution carrier, design §D5). A remote caller can send
+///    the carrier header, but cannot make the middleware insert the extension without the
+///    secret, so the extension is trusted exactly as far as the credential is.
+/// 3. The `X-Temper-Surface` header allowlist — exactly `{cli, sdk}`.
+/// 4. Degrade to [`Surface::ApiHttp`] (`web`).
 ///
 /// Never fails. An untrusted claim is logged at debug — it is ordinary traffic (every browser
 /// request omits the header), not an anomaly worth a warning.
-fn resolve_surface(in_process: Option<InProcessSurface>, headers: &HeaderMap) -> Surface {
+fn resolve_surface(
+    in_process: Option<InProcessSurface>,
+    relayed: Option<RelayedSurface>,
+    headers: &HeaderMap,
+) -> Surface {
     if let Some(InProcessSurface(surface)) = in_process {
+        return surface;
+    }
+    if let Some(RelayedSurface(surface)) = relayed {
         return surface;
     }
     let Some(raw) = headers.get(SURFACE_HEADER) else {
@@ -80,8 +93,10 @@ where
         _state: &S,
     ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
         let in_process = parts.extensions.get::<InProcessSurface>().copied();
+        let relayed = parts.extensions.get::<RelayedSurface>().copied();
         std::future::ready(Ok(RequestSurface(resolve_surface(
             in_process,
+            relayed,
             &parts.headers,
         ))))
     }
@@ -142,29 +157,38 @@ mod tests {
 
     #[test]
     fn absent_header_degrades_to_web() {
-        assert_eq!(resolve_surface(None, &HeaderMap::new()), Surface::ApiHttp);
+        assert_eq!(
+            resolve_surface(None, None, &HeaderMap::new()),
+            Surface::ApiHttp
+        );
     }
 
     #[test]
     fn untrusted_header_degrades_to_web() {
         assert_eq!(
-            resolve_surface(None, &headers_with("mcp")),
+            resolve_surface(None, None, &headers_with("mcp")),
             Surface::ApiHttp
         );
         assert_eq!(
-            resolve_surface(None, &headers_with("nonsense")),
+            resolve_surface(None, None, &headers_with("nonsense")),
             Surface::ApiHttp
         );
-        assert_eq!(resolve_surface(None, &headers_with("")), Surface::ApiHttp);
+        assert_eq!(
+            resolve_surface(None, None, &headers_with("")),
+            Surface::ApiHttp
+        );
     }
 
     #[test]
     fn trusted_header_resolves() {
         assert_eq!(
-            resolve_surface(None, &headers_with("cli")),
+            resolve_surface(None, None, &headers_with("cli")),
             Surface::CliCloud
         );
-        assert_eq!(resolve_surface(None, &headers_with("sdk")), Surface::Sdk);
+        assert_eq!(
+            resolve_surface(None, None, &headers_with("sdk")),
+            Surface::Sdk
+        );
     }
 
     /// A header whose bytes are not valid ASCII cannot even be `to_str`'d. It degrades; it
@@ -176,7 +200,7 @@ mod tests {
             SURFACE_HEADER,
             axum::http::HeaderValue::from_bytes(&[0xff, 0xfe]).expect("opaque bytes"),
         );
-        assert_eq!(resolve_surface(None, &h), Surface::ApiHttp);
+        assert_eq!(resolve_surface(None, None, &h), Surface::ApiHttp);
     }
 
     // --- the in-process door: the trusted extension, which no header can reach ---
@@ -184,6 +208,7 @@ mod tests {
     /// Build `request::Parts` the way the extractor sees them, from headers and extensions.
     fn parts_with(
         in_process: Option<InProcessSurface>,
+        relayed: Option<RelayedSurface>,
         headers: HeaderMap,
     ) -> axum::http::request::Parts {
         let mut builder = axum::http::Request::builder();
@@ -192,6 +217,9 @@ mod tests {
         }
         let mut request = builder.body(()).expect("headerless body request");
         if let Some(surface) = in_process {
+            request.extensions_mut().insert(surface);
+        }
+        if let Some(surface) = relayed {
             request.extensions_mut().insert(surface);
         }
         let (parts, _) = request.into_parts();
@@ -203,9 +231,9 @@ mod tests {
     #[test]
     fn the_in_process_extension_resolves_its_surface() {
         for surface in Surface::ALL {
-            let parts = parts_with(Some(InProcessSurface(surface)), HeaderMap::new());
+            let parts = parts_with(Some(InProcessSurface(surface)), None, HeaderMap::new());
             let in_process = parts.extensions.get::<InProcessSurface>().copied();
-            assert_eq!(resolve_surface(in_process, &parts.headers), surface);
+            assert_eq!(resolve_surface(in_process, None, &parts.headers), surface);
         }
     }
 
@@ -213,16 +241,23 @@ mod tests {
     /// request carrying a spoofed `sdk` header still attributes `@mcp`.
     #[test]
     fn the_in_process_extension_outranks_any_header_claim() {
-        let parts = parts_with(Some(InProcessSurface(Surface::Mcp)), headers_with("sdk"));
+        let parts = parts_with(
+            Some(InProcessSurface(Surface::Mcp)),
+            None,
+            headers_with("sdk"),
+        );
         let in_process = parts.extensions.get::<InProcessSurface>().copied();
-        assert_eq!(resolve_surface(in_process, &parts.headers), Surface::Mcp);
+        assert_eq!(
+            resolve_surface(in_process, None, &parts.headers),
+            Surface::Mcp
+        );
     }
 
     /// The extractor itself: an extension-less request resolves exactly as before, through
     /// the header allowlist — the in-process door adds a channel, it does not rewire the old one.
     #[test]
     fn without_the_extension_the_extractor_resolves_headers_as_before() {
-        let untrusted = parts_with(None, headers_with("mcp"));
+        let untrusted = parts_with(None, None, headers_with("mcp"));
         let resolved = tokio::runtime::Runtime::new().unwrap().block_on(async {
             RequestSurface::from_request_parts(&mut untrusted.clone(), &())
                 .await
@@ -231,7 +266,7 @@ mod tests {
         });
         assert_eq!(resolved, Surface::ApiHttp);
 
-        let trusted = parts_with(None, headers_with("cli"));
+        let trusted = parts_with(None, None, headers_with("cli"));
         let resolved = tokio::runtime::Runtime::new().unwrap().block_on(async {
             RequestSurface::from_request_parts(&mut trusted.clone(), &())
                 .await
@@ -239,5 +274,69 @@ mod tests {
                 .0
         });
         assert_eq!(resolved, Surface::CliCloud);
+    }
+
+    // --- the network door: the relayed extension, trusted beside the service credential ---
+
+    /// The network door's whole point: an MCP act arriving through the relay attributes `@mcp`,
+    /// where the same claim sent as a header is untrusted. The relay-trust middleware only
+    /// inserts the extension beside a valid service credential — that condition is ITS
+    /// contract (see `relay_trust.rs`); resolution trusts the extension it finds.
+    #[test]
+    fn the_relayed_extension_resolves_mcp() {
+        let parts = parts_with(None, Some(RelayedSurface(Surface::Mcp)), HeaderMap::new());
+        let in_process = parts.extensions.get::<InProcessSurface>().copied();
+        let relayed = parts.extensions.get::<RelayedSurface>().copied();
+        assert_eq!(
+            resolve_surface(in_process, relayed, &parts.headers),
+            Surface::Mcp
+        );
+    }
+
+    /// Priority: in-process speaks first. The in-process transport is the incumbent door and
+    /// never relays; if both extensions are present, the in-process claim wins.
+    #[test]
+    fn the_in_process_extension_outranks_the_relayed_one() {
+        let parts = parts_with(
+            Some(InProcessSurface(Surface::CliCloud)),
+            Some(RelayedSurface(Surface::Mcp)),
+            HeaderMap::new(),
+        );
+        let in_process = parts.extensions.get::<InProcessSurface>().copied();
+        let relayed = parts.extensions.get::<RelayedSurface>().copied();
+        assert_eq!(
+            resolve_surface(in_process, relayed, &parts.headers),
+            Surface::CliCloud
+        );
+    }
+
+    /// The relayed extension outranks the header: a relayed MCP request carrying a spoofed
+    /// `sdk` header still attributes `@mcp` — the carrier channel is trusted, the header is not.
+    #[test]
+    fn the_relayed_extension_outranks_any_header_claim() {
+        let parts = parts_with(
+            None,
+            Some(RelayedSurface(Surface::Mcp)),
+            headers_with("sdk"),
+        );
+        let in_process = parts.extensions.get::<InProcessSurface>().copied();
+        let relayed = parts.extensions.get::<RelayedSurface>().copied();
+        assert_eq!(
+            resolve_surface(in_process, relayed, &parts.headers),
+            Surface::Mcp
+        );
+    }
+
+    /// Without the extension, the header allowlist decides exactly as before — the network
+    /// door adds a channel, it does not rewire the old ones.
+    #[test]
+    fn the_relayed_arm_is_absent_by_default() {
+        let parts = parts_with(None, None, headers_with("mcp"));
+        let in_process = parts.extensions.get::<InProcessSurface>().copied();
+        let relayed = parts.extensions.get::<RelayedSurface>().copied();
+        assert_eq!(
+            resolve_surface(in_process, relayed, &parts.headers),
+            Surface::ApiHttp
+        );
     }
 }

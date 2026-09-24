@@ -8,7 +8,7 @@ publish = false
 ignored = ["base64", "rmp-serde", "serde_json", "temper-ingest"]
 
 [features]
-test-db = []
+test-db = ["temper-services/test-harness"]
 # Enables tests that exercise the CLI-side embed pipeline (compute_body_chunks /
 # build_ingest_payload). Requires ONNX Runtime at test time. CI runs these in
 # the dedicated "Embed & MCP Round-Trip Tests" job. The in-process server's

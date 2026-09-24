@@ -109,7 +109,7 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
     let fetched = app
         .client
         .resources()
-        .get(resource.id.into())
+        .get(resource.id.into(), None)
         .await
         .expect("resource get after meta update failed");
 

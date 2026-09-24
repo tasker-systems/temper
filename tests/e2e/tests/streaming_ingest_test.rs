@@ -727,7 +727,7 @@ async fn interrupted_ingest_is_not_a_document(pool: PgPool) {
     let whole_row = app
         .client
         .resources()
-        .get(whole_id)
+        .get(whole_id, None)
         .await
         .expect("show the whole resource");
     assert_eq!(
@@ -838,7 +838,7 @@ async fn interrupted_ingest_is_not_a_document(pool: PgPool) {
     let shown = app
         .client
         .resources()
-        .get(partial_id)
+        .get(partial_id, None)
         .await
         .expect("show must still work on a partial — hidden is not deleted");
     assert_eq!(
@@ -886,7 +886,7 @@ async fn interrupted_ingest_is_not_a_document(pool: PgPool) {
     let shown = app
         .client
         .resources()
-        .get(partial_id)
+        .get(partial_id, None)
         .await
         .expect("show after finalize");
     assert_eq!(

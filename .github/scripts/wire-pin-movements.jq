@@ -3,7 +3,11 @@
 # The pin gate's verdict comes from the shared comparator (wire-shape-lib.jq via
 # wire-shape.jq — ONE definition); this program only NAMES what moved, reusing the
 # same broke_node so the naming can never disagree with the verdict. A "changed"
-# line here is exactly a node whose broke_node is true.
+# line here is exactly a node whose broke_node is true — including the
+# side-aware tolerance arm (2026-09-23): a path whose only movement is a born
+# optional parameter, or an input-only schema whose only movement is string-enum
+# member growth, computes as growth and is deliberately NOT named as a change.
+# See the lib header for the tolerance classes and their §4 grounding.
 #
 # Inputs: --slurpfile base and --slurpfile head, each the caller's
 # `jq -S 'del(.info.version)'`-stripped contract. Output: one JSON array of strings.
@@ -16,13 +20,15 @@ include "wire-shape-lib";
 
 [ ($base[0].paths | keys[]) as $p
   | if ($head[0].paths | has($p)) | not then "path removed: \($p)"
-    elif broke_node($base[0].paths[$p]; $head[0].paths[$p]) then "path changed: \($p)"
+    elif broke_node($base[0].paths[$p]; $head[0].paths[$p]; "mixed") then "path changed: \($p)"
     else empty end ]
 + [ ($head[0].paths | keys[]) as $p
     | if ($base[0].paths | has($p)) | not then "path born: \($p)" else empty end ]
 + [ (($base[0].components.schemas // {}) | keys[]) as $s
     | if (($head[0].components.schemas // {}) | has($s)) | not then "schema removed: \($s)"
-      elif broke_node($base[0].components.schemas[$s]; $head[0].components.schemas[$s]) then "schema changed: \($s)"
+      elif broke_node($base[0].components.schemas[$s]; $head[0].components.schemas[$s];
+                      (if (tolerant_input_names | index($s)) != null then "input" else "mixed" end))
+      then "schema changed: \($s)"
       else empty end ]
 + [ (($head[0].components.schemas // {}) | keys[]) as $s
     | if (($base[0].components.schemas // {}) | has($s)) | not then "schema born: \($s)" else empty end ]

@@ -139,6 +139,33 @@ impl TemperClient {
         self
     }
 
+    /// Attach constructor-level default headers to the underlying transport —
+    /// appended to every request this client sends, riding retries in one place.
+    /// The relay's service credential and attribution carrier ride here
+    /// (network-door design §D6).
+    pub fn with_default_headers(mut self, headers: reqwest::header::HeaderMap) -> Self {
+        self.http = self.http.with_default_headers(headers);
+        self
+    }
+
+    /// Raise the underlying transport's retry budget for non-idempotent requests.
+    /// Stock is `1` — a write is never replayed. The relay's client uses `2`, the
+    /// ruled "1 retry on non-idempotent tool acts" (network-door design §2.1/§11.6).
+    pub fn with_non_idempotent_attempts(mut self, attempts: u32) -> Self {
+        self.http = self.http.with_non_idempotent_attempts(attempts);
+        self
+    }
+
+    /// Swap in a shared connection pool (see
+    /// [`crate::http::HttpClient::with_connection_pool`] — the network door's
+    /// statelessness carve-out). The facade's token store still routes refresh /
+    /// logout / status; for a relay client built from
+    /// [`Self::with_token`] with an empty store there is nothing else to move.
+    pub fn with_connection_pool(mut self, inner: reqwest::Client) -> Self {
+        self.http = self.http.with_connection_pool(inner);
+        self
+    }
+
     /// Get a valid access token, refreshing via the token endpoint if needed.
     ///
     /// Requires OAuth config to have been set via [`with_oauth`](Self::with_oauth).

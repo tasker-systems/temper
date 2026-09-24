@@ -14,14 +14,13 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  class ResourceSection
-    BODY = "body".freeze
-    OPEN_META = "open-meta".freeze
-    EDGES = "edges".freeze
-    EMBEDDING_STATUS = "embedding-status".freeze
+  class EmbeddingStatus
+    READY = "ready".freeze
+    PENDING = "pending".freeze
+    FAILED = "failed".freeze
 
     def self.all_vars
-      @all_vars ||= [BODY, OPEN_META, EDGES, EMBEDDING_STATUS].freeze
+      @all_vars ||= [READY, PENDING, FAILED].freeze
     end
 
     # Builds the enum from string
@@ -35,8 +34,8 @@ module Temper::Generated
     # @param [String] The enum value in the form of the string
     # @return [String] The enum value
     def build_from_hash(value)
-      return value if ResourceSection.all_vars.include?(value)
-      raise "Invalid ENUM value #{value} for class #ResourceSection"
+      return value if EmbeddingStatus.all_vars.include?(value)
+      raise "Invalid ENUM value #{value} for class #EmbeddingStatus"
     end
   end
 end

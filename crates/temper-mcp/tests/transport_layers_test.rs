@@ -395,3 +395,57 @@ async fn a_response_that_sets_its_own_policy_keeps_it() {
         "relaxing one header must not drop the rest of the baseline"
     );
 }
+
+/// The relay pool never follows a redirect. Its clients carry the shared
+/// service credential and the caller's bearer as constructor-level default headers, and
+/// reqwest replays default headers on every redirect hop — a followed 3xx would hand
+/// both secrets to whatever origin the `Location` names. The probe binds a real
+/// listener whose `/here` answers 302 at a canary on the same server: a following
+/// client returns the canary's 200 marker, the relay's pool returns the 302 itself.
+///
+/// `[added — 2026-09-23, found in review]` reqwest's default policy follows up to ten
+/// hops; the API emits no 3xx today, so this witness pins the relay's behavior to that
+/// fact's independence.
+#[tokio::test]
+async fn the_relay_pool_does_not_follow_redirects() {
+    use axum::routing::get;
+
+    let app = axum::Router::new()
+        .route(
+            "/here",
+            get(|| async {
+                axum::response::Redirect::temporary("/canary-that-must-never-be-fetched")
+            }),
+        )
+        .route(
+            "/canary-that-must-never-be-fetched",
+            get(|| async { "SECRETS REPLAYED" }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind the probe listener");
+    let addr = listener.local_addr().expect("probe address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("probe server runs");
+    });
+
+    let client = temper_mcp::service::shared_relay_pool();
+    let resp = client
+        .get(format!("http://{addr}/here"))
+        .send()
+        .await
+        .expect("the probe answers");
+
+    assert_eq!(
+        resp.status().as_u16(),
+        307,
+        "the redirect itself is the answer, never the location it names"
+    );
+    let body = resp.text().await.expect("redirect body reads");
+    assert!(
+        !body.contains("SECRETS REPLAYED"),
+        "the canary must never be fetched: {body:?}"
+    );
+
+    server.abort();
+}

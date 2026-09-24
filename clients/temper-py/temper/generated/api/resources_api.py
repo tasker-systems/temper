@@ -1354,6 +1354,7 @@ class ResourcesApi:
     def get_resource(
         self,
         id: Annotated[UUID, Field(description="Resource ID")],
+        sections: Annotated[Optional[StrictStr], Field(description="Comma-separated extra sections to fill on the view (kebab-case); `open-meta` is always included, `embedding-status` is the additive one")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1373,6 +1374,8 @@ class ResourcesApi:
 
         :param id: Resource ID (required)
         :type id: UUID
+        :param sections: Comma-separated extra sections to fill on the view (kebab-case); `open-meta` is always included, `embedding-status` is the additive one
+        :type sections: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -1399,6 +1402,7 @@ class ResourcesApi:
 
         _param = self._get_resource_serialize(
             id=id,
+            sections=sections,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1408,6 +1412,7 @@ class ResourcesApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ResourceView",
+            '400': "ErrorBody",
             '401': "ErrorBody",
             '404': "ErrorBody",
         }
@@ -1426,6 +1431,7 @@ class ResourcesApi:
     def get_resource_with_http_info(
         self,
         id: Annotated[UUID, Field(description="Resource ID")],
+        sections: Annotated[Optional[StrictStr], Field(description="Comma-separated extra sections to fill on the view (kebab-case); `open-meta` is always included, `embedding-status` is the additive one")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1445,6 +1451,8 @@ class ResourcesApi:
 
         :param id: Resource ID (required)
         :type id: UUID
+        :param sections: Comma-separated extra sections to fill on the view (kebab-case); `open-meta` is always included, `embedding-status` is the additive one
+        :type sections: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -1471,6 +1479,7 @@ class ResourcesApi:
 
         _param = self._get_resource_serialize(
             id=id,
+            sections=sections,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1480,6 +1489,7 @@ class ResourcesApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ResourceView",
+            '400': "ErrorBody",
             '401': "ErrorBody",
             '404': "ErrorBody",
         }
@@ -1498,6 +1508,7 @@ class ResourcesApi:
     def get_resource_without_preload_content(
         self,
         id: Annotated[UUID, Field(description="Resource ID")],
+        sections: Annotated[Optional[StrictStr], Field(description="Comma-separated extra sections to fill on the view (kebab-case); `open-meta` is always included, `embedding-status` is the additive one")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1517,6 +1528,8 @@ class ResourcesApi:
 
         :param id: Resource ID (required)
         :type id: UUID
+        :param sections: Comma-separated extra sections to fill on the view (kebab-case); `open-meta` is always included, `embedding-status` is the additive one
+        :type sections: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -1543,6 +1556,7 @@ class ResourcesApi:
 
         _param = self._get_resource_serialize(
             id=id,
+            sections=sections,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1552,6 +1566,7 @@ class ResourcesApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ResourceView",
+            '400': "ErrorBody",
             '401': "ErrorBody",
             '404': "ErrorBody",
         }
@@ -1565,6 +1580,7 @@ class ResourcesApi:
     def _get_resource_serialize(
         self,
         id,
+        sections,
         x_temper_surface,
         _request_auth,
         _content_type,
@@ -1590,6 +1606,10 @@ class ResourcesApi:
         if id is not None:
             _path_params['id'] = id
         # process the query parameters
+        if sections is not None:
+            
+            _query_params.append(('sections', sections))
+            
         # process the header parameters
         if x_temper_surface is not None:
             _header_params['X-Temper-Surface'] = x_temper_surface

@@ -3,17 +3,23 @@
 //! Implements `list_resources`, `read_resource`, and `list_resource_templates`
 //! so MCP clients can browse and inject vault content into context without
 //! explicit tool calls.
+//!
+//! **The network door:** every read crosses the deployed API through the relay
+//! client the service built from the request's `Parts` (design §3, §D6) — the same
+//! gated reads the HTTP door serves, so visibility is decided once, at the API, by
+//! the caller's own bearer. Context-ref resolution for the `temper://contexts/…`
+//! URI is absorbed server-side: the API's list handler resolves the ref against
+//! the caller's own visibility, so this module never resolves anything locally.
 
 use rmcp::model::{
     AnnotateAble, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
     RawResource, RawResourceTemplate, ReadResourceRequestParams, ReadResourceResult,
     ResourceContents,
 };
+use temper_client::TemperClient;
 use uuid::Uuid;
 
-use temper_core::types::ids::{ProfileId, ResourceId};
-use temper_core::types::Profile;
-use temper_services::state::AppState;
+use crate::service::AcrossAuth;
 
 /// Page size for the resource-browsing list calls. MCP resource listing is a
 /// flat browse surface (no client-driven pagination), so we cap each fetch at a
@@ -25,8 +31,7 @@ const MCP_RESOURCE_BROWSE_LIMIT: i64 = 200;
 /// Returns a flat list: one `Resource` per active knowledge base resource.
 /// Each resource URI follows the pattern `temper://resources/{id}`.
 pub async fn list_resources(
-    state: &AppState,
-    profile: &Profile,
+    client: &TemperClient,
     _request: Option<PaginatedRequestParams>,
 ) -> Result<ListResourcesResult, rmcp::ErrorData> {
     // Fetch all visible resources (no filters, reasonable limit for browsing).
@@ -35,13 +40,9 @@ pub async fn list_resources(
         ..Default::default()
     };
 
-    let response = temper_services::backend::substrate_read::list_select(
-        &state.pool,
-        ProfileId::from(profile.id),
-        params,
-    )
-    .await
-    .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None))?;
+    let response = client.resources().list(&params).await.across_auth(|e| {
+        rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None)
+    })?;
 
     let resources = response
         .rows
@@ -100,8 +101,7 @@ pub async fn list_resource_templates(
 /// - `temper://resources/{id}/content` — raw markdown only
 /// - `temper://contexts/{ref}/resources` — JSON list of resources in context (ref = UUID or `@owner/slug`)
 pub async fn read_resource(
-    state: &AppState,
-    profile: &Profile,
+    client: &TemperClient,
     request: ReadResourceRequestParams,
 ) -> Result<ReadResourceResult, rmcp::ErrorData> {
     let uri = &request.uri;
@@ -112,13 +112,7 @@ pub async fn read_resource(
         .and_then(|rest| rest.strip_suffix("/content"))
         .and_then(|id| Uuid::try_parse(id).ok())
     {
-        let content = temper_services::backend::substrate_read::get_content_select(
-            &state.pool,
-            ProfileId::from(profile.id),
-            ResourceId::from(id),
-        )
-        .await
-        .map_err(|e| {
+        let content = client.resources().content(id).await.across_auth(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to read resource content: {e}"), None)
         })?;
 
@@ -134,27 +128,16 @@ pub async fn read_resource(
         .strip_prefix("temper://resources/")
         .and_then(|id| Uuid::try_parse(id).ok())
     {
-        // `show_view_select` with no sections: the browse surface returns the metadata object and
-        // the markdown as two separate content parts, so the body is fetched below rather than
-        // asked for as a section (`get_content_select` is the door a `…/content` URI uses too).
-        let row = temper_services::backend::substrate_read::show_view_select(
-            &state.pool,
-            ProfileId::from(profile.id),
-            ResourceId::from(id),
-            &temper_core::types::resource_view::SectionSet::default(),
-        )
-        .await
-        .map_err(|e| {
+        // The gated identity read with its default section set — `get(id, None)` is the
+        // door's open-meta baseline, so the browse metadata part carries `open_meta`
+        // (and the managed tier, which is always present on a view). The markdown is
+        // fetched below as its own part rather than asked for as a section (the
+        // `…/content` read is the same door a `…/content` URI uses).
+        let row = client.resources().get(id, None).await.across_auth(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to read resource: {e}"), None)
         })?;
 
-        let content = temper_services::backend::substrate_read::get_content_select(
-            &state.pool,
-            ProfileId::from(profile.id),
-            ResourceId::from(id),
-        )
-        .await
-        .map_err(|e| {
+        let content = client.resources().content(id).await.across_auth(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to read resource content: {e}"), None)
         })?;
 
@@ -171,43 +154,31 @@ pub async fn read_resource(
         ]));
     }
 
-    // temper://contexts/{ref}/resources  (ref = UUID or @owner/slug)
+    // temper://contexts/{ref}/resources  (ref = UUID or @owner/slug).
+    // Resolution is absorbed server-side: the API's list handler resolves the ref
+    // against the CALLER's visibility and answers its own 404 voice for an
+    // unreadable or absent context — this module never resolves locally, so the
+    // read discloses exactly what the gated list read admits.
     if let Some(context_ref_str) = uri
         .strip_prefix("temper://contexts/")
         .and_then(|rest| rest.strip_suffix("/resources"))
     {
-        let r = temper_core::context_ref::parse_context_ref(context_ref_str).map_err(|e| {
+        // Parse-shape only (bare names rejected client-side, matching the tools); the
+        // authority check is the server's.
+        temper_core::context_ref::parse_context_ref(context_ref_str).map_err(|e| {
             rmcp::ErrorData::invalid_params(
                 format!("Invalid context ref {context_ref_str:?}: {e}"),
                 None,
             )
         })?;
-        let context_id = temper_services::services::context_service::resolve_context_ref(
-            &state.pool,
-            temper_core::types::ids::ProfileId::from(profile.id),
-            &r,
-        )
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(
-                format!("Failed to resolve context ref {context_ref_str:?}: {e}"),
-                None,
-            )
-        })?;
 
         let params = temper_workflow::types::resource::ResourceListParams {
-            context_ref: Some(uuid::Uuid::from(context_id).to_string()),
+            context_ref: Some(context_ref_str.to_string()),
             limit: Some(MCP_RESOURCE_BROWSE_LIMIT),
             ..Default::default()
         };
 
-        let response = temper_services::backend::substrate_read::list_select(
-            &state.pool,
-            ProfileId::from(profile.id),
-            params,
-        )
-        .await
-        .map_err(|e| {
+        let response = client.resources().list(&params).await.across_auth(|e| {
             rmcp::ErrorData::internal_error(
                 format!("Failed to list resources in context: {e}"),
                 None,

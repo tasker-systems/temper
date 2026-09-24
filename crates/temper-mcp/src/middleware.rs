@@ -27,8 +27,23 @@ use crate::router::McpAppState;
 /// string in the extensions map. It travels beside [`RawJwtClaims`] because the
 /// shared auth seam's human email ladder may need to present it to the IdP's
 /// `/userinfo` endpoint — the one rung that needs the token itself, not its claims.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BearerToken(pub String);
+
+impl std::fmt::Debug for BearerToken {
+    /// Hand-written, not derived — presence, never value (the McpConfig redaction's
+    /// shape, 2026-09-24 review). `http::request::Parts` derives `Debug` and formats
+    /// its extension map, so a future `tracing::debug!(?parts)` on the relay path
+    /// would have printed the live caller bearer verbatim. The
+    /// `audit-credential-debug` tripwire cannot see tuple structs (its regex reads
+    /// `name: Type` field position only), which is exactly why this impl exists
+    /// rather than a baseline entry.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BearerToken")
+            .field("0", &"<redacted>")
+            .finish()
+    }
+}
 
 /// Validate the Auth0 Bearer JWT on every MCP request.
 ///
@@ -126,4 +141,25 @@ fn extract_bearer(request: &Request<Body>) -> Option<String> {
     let h = request.headers().get(header::AUTHORIZATION)?;
     let v = h.to_str().ok()?;
     v.strip_prefix("Bearer ").map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Debug impl is the whole contract: the bearer must never render, in full or
+    /// in prefix. FAILS IF: the formatted output contains any substring of the token.
+    #[test]
+    fn bearer_token_debug_never_renders_the_token() {
+        let token = "aaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbb.cccccccccccccccc";
+        let rendered = format!("{:?}", BearerToken(token.to_string()));
+        assert!(
+            !rendered.contains("bbbbbbbbbbbbbbbb"),
+            "Debug leaks the token payload: {rendered}"
+        );
+        assert!(
+            rendered.contains("redacted"),
+            "presence-preserving shape: {rendered}"
+        );
+    }
 }

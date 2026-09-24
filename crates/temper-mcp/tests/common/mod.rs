@@ -55,6 +55,7 @@ pub fn state_with_cors_origins(cors_origins: Vec<String>) -> AppState {
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        mcp_service_secret: None,
         vercel_connect: None,
         slack_link: None,
         slack_mint_secret: None,
@@ -91,6 +92,7 @@ pub fn state_with_distinct_audiences() -> AppState {
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        mcp_service_secret: None,
         vercel_connect: None,
         slack_link: None,
         slack_mint_secret: None,
@@ -110,6 +112,8 @@ pub fn mcp_config() -> McpConfig {
     McpConfig {
         mcp_base_url: "https://temper.invalid".to_string(),
         mcp_client_id: None,
+        api_base_url: None,
+        mcp_service_secret: None,
         oauth: OAuthStaticConfig {
             redirect_uris: vec![],
             allow_localhost: false,

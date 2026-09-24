@@ -149,6 +149,26 @@
       ],
       "type": "object"
     },
+    "EmbeddingStatus": {
+      "description": "Derived embedding-readiness of a resource (issue #299, Phase 4). Computed — never a stored column —\nfrom the resource's current chunks plus its embed-job state (design §8), surfaced on\n[`super::resource_view::ResourceView`] as the `embedding-status` section (B1: it rode the MCP\nresponse envelope before the section did) so a caller can tell whether semantic (vector) search\nwill find a just-created resource yet. FTS is always immediate; only the vector is\neventually-consistent under async embed.",
+      "oneOf": [
+        {
+          "const": "ready",
+          "description": "Every current chunk is embedded (or the resource has no chunks at all — an empty body is\ntrivially ready). Vector search will find it.",
+          "type": "string"
+        },
+        {
+          "const": "pending",
+          "description": "≥1 current chunk still has a NULL embedding and a live embed job exists\n(`pending`/`in_progress`/`waiting_for_retry`) — the vector is in flight.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "≥1 current chunk still has a NULL embedding and no live job remains — the embed job is `dead`\n(reaper-exhausted) or absent after a supersede race. Recoverable via re-drive.",
+          "type": "string"
+        }
+      ]
+    },
     "Extent": {
       "description": "Whether anything remains BEYOND what the caller received.\n\nNOT a total. A total costs a second query — the standing tax of pagination — and across a chain\nthat tax is paid per stage; for a whole composition it is not even well-defined, because each\nstage's output is the next stage's domain. `Partial` is answerable with one more page.\n\nThis is what `every-bound-a-read-applies-is-visible-in-its-answer` actually asks for: the\nability to distinguish \"this is everything\" from \"this is some of it\".\n\n# It answers about the FAR edge of the page, never the near one\n\n`[clarified — 2026-08-17, Pete]` The opening line read *\"Whether the caller received everything\nthat matched\"*, and `Complete` read *\"Everything that matched is here\"*. Under an `offset` those\nare false, and were already false for the find acts before `follow-from` joined them: a stage\nasking `{limit: 50, offset: 60}` of a 60-row set produces nothing, so `produced < limit` and the\nextent is `Complete` — while sixty rows matched and none came back.\n\nThat is not a miscomputation, it is the question being narrower than the old sentence claimed.\nThe bound this reports against is the LIMIT, so it says *\"the page was not cut off at its far\nedge\"*. What an `offset` skipped is disclosed by the offset itself, in `terms_applied`, and is\nnot folded in here, because folding it in would require the total this type exists to avoid.\n\n**So `Complete` means \"ask no further\", not \"you hold the whole set\".** The two coincide exactly\nwhen no offset was applied, which is the common case and the reason the loose reading survived\nthis long.",
       "oneOf": [
@@ -714,6 +734,17 @@
         },
         "doc_type_name": {
           "type": "string"
+        },
+        "embedding_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EmbeddingStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Derived embedding-readiness — the `embedding-status` section.\n\nAbsent means **not requested**, never \"not embedded\": whenever the section was\nasked for, the value is `Some` and names one of [`EmbeddingStatus`]'s three\nstates. It rides the view rather than a response envelope (B1) so the wire shape\nstays the one view: the standalone `GET /api/embed/status` read this field\nreplaced could not be made oracle-free — gating it leaked readability through map\npresence, leaving it ungated leaked pipeline state past the gate — while a gated\nread carrying the field discloses nothing about any row the gate did not\nalready admit."
         },
         "id": {
           "description": "A `kb_resources.id` value.",

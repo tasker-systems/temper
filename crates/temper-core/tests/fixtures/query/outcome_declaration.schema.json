@@ -17,6 +17,11 @@
           "const": "edges",
           "description": "The resource's graph edges, fetched alongside the view rather than carried on it.",
           "type": "string"
+        },
+        {
+          "const": "embedding-status",
+          "description": "Derived embedding-readiness — [`ResourceView::embedding_status`].",
+          "type": "string"
         }
       ]
     },

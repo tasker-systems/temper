@@ -65,16 +65,30 @@ pub async fn list(
     Ok(Json(response))
 }
 
+/// Query params for `GET /api/resources/{id}` — additive over the incumbent shape.
+#[derive(Debug, serde::Deserialize)]
+pub struct ResourceShowQuery {
+    /// Comma-separated extra sections to fill on the view (`ResourceSection` names,
+    /// kebab-case). `open-meta` is the door's baseline and is always filled;
+    /// `embedding-status` is the additive one (B1). Unknown names are a `400` naming this
+    /// door's vocabulary.
+    pub sections: Option<String>,
+}
+
 /// Get one resource
 #[utoipa::path(
     get,
     operation_id = "get_resource",
     path = "/api/resources/{id}",
     tag = "Resources",
-    params(("id" = Uuid, Path, description = "Resource ID")),
+    params(
+        ("id" = Uuid, Path, description = "Resource ID"),
+        ("sections" = Option<String>, Query, description = "Comma-separated extra sections to fill on the view (kebab-case); `open-meta` is always included, `embedding-status` is the additive one"),
+    ),
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Resource plus both metadata tiers", body = ResourceView),
+        (status = 400, description = "Unknown section name", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
     )
@@ -82,22 +96,44 @@ pub async fn list(
 pub async fn get(
     State(state): State<AppState>,
     auth: AuthUser,
-    RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
+    Query(query): Query<ResourceShowQuery>,
 ) -> ApiResult<Json<ResourceView>> {
-    use temper_core::types::ids::ResourceId;
-    use temper_workflow::operations::ShowResource;
+    use std::collections::BTreeSet;
 
-    let cmd = ShowResource {
-        resource: ResourceId::from(resource_id),
-        origin: surface,
-    };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
-    let out = backend.show_resource(cmd).await.map_err(ApiError::from)?;
-    // The trait's `ResourceView` IS this endpoint's response now — no narrowing. A single-row
-    // `GET /api/resources` and this call serialize identically for the same resource, which is
-    // what `show_and_single_row_list_agree_when_body_excluded` holds in place.
-    Ok(Json(out.value))
+    use temper_core::types::resource_view::{ResourceSection, SectionSet};
+
+    // `open-meta` is the baseline this door has always filled (the managed tier is not a
+    // section — it is always present on a view). Requested sections union onto it, so the
+    // no-query case answers with the exact pre-`sections` shape — the one
+    // `show_and_single_row_list_agree_when_body_excluded` holds in place — while
+    // `?sections=embedding-status` (B1) carries the derived field on the row the gate
+    // already admitted, replacing the standalone status route that read could not keep.
+    let mut names: BTreeSet<ResourceSection> = BTreeSet::new();
+    names.insert(ResourceSection::OpenMeta);
+    if let Some(csv) = query.sections.as_deref() {
+        // The show door parses against ITS accepted set: `edges` is not one — edges are
+        // fetched alongside a view, never carried on it, so accepting the word was
+        // answering 200 with less than was asked for (the accept-and-ignore shape the
+        // LIST door's ruling refuses; residual SEC-4 F3).
+        let extra =
+            SectionSet::parse_csv_accepting(csv, &ResourceSection::SHOW).map_err(ApiError::from)?;
+        for section in ResourceSection::SHOW {
+            if extra.contains(section) {
+                names.insert(section);
+            }
+        }
+    }
+    let sections = SectionSet::from_iter(names);
+
+    let view = temper_services::backend::substrate_read::show_view_select(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        ResourceId::from(resource_id),
+        &sections,
+    )
+    .await?;
+    Ok(Json(view))
 }
 
 /// Read a resource's reconstituted content

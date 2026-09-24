@@ -63,7 +63,11 @@ use crate::state::AppState;
 pub enum AuthzError {
     /// The token is machine-shaped but not coherently so — classification (crate-private,
     /// see `normalize.rs`) refused it. Carries the reason (already logged by the seam) so a
-    /// surface can decide how much of it to say on the wire; neither says any of it.
+    /// surface can decide how much of it to say on the wire. As of the network-door ruling 7,
+    /// the API says all of it: the 401 body is `machine credential refused: {why}` — the
+    /// sentences are static, operator-actionable statements about the caller's own token,
+    /// and a distinct body is what lets the relay's tool layer split this arm from the
+    /// expired-in-flight 401 it used to share a body with.
     Refused(&'static str),
     /// The human email ladder fell off its bottom rung: no `email` claim, no cached
     /// auth link, and `/userinfo` did not answer. Distinct from [`Self::ProfileResolution`]
@@ -434,6 +438,7 @@ mod tests {
             enable_swagger: false,
             internal_reconcile_secret: None,
             embed_dispatch_secret: None,
+            mcp_service_secret: None,
             vercel_connect: None,
             slack_link: None,
             slack_mint_secret: None,

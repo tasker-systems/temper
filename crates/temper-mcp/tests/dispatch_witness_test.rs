@@ -34,6 +34,7 @@ use rmcp::{
     ServerHandler,
 };
 use sqlx::postgres::PgPoolOptions;
+use temper_mcp::config::McpConfig;
 use temper_mcp::service::TemperMcpService;
 use temper_services::{
     auth_config::{AuthConfig, AuthMode},
@@ -66,6 +67,7 @@ fn service_for_dispatch_witness() -> TemperMcpService {
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        mcp_service_secret: None,
         vercel_connect: None,
         slack_link: None,
         slack_mint_secret: None,
@@ -76,7 +78,20 @@ fn service_for_dispatch_witness() -> TemperMcpService {
 
     let jwks = JwksKeyStore::new("https://example.invalid/.well-known/jwks.json".to_string());
     let state = AppState::new(pool, jwks, config);
-    TemperMcpService::new(state)
+    TemperMcpService::new(
+        state,
+        McpConfig {
+            mcp_base_url: "https://temper.invalid".to_string(),
+            mcp_client_id: None,
+            api_base_url: None,
+            mcp_service_secret: None,
+            oauth: temper_mcp::config::OAuthStaticConfig {
+                redirect_uris: vec![],
+                allow_localhost: false,
+            },
+        },
+        temper_mcp::service::shared_relay_pool(),
+    )
 }
 
 /// Dispatch a tool call through the generated `ServerHandler::call_tool` against a bare

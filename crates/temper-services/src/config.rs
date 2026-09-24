@@ -5,11 +5,12 @@ use std::env;
 
 /// The instance's whole configuration.
 ///
-/// `Debug` is hand-written to REDACT `internal_reconcile_secret`, `embed_dispatch_secret` and
-/// `slack_mint_secret` — the three plaintext shared secrets behind three separate signature gates,
-/// the last of which vends a token acting as any linked human. A derived `Debug` would print all
-/// three verbatim wherever an `ApiConfig` is formatted. This is the same reasoning already spelled
-/// out on [`SlackLinkConfig`] below ("would print it verbatim wherever this or the enclosing
+/// `Debug` is hand-written to REDACT `internal_reconcile_secret`, `embed_dispatch_secret`,
+/// `slack_mint_secret` and `mcp_service_secret` — the plaintext shared secrets behind the
+/// signature and relay-trust gates, the last of which is what lets a caller claim MCP
+/// provenance at the ledger. A derived `Debug` would print them verbatim wherever an
+/// `ApiConfig` is formatted. This is the same reasoning already spelled out on
+/// [`SlackLinkConfig`] below ("would print it verbatim wherever this or the enclosing
 /// `ApiConfig` is formatted") — the nested config got the treatment before its parent did.
 ///
 /// Redaction is PRESENCE-PRESERVING: each secret prints as `Some("redacted")` or `None`, because
@@ -35,6 +36,12 @@ pub struct ApiConfig {
     /// Shared secret gating the internal embed-dispatch drain endpoint (issue #299), called by the
     /// Vercel cron. `None` disables the endpoint (a deployment with no drain configured).
     pub embed_dispatch_secret: Option<String>,
+    /// Shared secret validating the MCP relay's forwarded calls (the network door's
+    /// service-to-service credential — design §D2, ruling 6). `None` is a quiet degrade at the
+    /// API: the attribution carrier is never trusted and direct callers are unaffected. Never
+    /// shared with any other secret — `check_secret_distinctness` refuses the boot on a
+    /// collision, because sharing would let every holder of the other key forge relay trust.
+    pub mcp_service_secret: Option<String>,
     /// Vercel Connect broker credentials. `None` when the four env vars are not all
     /// set — the deployment then has a `NullBroker` and mints fail clearly. Never
     /// hardcoded; a self-hosted operator sets their own.
@@ -205,6 +212,10 @@ impl std::fmt::Debug for ApiConfig {
                 "embed_dispatch_secret",
                 &self.embed_dispatch_secret.as_ref().map(|_| "redacted"),
             )
+            .field(
+                "mcp_service_secret",
+                &self.mcp_service_secret.as_ref().map(|_| "redacted"),
+            )
             .field("vercel_connect", &self.vercel_connect)
             .field("slack_link", &self.slack_link)
             .field(
@@ -247,8 +258,10 @@ impl ApiConfig {
         // which mode their instance is in is exactly the operator who mis-sets these variables.
         tracing::info!(mode = %auth.mode, "auth configured");
 
-        // Auth identity first, then secret hygiene, then everything that merely has to be present.
+        // Auth identity first, then secret hygiene (distinctness, then strength), then
+        // everything that merely has to be present.
         check_secret_distinctness(&lookup)?;
+        check_shared_secret_strength(&lookup)?;
 
         let cors_origins: Vec<String> = lookup("CORS_ORIGINS")
             .unwrap_or_default()
@@ -281,12 +294,12 @@ impl ApiConfig {
             cors_origins,
             port: lookup("PORT").and_then(|p| p.parse().ok()).unwrap_or(3000),
             enable_swagger,
-            internal_reconcile_secret: lookup("INTERNAL_RECONCILE_SECRET")
-                .filter(|s| !s.is_empty()),
-            embed_dispatch_secret: lookup("EMBED_DISPATCH_SECRET").filter(|s| !s.is_empty()),
+            internal_reconcile_secret: shared_secret(&lookup, "INTERNAL_RECONCILE_SECRET"),
+            embed_dispatch_secret: shared_secret(&lookup, "EMBED_DISPATCH_SECRET"),
+            mcp_service_secret: shared_secret(&lookup, "TEMPER_MCP_SERVICE_SECRET"),
             vercel_connect: parse_vercel_connect(&lookup),
             slack_link: parse_slack_link(&lookup),
-            slack_mint_secret: lookup("SLACK_MINT_SECRET").filter(|s| !s.is_empty()),
+            slack_mint_secret: shared_secret(&lookup, "SLACK_MINT_SECRET"),
             rate_limit: crate::rate_limit::parse_rate_limit(&lookup)?,
             blob,
             blob_disabled_by_policy,
@@ -524,13 +537,14 @@ fn parse_slack_link(lookup: impl Fn(&str) -> Option<String>) -> Option<SlackLink
 /// stored grant. And `openssl rand -base64 32` is the documented generator for the vault key
 /// (`parse_slack_link` above says so), which makes "generate once, paste everywhere" the exact
 /// operator error this guards.
-const SHARED_SECRET_VARS: [&str; 6] = [
+const SHARED_SECRET_VARS: [&str; 7] = [
     "INTERNAL_RECONCILE_SECRET",
     "EMBED_DISPATCH_SECRET",
     "SLACK_LINK_SECRET",
     "SLACK_MINT_SECRET",
     "BLOB_READ_WRITE_TOKEN",
     "SLACK_VAULT_ENC_KEY",
+    "TEMPER_MCP_SERVICE_SECRET",
 ];
 
 /// Refuse to boot when two shared secrets hold the same value.
@@ -553,12 +567,58 @@ const SHARED_SECRET_VARS: [&str; 6] = [
 ///
 /// Only [`ApiConfig::from_lookup`] runs this, so the in-process test harnesses that build an
 /// `ApiConfig` by struct literal are unaffected — correctly, since they are not deployments.
+/// A shared secret read from the environment. Compared against a header PRESENTED as
+/// its value, so the stored value and the presentation must agree byte-for-byte —
+/// surrounding whitespace is an operator artifact (a pasted value, a trailing newline
+/// from `$(cat /run/secrets/…)` or an env_file), never part of the secret. Trimming
+/// here keeps the gate from silently failing every presentation of an
+/// otherwise-correct secret, and keeps `check_secret_distinctness`'s compare on
+/// trimmed values honest about collisions like `"X"` vs `"X␣"`.
+fn shared_secret(lookup: &impl Fn(&str) -> Option<String>, name: &str) -> Option<String> {
+    lookup(name)
+        .map(|v| v.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// The floor a header-compared shared secret must clear. The values that would trip
+/// this — a committed test constant, an operator's pasted `"changeme"`, an
+/// under-generated placeholder — are the only ones with any business being refused
+/// here; a 16-char random string is the smallest secret a holder cannot guess.
+const MIN_SHARED_SECRET_CHARS: usize = 16;
+
+/// A production-level check the distinctness gate cannot express: EACH header-compared
+/// shared secret must be long enough to be a secret. The distinctness gate answers "are
+/// these two values different"; this answers "is this value a secret at all". Only the
+/// secrets in this arc's scope are refused — the e2e harness's `e2e-mcp-relay-service-
+/// credential` constant is excluded from every check by being a *harness* constant, but
+/// a production deployment pasting it would now refuse to boot, as it should.
+fn check_shared_secret_strength(
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<(), ConfigError> {
+    for name in [
+        "TEMPER_MCP_SERVICE_SECRET",
+        "INTERNAL_RECONCILE_SECRET",
+        "EMBED_DISPATCH_SECRET",
+        "SLACK_MINT_SECRET",
+    ] {
+        if let Some(value) = shared_secret(lookup, name) {
+            if value.chars().count() < MIN_SHARED_SECRET_CHARS {
+                return Err(ConfigError::WeakSharedSecret(name));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn check_secret_distinctness(lookup: impl Fn(&str) -> Option<String>) -> Result<(), ConfigError> {
     // Empty is absent (the `.filter(|s| !s.is_empty())` convention every field above uses). Two
     // unset variables both reading "" are not a collision — they are two disabled endpoints.
+    // Comparison is over TRIMMED values (see `shared_secret`): the consumption gates compare
+    // against what a holder's PROCESS env contains; two values equal only after trimming are
+    // the same secret with whitespace paste skew, and their holders cross-authenticate.
     let present: Vec<(&'static str, String)> = SHARED_SECRET_VARS
         .iter()
-        .filter_map(|&name| lookup(name).filter(|v| !v.is_empty()).map(|v| (name, v)))
+        .filter_map(|&name| shared_secret(&lookup, name).map(|v| (name, v)))
         .collect();
 
     for (i, (a_name, a_value)) in present.iter().enumerate() {
@@ -685,6 +745,7 @@ mod tests {
     }
 
     // FAILS IF: only ONE of a colliding pair is set — that is a single secret, not a shared one.
+
     #[test]
     fn a_lone_secret_never_collides() {
         assert_eq!(
@@ -693,7 +754,76 @@ mod tests {
         );
     }
 
-    // FAILS IF: the collision error names the wrong pair, or prints the colliding secret.
+    // FAILS IF: two secrets differing only by surrounding whitespace pass the gate.
+    // Each consumption gate compares a holder PRESENTATION against the stored value —
+    // and a presentation trimmed on one side of the wire means `"X"` and `"X␣"` are
+    // the same secret with paste skew: their holders cross-authenticate, which is the
+    // exact operator error this gate exists to refuse.
+    #[test]
+    fn whitespace_skewed_values_are_one_secret() {
+        assert_eq!(
+            check_secret_distinctness(env(&[
+                ("TEMPER_MCP_SERVICE_SECRET", "shared-secret "),
+                ("INTERNAL_RECONCILE_SECRET", "shared-secret"),
+            ])),
+            // The pair's report order is the iteration order of SHARED_SECRET_VARS —
+            // the file's own comment pins that as the deterministic property.
+            Err(ConfigError::SecretCollision(
+                "INTERNAL_RECONCILE_SECRET",
+                "TEMPER_MCP_SERVICE_SECRET"
+            )),
+            "the distinctness gate must compare trimmed values"
+        );
+        // Whitespace-only is as absent as empty (the e2e harness's None case).
+        assert_eq!(
+            check_secret_distinctness(env(&[("EMBED_DISPATCH_SECRET", "   ")])),
+            Ok(())
+        );
+    }
+
+    // FAILS IF: a gate secret stored by the API keeps its surrounding whitespace — a
+    // trailing newline from `$(cat /run/secrets/…)` would make the stored value differ
+    // from the value the other function (which trims at parse) presents, silently
+    // failing every presentation of an otherwise-correct secret.
+    #[test]
+    fn the_mcp_service_secret_is_stored_trimmed_like_its_presentation() {
+        assert_eq!(
+            shared_secret(
+                &env(&[("TEMPER_MCP_SERVICE_SECRET", "  relay-secret\n")]),
+                "TEMPER_MCP_SERVICE_SECRET"
+            ),
+            Some("relay-secret".to_string())
+        );
+    }
+
+    // FAILS IF: a header-compared shared secret under the length floor boots. The
+    // committed test constant is the canonical trip: 16 chars is the smallest value a
+    // holder cannot guess, and anything shorter — a paste placeholder most of all —
+    // collapses the relay gate into a guessable door the distinctness gate cannot see.
+    #[test]
+    fn a_short_shared_secret_refuses_to_boot() {
+        let pairs = with_secrets(&[("TEMPER_MCP_SERVICE_SECRET", "too-short".to_string())]);
+        assert_eq!(
+            check_shared_secret_strength(&lookup_of(&pairs)),
+            Err(ConfigError::WeakSharedSecret("TEMPER_MCP_SERVICE_SECRET")),
+        );
+    }
+
+    // FAILS IF: the floor trips on a correct configuration. The distinctness pair's
+    // negative mirror: a guard that refuses everything is not a guard.
+    #[test]
+    fn strong_or_absent_shared_secrets_boot() {
+        assert_eq!(
+            check_shared_secret_strength(&lookup_of(&with_secrets(&[]))),
+            Ok(()),
+            "absent is configured-off, not weak"
+        );
+        let pairs = with_secrets(&[(
+            "TEMPER_MCP_SERVICE_SECRET",
+            "a-real-32-char-random-value!".to_string(),
+        )]);
+        assert_eq!(check_shared_secret_strength(&lookup_of(&pairs)), Ok(()));
+    }
     //
     // The sibling assertion on `ConfigError::McpAudienceMismatch`
     // (`auth_config::tests::errors_name_the_variable_and_never_print_values`) carries the same

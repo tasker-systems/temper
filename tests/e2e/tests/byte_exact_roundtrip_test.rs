@@ -172,7 +172,7 @@ async fn byte_exact_roundtrip(pool: PgPool) {
         // ...and the guarantee is surfaced: verbatim, not derived. Guards against an inert feature —
         // a byte-exact read that silently fell back to the derived reconstruction would still match
         // for these bodies, but would not carry the verbatim guarantee.
-        let detail = app.client.resources().get(id).await.expect("show");
+        let detail = app.client.resources().get(id, None).await.expect("show");
         assert_eq!(
             detail.body_storage,
             Some(BodyStorage::Verbatim),

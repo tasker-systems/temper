@@ -57,7 +57,7 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
 
     let shared = Arc::new(McpAppState {
         api_state: api_state.clone(),
-        mcp_config,
+        mcp_config: mcp_config.clone(),
     });
 
     // ── Public OAuth discovery endpoints ───────────────────────────────
@@ -92,8 +92,25 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
         .with_json_response(true)
         .disable_allowed_hosts();
 
+    // The relay's ONE pool: built once per process here, refcount-cloned into every
+    // per-request service (the §D6 carve-out — a pool inside the factory closure would
+    // be per-request, the fresh-TLS-per-call cost it exists to avoid).
+    let shared_relay_pool = crate::service::shared_relay_pool();
+
     let mcp_service = StreamableHttpService::new(
-        move || Ok(TemperMcpService::new(api_state.clone())),
+        // Stateless mode calls this factory once per HTTP request, so every request
+        // gets a fresh service — and a fresh view of the (immutable) relay config.
+        {
+            let mcp_config = mcp_config.clone();
+            let shared_relay_pool = shared_relay_pool.clone();
+            move || {
+                Ok(TemperMcpService::new(
+                    api_state.clone(),
+                    mcp_config.clone(),
+                    shared_relay_pool.clone(),
+                ))
+            }
+        },
         Arc::new(LocalSessionManager::default()),
         config,
     );

@@ -119,10 +119,15 @@ pub async fn require_auth(
     let authed = temper_services::auth::authenticate_token(&state, &raw, &token)
         .await
         .map_err(|e| match e {
-            // The seam has already logged the reason with the `sub`; on the wire this
-            // is indistinguishable from any other bad token, as it was before.
-            temper_services::auth::AuthzError::Refused(_) => {
-                ApiError::Unauthorized("Invalid or expired token".to_string())
+            // The seam has already logged the reason with the `sub`. The body NAMES the
+            // machine-credential refusal distinctly (the `why` is a static, operator-actionable
+            // sentence about the caller's own token — nothing secret, nothing enumerable). This
+            // is the network-door ruling 7: the relay's tool layer maps post-edge 401s arm-for-arm
+            // from the preserved body, and a one-body answer (expired-in-flight and this arm
+            // sharing the generic sentence) made that mapping impossible — no client-side change
+            // can split one body into two arms. Error MESSAGE strings only; no schema change.
+            temper_services::auth::AuthzError::Refused(why) => {
+                ApiError::Unauthorized(format!("machine credential refused: {why}"))
             }
             temper_services::auth::AuthzError::Deactivated { profile_id } => {
                 tracing::warn!(%profile_id, "rejected: profile is deactivated");

@@ -370,6 +370,11 @@ fn section_advice(section: ResourceSection) -> &'static str {
             "Edge listing has its own commands; `follow-from` with an `edge_filter` walks and \
              filters on edges without returning them"
         }
+        // B1 made the readiness a section of the gated resource reads; this door has not grown
+        // the hydration arm, so the honest answer names the door that serves it.
+        ResourceSection::EmbeddingStatus => {
+            "Embedding readiness rides `show` as the `embedding-status` section"
+        }
         ResourceSection::OpenMeta => "",
     }
 }

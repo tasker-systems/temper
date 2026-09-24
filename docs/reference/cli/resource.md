@@ -174,9 +174,9 @@ Options:
       --status <STATUS>
           Filter by status (goal only)
       --with <WITH>
-          Add a section to every row (comma-separated or repeated). `--with open-meta` fills the open metadata tier — the same envelope and the same row type as the default list, since asking for a section adds a part to the one shape rather than selecting a second one. The managed tier is always present either way. `body` is deliberately not offered here: a page of reconstructed bodies is an unbounded payload behind a flag that reads as cheap — use `show` per row [possible values: open-meta]
+          Add a section to every row (comma-separated or repeated). `--with open-meta` fills the open metadata tier — the same envelope and the same row type as the default list, since asking for a section adds a part to the one shape rather than selecting a second one. The managed tier is always present either way. `body` is deliberately not offered here: a page of reconstructed bodies is an unbounded payload behind a flag that reads as cheap — use `show` per row [possible values: open-meta, embedding-status]
       --without <WITHOUT>
-          Drop a section from every row (comma-separated or repeated). `list` asks for none by default, so this is only meaningful against a `--with` on the same invocation — and naming one section in both is a hard error, not a precedence rule [possible values: open-meta]
+          Drop a section from every row (comma-separated or repeated). `list` asks for none by default, so this is only meaningful against a `--with` on the same invocation — and naming one section in both is a hard error, not a precedence rule [possible values: open-meta, embedding-status]
       --fields <FIELDS>
           Subselect top-level response keys on each row (anchor key always preserved). Use jq for nested projection
   -h, --help
@@ -247,12 +247,12 @@ Options:
           
           The peer is polymorphic (the 2026-09-02 S6 deferral, landed): resource peers carry their title; blob peers — the `derivation_source` edge `--preserve-source` asserts, say — are addressed by bare id alone, so this section answers "what is this resource derived from" from the resource side. `temper blob relations <blob-id>` remains the blob-side view. Cogmap-ended edges are not rendered here, and the walk surfaces stay node-typed: an edge listing may render a blob, a walk never materializes one.
           
-          [possible values: body, open-meta, edges]
+          [possible values: body, open-meta, edges, embedding-status]
 
       --without <WITHOUT>
           Drop a section (comma-separated or repeated). `--without body` is the cheap orientation read: everything `show` returns except the reconstructed markdown, and it composes freely with `--with edges`. Naming one section in both `--with` and `--without` is a hard error, not a precedence rule
           
-          [possible values: body, open-meta, edges]
+          [possible values: body, open-meta, edges, embedding-status]
 
       --fields <FIELDS>
           Subselect top-level response keys (the anchor key `id` is always preserved). Use jq for nested projection

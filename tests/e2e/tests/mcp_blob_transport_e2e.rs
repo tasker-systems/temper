@@ -63,6 +63,7 @@ async fn spawn_mcp_server(
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        mcp_service_secret: None,
         vercel_connect: None,
         slack_link: None,
         slack_mint_secret: None,
@@ -81,6 +82,8 @@ async fn spawn_mcp_server(
     let mcp_config = McpConfig {
         mcp_base_url: "http://mcp.test".to_string(),
         mcp_client_id: None,
+        api_base_url: None,
+        mcp_service_secret: None,
         oauth: OAuthStaticConfig {
             redirect_uris: vec![],
             allow_localhost: true,
