@@ -396,7 +396,7 @@ async fn a_response_that_sets_its_own_policy_keeps_it() {
     );
 }
 
-/// The relay pool never follows a redirect (RG-2 F1). Its clients carry the shared
+/// The relay pool never follows a redirect. Its clients carry the shared
 /// service credential and the caller's bearer as constructor-level default headers, and
 /// reqwest replays default headers on every redirect hop — a followed 3xx would hand
 /// both secrets to whatever origin the `Location` names. The probe binds a real

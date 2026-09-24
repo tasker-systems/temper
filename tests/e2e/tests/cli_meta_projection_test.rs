@@ -96,7 +96,7 @@ async fn show_without_body_returns_the_view_minus_the_body(pool: sqlx::PgPool) {
 }
 
 /// `--with embedding-status` is a section `show` actually REQUESTS, not one it parses
-/// and silently drops (RG-1 F3): the resolved sections ride the view call's
+/// and silently drops (found in the arc-boundary review, 2026-09-24): the resolved sections ride the view call's
 /// `?sections=` parameter, so the derived field lands on the rendered JSON. Before the
 /// fix the flag charged the caller a valid word and returned neither the field nor an
 /// error.

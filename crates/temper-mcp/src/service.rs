@@ -53,7 +53,7 @@ pub(crate) const RELAY_REQUEST_TIMEOUT_SECS: u64 = 45;
 pub fn shared_relay_pool() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(RELAY_REQUEST_TIMEOUT_SECS))
-        // Redirects are refused, never followed (RG-2 F1): the pool's clients carry the
+        // [added — 2026-09-24, found in review] Redirects are refused, never followed: the pool's clients carry the
         // shared service credential and the caller's bearer as default headers, and
         // reqwest replays default headers on every redirect hop — a 3xx answered by
         // anything in front of the pinned `api_base_url` must not be able to re-send
@@ -1282,7 +1282,7 @@ mod tests {
     use temper_client::error::ClientError;
 
     /// The JWKS-outage 401 ("Authentication service unavailable") is TRANSIENT — the
-    /// one post-edge cause whose remedy is a retry (RG-1 F4). The catch-all would
+    /// one post-edge cause whose remedy is a retry [added — 2026-09-24, found in review]. The catch-all would
     /// frame it terminal; this arm must map it to an internal, retryable voice. The
     /// face needs the key store to FAIL, not the caller, so it cannot be produced on
     /// demand at the listener — the mapping's other arms carry the wire witnesses.

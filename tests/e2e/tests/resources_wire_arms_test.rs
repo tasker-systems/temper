@@ -257,7 +257,7 @@ async fn deactivated_account_speaks_the_terminal_deactivation_sentence(pool: PgP
 }
 
 /// The post-edge 401 arms speak on DELETE too, not only on the read voices: the one
-/// migrated tool that skipped the mapping (RG-1 F1) rendered a deactivated refusal as
+/// migrated tool that skipped the mapping (found in the arc-boundary review, 2026-09-24) rendered a deactivated refusal as
 /// an internal fault with a CLI login hint. Every tool in the family carries the arms.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_post_edge_401_on_delete_speaks_the_arm_not_the_fault(pool: PgPool) {

@@ -1780,7 +1780,7 @@ pub fn show(_config: &Config, params: ShowParams<'_>) -> Result<()> {
     )?;
     let want_body = sections.contains(ResourceSection::Body);
 
-    // The requested sections RIDE the view call (RG-1 F3): `--with embedding-status`
+    // [added — 2026-09-24, found in review] The requested sections RIDE the view call: `--with embedding-status`
     // used to parse, print in help, and then silently never be requested. `body` is
     // excluded — this command fetches content through `GET /content` below, and the
     // view call is not where it comes from — and so is `edges`, which has its own
