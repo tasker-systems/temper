@@ -479,9 +479,7 @@ async fn enriched_view(
         .get(id, Some(&enriched_sections()))
         .await
         .across_auth(|e| {
-            map_across_auth(e, |e| {
-                rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
-            })
+            rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
         })?;
     let body_markdown = if include_content {
         Some(
@@ -490,12 +488,10 @@ async fn enriched_view(
                 .content(id)
                 .await
                 .across_auth(|e| {
-                    map_across_auth(e, |e| {
-                        rmcp::ErrorData::internal_error(
-                            format!("Failed to get resource: {e}"),
-                            None,
-                        )
-                    })
+                    rmcp::ErrorData::internal_error(
+                        format!("Failed to get resource: {e}"),
+                        None,
+                    )
                 })?
                 .markdown,
         )
