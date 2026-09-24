@@ -40,8 +40,11 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   rewriting roles. Alongside, an operator repair
   verb exists for instances that drifted before this change: `POST
   /api/access/admin/auto-join/reconcile` and `temper admin access reconcile-auto-join`
-  converge every auto-join team to the standing-approved population and report each
-  (team, profile) pair added. Who observes: approving a principal by any door now puts
+  converge every auto-join team to the standing-approved population, report each
+  (team, profile) pair added, and name any touched team that also carries SAML group
+  mappings — those teams' new native rows permanently pre-empt IdP role assertions for
+  the pairs written (native-wins-skip), and the verb warns so the operator sees the
+  conversion the repair is making. Who observes: approving a principal by any door now puts
   them in every auto-join team at the team's `auto_join_role`, atomically; revocation and
   deactivation leave rosters exactly as they were (stale rows are harmless under D18 —
   membership confers no access, and admission is denied at every surface); an operator of

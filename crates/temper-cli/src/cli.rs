@@ -1968,7 +1968,8 @@ pub enum AdminAccessAction {
     /// prints a line. Approved machine principals enroll like any other profile, so on a
     /// drifted instance a reconcile widens machine read reach — the report is the review
     /// artifact. On a team that also carries a SAML group mapping, the native rows this
-    /// writes pre-empt later IdP role assertions for that pair (native-wins-skip).
+    /// writes pre-empt later IdP role assertions for that pair (native-wins-skip); the verb
+    /// warns when its report touches such teams.
     ReconcileAutoJoin,
 }
 

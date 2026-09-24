@@ -132,20 +132,28 @@ pub async fn access_remote(
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
             (id, "reactivated")
         }
-        // The reconcile verb takes no profile and answers with rows, so it reports for itself
-        // rather than flowing into the shared one-line tail below.
+        // The reconcile verb takes no profile and answers with an outcome, so it reports for
+        // itself rather than flowing into the shared one-line tail below.
         AdminAccessAction::ReconcileAutoJoin => {
-            let rows = admin
+            let outcome = admin
                 .reconcile_auto_join()
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
-            if rows.is_empty() {
+            if outcome.added.is_empty() {
                 println!("auto-join rosters converged — nothing to add");
             } else {
-                for row in &rows {
+                for row in &outcome.added {
                     println!("{} {}", row.team_slug, row.profile_handle);
                 }
-                println!("{} pair(s) added", rows.len());
+                println!("{} pair(s) added", outcome.added.len());
+            }
+            if !outcome.saml_mapped_teams.is_empty() {
+                eprintln!(
+                    "warning: these teams also carry SAML group mappings: {} — the native \
+                     rows just written pre-empt IdP role assertions for those (team, profile) \
+                     pairs (native-wins-skip)",
+                    outcome.saml_mapped_teams.join(", ")
+                );
             }
             return Ok(());
         }

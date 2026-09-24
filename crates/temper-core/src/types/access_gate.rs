@@ -286,3 +286,21 @@ pub struct AutoJoinReconcileRow {
     pub team_slug: String,
     pub profile_handle: String,
 }
+
+/// The outcome of an operator auto-join reconciliation: the (team, profile) pairs added,
+/// plus the touched teams that also carry SAML group mappings. Enrollment writes NATIVE
+/// rows on auto-join teams, and `reconcile_idp_memberships` skips any (team, profile) pair
+/// the profile holds natively — so on a SAML-mapped auto-join team every pair in `added`
+/// permanently pre-empts the IdP's role assertions for that pair (native-wins-skip). The
+/// verb names those teams so the operator sees the conversion the repair is making.
+///
+/// No `utoipa` derive, matching [`AutoJoinReconcileRow`] and every other type on this
+/// operator-only surface: those routes are mounted with a plain `.route(...)` and stay off
+/// the documented contract on purpose.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReconcileAutoJoinOutcome {
+    pub added: Vec<AutoJoinReconcileRow>,
+    pub saml_mapped_teams: Vec<String>,
+}

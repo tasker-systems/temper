@@ -112,6 +112,20 @@ export type QueueCount = {
 count: number, };
 
 /**
+ * The outcome of an operator auto-join reconciliation: the (team, profile) pairs added,
+ * plus the touched teams that also carry SAML group mappings. Enrollment writes NATIVE
+ * rows on auto-join teams, and `reconcile_idp_memberships` skips any (team, profile) pair
+ * the profile holds natively — so on a SAML-mapped auto-join team every pair in `added`
+ * permanently pre-empts the IdP's role assertions for that pair (native-wins-skip). The
+ * verb names those teams so the operator sees the conversion the repair is making.
+ *
+ * No `utoipa` derive, matching [`AutoJoinReconcileRow`] and every other type on this
+ * operator-only surface: those routes are mounted with a plain `.route(...)` and stay off
+ * the documented contract on purpose.
+ */
+export type ReconcileAutoJoinOutcome = { added: Array<AutoJoinReconcileRow>, saml_mapped_teams: Array<string>, };
+
+/**
  * An **open** reconsideration request, with the asking principal's identity (spec D15 admin
  * inbox).
  *

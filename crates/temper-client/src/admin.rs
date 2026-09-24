@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::access_gate::{
-    AutoJoinReconcileRow, JoinRequest, JoinRequestStatus, JoinRequestWithProfile, QueueCount,
+    JoinRequest, JoinRequestStatus, JoinRequestWithProfile, QueueCount, ReconcileAutoJoinOutcome,
     ReviewRequestWithProfile, SystemSettings,
 };
 use temper_core::types::admin::{
@@ -286,8 +286,9 @@ impl<'a> AdminClient<'a> {
     }
 
     /// Converge every auto-join team's roster to the standing-approved population (admin only).
-    /// Returns the (team, profile) pairs added; an empty vec means already converged.
-    pub async fn reconcile_auto_join(&self) -> Result<Vec<AutoJoinReconcileRow>> {
+    /// Returns the (team, profile) pairs added plus the touched teams that also carry SAML
+    /// group mappings; an empty `added` means already converged.
+    pub async fn reconcile_auto_join(&self) -> Result<ReconcileAutoJoinOutcome> {
         let token = self.http.resolve_token()?;
         let path = "/api/access/admin/auto-join/reconcile";
         let req = self.http.post(path).json(&serde_json::json!({}));

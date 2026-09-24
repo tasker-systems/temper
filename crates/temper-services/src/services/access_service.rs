@@ -22,7 +22,7 @@ use temper_principal::{Act, ActorAuthority};
 
 use temper_core::types::access_gate::{
     AutoJoinReconcileRow, Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile,
-    PublicSystemSettings, ReviewRequestWithProfile, SystemSettings,
+    PublicSystemSettings, ReconcileAutoJoinOutcome, ReviewRequestWithProfile, SystemSettings,
 };
 use temper_core::types::admin::UpdateSettingsRequest;
 use temper_core::types::cognitive_maps::{
@@ -857,7 +857,7 @@ pub async fn demote_admin(pool: &PgPool, admin: &SystemAdmin, subject: ProfileId
 }
 
 /// Converge every auto-join team to the standing-approved population, reporting each
-/// (team, profile) pair added.
+/// (team, profile) pair added plus the touched teams that also carry SAML group mappings.
 ///
 /// The operator repair for instances that drifted while enrollment lived only on the
 /// request-review door: profiles approved out-of-band (`admin access approve`, promotion,
@@ -870,10 +870,16 @@ pub async fn demote_admin(pool: &PgPool, admin: &SystemAdmin, subject: ProfileId
 /// this only repairs history. The SQL (`auto_join_reconcile`, same migration) is idempotent
 /// — a converged instance reconciles to zero rows — and never rewrites an explicit role.
 /// The `&SystemAdmin` proof is the gate (F-3), matching the sibling verbs above.
+///
+/// The SAML interplay is surfaced, not silent: a touched team that also carries
+/// `kb_saml_group_mappings` rows has just had NATIVE rows written for its pairs, and
+/// `reconcile_idp_memberships` skips any (team, profile) pair the profile holds natively —
+/// so the IdP's role assertions for those pairs are pre-empted from here on. The outcome
+/// names those teams (native-wins-skip), and the server log warns alongside.
 pub async fn reconcile_auto_join(
     pool: &PgPool,
     _admin: &SystemAdmin,
-) -> ApiResult<Vec<AutoJoinReconcileRow>> {
+) -> ApiResult<ReconcileAutoJoinOutcome> {
     let rows = sqlx::query_as!(
         AutoJoinReconcileRow,
         // `!` overrides: a set-returning function's columns are untyped-nullable to the
@@ -883,14 +889,39 @@ pub async fn reconcile_auto_join(
     )
     .fetch_all(pool)
     .await?;
+    let saml_mapped_teams: Vec<String> = if rows.is_empty() {
+        Vec::new()
+    } else {
+        let slugs: Vec<String> = rows.iter().map(|r| r.team_slug.clone()).collect();
+        sqlx::query_scalar!(
+            "SELECT DISTINCT t.slug FROM kb_teams t \
+             JOIN kb_saml_group_mappings g ON g.team_id = t.id \
+             WHERE t.slug = ANY($1) \
+             ORDER BY t.slug",
+            &slugs
+        )
+        .fetch_all(pool)
+        .await?
+    };
     // The verb mutates rosters across every auto-join team; its only record must not be the
     // HTTP response body a lost terminal scrollback erases. Same discipline as the SAML
     // reconcile channel (internal_saml::reconcile) — structured fields, one line.
-    tracing::info!(
-        pairs_added = rows.len(),
-        "auto-join reconcile complete (operator verb)"
-    );
-    Ok(rows)
+    if saml_mapped_teams.is_empty() {
+        tracing::info!(
+            pairs_added = rows.len(),
+            "auto-join reconcile complete (operator verb)"
+        );
+    } else {
+        tracing::warn!(
+            pairs_added = rows.len(),
+            saml_mapped_teams = %saml_mapped_teams.join(", "),
+            "auto-join reconcile wrote native rows on SAML-mapped teams — IdP role assertions are pre-empted for those pairs (native-wins-skip)"
+        );
+    }
+    Ok(ReconcileAutoJoinOutcome {
+        added: rows,
+        saml_mapped_teams,
+    })
 }
 
 // ---------------------------------------------------------------------------

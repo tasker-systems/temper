@@ -46,8 +46,10 @@
 --         the decided DO-NOTHING posture made legible, not new semantics —
 --         the request-review door always had this property; this fix
 --         widens it to every door and mass-creates the conversion at
---         reconcile time. An operator mapping IdP groups onto an
---         auto-join team should read the reconcile report against that.
+--         reconcile time. The reconcile verb therefore names any touched
+--         team that carries SAML group mappings in its outcome and warns
+--         on the server log, so an operator mapping IdP groups onto an
+--         auto-join team sees the conversion the repair is making.
 --     The invariant is therefore one-directional by design: every
 --     standing-approved profile is a member (this fix); the converse holds
 --     only among transitions this committer saw. Stale rows for revoked or
