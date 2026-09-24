@@ -138,6 +138,14 @@ pub enum ConfigError {
     )]
     SecretCollision(&'static str, &'static str),
 
+    #[error(
+        "{0} is set but weak: it must be at least 16 non-whitespace characters — a human-generated \
+         value short enough to guess or a committed test constant collapses the privilege split \
+         `TEMPER_MCP_SERVICE_SECRET` exists to enforce inside a deployment. Generate it: \
+         `openssl rand -base64 32`."
+    )]
+    WeakSharedSecret(&'static str),
+
     // --- the rate-limit seam (spec A7/A9: chosen values, default off) ---
     //
     // Both arms name the variable and the shape it must take, and print no value — the

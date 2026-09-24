@@ -258,8 +258,10 @@ impl ApiConfig {
         // which mode their instance is in is exactly the operator who mis-sets these variables.
         tracing::info!(mode = %auth.mode, "auth configured");
 
-        // Auth identity first, then secret hygiene, then everything that merely has to be present.
+        // Auth identity first, then secret hygiene (distinctness, then strength), then
+        // everything that merely has to be present.
         check_secret_distinctness(&lookup)?;
+        check_shared_secret_strength(&lookup)?;
 
         let cors_origins: Vec<String> = lookup("CORS_ORIGINS")
             .unwrap_or_default()
@@ -578,6 +580,36 @@ fn shared_secret(lookup: &impl Fn(&str) -> Option<String>, name: &str) -> Option
         .filter(|s| !s.is_empty())
 }
 
+/// The floor a header-compared shared secret must clear. The values that would trip
+/// this — a committed test constant, an operator's pasted `"changeme"`, an
+/// under-generated placeholder — are the only ones with any business being refused
+/// here; a 16-char random string is the smallest secret a holder cannot guess.
+const MIN_SHARED_SECRET_CHARS: usize = 16;
+
+/// A production-level check the distinctness gate cannot express: EACH header-compared
+/// shared secret must be long enough to be a secret. The distinctness gate answers "are
+/// these two values different"; this answers "is this value a secret at all". Only the
+/// secrets in this arc's scope are refused — the e2e harness's `e2e-mcp-relay-service-
+/// credential` constant is excluded from every check by being a *harness* constant, but
+/// a production deployment pasting it would now refuse to boot, as it should.
+fn check_shared_secret_strength(
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<(), ConfigError> {
+    for name in [
+        "TEMPER_MCP_SERVICE_SECRET",
+        "INTERNAL_RECONCILE_SECRET",
+        "EMBED_DISPATCH_SECRET",
+        "SLACK_MINT_SECRET",
+    ] {
+        if let Some(value) = shared_secret(lookup, name) {
+            if value.chars().count() < MIN_SHARED_SECRET_CHARS {
+                return Err(ConfigError::WeakSharedSecret(name));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn check_secret_distinctness(lookup: impl Fn(&str) -> Option<String>) -> Result<(), ConfigError> {
     // Empty is absent (the `.filter(|s| !s.is_empty())` convention every field above uses). Two
     // unset variables both reading "" are not a collision — they are two disabled endpoints.
@@ -764,7 +796,34 @@ mod tests {
         );
     }
 
-    // FAILS IF: the collision error names the wrong pair, or prints the colliding secret.
+    // FAILS IF: a header-compared shared secret under the length floor boots. The
+    // committed test constant is the canonical trip: 16 chars is the smallest value a
+    // holder cannot guess, and anything shorter — a paste placeholder most of all —
+    // collapses the relay gate into a guessable door the distinctness gate cannot see.
+    #[test]
+    fn a_short_shared_secret_refuses_to_boot() {
+        let pairs = with_secrets(&[("TEMPER_MCP_SERVICE_SECRET", "too-short".to_string())]);
+        assert_eq!(
+            check_shared_secret_strength(&lookup_of(&pairs)),
+            Err(ConfigError::WeakSharedSecret("TEMPER_MCP_SERVICE_SECRET")),
+        );
+    }
+
+    // FAILS IF: the floor trips on a correct configuration. The distinctness pair's
+    // negative mirror: a guard that refuses everything is not a guard.
+    #[test]
+    fn strong_or_absent_shared_secrets_boot() {
+        assert_eq!(
+            check_shared_secret_strength(&lookup_of(&with_secrets(&[]))),
+            Ok(()),
+            "absent is configured-off, not weak"
+        );
+        let pairs = with_secrets(&[(
+            "TEMPER_MCP_SERVICE_SECRET",
+            "a-real-32-char-random-value!".to_string(),
+        )]);
+        assert_eq!(check_shared_secret_strength(&lookup_of(&pairs)), Ok(()));
+    }
     //
     // The sibling assertion on `ConfigError::McpAudienceMismatch`
     // (`auth_config::tests::errors_name_the_variable_and_never_print_values`) carries the same
