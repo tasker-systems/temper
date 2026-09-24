@@ -3,6 +3,18 @@ import type { Refusal } from "./admission";
 import type { Standing } from "./admission";
 
 /**
+ * One (team, profile) pair an auto-join reconciliation added — the answer of
+ * `POST /api/access/admin/auto-join/reconcile` and `temper admin access reconcile-auto-join`.
+ * The roster drift it repairs was silent (profiles approved through the direct-grant door
+ * never joined the `everyone` pool); the repair names what it did.
+ *
+ * No `utoipa` derive, matching [`QueueCount`] and every other type on this operator-only
+ * surface: those routes are mounted with a plain `.route(...)` and stay off the documented
+ * contract on purpose.
+ */
+export type AutoJoinReconcileRow = { team_slug: string, profile_handle: string, };
+
+/**
  * Entitlements included in the profile response — tells the client
  * what this profile is allowed to do at the system level.
  *
@@ -98,6 +110,20 @@ export type QueueCount = {
  * TypeScript as `bigint` and does not survive `JSON.stringify`.
  */
 count: number, };
+
+/**
+ * The outcome of an operator auto-join reconciliation: the (team, profile) pairs added,
+ * plus the touched teams that also carry SAML group mappings. Enrollment writes NATIVE
+ * rows on auto-join teams, and `reconcile_idp_memberships` skips any (team, profile) pair
+ * the profile holds natively — so on a SAML-mapped auto-join team every pair in `added`
+ * permanently pre-empts the IdP's role assertions for that pair (native-wins-skip). The
+ * verb names those teams so the operator sees the conversion the repair is making.
+ *
+ * No `utoipa` derive, matching [`AutoJoinReconcileRow`] and every other type on this
+ * operator-only surface: those routes are mounted with a plain `.route(...)` and stay off
+ * the documented contract on purpose.
+ */
+export type ReconcileAutoJoinOutcome = { added: Array<AutoJoinReconcileRow>, saml_mapped_teams: Array<string>, };
 
 /**
  * An **open** reconsideration request, with the asking principal's identity (spec D15 admin

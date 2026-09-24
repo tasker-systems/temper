@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use temper_core::types::access_gate::{
     JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings, QueueCount,
-    ReviewRequestWithProfile, SystemSettings,
+    ReconcileAutoJoinOutcome, ReviewRequestWithProfile, SystemSettings,
 };
 use temper_core::types::admin::{DemoteAdminRequest, PromoteAdminRequest, UpdateSettingsRequest};
 use temper_core::types::ids::ProfileId;
@@ -384,6 +384,19 @@ pub async fn approve_principal(
     let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
     access_service::admin_approve(&state.pool, &admin, ProfileId::from(profile_id)).await?;
     Ok(StatusCode::OK)
+}
+
+/// POST /api/access/admin/auto-join/reconcile — converge every auto-join team's roster to the
+/// standing-approved population (admin only). Returns the (team, profile) pairs added plus
+/// the touched teams that also carry SAML group mappings (whose new native rows pre-empt
+/// IdP role assertions); an empty `added` means the instance was already converged.
+pub async fn reconcile_auto_join(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<ReconcileAutoJoinOutcome>> {
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    let outcome = access_service::reconcile_auto_join(&state.pool, &admin).await?;
+    Ok(Json(outcome))
 }
 
 /// POST /api/access/admin/principals/:id/revoke — revoke a principal's admission (admin only).

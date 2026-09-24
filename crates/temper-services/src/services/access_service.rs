@@ -21,8 +21,8 @@ use crate::services::standing_service::{self, ApplyStandingParams};
 use temper_principal::{Act, ActorAuthority};
 
 use temper_core::types::access_gate::{
-    Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings,
-    ReviewRequestWithProfile, SystemSettings,
+    AutoJoinReconcileRow, Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile,
+    PublicSystemSettings, ReconcileAutoJoinOutcome, ReviewRequestWithProfile, SystemSettings,
 };
 use temper_core::types::admin::UpdateSettingsRequest;
 use temper_core::types::cognitive_maps::{
@@ -714,7 +714,9 @@ pub async fn promote_admin(
 
 /// Approve a principal directly — the machine/direct-grant door, legal from `Denied` (D14) and
 /// `Revoked` (D16) as well as `Requested`. Distinct from `review_request`'s approval, which also
-/// enrolls a *human requester* into the auto-join pool; a direct grant confers standing only.
+/// closes a join-request record; a direct grant touches no request row. Both doors confer the
+/// same standing, and the auto-join pool enrollment both imply is materialized by the standing
+/// committer itself (`20260923000010`) — it is never this function's or review_request's job.
 pub async fn admin_approve(
     pool: &PgPool,
     admin: &SystemAdmin,
@@ -852,6 +854,74 @@ pub async fn demote_admin(pool: &PgPool, admin: &SystemAdmin, subject: ProfileId
     .fetch_one(pool)
     .await?;
     Ok(())
+}
+
+/// Converge every auto-join team to the standing-approved population, reporting each
+/// (team, profile) pair added plus the touched teams that also carry SAML group mappings.
+///
+/// The operator repair for instances that drifted while enrollment lived only on the
+/// request-review door: profiles approved out-of-band (`admin access approve`, promotion,
+/// reactivation) were absent from the `everyone` pool with no signal anywhere, and diffing
+/// `team show +everyone` against `admin profiles list --standing all` by hand was the only
+/// way to see it. This is the one verb that closes such a gap without hand-adding members.
+///
+/// Enrollment itself needs no verb — since `20260923000010` the standing committer
+/// (`principal_standing_apply`) materializes the mirror atomically on every transition, so
+/// this only repairs history. The SQL (`auto_join_reconcile`, same migration) is idempotent
+/// — a converged instance reconciles to zero rows — and never rewrites an explicit role.
+/// The `&SystemAdmin` proof is the gate (F-3), matching the sibling verbs above.
+///
+/// The SAML interplay is surfaced, not silent: a touched team that also carries
+/// `kb_saml_group_mappings` rows has just had NATIVE rows written for its pairs, and
+/// `reconcile_idp_memberships` skips any (team, profile) pair the profile holds natively —
+/// so the IdP's role assertions for those pairs are pre-empted from here on. The outcome
+/// names those teams (native-wins-skip), and the server log warns alongside.
+pub async fn reconcile_auto_join(
+    pool: &PgPool,
+    _admin: &SystemAdmin,
+) -> ApiResult<ReconcileAutoJoinOutcome> {
+    let rows = sqlx::query_as!(
+        AutoJoinReconcileRow,
+        // `!` overrides: a set-returning function's columns are untyped-nullable to the
+        // introspection, but the function's INSERT..RETURNING provenance makes both NOT NULL.
+        "SELECT team_slug AS \"team_slug!\", profile_handle AS \"profile_handle!\" \
+         FROM auto_join_reconcile()"
+    )
+    .fetch_all(pool)
+    .await?;
+    let saml_mapped_teams: Vec<String> = if rows.is_empty() {
+        Vec::new()
+    } else {
+        let slugs: Vec<String> = rows.iter().map(|r| r.team_slug.clone()).collect();
+        sqlx::query_scalar!(
+            "SELECT DISTINCT t.slug FROM kb_teams t \
+             JOIN kb_saml_group_mappings g ON g.team_id = t.id \
+             WHERE t.slug = ANY($1) \
+             ORDER BY t.slug",
+            &slugs
+        )
+        .fetch_all(pool)
+        .await?
+    };
+    // The verb mutates rosters across every auto-join team; its only record must not be the
+    // HTTP response body a lost terminal scrollback erases. Same discipline as the SAML
+    // reconcile channel (internal_saml::reconcile) — structured fields, one line.
+    if saml_mapped_teams.is_empty() {
+        tracing::info!(
+            pairs_added = rows.len(),
+            "auto-join reconcile complete (operator verb)"
+        );
+    } else {
+        tracing::warn!(
+            pairs_added = rows.len(),
+            saml_mapped_teams = %saml_mapped_teams.join(", "),
+            "auto-join reconcile wrote native rows on SAML-mapped teams — IdP role assertions are pre-empted for those pairs (native-wins-skip)"
+        );
+    }
+    Ok(ReconcileAutoJoinOutcome {
+        added: rows,
+        saml_mapped_teams,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1431,8 +1501,8 @@ pub async fn review_request(
     // standing it confers must be one transaction. `Approve` is legal from the requester's born
     // `Denied` state (transition.rs, D14); the raw committer on the tx is the machine-door pattern —
     // it keeps the standing write atomic with the decision, which `standing_service::apply` (a
-    // `&PgPool` call) could not. `has_system_access` is now true, so `ensure_auto_join_memberships`
-    // below (ordered after) does its enrollment rather than no-op.
+    // `&PgPool` call) could not. `has_system_access` is now true, so the committer's enrollment
+    // arm materializes the auto-join mirror right here in this transaction.
     if params.decision == JoinRequestStatus::Approved {
         sqlx::query_scalar!(
             "SELECT principal_standing_apply($1,'approve','approved',$2,$3)",
@@ -1456,14 +1526,8 @@ pub async fn review_request(
         )
         .execute(&mut *tx)
         .await?;
-
-        // Enroll the now-approved profile into the rest of the auto-join "everyone" pool.
-        sqlx::query!(
-            "SELECT ensure_auto_join_memberships($1)",
-            row.requesting_profile_id,
-        )
-        .execute(&mut *tx)
-        .await?;
+        // No separate auto-join enrollment here: `principal_standing_apply` above materializes
+        // the mirror in this same transaction (`20260923000010`), for every door alike.
     } else {
         // Rejection returns standing to `Denied` so the principal may re-request (spec §5;
         // `join_request_rejection_allows_resubmit` pins this). Raw on the tx (machine-door pattern),

@@ -23,6 +23,40 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.2 — unreleased
+- **Auto-join enrollment materializes at the standing committer; operator reconcile verb**
+  A team flagged `auto_join_role` is an always-complete "everyone pool"
+  (migration `20260629000002`'s header), but since the enrollment trigger was dropped
+  (`20260722000100`) the pool only grew through the request-review door: `admin access
+  approve`, admin promotion, and reactivation conferred standing while enrolling nowhere,
+  so approved principals silently drifted out of `everyone` (and any other auto-join team).
+  The standing committer (`principal_standing_apply`) now materializes the enrollment in
+  the standing transaction — enroll while `has_system_access` — so every approval door
+  inherits it. The pool is append-only, decided rather than inherited: no standing
+  transition removes an auto-join membership, because post-D11 those rows are owned by
+  other authorities (D14 machine hygiene enrolls born-`denied` machines, D17/D11
+  revocation deliberately preserves grants and memberships, IdP-source rows are owned by
+  SAML reconcile); the invariant reads one-directional — every standing-approved profile
+  is a member — and enrollment defers to existing rows (`DO NOTHING`) rather than
+  rewriting roles. Alongside, an operator repair
+  verb exists for instances that drifted before this change: `POST
+  /api/access/admin/auto-join/reconcile` and `temper admin access reconcile-auto-join`
+  converge every auto-join team to the standing-approved population, report each
+  (team, profile) pair added, and name any touched team that also carries SAML group
+  mappings — those teams' new native rows permanently pre-empt IdP role assertions for
+  the pairs written (native-wins-skip), and the verb warns so the operator sees the
+  conversion the repair is making. Who observes: approving a principal by any door now puts
+  them in every auto-join team at the team's `auto_join_role`, atomically; revocation and
+  deactivation leave rosters exactly as they were (stale rows are harmless under D18 —
+  membership confers no access, and admission is denied at every surface); an operator of
+  a drifted instance gets a
+  one-command convergence that names what it added. The route is on the operator-only
+  undocumented surface (no openapi movement); the ts-rs `access.ts` tree gains
+  `AutoJoinReconcileRow`. Server-to-server and library callers see the standing committer's
+  return value unchanged.
+pr: self
+classes: additive, behavioral
+surfaces: http, cli-stdout, clients
+status: signal-only
 - **The data-artifact refusal surface — declined writes travel as typed 400s, explicit `kind_owner` reaches the SQL layer, CLI `--kind-owner`**
   A data-artifact write the system declines for reasons the caller can act on — the shape
   registry's SQL refusals and the enforcing-shape commit verdict — was mapped onto the

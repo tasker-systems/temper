@@ -60,6 +60,7 @@ ALLOWLIST='/api/access/admin/requests
 /api/access/admin/principals/{id}/revoke
 /api/access/admin/principals/{id}/deactivate
 /api/access/admin/principals/{id}/reactivate
+/api/access/admin/auto-join/reconcile
 /api/access/admin/profiles
 /api/access/admin/profiles/{profile_id}
 /api/admin/ledger

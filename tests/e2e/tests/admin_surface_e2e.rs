@@ -290,6 +290,21 @@ async fn non_admin_is_forbidden_on_all_admin_endpoints(pool: sqlx::PgPool) {
             "{verb} must be admin-only"
         );
     }
+
+    // POST auto-join reconcile → 403. Same operator-only surface as the standing acts; no
+    // body needed — the handler's admin gate fires before any SQL runs.
+    let resp = app
+        .reqwest_client
+        .post(app.url("/api/access/admin/auto-join/reconcile"))
+        .header("Authorization", format!("Bearer {second_token}"))
+        .send()
+        .await
+        .expect("auto-join reconcile");
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "auto-join reconcile must be admin-only"
+    );
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
