@@ -1394,7 +1394,10 @@ pub async fn delete_resource(
         .delete(input.id, &input.act)
         .await
         .map(|_| ())
-        .map_err(|e| match e {
+        // A post-edge 401 speaks its own arm FIRST (deactivated / machine gate /
+        // expired-in-flight) — the family's discipline, never an internal fault with
+        // a CLI login hint spoken to an MCP caller.
+        .across_auth(|e| match e {
             ClientError::ForbiddenDetail { message } => {
                 rmcp::ErrorData::invalid_params(message, None)
             }

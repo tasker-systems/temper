@@ -256,6 +256,44 @@ async fn deactivated_account_speaks_the_terminal_deactivation_sentence(pool: PgP
     );
 }
 
+/// The post-edge 401 arms speak on DELETE too, not only on the read voices: the one
+/// migrated tool that skipped the mapping (RG-1 F1) rendered a deactivated refusal as
+/// an internal fault with a CLI login hint. Every tool in the family carries the arms.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_post_edge_401_on_delete_speaks_the_arm_not_the_fault(pool: PgPool) {
+    let app = common::setup_relay(pool).await;
+    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let parts = app.relay_parts();
+
+    sqlx::query(
+        "INSERT INTO kb_principal_standing (profile_id, state)
+         SELECT id, 'deactivated' FROM kb_profiles WHERE email = $1
+         ON CONFLICT (profile_id) DO UPDATE SET state = 'deactivated'",
+    )
+    .bind("e2e@test.example.com")
+    .execute(&app.pool)
+    .await
+    .expect("deactivate the principal");
+
+    let err = temper_mcp::tools::resources::delete_resource(
+        &svc,
+        &parts,
+        serde_json::from_value(json!({ "id": uuid::Uuid::now_v7().to_string() }))
+            .expect("input deserializes"),
+    )
+    .await
+    .expect_err("a deactivated principal does not answer");
+
+    assert_eq!(
+        code_of(&err), -32600,
+        "the arm's terminal sentence, never an internal fault: {err}"
+    );
+    assert_eq!(
+        err.message,
+        "This account has been deactivated. This error is terminal and should not be retried."
+    );
+}
+
 // ── Body-limit boundary ─────────────────────────────────────────────
 
 /// The wire's ceiling is witnessed at `/api/query` — the route whose backstop rose to
