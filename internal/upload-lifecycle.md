@@ -59,6 +59,6 @@ named in the record. Bytes release only when no live record carries the same has
 
 Open work, stated so absence is never read as coverage:
 
-- **No per-owner aggregate bounds** — nothing caps open staged sessions or total staged
-  bytes per principal (task `01a0723e-cfe5-7080-9e0e-9b3323c25080` in the temper vault;
-  shipped 2026-09-24 to PR #950 — pending merge).
+- **No per-owner aggregate bounds** — resolved: shipped in PR #950 (merged 2026-09-24) —
+  a principal holds at most 8 open sessions and stages at most 5 × the cap
+  (task `01a0723e-cfe5-7080-9e0e-9b3323c25080` in the temper vault).
