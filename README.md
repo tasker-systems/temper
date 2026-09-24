@@ -81,6 +81,12 @@ The fastest way to try temper is the one-liner installer — no Rust toolchain n
 curl -fsSL https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.sh | sh
 ```
 
+**Homebrew (macOS Apple Silicon, Linux x64):**
+
+```sh
+brew install tasker-systems/tap/temper
+```
+
 **Windows (x86_64, PowerShell):**
 
 ```powershell
