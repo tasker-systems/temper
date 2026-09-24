@@ -39,7 +39,9 @@ impl std::fmt::Debug for BearerToken {
     /// `name: Type` field position only), which is exactly why this impl exists
     /// rather than a baseline entry.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BearerToken").field("0", &"<redacted>").finish()
+        f.debug_struct("BearerToken")
+            .field("0", &"<redacted>")
+            .finish()
     }
 }
 
