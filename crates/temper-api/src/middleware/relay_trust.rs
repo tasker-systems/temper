@@ -20,12 +20,16 @@
 //! cannot forge CLI attribution: the network door carries MCP acts, and its carrier's
 //! vocabulary is one value by design.
 //!
-//! Scope: mounted on the gated and auth-only stacks — every route whose handlers extract
-//! [`RequestSurface`](crate::middleware::surface::RequestSurface) (wherever surface-attributed
-//! writes happen) — and NOT on the internal routes, where a secret-holder gains nothing (their
-//! writes attribute to their own emitters). Ordering is free among pre-handler layers; the only
-//! semantic requirement is preceding `RequestSurface` extraction, which every middleware
-//! satisfies by construction.
+//! Scope: mounted on the gated stack only — the one stack whose handlers extract
+//! [`RequestSurface`](crate::middleware::surface::RequestSurface) (wherever
+//! surface-attributed writes happen). The auth-only stack mounts it NOT: none of its
+//! handlers extracts `RequestSurface`, so there is no attribution to trust there — a
+//! handler that later extracts it on that stack MUST bring the middleware with it or
+//! its relayed acts silently degrade to `@web` (§D7's watched-for symptom). Internal
+//! routes are excluded for the same reason plus a different one: a secret-holder gains
+//! nothing there (their writes attribute to their own emitters). Ordering is free
+//! among pre-handler layers; the only semantic requirement is preceding
+//! `RequestSurface` extraction, which every middleware satisfies by construction.
 
 use axum::{body::Body, extract::State, http::Request, middleware::Next, response::Response};
 
