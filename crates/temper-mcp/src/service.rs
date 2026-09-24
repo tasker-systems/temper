@@ -457,8 +457,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::api::SearchParams>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::search::search(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::search::search(self, &parts, input).await
     }
 
     #[tool(
@@ -469,8 +470,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::query::QueryInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::query::run_query(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::query::run_query(self, &parts, input).await
     }
 
     // ── Trail (unchanged) ──────────────────────────────────────────────
@@ -1861,7 +1863,13 @@ mod tests {
         let mut missing: Vec<String> = Vec::new();
         for segment in &tool_segments {
             let direct_gate = segment.contains("ensure_profile_from_parts");
-            let network_door = segment.contains("tools::resources::");
+            // The families that have crossed the network door dispatch through their
+            // tools module with the request parts; the gate runs at the API on the
+            // bearer those parts carry. A family migrating moves BETWEEN arms in the
+            // same commit as its tool change.
+            let network_door = ["tools::resources::", "tools::search::", "tools::query::"]
+                .iter()
+                .any(|dispatch| segment.contains(dispatch));
             if !direct_gate && !network_door {
                 let fn_name = segment
                     .split("async fn ")
@@ -1870,8 +1878,9 @@ mod tests {
                     .unwrap_or("<unknown>")
                     .trim();
                 missing.push(format!(
-                    "{fn_name} (neither `ensure_profile_from_parts` nor a `tools::resources::` \
-                     network-door dispatch)"
+                    "{fn_name} (neither `ensure_profile_from_parts` nor a network-door \
+                     dispatch — `tools::resources::`, `tools::search::`, or \
+                     `tools::query::`)"
                 ));
             }
         }
@@ -1880,7 +1889,7 @@ mod tests {
             missing.is_empty(),
             "these #[tool] methods authenticate under neither binding — every tool must \
              either gate directly (ensure_profile_from_parts) or cross the network door \
-             (tools::resources::, whose gate runs at the API):\n  {}\n\
+             (a `tools::<family>::` dispatch whose gate runs at the API):\n  {}\n\
              A tool satisfying neither arm runs unauthenticated or half-migrated.",
             missing.join("\n  ")
         );

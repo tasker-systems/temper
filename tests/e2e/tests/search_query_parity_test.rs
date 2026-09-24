@@ -15,18 +15,19 @@
 //! **search**
 //! - *Degenerate embedding* — `reject_degenerate_embedding`
 //!   (`substrate_read.rs`) refuses a zero-norm/non-finite vector as
-//!   `ApiError::BadRequest`. The DIRECT binding renders every error as
-//!   `internal_error`; through the door it arrives as a 400 and the relayed call
-//!   site renders it `invalid_params` with the server's sentence (the
-//!   `contexts.rs::map_api_error` BadRequest arm's precedent).
-//!   **DECLARED PARITY DELTA**: this one face changes rendered kind
-//!   (`internal_error` → `invalid_params`) at the swap — the delta is named here and
-//!   the assertion flips in the swap commit, nowhere else.
-//! - *Post-edge 401 arms* — machine-gate / registration-gate / deactivation, mapped
-//!   by the shared `map_post_edge_refusal` through `AcrossAuth` (expired-in-flight
-//!   is wire-only; see the query notes). The arm wording is a shared constant both
-//!   bindings speak; the full arm matrix lives in `resources_wire_arms_test.rs`,
-//!   which already pins the shared mapping.
+//!   `ApiError::BadRequest`. The DIRECT binding rendered every error as
+//!   `internal_error`; through the door it arrives as a 400 and speaks the
+//!   server's own sentence as `invalid_params` (the `contexts.rs::map_api_error`
+//!   BadRequest arm's precedent). **DECLARED PARITY DELTA**: this one face
+//!   changed rendered kind (`internal_error` → `invalid_params`) at the swap —
+//!   the suite pinned the direct face before the swap and pins the door's face
+//!   now, and the change is named here and in the swap commit.
+//! - *Post-edge 401 arms* — expired-in-flight / machine-gate / registration-gate /
+//!   deactivation, mapped by the shared `map_post_edge_refusal` through
+//!   `AcrossAuth`. The suite witnesses expired-in-flight (the one arm the direct
+//!   binding could not produce at all — the gate never re-checked `exp` in
+//!   process); the full arm matrix lives in `resources_wire_arms_test.rs`, which
+//!   already pins the shared mapping.
 //! - *System-access 403* — both routes sit on the gated stack
 //!   (`routes.rs::gated_routes`), so a denied-standing caller 403s at
 //!   `require_system_access` and the five-field terminal sentence speaks.
@@ -41,10 +42,10 @@
 //!   its stage, reason, and detail — the arm-for-arm parity face this family is known
 //!   for. A composition-level refusal (no stage) must not grow an empty `stage ''`
 //!   prefix.
-//! - *Post-edge 401 arms* and *system-access 403* — same vehicles as search, with one
-//!   harness note: expired-in-flight is a face ONLY the wire produces (the direct
-//!   gate does not re-check `exp` on planted claims — `auth_seam_parity_e2e`), so its
-//!   witness joins at the swap; the other arms' full matrix lives in
+//! - *Post-edge 401 arms* and *system-access 403* — same vehicles as search.
+//!   Expired-in-flight is a face ONLY the wire produces (the direct gate did not
+//!   re-check `exp` on planted claims — `auth_seam_parity_e2e`); its witness joined
+//!   at the swap. The other arms' full matrix lives in
 //!   `resources_wire_arms_test.rs`, which already pins the shared mapping.
 //! - *Body ceiling* — the wire face at `/api/query` is witnessed at the same route by
 //!   `resources_wire_arms_test.rs`; not duplicated here.
@@ -54,12 +55,10 @@
 //!
 //! # How the tools are driven
 //!
-//! Through the tool functions with the harness-seeded profile — the cache
-//! `mcp_relay_service` plants is the DIRECT binding's caller path
-//! (`require_profile`); the swap replaces it with the bearer the relayed tool
-//! carries. The system-access arm is the one exception: pre-swap its gate runs
-//! in-process (`ensure_profile_from_parts`), and the test drives that gate
-//! directly.
+//! Through the tool functions over relayed parts — the same hop the deployed
+//! relay makes: a real `TemperMcpService` whose relay config points at THIS
+//! process's listener, per-request parts carrying the harness principal's REAL
+//! bearer that the API's own auth middleware adjudicates.
 
 mod common;
 
@@ -156,16 +155,16 @@ async fn ingest_searchable(app: &E2eTestApp, title: &str, slug: &str, content: &
         .expect("corpus ingest lands");
 }
 
-/// Drive the `search` tool: the tool function over the harness-seeded profile —
-/// the DIRECT binding's caller path. Byte-stable across the swap, where the tool
-/// carries the bearer to the API instead.
+/// Drive the `search` tool: the tool function over the relayed parts — the swap
+/// made the parts the bearer's vehicle; the gate runs at the API.
 async fn run_search(
     svc: &TemperMcpService,
-    _parts: &axum::http::request::Parts,
+    parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
     temper_mcp::tools::search::search(
         svc,
+        parts,
         parity::input::<temper_core::types::api::SearchParams>(params),
     )
     .await
@@ -174,41 +173,15 @@ async fn run_search(
 /// Drive the `query` tool — same reasoning as `run_search`.
 async fn run_query(
     svc: &TemperMcpService,
-    _parts: &axum::http::request::Parts,
+    parts: &axum::http::request::Parts,
     body: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
     temper_mcp::tools::query::run_query(
         svc,
+        parts,
         parity::input::<temper_mcp::tools::query::QueryInput>(body),
     )
     .await
-}
-
-/// Request parts carrying hand-built claims beside the bearer — the shape the
-/// DIRECT binding's in-process gate reads (`authed_request` needs BOTH
-/// extensions; `relay_parts` alone is the relay's bearer-only shape).
-fn claimed_parts(
-    token: &str,
-    email: Option<&str>,
-    exp_offset_secs: i64,
-) -> axum::http::request::Parts {
-    use chrono::Utc;
-    let now = Utc::now().timestamp();
-    axum::http::Request::builder()
-        .extension(temper_mcp::middleware::BearerToken(token.to_string()))
-        .extension(temper_services::auth::RawJwtClaims {
-            sub: "e2e-test-user".to_string(),
-            email: email.map(str::to_string),
-            email_verified: Some(true),
-            azp: None,
-            gty: None,
-            exp: now + exp_offset_secs,
-            iat: 0,
-        })
-        .body(())
-        .expect("claimed parts build")
-        .into_parts()
-        .0
 }
 
 // ── search: hit shapes ──────────────────────────────────────────────
@@ -328,11 +301,13 @@ async fn empty_results_carry_the_arm_disposition_not_a_bare_list(pool: PgPool) {
 
 // ── search: refusal faces ───────────────────────────────────────────
 
-/// The degenerate-embedding caller error. DIRECT binding today: the tool wraps every
-/// error as `internal_error` (-32603) — pinned here so the swap's kind change is a
-/// DECLARED delta, not a silent one (see the header).
+/// The degenerate-embedding caller error, THE DECLARED PARITY DELTA: the direct
+/// binding wrapped it as `internal_error` (pinned there by this suite before the
+/// swap); through the door it arrives as the API's 400 and speaks the server's own
+/// sentence as `invalid_params` — the `contexts.rs::map_api_error` BadRequest arm's
+/// precedent.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_degenerate_embedding_refuses_as_the_direct_binding_renders_it(pool: PgPool) {
+async fn a_degenerate_embedding_refuses_as_a_caller_error(pool: PgPool) {
     let (_app, svc, parts) = harness(pool).await;
 
     let err = run_search(&svc, &parts, json!({ "embedding": vec![0.0f32; 768] }))
@@ -340,23 +315,42 @@ async fn a_degenerate_embedding_refuses_as_the_direct_binding_renders_it(pool: P
         .expect_err("a zero-magnitude vector is refused");
     assert_eq!(
         code_of(&err),
-        -32603,
-        "the DIRECT binding renders every error internal: {err}"
+        -32602,
+        "a caller error, not a fault — the declared delta: {err}"
     );
     assert!(
-        err.message.contains("Search failed:"),
-        "the direct wrapper's own voice: {err}"
+        err.message.contains("embedding has no direction"),
+        "the server's own sentence: {err}"
     );
 }
 
-/// System access (Level 2), pre-swap: the gate runs IN-PROCESS
-/// (`ensure_profile_from_parts`), and a denied-standing caller meets the gate's
-/// terminal sentence, naming the identity. At the swap this gate leaves the
-/// method and the same sentence comes back from the API's 403 through the
-/// preserved-body mapping.
+/// Expired-in-flight — a face ONLY the wire produces (the direct gate never
+/// re-checked `exp` on planted claims): the bearer verifies at edge-shaped parts
+/// construction, crosses, and dies at the API's decode. The preserved 401 body
+/// maps to the shared terminal re-authenticate sentence.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_expired_bearer_speaks_the_re_authenticate_arm(pool: PgPool) {
+    let (app, svc, _parts) = harness(pool).await;
+    let expired = common::generate_expired_jwt("e2e-test-user", "e2e@test.example.com");
+    let parts = app.relay_parts_for(&expired);
+
+    let err = run_search(&svc, &parts, json!({ "query": "anything" }))
+        .await
+        .expect_err("an expired bearer does not answer");
+    assert_eq!(code_of(&err), -32600, "terminal, not a caller error: {err}");
+    assert_eq!(
+        err.message,
+        "This session's token has expired. Re-authenticate (the MCP client's OAuth \
+         flow will refresh it) and retry the call."
+    );
+}
+
+/// System access (Level 2) through the door: a denied-standing caller's gated
+/// request 403s at the API's `require_system_access`, temper-client surfaces the
+/// typed refusal, and the five-field terminal sentence names the identity.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_denied_standing_speaks_the_system_access_arm(pool: PgPool) {
-    let (app, svc, _parts) = harness(pool).await;
+    let (app, svc, parts) = harness(pool).await;
 
     sqlx::query(
         "INSERT INTO kb_principal_standing (profile_id, state)
@@ -368,11 +362,9 @@ async fn a_denied_standing_speaks_the_system_access_arm(pool: PgPool) {
     .await
     .expect("deny the principal's standing");
 
-    let parts = claimed_parts(&app.token, Some(parity::EMAIL), 3600);
-    let err = svc
-        .ensure_profile_from_parts(&parts)
+    let err = run_search(&svc, &parts, json!({ "query": "anything" }))
         .await
-        .expect_err("a denied principal does not pass the gate");
+        .expect_err("a denied principal does not answer");
     assert_eq!(code_of(&err), -32600, "terminal, never retryable: {err}");
     assert!(
         err.message.starts_with(
@@ -535,11 +527,30 @@ async fn a_composition_level_refusal_omits_the_empty_stage_prefix(pool: PgPool) 
 
 // ── query: the shared refusal arms ──────────────────────────────────
 
-/// System access on the query door, pre-swap: the same in-process gate, the same
-/// five-field terminal sentence.
+/// Expired-in-flight on the query door: the same wire-only face, the same shared
+/// arm, the same sentence.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn query_expired_bearer_speaks_the_re_authenticate_arm(pool: PgPool) {
+    let (app, svc, _parts) = harness(pool).await;
+    let expired = common::generate_expired_jwt("e2e-test-user", "e2e@test.example.com");
+    let parts = app.relay_parts_for(&expired);
+
+    let err = run_query(&svc, &parts, json!({ "plan": answerable_plan() }))
+        .await
+        .expect_err("an expired bearer does not answer");
+    assert_eq!(code_of(&err), -32600, "terminal, not a caller error: {err}");
+    assert_eq!(
+        err.message,
+        "This session's token has expired. Re-authenticate (the MCP client's OAuth \
+         flow will refresh it) and retry the call."
+    );
+}
+
+/// System access on the query door, through the door: the gated stack's five-field
+/// terminal sentence, mapped from the API's 403.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn query_denied_standing_speaks_the_system_access_arm(pool: PgPool) {
-    let (app, svc, _parts) = harness(pool).await;
+    let (app, svc, parts) = harness(pool).await;
 
     sqlx::query(
         "INSERT INTO kb_principal_standing (profile_id, state)
@@ -551,11 +562,9 @@ async fn query_denied_standing_speaks_the_system_access_arm(pool: PgPool) {
     .await
     .expect("deny the principal's standing");
 
-    let parts = claimed_parts(&app.token, Some(parity::EMAIL), 3600);
-    let err = svc
-        .ensure_profile_from_parts(&parts)
+    let err = run_query(&svc, &parts, json!({ "plan": answerable_plan() }))
         .await
-        .expect_err("a denied principal does not pass the gate");
+        .expect_err("a denied principal does not answer");
     assert_eq!(code_of(&err), -32600, "terminal, never retryable: {err}");
     assert!(
         err.message.starts_with(
