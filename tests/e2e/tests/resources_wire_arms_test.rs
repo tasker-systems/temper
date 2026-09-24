@@ -295,6 +295,76 @@ async fn a_post_edge_401_on_delete_speaks_the_arm_not_the_fault(pool: PgPool) {
     );
 }
 
+// ── Post-edge system-access refusal (Level 2, 403) ─────────────────
+
+/// Level 2 crosses the door too: a denied-standing caller's gated request 403s at the
+/// API's `require_system_access`, temper-client surfaces the typed
+/// `SystemAccessRequired`, and the tool answers with the DIRECT binding's five-field
+/// fidelity (email, display_name, refusal kind, request_url, cli_command) — terminal,
+/// naming the identity and the remedy. This is the first refusal a caller on an
+/// invite-only deployment hits; the parity suite pins the fidelity for the direct
+/// binding (`auth_seam_parity_e2e`), and until this arm it fell through to an
+/// internal fault saying only "system access required".
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_denied_standing_speaks_the_system_access_arm_through_the_door(pool: PgPool) {
+    let app = common::setup_relay(pool).await;
+    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let parts = app.relay_parts();
+
+    sqlx::query(
+        "INSERT INTO kb_principal_standing (profile_id, state)
+         SELECT id, 'denied' FROM kb_profiles WHERE email = $1
+         ON CONFLICT (profile_id) DO UPDATE SET state = 'denied'",
+    )
+    .bind("e2e@test.example.com")
+    .execute(&app.pool)
+    .await
+    .expect("deny the principal's standing");
+
+    let err = temper_mcp::tools::resources::get_resource(
+        &svc,
+        &parts,
+        serde_json::from_value(json!({ "id": uuid::Uuid::now_v7().to_string() }))
+            .expect("input deserializes"),
+    )
+    .await
+    .expect_err("a denied principal did not answer");
+
+    assert_eq!(
+        code_of(&err),
+        -32600,
+        "the system-access arm is terminal, never a retryable fault: {err}"
+    );
+    assert!(
+        err.message.starts_with(
+            "Access to this temper instance requires approval for e2e@test.example.com — "
+        ),
+        "the sentence names the identity: {err}"
+    );
+    assert!(
+        err.message
+            .contains(temper_core::types::access_gate::REQUEST_ACCESS_URL),
+        "the sentence names the self-service door: {err}"
+    );
+    assert!(
+        err.message
+            .ends_with("This error is terminal and should not be retried."),
+        "framed terminal: {err}"
+    );
+    let data = err.data.expect("the denial carries typed details");
+    for field in ["email", "display_name", "request_url", "cli_command"] {
+        assert!(
+            !data[field].is_null(),
+            "par fidelity: `{field}` survives the hop: {data}"
+        );
+    }
+    assert_eq!(
+        data["refusal"]["kind"],
+        json!("denied"),
+        "the typed refusal kind rides through: {data}"
+    );
+}
+
 // ── Body-limit boundary ─────────────────────────────────────────────
 
 /// The wire's ceiling is witnessed at `/api/query` — the route whose backstop rose to

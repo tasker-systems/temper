@@ -32,37 +32,7 @@ use temper_services::services::context_service::resolve_context_ref;
 use temper_workflow::operations::{BodyUpdate, CreateResource, Surface};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
-use crate::service::TemperMcpService;
-
-/// Client results cross the post-edge auth mapping before any call-site mapping:
-/// a deactivated / machine-gate / expired-in-flight refusal speaks its own terminal
-/// sentence (the §3 arm-for-arm discipline), everything else falls through unchanged.
-trait AcrossAuth<T> {
-    fn across_auth(
-        self,
-        own: impl FnOnce(ClientError) -> rmcp::ErrorData,
-    ) -> Result<T, rmcp::ErrorData>;
-}
-
-impl<T> AcrossAuth<T> for Result<T, ClientError> {
-    fn across_auth(
-        self,
-        own: impl FnOnce(ClientError) -> rmcp::ErrorData,
-    ) -> Result<T, rmcp::ErrorData> {
-        self.map_err(|e| crate::service::map_post_edge_auth(&e).unwrap_or_else(|| own(e)))
-    }
-}
-
-/// Map one client error: a post-edge authentication refusal speaks FIRST, arm-for-arm
-/// from the preserved 401 body (`service::map_post_edge_auth` — design §3); anything
-/// else falls to the call site's own mapping, which stays the only author of the
-/// tool-voice sentences.
-fn map_across_auth(
-    e: ClientError,
-    own: impl FnOnce(ClientError) -> rmcp::ErrorData,
-) -> rmcp::ErrorData {
-    crate::service::map_post_edge_auth(&e).unwrap_or_else(|| own(e))
-}
+use crate::service::{AcrossAuth, TemperMcpService};
 
 /// Schemars `schema_with` for every `open_meta` input field.
 ///
@@ -851,35 +821,33 @@ pub async fn create_resource(
     };
 
     let view = client.ingest().create(&payload).await.across_auth(|e| {
-        map_across_auth(e, |e| {
-            match e {
-            // F-2: placing a resource into a context requires WRITE on that context, and the
-            // door's own gate enforces it for both home kinds. The sentences are the gate's,
-            // carried arm-for-arm from the direct binding's error mapping.
-            ClientError::ForbiddenDetail { message } => {
-                rmcp::ErrorData::invalid_params(message, None)
-            }
-            ClientError::Forbidden => rmcp::ErrorData::invalid_params(
-                "Not authorized to create in this context: placing a resource requires write access, \
-                 and read access alone (watcher role, a read-only grant, a shared context, or \
-                 membership in an enclosing team) is not enough."
-                    .to_string(),
-                None,
-            ),
-            // The service's own sentence, un-prefixed: the direct binding's tool wrapped the
-            // resolver's failure with "context not found: ", a prefix the door does not
-            // re-apply — the kind (invalid_params) and the gate are identical.
-            ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
-            ClientError::Server {
-                status: 400,
-                message,
-            } => rmcp::ErrorData::invalid_params(message, None),
-            other => rmcp::ErrorData::internal_error(
-                format!("Failed to create resource: {other}"),
-                None,
-            ),
+        match e {
+        // F-2: placing a resource into a context requires WRITE on that context, and the
+        // door's own gate enforces it for both home kinds. The sentences are the gate's,
+        // carried arm-for-arm from the direct binding's error mapping.
+        ClientError::ForbiddenDetail { message } => {
+            rmcp::ErrorData::invalid_params(message, None)
         }
-        })
+        ClientError::Forbidden => rmcp::ErrorData::invalid_params(
+            "Not authorized to create in this context: placing a resource requires write access, \
+             and read access alone (watcher role, a read-only grant, a shared context, or \
+             membership in an enclosing team) is not enough."
+                .to_string(),
+            None,
+        ),
+        // The service's own sentence, un-prefixed: the direct binding's tool wrapped the
+        // resolver's failure with "context not found: ", a prefix the door does not
+        // re-apply — the kind (invalid_params) and the gate are identical.
+        ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(message, None),
+        other => rmcp::ErrorData::internal_error(
+            format!("Failed to create resource: {other}"),
+            None,
+        ),
+        }
     })?;
 
     // Read back through the same door `get_resource` uses so the response carries both

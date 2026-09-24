@@ -840,6 +840,99 @@ fn authed_request(
     Ok((claims, token))
 }
 
+/// The terminal sentences both refusal mappings speak. Two mappings consume them —
+/// the direct binding's `map_authz_error` (typed `AuthzError`, computed in-process)
+/// and the relay's `map_post_edge_auth` (the API's preserved 401 body text) — and the
+/// split between the two MAPPINGS is principled (different input types; ruling 7
+/// deliberately chose wire-messages over a schema change). What must not split is the
+/// SENTENCE: hand-copied literals drifted between the bindings once already
+/// (`EmailResolution` was missed — the catch-all spoke the raw API body). The repo's
+/// `REQUEST_ACCESS_COMMAND` precedent exists for exactly this.
+const TERMINAL_MACHINE_GATE_SENTENCE: &str =
+    "This token is machine-shaped but does not declare a valid \
+     client_credentials grant. This error is terminal and should not be retried.";
+const TERMINAL_DEACTIVATION_SENTENCE: &str =
+    "This account has been deactivated. This error is terminal and should not be retried.";
+const TERMINAL_EMAIL_RESOLUTION_SENTENCE: &str =
+    "Could not resolve an email address for this token. \
+     This error is terminal and should not be retried.";
+
+/// Client results cross the post-edge refusal mapping before any call-site mapping:
+/// a deactivated / machine-gate / expired-in-flight / email-resolution / system-
+/// access refusal speaks its own sentence (the §3 arm-for-arm discipline), everything
+/// else falls through unchanged to the call site's own voice. The ONE idiom every
+/// relayed call site uses — both the `tools` module and the protocol module.
+pub(crate) trait AcrossAuth<T> {
+    fn across_auth(
+        self,
+        own: impl FnOnce(ClientError) -> rmcp::ErrorData,
+    ) -> Result<T, rmcp::ErrorData>;
+}
+
+impl<T> AcrossAuth<T> for Result<T, ClientError> {
+    fn across_auth(
+        self,
+        own: impl FnOnce(ClientError) -> rmcp::ErrorData,
+    ) -> Result<T, rmcp::ErrorData> {
+        self.map_err(|e| map_post_edge_refusal(&e).unwrap_or_else(|| own(e)))
+    }
+}
+
+/// Map a post-edge refusal — Level 1's 401 arms plus Level 2's system-access 403 —
+/// onto the rmcp sentence that refusal's arm speaks (design §3; the arm-for-arm
+/// mapping ruling 7 completed, extended to Level 2 when the review round found
+/// `SystemAccessRequired` falling through to an internal fault).
+///
+/// `None` for every other error — only post-edge refusals speak here; the tool's
+/// own mapping owns the rest.
+pub(crate) fn map_post_edge_refusal(refusal: &ClientError) -> Option<rmcp::ErrorData> {
+    map_system_access_refusal(refusal).or_else(|| map_post_edge_auth(refusal))
+}
+
+/// Level 2's refusal through the door: the gated stack's `require_system_access`
+/// 403 arrives typed as `ClientError::SystemAccessRequired`, carrying the API's
+/// `SystemAccessDetails` reconstructed defensively (`CliAccessDetails`). The tool
+/// renders the direct binding's sentence and details — the FIRST refusal a caller on
+/// an invite-only deployment hits, so it must name the identity, the reason, and the
+/// remediation, not reduce to "system access required" as an internal fault.
+fn map_system_access_refusal(refusal: &ClientError) -> Option<rmcp::ErrorData> {
+    let ClientError::SystemAccessRequired(details) = refusal else {
+        return None;
+    };
+    let who = details.email.as_deref().unwrap_or("your account");
+    // `CliAccessDetails.refusal` is `Option` only because the error chain
+    // reconstructs defensively; every current server populates it. The fallback
+    // sentence states the standing fact without inventing a kind.
+    let reason = details
+        .refusal
+        .as_ref()
+        .map(|r| r.reason())
+        .unwrap_or_else(|| "your standing does not include system access".to_string());
+    let payload = serde_json::json!({
+        "email": details.email,
+        "display_name": details.display_name,
+        "refusal": details.refusal,
+        // The remediation rides the constants even when the wire left them unset:
+        // one address and one command, shared with the API's 403 and the direct
+        // binding, so the surfaces cannot disagree.
+        "request_url": details.request_url.clone()
+            .unwrap_or_else(|| temper_core::types::access_gate::REQUEST_ACCESS_URL.to_string()),
+        "cli_command": details.cli_command.clone()
+            .unwrap_or_else(|| temper_core::types::access_gate::REQUEST_ACCESS_COMMAND.to_string()),
+    });
+    Some(rmcp::ErrorData::new(
+        rmcp::model::ErrorCode::INVALID_REQUEST,
+        format!(
+            "Access to this temper instance requires approval for {who} — {reason}. \
+             Visit {} or run `{}` in the CLI to request access. \
+             This error is terminal and should not be retried.",
+            temper_core::types::access_gate::REQUEST_ACCESS_URL,
+            temper_core::types::access_gate::REQUEST_ACCESS_COMMAND
+        ),
+        Some(payload),
+    ))
+}
+
 /// Map a post-edge authentication refusal onto the rmcp sentence that refusal's arm
 /// speaks (design §3 — the arm-for-arm mapping ruling 7 completed).
 ///
@@ -859,6 +952,9 @@ fn authed_request(
 ///   could not produce: expiry used to die at the edge) → the NEW re-authenticate
 ///   sentence, consistent with the `WWW-Authenticate` remediation the edge emits
 ///   (design §10's named parity arm).
+/// - **Email resolution** (the API passes `EmailResolution` straight through as the
+///   401 body) → the direct binding's terminal email sentence, via the shared
+///   constant.
 ///
 /// `None` for every other error — only authentication refusals speak here; the tool's
 /// own mapping owns the rest.
@@ -879,16 +975,16 @@ pub(crate) fn map_post_edge_auth(refusal: &ClientError) -> Option<rmcp::ErrorDat
     if cause.starts_with("machine credential refused:") {
         // Terminal, like the direct binding's `AuthzError::Refused` arm: the token is
         // structurally incoherent, so retrying changes nothing.
-        Some(terminal(
-            "This token is machine-shaped but does not declare a valid \
-             client_credentials grant. This error is terminal and should not be retried."
-                .to_string(),
-        ))
+        Some(terminal(TERMINAL_MACHINE_GATE_SENTENCE.to_string()))
     } else if cause == "account is deactivated" {
-        Some(terminal(
-            "This account has been deactivated. This error is terminal and should not be retried."
-                .to_string(),
-        ))
+        Some(terminal(TERMINAL_DEACTIVATION_SENTENCE.to_string()))
+    } else if cause == "Token missing email claim and userinfo lookup failed" {
+        // The email-ladder 401 (the API passes `EmailResolution` straight through as
+        // the body, auth.rs:136). A human token with no resolvable email — terminal:
+        // re-sending changes nothing (the fix is a token with an email claim). Speaks
+        // the direct binding's `AuthzError::EmailResolution` sentence via the shared
+        // constant.
+        Some(terminal(TERMINAL_EMAIL_RESOLUTION_SENTENCE.to_string()))
     } else if cause == "Invalid or expired token" {
         // The expired-in-flight face. The bearer verified at the edge but no longer
         // decodes at the API — its lifetime ended inside the hop. The remedy is
@@ -925,9 +1021,13 @@ pub(crate) fn map_post_edge_auth(refusal: &ClientError) -> Option<rmcp::ErrorDat
             None,
         ))
     } else {
-        // The machine-principal registration gate rejects with its own 401 message
-        // (unregistered or revoked client_id — G3 Phase A's gate); the direct binding
-        // framed it terminal, so the framing carries.
+        // The catch-all: the machine-principal REGISTRATION GATE's own 401 voice
+        // (unregistered or revoked client_id — G3 Phase A's gate) arrives here, and
+        // the direct binding framed it terminal, so the framing carries. Every other
+        // named cause above got its arm BECAUSE it stopped belonging here — a cause
+        // landing in this arm is either the gate's voice or a face nobody has named
+        // yet; the latter is the drift this comment exists to prevent reading as
+        // intended.
         Some(terminal(format!(
             "{cause} This error is terminal and should not be retried."
         )))
@@ -945,9 +1045,7 @@ fn map_authz_error(e: temper_services::auth::AuthzError) -> rmcp::ErrorData {
         // changes nothing. The seam has already logged the `sub` and the reason.
         AuthzError::Refused(_) => rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_REQUEST,
-            "This token is machine-shaped but does not declare a valid \
-             client_credentials grant. This error is terminal and should not be retried."
-                .to_string(),
+            TERMINAL_MACHINE_GATE_SENTENCE.to_string(),
             None,
         ),
         // Also terminal: a human token we cannot put a name to. Before the seam owned
@@ -959,9 +1057,7 @@ fn map_authz_error(e: temper_services::auth::AuthzError) -> rmcp::ErrorData {
             tracing::warn!(%err, "rejected: could not resolve an email for a human token");
             rmcp::ErrorData::new(
                 rmcp::model::ErrorCode::INVALID_REQUEST,
-                "Could not resolve an email address for this token. \
-                 This error is terminal and should not be retried."
-                    .to_string(),
+                TERMINAL_EMAIL_RESOLUTION_SENTENCE.to_string(),
                 None,
             )
         }
@@ -969,8 +1065,7 @@ fn map_authz_error(e: temper_services::auth::AuthzError) -> rmcp::ErrorData {
             tracing::warn!(%profile_id, "rejected: profile is deactivated");
             rmcp::ErrorData::new(
                 rmcp::model::ErrorCode::INVALID_REQUEST,
-                "This account has been deactivated. This error is terminal and should not be retried."
-                    .to_string(),
+                TERMINAL_DEACTIVATION_SENTENCE.to_string(),
                 None,
             )
         }

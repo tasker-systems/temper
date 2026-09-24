@@ -19,6 +19,8 @@ use rmcp::model::{
 use temper_client::TemperClient;
 use uuid::Uuid;
 
+use crate::service::AcrossAuth;
+
 /// Page size for the resource-browsing list calls. MCP resource listing is a
 /// flat browse surface (no client-driven pagination), so we cap each fetch at a
 /// reasonable ceiling rather than streaming the whole vault.
@@ -38,10 +40,8 @@ pub async fn list_resources(
         ..Default::default()
     };
 
-    let response = client.resources().list(&params).await.map_err(|e| {
-        crate::service::map_post_edge_auth(&e).unwrap_or_else(|| {
-            rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None)
-        })
+    let response = client.resources().list(&params).await.across_auth(|e| {
+        rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None)
     })?;
 
     let resources = response
@@ -112,13 +112,8 @@ pub async fn read_resource(
         .and_then(|rest| rest.strip_suffix("/content"))
         .and_then(|id| Uuid::try_parse(id).ok())
     {
-        let content = client.resources().content(id).await.map_err(|e| {
-            crate::service::map_post_edge_auth(&e).unwrap_or_else(|| {
-                rmcp::ErrorData::internal_error(
-                    format!("Failed to read resource content: {e}"),
-                    None,
-                )
-            })
+        let content = client.resources().content(id).await.across_auth(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to read resource content: {e}"), None)
         })?;
 
         return Ok(ReadResourceResult::new(vec![ResourceContents::text(
@@ -138,19 +133,12 @@ pub async fn read_resource(
         // (and the managed tier, which is always present on a view). The markdown is
         // fetched below as its own part rather than asked for as a section (the
         // `…/content` read is the same door a `…/content` URI uses).
-        let row = client.resources().get(id, None).await.map_err(|e| {
-            crate::service::map_post_edge_auth(&e).unwrap_or_else(|| {
-                rmcp::ErrorData::internal_error(format!("Failed to read resource: {e}"), None)
-            })
+        let row = client.resources().get(id, None).await.across_auth(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to read resource: {e}"), None)
         })?;
 
-        let content = client.resources().content(id).await.map_err(|e| {
-            crate::service::map_post_edge_auth(&e).unwrap_or_else(|| {
-                rmcp::ErrorData::internal_error(
-                    format!("Failed to read resource content: {e}"),
-                    None,
-                )
-            })
+        let content = client.resources().content(id).await.across_auth(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to read resource content: {e}"), None)
         })?;
 
         // Return metadata as JSON + content as markdown.
@@ -190,13 +178,11 @@ pub async fn read_resource(
             ..Default::default()
         };
 
-        let response = client.resources().list(&params).await.map_err(|e| {
-            crate::service::map_post_edge_auth(&e).unwrap_or_else(|| {
-                rmcp::ErrorData::internal_error(
-                    format!("Failed to list resources in context: {e}"),
-                    None,
-                )
-            })
+        let response = client.resources().list(&params).await.across_auth(|e| {
+            rmcp::ErrorData::internal_error(
+                format!("Failed to list resources in context: {e}"),
+                None,
+            )
         })?;
 
         let json = serde_json::to_string_pretty(&response.rows).map_err(|e| {
