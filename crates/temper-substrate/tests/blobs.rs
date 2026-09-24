@@ -1351,9 +1351,20 @@ async fn staged_session(
     home: ContextId,
     content_type: &str,
 ) -> Uuid {
-    uploads::create_session(pool, owner, &AnchorRef::context(home), content_type)
-        .await
-        .unwrap()
+    match uploads::create_session(
+        pool,
+        owner,
+        &AnchorRef::context(home),
+        content_type,
+        i64::MAX,
+        i64::MAX,
+    )
+    .await
+    .unwrap()
+    {
+        uploads::BeginOutcome::Began { upload_id } => upload_id,
+        other => panic!("an unbounded begin never refuses, got {other:?}"),
+    }
 }
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
