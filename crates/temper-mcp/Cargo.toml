@@ -7,9 +7,7 @@ description = "MCP server for agent access to the temper knowledge base"
 [features]
 # Gates the `#[sqlx::test]` suites in `tests/` — without it, `cargo make test`
 # (no database) compiles them out entirely. Same pattern as temper-api/temper-services.
-# Also forwards temper-services' `test-db` so the sealed test-only constructors that
-# gate on it (JwksKeyStore::with_static_key) exist in this crate's test builds.
-test-db = ["temper-services/test-db"]
+test-db = []
 
 [dependencies]
 # The network door: the resources family's tools execute through the DEPLOYED API as a
@@ -26,6 +24,7 @@ temper-client = { path = "../temper-client" }
 # so workspace unification builds one reqwest.
 reqwest = { version = "0.12", default-features = false }
 temper-services = { path = "../temper-services" }
+
 temper-principal = { path = "../temper-principal" }
 temper-core = { path = "../temper-core", features = ["web-api", "mcp"] }
 temper-substrate = { path = "../temper-substrate" }
@@ -60,6 +59,9 @@ url = "2"
 uuid = { version = "1", features = ["v7", "serde"] }
 
 [dev-dependencies]
+# The tests' in-process JWKS and the harness's static-key store need the cfg-gated
+# constructor; features on the dev-dep union into test builds only, never the lib.
+temper-services = { path = "../temper-services", features = ["test-db"] }
 # `ServiceExt::oneshot` — drives a request through the assembled router without binding a port.
 tower = { version = "0.5", features = ["util"] }
 # Builds the gzip body that witnesses the request-decompression layer.

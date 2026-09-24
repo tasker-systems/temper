@@ -154,10 +154,18 @@ async fn an_unknown_section_name_is_a_400_naming_the_vocabulary(pool: PgPool) {
         "an unknown section is the caller's 400: {body}"
     );
     let message = body["error"]["message"].as_str().unwrap_or_default();
-    for valid in ["body", "open-meta", "edges", "embedding-status"] {
+    // The show door's vocabulary is the show door's: `edges` is refused (nothing fills
+    // it here — the accept-and-ignore shape the LIST ruling names), so the refusal must
+    // name what the door DOES serve and must NOT offer the declined word back as a
+    // choice — an agent retrying "edges" after that refusal would loop.
+    for valid in ["body", "open-meta", "embedding-status"] {
         assert!(
             message.contains(valid),
             "the refusal names `{valid}` so the caller can recover from it alone: {body}"
         );
     }
+    assert!(
+        !message.contains("edges"),
+        "the refusal must not name `edges` — the show door does not serve it: {body}"
+    );
 }

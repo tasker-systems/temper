@@ -181,6 +181,8 @@ values differ.
 | `AUTH_PROVIDER_NAME` | api, mcp | **Keep `auth0`.** It is a profile label and email-cache key, not a validation switch; leave it at the default rather than inventing an `okta` value |
 | `MCP_CLIENT_ID` | mcp | The MCP native application's Client ID |
 | `MCP_BASE_URL` | mcp | `https://<instance>` — no trailing slash |
+| `TEMPER_API_BASE_URL` | mcp | `https://<instance>` — the relay target; pin it in the MCP function's env. Same row in the [base deployment contract](./self-host-temper.md#environment-variable-contract) |
+| `TEMPER_MCP_SERVICE_SECRET` | api, mcp | The relay's service credential — one generated value on both functions. Same row in the [base deployment contract](./self-host-temper.md#environment-variable-contract) |
 | `MCP_PROXY_SECRET` | mcp | Not an Okta value — you generate it: at least 32 characters (`openssl rand -base64 48`). Required here for the same reason as under Auth0: an instance fronted by an external IdP serves the loopback redirect proxy, which encrypts its state token with a key derived from this secret alone. See the [base deployment's row](./self-host-temper.md#environment-variable-contract) |
 
 Everything else in the base deployment's environment contract (`DATABASE_URL`,
