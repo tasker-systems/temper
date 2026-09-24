@@ -1864,12 +1864,14 @@ mod tests {
         for segment in &tool_segments {
             let direct_gate = segment.contains("ensure_profile_from_parts");
             // The families that have crossed the network door dispatch through their
-            // tools module with the request parts; the gate runs at the API on the
-            // bearer those parts carry. A family migrating moves BETWEEN arms in the
-            // same commit as its tool change.
-            let network_door = ["tools::resources::", "tools::search::", "tools::query::"]
-                .iter()
-                .any(|dispatch| segment.contains(dispatch));
+            // tools module HANDING IT THE PARTS — `tools::<family>::<name>(self,
+            // &parts, ...)`. A bare `tools::` match is satisfied by the input TYPE
+            // alone (`Parameters<tools::query::QueryInput>` names the family in the
+            // signature), which the bite probe exploited: a method with neither gate
+            // nor dispatch passed the old arm. The `(self, &parts` call shape is the
+            // discriminator — parts exist on the dispatch path to be forwarded.
+            let network_door =
+                segment.contains("tools::") && segment.contains("(self, &parts");
             if !direct_gate && !network_door {
                 let fn_name = segment
                     .split("async fn ")
@@ -1879,8 +1881,7 @@ mod tests {
                     .trim();
                 missing.push(format!(
                     "{fn_name} (neither `ensure_profile_from_parts` nor a network-door \
-                     dispatch — `tools::resources::`, `tools::search::`, or \
-                     `tools::query::`)"
+                     dispatch — a `tools::<family>::` call handing it `&parts`)"
                 ));
             }
         }
