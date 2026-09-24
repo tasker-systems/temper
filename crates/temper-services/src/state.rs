@@ -255,7 +255,7 @@ impl JwksKeyStore {
     /// silently let a future caller wire a static-key trust root without it looking like
     /// a test edit (the `from_lookup` precedent for this crate's own from_env parse).
     /// `test-db` here so the sibling crates' test harnesses build it too.
-    #[cfg(any(test, feature = "test-db"))]
+    #[cfg(any(test, feature = "test-harness"))]
     pub fn with_static_key(key: DecodingKey, algorithm: Algorithm) -> Self {
         let cached = CachedKeys {
             // No `kid`: a static key answers for every token, which is what a test harness wants
