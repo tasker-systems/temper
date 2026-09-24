@@ -58,12 +58,63 @@ pub enum AppendOutcome {
 /// Begin a staged upload. The id is server-minted: a staging session is not a ledger
 /// entity, so there is no identity-as-input question (contrast `kb_blobs.id`'s deliberate
 /// lack of a DEFAULT).
+///
+/// The per-owner staging bounds are decided in the SAME transaction that mints the row,
+/// under a transaction-scoped advisory lock keyed on the owner — N concurrent begins by
+/// one principal serialize instead of each reading the same counts and all landing (the
+/// per-append F4 lesson, at the begin grain). A collision of the hash key with another
+/// principal's costs only serialization, never correctness: the counts are read against
+/// THIS owner inside the lock. The early refusal arms drop the transaction, so a refused
+/// begin mints nothing and releases the lock with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BeginOutcome {
+    Began { upload_id: Uuid },
+    OverOpenSessions { open: i64, limit: i64 },
+    OverStagingBudget { staged: i64, budget: i64 },
+}
+
 pub async fn create_session(
     pool: &PgPool,
     owner: ProfileId,
     home: &AnchorRef,
     content_type: &str,
-) -> Result<Uuid> {
+    max_open_sessions: i64,
+    staging_budget: i64,
+) -> Result<BeginOutcome> {
+    let mut txn = pool.begin().await?;
+    sqlx::query!(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+        owner.uuid().to_string(),
+    )
+    .execute(&mut *txn)
+    .await?;
+    let stats = sqlx::query!(
+        r#"SELECT
+             (SELECT count(*) FROM kb_blob_uploads WHERE owner_profile_id = $1)::bigint
+               AS "open!",
+             COALESCE((
+               SELECT SUM(octet_length(s.bytes))
+                 FROM kb_blob_upload_segments s
+                 JOIN kb_blob_uploads u ON u.id = s.upload_id
+                WHERE u.owner_profile_id = $1
+             ), 0)::bigint AS "staged!"
+           "#,
+        owner.uuid(),
+    )
+    .fetch_one(&mut *txn)
+    .await?;
+    if stats.open >= max_open_sessions {
+        return Ok(BeginOutcome::OverOpenSessions {
+            open: stats.open,
+            limit: max_open_sessions,
+        });
+    }
+    if stats.staged > staging_budget {
+        return Ok(BeginOutcome::OverStagingBudget {
+            staged: stats.staged,
+            budget: staging_budget,
+        });
+    }
     let row = sqlx::query!(
         r#"INSERT INTO kb_blob_uploads (owner_profile_id, home_table, home_id, content_type)
            VALUES ($1, $2, $3, $4)
@@ -73,9 +124,10 @@ pub async fn create_session(
         home.id,
         content_type,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *txn)
     .await?;
-    Ok(row.id)
+    txn.commit().await?;
+    Ok(BeginOutcome::Began { upload_id: row.id })
 }
 
 /// The session row's `home_table` back into the anchor table. The DDL CHECK admits only
