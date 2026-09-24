@@ -437,7 +437,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::reblock::resource_reblock(self, input).await
     }
 
@@ -452,7 +451,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::search::search(self, input).await
     }
 
@@ -464,7 +462,6 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::query::QueryInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::query::run_query(self, input).await
     }
@@ -480,7 +477,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::trail::element_trail(self, input).await
     }
 
@@ -495,7 +491,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::blobs::blob_read(self, input).await
     }
 
@@ -507,7 +502,6 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::blobs::BlobManageInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::blobs::blob_manage(self, input).await
     }
@@ -523,7 +517,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::relationships::relationship(self, input).await
     }
 
@@ -537,7 +530,6 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::citation_audits::RecordCitationAuditInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::citation_audits::record_citation_audit(self, input).await
     }
@@ -553,7 +545,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::facets::facets_read(self, input).await
     }
 
@@ -566,7 +557,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::facets::facet_set_unified(self, input).await
     }
 
@@ -578,7 +568,6 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::facets::FacetRetractInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::facets::facet_retract(self, input).await
     }
@@ -594,7 +583,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::cognitive_maps::cogmap_read(self, input).await
     }
 
@@ -606,7 +594,6 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::cognitive_maps::CogmapListInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::cognitive_maps::cogmap_list(self, input).await
     }
@@ -620,7 +607,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::cognitive_maps::cogmap_create(self, input).await
     }
 
@@ -632,7 +618,6 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::materialize::MaterializeTriggerInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::cognitive_maps::cogmap_materialize(self, input).await
     }
@@ -648,7 +633,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::contexts::context_read(self, input).await
     }
 
@@ -661,7 +645,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::contexts::context_manage(self, input).await
     }
 
@@ -673,7 +656,6 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::materialize::ContextMaterializeInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::cognitive_maps::context_materialize(self, input).await
     }
@@ -689,7 +671,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::doc_types::describe_schema(self, input).await
     }
 
@@ -704,7 +685,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::invocations::invocation_read(self, input).await
     }
 
@@ -716,7 +696,6 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::invocations::InvocationManageInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::invocations::invocation_manage(self, input).await
     }
@@ -732,7 +711,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::ingest::segmented_ingest(self, input).await
     }
 
@@ -747,7 +725,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::steward::steward_ingest_delta(self, input).await
     }
 
@@ -759,7 +736,6 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::steward::StewardAdvanceWatermarkInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::steward::steward_advance_watermark(self, input).await
     }
@@ -773,7 +749,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::data_artifacts::list_artifacts(self, input).await
     }
 
@@ -785,7 +760,6 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifacts::GetArtifactInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::data_artifacts::get_artifact(self, input).await
     }
@@ -799,7 +773,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::data_artifacts::commit_artifact(self, input).await
     }
 
@@ -811,7 +784,6 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifact_shapes::ListShapesInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::data_artifact_shapes::list_shapes(self, input).await
     }
@@ -825,7 +797,6 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        self.ensure_profile_from_parts(&parts).await?;
         tools::data_artifact_shapes::get_shape(self, input).await
     }
 
@@ -837,7 +808,6 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifact_shapes::DeclareShapeInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
         self.ensure_profile_from_parts(&parts).await?;
         tools::data_artifact_shapes::declare_shape(self, input).await
     }
