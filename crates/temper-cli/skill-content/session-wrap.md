@@ -119,9 +119,16 @@ preamble does not name a wrong turn, it is probably a summary wearing a preamble
 ### Ship it ready to paste
 
 A preamble the user has to assemble from ids scattered through a note is a preamble that does not get
-used. End the session by echoing the next session's starting invocation with the ids filled in —
-context, the task if one continues, the goal if the work sits under one, the note you just wrote, and
-the preamble itself.
+used — but the note itself already **is** the transport payload. The handoff is the preamble prose
+under Next Steps and nothing else; a cold session orients via the preceding-session flag (`--from-session`),
+which is what it exists for. Do not echo an invocation that embeds the note being written — a pointer
+inside the document it points at carries no information — and do not duplicate the preamble into a
+`--note` payload: the same text ships twice and the two copies drift.
+
+A pastable earns its place only when it will be pasted from somewhere other than the note it lives
+in, and even then it is thin — `session start --context <ctx> --from-session <prev-note-id>` with no
+inline payload. That is the one legitimate placement: an invocation that travels somewhere other
+than inside its own note.
 
 `session-lifecycle.md` carries the literal form, because it differs by surface: one has a
 slash-command router and the other does not. What belongs here is the judgment about **when not to
