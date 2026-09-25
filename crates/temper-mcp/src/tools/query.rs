@@ -121,9 +121,9 @@ pub async fn run_query(
         without_trace
     };
 
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        body,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(body),
+    ]))
 }
 
 /// Map a query-path error onto an MCP error.

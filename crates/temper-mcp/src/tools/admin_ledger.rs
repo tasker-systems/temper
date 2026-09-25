@@ -113,9 +113,9 @@ pub async fn admin_ledger(
     // The same projection temper-api uses — typed, and shared so the surfaces cannot drift.
     let page = admin_ledger_service::to_wire_page(entries, epoch).map_err(map_err)?;
     let text = serde_json::to_string_pretty(&page).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 #[cfg(test)]

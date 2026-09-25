@@ -57,9 +57,9 @@ pub async fn list_artifacts(
     .map_err(map_api_err)?;
 
     let json = serde_json::to_string_pretty(&artifacts).unwrap_or_else(|_| "[]".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        json,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(json),
+    ]))
 }
 
 pub async fn get_artifact(
@@ -78,13 +78,15 @@ pub async fn get_artifact(
     match artifact {
         Some(a) => {
             let json = serde_json::to_string_pretty(&a).unwrap_or_else(|_| "{}".to_string());
-            Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-                json,
-            )]))
+            Ok(CallToolResult::success(vec![
+                rmcp::model::ContentBlock::text(json),
+            ]))
         }
-        None => Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-            "Artifact not found or not visible to you.".to_string(),
-        )])),
+        None => Ok(CallToolResult::success(vec![
+            rmcp::model::ContentBlock::text(
+                "Artifact not found or not visible to you.".to_string(),
+            ),
+        ])),
     }
 }
 
@@ -233,9 +235,9 @@ pub async fn commit_artifact(
         artifact: out.value,
     };
     let json = serde_json::to_string_pretty(&response).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        json,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(json),
+    ]))
 }
 
 fn parse_resource_ref(s: &str) -> Result<ResourceId, rmcp::ErrorData> {

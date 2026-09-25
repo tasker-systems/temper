@@ -86,9 +86,9 @@ pub async fn element_trail(
     .await
     .map_err(|e| map_err(TemperError::from(e), "element_trail"))?;
 
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&trail),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&trail)),
+    ]))
 }
 
 #[cfg(test)]

@@ -59,9 +59,9 @@ temper-telemetry = { path = "../../crates/temper-telemetry", features = ["test-s
 # The REAL rmcp client, for `mcp_blob_transport_e2e`: the S5 blob tools were witnessed through
 # direct tool-fn calls; S6 drives them through the deployed streamable-HTTP transport. Dev-only —
 # nothing in production links the client side. `reqwest13` is the reqwest rmcp itself implements
-# `StreamableHttpClient` for (rmcp 1.8 pairs with reqwest 0.13; the workspace otherwise pins 0.12),
-# so the transport is built with the client type the trait impl covers.
-rmcp = { version = "1.8", features = [
+# `StreamableHttpClient` for (rmcp 3.4.1 declares reqwest 0.13.2; the workspace otherwise pins
+# 0.12), so the transport is built with the client type the trait impl covers.
+rmcp = { version = "3.4.1", features = [
     "client",
     "transport-streamable-http-client-reqwest",
 ] }

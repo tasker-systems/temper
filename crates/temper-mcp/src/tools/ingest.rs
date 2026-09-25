@@ -160,9 +160,9 @@ pub async fn ingest_begin(
         .await
         .map_err(|e| map_err(e, "ingest_begin"))?;
 
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&out.value),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&out.value)),
+    ]))
 }
 
 pub async fn ingest_append(
@@ -203,9 +203,9 @@ pub async fn ingest_append(
         .await
         .map_err(|e| map_err(e, "ingest_append"))?;
 
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&out.value),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&out.value)),
+    ]))
 }
 
 pub async fn ingest_finalize(
@@ -233,12 +233,12 @@ pub async fn ingest_finalize(
         .await
         .map_err(|e| map_err(e, "ingest_finalize"))?;
 
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        format!(
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(format!(
             "Finalized {} ({} blocks).",
             input.resource, input.expected_blocks
-        ),
-    )]))
+        )),
+    ]))
 }
 
 pub async fn ingest_blocks(
@@ -255,9 +255,9 @@ pub async fn ingest_blocks(
         .await
         .map_err(|e| map_err(e, "ingest_blocks"))?;
 
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&out.value),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&out.value)),
+    ]))
 }
 
 // ── Consolidated tool (4→1) ─────────────────────────────────────────────────────

@@ -23,6 +23,29 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.2 — unreleased
+- **rmcp 1.8 → 3.4.1 — the SDK behind the MCP surface jumps two majors; 2026-07-28 enters the advertisement; the wire is held byte-identical**
+  The dependency behind every MCP tool, resource, and initialize response moves from
+  rmcp 1.8 (Jun 2026) to 3.4.1 (Sep 2026, MCP spec 2026-07-28). What changes behind an
+  unchanged shape: `with_stateful_mode` → `with_legacy_session_mode`, `Content` →
+  `ContentBlock`, `ServerInfo`/`ClientInfo` → `ServerConfig`/`ClientConfig`, resource
+  raw-wrappers flattened, and `supported_protocol_versions()` overridden to the explicit
+  pair `["2025-11-25", "2026-07-28"]` — not the SDK default (every version the SDK knows,
+  back to 2024-11-05) and not a 2026-07-28-only list (which would strand every legacy
+  client: negotiation echoes a legacy client's request only when the server supports it,
+  and rejects when it supports no initialize-handshake version). Who observes: a legacy
+  client, nothing — the byte-stability witness pins the full 38-tool `tools/list` response
+  byte-identical across the jump and the initialize negotiation observable (legacy,
+  ancient, and modern requested versions all answered `2025-11-25`) is held; a modern
+  client may now negotiate the 2026-07-28 lifecycle (per-request metadata instead of the
+  handshake), which is the beat's deliberate flip and the only new wire capability.
+  Release relevance: none beyond the additive capability — no shape moves, no schema
+  moves, the dogfood probe against the deployed 3.x build completes the beat's evidence
+  after merge.
+pr: self
+classes: additive
+surfaces: mcp
+status: signal-only
+
 - **The MCP search and query tools execute through the network door; a relayed composition is measured once, by the door it arrived on**
   The `search` and `run_query` MCP tools stop calling the service-direct read path and
   forward to `POST /api/search` and `POST /api/query` as `temper-client` calls, exactly

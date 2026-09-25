@@ -336,9 +336,9 @@ async fn read_blob(
         content_bytes: blob.content_bytes,
         content_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
     };
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&result),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&result)),
+    ]))
 }
 
 async fn list_blobs(
@@ -363,9 +363,9 @@ async fn list_blobs(
     .await
     .map_err(|e| map_api_error(ACTION, e))?;
 
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&rows),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&rows)),
+    ]))
 }
 
 // ── Manage handlers ────────────────────────────────────────────────────────────
@@ -441,9 +441,9 @@ async fn commit_blob(
         deduped: outcome.deduped,
         estate_scope_disclosure: outcome.estate_scope_disclosure,
     };
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&response),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&response)),
+    ]))
 }
 
 async fn relate_blob(
@@ -506,9 +506,9 @@ async fn relate_blob(
     .await
     .map_err(|e| map_api_error(ACTION, e))?;
 
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&ack),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&ack)),
+    ]))
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────

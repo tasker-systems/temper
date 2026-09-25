@@ -36,7 +36,7 @@ base64 = "0.22"
 # Collecting the read-through `ByteStream` into a whole tool result.
 futures = "0.3"
 
-rmcp = { version = "1.8", features = [
+rmcp = { version = "3.4.1", features = [
     "server",
     "transport-streamable-http-server",
 ] }

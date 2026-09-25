@@ -124,9 +124,9 @@ pub async fn record_citation_audit(
     // (`temper-api/src/handlers/citation_audits.rs` returns `Json<Uuid>`), not a wrapping ack
     // struct — there is no shared `CitationAuditAck` type, and inventing one here would be a
     // second spelling of a response shape the HTTP surface already settled.
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&out.value),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&out.value)),
+    ]))
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────

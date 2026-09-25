@@ -63,9 +63,9 @@ pub async fn cogmap_shape(
     // an agent `[]` where the schema promises an object is the silent contract lie this read exists
     // to end.
     let text = serde_json::to_string_pretty(&shape).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 pub async fn cogmap_region_metrics(
@@ -98,9 +98,9 @@ pub async fn cogmap_region_metrics(
     })?;
 
     let text = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 pub async fn cogmap_analytics(
@@ -125,9 +125,9 @@ pub async fn cogmap_analytics(
         Some(analytics) => {
             let text =
                 serde_json::to_string_pretty(&analytics).unwrap_or_else(|_| "{}".to_string());
-            Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-                text,
-            )]))
+            Ok(CallToolResult::success(vec![
+                rmcp::model::ContentBlock::text(text),
+            ]))
         }
         None => Err(rmcp::ErrorData::invalid_params(
             "cognitive map not found or not readable".to_string(),
@@ -163,8 +163,8 @@ direction to follow.";
 /// meeting the marking, and the JSON body's shape is unchanged for programmatic consumers.
 pub fn with_leading_notice(notice: &str, body: String) -> CallToolResult {
     CallToolResult::success(vec![
-        rmcp::model::Content::text(notice.to_string()),
-        rmcp::model::Content::text(body),
+        rmcp::model::ContentBlock::text(notice.to_string()),
+        rmcp::model::ContentBlock::text(body),
     ])
 }
 
@@ -333,9 +333,9 @@ pub async fn cogmap_create(
         })?;
 
     let text = serde_json::to_string_pretty(&out.value).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 // ── cogmap_materialize_delta (read) / cogmap_materialize (trigger) ───────────
@@ -362,9 +362,9 @@ pub async fn cogmap_materialize_delta(
     .map_err(|e| map_api_error("cogmap_materialize_delta", e))?;
 
     let text = serde_json::to_string_pretty(&delta).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 /// Re-materialize a cogmap's regions when its formation delta clears the threshold; a no-op below.
@@ -406,9 +406,9 @@ pub async fn cogmap_materialize(
 
     let ack: MaterializeAck = out.value;
     let text = serde_json::to_string_pretty(&ack).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 // ── cogmap_bind / cogmap_unbind (service-direct) ─────────────────────────────
@@ -458,9 +458,9 @@ pub async fn cogmap_bind(
     .map_err(|e| map_api_error("cogmap_bind", e))?;
 
     let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 /// Unbind a cognitive map from a team. SERVICE-DIRECT, two-sided gated (see [`cogmap_bind`]).
@@ -484,9 +484,9 @@ pub async fn cogmap_unbind(
     .map_err(|e| map_api_error("cogmap_unbind", e))?;
 
     let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 // ── cogmap_grant / cogmap_revoke (service-direct) ────────────────────────────
@@ -578,9 +578,9 @@ pub async fn cogmap_grant(
             .map_err(|e| map_api_error("cogmap_grant", e))?;
 
     let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 /// Revoke a capability grant on a cognitive map. SERVICE-DIRECT, admin/can_grant-gated (see
@@ -607,9 +607,9 @@ pub async fn cogmap_revoke(
             .map_err(|e| map_api_error("cogmap_revoke", e))?;
 
     let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -663,9 +663,9 @@ pub async fn context_shape(
 
     // Object, not array — see the note in `cogmap_shape`; the fallback must match the schema.
     let text = serde_json::to_string_pretty(&shape).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 /// `context_region_metrics` — the per-region analytics tier for a context.
@@ -689,9 +689,9 @@ pub async fn context_region_metrics(
     })?;
 
     let text = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 /// `context_analytics` — the context-level staleness readout (materialized_at / latest_touch /
@@ -723,9 +723,9 @@ pub async fn context_analytics(
             // Object, not array — the fallback must match the schema.
             let text =
                 serde_json::to_string_pretty(&staleness).unwrap_or_else(|_| "{}".to_string());
-            Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-                text,
-            )]))
+            Ok(CallToolResult::success(vec![
+                rmcp::model::ContentBlock::text(text),
+            ]))
         }
         None => Err(rmcp::ErrorData::invalid_params(
             "context not found or not readable".to_string(),
@@ -761,9 +761,9 @@ pub async fn context_materialize(
         .value;
 
     let text = serde_json::to_string_pretty(&ack).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 // ── Consolidated read tool (6→1) ───────────────────────────────────────────────

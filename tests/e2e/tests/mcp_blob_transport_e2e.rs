@@ -22,7 +22,7 @@ mod common;
 
 use base64::Engine as _;
 use jsonwebtoken::Algorithm;
-use rmcp::model::{CallToolRequestParams, ClientInfo, PaginatedRequestParams};
+use rmcp::model::{CallToolRequestParams, ClientConfig, PaginatedRequestParams};
 use rmcp::service::{ServerSink, ServiceExt};
 use rmcp::transport::streamable_http_client::{
     StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
@@ -104,8 +104,8 @@ async fn spawn_mcp_server(
 
 /// Extract the text of the first content part of a tool result.
 fn text_of(result: rmcp::model::CallToolResult) -> String {
-    match result.content.first().map(|c| &c.raw) {
-        Some(rmcp::model::RawContent::Text(t)) => t.text.clone(),
+    match result.content.first() {
+        Some(rmcp::model::ContentBlock::Text(t)) => t.text.clone(),
         other => panic!("tool returned no text content part: {other:?}"),
     }
 }
@@ -146,7 +146,7 @@ async fn connect_client(
     mcp_addr: std::net::SocketAddr,
     token: &str,
 ) -> (
-    rmcp::service::RunningService<rmcp::RoleClient, rmcp::model::ClientInfo>,
+    rmcp::service::RunningService<rmcp::RoleClient, rmcp::model::ClientConfig>,
     ServerSink,
 ) {
     let transport = StreamableHttpClientTransport::with_client(
@@ -154,7 +154,7 @@ async fn connect_client(
         StreamableHttpClientTransportConfig::with_uri(format!("http://{mcp_addr}/mcp"))
             .auth_header(token.to_string()),
     );
-    let service = ClientInfo::default()
+    let service = ClientConfig::default()
         .serve(transport)
         .await
         .expect("the initialize handshake must succeed over the deployed transport");
@@ -183,13 +183,13 @@ async fn blob_tools_survive_the_real_transport_byte_for_byte(pool: sqlx::PgPool)
     // is rmcp's OWN reqwest (aliased `reqwest13` — the version its `StreamableHttpClient`
     // impl covers); `auth_header` takes the RAW token and adds the `Bearer ` prefix itself.
     // The config default is stateless-tolerant (`allow_stateless: true`), which this server
-    // requires: the deployed router runs `stateful_mode(false)`.
+    // requires: the deployed router runs `legacy_session_mode(false)`.
     let transport = StreamableHttpClientTransport::with_client(
         reqwest13::Client::new(),
         StreamableHttpClientTransportConfig::with_uri(format!("http://{mcp_addr}/mcp"))
             .auth_header(app.token.clone()),
     );
-    let client_info = ClientInfo::default();
+    let client_info = ClientConfig::default();
     let service = client_info
         .serve(transport)
         .await

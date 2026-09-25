@@ -16,11 +16,12 @@ use rmcp::{
     handler::server::{common::Extension, wrapper::Parameters},
     model::{
         CallToolResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
-        PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ServerCapabilities,
-        ServerInfo,
+        PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
+        ServerCapabilities, ServerConfig,
     },
     tool, tool_handler, tool_router,
 };
+use std::borrow::Cow;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -95,7 +96,7 @@ const RELAY_NON_IDEMPOTENT_ATTEMPTS: u32 = 2;
 /// The `ToolRouter` is **not** stored as a field. Under rmcp ≥ 1.4 the `#[tool_handler]` macro
 /// defaults to `Self::tool_router()` — rebuilding the router per `call_tool` / `list_tools`
 /// call — so a stored field would be dead weight: built in `new` and never read. Temper runs the
-/// streamable-HTTP transport in **stateless mode** (`with_stateful_mode(false)` in
+/// streamable-HTTP transport in **stateless mode** (`with_legacy_session_mode(false)` in
 /// `router::build_router`), which calls the service factory — and thus `new` — once per HTTP
 /// request, so each service instance serves exactly one call. Building the router in `new` and
 /// reading it in `call_tool` is the same number of builds as building it in `call_tool` alone;
@@ -1174,8 +1175,8 @@ fn advertise_blob_tools(tools: Vec<rmcp::model::Tool>, blob_ready: bool) -> Vec<
 
 #[tool_handler]
 impl rmcp::ServerHandler for TemperMcpService {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
@@ -1207,11 +1208,7 @@ impl rmcp::ServerHandler for TemperMcpService {
             Self::tool_router().list_all(),
             self.api_state.config.blob.is_some(),
         );
-        Ok(ListToolsResult {
-            tools,
-            meta: None,
-            next_cursor: None,
-        })
+        Ok(ListToolsResult::with_all_items(tools))
     }
 
     async fn initialize(
@@ -1233,6 +1230,22 @@ impl rmcp::ServerHandler for TemperMcpService {
         // sentence — accepted on the record (§10, named deltas).
 
         Ok(self.get_info())
+    }
+
+    /// The protocol versions this server can serve: the 2025-11-25 initialize
+    /// handshake plus the 2026-07-28 spec, whose lifecycle lives in per-request
+    /// metadata rather than the handshake. Deliberately EXPLICIT, not the SDK
+    /// default: rmcp 3.4.1's blanket default advertises every version it knows
+    /// (back to 2024-11-05), a surface this server has never served, and a
+    /// 2026-07-28-only list would strand every legacy client — negotiation
+    /// echoes a legacy client's requested version only when the server supports
+    /// it, and rejects when it supports no initialize-handshake version at all.
+    /// With this list a legacy client is echoed the version it asked for and a
+    /// modern client resolves through per-request negotiation; `get_info()`
+    /// stays at the SDK default (`V_2025_11_25`), which is both today's
+    /// initialize observable and the fallback answer for modern requests.
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(&[ProtocolVersion::V_2025_11_25, ProtocolVersion::V_2026_07_28])
     }
 
     // ── Resources protocol ────────────────────────────────────────────
@@ -1266,10 +1279,12 @@ impl rmcp::ServerHandler for TemperMcpService {
         &self,
         request: ReadResourceRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<ReadResourceResult, rmcp::ErrorData> {
+    ) -> Result<ReadResourceResponse, rmcp::ErrorData> {
         if let Some(parts) = context.extensions.get::<http::request::Parts>() {
             let client = self.relay_client(parts)?;
-            return crate::resources::read_resource(&client, request).await;
+            return crate::resources::read_resource(&client, request)
+                .await
+                .map(ReadResourceResponse::from);
         }
         Err(rmcp::ErrorData::internal_error(
             "Not authenticated".to_string(),

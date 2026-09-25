@@ -857,9 +857,9 @@ pub async fn create_resource(
         resource: enriched,
         status: CreateStatus::Created,
     };
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&response),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&response)),
+    ]))
 }
 
 /// Map a `ProjectionError` to an `rmcp::ErrorData` invalid-params response.
@@ -913,11 +913,11 @@ pub async fn get_resource(
         enriched_value
     };
 
-    let mut parts = vec![rmcp::model::Content::text(
+    let mut parts = vec![rmcp::model::ContentBlock::text(
         serde_json::to_string_pretty(&filtered).unwrap_or_else(|_| "{}".to_string()),
     )];
     if let Some(markdown) = body_markdown {
-        parts.push(rmcp::model::Content::text(markdown));
+        parts.push(rmcp::model::ContentBlock::text(markdown));
     }
     Ok(CallToolResult::success(parts))
 }
@@ -939,9 +939,9 @@ pub async fn get_block_provenance(
             rmcp::ErrorData::internal_error(format!("Failed to read provenance: {e}"), None)
         })?;
 
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&rows),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&rows)),
+    ]))
 }
 
 /// Read one content block by address — the three-state resolution (D-D1), through the
@@ -967,9 +967,9 @@ pub async fn get_block(
             other => rmcp::ErrorData::internal_error(format!("block read failed: {other}"), None),
         })?;
 
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&read),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&read)),
+    ]))
 }
 
 /// Ledger L2 — a resource's bidirectional `derived_from` lineage: what it derives
@@ -996,9 +996,9 @@ pub async fn resource_lineage(
             other => rmcp::ErrorData::internal_error(format!("lineage read failed: {other}"), None),
         })?;
 
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&lineage),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&lineage)),
+    ]))
 }
 
 pub async fn list_resources(
@@ -1143,9 +1143,9 @@ pub async fn list_resources(
         offset,
         facets,
     };
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&response),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&response)),
+    ]))
 }
 
 pub async fn update_resource(
@@ -1221,9 +1221,9 @@ pub async fn update_resource(
 
     // Return the enriched current state, read back through the same door `get_resource` uses.
     let (enriched, _) = enriched_view(&client, input.id, false).await?;
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&enriched),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&enriched)),
+    ]))
 }
 
 pub async fn annotate_resource(
@@ -1280,9 +1280,9 @@ pub async fn annotate_resource(
         .across_auth(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to read provenance: {e}"), None)
         })?;
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&rows),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&rows)),
+    ]))
 }
 
 pub async fn update_resource_meta(
@@ -1335,9 +1335,9 @@ pub async fn update_resource_meta(
         updated: true,
         id: input.id,
     };
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&response),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&response)),
+    ]))
 }
 
 pub async fn delete_resource(
@@ -1385,9 +1385,9 @@ pub async fn delete_resource(
             id: input.id,
         })?;
 
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&response),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&response)),
+    ]))
 }
 
 // ── resource_grant / resource_revoke (service-direct) ──────────────
@@ -1489,9 +1489,9 @@ pub async fn resource_grant(
         .await
         .across_auth(|e| map_grant_error("resource_grant", e))?;
     let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 /// Revoke a capability grant on a resource, through the door. Admin/can_grant/owner-gated
@@ -1518,9 +1518,9 @@ pub async fn resource_revoke(
         .await
         .across_auth(|e| map_grant_error("resource_revoke", e))?;
     let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 #[cfg(test)]

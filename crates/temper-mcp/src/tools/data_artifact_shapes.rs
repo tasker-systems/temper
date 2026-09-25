@@ -47,9 +47,9 @@ pub async fn list_shapes(
         .map_err(map_api_err)?;
 
     let json = serde_json::to_string_pretty(&shapes).unwrap_or_else(|_| "[]".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        json,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(json),
+    ]))
 }
 
 pub async fn get_shape(
@@ -68,13 +68,13 @@ pub async fn get_shape(
     match shape {
         Some(s) => {
             let json = serde_json::to_string_pretty(&s).unwrap_or_else(|_| "{}".to_string());
-            Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-                json,
-            )]))
+            Ok(CallToolResult::success(vec![
+                rmcp::model::ContentBlock::text(json),
+            ]))
         }
-        None => Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-            "Shape not found or not visible to you.".to_string(),
-        )])),
+        None => Ok(CallToolResult::success(vec![
+            rmcp::model::ContentBlock::text("Shape not found or not visible to you.".to_string()),
+        ])),
     }
 }
 
@@ -183,9 +183,9 @@ pub async fn declare_shape(
     })?;
 
     let json = serde_json::to_string_pretty(&shape).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        json,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(json),
+    ]))
 }
 
 fn parse_home_anchor(home_type: &str, home_id: &str) -> Result<HomeAnchor, rmcp::ErrorData> {
