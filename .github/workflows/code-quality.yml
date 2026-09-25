@@ -411,6 +411,9 @@ jobs:
       - name: Guard test — check-public-surface-drift
         run: bash .github/scripts/test-check-public-surface-drift.sh
 
+      - name: Guard test — check-coverage-floors
+        run: python3 .github/scripts/test-check-coverage-floors.py
+
       - name: Guard test — audit-route-auth (per-builder layer wiring)
         run: bash .github/scripts/test-audit-route-auth.sh
 

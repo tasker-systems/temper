@@ -115,3 +115,10 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
           fail_ci_if_error: false
+
+      - name: Check per-crate coverage floors
+        # The floors gate the NIGHTLY run only — "drift caught the next morning" is the documented
+        # acceptable latency (the PR path stays coverage-free; see the header). A red here names
+        # the crate, its measured coverage, and its floor, so one crate's drift is never averaged
+        # away behind the workspace aggregate.
+        run: python3 .github/scripts/check-coverage-floors.py --lcov lcov.info
