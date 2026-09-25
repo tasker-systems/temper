@@ -1473,7 +1473,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 let dir = std::path::PathBuf::from(path);
                 let written = temper_cli::commands::skill::emit_agent_skills(&dir)?;
                 temper_cli::output::success(format!(
-                    "Emitted {} agent-skill files: {}",
+                    "Emitted {} skill files: {}",
                     written.len(),
                     dir.display()
                 ));

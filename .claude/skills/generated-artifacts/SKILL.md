@@ -1,9 +1,11 @@
 ---
+metadata:
+  internal: true
 name: generated-artifacts
-description: Regenerating the router-derived artifacts (openapi.json and all three SDKs — the temper-rb gem, temper-ts's schema.ts, temper-py's generated package), the ts-rs TypeScript type trees, and the committed agent-skills/ projection. Use when a response DTO, route, ts-rs-derived Rust type, or shared skill template changes, or when `cargo make check` fails on openapi-check, openapi-rb-drift, openapi-ts-drift, openapi-py-drift, ts-rs-drift, or skills-drift.
+description: Regenerating the router-derived artifacts (openapi.json and all three SDKs — the temper-rb gem, temper-ts's schema.ts, temper-py's generated package), the ts-rs TypeScript type trees, and the committed skills/ projection. Use when a response DTO, route, ts-rs-derived Rust type, or shared skill template changes, or when `cargo make check` fails on openapi-check, openapi-rb-drift, openapi-ts-drift, openapi-py-drift, ts-rs-drift, or skills-drift.
 ---
 
-# Generated artifacts: OpenAPI SDKs, ts-rs type trees, and the agent-skills projection
+# Generated artifacts: OpenAPI SDKs, ts-rs type trees, and the skills/ projection
 
 Three independent codegen pipelines hang off the Rust source. All are gated by
 `cargo make check`, and all fail in ways that read as "you forgot to regenerate"
@@ -139,17 +141,17 @@ while the agent spoke a retired wire contract. It does **not** cover the wire `s
 tags: those live in temper-api, which has no ts-rs (task
 `019f910b-579b-74c2-bf05-702aaed0a011`).
 
-## `agent-skills/` is a committed projection of the shared skill templates
+## `skills/temper-knowledge-base/` is a committed projection of the shared skill templates
 
-`agent-skills/temper-knowledge-base/` is the installable skill for **MCP-only clients** (Claude
+`skills/temper-knowledge-base/` is the installable skill for **MCP-only clients** (Claude
 Desktop, claude.ai). It is not hand-maintained: `temper skill emit --path
-agent-skills/temper-knowledge-base` regenerates it from `crates/temper-cli/templates/shared/*` (surface-
+skills/temper-knowledge-base` regenerates it from `crates/temper-cli/templates/shared/*` (surface-
 parameterized, `cli` vs `mcp`), `crates/temper-cli/skill-content/mcp/SKILL.md`, and — for
 `references/frontmatter.md` — `temper_workflow`'s embedded JSON Schemas plus the
 `ManagedMeta` wire type.
 
 ```bash
-cargo run -p temper-cli -- skill emit --path agent-skills/temper-knowledge-base
+cargo run -p temper-cli -- skill emit --path skills/temper-knowledge-base
 cargo make skill-package   # …and wrap it as dist/temper-skill-v<ver>.zip
 ```
 

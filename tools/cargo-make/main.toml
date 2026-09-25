@@ -103,8 +103,8 @@ description = "Fail if the committed openapi.json moves beyond the current pinne
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-openapi-pin.sh"]
 
 [tasks.skills-drift]
-description = "Fail if the committed agent-skills/ projection has drifted from the templates that produce it"
-# `agent-skills/temper-knowledge-base/` is an installable skill for MCP-only clients, and it is now
+description = "Fail if the committed skills/ projection has drifted from the templates that produce it"
+# `skills/temper-knowledge-base/` is an installable skill for MCP-only clients, and it is now
 # a committed PROJECTION of shared templates plus schema-derived content rather than a
 # hand-maintained copy. Hand-maintained it drifted past staleness into being wrong about the system
 # — teaching primitives temper has never shipped — and nothing could notice, because nothing

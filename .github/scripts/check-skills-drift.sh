@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 #
-# Fail if the committed `agent-skills/` tree drifts from the templates that produce it.
+# Fail if the committed `skills/` projection tree drifts from the templates that produce it.
 #
 # Re-emits the MCP skill projection and fails if the result differs from what is committed — the
 # same shape as check-ts-rs-drift.sh, for the same reason one tier up.
 #
 # ## Why this exists
 #
-# `agent-skills/` is an installable skill for MCP-only clients. Hand-maintained, it drifted past
+# `skills/temper-knowledge-base/` is an installable skill for MCP-only clients — both directly
+# (`temper skill emit`) and through the skills.sh channel, whose scanner walks the repo-root
+# `skills/` directory as a priority container. Hand-maintained, it drifted past
 # staleness into being WRONG about the system: it taught "Vault Primitives: Tickets / Milestones"
 # and an "Epic Workflow", none of which temper has ever shipped, and its frontmatter reference
 # documented Ticket and Milestone schemas. Nothing noticed, because nothing connects prose to the
@@ -56,7 +58,7 @@ set -euo pipefail
 
 DEFAULT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REPO_ROOT="${SKILLS_DRIFT_REPO_ROOT:-$DEFAULT_ROOT}"
-TREE="${SKILLS_DRIFT_TREE:-agent-skills/temper-knowledge-base}"
+TREE="${SKILLS_DRIFT_TREE:-skills/temper-knowledge-base}"
 EMIT_CMD="${SKILLS_DRIFT_EMIT_CMD:-cargo run -q -p temper-cli -- skill emit --path $TREE}"
 
 # The tree must have something TRACKED before we regenerate into it. `git status` over a path git
@@ -69,7 +71,7 @@ if [ -z "$(git -C "$REPO_ROOT" ls-files -- "$TREE")" ]; then
     exit 1
 fi
 
-echo "Re-emitting the agent-skills projection into: $TREE"
+echo "Re-emitting the skills/ projection into: $TREE"
 
 # Capture the emit's output and replay it ONLY on failure — same reasoning as the ts-rs gate: a
 # cargo build writes errors to stdout, so discarding stdout discards the reason, and a red job whose
@@ -104,11 +106,11 @@ fi
 # the diagnosis below ever printed. That is the silent-failure mode this gate's sibling was fixed
 # for once already, reintroduced through a different door; the harness case for a reworded report
 # is what caught it.
-emitted="$(grep -oE 'Emitted [0-9]+ agent-skill files' "$EMIT_LOG" | grep -oE '[0-9]+' | head -1 || true)"
+emitted="$(grep -oE 'Emitted [0-9]+ skill files' "$EMIT_LOG" | grep -oE '[0-9]+' | head -1 || true)"
 if [ -z "$emitted" ] || [ "$emitted" -lt 1 ]; then
     echo >&2
     echo "ERROR: the emit reported no files written, so this gate compared nothing." >&2
-    echo "       Expected a line like 'Emitted N agent-skill files' with N >= 1. Its output:" >&2
+    echo "       Expected a line like 'Emitted N skill files' with N >= 1. Its output:" >&2
     echo >&2
     cat "$EMIT_LOG" >&2
     exit 1
@@ -121,7 +123,7 @@ DIRTY="$(git -C "$REPO_ROOT" status --porcelain -- "$TREE")"
 
 if [ -n "$DIRTY" ]; then
     echo >&2
-    echo "ERROR: the committed agent-skills tree is out of date with the templates that produce it." >&2
+    echo "ERROR: the committed skills/ tree is out of date with the templates that produce it." >&2
     echo >&2
     printf '%s\n' "$DIRTY" >&2
     echo >&2
@@ -133,4 +135,4 @@ if [ -n "$DIRTY" ]; then
     exit 1
 fi
 
-echo "agent-skills is up to date with its templates (${emitted} generated file(s) checked)"
+echo "skills/ projection is up to date with its templates (${emitted} generated file(s) checked)"

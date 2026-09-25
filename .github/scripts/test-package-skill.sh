@@ -9,7 +9,7 @@
 # upload time, or in a release job — so the cheap checks belong here.
 #
 # HERMETIC: every case builds a throwaway bundle under a temp dir and packages that, never the real
-# agent-skills tree. SKILL_BUNDLE_ROOT / SKILL_BUNDLE_NAME are the seams; no CI job sets them.
+# skills/ tree. SKILL_BUNDLE_ROOT / SKILL_BUNDLE_NAME are the seams; no CI job sets them.
 #
 #   bash .github/scripts/test-package-skill.sh
 

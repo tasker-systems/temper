@@ -123,7 +123,7 @@ fi
 # Tooling, CI, docs, tests, agent skills, the register itself — never forces
 # a move (see orchestrator ruling above)
 INFRA_CHANGED=false
-if changes_match '^(tools|\.github|docs|internal|tests|agent-skills)/|^RELEASE_REGISTER\.md$'; then
+if changes_match '^(tools|\.github|docs|internal|tests|skills)/|^RELEASE_REGISTER\.md$'; then
     INFRA_CHANGED=true
 fi
 

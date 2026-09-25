@@ -3,7 +3,7 @@
 //! Why local, not CI: the rendered index lives in the harness's own config space
 //! (`~/.claude/projects/<project>/memory/`, `~/.config/opencode/memory/`, …) — outside any
 //! repo, and per-machine. `.github/scripts/check-skills-drift.sh` (the sibling gate
-//! for the `agent-skills/` projection) works only because that tree is tracked by git, so CI can
+//! for the `skills/` projection) works only because that tree is tracked by git, so CI can
 //! diff committed-vs-regenerated. There is nothing here for CI to diff; this is a command a
 //! person or a hook runs, and its exit code is the gate (`main.rs` maps `Drifted` to
 //! `std::process::exit(1)`).

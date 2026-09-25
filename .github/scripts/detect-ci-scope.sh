@@ -35,7 +35,7 @@
 # change skipping TypeScript — is deliberately NOT done: ts-rs generates the
 # committed TS types FROM Rust, so a Rust change can move the TypeScript surface.
 # That coupling is exactly what the RUST_COUPLED veto below defends: a manual
-# edit to a generated TS tree, the agent-skills projection, openapi.json, or a
+# edit to a generated TS tree, the skills/ projection, openapi.json, or a
 # wire contract forces the Rust quality gates that regenerate-and-diff them
 # (ts-rs-drift, skills-drift, openapi-check) back ON, even though those files sit
 # under an inert root or look like plain data.
@@ -45,7 +45,7 @@
 # decision, not an omission. Two independent repo invariants forbid it:
 # test-rust selects with `--workspace` and never sub-selects tests
 # (.github/workflows/CLAUDE.md — "a filter that makes CI green is hiding a
-# test"), and the CLI's shared templates RENDER the committed `agent-skills/`
+# test"), and the CLI's shared templates RENDER the committed `skills/`
 # projection gated by skills-drift, so "just a template" is not a leaf change.
 # Feature unification and ts-rs make the crate-level couplings non-obvious; the
 # safe unit is the LANGUAGE boundary, not the crate.
@@ -222,7 +222,7 @@ fi
 #     Inertness proven by grep, per the bar below, not by the directory name:
 #       * no `include_str!`/`include_bytes!` anywhere under `crates/` or `tests/`
 #         names `internal/`. The complete set of paths those macros reach outside
-#         their own crate is agent-skills/, migrations/, schema-artifact/,
+#         their own crate is skills/, migrations/, schema-artifact/,
 #         scripts/install/, scripts/migration-declaration-corpus.txt and VERSION.
 #       * inert to cargo (`members = ["crates/*", "tests/e2e"]`) and to bun (a
 #         two-entry `workspaces` list).
@@ -293,10 +293,10 @@ RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/agent-w
 # measured hole, not a hypothetical:
 #
 #   crates/temper-cli/skill-content/**  — `include_str!`d into `commands/skill.rs`
-#     and rendered into the committed `agent-skills/` projection that skills-drift
+#     and rendered into the committed `skills/` projection that skills-drift
 #     diffs. All `.md`, and sitting under `crates/`, so the one tree where "it's
 #     just markdown" is most obviously wrong is also the one the extension test
-#     most confidently waved through. `agent-skills/` (the RECEIVE side) was
+#     most confidently waved through. `skills/` (the RECEIVE side) was
 #     already here; this is the SEND side, and a gate needs both or it only ever
 #     catches an edit to the copy.
 #   scripts/install/containment-corpus.txt — `include_str!`d by manifest.rs's
@@ -339,7 +339,7 @@ RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/agent-w
 # `assert_every_compiled_in_doc_is_vetoed` in test-detect-ci-scope.sh guards —
 # it derives the set from the source rather than trusting this list to stay
 # complete.
-RUST_COUPLED='^packages/temper-ui/src/lib/types/generated/|^packages/agent-workflows/mention/agent/generated/|^agent-skills/|^openapi\.json$|^tests/contracts/|^crates/temper-cli/skill-content/|^scripts/install/containment-corpus\.txt$|^scripts/migration-declaration-corpus\.txt$|^scripts/personal-data-surface\.txt$|^docs/reference/'
+RUST_COUPLED='^packages/temper-ui/src/lib/types/generated/|^packages/agent-workflows/mention/agent/generated/|^skills/|^openapi\.json$|^tests/contracts/|^crates/temper-cli/skill-content/|^scripts/install/containment-corpus\.txt$|^scripts/migration-declaration-corpus\.txt$|^scripts/personal-data-surface\.txt$|^docs/reference/'
 
 HAS_RUST_COUPLED=false
 if changes_match "$RUST_COUPLED"; then
@@ -503,7 +503,7 @@ fi
 
 # docs_only: at least one doc file AND no non-doc file AND not self-referential
 # AND no Rust-coupled committed artifact. The last clause closes a latent hole:
-# `agent-skills/**` is the committed skill projection and holds *.md files, so a
+# `skills/**` is the committed skill projection and holds *.md files, so a
 # hand-edit to one is all-docs by extension and would otherwise skip the WHOLE
 # pipeline — including the skills-drift gate that owns it, letting the projection
 # drift from its source unnoticed. A RUST_COUPLED touch is never "just docs".

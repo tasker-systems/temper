@@ -82,7 +82,7 @@ Alongside the three CLI archives, each release publishes **one** architecture-in
 
 It is the MCP packaging of the temper skill, uploaded by a user to Claude Desktop / claude.ai via
 **Customize → Skills → +**. Built by the `build-skill-bundle` job from the committed
-`agent-skills/temper-knowledge-base/` tree, attested like every other published artifact, and
+`skills/temper-knowledge-base/` tree, attested like every other published artifact, and
 reproducible locally with `cargo make skill-package`. See
 [connect-claude-desktop.md](../../docs/playbooks/connect-claude-desktop.md) for the user-facing side.
 

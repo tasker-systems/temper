@@ -120,14 +120,14 @@ jobs:
       # agree on every PR, so this is belt-and-braces — but a release is the wrong place to
       # discover that someone pushed to a release branch without re-emitting.
       - name: Re-emit the skill projection
-        run: cargo run -q -p temper-cli -- skill emit --path agent-skills/temper-knowledge-base
+        run: cargo run -q -p temper-cli -- skill emit --path skills/temper-knowledge-base
 
       # A release must not quietly ship a bundle that differs from what reviewers saw on main.
       - name: Fail if the emitted tree differs from what is committed
         run: |
-          if [ -n "$(git status --porcelain -- agent-skills)" ]; then
+          if [ -n "$(git status --porcelain -- skills)" ]; then
             echo "::error::the committed skill tree is stale — re-emit and commit before tagging"
-            git status --porcelain -- agent-skills
+            git status --porcelain -- skills
             exit 1
           fi
 

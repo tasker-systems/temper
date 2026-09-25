@@ -359,7 +359,7 @@ run_test "editing a guard's own test harness runs code-quality too" \
 #
 # The skip is ONE-DIRECTIONAL: a Rust change never skips TypeScript (ts-rs
 # generates TS from Rust), and any edit to a Rust-COUPLED committed artifact
-# (a generated TS tree, agent-skills, openapi.json, a wire contract) VETOES the
+# (a generated TS tree, the skills/ projection, openapi.json, a wire contract) VETOES the
 # skip because a Rust quality gate regenerates-and-diffs it.
 # ---------------------------------------------------------------------------
 
@@ -440,12 +440,12 @@ run_test "openapi.json: VETO, rust corpus runs" \
     "RUN_RUST_QUALITY=true" \
     "RUN_TEST_RUST=true"
 
-# agent-skills/ is the committed projection gated by skills-drift in rust-quality.
+# skills/ is the committed projection gated by skills-drift in rust-quality.
 # Its files are *.md, so without the RUST_COUPLED clause on DOCS_ONLY a hand-edit
 # would be classified docs-only and skip the very gate that owns it — this pins
 # that the coupling defeats the docs-only skip.
-run_test "agent-skills projection (*.md): defeats docs-only, rust corpus runs" \
-    "agent-skills/temper-knowledge-base/SKILL.md" \
+run_test "skills/ projection (*.md): defeats docs-only, rust corpus runs" \
+    "skills/temper-knowledge-base/SKILL.md" \
     "DOCS_ONLY=false" \
     "RUST_INERT=false" \
     "RUN_RUST_QUALITY=true" \
