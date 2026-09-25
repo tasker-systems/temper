@@ -589,7 +589,7 @@ mod tests {
     ///
     /// Keyed on the **bug**, not on a value shape: the invariant is that this route family takes no
     /// path parameter at all, so a future `/api/invitations/{anything}` fails here whatever the
-    /// parameter is called. `temper_telemetry::redact` remains as defence in depth for the case where
+    /// parameter is called. `temper_core::redact` remains as defence in depth for the case where
     /// a credential-bearing path is reintroduced somewhere this test does not reach.
     ///
     /// Asserted against the router-derived structure, not a substring: `{token}` appears inside

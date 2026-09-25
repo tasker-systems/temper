@@ -21,7 +21,9 @@ trap 'rm -rf "$TMP"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 VERSION="9.9.9"
-CRATES=(temperkb-principal temperkb-auth temperkb-telemetry temperkb-core temperkb-workflow temperkb-client)
+# Must match publish-crates.sh's CRATES array — this IS the expected publish
+# sequence case 1 asserts against. (Dev-deps impose no order; see the script.)
+CRATES=(temperkb-principal temperkb-auth temperkb-core temperkb-workflow temperkb-telemetry temperkb-client)
 
 # Stub `cargo`: log every invocation, always succeed. `publish` calls carry
 # `-p <crate>`; the log line is the observable.
@@ -104,10 +106,13 @@ for c in "${CRATES[@]}"; do
     grep -q "crates/$c/versions" "$CALLS_FRESH" \
         || fail "the duplicate probe never ran for $c: $(cat "$CALLS_FRESH")"
 done
-FIRST_PUBLISH=$(line_of "publish -p temperkb-principal" "$CALLS_FRESH")
-LAST_PUBLISH=$(line_of "publish -p temperkb-client" "$CALLS_FRESH")
-[ "$FIRST_PUBLISH" -lt "$LAST_PUBLISH" ] \
-    || fail "the closure published out of dependency order: $(cat "$CALLS_FRESH")"
+# The FULL publish sequence must equal the dependency order — not merely a
+# head-vs-tail spot check. Any permutation that puts a crate before something
+# it regularly depends on fails here.
+PUBLISH_ORDER="$(grep '^cargo publish -p ' "$CALLS_FRESH" | sed 's/^cargo publish -p //' | paste -sd, -)"
+EXPECTED_ORDER="$(IFS=,; echo "${CRATES[*]}")"
+[ "$PUBLISH_ORDER" = "$EXPECTED_ORDER" ] \
+    || fail "the publish sequence departed from dependency order: got [$PUBLISH_ORDER], want [$EXPECTED_ORDER] — call log: $(cat "$CALLS_FRESH")"
 FIRST_CORE_PROBE=$(line_of "crates/temperkb-core/versions" "$CALLS_FRESH")
 [ "$FIRST_CORE_PROBE" -gt "$(line_of 'publish -p temperkb-auth' "$CALLS_FRESH")" ] \
     && [ "$FIRST_CORE_PROBE" -lt "$(line_of 'publish -p temperkb-core' "$CALLS_FRESH")" ] \

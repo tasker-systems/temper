@@ -8,8 +8,8 @@
 #   ./tools/scripts/release/publish-crates.sh VERSION [--dry-run]
 #
 # The closure, at the workspace lockstep version:
-#   temperkb-principal -> temperkb-auth -> temperkb-telemetry -> temperkb-core
-#   -> temperkb-workflow -> temperkb-client
+#   temperkb-principal -> temperkb-auth -> temperkb-core -> temperkb-workflow
+#   -> temperkb-telemetry -> temperkb-client
 #
 # Ordered, and not as style: a published crate's manifest must resolve its
 # dependencies from the REGISTRY (cargo strips the path and keeps the version
@@ -55,8 +55,11 @@ fi
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
-# Dependency order: a crate publishes only after everything it depends on.
-CRATES=(temperkb-principal temperkb-auth temperkb-telemetry temperkb-core temperkb-workflow temperkb-client)
+# Dependency order: a crate publishes only after everything it REGULARLY
+# depends on. (Dev-dependencies impose no order — temperkb-telemetry's are
+# path-only, which resolve locally and survive packing; a versioned dev-dep
+# would resolve from the registry and make the crate unpackageable.)
+CRATES=(temperkb-principal temperkb-auth temperkb-core temperkb-workflow temperkb-telemetry temperkb-client)
 
 echo "==> Publishing the client closure ${VERSION} to crates.io (dry-run: ${DRY_RUN})"
 

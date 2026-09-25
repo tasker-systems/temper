@@ -55,12 +55,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 test-support = ["opentelemetry_sdk/testing"]
 
 [dev-dependencies]
-# `root_span!` expands `::temper_core::redact::redact_path` at the CALL SITE, so the
-# macro's own test invocations (here, in lib.rs and tests/) need temper-core to
-# resolve. A dev-dependency, deliberately: the published crate forces temper-core
-# on no one — only the crates that invoke the macro (api, mcp, client) carry the
-# dependency, and every one of them already had it.
-temperkb-core.workspace = true
+# BOTH dev-deps stay PATH-ONLY, and deliberately not workspace-inherited: a
+# workspace-inherited entry carries a version, and cargo resolves a versioned
+# dev-dependency from the registry when packaging — where this crate's own new
+# version can never exist before its first publish (and temperkb-core's is
+# merely an ordering hazard). Path-only dev-dependencies are ignored by
+# consumers and resolved locally at publish verification, so packing works.
+# `root_span!` expands `::temper_core::redact::redact_path` at the CALL SITE,
+# so the macro's own test invocations need temper-core to resolve. No
+# dependency on temper-core is forced on any CONSUMER of the published crate —
+# dev-dependencies are never resolved for a dependency.
+temperkb-core = { path = "../temper-core" }
 # `flush_budget.rs` drives the async `flush_within_budget` and needs a runtime to block on.
 tokio = { version = "1", features = ["rt", "time", "macros"] }
 # Depend on ourselves to turn our own `test-support` on for our own tests. Without this,
@@ -68,7 +73,7 @@ tokio = { version = "1", features = ["rt", "time", "macros"] }
 # the tests in `tests/` only build because *another* workspace member — tests/e2e — happens to enable
 # the feature, which workspace unification then applies here. That is a real trap: the natural
 # per-crate command is broken while `cargo make test` passes.
-temperkb-telemetry = { workspace = true, features = ["test-support"] }
+temperkb-telemetry = { path = ".", features = ["test-support"] }
 opentelemetry_sdk = { version = "0.32", features = ["testing"] }
 serde_json = "1"
 temp-env = "0.3.6"
