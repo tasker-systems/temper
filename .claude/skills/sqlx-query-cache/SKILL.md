@@ -1,4 +1,6 @@
 ---
+metadata:
+  internal: true
 name: sqlx-query-cache
 description: How compile-time-checked SQL works in this repo and which .sqlx cache to regenerate after changing SQL or schema. Use when adding or editing a sqlx query! macro, changing a migration, or when an offline build fails on a missing/stale query cache entry.
 ---

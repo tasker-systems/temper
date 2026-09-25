@@ -1,4 +1,6 @@
 ---
+metadata:
+  internal: true
 name: temper-design
 description: Use this skill to generate well-branded interfaces and assets for Temper, either for production or throwaway prototypes/mocks/etc. Contains essential design guidelines, colors, type, fonts, assets, and UI kit components for prototyping.
 user-invocable: true

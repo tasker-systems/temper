@@ -1605,7 +1605,7 @@ mod tests {
         use std::collections::BTreeSet;
 
         let skill_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../agent-skills/temper-knowledge-base");
+            .join("../../skills/temper-knowledge-base");
 
         // Walk one level plus `references/`; the bundle is deliberately shallow.
         let mut docs: Vec<(String, String)> = Vec::new();

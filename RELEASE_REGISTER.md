@@ -23,6 +23,20 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.2 — unreleased
+- **The MCP skill projection moves to `skills/temper-knowledge-base/` — the temper-mcp gate's fixture path follows**
+  A distribution change, not a wire change: the committed MCP packaging moves to the
+  skills.sh scanner's priority container dir so `npx skills add tasker-systems/temper`
+  surfaces it (previously the scanner's priority pass satisfied itself on the
+  repo-internal `.claude/skills/` trees and the skill was unreachable). The
+  `every_tool_the_shipped_skill_names_exists_in_the_router` temper-mcp test reads the tree
+  by path; the path moved, the walked file set is byte-identical (git rename at 100%), and
+  the router is untouched. No route, field, schema, or tool surface moves; openapi.json is
+  static.
+pr: self
+classes: behavioral
+surfaces: mcp
+status: signal-only
+
 - **Auto-join enrollment materializes at the standing committer; operator reconcile verb**
   A team flagged `auto_join_role` is an always-complete "everyone pool"
   (migration `20260629000002`'s header), but since the enrollment trigger was dropped

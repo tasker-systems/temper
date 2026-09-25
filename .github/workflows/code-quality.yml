@@ -147,11 +147,11 @@ jobs:
       - name: Check generated TypeScript types are up to date with the Rust (ts-rs drift)
         run: bash .github/scripts/check-ts-rs-drift.sh
 
-      # The same shape one tier up: `agent-skills/` is a committed projection of shared templates,
+      # The same shape one tier up: `skills/` is a committed projection of shared templates,
       # so an edited template with an un-re-emitted tree ships a skill that disagrees with its own
       # source. Hand-maintained, that tree taught doc types temper has never had. Its harness is in
       # the guard-tests job; it runs here because the emit needs cargo.
-      - name: Check the committed agent-skills projection is up to date (skills drift)
+      - name: Check the committed skills/ projection is up to date (skills drift)
         run: bash .github/scripts/check-skills-drift.sh
 
       # And once more for `docs/reference/cli`, which is a projection of the BUILT binary's
