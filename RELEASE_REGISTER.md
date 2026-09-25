@@ -23,6 +23,31 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.2 — unreleased
+- **The MCP search and query tools execute through the network door; a relayed composition is measured once, by the door it arrived on**
+  The `search` and `run_query` MCP tools stop calling the service-direct read path and
+  forward to `POST /api/search` and `POST /api/query` as `temper-client` calls, exactly
+  as the resources family has since the door opened: the caller's bearer re-issued, the
+  service credential and the `mcp` carrier set by the relay, refusals mapped
+  arm-for-arm from the preserved bodies (`PLAN_REFUSED` reconstructed into the tool's
+  every-refusal rendering; the direct methods' `ensure_profile_from_parts` gate deleted
+  whole — Level 1 + 2 execute at the API). Tool names, wire schemas, and tool
+  descriptions are byte-identical. Who observes: an MCP-calling agent, whose one
+  visible change is the degenerate-embedding search refusal — previously wrapped as an
+  internal error, now `invalid_params` carrying the server's own sentence (a declared
+  parity delta, named in the parity suite's header; expired-in-flight, machine-gate,
+  and deactivation arms are unchanged, witnessed through the preserved 401 bodies).
+  Alongside, `/api/query`'s composition-shape measurement skips its `door=http` event
+  when the request arrived relayed (`RelayedSurface` planted by `relay_trust`, which
+  requires the service credential AND the honored carrier): the MCP edge records the
+  same composition as `door=mcp` pre-relay, so one act is measured once by the door it
+  arrived on, and a forged carrier without the credential degrades to measurement, not
+  suppression. openapi.json does not move: no schema, route, or status changes; the new
+  extractor reads a server-side extension, not the wire.
+pr: self
+classes: behavioral
+surfaces: http, mcp
+status: signal-only
+
 - **The MCP skill projection moves to `skills/temper-knowledge-base/` — the temper-mcp gate's fixture path follows**
   A distribution change, not a wire change: the committed MCP packaging moves to the
   skills.sh scanner's priority container dir so `npx skills add tasker-systems/temper`
