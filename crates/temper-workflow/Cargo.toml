@@ -1,7 +1,10 @@
 [package]
 name = "temper-workflow"
-version = "0.5.3"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Doc-type-aware workflow vocabulary for the temper knowledge base: resource rows, frontmatter, schema validation, and the operations command layer"
 
 [dependencies]
 temper-core = { path = "../temper-core" }

@@ -1,7 +1,10 @@
 [package]
 name = "temper-e2e"
+# Never published and never released: the version is a literal placeholder, NOT
+# the workspace lockstep version — inheriting it here would tie e2e's identity
+# to a bump that means nothing to it.
 version = "0.0.0"
-edition = "2021"
+edition.workspace = true
 publish = false
 
 [package.metadata.cargo-machete]

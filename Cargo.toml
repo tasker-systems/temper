@@ -2,11 +2,23 @@
 resolver = "2"
 members = ["crates/*", "tests/e2e"]
 
-[package]
-name = "temper-cloud"
+# Shared package metadata. `version` is the workspace's lockstep version: every
+# member inherits it, so a release bumps exactly one line. The crates published
+# to crates.io (the `temperkb-*` client closure) additionally inherit `license`
+# and `repository`; everything else carries `publish = false` so server-side
+# internals cannot reach the registry by accident.
+[workspace.package]
 version = "0.5.3"
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/tasker-systems/temper"
+
+[package]
+name = "temper-cloud"
+version.workspace = true
+edition.workspace = true
 description = "Vercel deployment adapter for temper-api"
+publish = false
 
 [[bin]]
 name = "axum"

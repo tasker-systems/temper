@@ -1,7 +1,9 @@
 [package]
 name = "temper-principal"
-version = "0.5.3"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "The pure principal-admission and standing-transition machines. No I/O, no database."
 
 # DELIBERATELY EMPTY OF WORKSPACE DEPENDENCIES.

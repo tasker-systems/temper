@@ -1,8 +1,9 @@
 [package]
 name = "temper-cli"
-version = "0.5.3"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 description = "Developer workflow tool for agent-assisted development"
+publish = false
 
 [package.metadata.cargo-machete]
 ignored = ["indicatif"]

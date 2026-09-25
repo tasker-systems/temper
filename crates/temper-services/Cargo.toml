@@ -1,8 +1,9 @@
 [package]
 name = "temper-services"
-version = "0.5.3"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 description = "Shared business-logic + auth-infra layer for temper-api and temper-mcp"
+publish = false
 
 [dependencies]
 temper-auth = { path = "../temper-auth" }

@@ -1,7 +1,9 @@
 [package]
 name = "temper-auth"
-version = "0.5.3"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Shared OAuth2 PKCE mechanics for temper's client and server surfaces"
 
 [dependencies]

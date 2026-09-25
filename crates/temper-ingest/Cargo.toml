@@ -1,8 +1,9 @@
 [package]
 name = "temper-ingest"
-version = "0.5.3"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 description = "Embedding and extraction pipeline for temper knowledge base"
+publish = false
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }

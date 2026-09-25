@@ -1,7 +1,7 @@
 [package]
 name = "temper-migrate"
-version = "0.5.3"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 publish = false
 
 # WHY THIS CRATE EXISTS SEPARATELY FROM temper-substrate
