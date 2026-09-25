@@ -1,53 +1,5 @@
 {
   "$defs": {
-    "ActName": {
-      "anyOf": [
-        {
-          "const": "find-exact",
-          "description": "*I can quote the exact words.*",
-          "type": "string"
-        },
-        {
-          "const": "find-about-anywhere",
-          "description": "*A concept, no exact words; search everything I can see.*",
-          "type": "string"
-        },
-        {
-          "const": "find-about-within",
-          "description": "*A concept, plus a set to search inside.*",
-          "type": "string"
-        },
-        {
-          "const": "find-resources-with",
-          "description": "*I can say what these things ARE; I have no question about what they mean.*\n\nThe only act with no intention — a pure selection. It narrows by what is known about a\nresource and orders nothing, so it SELECTS without SCORING, which is the distinction\n[`ActDeclaration::orders_by`] carries and which the registry's invariants had folded\ntogether under `produces.is_some()` until this act arrived.\n\nIts output is a set to pipe, never rows to read: a stage running it cannot appear in\n`returns`, for the same reason a combinator cannot — rows with no ordering quantity have\nnothing to score them, and the assembler would drop every one while reporting\n`disposition: answered`.",
-          "type": "string"
-        },
-        {
-          "const": "follow-from",
-          "description": "*A found thing; I want its neighbours.*",
-          "type": "string"
-        },
-        {
-          "const": "survey",
-          "description": "*A question about what a scope knows.*",
-          "type": "string"
-        },
-        {
-          "const": "substantiate",
-          "description": "*A claim; I want its defensibility.*",
-          "type": "string"
-        },
-        {
-          "const": "admit",
-          "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
-          "type": "string"
-        },
-        {
-          "type": "string"
-        }
-      ],
-      "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
-    },
     "ActQuantity": {
       "description": "The quantity an act orders its answer by, named so that summing it with another act's reads as\nthe category error it is.\n\nThis is where `no-cross-act-ranking` becomes structural instead of a rule someone remembers.\nResearch [Asking Temper](./019fbd9b-2d28-7530-9da0-4515319d6688), delta 5: *\"Act responses never\nexpose commensurable score fields — no bare `score: f64` shared across acts; each quantity\ncarries its act's name and shape.\"* Arithmetic follows names: two fields called `score` invite\n`a.score + b.score` and no reviewer catches it. The retired `unified_search` is the worked\nfailure — it renamed `fts_norm` and `vec_norm` to `fts_score`/`vector_score` and then summed them\ninto `combined_score`, which is the exact expression the frame register forbids. It was dropped\non 2026-08-06; the body stays readable in the migration history.",
       "properties": {
@@ -295,84 +247,6 @@
           "type": "object"
         }
       ]
-    },
-    "ManagedMeta": {
-      "additionalProperties": false,
-      "description": "Temper-governed **workflow + provenance** metadata for a vault resource.\n\nThis is a **closed, temper-owned vocabulary** of exactly the `KeyFate::Property`\nkeys — optional, smart-defaulted metadata. Identity (`title`/`slug`), type\n(`doc_type_name`), home (`context`/`cogmap`), and relationships (`goal`) are NOT\nmetadata: they are first-class wire fields, never carried here. The Property field\nset is kept in lockstep with `temper_substrate::keys::MANAGED_PROPERTY_KEYS` by the\ndrift-guard in `temper-services/tests/managed_meta_property_drift_test.rs`.\n\nThere is no catch-all — a key not named here is not a managed key. Caller-defined\n(\"bring-your-own\") fields belong in `open_meta`, the free-form tier. Deserialization\nrejects unknown keys (`#[serde(deny_unknown_fields)]`) so a mis-filed key (including a\nformer identity key like `temper-title`) fails loudly at the wire boundary instead of\nsilently migrating tiers.\n\nAll fields use `temper-*` YAML/JSON key names via `serde(rename)`.\n`None` fields are omitted from serialized output.",
-      "properties": {
-        "temper-branch": {
-          "description": "Git branch associated with the task (task only)",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "temper-effort": {
-          "description": "Task effort estimate (task only)",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "temper-llm-model": {
-          "description": "Model that produced this resource",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "temper-llm-run": {
-          "description": "UUIDv7 stamp from a (historical) LLM-assisted run.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "temper-mode": {
-          "description": "Task execution mode (task only)",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "temper-pr": {
-          "description": "Pull request reference (task only)",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "temper-provenance": {
-          "description": "How this resource was created (LLM-discovered or user-created)",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "temper-seq": {
-          "description": "Sequence number for ordering (task/goal)",
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "temper-stage": {
-          "description": "Task workflow stage (task only)",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "temper-status": {
-          "description": "Goal lifecycle status (goal only)",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
     },
     "MatchLocation": {
       "description": "Where in a resource a chunk-grain match landed.",
@@ -838,9 +712,83 @@
           ]
         },
         "managed_meta": {
-          "$ref": "#/$defs/ManagedMeta",
+          "additionalProperties": false,
           "default": {},
-          "description": "Typed managed (`temper-*`) frontmatter — the closed Property vocabulary.\n\n**Not an `Option`.** This is what makes dropping the hoisted `stage`/`mode`/\n`effort`/`seq` columns lossless: the values did not go away, they went home. A\nresource with no managed metadata carries an all-`None` `ManagedMeta`, which\nserializes as `{}` — present and empty, never absent."
+          "description": "Typed managed (`temper-*`) frontmatter — the closed Property vocabulary.\n\n**Not an `Option`.** This is what makes dropping the hoisted `stage`/`mode`/\n`effort`/`seq` columns lossless: the values did not go away, they went home. A\nresource with no managed metadata carries an all-`None` `ManagedMeta`, which\nserializes as `{}` — present and empty, never absent.",
+          "properties": {
+            "temper-branch": {
+              "description": "Git branch associated with the task (task only)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "temper-effort": {
+              "description": "Task effort estimate (task only)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "temper-llm-model": {
+              "description": "Model that produced this resource",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "temper-llm-run": {
+              "description": "UUIDv7 stamp from a (historical) LLM-assisted run.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "temper-mode": {
+              "description": "Task execution mode (task only)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "temper-pr": {
+              "description": "Pull request reference (task only)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "temper-provenance": {
+              "description": "How this resource was created (LLM-discovered or user-created)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "temper-seq": {
+              "description": "Sequence number for ordering (task/goal)",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "temper-stage": {
+              "description": "Task workflow stage (task only)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "temper-status": {
+              "description": "Goal lifecycle status (goal only)",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
         },
         "open_meta": {
           "description": "Open (user-defined) frontmatter — the free-form tier, intentionally untyped.\nAbsent means the `open-meta` section was not requested."
@@ -974,8 +922,19 @@
           "type": "integer"
         },
         "relation": {
-          "$ref": "#/$defs/StageRelation",
-          "description": "Whether this set NARROWED the stage or was REACHED from."
+          "description": "Whether this set NARROWED the stage or was REACHED from.",
+          "oneOf": [
+            {
+              "const": "bound",
+              "description": "Narrow to within this set.",
+              "type": "string"
+            },
+            {
+              "const": "seed",
+              "description": "Grow from this set.",
+              "type": "string"
+            }
+          ]
         },
         "source": {
           "$ref": "#/$defs/InputSource"
@@ -1033,26 +992,56 @@
         }
       ]
     },
-    "StageRelation": {
-      "description": "What the receiving act does with the set it was handed.\n\nDeclared at the CONSUMING stage, never the producing one — the producer emits membership and\nhas no opinion about what the next act does with it.\n\n```text\nbound — narrow to within this set.  Output ⊆ input.\nseed  — grow from this set.         Output ESCAPES input.\n```\n\n**A composition is not monotonically narrowing.** A pipeline may alternate:\n`find-about-anywhere` (fuzzy, wide) → `follow-from` as a SEED (reaches beyond) → `find-exact`\nas a BOUND (narrows again). Any code assuming a stage's output is a subset of its input is\nwrong for half of these.\n\n# Why this is on the wire rather than derived from the act\n\nAcross all seven acts `accepts_bounds` and `accepts_seeds` are DISJOINT, so the relation is\nfully determined by the act and this field can only ever agree with the declaration or be\nrefused. It is carried anyway, for the negative face: a caller who writes `seed` against\n`find-exact` meant something real — *reach beyond these* — and `find-exact` cannot. Deriving\nthe relation from the act would silently execute a NARROWING instead, answering a different\nquestion than the one asked. Refusing tells them what the system cannot do.\n`[decided — 2026-08-08, Pete]`\n\n# The third id set, which is not on this axis\n\nThe visibility verdict is hard, applies to every stage, and is **never expressible here**. It\nis not a `StageRelation` value and must never become one — `query_plan`'s ungated-core call\nfixes it as a non-parameter for exactly that reason.\n\nReplaces the incumbent `BoundsMode`, which sat on the invocation as an `Option` whose\n\"required whenever `input` is present\" invariant was held by prose. That admitted a meaningless\nstate — input present, relation absent — which the validator silently read as `bound`.",
-      "oneOf": [
-        {
-          "const": "bound",
-          "description": "Narrow to within this set.",
-          "type": "string"
-        },
-        {
-          "const": "seed",
-          "description": "Grow from this set.",
-          "type": "string"
-        }
-      ]
-    },
     "StageResult": {
       "description": "One returned stage's answer.\n\nNeither `PartialEq` nor `Eq`, unlike its neighbours here: it holds hydrated rows, and\n[`crate::types::resource_view::ResourceView`] derives neither while the quantities are floats.\nThe tests below compare the SERIALIZED form instead, which is what a client actually observes\nand is the stronger assertion anyway — a field that fails to serialize is invisible to\nstructural equality.\n\n`[renamed from StageResult — 2026-08-08]` A stage runs one act, but the thing being described is\nthe STAGE — it is keyed by the caller's stage name, and its numbers are about the set that\nstage was handed. Naming it for the act invited exactly the ordinal-keyed trace this reshape\nalso removed.",
       "properties": {
         "act": {
-          "$ref": "#/$defs/ActName"
+          "anyOf": [
+            {
+              "const": "find-exact",
+              "description": "*I can quote the exact words.*",
+              "type": "string"
+            },
+            {
+              "const": "find-about-anywhere",
+              "description": "*A concept, no exact words; search everything I can see.*",
+              "type": "string"
+            },
+            {
+              "const": "find-about-within",
+              "description": "*A concept, plus a set to search inside.*",
+              "type": "string"
+            },
+            {
+              "const": "find-resources-with",
+              "description": "*I can say what these things ARE; I have no question about what they mean.*\n\nThe only act with no intention — a pure selection. It narrows by what is known about a\nresource and orders nothing, so it SELECTS without SCORING, which is the distinction\n[`ActDeclaration::orders_by`] carries and which the registry's invariants had folded\ntogether under `produces.is_some()` until this act arrived.\n\nIts output is a set to pipe, never rows to read: a stage running it cannot appear in\n`returns`, for the same reason a combinator cannot — rows with no ordering quantity have\nnothing to score them, and the assembler would drop every one while reporting\n`disposition: answered`.",
+              "type": "string"
+            },
+            {
+              "const": "follow-from",
+              "description": "*A found thing; I want its neighbours.*",
+              "type": "string"
+            },
+            {
+              "const": "survey",
+              "description": "*A question about what a scope knows.*",
+              "type": "string"
+            },
+            {
+              "const": "substantiate",
+              "description": "*A claim; I want its defensibility.*",
+              "type": "string"
+            },
+            {
+              "const": "admit",
+              "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
+              "type": "string"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
         },
         "disclosed_regions": {
           "default": [],
@@ -1144,7 +1133,52 @@
       "description": "One stage's mandatory disclosure. Exists whether or not the stage produced a result.\n\n**`Eq` was dropped when `disclosed_regions` arrived** `[2026-08-20]`. `region_score` is an `f64`\ncarried raw and un-normalized — see [`super::hits::RegionDisclosure`] for why — so this type is\n`PartialEq` and cannot be `Eq`.\nNothing used it as a set or map key. [`super::envelope::StageResult`] never derived either.",
       "properties": {
         "act": {
-          "$ref": "#/$defs/ActName"
+          "anyOf": [
+            {
+              "const": "find-exact",
+              "description": "*I can quote the exact words.*",
+              "type": "string"
+            },
+            {
+              "const": "find-about-anywhere",
+              "description": "*A concept, no exact words; search everything I can see.*",
+              "type": "string"
+            },
+            {
+              "const": "find-about-within",
+              "description": "*A concept, plus a set to search inside.*",
+              "type": "string"
+            },
+            {
+              "const": "find-resources-with",
+              "description": "*I can say what these things ARE; I have no question about what they mean.*\n\nThe only act with no intention — a pure selection. It narrows by what is known about a\nresource and orders nothing, so it SELECTS without SCORING, which is the distinction\n[`ActDeclaration::orders_by`] carries and which the registry's invariants had folded\ntogether under `produces.is_some()` until this act arrived.\n\nIts output is a set to pipe, never rows to read: a stage running it cannot appear in\n`returns`, for the same reason a combinator cannot — rows with no ordering quantity have\nnothing to score them, and the assembler would drop every one while reporting\n`disposition: answered`.",
+              "type": "string"
+            },
+            {
+              "const": "follow-from",
+              "description": "*A found thing; I want its neighbours.*",
+              "type": "string"
+            },
+            {
+              "const": "survey",
+              "description": "*A question about what a scope knows.*",
+              "type": "string"
+            },
+            {
+              "const": "substantiate",
+              "description": "*A claim; I want its defensibility.*",
+              "type": "string"
+            },
+            {
+              "const": "admit",
+              "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
+              "type": "string"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
         },
         "disclosed_regions": {
           "default": [],

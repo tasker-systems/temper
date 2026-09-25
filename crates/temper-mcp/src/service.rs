@@ -1533,25 +1533,32 @@ mod tests {
             .input_schema;
         let schema = serde_json::to_value(&*advertised).expect("input schema serializes");
 
-        // The wrapper `$ref`s `Composition` into `$defs`, so the ceilings live under the DEFS —
-        // reaching them through the advertised object is the whole point of this test.
+        // Declarations are self-contained (no `$ref`, no `$defs` on the wire), so the ceilings
+        // now live INLINE under the advertised object — reaching them where a client reads them
+        // is the whole point of this test. The pointer walks one `stages` item's `anyOf` arm
+        // (StageNode is untagged) and StageInput's `oneOf` caller arm; a wire-form change moves
+        // these, and the panic below names the pointer that went missing.
+        let stage = "/properties/plan/properties/stages/items/anyOf/0";
         for (pointer, expected) in [
-            ("/$defs/Composition/properties/stages/maxItems", MAX_STAGES),
+            ("/properties/plan/properties/stages/maxItems", MAX_STAGES),
             (
-                "/$defs/Intention/properties/query/maxLength",
+                &format!("{stage}/properties/intention/properties/query/maxLength"),
                 MAX_INTENTION_QUERY_BYTES,
             ),
-            ("/$defs/IdSet/properties/ids/maxItems", MAX_ID_SET_IDS),
             (
-                "/$defs/ResourceFilter/properties/doc_type/maxItems",
+                &format!("{stage}/properties/inputs/items/oneOf/0/properties/ids/properties/ids/maxItems"),
+                MAX_ID_SET_IDS,
+            ),
+            (
+                &format!("{stage}/properties/resource_filter/properties/doc_type/maxItems"),
                 MAX_FILTER_VALUES,
             ),
             (
-                "/$defs/ResourceFilter/properties/tags/maxItems",
+                &format!("{stage}/properties/resource_filter/properties/tags/maxItems"),
                 MAX_FILTER_VALUES,
             ),
             (
-                "/$defs/EdgeFilter/properties/labels/maxItems",
+                &format!("{stage}/properties/edge_filter/properties/labels/maxItems"),
                 MAX_FILTER_VALUES,
             ),
         ] {

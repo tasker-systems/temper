@@ -113,6 +113,7 @@ impl From<StageName> for String {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 #[serde(rename_all = "snake_case")]
 pub enum StageRelation {
     /// Narrow to within this set.
@@ -134,6 +135,7 @@ pub enum StageRelation {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 #[serde(rename_all = "snake_case", tag = "from")]
 pub enum StageInput {
     /// A literal id set the caller supplied — the incumbent `bounds` case, now one input variant.

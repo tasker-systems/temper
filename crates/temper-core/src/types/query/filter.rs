@@ -33,6 +33,7 @@ use crate::types::graph::EdgeKind;
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct EdgeFilter {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edge_kinds: Vec<EdgeKind>,
@@ -63,6 +64,7 @@ pub struct EdgeFilter {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct FacetPredicate {
     pub key: String,
     pub value: String,
@@ -87,6 +89,7 @@ pub struct FacetPredicate {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct ResourceFilter {
     /// `kb_properties` where `property_key = 'doc_type'`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -151,6 +154,7 @@ pub enum FilterField {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 #[serde(rename_all = "snake_case", tag = "op")]
 pub enum PropertyOp {
     /// The key is present at all. A row-existence check on the `property_key` btree — NOT a jsonb
@@ -220,6 +224,7 @@ pub enum PropertyOp {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 #[serde(rename_all = "snake_case")]
 pub enum OrdOp {
     Gt,
@@ -244,6 +249,7 @@ pub enum OrdOp {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct PropertyPredicate {
     pub key: String,
     pub op: PropertyOp,

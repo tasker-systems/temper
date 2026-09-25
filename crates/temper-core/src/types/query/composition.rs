@@ -45,6 +45,7 @@ use crate::types::resource_view::ResourceSection;
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct Intention {
     /// The question, in the caller's own words.
     ///
@@ -108,6 +109,7 @@ pub struct Intention {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct ReturnSpec {
     pub stage: StageName,
     /// Which sections to hydrate onto each row, in the SAME vocabulary `temper resource show
@@ -146,6 +148,7 @@ impl ReturnSpec {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct OutcomeDeclaration {
     // There is deliberately no `description`. It was a required prose string — "a composition's
     // pocket outcome register" — which is goal-authoring discipline leaked into a wire contract.
@@ -184,6 +187,7 @@ pub struct OutcomeDeclaration {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 #[serde(rename_all = "snake_case")]
 pub enum CombineOp {
     Union,
@@ -213,6 +217,7 @@ impl CombineOp {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct CombineNode {
     pub name: StageName,
     pub op: CombineOp,
@@ -259,6 +264,7 @@ pub struct CombineNode {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 // Untagged so a plan's JSON reads naturally, with no synthetic node-kind discriminator. The two
 // variants are unambiguous: a `CombineNode` carries `op`, an `ActInvocation` carries `act`.
 #[serde(untagged)]
@@ -311,6 +317,7 @@ impl StageNode {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct Composition {
     pub outcome: OutcomeDeclaration,
     // There is deliberately no `intention` here — it moved onto each `ActInvocation`
