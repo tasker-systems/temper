@@ -44,7 +44,7 @@ set -euo pipefail
 : "${VERSION:?VERSION required (e.g. VERSION=0.2.7)}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-BUNDLE_ROOT="${SKILL_BUNDLE_ROOT:-${REPO_ROOT}/agent-skills}"
+BUNDLE_ROOT="${SKILL_BUNDLE_ROOT:-${REPO_ROOT}/skills}"
 BUNDLE_NAME="${SKILL_BUNDLE_NAME:-temper-knowledge-base}"
 OUT_DIR="${1:-${REPO_ROOT}/dist}"
 

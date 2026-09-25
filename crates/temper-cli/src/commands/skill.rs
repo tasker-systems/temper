@@ -17,7 +17,7 @@ use crate::templates::{
 // ── Surfaces ─────────────────────────────────────────────────────────────────
 
 /// The two packagings of the same discipline. `cli` ships to `~/.claude/skills/temper/` and speaks
-/// `temper …` commands; `mcp` is the committed `agent-skills/` projection and speaks tool calls.
+/// `temper …` commands; `mcp` is the committed `skills/` projection and speaks tool calls.
 ///
 /// They exist as one template set because the discipline is about outcomes and grounding, which are
 /// surface-independent by design — only the worked examples differ. Two hand-maintained copies of
@@ -30,7 +30,7 @@ pub const SURFACE_MCP: &str = "mcp";
 ///
 /// askama strips a single trailing newline from the template file, so a template that ends the way
 /// every other file in this tree ends renders one byte short. That is invisible until something
-/// compares the render against a file on disk — which is exactly what the `agent-skills` drift gate
+/// compares the render against a file on disk — which is exactly what the `skills/` drift gate
 /// does, where it would read as permanent, uncloseable drift. Normalising here rather than padding
 /// the template keeps the fix where a reader will find it.
 fn render_md<T: Template>(template: &T) -> Result<String> {
@@ -103,7 +103,7 @@ static PROJECT_SETUP_MD: &str = include_str!("../../skill-content/project-setup.
 /// Gated at install time rather than templated per-user: the content itself is static.
 static ADMIN_MD: &str = include_str!("../../skill-content/admin.md");
 static KNOWLEDGE_BASE_MD: &str =
-    include_str!("../../../../agent-skills/temper-knowledge-base/knowledge-base.md");
+    include_str!("../../../../skills/temper-knowledge-base/knowledge-base.md");
 static WF_BUILD_SMALL: &str = include_str!("../../skill-content/workflows/build-small.md");
 static WF_BUILD_MEDIUM: &str = include_str!("../../skill-content/workflows/build-medium.md");
 static WF_BUILD_LARGE: &str = include_str!("../../skill-content/workflows/build-large.md");
@@ -856,7 +856,7 @@ pub fn generate(_config: &Config, include_admin: bool) -> Result<String> {
 
 // ── The MCP surface: a committed projection ──────────────────────────────────
 
-/// Generate the `agent-skills/` tree as a map of relative_path → content.
+/// Generate the `skills/` projection tree as a map of relative_path → content.
 ///
 /// **Config-free, and that is the whole reason this tree can be committed.** The CLI skill bakes a
 /// per-user context list into its router, so its rendered form is one developer's and could never be
@@ -915,7 +915,7 @@ pub fn generate_agent_skill_files() -> Result<HashMap<String, String>> {
     Ok(files)
 }
 
-/// Write the generated `agent-skills/` tree into `dir`, returning the relative paths written.
+/// Write the generated `skills/` projection tree into `dir`, returning the relative paths written.
 ///
 /// Every write goes through `write_if_changed`, so re-emitting an up-to-date tree touches no mtimes
 /// — which is what lets the drift gate run this unconditionally and read `git status` afterwards.

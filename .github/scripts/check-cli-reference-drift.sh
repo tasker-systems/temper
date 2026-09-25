@@ -36,7 +36,7 @@
 #
 # ## Reachability
 #
-# `docs/reference/` is in detect-ci-scope.sh's RUST_COUPLED for the same reason `agent-skills/` is:
+# `docs/reference/` is in detect-ci-scope.sh's RUST_COUPLED for the same reason `skills/` is:
 # it is markdown, so it would otherwise scope as docs-only, and a docs-only change turns
 # rust-quality OFF — leaving a hand-edit to a generated tree with nothing to catch it. Only the Rust
 # toolchain can verify this tree, so a change to it must summon that toolchain.

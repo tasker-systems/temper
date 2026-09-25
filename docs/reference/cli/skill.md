@@ -13,7 +13,7 @@ Commands:
   generate  Generate skill content (preview to stdout)
   install   Install skill directory and command wrapper
   check     Check skill status
-  emit      Emit the MCP (`agent-skills/`) projection into a directory
+  emit      Emit the MCP (`skills/`) projection into a directory
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -117,7 +117,7 @@ Options:
 ### `temper skill emit`
 
 ```text
-Emit the MCP (`agent-skills/`) projection into a directory.
+Emit the MCP (`skills/`) projection into a directory.
 
 Config-free by construction — unlike `install`, this reads no config and bakes in no per-user state, which is what makes the emitted tree committable and pinnable by a drift gate. Writes only the generated files; hand-written siblings in the directory are untouched.
 
@@ -125,7 +125,7 @@ Usage: temper skill emit [OPTIONS] --path <PATH>
 
 Options:
       --path <PATH>
-          Directory to write the tree into (e.g. `agent-skills`)
+          Directory to write the tree into (e.g. `skills/temper-knowledge-base`)
 
       --vault <VAULT>
           Path to vault (overrides TEMPER_VAULT and auto-detection)

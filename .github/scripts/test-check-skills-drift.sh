@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # .github/scripts/test-check-skills-drift.sh
 #
-# Test harness for check-skills-drift.sh — the agent-skills projection drift gate.
+# Test harness for check-skills-drift.sh — the skills/ projection drift gate.
 #
 # The gate's whole value is that it FAILS when the committed projection stops matching what the
 # templates emit. Nothing about a passing gate distinguishes "the tree is in step" from "this script
@@ -34,10 +34,10 @@ trap 'rm -rf "$WORK"' EXIT
 make_repo() {
     local root="$1"
     rm -rf "$root"
-    mkdir -p "$root/agent-skills/temper-knowledge-base/references"
-    echo "# skill" >"$root/agent-skills/temper-knowledge-base/SKILL.md"
-    echo "# frontmatter" >"$root/agent-skills/temper-knowledge-base/references/frontmatter.md"
-    echo "# hand-written tool reference" >"$root/agent-skills/temper-knowledge-base/knowledge-base.md"
+    mkdir -p "$root/skills/temper-knowledge-base/references"
+    echo "# skill" >"$root/skills/temper-knowledge-base/SKILL.md"
+    echo "# frontmatter" >"$root/skills/temper-knowledge-base/references/frontmatter.md"
+    echo "# hand-written tool reference" >"$root/skills/temper-knowledge-base/knowledge-base.md"
     git -C "$root" init -q
     git -C "$root" config user.email t@t.invalid
     git -C "$root" config user.name t
@@ -47,7 +47,7 @@ make_repo() {
 
 # A stub emit that reproduces the committed tree — the shape of a clean run. Takes the repo root.
 clean_emit() {
-    echo "printf '# skill\n' > $1/agent-skills/temper-knowledge-base/SKILL.md; echo 'Emitted 2 agent-skill files'"
+    echo "printf '# skill\n' > $1/skills/temper-knowledge-base/SKILL.md; echo 'Emitted 2 skill files'"
 }
 
 # run_case NAME REPO EMIT_CMD EXPECTED_EXIT [EXPECTED_SUBSTRING]
@@ -88,7 +88,7 @@ run_case "clean tree passes" "$WORK/a" "$(clean_emit "$WORK/a")" 0
 #     the templates emit. This is the template-edited-but-tree-not-re-emitted case.
 make_repo "$WORK/b"
 run_case "MODIFIED generated file fails" "$WORK/b" \
-    "echo '# skill CHANGED' > $WORK/b/agent-skills/temper-knowledge-base/SKILL.md; echo 'Emitted 2 agent-skill files'" \
+    "echo '# skill CHANGED' > $WORK/b/skills/temper-knowledge-base/SKILL.md; echo 'Emitted 2 skill files'" \
     1 "out of date"
 
 # (c) The case a plain `git diff --exit-code` MISSES, and the reason this gate uses `git status`.
@@ -97,20 +97,20 @@ run_case "MODIFIED generated file fails" "$WORK/b" \
 #     without a file its own router names.
 make_repo "$WORK/c"
 run_case "UNTRACKED new generated file fails" "$WORK/c" \
-    "echo '# teams' > $WORK/c/agent-skills/temper-knowledge-base/teams.md; echo 'Emitted 3 agent-skill files'" \
+    "echo '# teams' > $WORK/c/skills/temper-knowledge-base/teams.md; echo 'Emitted 3 skill files'" \
     1 "out of date"
 
 # (d) A deleted generated file is drift too — a file the router still names but nothing emits.
 make_repo "$WORK/d"
 run_case "DELETED generated file fails" "$WORK/d" \
-    "rm $WORK/d/agent-skills/temper-knowledge-base/references/frontmatter.md; echo 'Emitted 1 agent-skill files'" \
+    "rm $WORK/d/skills/temper-knowledge-base/references/frontmatter.md; echo 'Emitted 1 skill files'" \
     1 "out of date"
 
 # (e) THE LOAD-BEARING CASE: a tree that exists but has nothing tracked in it. `git status` over an
 #     untracked path is silent, so without an explicit tracked-check the gate would pass forever
 #     while checking nothing — green, and blind.
 make_repo "$WORK/e"
-git -C "$WORK/e" rm -q -r --cached agent-skills/temper-knowledge-base
+git -C "$WORK/e" rm -q -r --cached skills/temper-knowledge-base
 git -C "$WORK/e" commit -qm "untrack the tree"
 run_case "a tree with nothing tracked fails loudly" "$WORK/e" "$(clean_emit "$WORK/e")" \
     1 "nothing to diff against"
@@ -119,7 +119,7 @@ run_case "a tree with nothing tracked fails loudly" "$WORK/e" "$(clean_emit "$WO
 #     would be clean and the gate green, having compared nothing — the most dangerous green
 #     available, because it is indistinguishable from a real pass.
 make_repo "$WORK/f"
-run_case "an emit that writes NOTHING fails" "$WORK/f" "echo 'Emitted 0 agent-skill files'" \
+run_case "an emit that writes NOTHING fails" "$WORK/f" "echo 'Emitted 0 skill files'" \
     1 "reported no files written"
 
 # (g) ...and so must an emit whose report this gate can no longer read. If the emit's output changes
@@ -128,7 +128,7 @@ run_case "an emit that writes NOTHING fails" "$WORK/f" "echo 'Emitted 0 agent-sk
 #     clean and the ONLY thing standing between this and a false green is the count check.
 make_repo "$WORK/g"
 run_case "an unreadable emit report fails rather than passing" "$WORK/g" \
-    "printf '# skill\n' > $WORK/g/agent-skills/temper-knowledge-base/SKILL.md; echo 'wrote some files, who knows how many'" \
+    "printf '# skill\n' > $WORK/g/skills/temper-knowledge-base/SKILL.md; echo 'wrote some files, who knows how many'" \
     1 "reported no files written"
 
 # (h) A FAILING emit must fail the gate. The emit is a cargo build, and the most ordinary way for it
