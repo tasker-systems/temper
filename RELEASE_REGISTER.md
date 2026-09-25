@@ -512,6 +512,28 @@ classes: additive, behavioral
 surfaces: mcp
 status: signal-only
 
+- **The client closure becomes registry-consumable — the six crates publish as `temperkb-*` from CI**
+  A distribution change, not a wire change: the published-side package names of
+  `temper-core`, `-client`, `-principal`, `-workflow`, `-auth`, and `-telemetry`
+  move to the `temperkb-` prefix (crates.io's `temper` and `temper-core` are
+  unrelated projects), while every LIBRARY keeps its `temper_*` name via an
+  explicit `[lib] name`, so no `use temper_core::…` — in this workspace or in a
+  downstream consumer — moves. The internal manifests gain no dependency edge:
+  path dependencies are rewritten to the new keys with the same paths, feature
+  forwards follow, and all 16 members inherit the workspace lockstep version
+  (one line per release bump). Server-side internals are locked out of the
+  registry by an explicit `publish = false` rather than by the absence of a
+  publish step. Who observes it: a Rust consumer outside this monorepo — first,
+  an external Tauri app — resolves `temperkb-client` and its closure from
+  crates.io at semver, the Rust counterpart of the existing PyPI/npm/RubyGems
+  lanes; nothing that talks to a deployed temper changes a byte.
+  Release-relevant as the enabling change for the crates.io lane in the release
+  workflow.
+pr: self
+classes: additive
+surfaces: clients, internal
+status: signal-only
+
 ## Shipped in v0.5.2
 
 - **This release — the 0.5.2 fleet alignment: VERSION 0.5.1 → 0.5.2 across crates, packages, and clients**

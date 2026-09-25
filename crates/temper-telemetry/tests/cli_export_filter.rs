@@ -20,7 +20,7 @@
 //! Same reason `crates/temper-api/tests/telemetry_link_test.rs` gives: the provider is a process-global
 //! `OnceLock` and installs once. nextest gives each test its own process and `cargo test` does not, so
 //! separate `#[test]` functions each installing a provider pass under the runner this repo uses and fail
-//! under the one someone reaches for by hand (`cargo test -p temper-telemetry`). A gate that silently
+//! under the one someone reaches for by hand (`cargo test -p temperkb-telemetry`). A gate that silently
 //! degrades depending on the runner is worse than one that is simply longer to read.
 
 use opentelemetry_sdk::trace::InMemorySpanExporter;

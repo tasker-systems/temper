@@ -21,7 +21,7 @@
 //! then into the generated CLI reference, which would be documenting the
 //! machinery that documents it.
 //!
-//!   cargo run -q -p temper-core --features config-schema --example config-reference
+//!   cargo run -q -p temperkb-core --features config-schema --example config-reference
 
 use temper_core::types::config::TemperConfig;
 

@@ -1,20 +1,21 @@
 [package]
 name = "temper-services"
-version = "0.5.3"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 description = "Shared business-logic + auth-infra layer for temper-api and temper-mcp"
+publish = false
 
 [dependencies]
-temper-auth = { path = "../temper-auth" }
-temper-core = { path = "../temper-core", features = ["web-api"] }
+temperkb-auth.workspace = true
+temperkb-core = { workspace = true, features = ["web-api"] }
 # `sanitize_echoed_path` — the fallback handler must run the same path redaction the
 # request root spans do (both crates already depend on temper-telemetry in every binary
 # that links this one, so this adds no new code to the graph).
-temper-telemetry = { path = "../temper-telemetry" }
+temperkb-telemetry.workspace = true
 # `#[act_span]` — the one declaration of the act-grain span field set that `ACT_SPAN_FIELDS` names.
 temper-macros = { path = "../temper-macros" }
-temper-principal = { path = "../temper-principal" }
-temper-workflow = { path = "../temper-workflow", features = ["web-api"] }
+temperkb-principal.workspace = true
+temperkb-workflow = { workspace = true, features = ["web-api"] }
 temper-substrate = { path = "../temper-substrate" }
 # Re-exported as `temper_services::MIGRATOR` for `#[sqlx::test(migrator = ...)]`.
 temper-migrate = { path = "../temper-migrate" }
@@ -95,7 +96,7 @@ tracing-subscriber = "0.3"
 # exporter + the test provider (`test-support`), and `SpanKind` to locate the request root by kind
 # rather than by a name that has changed before. Same three temper-api's telemetry tests carry, at
 # the same versions — these must move together or the two suites disagree about what a span is.
-temper-telemetry = { path = "../temper-telemetry", features = ["test-support"] }
+temperkb-telemetry = { workspace = true, features = ["test-support"] }
 opentelemetry_sdk = { version = "0.32", features = ["testing"] }
 opentelemetry = "0.32"
 serde_yaml = "0.9"

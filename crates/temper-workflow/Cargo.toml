@@ -1,10 +1,18 @@
+# Published to crates.io as `temperkb-workflow`; the LIBRARY keeps the
+# `temper_workflow` name (see temperkb-core's manifest for the convention).
 [package]
-name = "temper-workflow"
-version = "0.5.3"
-edition = "2021"
+name = "temperkb-workflow"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Doc-type-aware workflow vocabulary for the temper knowledge base: resource rows, frontmatter, schema validation, and the operations command layer"
+
+[lib]
+name = "temper_workflow"
 
 [dependencies]
-temper-core = { path = "../temper-core" }
+temperkb-core.workspace = true
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 jsonschema = "0.45"
@@ -23,6 +31,6 @@ utoipa = { version = "5", features = ["uuid"], optional = true }
 tempfile = "3"
 
 [features]
-mcp = ["schemars", "temper-core/mcp"]
-typescript = ["ts-rs", "temper-core/typescript"]
-web-api = ["utoipa", "utoipa/chrono", "temper-core/web-api"]
+mcp = ["schemars", "temperkb-core/mcp"]
+typescript = ["ts-rs", "temperkb-core/typescript"]
+web-api = ["utoipa", "utoipa/chrono", "temperkb-core/web-api"]
