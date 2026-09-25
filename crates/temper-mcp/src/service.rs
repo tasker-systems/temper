@@ -457,8 +457,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::api::SearchParams>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::search::search(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::search::search(self, &parts, input).await
     }
 
     #[tool(
@@ -469,8 +470,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::query::QueryInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::query::run_query(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::query::run_query(self, &parts, input).await
     }
 
     // ── Trail (unchanged) ──────────────────────────────────────────────
@@ -1812,7 +1814,8 @@ mod tests {
     ///   call `ensure_profile_from_parts` before dispatching — Level 1 + 2 run HERE, in
     ///   the MCP function. A method that skips it compiles fine and is advertised by the
     ///   router; it just runs unauthenticated, silently.
-    /// - **Network-door families** (dispatching to `tools::resources::`) call
+    /// - **Network-door families** (resources, search + query so far; every family on
+    ///   the register's migration order eventually) call
     ///   `svc.relay_client(parts)` and the API's own auth middleware performs Level 1 + 2
     ///   on the caller's bearer — running the seam at the MCP function too would be the
     ///   duplicate-resolution the door exists to remove, and the post-edge refusals are
@@ -1861,7 +1864,21 @@ mod tests {
         let mut missing: Vec<String> = Vec::new();
         for segment in &tool_segments {
             let direct_gate = segment.contains("ensure_profile_from_parts");
-            let network_door = segment.contains("tools::resources::");
+            // The families that have crossed the network door dispatch through their
+            // tools module HANDING IT THE PARTS — `tools::<family>::<name>(self,
+            // &parts, ...)`. A bare `tools::` match is satisfied by the input TYPE
+            // alone (`Parameters<tools::query::QueryInput>` names the family in the
+            // signature), which the bite probe exploited: a method with neither gate
+            // nor dispatch passed the old arm. The `(self, &parts` call shape is the
+            // discriminator — parts exist on the dispatch path to be forwarded.
+            //
+            // This is a source-scraping TRIPWIRE, not a control: the two substrings
+            // match independently, so a future method whose body hands `&parts` to a
+            // local helper (not a door dispatch) satisfies the arm while running
+            // unauthenticated at Level 2 (transport Level 1 still runs at the edge).
+            // Named so the next widening tightens the discriminator instead of
+            // compounding the heuristic.
+            let network_door = segment.contains("tools::") && segment.contains("(self, &parts");
             if !direct_gate && !network_door {
                 let fn_name = segment
                     .split("async fn ")
@@ -1870,8 +1887,8 @@ mod tests {
                     .unwrap_or("<unknown>")
                     .trim();
                 missing.push(format!(
-                    "{fn_name} (neither `ensure_profile_from_parts` nor a `tools::resources::` \
-                     network-door dispatch)"
+                    "{fn_name} (neither `ensure_profile_from_parts` nor a network-door \
+                     dispatch — a `tools::<family>::` call handing it `&parts`)"
                 ));
             }
         }
@@ -1880,7 +1897,7 @@ mod tests {
             missing.is_empty(),
             "these #[tool] methods authenticate under neither binding — every tool must \
              either gate directly (ensure_profile_from_parts) or cross the network door \
-             (tools::resources::, whose gate runs at the API):\n  {}\n\
+             (a `tools::<family>::` dispatch whose gate runs at the API):\n  {}\n\
              A tool satisfying neither arm runs unauthenticated or half-migrated.",
             missing.join("\n  ")
         );

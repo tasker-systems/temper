@@ -1,10 +1,11 @@
 //! Query tool — the MCP door onto the composition contract.
 //!
-//! One tool taking a whole `Composition` as its input, calling the same service-direct read path
-//! the API handler calls (`query_read::prepare` → `run_composition`). The composition schema IS
-//! the tool's input schema — every struct already carries `#[cfg_attr(feature = "mcp",
-//! derive(schemars::JsonSchema))]`, so the vocabulary an agent needs to compose is the schema it
-//! reads, not a second description of it.
+//! One tool taking a whole `Composition` as its input, forwarded to `POST /api/query`
+//! through the network door (beat G3b) — the same route, shape-gate, embed, and
+//! validate pipeline the HTTP door serves, on the caller's own bearer. The composition
+//! schema IS the tool's input schema — every struct already carries
+//! `#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]`, so the vocabulary an
+//! agent needs to compose is the schema it reads, not a second description of it.
 //!
 //! # The door, declared
 //!
@@ -39,13 +40,11 @@ use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use temper_core::types::ids::ProfileId;
+use temper_client::error::ClientError;
 use temper_core::types::query::composition::CompositionShape;
 use temper_core::types::query::Composition;
-use temper_services::backend::query_read;
-use temper_services::error::ApiError;
 
-use crate::service::TemperMcpService;
+use crate::service::{AcrossAuth, TemperMcpService};
 
 /// MCP input for `run_query`: a composition plan and a trace flag.
 ///
@@ -84,24 +83,28 @@ fn default_trace() -> bool {
 /// and its reason — so the plan can be repaired in one round trip, not one refusal per call.
 pub async fn run_query(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: QueryInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-
-    // Before validation, for the reason `CompositionShape` carries. The `mcp` door is measured
-    // separately from `http` because `embeddings_supplied` is structurally zero here — this door
-    // cannot run the model, which is why the server embeds on its behalf — so any bound on what
-    // the server must embed binds this door alone, and its distribution is the one that decides it.
+    // The client is constructed BEFORE the act measures: an arrival with no bearer, or a
+    // deployment missing its relay config, is refused by the constructor and never enters
+    // the distribution — the direct binding's `require_profile`-first ordering excluded
+    // unauthenticated arrivals the same way. Measuring before the send (not after) keeps
+    // the property `CompositionShape` requires: the act is counted before the server
+    // decides whether to answer it. The `mcp` door is measured separately from `http`
+    // because `embeddings_supplied` is structurally zero here — this door cannot run the
+    // model, which is why the server embeds on its behalf — so any bound on what the
+    // server must embed binds this door alone, and its distribution is the one that
+    // decides it. The API skips its own `door=http` event when the act arrives relayed,
+    // so one act measures once, on the door it arrived on.
+    let client = svc.relay_client(parts)?;
     CompositionShape::of(&input.plan).record("mcp");
 
-    let validated = query_read::prepare(input.plan)
+    let response = client
+        .query()
+        .run(&input.plan)
         .await
-        .map_err(|refusals| map_query_error("run_query", ApiError::PlanRefused { refusals }))?;
-
-    let response =
-        query_read::run_composition(&svc.api_state.pool, ProfileId::from(profile.id), &validated)
-            .await
-            .map_err(|e| map_query_error("run_query", e))?;
+        .across_auth(|e| map_query_error("run_query", e))?;
 
     let body = if input.trace {
         serde_json::to_string_pretty(&response).unwrap_or_else(|_| "{}".to_string())
@@ -126,13 +129,16 @@ pub async fn run_query(
 /// Map a query-path error onto an MCP error.
 ///
 /// `PlanRefused` is the one error shape this door produces that an agent can act on: it carries
-/// every static refusal, each naming its stage and reason. Rendering it as `invalid_params` with
-/// the joined refusal details lets the agent repair the plan in one round trip — the same care
-/// `contexts.rs::map_api_error` gives `BadRequest`, because `PlanRefused` IS a `BadRequest` variant
-/// at the HTTP layer. Everything else stays opaque, matching the established pattern.
-fn map_query_error(context: &str, err: ApiError) -> rmcp::ErrorData {
+/// every static refusal, each naming its stage and reason. The 400 arrives under the wire code
+/// `PLAN_REFUSED` and temper-client reconstructs the refusal list
+/// (`ClientError::PlanRefused`), so the rendering is the direct binding's, arm for arm —
+/// `invalid_params` with the joined refusal details lets the agent repair the plan in one round
+/// trip, the same care `contexts.rs::map_api_error` gives `BadRequest`, because `PlanRefused` IS
+/// a `BadRequest` variant at the HTTP layer. Everything else stays opaque, matching the
+/// established pattern.
+fn map_query_error(context: &str, err: ClientError) -> rmcp::ErrorData {
     match err {
-        ApiError::PlanRefused { refusals } => {
+        ClientError::PlanRefused { refusals } => {
             // `[added — 2026-08-28, found in review]` The HTTP door logs every refusal's reason in
             // `ApiError`'s `IntoResponse`; this door never reaches that impl, so an MCP refusal
             // emitted NOTHING and the agent-facing surface — the one carrying the most automated
@@ -165,6 +171,7 @@ fn map_query_error(context: &str, err: ApiError) -> rmcp::ErrorData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use temper_client::error::ClientError;
     use temper_core::types::query::PlanRefusal;
     use temper_core::types::query::RefusalReason;
     use temper_core::types::query::StageName;
@@ -185,7 +192,7 @@ mod tests {
                 detail: "find-about-anywhere does not accept an edge filter".to_string(),
             },
         ];
-        let err = map_query_error("run_query", ApiError::PlanRefused { refusals });
+        let err = map_query_error("run_query", ClientError::PlanRefused { refusals });
         assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
 
         let msg = err.message.as_ref();
@@ -216,7 +223,7 @@ mod tests {
             reason: RefusalReason::NoReturns,
             detail: "outcome.returns is empty".to_string(),
         }];
-        let err = map_query_error("run_query", ApiError::PlanRefused { refusals });
+        let err = map_query_error("run_query", ClientError::PlanRefused { refusals });
         let msg = err.message.as_ref();
         assert!(!msg.contains("stage ''"), "no empty stage prefix: {msg}");
         assert!(msg.contains("NoReturns") || msg.contains("no_returns"));
@@ -228,7 +235,13 @@ mod tests {
     /// server fault for a repairable plan.
     #[test]
     fn a_non_refusal_error_stays_opaque() {
-        let err = map_query_error("run_query", ApiError::Internal("db down".to_string()));
+        let err = map_query_error(
+            "run_query",
+            ClientError::Server {
+                status: 503,
+                message: "db down".to_string(),
+            },
+        );
         assert_eq!(err.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
         // The opaque path carries the context tag, not the refusal-rendering shape — an agent
         // reading this knows it is not a plan refusal, not which stage to repair.
