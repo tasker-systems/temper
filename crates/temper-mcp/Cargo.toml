@@ -64,7 +64,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 # constructor; the dev-dep enables temper-services' NARROW `test-harness` (never
 # `test-db` — that gate compiles the crate's own #[sqlx::test] bodies, which the DB-less
 # unit lane would then run).
-temper-services = { path = "../temper-services" }
+temper-services = { path = "../temper-services", features = ["test-harness"] }
 # `ServiceExt::oneshot` — drives a request through the assembled router without binding a port.
 tower = { version = "0.5", features = ["util"] }
 # Builds the gzip body that witnesses the request-decompression layer.
