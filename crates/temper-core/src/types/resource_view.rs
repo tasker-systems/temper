@@ -273,6 +273,7 @@ impl ResourceView {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "ResourceSection.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 #[serde(rename_all = "kebab-case")]
 pub enum ResourceSection {
     /// The reconstructed markdown body — [`ResourceView::content`].

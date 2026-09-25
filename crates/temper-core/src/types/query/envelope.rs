@@ -22,6 +22,7 @@ use super::stage::{StageInput, StageName, StageOutput};
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 // **STRICT, and the only struct in this contract that is** `[decided — 2026-08-14, Pete]`.
 //
 // `[input] -> [inputs]` renamed a LOAD-BEARING field. Without this, a plan still sending the old

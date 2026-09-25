@@ -16,6 +16,7 @@ use crate::validation::validate_owner_pattern;
 /// `(owner_table, owner_id)` pair.
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContextOwnerRef {
     /// `@me` — the calling principal's own profile.

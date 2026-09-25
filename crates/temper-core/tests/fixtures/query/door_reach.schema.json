@@ -27,24 +27,6 @@
         "edge"
       ],
       "type": "string"
-    },
-    "IdKind": {
-      "anyOf": [
-        {
-          "enum": [
-            "resource",
-            "region",
-            "cogmap",
-            "context"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
-          "type": "string"
-        }
-      ],
-      "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -69,7 +51,22 @@
         "bounds_unreachable": {
           "description": "Bound KINDS the act admits that this door has no slot for. Zero live instances anywhere\nin the registry as of this branch: the `find` acts' `Resource` bound was the one —\nevery door hard-bound `NULL` for bound-ids and no door's params carried a resource-id\nlist — until `SearchParams` gained `bound_ids` and `temper search` gained `--within`,\nclosing it everywhere at once. The field stays because an act admitting a bound kind\nthat not every door can supply is exactly this shape again; nothing currently occupies\nit. Same guard as `terms_unreachable` — every entry must appear in the act's\n`accepts_bounds`.",
           "items": {
-            "$ref": "#/$defs/IdKind"
+            "anyOf": [
+              {
+                "enum": [
+                  "resource",
+                  "region",
+                  "cogmap",
+                  "context"
+                ],
+                "type": "string"
+              },
+              {
+                "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
+                "type": "string"
+              }
+            ],
+            "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
           },
           "type": "array"
         },

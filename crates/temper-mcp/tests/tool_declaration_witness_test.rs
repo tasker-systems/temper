@@ -180,6 +180,71 @@ async fn tool_declarations_are_byte_identical_across_the_sdk_upgrade() {
     );
 }
 
+/// The wire rule (strategy spec 2026-09-25): a temper MCP tool declaration is
+/// self-contained — no `$ref`, no `$defs`, anywhere in any served `inputSchema`, ever.
+/// Enforced globally over every served tool, never per-tool and never by memory: a
+/// `$ref`-carrying declaration removes the `type: object` signal that drives client-side
+/// encoding, and an unresolved `$ref` reaches a model as `null`. Written before the
+/// inline fix and held RED over the pre-fix tree — that failing run is the bite.
+#[tokio::test]
+async fn every_served_tool_input_schema_is_self_contained() {
+    let (_, bytes) = post_mcp(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/list",
+        "params": {}
+    }))
+    .await;
+    let body: Value = serde_json::from_slice(&bytes).expect("tools/list answers JSON");
+    let tools = body
+        .pointer("/result/tools")
+        .and_then(Value::as_array)
+        .expect("tools/list carries result.tools");
+    assert!(!tools.is_empty(), "the served tool set must not be empty");
+
+    fn collect_ref_paths(value: &Value, path: &str, hits: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    let child_path = format!("{path}.{key}");
+                    if key == "$ref" || key == "$defs" {
+                        hits.push(child_path.clone());
+                    }
+                    collect_ref_paths(child, &child_path, hits);
+                }
+            }
+            Value::Array(items) => {
+                for (i, item) in items.iter().enumerate() {
+                    collect_ref_paths(item, &format!("{path}[{i}]"), hits);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut offenders: Vec<String> = Vec::new();
+    for tool in tools {
+        let name = tool
+            .get("name")
+            .and_then(Value::as_str)
+            .expect("every tool names itself");
+        if let Some(schema) = tool.get("inputSchema") {
+            let mut hits = Vec::new();
+            collect_ref_paths(schema, name, &mut hits);
+            if !hits.is_empty() {
+                offenders.push(format!("  {name}: {}", hits.join(", ")));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "the wire rule is self-contained declarations — zero $ref/$defs — but {} tool \
+         declaration(s) carry them:\n{}",
+        offenders.len(),
+        offenders.join("\n")
+    );
+}
+
 /// Initialize negotiation is stable for every version shape a client can ask.
 ///
 /// Written on the 1.8 tree, whose handler echoes `get_info()` (protocol version

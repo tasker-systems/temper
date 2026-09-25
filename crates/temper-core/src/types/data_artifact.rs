@@ -80,6 +80,7 @@ pub struct ArtifactListParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 pub enum KindOwnerInput {
     #[serde(rename = "kb_profiles")]
     Profile(Uuid),

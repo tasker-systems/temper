@@ -1,354 +1,53 @@
 {
-  "$defs": {
-    "ActInvocation": {
-      "additionalProperties": false,
-      "description": "One act, invoked — a named node in the composition DAG.\n\n**No `Eq`, only `PartialEq`** — [`Self::intention`] carries the query vector. See\n[`super::composition::Intention`].",
-      "properties": {
-        "act": {
-          "$ref": "#/$defs/ActName"
-        },
-        "edge_filter": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EdgeFilter"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "inputs": {
-          "description": "Where this stage's sets come from, and what this act does with each: caller-supplied ids or\nan upstream stage, each carrying its own [`super::stage::StageRelation`]. Empty for a root\nact that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal\n`bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].\n\nThere is deliberately no sibling `bounds_mode` here `[decided — 2026-08-08, Pete]`. It was\nan `Option<BoundsMode>` whose\n\"required whenever an input is present\" invariant lived in prose, which admitted a\nmeaningless state the validator then read as `bound`. The relation belongs to the edge, and\nnesting it there makes the meaningless state unrepresentable rather than merely invalid.\n\n# A LIST, and at most one per relation\n\n`[widened — 2026-08-14, Pete]` This was `Option<StageInput>` — **one** set, carrying **one**\nrelation. That made a bounded walk inexpressible: `follow-from` needs seeds to start from\n*and* a bound to stay inside, at the same time, and a single slot can hold one or the other.\nThe fragment (`20260814000030`) had the `p_bound_ids` parameter and no caller could fill it,\nso `accepts_bounds: [Resource]` would have declared a capability nothing could reach.\n\n**The cardinality rule is one per RELATION, not one per source.** Two seeds is malformed\n([`super::disposition::RefusalReason::DuplicateInputRelation`]) rather than a union — a union\nis `CombineOp::Union`, which is an existing, visible stage rather than a silent merge inside\none. So the list is short by construction and is not a general fan-in.\n\n**Why a list rather than a second `bound` field beside this one.** The relation already\ndistinguishes them, so a list gives a bound exactly one spelling; a sibling field would give\nit two — the new field, and this one with a `Bound` relation — which is the incumbent\nliteral `bounds: Option<IdSet>` shape this contract deliberately replaced\n`[decided — 2026-08-14, Pete]`, returning under a different name.",
-          "items": {
-            "$ref": "#/$defs/StageInput"
-          },
-          "type": "array"
-        },
-        "intention": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Intention"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "The question this act asks: its text, and the caller's vector when there is one.\n\n**A parameter of the act, exactly like [`Self::terms`] and [`Self::resource_filter`]**\n`[decided — 2026-08-12, Pete]`, spec ⟨7⟩. It lived on the composition envelope until then,\nwhich made a DAG able to ask only one question — every find stage reading the same string.\n\n`None` for an act that asks nothing (`follow-from`, `survey`, the combinators). `None` on a\nfind act is `MissingIntention`, refused by the shape pass: `find-exact` sources its\n`p_query` from here and there is nowhere else to get it."
-        },
-        "name": {
-          "description": "This node's name, referenced by downstream stages and by `returns`.",
-          "type": "string"
-        },
-        "properties": {
-          "description": "Every predicate here is refused, and the refusal says where the capability went.\n\n**Keep this heading to one line** `[found in review — 2026-08-15]`. schemars takes the first\nheading LINE as the schema `title` and the remainder as `description`, so a heading that wraps\nships a truncated sentence as the title and an orphan word as the start of the description —\ninto `act_invocation.schema.json`, `openapi.json`, and every generated client. A mechanical\nconstraint of the generator, not a style preference.\n\n`[2026-08-15]` **Both halves now have containers** — [`super::filter::ResourceFilter`]'s\n`properties` and [`super::filter::EdgeFilter`]'s — so a property predicate has a\nhome that names its own subject, and this field has nothing left to mean. The subject tag it\ncarried (`PropertySubject`), that tag's open arm, the `UnknownFilterValue` refusal the open\narm existed to raise, and the subject-tagged predicate type are all **deleted**.\n\n**The field is not deleted with them, and that is the whole decision**\n`[decided — 2026-08-15, Pete]`. [`ActInvocation`] carries `deny_unknown_fields`, and serde\nshort-circuits before `validate` runs — so removing the field would turn a named\n`FilterNotApplicable` inside `ErrorBody` into a deserializer 400 **outside** that shape. A\nstale caller would go from being told where to move their predicate to being told their body\nis unparseable. Retyping to [`super::filter::PropertyPredicate`], which carries no\n`deny_unknown_fields`, keeps a stale `{\"subject\":…,\"key\":…,\"op\":…}` parsing: the tag is\nignored and the redirect still fires.\n\n**The residue:** with the tag gone the redirect cannot name *which* container, so it names\nboth and lets the caller pick. That is a real loss of fidelity in the refusal, accepted as\nthe price of deleting the type.",
-          "items": {
-            "$ref": "#/$defs/PropertyPredicate"
-          },
-          "title": "A tombstone",
-          "type": "array"
-        },
-        "resource_filter": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ResourceFilter"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Narrowing by what a thing IS. At most one slot applies per act; supplying the other is\n`RefusalReason::FilterNotApplicable`."
-        },
-        "terms": {
-          "additionalProperties": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "description": "Act-level bound terms. A term this act does not admit is refused STATICALLY\n(`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.",
-          "type": "object"
-        }
-      },
-      "required": [
-        "name",
-        "act"
-      ],
-      "type": "object"
-    },
-    "ActName": {
-      "anyOf": [
-        {
-          "const": "find-exact",
-          "description": "*I can quote the exact words.*",
-          "type": "string"
-        },
-        {
-          "const": "find-about-anywhere",
-          "description": "*A concept, no exact words; search everything I can see.*",
-          "type": "string"
-        },
-        {
-          "const": "find-about-within",
-          "description": "*A concept, plus a set to search inside.*",
-          "type": "string"
-        },
-        {
-          "const": "find-resources-with",
-          "description": "*I can say what these things ARE; I have no question about what they mean.*\n\nThe only act with no intention — a pure selection. It narrows by what is known about a\nresource and orders nothing, so it SELECTS without SCORING, which is the distinction\n[`ActDeclaration::orders_by`] carries and which the registry's invariants had folded\ntogether under `produces.is_some()` until this act arrived.\n\nIts output is a set to pipe, never rows to read: a stage running it cannot appear in\n`returns`, for the same reason a combinator cannot — rows with no ordering quantity have\nnothing to score them, and the assembler would drop every one while reporting\n`disposition: answered`.",
-          "type": "string"
-        },
-        {
-          "const": "follow-from",
-          "description": "*A found thing; I want its neighbours.*",
-          "type": "string"
-        },
-        {
-          "const": "survey",
-          "description": "*A question about what a scope knows.*",
-          "type": "string"
-        },
-        {
-          "const": "substantiate",
-          "description": "*A claim; I want its defensibility.*",
-          "type": "string"
-        },
-        {
-          "const": "admit",
-          "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
-          "type": "string"
-        },
-        {
-          "type": "string"
-        }
-      ],
-      "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
-    },
-    "CombineNode": {
-      "description": "A set combination over two-or-more upstream stages. Its own node kind because no act takes more\nthan one input, so modelling it as an act would lie about what an act is.",
-      "properties": {
-        "inputs": {
-          "description": "Two or more. One input is not a combination; validation refuses it (beat B).\n\n**For `difference` it is exactly two, and it is ORDERED**: `inputs[0]` minus `inputs[1]`.\n`[decided — 2026-08-15, Pete]`\n\nA left fold was the alternative and it is the one Postgres would have given away free —\n`A EXCEPT B EXCEPT C` already evaluates as `A − (B ∪ C)`, which is the exact shape of the\nquestion that motivated this op, with one stage fewer. It is refused for two reasons that\ncompound:\n\n- **This field would mean two different things at once.** It is a set for `union` and\n  `intersect` and would be a distinguished head plus a set for `difference` — one `Vec` with\n  two readings, in a struct that carries no marker saying which is in force.\n- **Nothing would disclose the size of what was subtracted.** With `B ∪ C` written as its\n  own union stage, that stage carries a tally and a reader can see `|B ∪ C|`. Folded into\n  the difference, the union has no stage, no tally and no name — the same\n  no-stage-no-disclosure shape [`super::disposition::RefusalReason::DuplicateInputRelation`]\n  refuses for act inputs, one node kind over.\n\nThe cost is stated rather than hidden: `A − (B ∪ C)` is three stages here and two under a\nfold.",
-          "items": {
-            "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "name": {
-          "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
-          "type": "string"
-        },
-        "op": {
-          "$ref": "#/$defs/CombineOp"
-        }
-      },
-      "required": [
-        "name",
-        "op",
-        "inputs"
-      ],
-      "type": "object"
-    },
-    "CombineOp": {
-      "description": "A set combinator's operation. Every member takes two or more inputs; no act does, which is why\na combinator is its own node kind rather than an act invocation.\n\n**Two of the three are commutative and one is not, and that split is the whole of what\n[`CombineNode::inputs`] means.** For `union` and `intersect` the input list is a SET — reordering\nit cannot change the answer, and arity above two is a fold with nothing to say about order. For\n`difference` it is an ordered PAIR: `A − B ≠ B − A`, so `inputs[0]` is the minuend and\n`inputs[1]` the subtrahend, and a third input is refused rather than folded (see\n[`CombineNode::inputs`]).\n\nThe set is CLOSED and adding a member is a contract change — the same rule §12 states for\n`PropertyOp`. `union` and `intersect` were chosen as a pair; `difference` joins them because the\nquestion *\"in A, and in neither B nor C\"* is set-expressible, and `EdgeFilter`'s rule is that a\nnarrowing expressible as a set must be an act rather than a predicate. That is why this is not a\n`PropertyOp::LacksKey`, which is the tempting shape — it sits beside `HasKey` and reads\nnaturally, and it would inherit the open-key type hazard for a question that has no type\nquestion at all. `[decided — 2026-08-15, Pete]`",
-      "oneOf": [
-        {
-          "enum": [
-            "union",
-            "intersect"
-          ],
-          "type": "string"
-        },
-        {
-          "const": "difference",
-          "description": "`inputs[0]` minus `inputs[1]`. Exactly two inputs — see [`CombineNode::inputs`].",
-          "type": "string"
-        }
-      ]
-    },
-    "EdgeFilter": {
-      "description": "Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the\nkind is a closed DDL enum, the label is free text the caller actually sees on every edge.\n\n# Every field here constrains a HOP, and that is why they live in a container\n\n`[decided — 2026-08-14, Pete]` *A narrowing that can be expressed as a set must be an act. A\nnarrowing that cannot be a set belongs to the act whose semantics it constrains.* An edge\npredicate has no set-shaped substitute: binding a walk by *\"nodes that participate in an edge\nmatching P\"* admits a node because it has a matching edge **somewhere** and then walks it through\na different, non-matching one — a different question, returning plausible rows and looking like\nit narrowed. So these constrain the traversal from inside it, and the only act that traverses an\nedge is `follow-from`.",
-      "properties": {
-        "edge_kinds": {
-          "items": {
-            "description": "Structural edge type — the four Semantic-Spacetime primitives. Each kind\ncarries a distinct traversal algebra:\n- `Contains`  — transitive (composition / part-of participation)\n- `LeadsTo`   — antisymmetric, causal/temporal order\n- `Near`      — symmetric (proximity / similarity)\n- `Express`   — leaf attribute (has-property)\n\nMirrors the Postgres `edge_kind` enum.",
-            "enum": [
-              "express",
-              "contains",
-              "leads_to",
-              "near"
-            ],
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "labels": {
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 256,
-          "type": "array"
-        },
-        "properties": {
-          "description": "`kb_properties` rows owned by the edge itself: open key space, closed operator set.\nAND across the list, OR within a [`PropertyOp::Contains`].\n\n**This is where an edge property predicate lives, and the container is the point.** It moved\noff [`super::ActInvocation::properties`], where the same field meant different things\ndepending on which act carried it — which is what a `PropertySubject` tag existed to\ndisambiguate. Given a container the tag has no job; the subject is the container.\n\n**Zero edge-owned properties exist in this deployment** `[measured on prod — 2026-08-14]`,\nand the storage has admitted them since the schema's first migration (`kb_properties.\nowner_table` includes `'kb_edges'`, whose DDL comment has said *\"§4a edges carry facets\"*\nthroughout) with a shipped write path `[verified — 20260727000030]`. So this slot narrows\nnothing today by data rather than by design.",
-          "items": {
-            "$ref": "#/$defs/PropertyPredicate"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
-    "FacetPredicate": {
-      "description": "One `kb_properties` facet predicate, at the inner-key grain the facet model uses.",
-      "properties": {
-        "key": {
-          "type": "string"
-        },
-        "value": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "key",
-        "value"
-      ],
-      "type": "object"
-    },
-    "IdKind": {
-      "anyOf": [
-        {
-          "enum": [
-            "resource",
-            "region",
-            "cogmap",
-            "context"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
-          "type": "string"
-        }
-      ],
-      "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
-    },
-    "IdProvenance": {
-      "description": "Which anchor produced a set of region ids.\n\nLoad-bearing for exactly one kind today. Mirrors the shape of\n[`crate::types::home::HomeAnchor`] without reusing it: that type has no wire derives and is\ndeliberately internal.",
-      "oneOf": [
-        {
-          "properties": {
-            "anchor": {
-              "const": "cogmap",
-              "type": "string"
-            },
-            "id": {
-              "description": "A `kb_cogmaps.id` value — a cognitive map.",
-              "format": "uuid",
-              "type": "string"
-            }
-          },
-          "required": [
-            "anchor",
-            "id"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "anchor": {
-              "const": "context",
-              "type": "string"
-            },
-            "id": {
-              "description": "A `kb_contexts.id` value.",
-              "format": "uuid",
-              "type": "string"
-            }
-          },
-          "required": [
-            "anchor",
-            "id"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "IdSet": {
-      "description": "The one value that crosses a stage boundary. Membership, never rank.",
-      "properties": {
-        "ids": {
-          "description": "The ids themselves — at most [`MAX_ID_SET_IDS`] of them, refused as\n[`crate::types::query::disposition::RefusalReason::TooManyIds`].",
-          "items": {
-            "format": "uuid",
-            "type": "string"
-          },
-          "maxItems": 256,
-          "type": "array"
-        },
-        "kind": {
-          "$ref": "#/$defs/IdKind"
-        },
-        "provenance": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/IdProvenance"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Required for `region`; absent for every other kind today."
-        }
-      },
-      "required": [
-        "kind",
-        "ids"
-      ],
-      "type": "object"
-    },
-    "Intention": {
-      "description": "One find act's question: its text, and the caller's vector when there is one.\n\n`[2026-08-12]` This line read *\"computed once at composition start and threaded to every\nstage\"* — the envelope-placement claim spec ⟨7⟩ retired. It is corrected rather than left\nstanding because **this doc comment IS a published schema description**\n(`tests/fixtures/query/intention.schema.json`), so a stale sentence here is a lie shipped to\nevery client that reads the contract.\n\n**Its absence refuses, and that is about the QUESTION, not the vector.** A find stage with no\nintention has no words to search for, so it comes back `MissingIntention`. That refusal is\nforced rather than chosen: `find-exact` sources its query *text* from here — it becomes\n`p_query` — and there is nowhere else to get it.\n\nAn absent EMBEDDING is a different absence and does **not** refuse. The CLI can embed; the ruby\ngem, the TypeScript package and MCP structurally cannot, so refusing a vector search for want\nof a precomputed vector would deny this surface to every non-CLI client. The server embeds when\nnone arrives, exactly as `/api/search` already does, and only a FAILED embed refuses — as\n[`super::disposition::RefusalReason::EmbeddingUnavailable`], the one runtime refusal in the\ncontract. `[decided — 2026-08-08, Pete]`\n**This is a per-STAGE field, carried by [`super::envelope::ActInvocation`].** `[decided —\n2026-08-12, Pete]`, spec ⟨7⟩. It sat on the composition envelope until then, which meant a\ncomposition could ask exactly ONE question: every find stage in a DAG interrogated the same\nstring, and *\"find A, find B, intersect them\"* was inexpressible. That placement was never\nruled — it entered as a first-person commit paragraph and hardened into a test name.\n\n**No `Eq`, only `PartialEq`** — [`Self::embedding`] holds `f32`. Same reason\n[`super::envelope::StageResult`] derives neither, one derive milder: equality on a vector of\nfloats is well-defined enough for a test, total equality is not.",
-      "properties": {
-        "embedding": {
-          "description": "The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI\nlinks temper-ingest and embeds locally, which is faster than making the server do it; the\nruby gem, the TypeScript package and MCP structurally cannot, so the server embeds on their\nbehalf and its absence is not a refusal.\n\n**It rides beside the text it was computed FROM, and that pairing is the point.** At\ncomposition level a vector and its query could drift apart; here they cannot.\n\nThis never reaches a response: [`super::trace::CompositionTrace`] carries only `stages` and\nechoes no intention. Should a trace ever carry one, that stops being incidental and becomes\na constraint — a 768-float array must not serialize back to the caller.\n\n**Exactly [`MAX_EMBEDDING_DIM`] floats, every value finite, norm within\n[`MIN_EMBEDDING_NORM`]..[`MAX_EMBEDDING_NORM`]**, refused as\n[`super::disposition::RefusalReason::MalformedEmbedding`]. `[added — 2026-08-28, found in\nreview]` This carried no bound of any kind, which made it the largest unbounded field on the\ncontract: a million floats on one stage is 4 MB that validates cleanly, and there are\n[`MAX_STAGES`] stages. A wrong-sized vector also reached pgvector and came back as an\n**opaque 500** — the caller told nothing, in the door whose promise is a typed refusal.\n`[widened — 2026-09-02]` Length alone still let impossible values through: a NaN poisons\nevery cosine computed from it, and the all-zero vector's cosine is 0/0 — both surfaced as\ndriver errors behind the same opaque 500. The norm window is wide enough that any\nconsistently scaled direction passes; only values that are not vectors for this space at\nall are refused.\n\n**Published as a min AND a max, because the check is an equality.** `[corrected —\n2026-08-28, found in review]` Publishing only the maximum stated half the rule: a 384-float\nvector cleared every generated client and was then refused by the server, which is exactly\nthe gap the shape pass exists to close — a client must be able to refuse what the server\nwould refuse. The two bounds are the same number because a vector of any other length is\nnot a large question, it is a vector for a different space. The norm window is published in\nthe field's description text rather than as numeric constraints: a client that scales\nlegitimately is not an error the bounds are for.",
-          "items": {
-            "format": "float",
-            "type": "number"
-          },
-          "maxItems": 768,
-          "minItems": 768,
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "query": {
-          "description": "The question, in the caller's own words.\n\nAt most [`MAX_INTENTION_QUERY_BYTES`] bytes of it, refused as\n[`super::disposition::RefusalReason::IntentionTooLong`].",
-          "maxLength": 4096,
-          "type": "string"
-        }
-      },
-      "required": [
-        "query"
-      ],
-      "type": "object"
-    },
-    "OrdOp": {
-      "description": "The ordering direction for [`PropertyOp::Compare`]. A closed sub-enum, the same shape as\n`Contains`'s `Vec` — a nested closed set inside one `PropertyOp` discriminant.\n\nAll four directions are needed: inclusivity matters for dates (*\"on or after 2026-07-01\"* is\n`gte`, not `gt*). `Gt`/`Lt` are the half-open bounds; `Gte`/`Lte` are the closed ones; a\n`Between` is `gte` AND `lte` composed through the existing AND-across-the-list.",
-      "enum": [
-        "gt",
-        "gte",
-        "lt",
-        "lte"
-      ],
-      "type": "string"
-    },
-    "OutcomeDeclaration": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A composition, declared before execution.\n\n**No `Eq`, only `PartialEq`** — it transitively holds the query vector. See [`Intention`].",
+  "properties": {
+    "outcome": {
       "description": "Which stages come back, and how much of each row.",
       "properties": {
         "returns": {
           "description": "The stages whose rows are hydrated and returned. DECLARED, not inferred from graph shape:\ninferring from out-degree zero makes returning an intermediate impossible without a dummy\nconsumer, and means adding a downstream stage silently stops returning what you used to get\nback. The composition's produced kind(s) are DERIVED from these, replacing the old single\n`produces` field which could only ever be right for a one-arm plan.",
           "items": {
-            "$ref": "#/$defs/ReturnSpec"
+            "description": "One stage whose rows come back, and how much of each row.",
+            "properties": {
+              "stage": {
+                "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+                "type": "string"
+              },
+              "with": {
+                "description": "Which sections to hydrate onto each row, in the SAME vocabulary `temper resource show\n--with` uses. Empty means the kind's default projection.\n\nReplaces `fields: Vec<String>`, which promised field-level subselection over a projection,\nhad nothing implementing it, and duplicated a vocabulary that already works.\n\n**This door admits a subset, and the rest are REFUSED rather than unsupported** — see\n[`Self::ADMITTED_SECTIONS`]. The refusal lands at validation rather than at deserialization\non purpose: `/api/query` promises every refusal in one response, and a serde failure\nshort-circuits before validation runs, so a caller with four problems would learn about one\nof them in a deserializer's vocabulary.",
+                "items": {
+                  "description": "One addable or removable part of a [`ResourceView`].\n\nReplaces `--meta-only`, which conflated two axes because the two commands differ in\nwhat they otherwise return: on `show` it means *drop the body*\n(`temper-cli/src/cli.rs:571-575` — \"Show everything except the body\"), on `list` it\nmeans *add both meta tiers* (`:537-542` — \"each row carries both the managed and open\nmeta tiers ... on top of the usual row fields\"). Once both commands answer in one\nshape, that flag has two meanings and no coherent one.\n\nNaming the parts lets a caller add or remove each independently — including\n`show --with edges --without body`, which is **unreachable today**: `meta_only`\ncarries `conflicts_with = \"edges\"` (`temper-cli/src/cli.rs:574`), so the present\ndesign needs a rule to forbid a combination that is merely useful.\n\nThe managed tier is deliberately **not** a section: [`ResourceView::managed_meta`] is\nalways present, which is what makes dropping the hoisted workflow fields lossless.\n\nThe names are **kebab-case** (`open-meta`), not the `open_meta` of the field the\nsection fills. They are values a human or agent types after `--with`, and the CLI's\nvocabulary is kebab throughout; the `snake_case` enums in [`super::resource`]\n([`IngestState`], [`BodyStorage`]) are DB column values, which these are not. Serde's\nrename and [`FromStr`] are two independent mappings, so `section_names_are_kebab_case`\nasserts both.\n`[widened — 2026-08-08]` This carried only `Serialize`/`Deserialize` while it was reached\nexclusively through query strings and `parse_accepting`. `/api/query`'s `ReturnSpec.with` is\nthe first TYPED field of this enum on a wire contract, and a boundary type that both surfaces\nspeak is supposed to carry the generation derives — so it now does. No route references it, so\n`openapi.json` is unmoved.",
+                  "oneOf": [
+                    {
+                      "const": "body",
+                      "description": "The reconstructed markdown body — [`ResourceView::content`].",
+                      "type": "string"
+                    },
+                    {
+                      "const": "open-meta",
+                      "description": "The open (user-defined) frontmatter tier — [`ResourceView::open_meta`].",
+                      "type": "string"
+                    },
+                    {
+                      "const": "edges",
+                      "description": "The resource's graph edges, fetched alongside the view rather than carried on it.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "embedding-status",
+                      "description": "Derived embedding-readiness — [`ResourceView::embedding_status`].",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "stage"
+            ],
+            "type": "object"
           },
           "type": "array"
         }
@@ -358,267 +57,648 @@
       ],
       "type": "object"
     },
-    "PropertyOp": {
-      "description": "A property narrowing operator. CLOSED — the key space is open, the operator set is not. No\noperator takes a fragment of a query language; all bind their values.",
-      "oneOf": [
-        {
-          "description": "The key is present at all. A row-existence check on the `property_key` btree — NOT a jsonb\noperator, because `jsonb_path_ops` does not index key-existence and the btree already\nanswers it.",
-          "properties": {
-            "op": {
-              "const": "has_key",
-              "type": "string"
-            }
-          },
-          "required": [
-            "op"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.",
-          "properties": {
-            "op": {
-              "const": "contains",
-              "type": "string"
-            },
-            "values": {
-              "items": true,
-              "type": "array"
-            }
-          },
-          "required": [
-            "op",
-            "values"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "`property_value <direction> $value` over jsonb's native ordering, type-guarded.\n\n**The type is inferred from the caller's bound, never declared on the operator.**\n`jsonb_typeof(property_value) = jsonb_typeof($value)` segments by JSON type before the\ncomparison, so a row whose JSON type differs from the bound's is an **honest empty** rather\nthan a type-confusion match. jsonb defines a total type ordering\n(`null < boolean < number < string < array < object`), so without the guard a numeric\nbound against a string-valued key would match **every** string row (`string > number` is\ntrue in jsonb's ordering) — a type-confusion artifact, not an answer. The guard makes each\ncomparison run only within a homogeneous sub-population.\n\n**Per-VALUE inference, not per-key — and the distinction is the trap.** `temper-pr` is\n68 string / 7 numeric on ONE key, so no per-key answer exists; each caller sends one bound\nwith one JSON type, and the guard makes the other-type rows honest empties. A numeric bound\ncompares the 7 numeric rows; a string bound compares the 68 string rows; neither is wrong.\n\n**Numbers stored as JSON STRINGS** that need numeric comparison are out of scope: that is a\nconvention the key should fix (store numbers as JSON numbers), and `temper-seq` (132 numeric\nrows) already does. A comparison operator is not a type-coercion mechanism.\n\n`probe_count` for `Compare` is **1** — one bound, one comparison per row that carries the\nkey — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is\nNOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,\nand adding it saves one probe at the cost of a second value slot and a second SQL branch.",
-          "properties": {
-            "direction": {
-              "$ref": "#/$defs/OrdOp"
-            },
-            "op": {
-              "const": "compare",
-              "type": "string"
-            },
-            "value": true
-          },
-          "required": [
-            "op",
-            "direction",
-            "value"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "PropertyPredicate": {
-      "description": "A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an\n[`EdgeFilter`] means the edge's own `kb_properties` rows, a [`ResourceFilter`] means the\nresource's own, and nothing else has to be said.\n\n`[2026-08-15]` Both containers now exist, so the subject-tagged variant that floated free on the\ninvocation is **deleted**, along with the `PropertySubject` tag it carried and the\n`UnknownFilterValue` refusal that tag's open arm existed to raise. What survives is\n[`super::ActInvocation::properties`], retyped to this struct: it is a **tombstone**, refusing\nwith a redirect rather than being removed, because `ActInvocation` carries `deny_unknown_fields`\nand removing the field would route a stale caller into a deserializer 400 outside the\n`ErrorBody` shape — a worse answer than the one being replaced.",
-      "properties": {
-        "key": {
-          "type": "string"
-        },
-        "op": {
-          "$ref": "#/$defs/PropertyOp"
-        }
-      },
-      "required": [
-        "key",
-        "op"
-      ],
-      "type": "object"
-    },
-    "ResourceFilter": {
-      "description": "Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.\n\n**No field here has a closed vocabulary, and none is checked against one.**\n`[corrected — 2026-08-10, ADJ-10]` This claimed `doc_type`, `stage` and `status` were closed\nvocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three\nis: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as\n`FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value\nfor. `[2026-08-15]` `UnknownFilterValue` used to be raised here for exactly one thing — an\nunrecognized `PropertySubject` — and **that reason is now gone with the type**, so nothing on\nthis struct raises it.\n\nThe rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal,\nbecause it can never match; *a string that may be perfectly legitimate and matches nothing in the\nscope you asked about* is an honest empty. `doc_type` is the second kind.",
-      "properties": {
-        "doc_type": {
-          "description": "`kb_properties` where `property_key = 'doc_type'`.",
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 256,
-          "type": "array"
-        },
-        "facets": {
-          "description": "`kb_properties` where `property_key = 'facet'`.",
-          "items": {
-            "$ref": "#/$defs/FacetPredicate"
-          },
-          "type": "array"
-        },
-        "owner": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "properties": {
-          "description": "`kb_properties` rows owned by the resource itself: open key space, closed operator set.\nAND across the list, OR within a [`PropertyOp::Contains`].\n\n**The three named fields above reach three keys; this one reaches the rest.** Sixty-seven of\nthe seventy live property keys were narrowable by nothing on any act\n`[measured on prod — 2026-08-14]`.\n\n**The container is the point, and it is the same container `EdgeFilter` has.** This is where\na resource property predicate lives; it moved off `ActInvocation::properties`, where the same\nfield meant different things depending on which act carried it. Given a container the subject\ntag has no job, which is why the tag no longer exists.\n\n**`Contains` reads the value WHOLE — `kb_resource_properties`, never\n`kb_property_elements`** `[decided — 2026-08-15, Pete; 20260815000040]`. So it means exactly\nwhat [`EdgeFilter::properties`]'s `Contains` means. The element relation would silently\nnarrow the operator: an array-shaped probe matches the whole value and matches *nothing*\nagainst an exploded element, and a `[]`-valued key is a row in the one and no rows in the\nother. The element view continues to serve `tags` and `facets`, whose semantics genuinely\nare AND-containment over elements.",
-          "items": {
-            "$ref": "#/$defs/PropertyPredicate"
-          },
-          "type": "array"
-        },
-        "stage": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "status": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tags": {
-          "description": "`kb_properties` where `property_key = 'tags'`. AND-containment.",
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 256,
-          "type": "array"
-        },
-        "title_contains": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "ResourceSection": {
-      "description": "One addable or removable part of a [`ResourceView`].\n\nReplaces `--meta-only`, which conflated two axes because the two commands differ in\nwhat they otherwise return: on `show` it means *drop the body*\n(`temper-cli/src/cli.rs:571-575` — \"Show everything except the body\"), on `list` it\nmeans *add both meta tiers* (`:537-542` — \"each row carries both the managed and open\nmeta tiers ... on top of the usual row fields\"). Once both commands answer in one\nshape, that flag has two meanings and no coherent one.\n\nNaming the parts lets a caller add or remove each independently — including\n`show --with edges --without body`, which is **unreachable today**: `meta_only`\ncarries `conflicts_with = \"edges\"` (`temper-cli/src/cli.rs:574`), so the present\ndesign needs a rule to forbid a combination that is merely useful.\n\nThe managed tier is deliberately **not** a section: [`ResourceView::managed_meta`] is\nalways present, which is what makes dropping the hoisted workflow fields lossless.\n\nThe names are **kebab-case** (`open-meta`), not the `open_meta` of the field the\nsection fills. They are values a human or agent types after `--with`, and the CLI's\nvocabulary is kebab throughout; the `snake_case` enums in [`super::resource`]\n([`IngestState`], [`BodyStorage`]) are DB column values, which these are not. Serde's\nrename and [`FromStr`] are two independent mappings, so `section_names_are_kebab_case`\nasserts both.\n`[widened — 2026-08-08]` This carried only `Serialize`/`Deserialize` while it was reached\nexclusively through query strings and `parse_accepting`. `/api/query`'s `ReturnSpec.with` is\nthe first TYPED field of this enum on a wire contract, and a boundary type that both surfaces\nspeak is supposed to carry the generation derives — so it now does. No route references it, so\n`openapi.json` is unmoved.",
-      "oneOf": [
-        {
-          "const": "body",
-          "description": "The reconstructed markdown body — [`ResourceView::content`].",
-          "type": "string"
-        },
-        {
-          "const": "open-meta",
-          "description": "The open (user-defined) frontmatter tier — [`ResourceView::open_meta`].",
-          "type": "string"
-        },
-        {
-          "const": "edges",
-          "description": "The resource's graph edges, fetched alongside the view rather than carried on it.",
-          "type": "string"
-        },
-        {
-          "const": "embedding-status",
-          "description": "Derived embedding-readiness — [`ResourceView::embedding_status`].",
-          "type": "string"
-        }
-      ]
-    },
-    "ReturnSpec": {
-      "description": "One stage whose rows come back, and how much of each row.",
-      "properties": {
-        "stage": {
-          "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
-          "type": "string"
-        },
-        "with": {
-          "description": "Which sections to hydrate onto each row, in the SAME vocabulary `temper resource show\n--with` uses. Empty means the kind's default projection.\n\nReplaces `fields: Vec<String>`, which promised field-level subselection over a projection,\nhad nothing implementing it, and duplicated a vocabulary that already works.\n\n**This door admits a subset, and the rest are REFUSED rather than unsupported** — see\n[`Self::ADMITTED_SECTIONS`]. The refusal lands at validation rather than at deserialization\non purpose: `/api/query` promises every refusal in one response, and a serde failure\nshort-circuits before validation runs, so a caller with four problems would learn about one\nof them in a deserializer's vocabulary.",
-          "items": {
-            "$ref": "#/$defs/ResourceSection"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "stage"
-      ],
-      "type": "object"
-    },
-    "StageInput": {
-      "description": "Where a stage's set comes from, and WHAT IT IS FOR.\n\nThis is the type that closes the gap. Before it, an invocation could carry only a literal\n`bounds: Option<IdSet>` and had no way to name a producing stage.\n\n[`StageRelation`] is a field of every variant rather than an `Option` on the invocation, so\n\"an input with no declared relation\" is **unrepresentable** rather than merely invalid. The\nrelation belongs to the edge, not to the stage.",
-      "oneOf": [
-        {
-          "description": "A literal id set the caller supplied — the incumbent `bounds` case, now one input variant.",
-          "properties": {
-            "as": {
-              "$ref": "#/$defs/StageRelation"
-            },
-            "from": {
-              "const": "caller",
-              "type": "string"
-            },
-            "ids": {
-              "$ref": "#/$defs/IdSet"
-            }
-          },
-          "required": [
-            "from",
-            "as",
-            "ids"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "The `produced` set of an earlier stage, named rather than copied.",
-          "properties": {
-            "as": {
-              "$ref": "#/$defs/StageRelation"
-            },
-            "from": {
-              "const": "upstream",
-              "type": "string"
-            },
-            "stage": {
-              "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
-              "type": "string"
-            }
-          },
-          "required": [
-            "from",
-            "as",
-            "stage"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "StageNode": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ActInvocation"
-        },
-        {
-          "$ref": "#/$defs/CombineNode"
-        }
-      ],
-      "description": "A node in the composition DAG: an act invocation, or a set combination over other nodes.\n\n**No `Eq`, only `PartialEq`** — the act variant carries an intention, which carries the query\nvector. See [`Intention`]."
-    },
-    "StageRelation": {
-      "description": "What the receiving act does with the set it was handed.\n\nDeclared at the CONSUMING stage, never the producing one — the producer emits membership and\nhas no opinion about what the next act does with it.\n\n```text\nbound — narrow to within this set.  Output ⊆ input.\nseed  — grow from this set.         Output ESCAPES input.\n```\n\n**A composition is not monotonically narrowing.** A pipeline may alternate:\n`find-about-anywhere` (fuzzy, wide) → `follow-from` as a SEED (reaches beyond) → `find-exact`\nas a BOUND (narrows again). Any code assuming a stage's output is a subset of its input is\nwrong for half of these.\n\n# Why this is on the wire rather than derived from the act\n\nAcross all seven acts `accepts_bounds` and `accepts_seeds` are DISJOINT, so the relation is\nfully determined by the act and this field can only ever agree with the declaration or be\nrefused. It is carried anyway, for the negative face: a caller who writes `seed` against\n`find-exact` meant something real — *reach beyond these* — and `find-exact` cannot. Deriving\nthe relation from the act would silently execute a NARROWING instead, answering a different\nquestion than the one asked. Refusing tells them what the system cannot do.\n`[decided — 2026-08-08, Pete]`\n\n# The third id set, which is not on this axis\n\nThe visibility verdict is hard, applies to every stage, and is **never expressible here**. It\nis not a `StageRelation` value and must never become one — `query_plan`'s ungated-core call\nfixes it as a non-parameter for exactly that reason.\n\nReplaces the incumbent `BoundsMode`, which sat on the invocation as an `Option` whose\n\"required whenever `input` is present\" invariant was held by prose. That admitted a meaningless\nstate — input present, relation absent — which the validator silently read as `bound`.",
-      "oneOf": [
-        {
-          "const": "bound",
-          "description": "Narrow to within this set.",
-          "type": "string"
-        },
-        {
-          "const": "seed",
-          "description": "Grow from this set.",
-          "type": "string"
-        }
-      ]
-    }
-  },
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "A composition, declared before execution.\n\n**No `Eq`, only `PartialEq`** — it transitively holds the query vector. See [`Intention`].",
-  "properties": {
-    "outcome": {
-      "$ref": "#/$defs/OutcomeDeclaration"
-    },
     "stages": {
       "description": "The DAG's nodes. Each references its inputs explicitly by stage name — there is no\nprev-else-fallback, and no single execution order (a DAG has none). Beat B's topological\nsort derives the order; there is deliberately no `act_sequence` method, which would be a\nfalse claim that a DAG has one sequence.\n\nAt most [`MAX_STAGES`] of them, refused as\n[`super::disposition::RefusalReason::TooManyStages`].",
       "items": {
-        "$ref": "#/$defs/StageNode"
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "description": "One act, invoked — a named node in the composition DAG.\n\n**No `Eq`, only `PartialEq`** — [`Self::intention`] carries the query vector. See\n[`super::composition::Intention`].",
+            "properties": {
+              "act": {
+                "anyOf": [
+                  {
+                    "const": "find-exact",
+                    "description": "*I can quote the exact words.*",
+                    "type": "string"
+                  },
+                  {
+                    "const": "find-about-anywhere",
+                    "description": "*A concept, no exact words; search everything I can see.*",
+                    "type": "string"
+                  },
+                  {
+                    "const": "find-about-within",
+                    "description": "*A concept, plus a set to search inside.*",
+                    "type": "string"
+                  },
+                  {
+                    "const": "find-resources-with",
+                    "description": "*I can say what these things ARE; I have no question about what they mean.*\n\nThe only act with no intention — a pure selection. It narrows by what is known about a\nresource and orders nothing, so it SELECTS without SCORING, which is the distinction\n[`ActDeclaration::orders_by`] carries and which the registry's invariants had folded\ntogether under `produces.is_some()` until this act arrived.\n\nIts output is a set to pipe, never rows to read: a stage running it cannot appear in\n`returns`, for the same reason a combinator cannot — rows with no ordering quantity have\nnothing to score them, and the assembler would drop every one while reporting\n`disposition: answered`.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "follow-from",
+                    "description": "*A found thing; I want its neighbours.*",
+                    "type": "string"
+                  },
+                  {
+                    "const": "survey",
+                    "description": "*A question about what a scope knows.*",
+                    "type": "string"
+                  },
+                  {
+                    "const": "substantiate",
+                    "description": "*A claim; I want its defensibility.*",
+                    "type": "string"
+                  },
+                  {
+                    "const": "admit",
+                    "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
+                    "type": "string"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
+              },
+              "edge_filter": {
+                "description": "Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the\nkind is a closed DDL enum, the label is free text the caller actually sees on every edge.\n\n# Every field here constrains a HOP, and that is why they live in a container\n\n`[decided — 2026-08-14, Pete]` *A narrowing that can be expressed as a set must be an act. A\nnarrowing that cannot be a set belongs to the act whose semantics it constrains.* An edge\npredicate has no set-shaped substitute: binding a walk by *\"nodes that participate in an edge\nmatching P\"* admits a node because it has a matching edge **somewhere** and then walks it through\na different, non-matching one — a different question, returning plausible rows and looking like\nit narrowed. So these constrain the traversal from inside it, and the only act that traverses an\nedge is `follow-from`.",
+                "properties": {
+                  "edge_kinds": {
+                    "items": {
+                      "description": "Structural edge type — the four Semantic-Spacetime primitives. Each kind\ncarries a distinct traversal algebra:\n- `Contains`  — transitive (composition / part-of participation)\n- `LeadsTo`   — antisymmetric, causal/temporal order\n- `Near`      — symmetric (proximity / similarity)\n- `Express`   — leaf attribute (has-property)\n\nMirrors the Postgres `edge_kind` enum.",
+                      "enum": [
+                        "express",
+                        "contains",
+                        "leads_to",
+                        "near"
+                      ],
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "labels": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 256,
+                    "type": "array"
+                  },
+                  "properties": {
+                    "description": "`kb_properties` rows owned by the edge itself: open key space, closed operator set.\nAND across the list, OR within a [`PropertyOp::Contains`].\n\n**This is where an edge property predicate lives, and the container is the point.** It moved\noff [`super::ActInvocation::properties`], where the same field meant different things\ndepending on which act carried it — which is what a `PropertySubject` tag existed to\ndisambiguate. Given a container the tag has no job; the subject is the container.\n\n**Zero edge-owned properties exist in this deployment** `[measured on prod — 2026-08-14]`,\nand the storage has admitted them since the schema's first migration (`kb_properties.\nowner_table` includes `'kb_edges'`, whose DDL comment has said *\"§4a edges carry facets\"*\nthroughout) with a shipped write path `[verified — 20260727000030]`. So this slot narrows\nnothing today by data rather than by design.",
+                    "items": {
+                      "description": "A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an\n[`EdgeFilter`] means the edge's own `kb_properties` rows, a [`ResourceFilter`] means the\nresource's own, and nothing else has to be said.\n\n`[2026-08-15]` Both containers now exist, so the subject-tagged variant that floated free on the\ninvocation is **deleted**, along with the `PropertySubject` tag it carried and the\n`UnknownFilterValue` refusal that tag's open arm existed to raise. What survives is\n[`super::ActInvocation::properties`], retyped to this struct: it is a **tombstone**, refusing\nwith a redirect rather than being removed, because `ActInvocation` carries `deny_unknown_fields`\nand removing the field would route a stale caller into a deserializer 400 outside the\n`ErrorBody` shape — a worse answer than the one being replaced.",
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "op": {
+                          "description": "A property narrowing operator. CLOSED — the key space is open, the operator set is not. No\noperator takes a fragment of a query language; all bind their values.",
+                          "oneOf": [
+                            {
+                              "description": "The key is present at all. A row-existence check on the `property_key` btree — NOT a jsonb\noperator, because `jsonb_path_ops` does not index key-existence and the btree already\nanswers it.",
+                              "properties": {
+                                "op": {
+                                  "const": "has_key",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "op"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.",
+                              "properties": {
+                                "op": {
+                                  "const": "contains",
+                                  "type": "string"
+                                },
+                                "values": {
+                                  "items": true,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "op",
+                                "values"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "description": "`property_value <direction> $value` over jsonb's native ordering, type-guarded.\n\n**The type is inferred from the caller's bound, never declared on the operator.**\n`jsonb_typeof(property_value) = jsonb_typeof($value)` segments by JSON type before the\ncomparison, so a row whose JSON type differs from the bound's is an **honest empty** rather\nthan a type-confusion match. jsonb defines a total type ordering\n(`null < boolean < number < string < array < object`), so without the guard a numeric\nbound against a string-valued key would match **every** string row (`string > number` is\ntrue in jsonb's ordering) — a type-confusion artifact, not an answer. The guard makes each\ncomparison run only within a homogeneous sub-population.\n\n**Per-VALUE inference, not per-key — and the distinction is the trap.** `temper-pr` is\n68 string / 7 numeric on ONE key, so no per-key answer exists; each caller sends one bound\nwith one JSON type, and the guard makes the other-type rows honest empties. A numeric bound\ncompares the 7 numeric rows; a string bound compares the 68 string rows; neither is wrong.\n\n**Numbers stored as JSON STRINGS** that need numeric comparison are out of scope: that is a\nconvention the key should fix (store numbers as JSON numbers), and `temper-seq` (132 numeric\nrows) already does. A comparison operator is not a type-coercion mechanism.\n\n`probe_count` for `Compare` is **1** — one bound, one comparison per row that carries the\nkey — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is\nNOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,\nand adding it saves one probe at the cost of a second value slot and a second SQL branch.",
+                              "properties": {
+                                "direction": {
+                                  "description": "The ordering direction for [`PropertyOp::Compare`]. A closed sub-enum, the same shape as\n`Contains`'s `Vec` — a nested closed set inside one `PropertyOp` discriminant.\n\nAll four directions are needed: inclusivity matters for dates (*\"on or after 2026-07-01\"* is\n`gte`, not `gt*). `Gt`/`Lt` are the half-open bounds; `Gte`/`Lte` are the closed ones; a\n`Between` is `gte` AND `lte` composed through the existing AND-across-the-list.",
+                                  "enum": [
+                                    "gt",
+                                    "gte",
+                                    "lt",
+                                    "lte"
+                                  ],
+                                  "type": "string"
+                                },
+                                "op": {
+                                  "const": "compare",
+                                  "type": "string"
+                                },
+                                "value": true
+                              },
+                              "required": [
+                                "op",
+                                "direction",
+                                "value"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "op"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "inputs": {
+                "description": "Where this stage's sets come from, and what this act does with each: caller-supplied ids or\nan upstream stage, each carrying its own [`super::stage::StageRelation`]. Empty for a root\nact that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal\n`bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].\n\nThere is deliberately no sibling `bounds_mode` here `[decided — 2026-08-08, Pete]`. It was\nan `Option<BoundsMode>` whose\n\"required whenever an input is present\" invariant lived in prose, which admitted a\nmeaningless state the validator then read as `bound`. The relation belongs to the edge, and\nnesting it there makes the meaningless state unrepresentable rather than merely invalid.\n\n# A LIST, and at most one per relation\n\n`[widened — 2026-08-14, Pete]` This was `Option<StageInput>` — **one** set, carrying **one**\nrelation. That made a bounded walk inexpressible: `follow-from` needs seeds to start from\n*and* a bound to stay inside, at the same time, and a single slot can hold one or the other.\nThe fragment (`20260814000030`) had the `p_bound_ids` parameter and no caller could fill it,\nso `accepts_bounds: [Resource]` would have declared a capability nothing could reach.\n\n**The cardinality rule is one per RELATION, not one per source.** Two seeds is malformed\n([`super::disposition::RefusalReason::DuplicateInputRelation`]) rather than a union — a union\nis `CombineOp::Union`, which is an existing, visible stage rather than a silent merge inside\none. So the list is short by construction and is not a general fan-in.\n\n**Why a list rather than a second `bound` field beside this one.** The relation already\ndistinguishes them, so a list gives a bound exactly one spelling; a sibling field would give\nit two — the new field, and this one with a `Bound` relation — which is the incumbent\nliteral `bounds: Option<IdSet>` shape this contract deliberately replaced\n`[decided — 2026-08-14, Pete]`, returning under a different name.",
+                "items": {
+                  "description": "Where a stage's set comes from, and WHAT IT IS FOR.\n\nThis is the type that closes the gap. Before it, an invocation could carry only a literal\n`bounds: Option<IdSet>` and had no way to name a producing stage.\n\n[`StageRelation`] is a field of every variant rather than an `Option` on the invocation, so\n\"an input with no declared relation\" is **unrepresentable** rather than merely invalid. The\nrelation belongs to the edge, not to the stage.",
+                  "oneOf": [
+                    {
+                      "description": "A literal id set the caller supplied — the incumbent `bounds` case, now one input variant.",
+                      "properties": {
+                        "as": {
+                          "description": "What the receiving act does with the set it was handed.\n\nDeclared at the CONSUMING stage, never the producing one — the producer emits membership and\nhas no opinion about what the next act does with it.\n\n```text\nbound — narrow to within this set.  Output ⊆ input.\nseed  — grow from this set.         Output ESCAPES input.\n```\n\n**A composition is not monotonically narrowing.** A pipeline may alternate:\n`find-about-anywhere` (fuzzy, wide) → `follow-from` as a SEED (reaches beyond) → `find-exact`\nas a BOUND (narrows again). Any code assuming a stage's output is a subset of its input is\nwrong for half of these.\n\n# Why this is on the wire rather than derived from the act\n\nAcross all seven acts `accepts_bounds` and `accepts_seeds` are DISJOINT, so the relation is\nfully determined by the act and this field can only ever agree with the declaration or be\nrefused. It is carried anyway, for the negative face: a caller who writes `seed` against\n`find-exact` meant something real — *reach beyond these* — and `find-exact` cannot. Deriving\nthe relation from the act would silently execute a NARROWING instead, answering a different\nquestion than the one asked. Refusing tells them what the system cannot do.\n`[decided — 2026-08-08, Pete]`\n\n# The third id set, which is not on this axis\n\nThe visibility verdict is hard, applies to every stage, and is **never expressible here**. It\nis not a `StageRelation` value and must never become one — `query_plan`'s ungated-core call\nfixes it as a non-parameter for exactly that reason.\n\nReplaces the incumbent `BoundsMode`, which sat on the invocation as an `Option` whose\n\"required whenever `input` is present\" invariant was held by prose. That admitted a meaningless\nstate — input present, relation absent — which the validator silently read as `bound`.",
+                          "oneOf": [
+                            {
+                              "const": "bound",
+                              "description": "Narrow to within this set.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "seed",
+                              "description": "Grow from this set.",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "from": {
+                          "const": "caller",
+                          "type": "string"
+                        },
+                        "ids": {
+                          "description": "The one value that crosses a stage boundary. Membership, never rank.",
+                          "properties": {
+                            "ids": {
+                              "description": "The ids themselves — at most [`MAX_ID_SET_IDS`] of them, refused as\n[`crate::types::query::disposition::RefusalReason::TooManyIds`].",
+                              "items": {
+                                "format": "uuid",
+                                "type": "string"
+                              },
+                              "maxItems": 256,
+                              "type": "array"
+                            },
+                            "kind": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "resource",
+                                    "region",
+                                    "cogmap",
+                                    "context"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
+                                  "type": "string"
+                                }
+                              ],
+                              "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
+                            },
+                            "provenance": {
+                              "anyOf": [
+                                {
+                                  "description": "Which anchor produced a set of region ids.\n\nLoad-bearing for exactly one kind today. Mirrors the shape of\n[`crate::types::home::HomeAnchor`] without reusing it: that type has no wire derives and is\ndeliberately internal.",
+                                  "oneOf": [
+                                    {
+                                      "properties": {
+                                        "anchor": {
+                                          "const": "cogmap",
+                                          "type": "string"
+                                        },
+                                        "id": {
+                                          "description": "A `kb_cogmaps.id` value — a cognitive map.",
+                                          "format": "uuid",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "anchor",
+                                        "id"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "properties": {
+                                        "anchor": {
+                                          "const": "context",
+                                          "type": "string"
+                                        },
+                                        "id": {
+                                          "description": "A `kb_contexts.id` value.",
+                                          "format": "uuid",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "anchor",
+                                        "id"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Required for `region`; absent for every other kind today."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "ids"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "from",
+                        "as",
+                        "ids"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "description": "The `produced` set of an earlier stage, named rather than copied.",
+                      "properties": {
+                        "as": {
+                          "description": "What the receiving act does with the set it was handed.\n\nDeclared at the CONSUMING stage, never the producing one — the producer emits membership and\nhas no opinion about what the next act does with it.\n\n```text\nbound — narrow to within this set.  Output ⊆ input.\nseed  — grow from this set.         Output ESCAPES input.\n```\n\n**A composition is not monotonically narrowing.** A pipeline may alternate:\n`find-about-anywhere` (fuzzy, wide) → `follow-from` as a SEED (reaches beyond) → `find-exact`\nas a BOUND (narrows again). Any code assuming a stage's output is a subset of its input is\nwrong for half of these.\n\n# Why this is on the wire rather than derived from the act\n\nAcross all seven acts `accepts_bounds` and `accepts_seeds` are DISJOINT, so the relation is\nfully determined by the act and this field can only ever agree with the declaration or be\nrefused. It is carried anyway, for the negative face: a caller who writes `seed` against\n`find-exact` meant something real — *reach beyond these* — and `find-exact` cannot. Deriving\nthe relation from the act would silently execute a NARROWING instead, answering a different\nquestion than the one asked. Refusing tells them what the system cannot do.\n`[decided — 2026-08-08, Pete]`\n\n# The third id set, which is not on this axis\n\nThe visibility verdict is hard, applies to every stage, and is **never expressible here**. It\nis not a `StageRelation` value and must never become one — `query_plan`'s ungated-core call\nfixes it as a non-parameter for exactly that reason.\n\nReplaces the incumbent `BoundsMode`, which sat on the invocation as an `Option` whose\n\"required whenever `input` is present\" invariant was held by prose. That admitted a meaningless\nstate — input present, relation absent — which the validator silently read as `bound`.",
+                          "oneOf": [
+                            {
+                              "const": "bound",
+                              "description": "Narrow to within this set.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "seed",
+                              "description": "Grow from this set.",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "from": {
+                          "const": "upstream",
+                          "type": "string"
+                        },
+                        "stage": {
+                          "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "from",
+                        "as",
+                        "stage"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "intention": {
+                "description": "The question this act asks: its text, and the caller's vector when there is one.\n\n**A parameter of the act, exactly like [`Self::terms`] and [`Self::resource_filter`]**\n`[decided — 2026-08-12, Pete]`, spec ⟨7⟩. It lived on the composition envelope until then,\nwhich made a DAG able to ask only one question — every find stage reading the same string.\n\n`None` for an act that asks nothing (`follow-from`, `survey`, the combinators). `None` on a\nfind act is `MissingIntention`, refused by the shape pass: `find-exact` sources its\n`p_query` from here and there is nowhere else to get it.",
+                "properties": {
+                  "embedding": {
+                    "description": "The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI\nlinks temper-ingest and embeds locally, which is faster than making the server do it; the\nruby gem, the TypeScript package and MCP structurally cannot, so the server embeds on their\nbehalf and its absence is not a refusal.\n\n**It rides beside the text it was computed FROM, and that pairing is the point.** At\ncomposition level a vector and its query could drift apart; here they cannot.\n\nThis never reaches a response: [`super::trace::CompositionTrace`] carries only `stages` and\nechoes no intention. Should a trace ever carry one, that stops being incidental and becomes\na constraint — a 768-float array must not serialize back to the caller.\n\n**Exactly [`MAX_EMBEDDING_DIM`] floats, every value finite, norm within\n[`MIN_EMBEDDING_NORM`]..[`MAX_EMBEDDING_NORM`]**, refused as\n[`super::disposition::RefusalReason::MalformedEmbedding`]. `[added — 2026-08-28, found in\nreview]` This carried no bound of any kind, which made it the largest unbounded field on the\ncontract: a million floats on one stage is 4 MB that validates cleanly, and there are\n[`MAX_STAGES`] stages. A wrong-sized vector also reached pgvector and came back as an\n**opaque 500** — the caller told nothing, in the door whose promise is a typed refusal.\n`[widened — 2026-09-02]` Length alone still let impossible values through: a NaN poisons\nevery cosine computed from it, and the all-zero vector's cosine is 0/0 — both surfaced as\ndriver errors behind the same opaque 500. The norm window is wide enough that any\nconsistently scaled direction passes; only values that are not vectors for this space at\nall are refused.\n\n**Published as a min AND a max, because the check is an equality.** `[corrected —\n2026-08-28, found in review]` Publishing only the maximum stated half the rule: a 384-float\nvector cleared every generated client and was then refused by the server, which is exactly\nthe gap the shape pass exists to close — a client must be able to refuse what the server\nwould refuse. The two bounds are the same number because a vector of any other length is\nnot a large question, it is a vector for a different space. The norm window is published in\nthe field's description text rather than as numeric constraints: a client that scales\nlegitimately is not an error the bounds are for.",
+                    "items": {
+                      "format": "float",
+                      "type": "number"
+                    },
+                    "maxItems": 768,
+                    "minItems": 768,
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "query": {
+                    "description": "The question, in the caller's own words.\n\nAt most [`MAX_INTENTION_QUERY_BYTES`] bytes of it, refused as\n[`super::disposition::RefusalReason::IntentionTooLong`].",
+                    "maxLength": 4096,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "This node's name, referenced by downstream stages and by `returns`.",
+                "type": "string"
+              },
+              "properties": {
+                "description": "Every predicate here is refused, and the refusal says where the capability went.\n\n**Keep this heading to one line** `[found in review — 2026-08-15]`. schemars takes the first\nheading LINE as the schema `title` and the remainder as `description`, so a heading that wraps\nships a truncated sentence as the title and an orphan word as the start of the description —\ninto `act_invocation.schema.json`, `openapi.json`, and every generated client. A mechanical\nconstraint of the generator, not a style preference.\n\n`[2026-08-15]` **Both halves now have containers** — [`super::filter::ResourceFilter`]'s\n`properties` and [`super::filter::EdgeFilter`]'s — so a property predicate has a\nhome that names its own subject, and this field has nothing left to mean. The subject tag it\ncarried (`PropertySubject`), that tag's open arm, the `UnknownFilterValue` refusal the open\narm existed to raise, and the subject-tagged predicate type are all **deleted**.\n\n**The field is not deleted with them, and that is the whole decision**\n`[decided — 2026-08-15, Pete]`. [`ActInvocation`] carries `deny_unknown_fields`, and serde\nshort-circuits before `validate` runs — so removing the field would turn a named\n`FilterNotApplicable` inside `ErrorBody` into a deserializer 400 **outside** that shape. A\nstale caller would go from being told where to move their predicate to being told their body\nis unparseable. Retyping to [`super::filter::PropertyPredicate`], which carries no\n`deny_unknown_fields`, keeps a stale `{\"subject\":…,\"key\":…,\"op\":…}` parsing: the tag is\nignored and the redirect still fires.\n\n**The residue:** with the tag gone the redirect cannot name *which* container, so it names\nboth and lets the caller pick. That is a real loss of fidelity in the refusal, accepted as\nthe price of deleting the type.",
+                "items": {
+                  "description": "A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an\n[`EdgeFilter`] means the edge's own `kb_properties` rows, a [`ResourceFilter`] means the\nresource's own, and nothing else has to be said.\n\n`[2026-08-15]` Both containers now exist, so the subject-tagged variant that floated free on the\ninvocation is **deleted**, along with the `PropertySubject` tag it carried and the\n`UnknownFilterValue` refusal that tag's open arm existed to raise. What survives is\n[`super::ActInvocation::properties`], retyped to this struct: it is a **tombstone**, refusing\nwith a redirect rather than being removed, because `ActInvocation` carries `deny_unknown_fields`\nand removing the field would route a stale caller into a deserializer 400 outside the\n`ErrorBody` shape — a worse answer than the one being replaced.",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "op": {
+                      "description": "A property narrowing operator. CLOSED — the key space is open, the operator set is not. No\noperator takes a fragment of a query language; all bind their values.",
+                      "oneOf": [
+                        {
+                          "description": "The key is present at all. A row-existence check on the `property_key` btree — NOT a jsonb\noperator, because `jsonb_path_ops` does not index key-existence and the btree already\nanswers it.",
+                          "properties": {
+                            "op": {
+                              "const": "has_key",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "op"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.",
+                          "properties": {
+                            "op": {
+                              "const": "contains",
+                              "type": "string"
+                            },
+                            "values": {
+                              "items": true,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "values"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "description": "`property_value <direction> $value` over jsonb's native ordering, type-guarded.\n\n**The type is inferred from the caller's bound, never declared on the operator.**\n`jsonb_typeof(property_value) = jsonb_typeof($value)` segments by JSON type before the\ncomparison, so a row whose JSON type differs from the bound's is an **honest empty** rather\nthan a type-confusion match. jsonb defines a total type ordering\n(`null < boolean < number < string < array < object`), so without the guard a numeric\nbound against a string-valued key would match **every** string row (`string > number` is\ntrue in jsonb's ordering) — a type-confusion artifact, not an answer. The guard makes each\ncomparison run only within a homogeneous sub-population.\n\n**Per-VALUE inference, not per-key — and the distinction is the trap.** `temper-pr` is\n68 string / 7 numeric on ONE key, so no per-key answer exists; each caller sends one bound\nwith one JSON type, and the guard makes the other-type rows honest empties. A numeric bound\ncompares the 7 numeric rows; a string bound compares the 68 string rows; neither is wrong.\n\n**Numbers stored as JSON STRINGS** that need numeric comparison are out of scope: that is a\nconvention the key should fix (store numbers as JSON numbers), and `temper-seq` (132 numeric\nrows) already does. A comparison operator is not a type-coercion mechanism.\n\n`probe_count` for `Compare` is **1** — one bound, one comparison per row that carries the\nkey — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is\nNOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,\nand adding it saves one probe at the cost of a second value slot and a second SQL branch.",
+                          "properties": {
+                            "direction": {
+                              "description": "The ordering direction for [`PropertyOp::Compare`]. A closed sub-enum, the same shape as\n`Contains`'s `Vec` — a nested closed set inside one `PropertyOp` discriminant.\n\nAll four directions are needed: inclusivity matters for dates (*\"on or after 2026-07-01\"* is\n`gte`, not `gt*). `Gt`/`Lt` are the half-open bounds; `Gte`/`Lte` are the closed ones; a\n`Between` is `gte` AND `lte` composed through the existing AND-across-the-list.",
+                              "enum": [
+                                "gt",
+                                "gte",
+                                "lt",
+                                "lte"
+                              ],
+                              "type": "string"
+                            },
+                            "op": {
+                              "const": "compare",
+                              "type": "string"
+                            },
+                            "value": true
+                          },
+                          "required": [
+                            "op",
+                            "direction",
+                            "value"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "op"
+                  ],
+                  "type": "object"
+                },
+                "title": "A tombstone",
+                "type": "array"
+              },
+              "resource_filter": {
+                "description": "Narrowing by what a thing IS. At most one slot applies per act; supplying the other is\n`RefusalReason::FilterNotApplicable`.",
+                "properties": {
+                  "doc_type": {
+                    "description": "`kb_properties` where `property_key = 'doc_type'`.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 256,
+                    "type": "array"
+                  },
+                  "facets": {
+                    "description": "`kb_properties` where `property_key = 'facet'`.",
+                    "items": {
+                      "description": "One `kb_properties` facet predicate, at the inner-key grain the facet model uses.",
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "owner": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "properties": {
+                    "description": "`kb_properties` rows owned by the resource itself: open key space, closed operator set.\nAND across the list, OR within a [`PropertyOp::Contains`].\n\n**The three named fields above reach three keys; this one reaches the rest.** Sixty-seven of\nthe seventy live property keys were narrowable by nothing on any act\n`[measured on prod — 2026-08-14]`.\n\n**The container is the point, and it is the same container `EdgeFilter` has.** This is where\na resource property predicate lives; it moved off `ActInvocation::properties`, where the same\nfield meant different things depending on which act carried it. Given a container the subject\ntag has no job, which is why the tag no longer exists.\n\n**`Contains` reads the value WHOLE — `kb_resource_properties`, never\n`kb_property_elements`** `[decided — 2026-08-15, Pete; 20260815000040]`. So it means exactly\nwhat [`EdgeFilter::properties`]'s `Contains` means. The element relation would silently\nnarrow the operator: an array-shaped probe matches the whole value and matches *nothing*\nagainst an exploded element, and a `[]`-valued key is a row in the one and no rows in the\nother. The element view continues to serve `tags` and `facets`, whose semantics genuinely\nare AND-containment over elements.",
+                    "items": {
+                      "description": "A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an\n[`EdgeFilter`] means the edge's own `kb_properties` rows, a [`ResourceFilter`] means the\nresource's own, and nothing else has to be said.\n\n`[2026-08-15]` Both containers now exist, so the subject-tagged variant that floated free on the\ninvocation is **deleted**, along with the `PropertySubject` tag it carried and the\n`UnknownFilterValue` refusal that tag's open arm existed to raise. What survives is\n[`super::ActInvocation::properties`], retyped to this struct: it is a **tombstone**, refusing\nwith a redirect rather than being removed, because `ActInvocation` carries `deny_unknown_fields`\nand removing the field would route a stale caller into a deserializer 400 outside the\n`ErrorBody` shape — a worse answer than the one being replaced.",
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "op": {
+                          "description": "A property narrowing operator. CLOSED — the key space is open, the operator set is not. No\noperator takes a fragment of a query language; all bind their values.",
+                          "oneOf": [
+                            {
+                              "description": "The key is present at all. A row-existence check on the `property_key` btree — NOT a jsonb\noperator, because `jsonb_path_ops` does not index key-existence and the btree already\nanswers it.",
+                              "properties": {
+                                "op": {
+                                  "const": "has_key",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "op"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.",
+                              "properties": {
+                                "op": {
+                                  "const": "contains",
+                                  "type": "string"
+                                },
+                                "values": {
+                                  "items": true,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "op",
+                                "values"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "description": "`property_value <direction> $value` over jsonb's native ordering, type-guarded.\n\n**The type is inferred from the caller's bound, never declared on the operator.**\n`jsonb_typeof(property_value) = jsonb_typeof($value)` segments by JSON type before the\ncomparison, so a row whose JSON type differs from the bound's is an **honest empty** rather\nthan a type-confusion match. jsonb defines a total type ordering\n(`null < boolean < number < string < array < object`), so without the guard a numeric\nbound against a string-valued key would match **every** string row (`string > number` is\ntrue in jsonb's ordering) — a type-confusion artifact, not an answer. The guard makes each\ncomparison run only within a homogeneous sub-population.\n\n**Per-VALUE inference, not per-key — and the distinction is the trap.** `temper-pr` is\n68 string / 7 numeric on ONE key, so no per-key answer exists; each caller sends one bound\nwith one JSON type, and the guard makes the other-type rows honest empties. A numeric bound\ncompares the 7 numeric rows; a string bound compares the 68 string rows; neither is wrong.\n\n**Numbers stored as JSON STRINGS** that need numeric comparison are out of scope: that is a\nconvention the key should fix (store numbers as JSON numbers), and `temper-seq` (132 numeric\nrows) already does. A comparison operator is not a type-coercion mechanism.\n\n`probe_count` for `Compare` is **1** — one bound, one comparison per row that carries the\nkey — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is\nNOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,\nand adding it saves one probe at the cost of a second value slot and a second SQL branch.",
+                              "properties": {
+                                "direction": {
+                                  "description": "The ordering direction for [`PropertyOp::Compare`]. A closed sub-enum, the same shape as\n`Contains`'s `Vec` — a nested closed set inside one `PropertyOp` discriminant.\n\nAll four directions are needed: inclusivity matters for dates (*\"on or after 2026-07-01\"* is\n`gte`, not `gt*). `Gt`/`Lt` are the half-open bounds; `Gte`/`Lte` are the closed ones; a\n`Between` is `gte` AND `lte` composed through the existing AND-across-the-list.",
+                                  "enum": [
+                                    "gt",
+                                    "gte",
+                                    "lt",
+                                    "lte"
+                                  ],
+                                  "type": "string"
+                                },
+                                "op": {
+                                  "const": "compare",
+                                  "type": "string"
+                                },
+                                "value": true
+                              },
+                              "required": [
+                                "op",
+                                "direction",
+                                "value"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "op"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "stage": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "status": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "tags": {
+                    "description": "`kb_properties` where `property_key = 'tags'`. AND-containment.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 256,
+                    "type": "array"
+                  },
+                  "title_contains": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "terms": {
+                "additionalProperties": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "description": "Act-level bound terms. A term this act does not admit is refused STATICALLY\n(`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.",
+                "type": "object"
+              }
+            },
+            "required": [
+              "name",
+              "act"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A set combination over two-or-more upstream stages. Its own node kind because no act takes more\nthan one input, so modelling it as an act would lie about what an act is.",
+            "properties": {
+              "inputs": {
+                "description": "Two or more. One input is not a combination; validation refuses it (beat B).\n\n**For `difference` it is exactly two, and it is ORDERED**: `inputs[0]` minus `inputs[1]`.\n`[decided — 2026-08-15, Pete]`\n\nA left fold was the alternative and it is the one Postgres would have given away free —\n`A EXCEPT B EXCEPT C` already evaluates as `A − (B ∪ C)`, which is the exact shape of the\nquestion that motivated this op, with one stage fewer. It is refused for two reasons that\ncompound:\n\n- **This field would mean two different things at once.** It is a set for `union` and\n  `intersect` and would be a distinguished head plus a set for `difference` — one `Vec` with\n  two readings, in a struct that carries no marker saying which is in force.\n- **Nothing would disclose the size of what was subtracted.** With `B ∪ C` written as its\n  own union stage, that stage carries a tally and a reader can see `|B ∪ C|`. Folded into\n  the difference, the union has no stage, no tally and no name — the same\n  no-stage-no-disclosure shape [`super::disposition::RefusalReason::DuplicateInputRelation`]\n  refuses for act inputs, one node kind over.\n\nThe cost is stated rather than hidden: `A − (B ∪ C)` is three stages here and two under a\nfold.",
+                "items": {
+                  "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "description": "A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the\nname is a safe SQL identifier.\n\nThe compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the\nwhole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no\n`new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter,\nthen up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).",
+                "type": "string"
+              },
+              "op": {
+                "description": "A set combinator's operation. Every member takes two or more inputs; no act does, which is why\na combinator is its own node kind rather than an act invocation.\n\n**Two of the three are commutative and one is not, and that split is the whole of what\n[`CombineNode::inputs`] means.** For `union` and `intersect` the input list is a SET — reordering\nit cannot change the answer, and arity above two is a fold with nothing to say about order. For\n`difference` it is an ordered PAIR: `A − B ≠ B − A`, so `inputs[0]` is the minuend and\n`inputs[1]` the subtrahend, and a third input is refused rather than folded (see\n[`CombineNode::inputs`]).\n\nThe set is CLOSED and adding a member is a contract change — the same rule §12 states for\n`PropertyOp`. `union` and `intersect` were chosen as a pair; `difference` joins them because the\nquestion *\"in A, and in neither B nor C\"* is set-expressible, and `EdgeFilter`'s rule is that a\nnarrowing expressible as a set must be an act rather than a predicate. That is why this is not a\n`PropertyOp::LacksKey`, which is the tempting shape — it sits beside `HasKey` and reads\nnaturally, and it would inherit the open-key type hazard for a question that has no type\nquestion at all. `[decided — 2026-08-15, Pete]`",
+                "oneOf": [
+                  {
+                    "enum": [
+                      "union",
+                      "intersect"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "const": "difference",
+                    "description": "`inputs[0]` minus `inputs[1]`. Exactly two inputs — see [`CombineNode::inputs`].",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "op",
+              "inputs"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "A node in the composition DAG: an act invocation, or a set combination over other nodes.\n\n**No `Eq`, only `PartialEq`** — the act variant carries an intention, which carries the query\nvector. See [`Intention`]."
       },
       "maxItems": 64,
       "type": "array"

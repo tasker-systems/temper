@@ -97,84 +97,6 @@
         }
       ]
     },
-    "ManagedMeta": {
-      "additionalProperties": false,
-      "description": "Temper-governed **workflow + provenance** metadata for a vault resource.\n\nThis is a **closed, temper-owned vocabulary** of exactly the `KeyFate::Property`\nkeys — optional, smart-defaulted metadata. Identity (`title`/`slug`), type\n(`doc_type_name`), home (`context`/`cogmap`), and relationships (`goal`) are NOT\nmetadata: they are first-class wire fields, never carried here. The Property field\nset is kept in lockstep with `temper_substrate::keys::MANAGED_PROPERTY_KEYS` by the\ndrift-guard in `temper-services/tests/managed_meta_property_drift_test.rs`.\n\nThere is no catch-all — a key not named here is not a managed key. Caller-defined\n(\"bring-your-own\") fields belong in `open_meta`, the free-form tier. Deserialization\nrejects unknown keys (`#[serde(deny_unknown_fields)]`) so a mis-filed key (including a\nformer identity key like `temper-title`) fails loudly at the wire boundary instead of\nsilently migrating tiers.\n\nAll fields use `temper-*` YAML/JSON key names via `serde(rename)`.\n`None` fields are omitted from serialized output.",
-      "properties": {
-        "temper-branch": {
-          "description": "Git branch associated with the task (task only)",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "temper-effort": {
-          "description": "Task effort estimate (task only)",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "temper-llm-model": {
-          "description": "Model that produced this resource",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "temper-llm-run": {
-          "description": "UUIDv7 stamp from a (historical) LLM-assisted run.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "temper-mode": {
-          "description": "Task execution mode (task only)",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "temper-pr": {
-          "description": "Pull request reference (task only)",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "temper-provenance": {
-          "description": "How this resource was created (LLM-discovered or user-created)",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "temper-seq": {
-          "description": "Sequence number for ordering (task/goal)",
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "temper-stage": {
-          "description": "Task workflow stage (task only)",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "temper-status": {
-          "description": "Goal lifecycle status (goal only)",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "MatchLocation": {
       "description": "Where in a resource a chunk-grain match landed.",
       "properties": {
@@ -371,9 +293,83 @@
           ]
         },
         "managed_meta": {
-          "$ref": "#/$defs/ManagedMeta",
+          "additionalProperties": false,
           "default": {},
-          "description": "Typed managed (`temper-*`) frontmatter — the closed Property vocabulary.\n\n**Not an `Option`.** This is what makes dropping the hoisted `stage`/`mode`/\n`effort`/`seq` columns lossless: the values did not go away, they went home. A\nresource with no managed metadata carries an all-`None` `ManagedMeta`, which\nserializes as `{}` — present and empty, never absent."
+          "description": "Typed managed (`temper-*`) frontmatter — the closed Property vocabulary.\n\n**Not an `Option`.** This is what makes dropping the hoisted `stage`/`mode`/\n`effort`/`seq` columns lossless: the values did not go away, they went home. A\nresource with no managed metadata carries an all-`None` `ManagedMeta`, which\nserializes as `{}` — present and empty, never absent.",
+          "properties": {
+            "temper-branch": {
+              "description": "Git branch associated with the task (task only)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "temper-effort": {
+              "description": "Task effort estimate (task only)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "temper-llm-model": {
+              "description": "Model that produced this resource",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "temper-llm-run": {
+              "description": "UUIDv7 stamp from a (historical) LLM-assisted run.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "temper-mode": {
+              "description": "Task execution mode (task only)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "temper-pr": {
+              "description": "Pull request reference (task only)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "temper-provenance": {
+              "description": "How this resource was created (LLM-discovered or user-created)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "temper-seq": {
+              "description": "Sequence number for ordering (task/goal)",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "temper-stage": {
+              "description": "Task workflow stage (task only)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "temper-status": {
+              "description": "Goal lifecycle status (goal only)",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
         },
         "open_meta": {
           "description": "Open (user-defined) frontmatter — the free-form tier, intentionally untyped.\nAbsent means the `open-meta` section was not requested."

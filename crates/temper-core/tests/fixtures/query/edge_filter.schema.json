@@ -1,87 +1,4 @@
 {
-  "$defs": {
-    "OrdOp": {
-      "description": "The ordering direction for [`PropertyOp::Compare`]. A closed sub-enum, the same shape as\n`Contains`'s `Vec` — a nested closed set inside one `PropertyOp` discriminant.\n\nAll four directions are needed: inclusivity matters for dates (*\"on or after 2026-07-01\"* is\n`gte`, not `gt*). `Gt`/`Lt` are the half-open bounds; `Gte`/`Lte` are the closed ones; a\n`Between` is `gte` AND `lte` composed through the existing AND-across-the-list.",
-      "enum": [
-        "gt",
-        "gte",
-        "lt",
-        "lte"
-      ],
-      "type": "string"
-    },
-    "PropertyOp": {
-      "description": "A property narrowing operator. CLOSED — the key space is open, the operator set is not. No\noperator takes a fragment of a query language; all bind their values.",
-      "oneOf": [
-        {
-          "description": "The key is present at all. A row-existence check on the `property_key` btree — NOT a jsonb\noperator, because `jsonb_path_ops` does not index key-existence and the btree already\nanswers it.",
-          "properties": {
-            "op": {
-              "const": "has_key",
-              "type": "string"
-            }
-          },
-          "required": [
-            "op"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.",
-          "properties": {
-            "op": {
-              "const": "contains",
-              "type": "string"
-            },
-            "values": {
-              "items": true,
-              "type": "array"
-            }
-          },
-          "required": [
-            "op",
-            "values"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "`property_value <direction> $value` over jsonb's native ordering, type-guarded.\n\n**The type is inferred from the caller's bound, never declared on the operator.**\n`jsonb_typeof(property_value) = jsonb_typeof($value)` segments by JSON type before the\ncomparison, so a row whose JSON type differs from the bound's is an **honest empty** rather\nthan a type-confusion match. jsonb defines a total type ordering\n(`null < boolean < number < string < array < object`), so without the guard a numeric\nbound against a string-valued key would match **every** string row (`string > number` is\ntrue in jsonb's ordering) — a type-confusion artifact, not an answer. The guard makes each\ncomparison run only within a homogeneous sub-population.\n\n**Per-VALUE inference, not per-key — and the distinction is the trap.** `temper-pr` is\n68 string / 7 numeric on ONE key, so no per-key answer exists; each caller sends one bound\nwith one JSON type, and the guard makes the other-type rows honest empties. A numeric bound\ncompares the 7 numeric rows; a string bound compares the 68 string rows; neither is wrong.\n\n**Numbers stored as JSON STRINGS** that need numeric comparison are out of scope: that is a\nconvention the key should fix (store numbers as JSON numbers), and `temper-seq` (132 numeric\nrows) already does. A comparison operator is not a type-coercion mechanism.\n\n`probe_count` for `Compare` is **1** — one bound, one comparison per row that carries the\nkey — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is\nNOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,\nand adding it saves one probe at the cost of a second value slot and a second SQL branch.",
-          "properties": {
-            "direction": {
-              "$ref": "#/$defs/OrdOp"
-            },
-            "op": {
-              "const": "compare",
-              "type": "string"
-            },
-            "value": true
-          },
-          "required": [
-            "op",
-            "direction",
-            "value"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "PropertyPredicate": {
-      "description": "A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an\n[`EdgeFilter`] means the edge's own `kb_properties` rows, a [`ResourceFilter`] means the\nresource's own, and nothing else has to be said.\n\n`[2026-08-15]` Both containers now exist, so the subject-tagged variant that floated free on the\ninvocation is **deleted**, along with the `PropertySubject` tag it carried and the\n`UnknownFilterValue` refusal that tag's open arm existed to raise. What survives is\n[`super::ActInvocation::properties`], retyped to this struct: it is a **tombstone**, refusing\nwith a redirect rather than being removed, because `ActInvocation` carries `deny_unknown_fields`\nand removing the field would route a stale caller into a deserializer 400 outside the\n`ErrorBody` shape — a worse answer than the one being replaced.",
-      "properties": {
-        "key": {
-          "type": "string"
-        },
-        "op": {
-          "$ref": "#/$defs/PropertyOp"
-        }
-      },
-      "required": [
-        "key",
-        "op"
-      ],
-      "type": "object"
-    }
-  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the\nkind is a closed DDL enum, the label is free text the caller actually sees on every edge.\n\n# Every field here constrains a HOP, and that is why they live in a container\n\n`[decided — 2026-08-14, Pete]` *A narrowing that can be expressed as a set must be an act. A\nnarrowing that cannot be a set belongs to the act whose semantics it constrains.* An edge\npredicate has no set-shaped substitute: binding a walk by *\"nodes that participate in an edge\nmatching P\"* admits a node because it has a matching edge **somewhere** and then walks it through\na different, non-matching one — a different question, returning plausible rows and looking like\nit narrowed. So these constrain the traversal from inside it, and the only act that traverses an\nedge is `follow-from`.",
   "properties": {
@@ -108,7 +25,79 @@
     "properties": {
       "description": "`kb_properties` rows owned by the edge itself: open key space, closed operator set.\nAND across the list, OR within a [`PropertyOp::Contains`].\n\n**This is where an edge property predicate lives, and the container is the point.** It moved\noff [`super::ActInvocation::properties`], where the same field meant different things\ndepending on which act carried it — which is what a `PropertySubject` tag existed to\ndisambiguate. Given a container the tag has no job; the subject is the container.\n\n**Zero edge-owned properties exist in this deployment** `[measured on prod — 2026-08-14]`,\nand the storage has admitted them since the schema's first migration (`kb_properties.\nowner_table` includes `'kb_edges'`, whose DDL comment has said *\"§4a edges carry facets\"*\nthroughout) with a shipped write path `[verified — 20260727000030]`. So this slot narrows\nnothing today by data rather than by design.",
       "items": {
-        "$ref": "#/$defs/PropertyPredicate"
+        "description": "A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an\n[`EdgeFilter`] means the edge's own `kb_properties` rows, a [`ResourceFilter`] means the\nresource's own, and nothing else has to be said.\n\n`[2026-08-15]` Both containers now exist, so the subject-tagged variant that floated free on the\ninvocation is **deleted**, along with the `PropertySubject` tag it carried and the\n`UnknownFilterValue` refusal that tag's open arm existed to raise. What survives is\n[`super::ActInvocation::properties`], retyped to this struct: it is a **tombstone**, refusing\nwith a redirect rather than being removed, because `ActInvocation` carries `deny_unknown_fields`\nand removing the field would route a stale caller into a deserializer 400 outside the\n`ErrorBody` shape — a worse answer than the one being replaced.",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "op": {
+            "description": "A property narrowing operator. CLOSED — the key space is open, the operator set is not. No\noperator takes a fragment of a query language; all bind their values.",
+            "oneOf": [
+              {
+                "description": "The key is present at all. A row-existence check on the `property_key` btree — NOT a jsonb\noperator, because `jsonb_path_ops` does not index key-existence and the btree already\nanswers it.",
+                "properties": {
+                  "op": {
+                    "const": "has_key",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.",
+                "properties": {
+                  "op": {
+                    "const": "contains",
+                    "type": "string"
+                  },
+                  "values": {
+                    "items": true,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "op",
+                  "values"
+                ],
+                "type": "object"
+              },
+              {
+                "description": "`property_value <direction> $value` over jsonb's native ordering, type-guarded.\n\n**The type is inferred from the caller's bound, never declared on the operator.**\n`jsonb_typeof(property_value) = jsonb_typeof($value)` segments by JSON type before the\ncomparison, so a row whose JSON type differs from the bound's is an **honest empty** rather\nthan a type-confusion match. jsonb defines a total type ordering\n(`null < boolean < number < string < array < object`), so without the guard a numeric\nbound against a string-valued key would match **every** string row (`string > number` is\ntrue in jsonb's ordering) — a type-confusion artifact, not an answer. The guard makes each\ncomparison run only within a homogeneous sub-population.\n\n**Per-VALUE inference, not per-key — and the distinction is the trap.** `temper-pr` is\n68 string / 7 numeric on ONE key, so no per-key answer exists; each caller sends one bound\nwith one JSON type, and the guard makes the other-type rows honest empties. A numeric bound\ncompares the 7 numeric rows; a string bound compares the 68 string rows; neither is wrong.\n\n**Numbers stored as JSON STRINGS** that need numeric comparison are out of scope: that is a\nconvention the key should fix (store numbers as JSON numbers), and `temper-seq` (132 numeric\nrows) already does. A comparison operator is not a type-coercion mechanism.\n\n`probe_count` for `Compare` is **1** — one bound, one comparison per row that carries the\nkey — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is\nNOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,\nand adding it saves one probe at the cost of a second value slot and a second SQL branch.",
+                "properties": {
+                  "direction": {
+                    "description": "The ordering direction for [`PropertyOp::Compare`]. A closed sub-enum, the same shape as\n`Contains`'s `Vec` — a nested closed set inside one `PropertyOp` discriminant.\n\nAll four directions are needed: inclusivity matters for dates (*\"on or after 2026-07-01\"* is\n`gte`, not `gt*). `Gt`/`Lt` are the half-open bounds; `Gte`/`Lte` are the closed ones; a\n`Between` is `gte` AND `lte` composed through the existing AND-across-the-list.",
+                    "enum": [
+                      "gt",
+                      "gte",
+                      "lt",
+                      "lte"
+                    ],
+                    "type": "string"
+                  },
+                  "op": {
+                    "const": "compare",
+                    "type": "string"
+                  },
+                  "value": true
+                },
+                "required": [
+                  "op",
+                  "direction",
+                  "value"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "op"
+        ],
+        "type": "object"
       },
       "type": "array"
     }

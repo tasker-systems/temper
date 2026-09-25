@@ -1,53 +1,5 @@
 {
   "$defs": {
-    "ActName": {
-      "anyOf": [
-        {
-          "const": "find-exact",
-          "description": "*I can quote the exact words.*",
-          "type": "string"
-        },
-        {
-          "const": "find-about-anywhere",
-          "description": "*A concept, no exact words; search everything I can see.*",
-          "type": "string"
-        },
-        {
-          "const": "find-about-within",
-          "description": "*A concept, plus a set to search inside.*",
-          "type": "string"
-        },
-        {
-          "const": "find-resources-with",
-          "description": "*I can say what these things ARE; I have no question about what they mean.*\n\nThe only act with no intention — a pure selection. It narrows by what is known about a\nresource and orders nothing, so it SELECTS without SCORING, which is the distinction\n[`ActDeclaration::orders_by`] carries and which the registry's invariants had folded\ntogether under `produces.is_some()` until this act arrived.\n\nIts output is a set to pipe, never rows to read: a stage running it cannot appear in\n`returns`, for the same reason a combinator cannot — rows with no ordering quantity have\nnothing to score them, and the assembler would drop every one while reporting\n`disposition: answered`.",
-          "type": "string"
-        },
-        {
-          "const": "follow-from",
-          "description": "*A found thing; I want its neighbours.*",
-          "type": "string"
-        },
-        {
-          "const": "survey",
-          "description": "*A question about what a scope knows.*",
-          "type": "string"
-        },
-        {
-          "const": "substantiate",
-          "description": "*A claim; I want its defensibility.*",
-          "type": "string"
-        },
-        {
-          "const": "admit",
-          "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
-          "type": "string"
-        },
-        {
-          "type": "string"
-        }
-      ],
-      "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
-    },
     "ActQuantity": {
       "description": "The quantity an act orders its answer by, named so that summing it with another act's reads as\nthe category error it is.\n\nThis is where `no-cross-act-ranking` becomes structural instead of a rule someone remembers.\nResearch [Asking Temper](./019fbd9b-2d28-7530-9da0-4515319d6688), delta 5: *\"Act responses never\nexpose commensurable score fields — no bare `score: f64` shared across acts; each quantity\ncarries its act's name and shape.\"* Arithmetic follows names: two fields called `score` invite\n`a.score + b.score` and no reviewer catches it. The retired `unified_search` is the worked\nfailure — it renamed `fts_norm` and `vec_norm` to `fts_score`/`vector_score` and then summed them\ninto `combined_score`, which is the exact expression the frame register forbids. It was dropped\non 2026-08-06; the body stays readable in the migration history.",
       "properties": {
@@ -185,7 +137,22 @@
             "bounds_unreachable": {
               "description": "Bound KINDS the act admits that this door has no slot for. Zero live instances anywhere\nin the registry as of this branch: the `find` acts' `Resource` bound was the one —\nevery door hard-bound `NULL` for bound-ids and no door's params carried a resource-id\nlist — until `SearchParams` gained `bound_ids` and `temper search` gained `--within`,\nclosing it everywhere at once. The field stays because an act admitting a bound kind\nthat not every door can supply is exactly this shape again; nothing currently occupies\nit. Same guard as `terms_unreachable` — every entry must appear in the act's\n`accepts_bounds`.",
               "items": {
-                "$ref": "#/$defs/IdKind"
+                "anyOf": [
+                  {
+                    "enum": [
+                      "resource",
+                      "region",
+                      "cogmap",
+                      "context"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
+                    "type": "string"
+                  }
+                ],
+                "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
               },
               "type": "array"
             },
@@ -222,24 +189,6 @@
         "edge"
       ],
       "type": "string"
-    },
-    "IdKind": {
-      "anyOf": [
-        {
-          "enum": [
-            "resource",
-            "region",
-            "cogmap",
-            "context"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
-          "type": "string"
-        }
-      ],
-      "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
     },
     "QuantityScale": {
       "description": "The scale of an act's ordering quantity.\n\nCarried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.\n`search_wide` rescales a cosine distance as `1.0 - d/2.0` into `[0,1]`, while\n`wayfind_region_scores` rescales *the same* `<=>` distance as `1 - d` into `[-1,1]`.\nNeither column name says so, and one of the two feeds a weighted sum everyone reads as a\n`[0,1]` score.",
@@ -319,7 +268,22 @@
     },
     "accepts_bounds": {
       "items": {
-        "$ref": "#/$defs/IdKind"
+        "anyOf": [
+          {
+            "enum": [
+              "resource",
+              "region",
+              "cogmap",
+              "context"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
+            "type": "string"
+          }
+        ],
+        "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
       },
       "type": "array"
     },
@@ -332,7 +296,22 @@
     },
     "accepts_seeds": {
       "items": {
-        "$ref": "#/$defs/IdKind"
+        "anyOf": [
+          {
+            "enum": [
+              "resource",
+              "region",
+              "cogmap",
+              "context"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
+            "type": "string"
+          }
+        ],
+        "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
       },
       "type": "array"
     },
@@ -375,7 +354,52 @@
       "type": "object"
     },
     "name": {
-      "$ref": "#/$defs/ActName"
+      "anyOf": [
+        {
+          "const": "find-exact",
+          "description": "*I can quote the exact words.*",
+          "type": "string"
+        },
+        {
+          "const": "find-about-anywhere",
+          "description": "*A concept, no exact words; search everything I can see.*",
+          "type": "string"
+        },
+        {
+          "const": "find-about-within",
+          "description": "*A concept, plus a set to search inside.*",
+          "type": "string"
+        },
+        {
+          "const": "find-resources-with",
+          "description": "*I can say what these things ARE; I have no question about what they mean.*\n\nThe only act with no intention — a pure selection. It narrows by what is known about a\nresource and orders nothing, so it SELECTS without SCORING, which is the distinction\n[`ActDeclaration::orders_by`] carries and which the registry's invariants had folded\ntogether under `produces.is_some()` until this act arrived.\n\nIts output is a set to pipe, never rows to read: a stage running it cannot appear in\n`returns`, for the same reason a combinator cannot — rows with no ordering quantity have\nnothing to score them, and the assembler would drop every one while reporting\n`disposition: answered`.",
+          "type": "string"
+        },
+        {
+          "const": "follow-from",
+          "description": "*A found thing; I want its neighbours.*",
+          "type": "string"
+        },
+        {
+          "const": "survey",
+          "description": "*A question about what a scope knows.*",
+          "type": "string"
+        },
+        {
+          "const": "substantiate",
+          "description": "*A claim; I want its defensibility.*",
+          "type": "string"
+        },
+        {
+          "const": "admit",
+          "description": "The anti-act: visibility-shaped admission wearing relevance's costume. Declared so that\npromoting it to a real act requires DELETING an explicit refusal.",
+          "type": "string"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
     },
     "orders_by": {
       "anyOf": [
@@ -391,7 +415,22 @@
     "produces": {
       "anyOf": [
         {
-          "$ref": "#/$defs/IdKind"
+          "anyOf": [
+            {
+              "enum": [
+                "resource",
+                "region",
+                "cogmap",
+                "context"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "An unrecognized kind. Never constructed by this crate — only by deserializing a producer\nnewer than this consumer.",
+              "type": "string"
+            }
+          ],
+          "description": "What an [`IdSet`]'s ids name.\n\nOPEN vocabulary: an unrecognized kind parses into [`IdKind::Other`] so the act layer can\nrefuse it with a reason. Domain-named, never table-named — this deliberately diverges from\n`LedgerRefKind`, which renames every variant to its SQL table."
         },
         {
           "type": "null"
