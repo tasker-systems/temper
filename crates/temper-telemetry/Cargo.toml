@@ -1,8 +1,15 @@
+# Published to crates.io as `temperkb-telemetry`; the LIBRARY keeps the
+# `temper_telemetry` name (see temperkb-core's manifest for the convention).
 [package]
-name = "temper-telemetry"
-version = "0.5.3"
-edition = "2021"
+name = "temperkb-telemetry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Shared telemetry seam for temper's deployables: logging init, inbound trace-context extraction, and the root-span field convention"
+
+[lib]
+name = "temper_telemetry"
 
 [dependencies]
 # `matched-path` for `MatchedPath`, the bounded route dimension the root span records into
@@ -43,19 +50,30 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 #
 # It enables `opentelemetry_sdk/testing` itself rather than leaning on a caller's dev-dependencies to
 # supply it: `InMemorySpanExporter` is gated behind that feature, so the surface only compiles where
-# something else happened to turn it on. That made `cargo check -p temper-telemetry --all-features`
+# something else happened to turn it on. That made `cargo check -p temperkb-telemetry --all-features`
 # fail on an item the feature itself names.
 test-support = ["opentelemetry_sdk/testing"]
 
 [dev-dependencies]
+# BOTH dev-deps stay PATH-ONLY, and deliberately not workspace-inherited: a
+# workspace-inherited entry carries a version, and cargo resolves a versioned
+# dev-dependency from the registry when packaging — where this crate's own new
+# version can never exist before its first publish (and temperkb-core's is
+# merely an ordering hazard). Path-only dev-dependencies are ignored by
+# consumers and resolved locally at publish verification, so packing works.
+# `root_span!` expands `::temper_core::redact::redact_path` at the CALL SITE,
+# so the macro's own test invocations need temper-core to resolve. No
+# dependency on temper-core is forced on any CONSUMER of the published crate —
+# dev-dependencies are never resolved for a dependency.
+temperkb-core = { path = "../temper-core" }
 # `flush_budget.rs` drives the async `flush_within_budget` and needs a runtime to block on.
 tokio = { version = "1", features = ["rt", "time", "macros"] }
 # Depend on ourselves to turn our own `test-support` on for our own tests. Without this,
-# `cargo test -p temper-telemetry` fails to compile (`cannot find function install_test_provider`) and
+# `cargo test -p temperkb-telemetry` fails to compile (`cannot find function install_test_provider`) and
 # the tests in `tests/` only build because *another* workspace member — tests/e2e — happens to enable
 # the feature, which workspace unification then applies here. That is a real trap: the natural
 # per-crate command is broken while `cargo make test` passes.
-temper-telemetry = { path = ".", features = ["test-support"] }
+temperkb-telemetry = { path = ".", features = ["test-support"] }
 opentelemetry_sdk = { version = "0.32", features = ["testing"] }
 serde_json = "1"
 temp-env = "0.3.6"

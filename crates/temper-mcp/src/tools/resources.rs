@@ -1721,13 +1721,31 @@ mod tests {
     /// Gap 1: the generated JsonSchema must describe `managed_meta` as the
     /// concrete `ManagedMeta` object rather than free-form JSON — that
     /// concreteness is what stops MCP clients from string-encoding the field.
+    /// Under the self-contained-declarations rule the concreteness is INLINE:
+    /// the property advertises `type: object` with named properties and no
+    /// `$ref`. Before the rule the property `$ref`'d a `$defs` entry and this
+    /// test keyed on the type name appearing in the schema string.
     #[test]
     fn create_resource_input_managed_meta_schema_is_concrete() {
-        let schema = schemars::schema_for!(CreateResourceInput);
-        let json = serde_json::to_string(&schema).expect("schema serializes");
+        let schema = serde_json::to_value(schemars::schema_for!(CreateResourceInput))
+            .expect("schema serializes");
+        let managed = &schema["properties"]["managed_meta"];
         assert!(
-            json.contains("ManagedMeta"),
-            "managed_meta should reference the typed ManagedMeta schema: {json}"
+            managed.get("$ref").is_none(),
+            "managed_meta must be inlined, not a $ref: {managed}"
+        );
+        let is_object = match &managed["type"] {
+            serde_json::Value::String(s) => s == "object",
+            serde_json::Value::Array(items) => items.iter().any(|v| v.as_str() == Some("object")),
+            _ => false,
+        };
+        assert!(
+            is_object,
+            "managed_meta must advertise type object: {managed}"
+        );
+        assert!(
+            managed["properties"].is_object(),
+            "managed_meta must carry its named properties inline, not free-form: {managed}"
         );
     }
 }

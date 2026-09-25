@@ -2,11 +2,35 @@
 resolver = "2"
 members = ["crates/*", "tests/e2e"]
 
-[package]
-name = "temper-cloud"
+# Shared package metadata. `version` is the workspace's lockstep version: every
+# member inherits it, so a release bumps exactly one line. The crates published
+# to crates.io (the `temperkb-*` client closure) additionally inherit `license`
+# and `repository`; everything else carries `publish = false` so server-side
+# internals cannot reach the registry by accident.
+[workspace.package]
 version = "0.5.3"
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/tasker-systems/temper"
+
+# The client closure, published to crates.io under the temperkb- prefix. Dependency
+# specs cannot inherit [workspace.package] fields, so the version is spelled here —
+# bump it TOGETHER with [workspace.package].version; the publish script's
+# version-agreement guard fails the release if the two disagree.
+[workspace.dependencies]
+temperkb-auth = { path = "crates/temper-auth", version = "0.5.3" }
+temperkb-client = { path = "crates/temper-client", version = "0.5.3" }
+temperkb-core = { path = "crates/temper-core", version = "0.5.3" }
+temperkb-principal = { path = "crates/temper-principal", version = "0.5.3" }
+temperkb-telemetry = { path = "crates/temper-telemetry", version = "0.5.3" }
+temperkb-workflow = { path = "crates/temper-workflow", version = "0.5.3" }
+
+[package]
+name = "temper-cloud"
+version.workspace = true
+edition.workspace = true
 description = "Vercel deployment adapter for temper-api"
+publish = false
 
 [[bin]]
 name = "axum"
@@ -24,7 +48,7 @@ path = "api/internal.rs"
 temper-api = { path = "crates/temper-api" }
 temper-services = { path = "crates/temper-services" }
 temper-mcp = { path = "crates/temper-mcp" }
-temper-telemetry = { path = "crates/temper-telemetry" }
+temperkb-telemetry.workspace = true
 vercel_runtime = { version = "2", features = ["axum"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"

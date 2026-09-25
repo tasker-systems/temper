@@ -1,15 +1,28 @@
+# Published to crates.io as `temperkb-client`; the LIBRARY keeps the `temper_client`
+# name (see temperkb-core's manifest for the convention).
 [package]
-name = "temper-client"
-version = "0.5.3"
-edition = "2021"
+name = "temperkb-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Auth-aware HTTP client for the temper cloud API"
 
+[lib]
+name = "temper_client"
+
 [dependencies]
-temper-core = { path = "../temper-core" }
-temper-principal = { path = "../temper-principal" }
-temper-workflow = { path = "../temper-workflow" }
-temper-auth = { path = "../temper-auth" }
-temper-telemetry = { path = "../temper-telemetry" }
+temperkb-core.workspace = true
+temperkb-principal.workspace = true
+temperkb-workflow.workspace = true
+temperkb-auth.workspace = true
+# OPTIONAL, default-on via the `telemetry` feature. Redaction and the outbound span
+# do NOT ride it — both are plain `tracing`/`temper-core` surface — so a consumer
+# that opts out (`default-features = false`) loses trace-context propagation only:
+# no `traceparent` header is emitted and no export stack is inherited. temper's own
+# surfaces keep the default and are unchanged. Removing this optionality later
+# would be a breaking change; widening it is not.
+temperkb-telemetry = { workspace = true, optional = true }
 reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls", "cookies"], default-features = false }
 # The in-process transport: prepared requests are driven through an assembled API router
 # (`Router::oneshot`) with no socket, so the per-route constraints at that router apply once.
@@ -30,7 +43,15 @@ dirs = "5"
 secrecy = { version = "0.10", features = ["serde"] }
 
 [features]
+default = ["telemetry"]
 integration-tests = []
+# Gates the OTel export stack (`temperkb-telemetry`) behind an opt-out rather than a
+# hard dependency: the motivation is an external consumer — temper-desktop first —
+# that needs the client's auth, retry, and redaction machinery without inheriting
+# opentelemetry. Trace-context propagation is the only casualty of opting out, and
+# only because a `traceparent` naming a span that is never exported is worse than
+# none — see `send_inner`.
+telemetry = ["dep:temperkb-telemetry"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

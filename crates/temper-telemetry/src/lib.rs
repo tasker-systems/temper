@@ -83,7 +83,6 @@ pub mod export;
 pub mod init;
 pub mod link;
 pub mod propagate;
-pub mod redact;
 pub mod request_span;
 
 pub use export::{force_flush_spans, set_service_name, shutdown_telemetry};
@@ -151,7 +150,15 @@ macro_rules! root_span {
             otel.name = $crate::tracing::field::Empty,
             otel.status_code = $crate::tracing::field::Empty,
             method = %request.method(),
-            path = %$crate::redact::redact_path(request.uri().path()),
+            // Path redaction happens HERE, in the macro, at the caller: `::temper_core` is an
+            // absolute path resolved where the macro EXPANDS, so any crate invoking [`root_span!`]
+            // must depend on temper-core (published as `temperkb-core`) — every current caller
+            // already does. The macro cannot carry redaction internally without dragging temper-core
+            // (and its sqlx tree) into temper-telemetry's dependency set, which would end this
+            // crate's standalone, dependency-light posture. Redaction is load-bearing for the
+            // exported `path` field: a credential in a path segment must never survive into a span
+            // attribute, whoever builds the span.
+            path = %::temper_core::redact::redact_path(request.uri().path()),
             // The matched route *template* (`/api/resources/{id}`), the bounded twin of `path` — a
             // dimension a metrics generator can key on directly. Recorded beside `otel.name` below.
             http.route = $crate::tracing::field::Empty,

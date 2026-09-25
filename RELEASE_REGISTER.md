@@ -23,6 +23,29 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.2 — unreleased
+- **The eight remaining `$ref`-carrying MCP tool declarations go fully inline — no `$ref`, no `$defs` on the wire**
+  The advertised input schemas of `create_resource`, `segmented_ingest`,
+  `update_resource`, `update_resource_meta`, `commit_data_artifact`,
+  `declare_data_artifact_shape`, `context_manage` and `run_query` now inline the
+  four temper-core type clusters they referenced — `ManagedMeta`, `KindOwnerInput`,
+  `ContextOwnerRef`, and the 21-type composition cluster — instead of carrying a
+  `$defs` block plus `$ref`s into it, completing the rule the scalar-enum row began:
+  every one of the 38 served declarations is self-contained, enforced by a new
+  router-wide guard (`every_served_tool_input_schema_is_self_contained`) rather than
+  per-tool witnesses alone. Who observes it: any client that does not resolve
+  `$ref`/`$defs` now sees the concrete object shape — `type: object` with named
+  properties — where it previously saw a reference it could not resolve (the
+  client-side string-encoding failure the client matrix's row 1 filed). No request or
+  response class changes shape: the tools accept and return exactly what they did,
+  and the inlined schema is JSON-Schema-equivalent to what it replaced.
+  Release-relevant as a schema-payload change only; the byte-witness fixture was
+  regenerated AS this declaration change and the query-ceilings test follows the
+  inlined pointers.
+pr: self
+classes: behavioral
+surfaces: mcp
+status: signal-only
+
 - **rmcp 1.8 → 3.4.1 — the SDK behind the MCP surface jumps two majors; 2026-07-28 enters the advertisement; the wire is held byte-identical**
   The dependency behind every MCP tool, resource, and initialize response moves from
   rmcp 1.8 (Jun 2026) to 3.4.1 (Sep 2026, MCP spec 2026-07-28). What changes behind an
@@ -487,6 +510,28 @@ status: signal-only
 pr: self
 classes: additive, behavioral
 surfaces: mcp
+status: signal-only
+
+- **The client closure becomes registry-consumable — the six crates publish as `temperkb-*` from CI**
+  A distribution change, not a wire change: the published-side package names of
+  `temper-core`, `-client`, `-principal`, `-workflow`, `-auth`, and `-telemetry`
+  move to the `temperkb-` prefix (crates.io's `temper` and `temper-core` are
+  unrelated projects), while every LIBRARY keeps its `temper_*` name via an
+  explicit `[lib] name`, so no `use temper_core::…` — in this workspace or in a
+  downstream consumer — moves. The internal manifests gain no dependency edge:
+  path dependencies are rewritten to the new keys with the same paths, feature
+  forwards follow, and all 16 members inherit the workspace lockstep version
+  (one line per release bump). Server-side internals are locked out of the
+  registry by an explicit `publish = false` rather than by the absence of a
+  publish step. Who observes it: a Rust consumer outside this monorepo — first,
+  an external Tauri app — resolves `temperkb-client` and its closure from
+  crates.io at semver, the Rust counterpart of the existing PyPI/npm/RubyGems
+  lanes; nothing that talks to a deployed temper changes a byte.
+  Release-relevant as the enabling change for the crates.io lane in the release
+  workflow.
+pr: self
+classes: additive
+surfaces: clients, internal
 status: signal-only
 
 ## Shipped in v0.5.2

@@ -260,6 +260,47 @@ jobs:
           VERSION: ${{ needs.determine-version.outputs.version }}
         run: bash tools/scripts/release/publish-py.sh "$VERSION"
 
+  # The Rust client closure publishes to crates.io as temperkb-* — the Rust
+  # counterpart of the PyPI/npm/RubyGems lanes. The script publishes in
+  # dependency order (a published crate's manifest must resolve its siblings
+  # from the registry, so the order is structural) and probes each crate's
+  # versions API first, so a re-cut release or a re-run after a partial
+  # failure skips loudly rather than failing or re-publishing.
+  #
+  # Auth is crates.io trusted publishing: rust-lang/crates-io-auth-action
+  # exchanges the job's OIDC identity token (id-token: write) for a
+  # short-lived upload token, auto-revoked when the job ends — no registry
+  # secret exists. The trusted publisher registered on crates.io names THIS
+  # workflow (release.yml — the identity claim names the job's own file, not
+  # the chain's entry, the same rule the RubyGems and PyPI publishers
+  # encode). The six publishers must be pre-registered on crates.io — which
+  # accepts pending publishers for not-yet-created crates — before the first
+  # release ships.
+  publish-rust-crates:
+    name: Publish Rust Crates (temperkb-*)
+    needs: determine-version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Authenticate with crates.io (trusted publishing)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
+      - name: Publish the client closure
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: bash tools/scripts/release/publish-crates.sh "$VERSION"
+
   update-homebrew-tap:
     name: Update the homebrew tap
     runs-on: macos-14
@@ -317,7 +358,7 @@ jobs:
     name: Release Summary
     runs-on: ubuntu-22.04
     timeout-minutes: 5
-    needs: [determine-version, build-cli-binaries, build-skill-bundle, publish-npm-clients, publish-ruby-client, publish-py-client]
+    needs: [determine-version, build-cli-binaries, build-skill-bundle, publish-npm-clients, publish-ruby-client, publish-py-client, publish-rust-crates]
     if: always()
     permissions:
       contents: write
@@ -343,6 +384,7 @@ jobs:
           NPM_RESULT: ${{ needs.publish-npm-clients.result }}
           RUBY_RESULT: ${{ needs.publish-ruby-client.result }}
           PY_RESULT: ${{ needs.publish-py-client.result }}
+          RUST_CRATES_RESULT: ${{ needs.publish-rust-crates.result }}
         run: |
           icon_for() {
             case "$1" in
@@ -363,13 +405,14 @@ jobs:
             echo "| npm clients (@tasker-systems/temper-ts, @tasker-systems/temper-telemetry-ts) | $(icon_for "$NPM_RESULT") ${NPM_RESULT} |"
             echo "| Ruby gem (temper-rb on rubygems.org) | $(icon_for "$RUBY_RESULT") ${RUBY_RESULT} |"
             echo "| Python client (temperkb-py on pypi.org) | $(icon_for "$PY_RESULT") ${PY_RESULT} |"
+            echo "| Rust client closure (temperkb-* on crates.io) | $(icon_for "$RUST_CRATES_RESULT") ${RUST_CRATES_RESULT} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Gated on BOTH producers. A release missing the skill bundle would publish silently and
       # look complete — the same "absence is indistinguishable from never-had-it" failure the
       # manifest guard inside this script exists to prevent, one artifact over.
       - name: Create GitHub Release
-        if: needs.build-cli-binaries.result == 'success' && needs.build-skill-bundle.result == 'success' && needs.publish-npm-clients.result == 'success' && needs.publish-ruby-client.result == 'success' && needs.publish-py-client.result == 'success'
+        if: needs.build-cli-binaries.result == 'success' && needs.build-skill-bundle.result == 'success' && needs.publish-npm-clients.result == 'success' && needs.publish-ruby-client.result == 'success' && needs.publish-py-client.result == 'success' && needs.publish-rust-crates.result == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.determine-version.outputs.version }}
@@ -377,7 +420,7 @@ jobs:
         run: ./.github/scripts/release/create-github-release.sh
 
       - name: Fail the job if any producer did not succeed
-        if: needs.build-cli-binaries.result != 'success' || needs.build-skill-bundle.result != 'success' || needs.publish-npm-clients.result != 'success' || needs.publish-ruby-client.result != 'success' || needs.publish-py-client.result != 'success'
+        if: needs.build-cli-binaries.result != 'success' || needs.build-skill-bundle.result != 'success' || needs.publish-npm-clients.result != 'success' || needs.publish-ruby-client.result != 'success' || needs.publish-py-client.result != 'success' || needs.publish-rust-crates.result != 'success'
         run: |
-          echo "::error::build-cli-binaries: ${{ needs.build-cli-binaries.result }}, build-skill-bundle: ${{ needs.build-skill-bundle.result }}, publish-npm-clients: ${{ needs.publish-npm-clients.result }}, publish-ruby-client: ${{ needs.publish-ruby-client.result }}, publish-py-client: ${{ needs.publish-py-client.result }} — release not published."
+          echo "::error::build-cli-binaries: ${{ needs.build-cli-binaries.result }}, build-skill-bundle: ${{ needs.build-skill-bundle.result }}, publish-npm-clients: ${{ needs.publish-npm-clients.result }}, publish-ruby-client: ${{ needs.publish-ruby-client.result }}, publish-py-client: ${{ needs.publish-py-client.result }}, publish-rust-crates: ${{ needs.publish-rust-crates.result }} — release not published."
           exit 1

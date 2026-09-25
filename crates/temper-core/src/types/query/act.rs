@@ -19,6 +19,7 @@ use super::stage::ProducedVariant;
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 pub enum ActName {
     /// *I can quote the exact words.*
     #[serde(rename = "find-exact")]

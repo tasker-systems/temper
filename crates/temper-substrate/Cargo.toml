@@ -1,7 +1,7 @@
 [package]
 name = "temper-substrate"
-version = "0.5.3"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 publish = false
 
 [features]
@@ -17,10 +17,10 @@ artifact-tests = []
 # `cargo nextest run -p temper-substrate --features test-db`.
 test-db = []
 # Emit + snapshot-test the scenario JSON Schema from the loader structs (schemars derives).
-scenario-schema = ["schemars", "temper-core/scenario-schema"]
+scenario-schema = ["schemars", "temperkb-core/scenario-schema"]
 
 [dependencies]
-temper-core = { path = "../temper-core" }
+temperkb-core.workspace = true
 # The readback degradation log (a folded map that fails to parse resolves unrecorded, and
 # says so) — workspace-pinned, logging-only.
 tracing = "0.1"

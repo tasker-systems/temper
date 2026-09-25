@@ -59,6 +59,7 @@ pub const PROVENANCE_USER_CREATED: &str = "user-created";
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct ManagedMeta {
     /// Task workflow stage (task only)
     #[serde(rename = "temper-stage")]

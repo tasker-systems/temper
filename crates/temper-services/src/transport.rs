@@ -169,7 +169,7 @@ where
 const MAX_ECHOED_PATH_BYTES: usize = 512;
 
 /// The path as it may appear in a log event or an error body: redacted through
-/// [`temper_telemetry::redact::redact_path`] — the same function the request root
+/// [`temper_core::redact::redact_path`] — the same function the request root
 /// spans run — and capped at [`MAX_ECHOED_PATH_BYTES`].
 ///
 /// The fallback sits *outside* the root span (it is the answer when no route exists),
@@ -178,7 +178,7 @@ const MAX_ECHOED_PATH_BYTES: usize = 512;
 /// leaked exactly this way — so the event and the body must not become a side door
 /// around the deny-by-default guard.
 fn sanitize_echoed_path(path: &str) -> std::borrow::Cow<'_, str> {
-    let redacted = temper_telemetry::redact::redact_path(path);
+    let redacted = temper_core::redact::redact_path(path);
     if redacted.len() <= MAX_ECHOED_PATH_BYTES {
         return redacted;
     }

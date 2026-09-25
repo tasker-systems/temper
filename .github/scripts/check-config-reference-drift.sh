@@ -51,7 +51,7 @@ SCHEMA_JSON="$(mktemp)"
 LOG="$(mktemp)"
 trap 'rm -f "$SCHEMA_JSON" "$LOG"' EXIT
 
-EMIT_CMD="${CONFIG_REF_EMIT_CMD:-cargo run -q -p temper-core --features config-schema --example config-reference}"
+EMIT_CMD="${CONFIG_REF_EMIT_CMD:-cargo run -q -p temperkb-core --features config-schema --example config-reference}"
 RENDER_CMD="${CONFIG_REF_RENDER_CMD:-python3 scripts/emit-config-reference.py --input $SCHEMA_JSON --out $TREE}"
 COMPLETE_CMD="${CONFIG_REF_COMPLETE_CMD:-python3 scripts/check-config-reference-complete.py --input $SCHEMA_JSON --tree $TREE}"
 
@@ -125,7 +125,7 @@ if [ -n "$DIRTY" ]; then
     echo >&2
     printf '%s\n' "$DIRTY" >&2
     echo >&2
-    echo "       Run: cargo run -q -p temper-core --features config-schema \\" >&2
+    echo "       Run: cargo run -q -p temperkb-core --features config-schema \\" >&2
     echo "              --example config-reference > /tmp/config-schema.json && \\" >&2
     echo "            python3 scripts/emit-config-reference.py --input /tmp/config-schema.json" >&2
     echo "       then COMMIT the result. Staging is NOT enough: this gate uses" >&2

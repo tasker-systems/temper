@@ -1,7 +1,7 @@
 //! Integration tests for temper-client.
 //!
 //! These require a running API and valid auth credentials.
-//! Run with: cargo test -p temper-client --features integration-tests
+//! Run with: cargo test -p temperkb-client --features integration-tests
 //!
 //! The tests skip gracefully when auth credentials are absent or invalid so
 //! that `cargo test --all-features` does not fail in environments without a
