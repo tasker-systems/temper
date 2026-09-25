@@ -1,16 +1,23 @@
+# Published to crates.io as `temperkb-core`; the LIBRARY keeps the `temper_core`
+# name, so every `use temper_core::…` — in this workspace and in downstream
+# consumers — is untouched by the registry rename. Same convention as the Python
+# distribution (`temperkb-py`) whose import package stays `temper`.
 [package]
-name = "temper-core"
+name = "temperkb-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Shared types, traits, and models for the temper knowledge base system"
 
+[lib]
+name = "temper_core"
+
 [package.metadata.cargo-machete]
 ignored = ["async-trait", "tokio"]
 
 [dependencies]
-temper-principal = { path = "../temper-principal" }
+temperkb-principal = { path = "../temper-principal" }
 async-trait = "0.1"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
@@ -58,12 +65,12 @@ scenario-schema = ["schemars"]
 # source, which is the thing the generated-reference work exists to avoid.
 config-schema = ["schemars"]
 test-db = []
-# Both forward to temper-principal so `Refusal` — which rides the admission 403 inside
+# Both forward to temperkb-principal so `Refusal` — which rides the admission 403 inside
 # `SystemAccessDetails` — is described by whichever generator this boundary turned on. Without the
 # forward the field would silently fall back to an opaque `unknown`/free-form object, which is the
 # exact drift these features exist to prevent.
-typescript = ["ts-rs", "temper-principal/typescript"]
-web-api = ["utoipa", "utoipa/chrono", "temper-principal/web-api"]
+typescript = ["ts-rs", "temperkb-principal/typescript"]
+web-api = ["utoipa", "utoipa/chrono", "temperkb-principal/web-api"]
 
 # Gated so a plain `cargo build --examples` (no features) does not try to compile the
 # JsonSchema derives out from under it. Mirrors how temper-substrate gates its schema suites.

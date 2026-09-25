@@ -1,10 +1,15 @@
+# Published to crates.io as `temperkb-auth`; the LIBRARY keeps the `temper_auth`
+# name (see temperkb-core's manifest for the convention).
 [package]
-name = "temper-auth"
+name = "temperkb-auth"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Shared OAuth2 PKCE mechanics for temper's client and server surfaces"
+
+[lib]
+name = "temper_auth"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

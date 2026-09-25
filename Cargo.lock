@@ -6102,16 +6102,16 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "sqlx",
- "temper-auth",
- "temper-client",
- "temper-core",
  "temper-ingest",
  "temper-migrate",
- "temper-principal",
  "temper-services",
  "temper-substrate",
- "temper-telemetry",
- "temper-workflow",
+ "temperkb-auth",
+ "temperkb-client",
+ "temperkb-core",
+ "temperkb-principal",
+ "temperkb-telemetry",
+ "temperkb-workflow",
  "tokio",
  "tower",
  "tracing",
@@ -6120,18 +6120,6 @@ dependencies = [
  "utoipa-axum",
  "utoipa-swagger-ui",
  "uuid",
-]
-
-[[package]]
-name = "temper-auth"
-version = "0.5.3"
-dependencies = [
- "base64 0.22.1",
- "rand 0.8.5",
- "serde",
- "sha2",
- "thiserror 2.0.18",
- "url",
 ]
 
 [[package]]
@@ -6165,12 +6153,12 @@ dependencies = [
  "sigstore-verify",
  "similar",
  "temp-env",
- "temper-client",
- "temper-core",
  "temper-ingest",
- "temper-principal",
- "temper-telemetry",
- "temper-workflow",
+ "temperkb-client",
+ "temperkb-core",
+ "temperkb-principal",
+ "temperkb-telemetry",
+ "temperkb-workflow",
  "tempfile",
  "tokio",
  "toml 0.8.23",
@@ -6182,36 +6170,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-client"
-version = "0.5.3"
-dependencies = [
- "axum",
- "base64 0.22.1",
- "chrono",
- "dirs 5.0.1",
- "open",
- "reqwest 0.12.28",
- "secrecy",
- "serde",
- "serde_json",
- "sha2",
- "temp-env",
- "temper-auth",
- "temper-core",
- "temper-principal",
- "temper-telemetry",
- "temper-workflow",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tower",
- "tracing",
- "url",
- "uuid",
- "wiremock",
-]
-
-[[package]]
 name = "temper-cloud"
 version = "0.5.3"
 dependencies = [
@@ -6219,40 +6177,11 @@ dependencies = [
  "temper-api",
  "temper-mcp",
  "temper-services",
- "temper-telemetry",
+ "temperkb-telemetry",
  "tokio",
  "tower",
  "tracing",
  "vercel_runtime",
-]
-
-[[package]]
-name = "temper-core"
-version = "0.5.3"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "chrono",
- "dirs 5.0.1",
- "hex",
- "hmac",
- "rmp-serde",
- "schemars",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "sqlx",
- "temper-principal",
- "thiserror 2.0.18",
- "tokio",
- "toml 0.8.23",
- "tracing",
- "ts-rs",
- "unicode-normalization",
- "utoipa",
- "uuid",
- "validator",
 ]
 
 [[package]]
@@ -6280,14 +6209,14 @@ dependencies = [
  "temp-env",
  "temper-api",
  "temper-cli",
- "temper-client",
- "temper-core",
  "temper-ingest",
  "temper-mcp",
  "temper-services",
  "temper-substrate",
- "temper-telemetry",
- "temper-workflow",
+ "temperkb-client",
+ "temperkb-core",
+ "temperkb-telemetry",
+ "temperkb-workflow",
  "tempfile",
  "tokio",
  "toml 0.8.23",
@@ -6314,7 +6243,7 @@ dependencies = [
  "sha2",
  "similar",
  "temp-env",
- "temper-core",
+ "temperkb-core",
  "tempfile",
  "thiserror 2.0.18",
  "tokenizers",
@@ -6344,13 +6273,13 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
- "temper-client",
- "temper-core",
- "temper-principal",
  "temper-services",
  "temper-substrate",
- "temper-telemetry",
- "temper-workflow",
+ "temperkb-client",
+ "temperkb-core",
+ "temperkb-principal",
+ "temperkb-telemetry",
+ "temperkb-workflow",
  "tokio",
  "toml 0.8.23",
  "tower",
@@ -6369,15 +6298,6 @@ dependencies = [
  "futures-core",
  "sqlx",
  "tokio",
-]
-
-[[package]]
-name = "temper-principal"
-version = "0.5.3"
-dependencies = [
- "serde",
- "ts-rs",
- "utoipa",
 ]
 
 [[package]]
@@ -6404,15 +6324,15 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "sqlx",
- "temper-auth",
- "temper-core",
  "temper-ingest",
  "temper-macros",
  "temper-migrate",
- "temper-principal",
  "temper-substrate",
- "temper-telemetry",
- "temper-workflow",
+ "temperkb-auth",
+ "temperkb-core",
+ "temperkb-principal",
+ "temperkb-telemetry",
+ "temperkb-workflow",
  "thiserror 2.0.18",
  "tokio",
  "tower-http",
@@ -6443,16 +6363,96 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "sqlx",
- "temper-core",
  "temper-ingest",
  "temper-migrate",
+ "temperkb-core",
  "tokio",
  "tracing",
  "uuid",
 ]
 
 [[package]]
-name = "temper-telemetry"
+name = "temperkb-auth"
+version = "0.5.3"
+dependencies = [
+ "base64 0.22.1",
+ "rand 0.8.5",
+ "serde",
+ "sha2",
+ "thiserror 2.0.18",
+ "url",
+]
+
+[[package]]
+name = "temperkb-client"
+version = "0.5.3"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "dirs 5.0.1",
+ "open",
+ "reqwest 0.12.28",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "sha2",
+ "temp-env",
+ "temperkb-auth",
+ "temperkb-core",
+ "temperkb-principal",
+ "temperkb-telemetry",
+ "temperkb-workflow",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower",
+ "tracing",
+ "url",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
+name = "temperkb-core"
+version = "0.5.3"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "dirs 5.0.1",
+ "hex",
+ "hmac",
+ "rmp-serde",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "sqlx",
+ "temperkb-principal",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
+ "ts-rs",
+ "unicode-normalization",
+ "utoipa",
+ "uuid",
+ "validator",
+]
+
+[[package]]
+name = "temperkb-principal"
+version = "0.5.3"
+dependencies = [
+ "serde",
+ "ts-rs",
+ "utoipa",
+]
+
+[[package]]
+name = "temperkb-telemetry"
 version = "0.5.3"
 dependencies = [
  "axum",
@@ -6465,7 +6465,7 @@ dependencies = [
  "prost",
  "serde_json",
  "temp-env",
- "temper-telemetry",
+ "temperkb-telemetry",
  "tokio",
  "tower",
  "tracing",
@@ -6474,7 +6474,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-workflow"
+name = "temperkb-workflow"
 version = "0.5.3"
 dependencies = [
  "async-trait",
@@ -6485,7 +6485,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sqlx",
- "temper-core",
+ "temperkb-core",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",

@@ -18,15 +18,15 @@ name = "emit-openapi"
 path = "src/bin/emit-openapi.rs"
 
 [dependencies]
-temper-auth = { path = "../temper-auth" }
-temper-principal = { path = "../temper-principal" }
-temper-core = { path = "../temper-core", features = ["web-api"] }
+temperkb-auth = { path = "../temper-auth" }
+temperkb-principal = { path = "../temper-principal" }
+temperkb-core = { path = "../temper-core", features = ["web-api"] }
 temper-services = { path = "../temper-services" }
-temper-workflow = { path = "../temper-workflow", features = ["web-api"] }
+temperkb-workflow = { path = "../temper-workflow", features = ["web-api"] }
 temper-substrate = { path = "../temper-substrate" }
 # Re-exported as `temper_api::MIGRATOR` for `#[sqlx::test(migrator = ...)]`.
 temper-migrate = { path = "../temper-migrate" }
-temper-telemetry = { path = "../temper-telemetry" }
+temperkb-telemetry = { path = "../temper-telemetry" }
 axum = { version = "0.8", features = ["json", "query", "multipart"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "chrono", "json", "uuid", "macros", "migrate"] }
 tokio = { version = "1", features = ["full"] }
@@ -59,7 +59,7 @@ test-embed = []
 [dev-dependencies]
 # `test-support` gives the flush-ordering test an in-memory exporter to assert against, so the
 # layer ordering in `apply_transport_layers` is verified against the real router.
-temper-telemetry = { path = "../temper-telemetry", features = ["test-support"] }
+temperkb-telemetry = { path = "../temper-telemetry", features = ["test-support"] }
 # The pure chunker (`chunk_markdown`) — body-write fixtures must carry the REAL chunk hashes
 # now that the write path applies the blocking policy (a synthetic hash is a drift refusal).
 temper-ingest = { path = "../temper-ingest", default-features = false }
@@ -74,7 +74,7 @@ sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "migra
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart"] }
 # temper-client — the in-process door witness drives the real public client through
 # `create_app`'s router with no socket (the MCP binding G1 builds).
-temper-client = { path = "../temper-client" }
+temperkb-client = { path = "../temper-client" }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }

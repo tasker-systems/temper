@@ -21,7 +21,7 @@ ort = { version = "2.0.0-rc.12", default-features = false, features = [
 regex = "1"
 sha2 = "0.10"
 similar = "2"
-temper-core = { path = "../temper-core" }
+temperkb-core = { path = "../temper-core" }
 thiserror = "2"
 tokenizers = { version = "0.22", optional = true }
 # Per-phase cold-load timing on the embed path (issue #451). Events are no-ops without a

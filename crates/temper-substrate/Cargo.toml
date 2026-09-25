@@ -17,10 +17,10 @@ artifact-tests = []
 # `cargo nextest run -p temper-substrate --features test-db`.
 test-db = []
 # Emit + snapshot-test the scenario JSON Schema from the loader structs (schemars derives).
-scenario-schema = ["schemars", "temper-core/scenario-schema"]
+scenario-schema = ["schemars", "temperkb-core/scenario-schema"]
 
 [dependencies]
-temper-core = { path = "../temper-core" }
+temperkb-core = { path = "../temper-core" }
 # The readback degradation log (a folded map that fails to parse resolves unrecorded, and
 # says so) — workspace-pinned, logging-only.
 tracing = "0.1"

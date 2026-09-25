@@ -2,7 +2,7 @@
 //! Query-contract JSON-Schemas are emitted from the SAME structs the wire uses, so the artifact
 //! and the code cannot drift. One committed snapshot per type.
 //!
-//! Regenerate: UPDATE_SCHEMA=1 cargo nextest run -p temper-core --features mcp --test query_schema
+//! Regenerate: UPDATE_SCHEMA=1 cargo nextest run -p temperkb-core --features mcp --test query_schema
 //!
 //! FEATURE-PINNED ON PURPOSE. The emitted schema depends on feature unification: with `mcp` on,
 //! the id newtypes emit INLINE (their `schemars(inline)` attribute); under a different feature set

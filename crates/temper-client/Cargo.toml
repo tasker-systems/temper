@@ -1,17 +1,22 @@
+# Published to crates.io as `temperkb-client`; the LIBRARY keeps the `temper_client`
+# name (see temperkb-core's manifest for the convention).
 [package]
-name = "temper-client"
+name = "temperkb-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Auth-aware HTTP client for the temper cloud API"
 
+[lib]
+name = "temper_client"
+
 [dependencies]
-temper-core = { path = "../temper-core" }
-temper-principal = { path = "../temper-principal" }
-temper-workflow = { path = "../temper-workflow" }
-temper-auth = { path = "../temper-auth" }
-temper-telemetry = { path = "../temper-telemetry" }
+temperkb-core = { path = "../temper-core" }
+temperkb-principal = { path = "../temper-principal" }
+temperkb-workflow = { path = "../temper-workflow" }
+temperkb-auth = { path = "../temper-auth" }
+temperkb-telemetry = { path = "../temper-telemetry" }
 reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls", "cookies"], default-features = false }
 # The in-process transport: prepared requests are driven through an assembled API router
 # (`Router::oneshot`) with no socket, so the per-route constraints at that router apply once.

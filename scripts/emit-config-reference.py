@@ -4,7 +4,7 @@
 
 Input is the document produced by:
 
-    cargo run -q -p temper-core --features config-schema --example config-reference
+    cargo run -q -p temperkb-core --features config-schema --example config-reference
 
 which carries the schemars JSON Schema for `TemperConfig`, the real
 `TemperConfig::default()` as JSON, and the same defaults rendered as TOML by the
