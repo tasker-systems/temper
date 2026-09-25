@@ -625,6 +625,17 @@ jobs:
       - name: Guard test — publish-npm (duplicate probe + guards)
         run: bash .github/scripts/test-publish-npm.sh
 
+      # The crates.io publish lane (temperkb-* client closure). Publishing runs
+      # for real only at a tagged release, so the per-crate duplicate probe's
+      # loud-skip path, the partial-resume behavior, BOTH version-agreement
+      # guards ([workspace.package] and the six [workspace.dependencies] specs),
+      # the dependency-order publish, and the dry-run surface are bitten here —
+      # a probe that stopped deciding before its crate's publish, or a closure
+      # that published out of order, would otherwise be witnessed by an actual
+      # registry push.
+      - name: Guard test — publish-crates (ordered lanes + probes + guards)
+        run: bash .github/scripts/test-publish-crates.sh
+
       # The Ruby publish lane (GitHub Packages). That host has no versions API,
       # so the push REFUSAL is the duplicate detector; this harness bites the
       # classifier both ways — a duplicate refusal skips loudly exactly once,
