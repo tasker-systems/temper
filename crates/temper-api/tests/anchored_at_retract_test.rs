@@ -53,7 +53,6 @@ fn create_cmd(context: Uuid, slug: &str) -> CreateResource {
 /// A profile with one context, two resources homed there, and TWO `derived_from` edges —
 /// source→target and target→source — so the foreign-edge arm has a real second edge to aim at.
 /// Returns `(backend, profile, source, target, edge_a, edge_b)`.
-#[allow(clippy::type_complexity)]
 async fn two_edge_fixture(pool: &PgPool) -> (DbBackend, Uuid, Uuid, Uuid, Uuid, Uuid) {
     let email = format!("retract-{}@example.com", Uuid::new_v4());
     let (profile, context) = common::fixtures::create_test_profile_with_context(pool, &email).await;

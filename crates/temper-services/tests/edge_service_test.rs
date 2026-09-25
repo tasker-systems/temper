@@ -110,7 +110,6 @@ async fn seed_event(pool: &PgPool, owner: Uuid) -> Uuid {
     .unwrap()
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn edge(
     pool: &PgPool,
     source: Uuid,

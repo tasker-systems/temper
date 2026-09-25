@@ -62,6 +62,17 @@ classes: behavioral
 surfaces: mcp
 status: signal-only
 
+- **Coverage floors — per-crate thresholds on the nightly report; the PR path stays coverage-free**
+  A hygiene change, not a wire change: coverage-thresholds.json floors every crate against the
+  lcov the nightly emits (check-coverage-floors.py, its mutation harness in guard-tests), so one
+  crate's drift is named, not averaged away. A temper-api test file lost a suppression the lint
+  no longer fires, which is where this path appears; no route, field, schema, or tool surface
+  moves.
+pr: self
+classes: behavioral
+surfaces: http
+status: signal-only
+
 - **Auto-join enrollment materializes at the standing committer; operator reconcile verb**
   A team flagged `auto_join_role` is an always-complete "everyone pool"
   (migration `20260629000002`'s header), but since the enrollment trigger was dropped

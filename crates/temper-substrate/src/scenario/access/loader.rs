@@ -90,18 +90,15 @@ pub async fn load_scaled(pool: &PgPool, world: &AccessWorld, scale: u32) -> Resu
     // `AccessResourceDef.key` would overwrite the named referent and every later `check:` would
     // silently resolve to the generated row. `generate` refuses on collision rather than relying on
     // ordering.
-    super::population::generate(
-        &mut tx,
-        world,
-        scale,
-        &profiles,
-        &entities,
-        &contexts,
-        &cogmaps,
-        &teams,
-        &mut resources,
-    )
-    .await?;
+    let mut ids = super::population::CorpusIds {
+        profiles: &profiles,
+        entities: &entities,
+        contexts: &contexts,
+        cogmaps: &cogmaps,
+        teams: &teams,
+        resources: &mut resources,
+    };
+    super::population::generate(&mut tx, world, scale, &mut ids).await?;
 
     let mut edges: HashMap<String, Uuid> = HashMap::new();
     insert_edges(
@@ -510,7 +507,6 @@ async fn insert_resources(
 /// owner, recorded as `granted_by_profile_id`, and a fixture's owner holds every capability on a
 /// resource it just created — so the conferred set is a subset by construction. This is fixture
 /// loading, not a request path; no gate is bypassed because no principal is acting.
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn insert_resource_grants(
     tx: &mut PgConnection,
     resource: Uuid,

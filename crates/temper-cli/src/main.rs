@@ -392,9 +392,11 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     &r#ref,
                     to_profile,
                     to_team,
-                    read,
-                    write,
-                    grant,
+                    temper_cli::actions::cogmap::Capabilities {
+                        read,
+                        write,
+                        grant_cap: grant,
+                    },
                     output_format,
                 ),
                 ResourceAction::Revoke {
@@ -1116,12 +1118,14 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 Box::pin(async move {
                     temper_cli::commands::admin::reblock_remote(
                         client,
-                        resource,
-                        context,
-                        all,
-                        dry_run,
-                        limit,
-                        after_id,
+                        temper_cli::commands::admin::ReblockInvocation {
+                            resource: resource.as_deref(),
+                            context: context.as_deref(),
+                            all,
+                            dry_run,
+                            limit,
+                            after_id,
+                        },
                         output_format,
                     )
                     .await
@@ -1748,9 +1752,11 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 &r#ref,
                 to_profile,
                 to_team,
-                read,
-                write,
-                grant,
+                temper_cli::actions::cogmap::Capabilities {
+                    read,
+                    write,
+                    grant_cap: grant,
+                },
                 output_format,
             ),
             CogmapCmd::Revoke {

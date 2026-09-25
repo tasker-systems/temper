@@ -758,14 +758,13 @@ pub async fn body(
 /// never reconstructed.
 ///
 /// Read-path only; the ledger stays the authority (no successor pointer is born on rows).
-#[allow(clippy::too_many_lines)]
 pub async fn block_read(
     pool: &PgPool,
     principal: ProfileId,
     resource: ResourceId,
     block_id: crate::ids::BlockId,
 ) -> std::result::Result<temper_core::types::provenance::BlockRead, ReadbackError> {
-    use temper_core::types::provenance::{BlockChunkRef, BlockFoldDisposition, BlockRead};
+    use temper_core::types::provenance::{BlockChunkRef, BlockRead};
 
     ensure_visible(pool, principal, resource).await?;
 
@@ -820,6 +819,21 @@ pub async fn block_read(
 
     // ── FOLDED: walk the row's own fold pointer (NOT NULL — every fold face stamps it),
     // read the map, gate successors. ──
+    folded_block_read(pool, principal, block_id, row.last_event_id).await
+}
+
+/// The folded arm of [`block_read`]: fetch the folding event, resolve the fold disposition from
+/// its `resource_reblocked` map (gating every named successor through the caller's visibility),
+/// and attach the attribution history. Every failure mode degrades to the defined `unrecorded`
+/// arm rather than a 500 — a corrupt map is an operator-log fault, not a read that never returns.
+async fn folded_block_read(
+    pool: &PgPool,
+    principal: ProfileId,
+    block_id: crate::ids::BlockId,
+    folded_by_event_id: uuid::Uuid,
+) -> std::result::Result<temper_core::types::provenance::BlockRead, ReadbackError> {
+    use temper_core::types::provenance::{BlockFoldDisposition, BlockRead};
+
     let disposition = {
         let event: Option<(String, serde_json::Value)> = {
             let row = sqlx::query!(
@@ -827,7 +841,7 @@ pub async fn block_read(
                      FROM kb_events e
                      JOIN kb_event_types t ON t.id = e.event_type_id
                     WHERE e.id = $1"#,
-                row.last_event_id,
+                folded_by_event_id,
             )
             .fetch_optional(pool)
             .await?;
@@ -846,13 +860,13 @@ pub async fn block_read(
                         Err(e) => {
                             tracing::warn!(
                                 block = %block_id,
-                                event = %row.last_event_id,
+                                event = %folded_by_event_id,
                                 error = %e,
                                 "resource_reblocked payload failed to parse; resolving unrecorded"
                             );
                             return Ok(BlockRead::Folded {
                                 block_id: block_id.uuid(),
-                                folded_by_event_id: row.last_event_id,
+                                folded_by_event_id,
                                 disposition: BlockFoldDisposition::Unrecorded,
                                 attribution_history: folded_history_rows(pool, block_id).await?,
                             });
@@ -892,7 +906,7 @@ pub async fn block_read(
     let attribution_history = folded_history_rows(pool, block_id).await?;
     Ok(BlockRead::Folded {
         block_id: block_id.uuid(),
-        folded_by_event_id: row.last_event_id,
+        folded_by_event_id,
         disposition,
         attribution_history,
     })

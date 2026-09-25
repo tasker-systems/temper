@@ -183,14 +183,11 @@ pub fn unbind(cogmap_ref: &str, team: &str, fmt: OutputFormat) -> Result<()> {
 }
 
 /// `temper cogmap grant <cogmap_ref> --to-profile|--to-team <ref> [--read] [--write] [--grant]`.
-#[allow(clippy::too_many_arguments)]
 pub fn grant(
     cogmap_ref: &str,
     to_profile: Option<uuid::Uuid>,
     to_team: Option<String>,
-    read: bool,
-    write: bool,
-    grant_cap: bool,
+    caps: crate::actions::cogmap::Capabilities,
     fmt: OutputFormat,
 ) -> Result<()> {
     let cogmap_id = temper_workflow::operations::parse_ref(cogmap_ref)?.0;
@@ -204,8 +201,7 @@ pub fn grant(
                 None => None,
             };
             let principal = crate::actions::cogmap::resolve_principal(to_profile, to_team_id)?;
-            crate::actions::cogmap::grant_api(client, cogmap_id, &principal, read, write, grant_cap)
-                .await
+            crate::actions::cogmap::grant_api(client, cogmap_id, &principal, &caps).await
         })
     })?;
 

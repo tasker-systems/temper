@@ -1,0 +1,20 @@
+{
+  "$comment": "Per-crate line-coverage floors. Checked by .github/scripts/check-coverage-floors.py against the lcov report the nightly coverage workflow emits — NEVER the PR path (see coverage.yml's header for the instrumented-double-run OOM trade). A floor change is a visible diff to this file, never a silent edit. A new crate joins in the commit that adds it. Floors were authored 2026-09-25 from a local run of the nightly's exact invocation (workspace, test-db+test-embed, --test-threads 1) at ~3 points of head-room below each crate's measured line coverage.",
+  "rust": {
+    "temper-agents": 70,
+    "temper-api": 80,
+    "temper-auth": 80,
+    "temper-cli": 70,
+    "temper-client": 75,
+    "temper-core": 95,
+    "temper-ingest": 90,
+    "temper-macros": 65,
+    "temper-mcp": 50,
+    "temper-migrate": 75,
+    "temper-principal": 90,
+    "temper-services": 90,
+    "temper-substrate": 75,
+    "temper-telemetry": 90,
+    "temper-workflow": 90
+  }
+}

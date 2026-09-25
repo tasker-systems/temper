@@ -94,7 +94,12 @@ async fn seed_event(pool: &PgPool, owner: Uuid) -> Uuid {
     .unwrap()
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test fixture: the two endpoints, the edge shape, and the event/fold state the \
+              raw INSERT needs are each a distinct column — a struct would restate the SQL bind \
+              list one name away from it."
+)]
 async fn derived_from(
     pool: &PgPool,
     source: Uuid,

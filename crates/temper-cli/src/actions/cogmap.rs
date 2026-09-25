@@ -14,6 +14,14 @@ pub struct Principal {
     pub id: uuid::Uuid,
 }
 
+/// The capability set a grant confers. `read` is forced on when `write`/`grant` is set
+/// (coherence) — enforced at the body build, never trusted from the caller.
+pub struct Capabilities {
+    pub read: bool,
+    pub write: bool,
+    pub grant_cap: bool,
+}
+
 /// Resolve exactly one of (profile, team) into a `(principal_table, principal_id)` pair.
 pub fn resolve_principal(
     profile: Option<uuid::Uuid>,
@@ -212,17 +220,15 @@ pub async fn grant_api(
     client: &temper_client::TemperClient,
     cogmap_id: uuid::Uuid,
     principal: &Principal,
-    read: bool,
-    write: bool,
-    grant: bool,
+    caps: &Capabilities,
 ) -> Result<GrantOutcome> {
     let body = CogmapGrantBody {
         principal_table: principal.table.clone(),
         principal_id: principal.id,
-        can_read: read || write || grant,
-        can_write: write,
+        can_read: caps.read || caps.write || caps.grant_cap,
+        can_write: caps.write,
         can_delete: false,
-        can_grant: grant,
+        can_grant: caps.grant_cap,
     };
     client
         .cognitive_maps()
