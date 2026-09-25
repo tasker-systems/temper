@@ -86,16 +86,19 @@ pub async fn run_query(
     parts: &http::request::Parts,
     input: QueryInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    // Before validation, for the reason `CompositionShape` carries — and BEFORE the
-    // relay, so the act is measured by the door it arrived on exactly once (the API
-    // skips its own `door=http` event when the act arrives relayed). The `mcp` door is
-    // measured separately from `http` because `embeddings_supplied` is structurally
-    // zero here — this door cannot run the model, which is why the server embeds on its
-    // behalf — so any bound on what the server must embed binds this door alone, and
-    // its distribution is the one that decides it.
-    CompositionShape::of(&input.plan).record("mcp");
-
+    // The client is constructed BEFORE the act measures: an arrival with no bearer, or a
+    // deployment missing its relay config, is refused by the constructor and never enters
+    // the distribution — the direct binding's `require_profile`-first ordering excluded
+    // unauthenticated arrivals the same way. Measuring before the send (not after) keeps
+    // the property `CompositionShape` requires: the act is counted before the server
+    // decides whether to answer it. The `mcp` door is measured separately from `http`
+    // because `embeddings_supplied` is structurally zero here — this door cannot run the
+    // model, which is why the server embeds on its behalf — so any bound on what the
+    // server must embed binds this door alone, and its distribution is the one that
+    // decides it. The API skips its own `door=http` event when the act arrives relayed,
+    // so one act measures once, on the door it arrived on.
     let client = svc.relay_client(parts)?;
+    CompositionShape::of(&input.plan).record("mcp");
 
     let response = client
         .query()

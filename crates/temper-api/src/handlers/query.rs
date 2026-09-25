@@ -73,6 +73,16 @@ pub async fn query(
     // one act across two doors. The extension is planted by `relay_trust` ONLY beside a valid
     // service credential AND the honored carrier, so a forged carrier degrades to measurement, not
     // to trust — a caller cannot suppress their own `http` measurement with headers.
+    //
+    // Two accepted residuals, named (RG-2 pass, ruled 2026-09-25):
+    // - A caller HOLDING the service credential can POST here directly, bypassing the MCP edge:
+    // the skip fires and no `door=mcp` record exists anywhere, so the act measures zero times.
+    // This is the first consumption of `RelayedSurface` that shapes a measurement rather than
+    // only attributing it; accepted because it is telemetry-only and the credential's documented
+    // residual already covers stolen-secret `@mcp` attribution on the thief's own acts.
+    // - While the API's `mcp_service_secret` is unset or mid-rotation (and the MCP edge is
+    // configured), the extension is never planted and every relayed act measures twice —
+    // the degrade is `debug`-silent by design, so the skew self-heals only at rotation end.
     if relayed.is_none() {
         CompositionShape::of(&composition).record("http");
     }

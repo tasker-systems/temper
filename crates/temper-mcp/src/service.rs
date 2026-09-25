@@ -1814,7 +1814,8 @@ mod tests {
     ///   call `ensure_profile_from_parts` before dispatching — Level 1 + 2 run HERE, in
     ///   the MCP function. A method that skips it compiles fine and is advertised by the
     ///   router; it just runs unauthenticated, silently.
-    /// - **Network-door families** (dispatching to `tools::resources::`) call
+    /// - **Network-door families** (resources, search + query so far; every family on
+    ///   the register's migration order eventually) call
     ///   `svc.relay_client(parts)` and the API's own auth middleware performs Level 1 + 2
     ///   on the caller's bearer — running the seam at the MCP function too would be the
     ///   duplicate-resolution the door exists to remove, and the post-edge refusals are
@@ -1870,6 +1871,13 @@ mod tests {
             // signature), which the bite probe exploited: a method with neither gate
             // nor dispatch passed the old arm. The `(self, &parts` call shape is the
             // discriminator — parts exist on the dispatch path to be forwarded.
+            //
+            // This is a source-scraping TRIPWIRE, not a control: the two substrings
+            // match independently, so a future method whose body hands `&parts` to a
+            // local helper (not a door dispatch) satisfies the arm while running
+            // unauthenticated at Level 2 (transport Level 1 still runs at the edge).
+            // Named so the next widening tightens the discriminator instead of
+            // compounding the heuristic.
             let network_door = segment.contains("tools::") && segment.contains("(self, &parts");
             if !direct_gate && !network_door {
                 let fn_name = segment

@@ -22,6 +22,13 @@
 //!   changed rendered kind (`internal_error` → `invalid_params`) at the swap —
 //!   the suite pinned the direct face before the swap and pins the door's face
 //!   now, and the change is named here and in the swap commit.
+//! - *Opaque faults* — **SECOND DECLARED PARITY DELTA, prose only**: the direct
+//!   binding rendered an unclassifiable failure as `internal_error("Search
+//!   failed: {e}")` with the `ApiError` Display; the door renders
+//!   `search failed: {other}` with the `ClientError` Display (e.g. faults carry
+//!   client-shaped wording). The kind is `internal_error` either way and the
+//!   prose is unactionable to an agent — named so a client diffing raw error
+//!   strings knows the delta is declared, not accidental.
 //! - *Post-edge 401 arms* — expired-in-flight / machine-gate / registration-gate /
 //!   deactivation, mapped by the shared `map_post_edge_refusal` through
 //!   `AcrossAuth`. The suite witnesses expired-in-flight (the one arm the direct

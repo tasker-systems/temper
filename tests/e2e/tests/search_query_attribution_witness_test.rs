@@ -92,7 +92,7 @@ async fn relayed_ingest(app: &common::E2eTestApp, title: &str) -> u16 {
 /// real listener's own DB. This is the attribution the family's acts share the
 /// trust path with.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_relaysd_write_through_the_real_listener_lands_at_mcp_in_the_ledger(pool: PgPool) {
+async fn a_relayed_write_through_the_real_listener_lands_at_mcp_in_the_ledger(pool: PgPool) {
     let app = common::setup_relay(pool).await;
     app.client
         .profile()
