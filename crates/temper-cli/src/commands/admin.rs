@@ -405,6 +405,18 @@ pub async fn reembed_remote(
     Ok(())
 }
 
+/// The invocation flags of `temper admin reblock`, one field per CLI flag. Exactly one scope
+/// member is set — `resource`, `context`, or `all` — and the exclusivity check in
+/// [`reblock_remote`] refuses anything else before any ref resolution.
+pub struct ReblockInvocation<'a> {
+    pub resource: Option<&'a str>,
+    pub context: Option<&'a str>,
+    pub all: bool,
+    pub dry_run: bool,
+    pub limit: Option<i64>,
+    pub after_id: Option<uuid::Uuid>,
+}
+
 /// `temper admin reblock` — run one bounded, resumable corpus re-blocking step (admin only for
 /// the deployment-wide arm; the resource and context arms ride the caller's own visibility).
 ///
@@ -417,17 +429,19 @@ pub async fn reembed_remote(
 /// asked for by name. `--limit` bounds how many candidates a single call considers, and
 /// `--after-id` resumes a walk from the previous receipt's cursor, so "reblock the corpus" is a
 /// walk, not a leap.
-#[allow(clippy::too_many_arguments)]
 pub async fn reblock_remote(
     client: &temper_client::TemperClient,
-    resource: Option<String>,
-    context: Option<String>,
-    all: bool,
-    dry_run: bool,
-    limit: Option<i64>,
-    after_id: Option<uuid::Uuid>,
+    invocation: ReblockInvocation<'_>,
     fmt: crate::format::OutputFormat,
 ) -> Result<()> {
+    let ReblockInvocation {
+        resource,
+        context,
+        all,
+        dry_run,
+        limit,
+        after_id,
+    } = invocation;
     // Exactly one scope — refuse to guess, BEFORE any ref resolution: an ambiguous invocation
     // must not spend authenticated round-trips learning it is ambiguous, and a resolution
     // failure must not mask the refusal. "All" must be asked for by name.
@@ -441,14 +455,14 @@ pub async fn reblock_remote(
         ));
     }
 
-    let resource_id = match resource.as_deref() {
+    let resource_id = match resource {
         Some(r) => Some(
             temper_workflow::operations::parse_ref(r)
                 .map_err(|e| TemperError::BadRequest(format!("invalid resource ref {r:?}: {e}")))?,
         ),
         None => None,
     };
-    let context_id = match context.as_deref() {
+    let context_id = match context {
         Some(c) => {
             Some(crate::commands::context_cmd::resolve_context_id_for_read(client, c).await?)
         }
@@ -569,12 +583,14 @@ mod tests {
     async fn reblock_with_no_scope_flag_errors() {
         let err = reblock_remote(
             &dead_client(),
-            None,
-            None,
-            false,
-            false,
-            None,
-            None,
+            ReblockInvocation {
+                resource: None,
+                context: None,
+                all: false,
+                dry_run: false,
+                limit: None,
+                after_id: None,
+            },
             crate::format::OutputFormat::Json,
         )
         .await
@@ -592,12 +608,14 @@ mod tests {
     async fn reblock_with_two_scope_flags_errors() {
         let err = reblock_remote(
             &dead_client(),
-            Some("019e84ab-26ba-7560-9d34-c60d74a9fbe2".to_string()),
-            Some("@me/temper".to_string()),
-            false,
-            false,
-            None,
-            None,
+            ReblockInvocation {
+                resource: Some("019e84ab-26ba-7560-9d34-c60d74a9fbe2"),
+                context: Some("@me/temper"),
+                all: false,
+                dry_run: false,
+                limit: None,
+                after_id: None,
+            },
             crate::format::OutputFormat::Json,
         )
         .await
@@ -617,12 +635,14 @@ mod tests {
     async fn reblock_with_exactly_one_scope_flag_reaches_dispatch() {
         let err = reblock_remote(
             &dead_client(),
-            Some("019e84ab-26ba-7560-9d34-c60d74a9fbe2".to_string()),
-            None,
-            false,
-            false,
-            None,
-            None,
+            ReblockInvocation {
+                resource: Some("019e84ab-26ba-7560-9d34-c60d74a9fbe2"),
+                context: None,
+                all: false,
+                dry_run: false,
+                limit: None,
+                after_id: None,
+            },
             crate::format::OutputFormat::Json,
         )
         .await

@@ -1521,14 +1521,11 @@ fn inject_truncation_diagnostic(
 /// the resource + target). The recipient is a bare profile UUID, matching the
 /// `team` member commands.
 /// `temper resource grant <ref> --to-profile|--to-team <ref> [--read] [--write] [--grant]`.
-#[allow(clippy::too_many_arguments)]
 pub fn grant(
     r#ref: &str,
     to_profile: Option<uuid::Uuid>,
     to_team: Option<String>,
-    read: bool,
-    write: bool,
-    grant_cap: bool,
+    caps: crate::actions::cogmap::Capabilities,
     fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     let resource_id = uuid::Uuid::from(temper_workflow::operations::parse_ref(r#ref)?);
@@ -1548,10 +1545,10 @@ pub fn grant(
             let body = temper_core::types::resource_grant::ResourceGrantBody {
                 principal_table: principal.table,
                 principal_id: principal.id,
-                can_read: read || write || grant_cap,
-                can_write: write,
+                can_read: caps.read || caps.write || caps.grant_cap,
+                can_write: caps.write,
                 can_delete: false,
-                can_grant: grant_cap,
+                can_grant: caps.grant_cap,
             };
 
             client

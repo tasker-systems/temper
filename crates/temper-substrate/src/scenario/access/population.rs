@@ -98,44 +98,42 @@ const FILLER: &[&str] = &[
     "late",
 ];
 
+/// The corpus id registries a population resolves against: every name a `PopulationDef` can
+/// name, plus the `resources` map generated keys register into (mut — the collision refusal
+/// lives at the insert site).
+pub(super) struct CorpusIds<'a> {
+    pub profiles: &'a HashMap<String, Uuid>,
+    pub entities: &'a HashMap<String, Uuid>,
+    pub contexts: &'a HashMap<String, Uuid>,
+    pub cogmaps: &'a HashMap<String, Uuid>,
+    pub teams: &'a HashMap<String, Uuid>,
+    pub resources: &'a mut HashMap<String, Uuid>,
+}
+
 /// Generate every population in `world`, scaled by `scale` (1 = as declared).
 ///
 /// Registers each generated resource under `<key_prefix>-<index>` in `resources`, so declarative
 /// checks and tests can name individual members.
-#[allow(clippy::too_many_arguments)]
-pub async fn generate(
+pub(super) async fn generate(
     tx: &mut PgConnection,
     world: &AccessWorld,
     scale: u32,
-    profiles: &HashMap<String, Uuid>,
-    entities: &HashMap<String, Uuid>,
-    contexts: &HashMap<String, Uuid>,
-    cogmaps: &HashMap<String, Uuid>,
-    teams: &HashMap<String, Uuid>,
-    resources: &mut HashMap<String, Uuid>,
+    ids: &mut CorpusIds<'_>,
 ) -> Result<()> {
     for pop in &world.populations {
-        generate_one(
-            tx, world, pop, scale, profiles, entities, contexts, cogmaps, teams, resources,
-        )
-        .await
-        .with_context(|| format!("generating population '{}'", pop.key_prefix))?;
+        generate_one(tx, world, pop, scale, ids)
+            .await
+            .with_context(|| format!("generating population '{}'", pop.key_prefix))?;
     }
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn generate_one(
     tx: &mut PgConnection,
     world: &AccessWorld,
     pop: &PopulationDef,
     scale: u32,
-    profiles: &HashMap<String, Uuid>,
-    entities: &HashMap<String, Uuid>,
-    contexts: &HashMap<String, Uuid>,
-    cogmaps: &HashMap<String, Uuid>,
-    teams: &HashMap<String, Uuid>,
-    resources: &mut HashMap<String, Uuid>,
+    ids: &mut CorpusIds<'_>,
 ) -> Result<()> {
     if pop.owners.is_empty() {
         bail!("population '{}' declares no owners", pop.key_prefix);
@@ -175,7 +173,7 @@ async fn generate_one(
                 )
             })?,
     };
-    let emitter = EntityId::from(*entities.get(&emitter_name).with_context(|| {
+    let emitter = EntityId::from(*ids.entities.get(&emitter_name).with_context(|| {
         format!(
             "population '{}' emitter '{emitter_name}' not in world.entities",
             pop.key_prefix
@@ -191,7 +189,7 @@ async fn generate_one(
         let topic = &pop.topics[idx % pop.topics.len()];
         let centroid = &centroids[idx % pop.topics.len()];
         let owner = ProfileId::from(
-            *profiles
+            *ids.profiles
                 .get(&pop.owners[idx % pop.owners.len()])
                 .with_context(|| {
                     format!(
@@ -204,8 +202,8 @@ async fn generate_one(
         let home = resolve_home(
             &pop.homes[idx % pop.homes.len()],
             &pop.key_prefix,
-            contexts,
-            cogmaps,
+            ids.contexts,
+            ids.cogmaps,
         )?;
         let doc_type = if pop.doc_types.is_empty() {
             None
@@ -273,15 +271,15 @@ async fn generate_one(
             Uuid::from(owner),
             &pop.grants,
             &key,
-            teams,
-            profiles,
+            ids.teams,
+            ids.profiles,
         )
         .await?;
 
         // Refuse rather than overwrite. Populations load AFTER the hand-declared resources and
         // share one map, so a collision would replace a named referent and every `check:` naming it
         // would silently resolve to a generated row instead.
-        if let Some(prior) = resources.insert(key.clone(), rid_uuid) {
+        if let Some(prior) = ids.resources.insert(key.clone(), rid_uuid) {
             bail!(
                 "population '{}' generated key {key:?}, which already names resource {prior} — a \
                  generated key must never shadow a hand-declared one",

@@ -183,12 +183,14 @@ pub async fn list_profiles(
 
     let rows = fetch_directory_page(
         pool,
-        needle.as_deref(),
-        &filter,
-        team_slug.as_deref(),
-        team_id,
-        limit,
-        offset,
+        DirectoryPageQuery {
+            needle: needle.as_deref(),
+            filter: &filter,
+            team_slug: team_slug.as_deref(),
+            team_id,
+            limit,
+            offset,
+        },
     )
     .await?;
 
@@ -201,12 +203,14 @@ pub async fn list_profiles(
         None => {
             let recount = fetch_directory_page(
                 pool,
-                needle.as_deref(),
-                &filter,
-                team_slug.as_deref(),
-                team_id,
-                1,
-                0,
+                DirectoryPageQuery {
+                    needle: needle.as_deref(),
+                    filter: &filter,
+                    team_slug: team_slug.as_deref(),
+                    team_id,
+                    limit: 1,
+                    offset: 0,
+                },
             )
             .await?;
             recount.first().map(|r| r.total).unwrap_or(0)
@@ -219,18 +223,31 @@ pub async fn list_profiles(
     })
 }
 
-/// The list statement, parameterized so the page read and the empty-page recount run
-/// byte-identical predicates.
-#[allow(clippy::too_many_arguments)]
-async fn fetch_directory_page(
-    pool: &PgPool,
-    needle: Option<&str>,
-    filter: &StandingFilter,
-    team_slug: Option<&str>,
+/// The filters one admin-directory page read runs under. Both the page read and the empty-page
+/// recount use the same statement, so the recount clones this with `limit: 1, offset: 0`.
+struct DirectoryPageQuery<'a> {
+    needle: Option<&'a str>,
+    filter: &'a StandingFilter,
+    team_slug: Option<&'a str>,
     team_id: Option<Uuid>,
     limit: i64,
     offset: i64,
+}
+
+/// The list statement, parameterized so the page read and the empty-page recount run
+/// byte-identical predicates.
+async fn fetch_directory_page(
+    pool: &PgPool,
+    page: DirectoryPageQuery<'_>,
 ) -> ApiResult<Vec<DirectoryRow>> {
+    let DirectoryPageQuery {
+        needle,
+        filter,
+        team_slug,
+        team_id,
+        limit,
+        offset,
+    } = page;
     let rows = sqlx::query_as!(
         DirectoryRow,
         r#"
