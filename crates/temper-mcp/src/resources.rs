@@ -12,9 +12,8 @@
 //! the caller's own visibility, so this module never resolves anything locally.
 
 use rmcp::model::{
-    AnnotateAble, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
-    RawResource, RawResourceTemplate, ReadResourceRequestParams, ReadResourceResult,
-    ResourceContents,
+    ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
+    ReadResourceRequestParams, ReadResourceResult, Resource, ResourceContents, ResourceTemplate,
 };
 use temper_client::TemperClient;
 use uuid::Uuid;
@@ -48,10 +47,9 @@ pub async fn list_resources(
         .rows
         .into_iter()
         .map(|r| {
-            RawResource::new(format!("temper://resources/{}", r.id), &r.title)
+            Resource::new(format!("temper://resources/{}", r.id), &r.title)
                 .with_description(format!("Origin: {}", r.origin_uri))
                 .with_mime_type("text/markdown")
-                .no_annotation()
         })
         .collect();
 
@@ -67,24 +65,21 @@ pub async fn list_resource_templates(
     _request: Option<PaginatedRequestParams>,
 ) -> Result<ListResourceTemplatesResult, rmcp::ErrorData> {
     let templates = vec![
-        RawResourceTemplate::new("temper://resources/{id}", "Resource by ID")
+        ResourceTemplate::new("temper://resources/{id}", "Resource by ID")
             .with_description(
                 "Retrieve a knowledge base resource by UUID. \
              Returns metadata and full markdown content.",
             )
-            .with_mime_type("text/markdown")
-            .no_annotation(),
-        RawResourceTemplate::new("temper://resources/{id}/content", "Resource content")
+            .with_mime_type("text/markdown"),
+        ResourceTemplate::new("temper://resources/{id}/content", "Resource content")
             .with_description("Retrieve only the raw markdown content of a resource.")
-            .with_mime_type("text/markdown")
-            .no_annotation(),
-        RawResourceTemplate::new("temper://contexts/{ref}/resources", "Resources in context")
+            .with_mime_type("text/markdown"),
+        ResourceTemplate::new("temper://contexts/{ref}/resources", "Resources in context")
             .with_description(
                 "List all resources belonging to a context. \
                  The ref must be a UUID or decorated form `@owner/slug` (e.g. `@me/my-context`).",
             )
-            .with_mime_type("application/json")
-            .no_annotation(),
+            .with_mime_type("application/json"),
     ];
 
     Ok(ListResourceTemplatesResult {

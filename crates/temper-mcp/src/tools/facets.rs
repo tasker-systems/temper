@@ -109,9 +109,9 @@ pub async fn facet_set(
     let ack = FacetAck {
         property_ids: out.value.into_iter().map(Uuid::from).collect(),
     };
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&ack),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&ack)),
+    ]))
 }
 
 /// MCP input for `edge_facet_set`.
@@ -189,9 +189,9 @@ pub async fn edge_facet_set(
     let ack = FacetAck {
         property_ids: out.value.into_iter().map(Uuid::from).collect(),
     };
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&ack),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&ack)),
+    ]))
 }
 
 /// Read the live facets of one edge. Service-direct, like every other read.
@@ -212,9 +212,9 @@ pub async fn edge_facets(
         edge_handle: input.edge_handle,
         facets,
     };
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&out),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&out)),
+    ]))
 }
 
 /// Read the live facets of one resource. Service-direct, like every other read.
@@ -244,9 +244,9 @@ pub async fn resource_facets(
         resource: Uuid::from(resource),
         facets,
     };
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&out),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&out)),
+    ]))
 }
 
 // ── Consolidated write tool (2→1) ─────────────────────────────────────────────
@@ -480,9 +480,9 @@ pub async fn facet_retract(
             let ack = FacetRetractAck {
                 property_id: Uuid::from(out.value),
             };
-            Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-                to_text(&ack),
-            )]))
+            Ok(CallToolResult::success(vec![
+                rmcp::model::ContentBlock::text(to_text(&ack)),
+            ]))
         }
     }
 }

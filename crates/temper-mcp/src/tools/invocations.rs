@@ -106,9 +106,9 @@ pub async fn invocation_open(
         id: out.value,
         invocation_id: out.value,
     };
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&ack),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&ack)),
+    ]))
 }
 
 pub async fn invocation_close(
@@ -138,9 +138,9 @@ pub async fn invocation_close(
         invocation_id: invocation,
         disposition,
     };
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&ack),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&ack)),
+    ]))
 }
 
 pub async fn invocation_show(
@@ -159,9 +159,9 @@ pub async fn invocation_show(
     .map_err(|e| rmcp::ErrorData::internal_error(format!("invocation_show failed: {e}"), None))?;
 
     let text = serde_json::to_string_pretty(&view).unwrap_or_else(|_| "null".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 pub async fn invocation_list(
@@ -185,9 +185,9 @@ pub async fn invocation_list(
     .map_err(|e| rmcp::ErrorData::internal_error(format!("invocation_list failed: {e}"), None))?;
 
     let text = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 // ── Consolidated write tool (2→1) ─────────────────────────────────────────────

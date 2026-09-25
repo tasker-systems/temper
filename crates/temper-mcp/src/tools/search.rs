@@ -34,7 +34,7 @@ pub async fn search(
     // block when the scope stage has something to say" branch has nothing left to do.
     let body = serde_json::to_string_pretty(&response)
         .unwrap_or_else(|_| "{\"exact\":{},\"wide\":{}}".to_string());
-    let contents = vec![rmcp::model::Content::text(body)];
+    let contents = vec![rmcp::model::ContentBlock::text(body)];
     Ok(CallToolResult::success(contents))
 }
 

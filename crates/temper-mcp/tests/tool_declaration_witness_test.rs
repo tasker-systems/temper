@@ -62,7 +62,9 @@ async fn post_mcp(request_body: Value) -> (StatusCode, Vec<u8>) {
                 .header(header::AUTHORIZATION, format!("Bearer {}", mcp_bearer()))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::ACCEPT, "application/json, text/event-stream")
-                .body(Body::from(serde_json::to_vec(&request_body).expect("serializes")))
+                .body(Body::from(
+                    serde_json::to_vec(&request_body).expect("serializes"),
+                ))
                 .expect("request builds"),
         )
         .await
@@ -131,8 +133,12 @@ async fn tool_declarations_are_byte_identical_across_the_sdk_upgrade() {
         );
     }
 
-    let pinned = std::fs::read(&fixture_path)
-        .unwrap_or_else(|_| panic!("fixture missing at {}; regenerate with UPDATE_MCP_DECLARATIONS=1", fixture_path.display()));
+    let pinned = std::fs::read(&fixture_path).unwrap_or_else(|_| {
+        panic!(
+            "fixture missing at {}; regenerate with UPDATE_MCP_DECLARATIONS=1",
+            fixture_path.display()
+        )
+    });
     assert_eq!(
         bytes, pinned,
         "the tools/list wire bytes moved — an SDK or declaration change leaked onto the wire"
@@ -155,7 +161,9 @@ async fn initialize_negotiation_is_stable_for_every_requested_version() {
         let answered = body
             .pointer("/result/protocolVersion")
             .and_then(Value::as_str)
-            .unwrap_or_else(|| panic!("initialize response carries result.protocolVersion: {body}"));
+            .unwrap_or_else(|| {
+                panic!("initialize response carries result.protocolVersion: {body}")
+            });
         assert_eq!(
             answered, "2025-11-25",
             "a client requesting {requested} must still be answered 2025-11-25"

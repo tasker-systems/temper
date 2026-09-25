@@ -34,9 +34,9 @@ pub async fn list_doc_types(svc: &TemperMcpService) -> Result<CallToolResult, rm
     let summaries = temper_workflow::schema::list_doc_types();
 
     let text = serde_json::to_string_pretty(&summaries).unwrap_or_else(|_| "[]".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 pub async fn describe_doc_type(
@@ -54,9 +54,9 @@ pub async fn describe_doc_type(
     })?;
 
     let text = serde_json::to_string_pretty(&response).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 /// Describe the recognized open_meta conventions — the self-describing schema (recognized keys, their
@@ -74,9 +74,9 @@ pub async fn describe_open_meta(svc: &TemperMcpService) -> Result<CallToolResult
     })?;
 
     let text = serde_json::to_string_pretty(&convention).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 // ── Consolidated read tool (3→1) ───────────────────────────────────────────────

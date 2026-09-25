@@ -160,9 +160,9 @@ pub async fn resource_reblock(
         .await
         .map_err(|e| map_err(e, "resource_reblock"))?;
 
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&out.value),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&out.value)),
+    ]))
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────

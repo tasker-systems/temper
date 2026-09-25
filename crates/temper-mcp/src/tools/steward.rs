@@ -74,9 +74,9 @@ pub async fn steward_ingest_delta(
     .await
     .map_err(|e| map_err(TemperError::from(e), "steward_ingest_delta"))?;
 
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&delta),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&delta)),
+    ]))
 }
 
 pub async fn steward_advance_watermark(
@@ -101,7 +101,7 @@ pub async fn steward_advance_watermark(
 
     // Render the cursors AS STORED. The agent needs to see which of its two optional inputs the
     // server filled in for it — re-assembling the ack from `input` would hide exactly that.
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&out.value),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&out.value)),
+    ]))
 }

@@ -471,7 +471,7 @@ async fn protocol_list_browses_through_the_door(pool: PgPool) {
     let listed = temper_mcp::resources::list_resources(&client, None)
         .await
         .expect("protocol list lands");
-    let uris: Vec<String> = listed.resources.iter().map(|r| r.raw.uri.clone()).collect();
+    let uris: Vec<String> = listed.resources.iter().map(|r| r.uri.clone()).collect();
     for id in &ids {
         assert!(
             uris.contains(&format!("temper://resources/{id}")),

@@ -162,9 +162,9 @@ pub async fn assert_relationship(
     let ack = RelationshipAck {
         edge_handle: Uuid::from(out.value),
     };
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&ack),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&ack)),
+    ]))
 }
 
 pub async fn retype_relationship(
@@ -196,9 +196,9 @@ pub async fn retype_relationship(
     let ack = RelationshipAck {
         edge_handle: Uuid::from(out.value),
     };
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&ack),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&ack)),
+    ]))
 }
 
 pub async fn reweight_relationship(
@@ -229,9 +229,9 @@ pub async fn reweight_relationship(
     let ack = RelationshipAck {
         edge_handle: Uuid::from(out.value),
     };
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&ack),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&ack)),
+    ]))
 }
 
 pub async fn fold_relationship(
@@ -263,9 +263,9 @@ pub async fn fold_relationship(
     let ack = RelationshipAck {
         edge_handle: Uuid::from(out.value),
     };
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&ack),
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&ack)),
+    ]))
 }
 
 // ── Consolidated tool (4→1) ─────────────────────────────────────────────────────

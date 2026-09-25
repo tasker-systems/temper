@@ -121,9 +121,9 @@ pub async fn list_contexts(svc: &TemperMcpService) -> Result<CallToolResult, rmc
     .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to list contexts: {e}"), None))?;
 
     let text = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 pub async fn get_context(
@@ -141,9 +141,9 @@ pub async fn get_context(
     .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get context: {e}"), None))?;
 
     let text = serde_json::to_string_pretty(&row).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 pub async fn create_context(
@@ -172,9 +172,9 @@ pub async fn create_context(
     .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to create context: {e}"), None))?;
 
     let text = serde_json::to_string_pretty(&row).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 /// Share a context into a team's read-reach. SERVICE-DIRECT, authorized by
@@ -199,9 +199,9 @@ pub async fn share_context(
     .map_err(|e| map_api_error("share_context", ForbiddenRule::ContextAndTargetTeam, e))?;
 
     let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 /// Transfer a context's ownership to a team. SERVICE-DIRECT, authorized by
@@ -225,9 +225,9 @@ pub async fn transfer_context(
     .map_err(|e| map_api_error("transfer_context", ForbiddenRule::ContextAndTargetTeam, e))?;
 
     let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 /// Unshare a context from a team. SERVICE-DIRECT, same `can_share` authorization as
@@ -248,9 +248,9 @@ pub async fn unshare_context(
     .map_err(|e| map_api_error("unshare_context", ForbiddenRule::ContextAndTargetTeam, e))?;
 
     let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 /// Rename a context — the one act that moves its `(name, slug)` identity pair in place.
@@ -275,9 +275,9 @@ pub async fn rename_context(
     .map_err(|e| map_api_error("rename_context", ForbiddenRule::ContextAdministration, e))?;
 
     let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        text,
-    )]))
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(text),
+    ]))
 }
 
 // ── Consolidated read tool (5→1) ───────────────────────────────────────────────

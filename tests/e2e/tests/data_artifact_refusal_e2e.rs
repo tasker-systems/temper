@@ -49,8 +49,8 @@ const EMPTY_CONTEXT_VOCAB: &str = "name kind_owner explicitly";
 
 /// Extract the text of the first content part of a tool result.
 fn text_of(result: rmcp::model::CallToolResult) -> String {
-    match result.content.first().map(|c| &c.raw) {
-        Some(rmcp::model::RawContent::Text(t)) => t.text.clone(),
+    match result.content.first() {
+        Some(rmcp::model::ContentBlock::Text(t)) => t.text.clone(),
         other => panic!("tool returned no text content part: {other:?}"),
     }
 }
