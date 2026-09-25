@@ -11,6 +11,7 @@ pub mod hash;
 pub mod ids;
 pub mod internal_sig;
 pub mod projection;
+pub mod redact;
 pub mod refs;
 pub mod types;
 pub mod validation;

@@ -1,5 +1,10 @@
 //! Keeping credentials out of span attributes.
 //!
+//! This module lives in temper-core (not temper-telemetry, where it was born) because redaction
+//! guards LOCAL log lines too — a retry warn, an error body's echoed path — not only exported
+//! spans, and both the client and the server must apply it regardless of whether an export stack
+//! is installed. temper-telemetry's `root_span!` macros expand to this function by absolute path.
+//!
 //! ## The leak this was built for is now closed at the source
 //!
 //! This module shipped in PR #540 as a **stopgap**: `POST /api/invitations/{token}/accept` (and
@@ -8,7 +13,7 @@
 //! and its own docs say *"the token IS the authority"* — a credential, valid seven days.
 //!
 //! Those routes are gone. The token now rides in the request body
-//! (`temper_core::types::invitation::InvitationTokenRequest`), so no temper route carries a credential
+//! (`crate::types::invitation::InvitationTokenRequest`), so no temper route carries a credential
 //! in its path and this function has no live leak to stop.
 //!
 //! ## Why it stays anyway

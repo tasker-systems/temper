@@ -219,9 +219,10 @@ impl fmt::Debug for HttpClient {
 /// **The path is redacted before it is rendered.** This comment used to claim the type "never
 /// contains sensitive data (tokens, bodies)" — it did: `accept_invitation` puts a bearer capability
 /// token in the URL path (`teams.rs`), and this `Display` is a span attribute that now leaves the
-/// process for a telemetry vendor. `temper_telemetry::redact::redact_path` is the one line of defence
+/// process for a telemetry vendor. `temper_core::redact::redact_path` is the one line of defence
 /// until goal `019f99dd-dc9c-79f1-947c-e61bde2148a9` builds the real registry; bodies are still never
-/// rendered here.
+/// rendered here. Redaction is deliberately unconditional — it guards this `Display`'s use in the
+/// LOCAL retry warn below, not only exported spans, so it does not ride the `telemetry` feature.
 struct ApiRequest<'a> {
     method: &'a reqwest::Method,
     path: &'a str,
@@ -240,7 +241,7 @@ impl fmt::Display for ApiRequest<'_> {
             f,
             "{} {}",
             self.method,
-            temper_telemetry::redact::redact_path(path)
+            temper_core::redact::redact_path(path)
         )
     }
 }
@@ -606,8 +607,16 @@ impl HttpClient {
             //
             // A no-op unless an exporter is installed (`TEMPER_CLI_TRACE` plus an OTLP endpoint), and
             // deliberately so: a `traceparent` naming an unexported span is worse than no header.
+            //
+            // Gated behind the `telemetry` feature: with the feature off there is no exporter to
+            // install, so no traceparent may be emitted — the headers map stays empty and the
+            // request goes out unchanged, which is exactly what the no-exporter branch did.
             let req = {
+                // `mut` exists for `inject_trace_context`'s write; with the feature off the map is
+                // never touched, and an empty map emits nothing — exactly the no-exporter behavior.
+                #[cfg_attr(not(feature = "telemetry"), allow(unused_mut))]
                 let mut trace_headers = reqwest::header::HeaderMap::new();
+                #[cfg(feature = "telemetry")]
                 temper_telemetry::inject_trace_context(&mut trace_headers);
                 if trace_headers.is_empty() {
                     req

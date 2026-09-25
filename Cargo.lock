@@ -6465,6 +6465,7 @@ dependencies = [
  "prost",
  "serde_json",
  "temp-env",
+ "temperkb-core",
  "temperkb-telemetry",
  "tokio",
  "tower",

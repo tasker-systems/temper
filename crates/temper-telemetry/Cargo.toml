@@ -55,6 +55,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 test-support = ["opentelemetry_sdk/testing"]
 
 [dev-dependencies]
+# `root_span!` expands `::temper_core::redact::redact_path` at the CALL SITE, so the
+# macro's own test invocations (here, in lib.rs and tests/) need temper-core to
+# resolve. A dev-dependency, deliberately: the published crate forces temper-core
+# on no one — only the crates that invoke the macro (api, mcp, client) carry the
+# dependency, and every one of them already had it.
+temperkb-core = { path = "../temper-core" }
 # `flush_budget.rs` drives the async `flush_within_budget` and needs a runtime to block on.
 tokio = { version = "1", features = ["rt", "time", "macros"] }
 # Depend on ourselves to turn our own `test-support` on for our own tests. Without this,
