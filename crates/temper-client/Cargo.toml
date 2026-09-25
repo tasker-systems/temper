@@ -12,17 +12,17 @@ description = "Auth-aware HTTP client for the temper cloud API"
 name = "temper_client"
 
 [dependencies]
-temperkb-core = { path = "../temper-core" }
-temperkb-principal = { path = "../temper-principal" }
-temperkb-workflow = { path = "../temper-workflow" }
-temperkb-auth = { path = "../temper-auth" }
+temperkb-core.workspace = true
+temperkb-principal.workspace = true
+temperkb-workflow.workspace = true
+temperkb-auth.workspace = true
 # OPTIONAL, default-on via the `telemetry` feature. Redaction and the outbound span
 # do NOT ride it — both are plain `tracing`/`temper-core` surface — so a consumer
 # that opts out (`default-features = false`) loses trace-context propagation only:
 # no `traceparent` header is emitted and no export stack is inherited. temper's own
 # surfaces keep the default and are unchanged. Removing this optionality later
 # would be a breaking change; widening it is not.
-temperkb-telemetry = { path = "../temper-telemetry", optional = true }
+temperkb-telemetry = { workspace = true, optional = true }
 reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls", "cookies"], default-features = false }
 # The in-process transport: prepared requests are driven through an assembled API router
 # (`Router::oneshot`) with no socket, so the per-route constraints at that router apply once.

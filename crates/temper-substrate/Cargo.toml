@@ -20,7 +20,7 @@ test-db = []
 scenario-schema = ["schemars", "temperkb-core/scenario-schema"]
 
 [dependencies]
-temperkb-core = { path = "../temper-core" }
+temperkb-core.workspace = true
 # The readback degradation log (a folded map that fails to parse resolves unrecorded, and
 # says so) — workspace-pinned, logging-only.
 tracing = "0.1"

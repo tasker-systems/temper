@@ -40,12 +40,12 @@ sigstore-trust-root = "0.11"
 sigstore-types = "0.11"
 sigstore-verify = "0.11"
 similar = "2"
-temperkb-client = { path = "../temper-client" }
-temperkb-core = { path = "../temper-core" }
-temperkb-principal = { path = "../temper-principal" }
-temperkb-workflow = { path = "../temper-workflow" }
+temperkb-client.workspace = true
+temperkb-core.workspace = true
+temperkb-principal.workspace = true
+temperkb-workflow.workspace = true
 temper-ingest = { path = "../temper-ingest" }
-temperkb-telemetry = { path = "../temper-telemetry" }
+temperkb-telemetry.workspace = true
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 toon-format = "0.5"

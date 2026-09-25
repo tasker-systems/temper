@@ -60,7 +60,7 @@ test-support = ["opentelemetry_sdk/testing"]
 # resolve. A dev-dependency, deliberately: the published crate forces temper-core
 # on no one — only the crates that invoke the macro (api, mcp, client) carry the
 # dependency, and every one of them already had it.
-temperkb-core = { path = "../temper-core" }
+temperkb-core.workspace = true
 # `flush_budget.rs` drives the async `flush_within_budget` and needs a runtime to block on.
 tokio = { version = "1", features = ["rt", "time", "macros"] }
 # Depend on ourselves to turn our own `test-support` on for our own tests. Without this,
@@ -68,7 +68,7 @@ tokio = { version = "1", features = ["rt", "time", "macros"] }
 # the tests in `tests/` only build because *another* workspace member — tests/e2e — happens to enable
 # the feature, which workspace unification then applies here. That is a real trap: the natural
 # per-crate command is broken while `cargo make test` passes.
-temperkb-telemetry = { path = ".", features = ["test-support"] }
+temperkb-telemetry = { workspace = true, features = ["test-support"] }
 opentelemetry_sdk = { version = "0.32", features = ["testing"] }
 serde_json = "1"
 temp-env = "0.3.6"

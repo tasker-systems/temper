@@ -12,7 +12,7 @@ description = "Doc-type-aware workflow vocabulary for the temper knowledge base:
 name = "temper_workflow"
 
 [dependencies]
-temperkb-core = { path = "../temper-core" }
+temperkb-core.workspace = true
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 jsonschema = "0.45"

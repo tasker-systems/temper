@@ -44,8 +44,8 @@ sqlx = { version = "0.8", features = [
 temper-api = { path = "../../crates/temper-api" }
 temper-services = { path = "../../crates/temper-services" }
 temper-cli = { path = "../../crates/temper-cli" }
-temperkb-client = { path = "../../crates/temper-client" }
-temperkb-core = { path = "../../crates/temper-core" }
+temperkb-client.workspace = true
+temperkb-core.workspace = true
 # Referenced only by the `test-embed`-gated server-query-embedding regression (#297) to build
 # real-embedding chunks and assert server/CLI query-vector parity. Already in the graph via
 # temper-substrate → temper-ingest(embed), so naming it adds no new linked footprint.
@@ -54,11 +54,11 @@ temper-ingest = { path = "../../crates/temper-ingest", features = ["embed"] }
 # `writes::resolve_emitter` `fetch_one` rather than retyping its query. Already in the graph via
 # temper-api → temper-services → temper-substrate, so naming it adds no new linked footprint.
 temper-substrate = { path = "../../crates/temper-substrate" }
-temperkb-workflow = { path = "../../crates/temper-workflow" }
+temperkb-workflow.workspace = true
 temper-mcp = { path = "../../crates/temper-mcp" }
 # `test-support` installs an in-memory span exporter so `mcp_span_link_test` can read the spans the
 # MCP router really exported, rather than a replica of its layer stack.
-temperkb-telemetry = { path = "../../crates/temper-telemetry", features = ["test-support"] }
+temperkb-telemetry = { workspace = true, features = ["test-support"] }
 # The REAL rmcp client, for `mcp_blob_transport_e2e`: the S5 blob tools were witnessed through
 # direct tool-fn calls; S6 drives them through the deployed streamable-HTTP transport. Dev-only —
 # nothing in production links the client side. `reqwest13` is the reqwest rmcp itself implements

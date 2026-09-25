@@ -10,6 +10,12 @@ license.workspace = true
 repository.workspace = true
 description = "Shared types, traits, and models for the temper knowledge base system"
 
+# The config-reference example is this repo's INTERNAL docs machinery — it regenerates
+# docs/reference/config (see .github/scripts/check-config-reference-drift.sh) and no
+# consumer of the published crate can use it. Excluding the file from the package makes
+# the target not exist there; in-repo builds and the drift gate are unaffected.
+exclude = ["examples/config-reference.rs"]
+
 [lib]
 name = "temper_core"
 
@@ -17,7 +23,7 @@ name = "temper_core"
 ignored = ["async-trait", "tokio"]
 
 [dependencies]
-temperkb-principal = { path = "../temper-principal" }
+temperkb-principal.workspace = true
 async-trait = "0.1"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }

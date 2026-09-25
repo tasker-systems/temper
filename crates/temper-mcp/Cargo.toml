@@ -20,17 +20,17 @@ test-db = []
 # including in tests, where the harness binds a real listener serving `create_app` in
 # the TEST process. Keeping the crate out of this dependency graph makes that property
 # structural: a future `temper_api::create_app` call here cannot compile.
-temperkb-client = { path = "../temper-client" }
+temperkb-client.workspace = true
 # Only for the shared connection pool's type; the feature set mirrors temper-client's
 # so workspace unification builds one reqwest.
 reqwest = { version = "0.12", default-features = false }
 temper-services = { path = "../temper-services" }
 
-temperkb-principal = { path = "../temper-principal" }
-temperkb-core = { path = "../temper-core", features = ["web-api", "mcp"] }
+temperkb-principal.workspace = true
+temperkb-core = { workspace = true, features = ["web-api", "mcp"] }
 temper-substrate = { path = "../temper-substrate" }
-temperkb-workflow = { path = "../temper-workflow", features = ["web-api", "mcp"] }
-temperkb-telemetry = { path = "../temper-telemetry" }
+temperkb-workflow = { workspace = true, features = ["web-api", "mcp"] }
+temperkb-telemetry.workspace = true
 
 # Blob commit/read carry bytes over the JSON-only MCP transport as base64.
 base64 = "0.22"
@@ -64,7 +64,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 # constructor; the dev-dep enables temper-services' NARROW `test-harness` (never
 # `test-db` — that gate compiles the crate's own #[sqlx::test] bodies, which the DB-less
 # unit lane would then run).
-temper-services = { path = "../temper-services", features = ["test-harness"] }
+temper-services = { path = "../temper-services" }
 # `ServiceExt::oneshot` — drives a request through the assembled router without binding a port.
 tower = { version = "0.5", features = ["util"] }
 # Builds the gzip body that witnesses the request-decompression layer.
