@@ -418,6 +418,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/citation-audits": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record a citation-audit verdict against a block's citation
+         * @description The authorization subject is the finding that owns `block_id`, resolved server-side; the caller
+         *     never names a finding, so a write can only ever land on the citation it addresses.
+         *
+         *     The act envelope in the body rides the ledger row as authorship and correlation metadata —
+         *     it never moves standing; only `value` does.
+         */
+        post: operations["record_citation_audit_for_block"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cogmaps/{id}/graph/slice": {
         parameters: {
             query?: never;
@@ -3222,6 +3249,47 @@ export interface components {
             /** Format: int32 */
             chunk_index: number;
             content_hash: string;
+        };
+        /**
+         * @description Request body for `POST /api/citation-audits` — the block-addressed audit write.
+         *
+         *     Carries exactly what [`CitationAuditRequest`] carries plus the act envelope, and drops the one
+         *     thing that body's route has that this one does not: a finding in the path. The finding is not a
+         *     field the caller may supply under either route — under the finding-addressed route it is a
+         *     routing address the server refuses on mismatch; here there is no such address at all, so a
+         *     caller can only ever address the block whose citation it audits, and the server derives the
+         *     authorization subject from that block. There is nothing to transpose.
+         *
+         *     **The act envelope is why this body exists as its own type.** An audit is an authored,
+         *     per-act write: the auditor's confidence in its verdict, the invocation it fired under, and any
+         *     free-text reasoning ride the act (the auditor's confidence is metadata on the ledger row and is
+         *     never read by the standing projection — only the signed `value` moves standing). The
+         *     finding-addressed route's body predates this shape and carries no act fields; this route's
+         *     writes never silently drop authorship the caller supplied.
+         */
+        BlockCitationAuditRequest: components["schemas"]["ActInput"] & {
+            /**
+             * Format: uuid
+             * @description The audited citation's block (`kb_content_blocks.id`). The server resolves this to its
+             *     owning finding, and that resolved finding — never anything the caller names — is what
+             *     authorization is evaluated over.
+             */
+            block_id: string;
+            /** @description Optional free-text rationale, recorded on the ledger row. */
+            reason?: string | null;
+            /**
+             * @description The cited source being assessed. Only `Resource`-kind citations are auditable: standing
+             *     reads only resource-kind bases, so the write path refuses anything else rather than letting
+             *     it land as a no-op the auditor could never detect.
+             */
+            source: components["schemas"]["ProvenanceSource"];
+            /**
+             * Format: double
+             * @description The signed verdict in `[-1.0, 1.0]` — how much defensibility this citation confers for the
+             *     connection it makes, never a claim about what the source says. Out-of-range is a 400; the
+             *     ledger column carries the same bound as a CHECK.
+             */
+            value: number;
         };
         /**
          * @description Where a folded block's content went, as the read surface states it (the defined-dangling-state
@@ -9487,6 +9555,69 @@ export interface operations {
             };
             /** @description Blob absent or not visible, or the peer not readable — each indistinguishable from absent by design */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    record_citation_audit_for_block: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlockCitationAuditRequest"];
+            };
+        };
+        responses: {
+            /** @description Citation audit recorded; returns the new kb_citation_audits.id */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Invalid payload, a verdict value outside [-1.0, 1.0], or a (block, source) pair that is not a live citation */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found — the finding is unreadable, the caller authored it (self-audit), the block does not exist (all three the same sentence), or the invocation correlator names no invocation the caller can read ("invocation … not found") */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict — the invocation correlator names a closed run */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

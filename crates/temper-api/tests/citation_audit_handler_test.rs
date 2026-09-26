@@ -18,6 +18,32 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use temper_core::types::ids::{CogmapId, ProfileId};
+use temper_services::backend::DbBackend;
+use temper_workflow::operations::{Backend, OpenInvocation, Surface};
+
+/// The migration-seeded public kernel cogmap — the originating map `open_invocation` requires.
+const L0_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
+
+/// Open a REAL invocation for `profile` (the act gate refuses caller-named ids that address
+/// nothing: an unknown invocation is a 404, a closed run a 409). Standing approval plus an L0
+/// write grant are the same front door `act_authorship_test.rs`'s harness uses.
+async fn open_invocation_for(pool: &PgPool, profile: Uuid) -> Uuid {
+    common::fixtures::approve_standing(pool, profile).await;
+    common::fixtures::grant_cogmap_write(pool, L0_COGMAP, profile).await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+    let out = backend
+        .open_invocation(OpenInvocation {
+            trigger_kind: "manual".to_string(),
+            originating_cogmap: CogmapId::from(L0_COGMAP),
+            parent_cogmap: None,
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .expect("open invocation for the auditor");
+    out.value
+}
+
 // ─── Fixture helpers ─────────────────────────────────────────────────────────
 
 /// Seed a finding (`kb_resources` + `kb_resource_homes`) owned/authored by `owner`, homed in
@@ -99,9 +125,14 @@ async fn seed_finding_with_block(
     (finding, block, source)
 }
 
-/// Register `profile` in the `kb_machine_clients` allowlist. An audit is an agent act: the write
-/// gate admits only a registered, unrevoked machine principal (spec §7's second conjunct), so
-/// without this row even a correctly-granted, non-authoring reader gets a 404.
+/// Register `profile` in the `kb_machine_clients` allowlist.
+///
+/// **Registration is deliberately NOT a write-gate conjunct** — an earlier pass read spec §7's
+/// "registered, unrevoked machine principal" as a third denial arm and it was removed by an
+/// explicit product decision (`authz/audit_gate.rs`'s module doc; test 8 proves a human may audit).
+/// Registration is required only by the dispatch tick and job completion, which speak for the
+/// queue. Tests still register where noted so a refusal provably comes from the arm under test —
+/// never from the conjunct that no longer exists.
 async fn register_machine(pool: &PgPool, profile: Uuid) {
     sqlx::query(
         "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
@@ -495,4 +526,279 @@ async fn posting_as_an_unregistered_human_reader_succeeds(pool: PgPool) {
             .await
             .unwrap();
     assert_eq!(audited, 1, "and the verdict actually lands on the ledger");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The block-addressed write — POST /api/citation-audits
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The same command through a body-addressed route: no finding in the address, nothing to
+// transpose, and the act envelope carried instead of defaulted empty. The refusal arms below are
+// the ones the finding-addressed route's tests pin, re-pinned here because the new route reaches
+// the gate through a different dispatch path (thin handler → `DbBackend`, no service pre-lookup).
+
+/// Body helper for the block-addressed route — deliberately ACT-LESS. The act fields route through
+/// `check_act_invocation` (unknown id → its own 404) which, if it ever reordered ahead of the
+/// finding-shaped refusals, would answer all three arms with the same not-found sentence and make
+/// the equivalence pin vacuously green. The refusal-arm tests must exercise the gate alone.
+fn block_body(block: Uuid, source: Uuid) -> Value {
+    json!({
+        "block_id": block,
+        "source": { "kind": "resource", "value": source },
+        "value": 0.8,
+        "reason": "independently verified",
+    })
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn posting_an_audit_by_block_address_records_the_verdict_and_keeps_the_act(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+
+    let email_author = format!("cah-author-{}@example.com", Uuid::new_v4());
+    let (author, ctx) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_author).await;
+    let (_finding, block, source) = seed_finding_with_block(&pool, author, ctx, "Finding").await;
+
+    let email_reader = format!("cah-reader-{}@example.com", Uuid::new_v4());
+    let (reader, _) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_reader).await;
+    grant_read_only(&pool, _finding, reader, author).await;
+    let invocation = open_invocation_for(&pool, reader).await;
+    let token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
+
+    let body = json!({
+        "block_id": block,
+        "source": { "kind": "resource", "value": source },
+        "value": 0.8,
+        "reason": "independently verified",
+        "invocation_id": invocation,
+        "confidence": "confident",
+    });
+
+    let resp = app
+        .client
+        .post(app.url("/api/citation-audits"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&body)
+        .send()
+        .await
+        .expect("request failed");
+
+    let status = resp.status().as_u16();
+    let body_text = resp.text().await.unwrap_or_default();
+    assert_eq!(status, 200, "expected 200; body: {body_text}");
+    let audit_id: Uuid =
+        serde_json::from_str(&body_text).expect("response body should be a bare JSON Uuid string");
+
+    let row_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM kb_citation_audits WHERE id = $1 AND block_id = $2)",
+    )
+    .bind(audit_id)
+    .bind(block)
+    .fetch_one(&pool)
+    .await
+    .expect("check audit row");
+    assert!(row_exists, "the audit lands on the audited block");
+
+    // The act envelope is not decoration: the invocation correlator lands on the owning event.
+    // Dropping the act in the handler (the finding-addressed body's empty default) would pass the
+    // 200 and fail here.
+    let event_invocation: Option<Uuid> = sqlx::query_scalar(
+        "SELECT e.invocation_id FROM kb_citation_audits a \
+         JOIN kb_events e ON e.id = a.audited_by_event_id WHERE a.id = $1",
+    )
+    .bind(audit_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read the audit's owning event");
+    assert_eq!(
+        event_invocation,
+        Some(invocation),
+        "the caller's invocation correlator must ride the write"
+    );
+
+    // The emitter resolves from the BEARER principal, never a hard-coded surface: the owning
+    // event's emitter entity must name the caller (the reader), so a regression that swapped
+    // `origin: surface` for a constant still passes the 200 but fails here.
+    let emitter_profile: Uuid = sqlx::query_scalar(
+        "SELECT en.profile_id FROM kb_citation_audits a \
+         JOIN kb_events e ON e.id = a.audited_by_event_id \
+         JOIN kb_entities en ON en.id = e.emitter_entity_id WHERE a.id = $1",
+    )
+    .bind(audit_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read the audit's emitter");
+    assert_eq!(
+        emitter_profile, reader,
+        "the audit's emitter must be the bearer principal"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn posting_an_audit_by_block_address_without_auth_returns_401(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+
+    let resp = app
+        .client
+        .post(app.url("/api/citation-audits"))
+        .json(&block_body(Uuid::new_v4(), Uuid::new_v4()))
+        .send()
+        .await
+        .expect("request failed");
+
+    assert_eq!(resp.status().as_u16(), 401, "missing auth returns 401");
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn posting_an_audit_by_block_address_returns_400_for_an_out_of_range_value(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+
+    let email_author = format!("cah-author-{}@example.com", Uuid::new_v4());
+    let (author, ctx) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_author).await;
+    let (finding, block, source) = seed_finding_with_block(&pool, author, ctx, "Finding").await;
+
+    let email_reader = format!("cah-reader-{}@example.com", Uuid::new_v4());
+    let (reader, _) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_reader).await;
+    grant_read_only(&pool, finding, reader, author).await;
+    let token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
+
+    let body = json!({
+        "block_id": block,
+        "source": { "kind": "resource", "value": source },
+        "value": 1.5,
+    });
+
+    let resp = app
+        .client
+        .post(app.url("/api/citation-audits"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&body)
+        .send()
+        .await
+        .expect("request failed");
+
+    assert_eq!(
+        resp.status().as_u16(),
+        400,
+        "out-of-range value is a caller fault"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn posting_an_audit_by_block_address_of_a_non_citation_returns_400(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+
+    let email_author = format!("cah-author-{}@example.com", Uuid::new_v4());
+    let (author, ctx) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_author).await;
+    let (finding, block, _source) = seed_finding_with_block(&pool, author, ctx, "Finding").await;
+    let (_other, _other_block, other_source) =
+        seed_finding_with_block(&pool, author, ctx, "Other").await;
+
+    let email_reader = format!("cah-reader-{}@example.com", Uuid::new_v4());
+    let (reader, _) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_reader).await;
+    grant_read_only(&pool, finding, reader, author).await;
+    let token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
+
+    let resp = app
+        .client
+        .post(app.url("/api/citation-audits"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&block_body(block, other_source))
+        .send()
+        .await
+        .expect("request failed");
+
+    assert_eq!(
+        resp.status().as_u16(),
+        400,
+        "a (block, source) pair that is not a live citation must be refused, not accepted as an \
+         inert verdict"
+    );
+}
+
+/// The three finding-shaped refusals through the block-addressed route — unknown block, unreadable
+/// finding, self-authored — answer with the SAME status AND the SAME body, byte for byte. The
+/// equivalence class is the gate's leak-safety guarantee; this pins it at the route so no future
+/// dispatch-path change can let one arm distinguish itself.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_three_finding_shaped_refusals_are_indistinguishable_by_block_address(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+
+    let email_author = format!("cah-author-{}@example.com", Uuid::new_v4());
+    let (author, ctx) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_author).await;
+    let (_finding, block, source) = seed_finding_with_block(&pool, author, ctx, "Finding").await;
+
+    let email_stranger = format!("cah-stranger-{}@example.com", Uuid::new_v4());
+    let (stranger, _) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_stranger).await;
+    let stranger_token = common::generate_test_jwt(&format!("test|{stranger}"), &email_stranger);
+    let author_token = common::generate_test_jwt(&format!("test|{author}"), &email_author);
+
+    // Arm 1 — unknown block: the id addresses nothing.
+    let unknown = app
+        .client
+        .post(app.url("/api/citation-audits"))
+        .header("Authorization", format!("Bearer {stranger_token}"))
+        .json(&block_body(Uuid::now_v7(), source))
+        .send()
+        .await
+        .expect("request failed");
+
+    // Arm 2 — unreadable finding: the stranger was never granted anything.
+    let unreadable = app
+        .client
+        .post(app.url("/api/citation-audits"))
+        .header("Authorization", format!("Bearer {stranger_token}"))
+        .json(&block_body(block, source))
+        .send()
+        .await
+        .expect("request failed");
+
+    // Arm 3 — self-audit: the author can read its own finding; the denial is authorship.
+    let self_audit = app
+        .client
+        .post(app.url("/api/citation-audits"))
+        .header("Authorization", format!("Bearer {author_token}"))
+        .json(&block_body(block, source))
+        .send()
+        .await
+        .expect("request failed");
+
+    let (unknown_status, unknown_body) =
+        (unknown.status(), unknown.text().await.unwrap_or_default());
+    let (unreadable_status, unreadable_body) = (
+        unreadable.status(),
+        unreadable.text().await.unwrap_or_default(),
+    );
+    let (self_status, self_body) = (
+        self_audit.status(),
+        self_audit.text().await.unwrap_or_default(),
+    );
+
+    for (name, status) in [
+        ("unknown", unknown_status),
+        ("unreadable", unreadable_status),
+        ("self-audit", self_status),
+    ] {
+        assert_eq!(
+            status.as_u16(),
+            404,
+            "the {name} arm must refuse with 404, not 403 (no existence oracle)"
+        );
+    }
+    assert_eq!(
+        unknown_body, unreadable_body,
+        "unknown and unreadable must be indistinguishable"
+    );
+    assert_eq!(
+        unknown_body, self_body,
+        "the self-audit denial must be indistinguishable from an unknown block — byte for byte, \
+         or the route becomes an authorship oracle"
+    );
 }

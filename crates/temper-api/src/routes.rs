@@ -95,6 +95,8 @@ fn gated_routes() -> OpenApiRouter<AppState> {
             handlers::citation_audits::record,
             handlers::citation_audits::list
         ))
+        // The block-addressed audit write — same gate, same command, no finding in the address.
+        .routes(routes!(handlers::citation_audits::record_for_block))
         .routes(routes!(handlers::edges::lineage))
         .routes(routes!(handlers::edges::assert))
         .routes(routes!(handlers::edges::retype))

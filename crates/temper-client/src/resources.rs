@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::error::{ClientError, Result};
 use crate::http::HttpClient;
-use temper_core::types::citation_audit::CitationAuditRequest;
+use temper_core::types::citation_audit::{BlockCitationAuditRequest, CitationAuditRequest};
 use temper_core::types::cognitive_maps::{GrantOutcome, RevokeOutcome};
 use temper_core::types::lineage::ResourceLineage;
 use temper_core::types::provenance::{BlockProvenanceRow, BlockRead};
@@ -267,6 +267,26 @@ impl<'a> ResourceClient<'a> {
         let req = self.http.post(&path).json(request);
         self.http
             .send_json(&Method::POST, &path, req, Some(&token))
+            .await
+    }
+
+    /// Record an auditor's signed verdict by block address alone — the block-addressed audit
+    /// write beside [`Self::record_citation_audit`].
+    ///
+    /// POST /api/citation-audits, returning the new `kb_citation_audits.id`. There is no finding
+    /// argument and none may be added: the server derives the authorization subject from
+    /// `request.block_id`, so a caller can only ever audit the citation it addresses. The request
+    /// carries the act envelope, and the write keeps it — authorship and correlation ride the
+    /// ledger row; only `value` moves standing.
+    pub async fn record_citation_audit_for_block(
+        &self,
+        request: &BlockCitationAuditRequest,
+    ) -> Result<Uuid> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/citation-audits";
+        let req = self.http.post(path).json(request);
+        self.http
+            .send_json(&Method::POST, path, req, Some(&token))
             .await
     }
 
