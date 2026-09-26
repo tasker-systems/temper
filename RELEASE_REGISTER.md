@@ -22,7 +22,8 @@ gate on a main-bound PR. Deprecation rows (the D-C3 records) carry the retiremen
 era release the record names. Historical and pre-policy rows read as history: only new rows carry
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
-## Since v0.5.2 — unreleased
+## Since v0.5.3 — unreleased
+
 - **The eight remaining `$ref`-carrying MCP tool declarations go fully inline — no `$ref`, no `$defs` on the wire**
   The advertised input schemas of `create_resource`, `segmented_ingest`,
   `update_resource`, `update_resource_meta`, `commit_data_artifact`,
@@ -260,6 +261,30 @@ classes: additive, behavioral
 surfaces: http, cli-stdout, clients
 status: signal-only
 
+- **The client closure becomes registry-consumable — the six crates publish as `temperkb-*` from CI**
+  A distribution change, not a wire change: the published-side package names of
+  `temper-core`, `-client`, `-principal`, `-workflow`, `-auth`, and `-telemetry`
+  move to the `temperkb-` prefix (crates.io's `temper` and `temper-core` are
+  unrelated projects), while every LIBRARY keeps its `temper_*` name via an
+  explicit `[lib] name`, so no `use temper_core::…` — in this workspace or in a
+  downstream consumer — moves. The internal manifests gain no dependency edge:
+  path dependencies are rewritten to the new keys with the same paths, feature
+  forwards follow, and all 16 members inherit the workspace lockstep version
+  (one line per release bump). Server-side internals are locked out of the
+  registry by an explicit `publish = false` rather than by the absence of a
+  publish step. Who observes it: a Rust consumer outside this monorepo — first,
+  an external Tauri app — resolves `temperkb-client` and its closure from
+  crates.io at semver, the Rust counterpart of the existing PyPI/npm/RubyGems
+  lanes; nothing that talks to a deployed temper changes a byte.
+  Release-relevant as the enabling change for the crates.io lane in the release
+  workflow.
+pr: self
+classes: additive
+surfaces: clients, internal
+status: signal-only
+
+## Shipped in v0.5.3
+
 - **This release — the 0.5.3 fleet alignment: VERSION 0.5.2 → 0.5.3 across crates, packages, and clients**
   The release train's own wire delta is none: version fields and the generated
   cores re-stale with the bump (the D-S3 baseline — no shape movement); the
@@ -426,7 +451,6 @@ classes: additive
 surfaces: internal
 status: signal-only
 
-
 - **Self-host route/cron table regeneration — counts and tables derived from `vercel.json`**
   `docs/playbooks/self-host-temper.md`'s route table, cron table, topology
   diagram, and routing-contract counts are regenerated from the current
@@ -510,28 +534,6 @@ status: signal-only
 pr: self
 classes: additive, behavioral
 surfaces: mcp
-status: signal-only
-
-- **The client closure becomes registry-consumable — the six crates publish as `temperkb-*` from CI**
-  A distribution change, not a wire change: the published-side package names of
-  `temper-core`, `-client`, `-principal`, `-workflow`, `-auth`, and `-telemetry`
-  move to the `temperkb-` prefix (crates.io's `temper` and `temper-core` are
-  unrelated projects), while every LIBRARY keeps its `temper_*` name via an
-  explicit `[lib] name`, so no `use temper_core::…` — in this workspace or in a
-  downstream consumer — moves. The internal manifests gain no dependency edge:
-  path dependencies are rewritten to the new keys with the same paths, feature
-  forwards follow, and all 16 members inherit the workspace lockstep version
-  (one line per release bump). Server-side internals are locked out of the
-  registry by an explicit `publish = false` rather than by the absence of a
-  publish step. Who observes it: a Rust consumer outside this monorepo — first,
-  an external Tauri app — resolves `temperkb-client` and its closure from
-  crates.io at semver, the Rust counterpart of the existing PyPI/npm/RubyGems
-  lanes; nothing that talks to a deployed temper changes a byte.
-  Release-relevant as the enabling change for the crates.io lane in the release
-  workflow.
-pr: self
-classes: additive
-surfaces: clients, internal
 status: signal-only
 
 ## Shipped in v0.5.2

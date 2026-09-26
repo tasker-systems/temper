@@ -8,9 +8,12 @@
 # temper-artifacts/specs/2026-09-09-shared-semver-policy-design.md). Sites,
 # each verified on disk before wiring (SG-6):
 #   VERSION                                    — the shared anchor (CLI stdout rides it)
-#   Cargo.toml (root) + crates/*/Cargo.toml    — every workspace [package] version,
-#                                                enumerated from the live tree
-#                                                (crates NEVER float — spec §3)
+#   Cargo.toml (root) [workspace.package]      — the anchor every workspace member
+#                                                inherits (crates NEVER float — spec §3)
+#   Cargo.toml (root) [workspace.dependencies] — the client closure's temperkb-* path+version
+#                                                specs (dependency specs cannot inherit the
+#                                                package anchor; the crates.io publish
+#                                                script's version-agreement guard reads them)
 #   clients/temper-rb/lib/temper/version.rb    — skin float (--rb)
 #   clients/temper-py/temper/version.py        — skin float (--py)
 #   clients/temper-ts/package.json             — skin float (--ts)
@@ -81,14 +84,53 @@ log_section "Core: VERSION + workspace crates"
 update_version_file "$CORE_VERSION"
 
 # The root Cargo.toml is itself a package (temper-cloud, the Vercel adapter
-# bin) — distinct from the packages/temper-cloud npm package.
+# bin) — distinct from the packages/temper-cloud npm package. Since the
+# workspace-inheritance consolidation, the root's only line-start `version =`
+# is [workspace.package]'s — the anchor every workspace member inherits — so
+# update_cargo_version's first-match rewrite lands exactly there, and the
+# member manifests carry no version sites of their own at all.
 update_cargo_version "Cargo.toml" "$CORE_VERSION"
 
-for crate_toml in "${REPO_ROOT}"/crates/*/Cargo.toml; do
-    [[ -f "$crate_toml" ]] || continue
-    grep -q '^version = ' "$crate_toml" || continue
-    update_cargo_version "$crate_toml" "$CORE_VERSION"
-done
+# The client closure's [workspace.dependencies] entries carry path + version
+# (dependency specs cannot inherit [workspace.package]), and a published
+# crate's manifest resolves its siblings from the registry — so these specs
+# MUST move with the anchor on every bump. The crates.io publish script's
+# version-agreement guard fails the release if they drift; a missed site here
+# is that guard firing in CI hours later, with the release red. Generic over
+# the temperkb- prefix: a seventh published crate needs no edit here.
+log_section "Client closure: [workspace.dependencies] version specs"
+
+if ! grep -qE '^temperkb-[a-z]+ = \{ path = ' Cargo.toml; then
+    die "No temperkb-* [workspace.dependencies] entries found in Cargo.toml — the closure's version sites moved or vanished; update this writer."
+fi
+
+if [[ "${DRY_RUN:-false}" == "true" ]]; then
+    while IFS= read -r line; do
+        dep="$(printf '%s' "$line" | sed -E 's/^(temperkb-[a-z]+) = \{.*/\1/')"
+        current="$(printf '%s' "$line" | sed -E 's/^temperkb-[a-z]+ = \{ path = "[^"]+", version = "([^"]+)".*/\1/')"
+        log_info "Would update ${dep} workspace-dependency spec: ${current} -> ${CORE_VERSION}"
+    done < <(grep -E '^temperkb-[a-z]+ = \{ path = ' Cargo.toml)
+else
+    sed_i -E 's/^(temperkb-[a-z]+ = \{ path = "[^"]+", version = ")[^"]+(" \})/\1'"${CORE_VERSION}"'\2/' Cargo.toml
+    log_info "Updated temperkb-* workspace-dependency specs -> ${CORE_VERSION}"
+fi
+
+# Verify the whole Rust half reads back as the requested version (SG-6): the
+# anchor, zero stale spec entries. Counting sites, not trusting the rewrite
+# to have matched everything: an uncounted miss is exactly the silent drift
+# the guard would catch later, in CI, with the release red.
+ws_version="$(awk -F'"' '/^\[workspace\.package\]/{p=1; next} /^\[/{p=0} p && /^version = /{print $2; exit}' Cargo.toml)"
+if [[ "${DRY_RUN:-false}" != "true" ]]; then
+    [[ "$ws_version" == "$CORE_VERSION" ]] ||
+        die "workspace anchor is ${ws_version}, expected ${CORE_VERSION}"
+    spec_total="$(grep -cE '^temperkb-[a-z]+ = \{ path = ' Cargo.toml)"
+    stale="$(awk -F'"' -v want="${CORE_VERSION}" '/^temperkb-[a-z]+ = \{ path = / && $4 != want { print "  " $1 " -> " $4 }' Cargo.toml)"
+    if [[ -n "$stale" ]]; then
+        die "stale temperkb-* [workspace.dependencies] version sites after the bump (${spec_total} sites total):
+${stale}"
+    fi
+    log_info "Verified: workspace anchor + ${spec_total} closure specs at ${CORE_VERSION}"
+fi
 
 # ---------------------------------------------------------------------------
 # Client skins (float P above the floor — spec §3)

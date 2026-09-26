@@ -273,9 +273,11 @@ jobs:
   # secret exists. The trusted publisher registered on crates.io names THIS
   # workflow (release.yml — the identity claim names the job's own file, not
   # the chain's entry, the same rule the RubyGems and PyPI publishers
-  # encode). The six publishers must be pre-registered on crates.io — which
-  # accepts pending publishers for not-yet-created crates — before the first
-  # release ships.
+  # encode). Trusted publishers are configured for all six temperkb-* names;
+  # their 0.5.3 initial versions were bootstrapped once with an API token
+  # (crates.io attaches publishers only to existing crates — no pending-
+  # publisher pre-registration), and every version after that rides this
+  # job's OIDC exchange.
   publish-rust-crates:
     name: Publish Rust Crates (temperkb-*)
     needs: determine-version
