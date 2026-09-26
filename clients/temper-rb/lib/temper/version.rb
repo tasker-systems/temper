@@ -7,5 +7,5 @@ module Temper
   # This file is loaded by temper-rb.gemspec via require_relative, so it must
   # stand alone: no reference to Temper::Generated, which is not loaded then.
   # CONTRACT_VERSION is defined in lib/temper.rb, after the generated core.
-  VERSION = '0.5.3'
+  VERSION = '0.5.4'
 end

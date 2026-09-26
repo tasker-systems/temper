@@ -8,7 +8,7 @@ members = ["crates/*", "tests/e2e"]
 # and `repository`; everything else carries `publish = false` so server-side
 # internals cannot reach the registry by accident.
 [workspace.package]
-version = "0.5.3"
+version = "0.5.4"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/tasker-systems/temper"
@@ -18,12 +18,12 @@ repository = "https://github.com/tasker-systems/temper"
 # bump it TOGETHER with [workspace.package].version; the publish script's
 # version-agreement guard fails the release if the two disagree.
 [workspace.dependencies]
-temperkb-auth = { path = "crates/temper-auth", version = "0.5.3" }
-temperkb-client = { path = "crates/temper-client", version = "0.5.3" }
-temperkb-core = { path = "crates/temper-core", version = "0.5.3" }
-temperkb-principal = { path = "crates/temper-principal", version = "0.5.3" }
-temperkb-telemetry = { path = "crates/temper-telemetry", version = "0.5.3" }
-temperkb-workflow = { path = "crates/temper-workflow", version = "0.5.3" }
+temperkb-auth = { path = "crates/temper-auth", version = "0.5.4" }
+temperkb-client = { path = "crates/temper-client", version = "0.5.4" }
+temperkb-core = { path = "crates/temper-core", version = "0.5.4" }
+temperkb-principal = { path = "crates/temper-principal", version = "0.5.4" }
+temperkb-telemetry = { path = "crates/temper-telemetry", version = "0.5.4" }
+temperkb-workflow = { path = "crates/temper-workflow", version = "0.5.4" }
 
 [package]
 name = "temper-cloud"

@@ -23,6 +23,28 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **This release — the 0.5.4 fleet alignment: VERSION 0.5.3 → 0.5.4 across crates, packages, and clients**
+  The release train's own wire delta is none: version fields and the generated
+  cores re-stale with the bump (the D-S3 baseline — no shape movement); the
+  P floor rides the additive rows already in this window.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
+
+- **temper-telemetry-ts aligns at 0.5.4 — the npm pair co-releases, and the lane's guard enforces it**
+  A version-site change, not a wire change: `publish-npm.sh` releases
+  `temper-ts` and `temper-telemetry-ts` as a pair at one requested version,
+  and its version-agreement guard refused the v0.5.4 lane when
+  `temper-ts` moved and `temper-telemetry-ts` (whose generated types did not
+  change this window) stayed at 0.5.3. The manifest aligns so the pair ships
+  together; the package content is unchanged from 0.5.3. Who observes it: the
+  npm registry listing only.
+pr: self
+classes: additive
+surfaces: clients
+status: signal-only
+
 - **The ledger/graph MCP tools execute through the network door — element_trail, facets, relationships, and the citation audit cross as real relayed calls**
   The four remaining ledger/graph tool families stop executing in-process and forward
   to their deployed routes (`GET /api/graph/elements/{kind}/{id}/trail`,
