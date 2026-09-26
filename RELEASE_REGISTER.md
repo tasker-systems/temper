@@ -23,6 +23,15 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **This release — the 0.5.4 fleet alignment: VERSION 0.5.3 → 0.5.4 across crates, packages, and clients**
+  The release train's own wire delta is none: version fields and the generated
+  cores re-stale with the bump (the D-S3 baseline — no shape movement); the
+  P floor rides the additive rows already in this window.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
+
 - **temper-telemetry-ts aligns at 0.5.4 — the npm pair co-releases, and the lane's guard enforces it**
   A version-site change, not a wire change: `publish-npm.sh` releases
   `temper-ts` and `temper-telemetry-ts` as a pair at one requested version,
