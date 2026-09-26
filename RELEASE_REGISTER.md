@@ -23,6 +23,14 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **This release — the 0.5.4 fleet alignment: VERSION 0.5.3 → 0.5.4 across crates, packages, and clients**
+  The release train's own wire delta is none: version fields and the generated
+  cores re-stale with the bump (the D-S3 baseline — no shape movement); the
+  P floor rides the additive rows already in this window.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
 - **The citation audit gains a block-addressed write — POST /api/citation-audits**
   The audit write's second route: the body names only the `(block, source)` citation
   pair plus the act envelope, and the server derives the authorization subject from
