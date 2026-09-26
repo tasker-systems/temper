@@ -21,6 +21,10 @@
 //! whose bodies carry the server's constant — and this tool renders **its own fixed
 //! sentence** keyed on the 404 status, byte-identical to the direct binding's arm, NEVER
 //! the server's 404 message: one string in, one string out, no election between causes.
+//! The status-keying carries one residual risk the in-process direct binding lacked: a
+//! ROUTING 404 (a wrong path, or the fallback handler) would render as this same
+//! finding-refusal sentence — which is exactly what the dead-base-URL probe class in the
+//! parity suite catches on every suite run.
 //!
 //! # Declared parity deltas
 //!

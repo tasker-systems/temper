@@ -30,6 +30,11 @@
 //!   and the gate are identical, per the resources family's precedent (`resources.rs`'s
 //!   context-refusal arm). Only the prefix drops; every sentence the server speaks is
 //!   carried through verbatim.
+//! - **Garbage-ref parse face**: the direct binding routed `parse_ref`'s failure through
+//!   the shared error map's catch-all, rendering it `internal_error`; the door's MCP-local
+//!   parse callsites render it `invalid_params`. This is a RENDERING delta of a parse face
+//!   — not a naming refusal (the refusal KIND changed, the pre-wire gate did not) — and is
+//!   pinned by `a_garbage_ref_through_resource_facets_refuses_as_invalid_params`.
 //!
 //! Every other arm maps arm-for-arm: `ForbiddenDetail` speaks the gate's own sentence
 //! under INVALID_REQUEST prefixed `{action}: ` (the direct face byte-for-byte), the terse

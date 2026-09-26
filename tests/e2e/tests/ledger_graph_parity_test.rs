@@ -1125,6 +1125,179 @@ async fn an_edge_facet_in_a_readable_unauthorable_map_speaks_the_forbidden_detai
     );
 }
 
+/// `facet_set` under a REAL OPEN invocation lands with the caller's correlation on the
+/// ledger — the act-envelope ride, bite-proven for the assert by
+/// `an_authored_assert_under_a_real_open_invocation_lands`, here for the facet write:
+/// the `property_asserted` event the write fires carries the invocation's id, so a
+/// `Default::default()` in the tool's act mapping (the envelope silently dropped) reddens
+/// here rather than passing invisibly.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_authored_facet_set_under_a_real_open_invocation_lands(pool: PgPool) {
+    let (app, svc, parts) = harness(pool).await;
+    let resource = ingest(&app, "Authored facet", None, None).await;
+    let invocation = open_invocation_for_harness(&app).await;
+
+    let res = run_facet_set(
+        &svc,
+        &parts,
+        json!({
+            "resource": resource.to_string(),
+            "values": {"status": "open"},
+            "invocation_id": invocation.to_string(),
+        }),
+    )
+    .await
+    .expect("the correlated facet write lands");
+    assert_eq!(
+        one_text(&res)["property_ids"]
+            .as_array()
+            .expect("ids")
+            .len(),
+        1,
+        "the write lands one row"
+    );
+
+    // The `facet` verb's ack ids are PROJECTOR-MINTED surrogates (one per inner key,
+    // `facet_inner_key_grain`), not the payload's own property_id — so the act is pinned
+    // by its owner, exactly one `property_asserted` having this fresh resource as owner.
+    let stamped: Option<Uuid> = sqlx::query_scalar(
+        "SELECT e.invocation_id FROM kb_events e \
+         JOIN kb_event_types et ON et.id = e.event_type_id \
+         WHERE et.name = 'property_asserted' \
+           AND (e.payload #>> '{owner,id}')::uuid = $1",
+    )
+    .bind(resource)
+    .fetch_one(&app.pool)
+    .await
+    .expect("the facet act is on the ledger");
+    assert_eq!(
+        stamped,
+        Some(invocation),
+        "the facet act correlates to the invocation it claimed"
+    );
+}
+
+/// `facet_retract` under a REAL OPEN invocation lands with the caller's correlation on
+/// the ledger — the DELETE ride proven end to end: the retraction has NO body, so the
+/// input's `ActInput` crosses the door as query params
+/// (`temper-client/src/facets.rs`'s `retract_on_edge`), and the `property_retracted`
+/// event the retraction fires carries the invocation's id. A `Default::default()` in the
+/// tool's act pass-through — or a query-param serialization that drops the fields —
+/// reddens here.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_authored_facet_retract_under_a_real_open_invocation_lands(pool: PgPool) {
+    let (app, svc, parts) = harness(pool).await;
+    let a = ingest(
+        &app,
+        "Authored retract source",
+        Some("The cited body."),
+        None,
+    )
+    .await;
+    let b = ingest(&app, "Authored retract target", None, None).await;
+    let handle = assert_edge(&svc, &parts, a, b).await;
+    let block = parity::first_block_id(&app.pool, a).await;
+    let res = temper_mcp::tools::facets::edge_facet_set(
+        &svc,
+        &parts,
+        input(json!({
+            "edge_handle": handle.to_string(),
+            "property_key": "anchored-at",
+            "values": {"endpoint": "source", "address": format!("{a}#{block}")},
+        })),
+    )
+    .await
+    .expect("the keyed row lands");
+    let property_id: Uuid = one_text(&res)["property_ids"][0]
+        .as_str()
+        .expect("the row id")
+        .parse()
+        .expect("a uuid");
+    let invocation = open_invocation_for_harness(&app).await;
+
+    run_facet_retract(
+        &svc,
+        &parts,
+        json!({
+            "target": "edge",
+            "edge_handle": handle.to_string(),
+            "property_id": property_id.to_string(),
+            "invocation_id": invocation.to_string(),
+        }),
+    )
+    .await
+    .expect("the correlated retraction lands");
+
+    let stamped: Option<Uuid> = sqlx::query_scalar(
+        "SELECT e.invocation_id FROM kb_events e \
+         JOIN kb_event_types et ON et.id = e.event_type_id \
+         WHERE et.name = 'property_retracted' \
+           AND (e.payload ->> 'property_id')::uuid = $1",
+    )
+    .bind(property_id)
+    .fetch_one(&app.pool)
+    .await
+    .expect("the retraction act is on the ledger");
+    assert_eq!(
+        stamped,
+        Some(invocation),
+        "the retraction act correlates to the invocation it claimed"
+    );
+}
+
+/// A garbage ref through the facets read refuses at the MCP-local parse callsite — the
+/// parse-face delta: the direct binding routed `parse_ref`'s failure through the shared
+/// error map's catch-all (`internal_error`); the door's parse callsite renders it
+/// `invalid_params`. A rendering change of a parse face, declared in the module doc.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_garbage_ref_through_resource_facets_refuses_as_invalid_params(pool: PgPool) {
+    let (_app, svc, parts) = harness(pool).await;
+
+    let err = temper_mcp::tools::facets::resource_facets(
+        &svc,
+        &parts,
+        input(json!({"resource": "not-a-ref"})),
+    )
+    .await
+    .expect_err("garbage is not a ref");
+    assert_eq!(code_of(&err), -32602, "a caller error, not a fault: {err}");
+    assert!(
+        err.message.contains("not a resource ref"),
+        "the parse callsite's own sentence: {err}"
+    );
+}
+
+/// An unknown edge handle through the edge-facet WRITE refuses with the
+/// `check_edge_mutable` row lookup's not-found shape rendered `invalid_params` — the
+/// same gate the verb routes run, but reached through the facet route's own path
+/// (`POST /api/relationships/{handle}/facets`), so the face is pinned here, not
+/// inherited from the verbs' test.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_unknown_edge_handle_refuses_the_edge_facet_write_as_invalid_params(pool: PgPool) {
+    let (_app, svc, parts) = harness(pool).await;
+    let ghost = Uuid::now_v7();
+
+    let err = temper_mcp::tools::facets::edge_facet_set(
+        &svc,
+        &parts,
+        input(json!({
+            "edge_handle": ghost.to_string(),
+            "values": {"note": "ghost"},
+        })),
+    )
+    .await
+    .expect_err("an unknown handle does not answer");
+    assert_eq!(
+        code_of(&err),
+        -32602,
+        "the not-found shape is a caller error: {err}"
+    );
+    assert!(
+        err.message.contains(&format!("edge {ghost} not found")),
+        "the lookup's own sentence, carried through un-prefixed: {err}"
+    );
+}
+
 // ── relationships ───────────────────────────────────────────────────
 
 /// The assert answers the handle ack for both target tables: the incumbent
@@ -1423,12 +1596,14 @@ async fn an_assert_from_a_foreign_resource_speaks_the_forbidden_arm(pool: PgPool
 
 // ── citation_audits ─────────────────────────────────────────────────
 
-/// The finding-shaped refusal is ONE sentence for every cause: an unknown block and
-/// the author auditing its own citation both render
+/// The finding-shaped refusal is ONE sentence for every cause: an unknown block, a
+/// finding the caller cannot READ, and the author auditing its own citation all render
 /// "record_citation_audit: finding not found, unreadable, or self-authored" —
-/// byte-exact, because `FINDING_REFUSAL` is one string by construction and the
-/// tool's NotFound arm deliberately re-states the equivalence locally
-/// (`citation_audits.rs:60-72`).
+/// byte-exact, because `FINDING_REFUSAL` is one string by construction and the tool's
+/// NotFound arm deliberately re-states the equivalence locally
+/// (`citation_audits.rs:60-72`). All three causes are driven here, the third through a
+/// SECOND identity's own bearer, so the equivalence claim is load-bearing at the MCP
+/// level, not argued from the gate.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_finding_shaped_refusals_are_one_indistinguishable_sentence(pool: PgPool) {
     let (app, svc, parts) = harness(pool).await;
@@ -1461,11 +1636,32 @@ async fn the_finding_shaped_refusals_are_one_indistinguishable_sentence(pool: Pg
     .await
     .expect_err("the author may not grade its own citation");
 
+    // The third cause: a REAL finding the caller cannot read — a second identity with
+    // NO grant on the harness-owned finding. Its own bearer crosses the door; the gate
+    // refuses the unreadable subject with the same constant.
+    let (token, _sub, _email) = parity::second_identity(&app, &app.pool, "audit-blind").await;
+    // The second identity is its own parts: its real bearer crosses the door,
+    // the API adjudicating it exactly like the harness's.
+    let other_parts = app.relay_parts_for(&token);
+    let unreadable = run_record_citation_audit(
+        &svc,
+        &other_parts,
+        json!({
+            "block_id": block.to_string(),
+            "source": {"kind": "resource", "value": source.to_string()},
+            "value": 0.8,
+        }),
+    )
+    .await
+    .expect_err("a finding the caller cannot read refuses");
+
     const EXPECTED: &str = "record_citation_audit: finding not found, unreadable, or self-authored";
     assert_eq!(code_of(&unknown), -32602, "{unknown}");
     assert_eq!(code_of(&self_audit), -32602, "{self_audit}");
+    assert_eq!(code_of(&unreadable), -32602, "{unreadable}");
     assert_eq!(unknown.message, EXPECTED, "byte-exact: {unknown}");
     assert_eq!(self_audit.message, EXPECTED, "byte-exact: {self_audit}");
+    assert_eq!(unreadable.message, EXPECTED, "byte-exact: {unreadable}");
 }
 
 /// A DIFFERENT approved principal, granted read on a finding it did not author,
@@ -1519,6 +1715,72 @@ async fn an_approved_reader_who_did_not_author_the_citation_records_an_audit(poo
     .await
     .expect("check the audit row");
     assert!(exists, "the verdict lands on the audited block");
+}
+
+/// A citation audit under a REAL OPEN invocation lands with the caller's correlation on
+/// the ledger — the act-envelope ride for the audit write: `BlockCitationAuditRequest` is
+/// the tool input 1:1, the act straight through, and the audit's own row points back at
+/// its firing event (`kb_citation_audits.audited_by_event_id`), whose `invocation_id`
+/// pins the run. The harness is the AUDITOR (read granted, did not author — the
+/// reader-recording fixture above with roles kept), so the self-authored arm stays out of
+/// the way and the correlation is the only variable.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_authored_citation_audit_under_a_real_open_invocation_lands(pool: PgPool) {
+    let (app, svc, parts) = harness(pool).await;
+    let harness_id = parity::profile_id_by_email(&app.pool, parity::EMAIL).await;
+
+    // The finding's author is a SECOND identity with its own default context; the
+    // harness's read-only grant makes it a legitimate auditor.
+    let (_token, _sub, author_email) =
+        parity::second_identity(&app, &app.pool, "audit-author").await;
+    let author_id = parity::profile_id_by_email(&app.pool, &author_email).await;
+    let author_ctx: Uuid = sqlx::query_scalar(
+        "SELECT c.id FROM kb_contexts c \
+         JOIN kb_profiles p ON p.id = c.owner_id \
+         WHERE p.email = $1 AND c.name = 'default'",
+    )
+    .bind(&author_email)
+    .fetch_one(&app.pool)
+    .await
+    .expect("the second identity's auto-provisioned default context");
+    let (finding, block, source) =
+        parity::seed_finding_with_block(&app.pool, author_id, author_ctx, "Correlated finding")
+            .await;
+    parity::grant_read_only(&app.pool, finding, harness_id, author_id).await;
+
+    let invocation = open_invocation_for_harness(&app).await;
+    let res = run_record_citation_audit(
+        &svc,
+        &parts,
+        json!({
+            "block_id": block.to_string(),
+            "source": {"kind": "resource", "value": source.to_string()},
+            "value": 0.8,
+            "invocation_id": invocation.to_string(),
+        }),
+    )
+    .await
+    .expect("the gate admits the reader, the run is open");
+    let audit_id: Uuid = one_text(&res)
+        .as_str()
+        .expect("the BARE audit id, no wrapping ack")
+        .parse()
+        .expect("a uuid");
+
+    let stamped: Option<Uuid> = sqlx::query_scalar(
+        "SELECT e.invocation_id FROM kb_events e \
+         JOIN kb_citation_audits ca ON ca.audited_by_event_id = e.id \
+         WHERE ca.id = $1",
+    )
+    .bind(audit_id)
+    .fetch_one(&app.pool)
+    .await
+    .expect("the audit act is on the ledger");
+    assert_eq!(
+        stamped,
+        Some(invocation),
+        "the audit act correlates to the invocation it claimed"
+    );
 }
 
 /// A Remote-kind citation refuses at the command boundary's source-kind guard

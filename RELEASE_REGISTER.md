@@ -46,7 +46,7 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   unchanged.
 pr: self
 classes: behavioral
-surfaces: http, mcp
+surfaces: mcp
 status: signal-only
 
 - **The citation audit gains a block-addressed write — POST /api/citation-audits**
