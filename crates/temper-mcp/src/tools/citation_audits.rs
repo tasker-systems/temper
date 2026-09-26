@@ -1,25 +1,46 @@
 //! Citation-audit tool — record an auditor's signed defensibility verdict on one citation.
 //!
-//! Mirrors the HTTP endpoint `POST /api/resources/{id}/citation-audits`
-//! (`temper-api/src/handlers/citation_audits.rs`) and dispatches through `DbBackend` — the same
-//! write path the HTTP handler uses. `RecordCitationAudit` carries no finding id: the server
-//! derives the authorization subject from `block_id` server-side
+//! Execution crosses the DEPLOYED API over the wire (beat G3c, the network door — the
+//! fourth family to cross): the handler drives a per-request temper-client HTTP relay
+//! built from the request's `Parts` and never touches the pool, the `DbBackend`, or a
+//! service function directly, forwarding to the **block-addressed audit route**
+//! `POST /api/citation-audits` (`temper-api/src/handlers/citation_audits.rs::record_for_block`,
+//! merged PR #961) on the caller's own bearer. `BlockCitationAuditRequest` is the tool
+//! input 1:1 — the MCP input's `act: ActInput` maps STRAIGHT THROUGH into the request's
+//! `act`, never defaulted, never dropped: an audit is an authored, per-act write, and the
+//! write keeps the authorship the caller supplied. `RecordCitationAudit` carries no finding
+//! id and none may be added: the server derives the authorization subject from `block_id`
 //! (`temper-services/src/authz/audit_gate.rs:65-77`), so this tool does not authorize — it
-//! dispatches, like every other MCP tool, and the backend command is the ONE gate.
+//! forwards, like every other network-door tool, and the API's gate is the ONE gate.
+//!
+//! # The one-string-by-construction property survives the wire
+//!
+//! Every finding-shaped refusal is one string by construction (`authz::audit_gate`'s
+//! `FINDING_REFUSAL`) precisely so a prober cannot tell "no such finding" from "exists but
+//! not yours" from "yours, so you may not grade it". Over the wire those arrive as 404s
+//! whose bodies carry the server's constant — and this tool renders **its own fixed
+//! sentence** keyed on the 404 status, byte-identical to the direct binding's arm, NEVER
+//! the server's 404 message: one string in, one string out, no election between causes.
+//!
+//! # Declared parity deltas
+//!
+//! None new: the fixed 404 sentence is the tool's own (kept byte-exact), the 400 face
+//! passes the server's sentence through bare exactly as the direct pass-through did, and
+//! the family-wide deltas (the caller-actionable 409 face, the dropped NotFound prefix)
+//! are declared in `relationships.rs`/`facets.rs` — the audit's 404 arm is exempt from
+//! the prefix delta because it never carried the server's message at all.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use temper_core::error::TemperError;
+use temper_client::error::ClientError;
 use temper_core::types::authorship::ActInput;
-use temper_core::types::ids::{BlockId, ProfileId};
+use temper_core::types::citation_audit::BlockCitationAuditRequest;
 use temper_core::types::provenance::ProvenanceSource;
-use temper_services::backend::DbBackend;
-use temper_workflow::operations::{Backend, RecordCitationAudit, Surface};
 
-use crate::service::TemperMcpService;
+use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 
 // ── Input structs ──────────────────────────────────────────────────────────────
 
@@ -57,28 +78,39 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
 }
 
-fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
+/// Map an audit-path error onto an MCP error, arm-for-arm with the direct binding.
+///
+/// **Deliberately does NOT carry the server's 404 message, unlike its NotFound siblings.**
+/// Every finding-shaped refusal is one string by construction (`authz::audit_gate`'s
+/// `FINDING_REFUSAL`) precisely so a prober cannot tell "no such finding" from "exists but
+/// not yours" from "yours, so you may not grade it". This arm enumerates all three without
+/// electing between them, which is the same guarantee stated locally — keyed on the 404
+/// status, never on the body. Making it message-transparent is safe only for as long as
+/// everything upstream is that constant — a coupling nothing here can enforce, so it stays
+/// independent.
+fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
     match e {
-        // **Deliberately does NOT carry the service message, unlike its siblings.** Every
-        // finding-shaped refusal is one string by construction (`authz::audit_gate`'s
-        // `FINDING_REFUSAL`) precisely so a prober cannot tell "no such finding" from "exists but
-        // not yours" from "yours, so you may not grade it". This arm enumerates all three without
-        // electing between them, which is the same guarantee stated locally. Making it
-        // message-transparent is safe only for as long as everything upstream is that constant —
-        // a coupling nothing here can enforce, so it stays independent.
-        TemperError::NotFound(_) => rmcp::ErrorData::invalid_params(
+        ClientError::NotFound { .. } => rmcp::ErrorData::invalid_params(
             format!("{action}: finding not found, unreadable, or self-authored"),
             None,
         ),
-        TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        // The door's 409 is caller-actionable — the direct catch-all rendered it
+        // internal_error (the family's declared delta).
+        ClientError::Conflict { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
         // A refusal that named the capability it withheld — carry the gate's own sentence. The
         // terse arm below stays exactly as it was, for the caller who may not even read the subject.
-        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::new(
+        ClientError::ForbiddenDetail { message } => rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_REQUEST,
-            format!("{action}: {msg}"),
+            format!("{action}: {message}"),
             None,
         ),
-        TemperError::Forbidden => rmcp::ErrorData::new(
+        ClientError::Forbidden => rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_REQUEST,
             format!("{action}: cannot audit this citation"),
             None,
@@ -91,41 +123,35 @@ fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
 
 /// Record an auditor's signed defensibility verdict on one `(block, source)` citation.
 ///
-/// CLI/HTTP equivalent: `POST /api/resources/{id}/citation-audits`.
+/// Forwards to the block-addressed route `POST /api/citation-audits` through the network
+/// door; the act rides the request verbatim.
 pub async fn record_citation_audit(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: RecordCitationAuditInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
-
-    let act = input
-        .act
-        .into_act_context()
-        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-
-    let cmd = RecordCitationAudit {
-        block: BlockId::from(input.block_id),
+    let request = BlockCitationAuditRequest {
+        block_id: input.block_id,
         source: input.source,
         value: input.value,
         reason: input.reason,
-        act,
-        origin: Surface::Mcp,
+        // Straight through: never defaulted, never dropped.
+        act: input.act,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id);
-    let out = backend
-        .record_citation_audit(cmd)
+    let client = svc.relay_client(parts)?;
+    let audit_id = client
+        .resources()
+        .record_citation_audit_for_block(&request)
         .await
-        .map_err(|e| map_err(e, "record_citation_audit"))?;
+        .across_auth(|e| map_err(e, "record_citation_audit"))?;
 
     // Matches the HTTP handler's response shape exactly: a bare audit id
     // (`temper-api/src/handlers/citation_audits.rs` returns `Json<Uuid>`), not a wrapping ack
     // struct — there is no shared `CitationAuditAck` type, and inventing one here would be a
     // second spelling of a response shape the HTTP surface already settled.
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(to_text(&out.value)),
+        rmcp::model::ContentBlock::text(to_text(&audit_id)),
     ]))
 }
 

@@ -84,12 +84,13 @@ async fn ingest(app: &common::E2eTestApp, title: &str, content: &str) -> uuid::U
 /// `property_asserted` row the write produced.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_facet_write_through_the_driven_path_lands_at_mcp_in_the_ledger(pool: PgPool) {
-    let (app, svc, _parts) = harness(pool).await;
+    let (app, svc, parts) = harness(pool).await;
     let handle = handle_of(&app.pool).await;
     let resource = ingest(&app, "Attributed facet", "The attributed body.").await;
 
     let res = temper_mcp::tools::facets::facet_set(
         &svc,
+        &parts,
         serde_json::from_value(json!({
             "resource": resource.to_string(),
             "values": {"status": "open"},
@@ -110,6 +111,7 @@ async fn a_facet_write_through_the_driven_path_lands_at_mcp_in_the_ledger(pool: 
 
     let trail = temper_mcp::tools::trail::element_trail(
         &svc,
+        &parts,
         serde_json::from_value(json!({
             "kind": "node",
             "element": resource.to_string(),

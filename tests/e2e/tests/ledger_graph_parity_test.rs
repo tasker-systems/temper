@@ -6,11 +6,11 @@
 //! discipline to search + query; this file applies it to the four ledger/graph tool
 //! families — element_trail, facets, relationships, citation_audits — before the
 //! migration touches them: a parity suite that never saw the old binding cannot prove
-//! parity. The tools are driven the way the MCP function drives them, through the
-//! family's own caller path (`require_profile` — the profile cache
-//! `mcp_relay_service` seeds, the same principal `relay_parts` presents), with the
-//! drivers' `(svc, parts, params)` signatures byte-stable for the swap, which changes
-//! only the driver bodies.
+//! parity. At the swap the tools crossed the network door and the driving changed with
+//! them — each tool now builds the per-request relay from its request's `Parts`, so the
+//! drivers (signatures byte-stable) pass those parts through and identity rides the
+//! bearer alone: the harness principal via `relay_parts`, a second identity via its OWN
+//! `relay_parts_for(token)`, the API adjudicating each bearer.
 //!
 //! # The refusal faces, named before they are witnessed (learning 4)
 //!
@@ -77,24 +77,39 @@
 //!   self-authored render ONE fixed sentence, because `authz::audit_gate`'s
 //!   `FINDING_REFUSAL` is one string by construction
 //!   (`audit_gate.rs:139`, both denial arms → `NotFound`) and the tool's NotFound arm
-//!   deliberately does NOT carry the service message
-//!   (`citation_audits.rs:60-72`). Pinned byte-exact.
+//!   deliberately does NOT carry the service message — post-swap it renders its OWN
+//!   fixed sentence keyed on the 404 status, never the body. Pinned byte-exact.
 //! - *Remote-kind source* — the caller-fault guard at the command boundary
-//!   (`db_backend.rs:2909-2916`) → `BadRequest`, passed through with the server's
-//!   own sentence (`citation_audits.rs:73`).
+//!   (`db_backend.rs:2909-2916`) → the API's 400, the server's own sentence passed
+//!   through bare (`citation_audits.rs`'s 400 arm).
 //! - *Out-of-range value* — the range guard
-//!   (`db_backend.rs:2896-2901`) → `BadRequest`, same pass-through.
+//!   (`db_backend.rs:2896-2901`) → the API's 400, same pass-through.
 //! - *Happy* — a gate-admitted auditor (readable finding, did not author) records
-//!   the audit; the response is the BARE audit Uuid, no wrapping ack
-//!   (`citation_audits.rs:123-129`).
+//!   the audit; the response is the BARE audit Uuid, no wrapping ack.
+//!
+//! # The declared parity deltas (flipped at the swap, named here and in the tool
+//! files' parity-delta sections)
+//!
+//! - **Closed-invocation 409** — the DIRECT binding's `map_err` had no `Conflict`
+//!   arm, so the act gate's non-open refusal rendered `internal_error`. The wire's
+//!   409 is caller-actionable (the run the correlation claim names is closed), so
+//!   the door renders it `invalid_params` with the server's own sentence — the
+//!   `contexts.rs::map_api_error` Conflict arm's precedent. The suite pinned the
+//!   direct face before the swap and pins the door's face now.
+//! - **NotFound prefixes** — the DIRECT maps prefixed every not-found with
+//!   `{action}: `; the door carries the server's own sentence un-prefixed (the
+//!   resources family's precedent: the door does not re-apply prefixes the direct
+//!   tool applied — kind and gate identical). The suite's 404 assertions assert by
+//!   `contains`, so they carry green across the prefix drop while the delta stays
+//!   named. The audit's fixed sentence is exempt — the tool renders its own.
 //!
 //! # How the tools are driven
 //!
-//! Through the tool functions over the harness-seeded profile — the cache
-//! `mcp_relay_service` plants is the DIRECT binding's caller path
-//! (`require_profile`); the swap replaces it with the bearer the relayed tool
-//! carries. A second identity re-seeds that cache through the same in-process gate
-//! (`ensure_profile_from_parts`, the G3b pre-swap idiom).
+//! Through the tool functions over relayed parts — the same hop the deployed
+//! relay makes: a real `TemperMcpService` whose relay config points at THIS
+//! process's listener, per-request parts carrying each principal's REAL bearer
+//! that the API's own auth middleware adjudicates (identity rides the bearer
+//! alone; a second identity is its own parts, the G3b swap's idiom).
 
 mod common;
 
@@ -143,8 +158,8 @@ mod parity {
     /// A SECOND approved identity, warmed through the real listener (JIT
     /// provisioning with the correct handle, per-surface emitters, and its own
     /// default context) and standing-approved by its own email — the G3a idiom
-    /// (`resources_parity_test.rs::second_identity`), returning what the DIRECT
-    /// binding's identity swap needs: the bearer and the claims to plant beside it.
+    /// (`resources_parity_test.rs::second_identity`), returning what the door's
+    /// identity swap needs: the bearer its own parts carry.
     pub async fn second_identity(
         app: &super::common::E2eTestApp,
         pool: &PgPool,
@@ -170,35 +185,6 @@ mod parity {
         .await
         .expect("approve the second identity's standing");
         (token, sub, email)
-    }
-
-    /// Request parts carrying hand-built claims beside the bearer — the shape the
-    /// DIRECT binding's in-process gate reads (`authed_request` needs BOTH
-    /// extensions; `relay_parts` alone is the relay's bearer-only shape). Copied from
-    /// the G3b pre-swap suite's `claimed_parts`, parameterized by identity.
-    pub fn claimed_parts(
-        token: &str,
-        sub: &str,
-        email: Option<&str>,
-        exp_offset_secs: i64,
-    ) -> axum::http::request::Parts {
-        use chrono::Utc;
-        let now = Utc::now().timestamp();
-        axum::http::Request::builder()
-            .extension(temper_mcp::middleware::BearerToken(token.to_string()))
-            .extension(temper_services::auth::RawJwtClaims {
-                sub: sub.to_string(),
-                email: email.map(str::to_string),
-                email_verified: Some(true),
-                azp: None,
-                gty: None,
-                exp: now + exp_offset_secs,
-                iat: 0,
-            })
-            .body(())
-            .expect("claimed parts build")
-            .into_parts()
-            .0
     }
 
     /// Build a tool input from its WIRE shape, so the deserializer — not a struct
@@ -380,15 +366,6 @@ async fn harness(pool: PgPool) -> (E2eTestApp, TemperMcpService, axum::http::req
     (app, svc, parts)
 }
 
-/// Re-seed the direct families' caller identity — the in-process gate the G3b
-/// pre-swap suite drove. Every second-identity test calls this ONCE, after its
-/// harness-side setup is done.
-async fn act_as_second(svc: &TemperMcpService, token: &str, sub: &str, email: &str) {
-    svc.ensure_profile_from_parts(&parity::claimed_parts(token, sub, Some(email), 3600))
-        .await
-        .expect("the second identity passes the in-process gate");
-}
-
 /// Ingest a resource through the harness's own client — the G3b setup idiom. With
 /// `content`, the body lands as a real content block (an `anchored-at` address
 /// half); with `cogmap`, the resource is kernel-homed in that map instead of a
@@ -427,16 +404,16 @@ async fn ingest(
         .uuid()
 }
 
-/// Drive the `element_trail` tool: the tool function over the harness-seeded
-/// profile — the DIRECT binding's caller path. Byte-stable across the swap, where
-/// the tool carries the bearer to the API instead.
+/// Drive the `element_trail` tool: the tool function over relayed parts — the
+/// swap made the parts the bearer's vehicle; the gate runs at the API.
 async fn run_element_trail(
     svc: &TemperMcpService,
-    _parts: &axum::http::request::Parts,
+    parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
     temper_mcp::tools::trail::element_trail(
         svc,
+        parts,
         parity::input::<temper_mcp::tools::trail::ElementTrailInput>(params),
     )
     .await
@@ -444,11 +421,12 @@ async fn run_element_trail(
 
 async fn run_facet_set(
     svc: &TemperMcpService,
-    _parts: &axum::http::request::Parts,
+    parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
     temper_mcp::tools::facets::facet_set(
         svc,
+        parts,
         parity::input::<temper_mcp::tools::facets::FacetSetInput>(params),
     )
     .await
@@ -456,11 +434,12 @@ async fn run_facet_set(
 
 async fn run_facet_set_unified(
     svc: &TemperMcpService,
-    _parts: &axum::http::request::Parts,
+    parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
     temper_mcp::tools::facets::facet_set_unified(
         svc,
+        parts,
         parity::input::<temper_mcp::tools::facets::FacetSetUnifiedInput>(params),
     )
     .await
@@ -468,11 +447,12 @@ async fn run_facet_set_unified(
 
 async fn run_facets_read(
     svc: &TemperMcpService,
-    _parts: &axum::http::request::Parts,
+    parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
     temper_mcp::tools::facets::facets_read(
         svc,
+        parts,
         parity::input::<temper_mcp::tools::facets::FacetsReadInput>(params),
     )
     .await
@@ -480,11 +460,12 @@ async fn run_facets_read(
 
 async fn run_facet_retract(
     svc: &TemperMcpService,
-    _parts: &axum::http::request::Parts,
+    parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
     temper_mcp::tools::facets::facet_retract(
         svc,
+        parts,
         parity::input::<temper_mcp::tools::facets::FacetRetractInput>(params),
     )
     .await
@@ -492,11 +473,12 @@ async fn run_facet_retract(
 
 async fn run_assert_relationship(
     svc: &TemperMcpService,
-    _parts: &axum::http::request::Parts,
+    parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
     temper_mcp::tools::relationships::assert_relationship(
         svc,
+        parts,
         parity::input::<temper_mcp::tools::relationships::AssertRelationshipInput>(params),
     )
     .await
@@ -504,11 +486,12 @@ async fn run_assert_relationship(
 
 async fn run_retype(
     svc: &TemperMcpService,
-    _parts: &axum::http::request::Parts,
+    parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
     temper_mcp::tools::relationships::retype_relationship(
         svc,
+        parts,
         parity::input::<temper_mcp::tools::relationships::RetypeRelationshipInput>(params),
     )
     .await
@@ -516,11 +499,12 @@ async fn run_retype(
 
 async fn run_reweight(
     svc: &TemperMcpService,
-    _parts: &axum::http::request::Parts,
+    parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
     temper_mcp::tools::relationships::reweight_relationship(
         svc,
+        parts,
         parity::input::<temper_mcp::tools::relationships::ReweightRelationshipInput>(params),
     )
     .await
@@ -528,11 +512,12 @@ async fn run_reweight(
 
 async fn run_fold(
     svc: &TemperMcpService,
-    _parts: &axum::http::request::Parts,
+    parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
     temper_mcp::tools::relationships::fold_relationship(
         svc,
+        parts,
         parity::input::<temper_mcp::tools::relationships::FoldRelationshipInput>(params),
     )
     .await
@@ -540,11 +525,12 @@ async fn run_fold(
 
 async fn run_record_citation_audit(
     svc: &TemperMcpService,
-    _parts: &axum::http::request::Parts,
+    parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
     temper_mcp::tools::citation_audits::record_citation_audit(
         svc,
+        parts,
         parity::input::<temper_mcp::tools::citation_audits::RecordCitationAuditInput>(params),
     )
     .await
@@ -706,12 +692,14 @@ async fn an_unknown_element_answers_an_empty_trail_not_an_error(pool: PgPool) {
 async fn a_second_identity_reads_an_empty_trail_not_an_error(pool: PgPool) {
     let (app, svc, _parts) = harness(pool).await;
     let resource = ingest(&app, "Invisible to others", Some("Hidden body."), None).await;
-    let (token, sub, email) = parity::second_identity(&app, &app.pool, "trail-other").await;
-    act_as_second(&svc, &token, &sub, &email).await;
+    let (token, _sub, _email) = parity::second_identity(&app, &app.pool, "trail-other").await;
+    // The second identity is its own parts: its real bearer crosses the door,
+    // the API adjudicating it exactly like the harness's.
+    let other_parts = app.relay_parts_for(&token);
 
     let res = run_element_trail(
         &svc,
-        &_parts,
+        &other_parts,
         json!({"kind": "node", "element": resource.to_string()}),
     )
     .await
@@ -848,6 +836,7 @@ async fn edge_facet_set_answers_the_ack_including_the_keyed_anchored_at_row(pool
 
     let res = temper_mcp::tools::facets::edge_facet_set(
         &svc,
+        &parts,
         input(json!({
             "edge_handle": handle.to_string(),
             "values": {"note": "witnesses clause one"},
@@ -864,6 +853,7 @@ async fn edge_facet_set_answers_the_ack_including_the_keyed_anchored_at_row(pool
 
     let res = temper_mcp::tools::facets::edge_facet_set(
         &svc,
+        &parts,
         input(json!({
             "edge_handle": handle.to_string(),
             "property_key": "anchored-at",
@@ -918,6 +908,7 @@ async fn facet_retract_answers_the_ack_and_a_second_retract_refuses(pool: PgPool
     let block = parity::first_block_id(&app.pool, a).await;
     let res = temper_mcp::tools::facets::edge_facet_set(
         &svc,
+        &parts,
         input(json!({
             "edge_handle": handle.to_string(),
             "property_key": "anchored-at",
@@ -1038,12 +1029,14 @@ async fn facet_retract_refuses_the_resource_target_by_name(pool: PgPool) {
 async fn facet_set_on_a_foreign_resource_speaks_the_forbidden_arm(pool: PgPool) {
     let (app, svc, _parts) = harness(pool).await;
     let resource = ingest(&app, "Foreign facet target", None, None).await;
-    let (token, sub, email) = parity::second_identity(&app, &app.pool, "facet-other").await;
-    act_as_second(&svc, &token, &sub, &email).await;
+    let (token, _sub, _email) = parity::second_identity(&app, &app.pool, "facet-other").await;
+    // The second identity is its own parts: its real bearer crosses the door,
+    // the API adjudicating it exactly like the harness's.
+    let other_parts = app.relay_parts_for(&token);
 
     let err = run_facet_set(
         &svc,
-        &_parts,
+        &other_parts,
         parity::facet_body(&resource.to_string(), json!({"status": "hijacked"})),
     )
     .await
@@ -1090,7 +1083,7 @@ async fn an_edge_facet_in_a_readable_unauthorable_map_speaks_the_forbidden_detai
     // The second identity reads L0 by team reach (auto-join watcher on the
     // temper-system team the L0 migration binds the map to) and gets clause 1
     // through a DIRECT write grant on the source resource alone.
-    let (token, sub, email) = parity::second_identity(&app, &app.pool, "detail-other").await;
+    let (token, _sub, email) = parity::second_identity(&app, &app.pool, "detail-other").await;
     sqlx::query(
         "INSERT INTO kb_access_grants \
              (subject_table, subject_id, principal_table, principal_id, can_read, can_write, \
@@ -1103,10 +1096,12 @@ async fn an_edge_facet_in_a_readable_unauthorable_map_speaks_the_forbidden_detai
     .execute(&app.pool)
     .await
     .expect("the direct resource write grant lands");
-    act_as_second(&svc, &token, &sub, &email).await;
+    // The second identity is its own parts: its real bearer crosses the door.
+    let other_parts = app.relay_parts_for(&token);
 
     let err = temper_mcp::tools::facets::edge_facet_set(
         &svc,
+        &other_parts,
         input(json!({
             "edge_handle": handle.to_string(),
             "values": {"note": "planted claim"},
@@ -1302,9 +1297,12 @@ async fn an_invocation_id_that_names_nothing_refuses_with_the_not_found_arm(pool
 }
 
 /// A CLOSED invocation refuses the correlation claim with the act gate's non-open
-/// arm (`db_backend.rs:2005-2011`). The DIRECT binding's `map_err` has no Conflict
-/// arm, so this face renders `internal_error` — a DECLARED PARITY DELTA CANDIDATE
-/// for the swap, which must re-derive what the door's 409 mapping speaks.
+/// arm (`db_backend.rs:2005-2011`) — THE DECLARED PARITY DELTA: the direct
+/// binding's `map_err` had no Conflict arm and rendered this face
+/// `internal_error` (pinned there by this suite before the swap); the wire's 409
+/// is caller-actionable, so the door renders it `invalid_params` with the
+/// server's own sentence — the `contexts.rs::map_api_error` Conflict arm's
+/// precedent.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_closed_invocation_refuses_with_the_conflict_arm(pool: PgPool) {
     let (app, svc, parts) = harness(pool).await;
@@ -1338,13 +1336,13 @@ async fn a_closed_invocation_refuses_with_the_conflict_arm(pool: PgPool) {
     .expect_err("a terminal envelope takes no new acts");
     assert_eq!(
         code_of(&err),
-        -32603,
-        "the DIRECT map_err has no Conflict arm — the declared delta: {err}"
+        -32602,
+        "a caller-actionable 409, not a fault — the declared delta: {err}"
     );
     assert!(
         err.message
             .contains("cannot stamp an act onto a non-open run"),
-        "the act gate's own sentence: {err}"
+        "the server's own sentence, carried through: {err}"
     );
 }
 
@@ -1400,12 +1398,14 @@ async fn an_assert_from_a_foreign_resource_speaks_the_forbidden_arm(pool: PgPool
     let (app, svc, _parts) = harness(pool).await;
     let a = ingest(&app, "Assert authority source", None, None).await;
     let b = ingest(&app, "Assert authority target", None, None).await;
-    let (token, sub, email) = parity::second_identity(&app, &app.pool, "assert-other").await;
-    act_as_second(&svc, &token, &sub, &email).await;
+    let (token, _sub, _email) = parity::second_identity(&app, &app.pool, "assert-other").await;
+    // The second identity is its own parts: its real bearer crosses the door,
+    // the API adjudicating it exactly like the harness's.
+    let other_parts = app.relay_parts_for(&token);
 
     let err = run_assert_relationship(
         &svc,
-        &_parts,
+        &other_parts,
         parity::assert_body(&a.to_string(), &b.to_string(), "hijack"),
     )
     .await
@@ -1480,7 +1480,7 @@ async fn an_approved_reader_who_did_not_author_the_citation_records_an_audit(poo
     let (_finding, block, source) =
         parity::seed_finding_with_block(&app.pool, harness_id, ctx, "Audited finding").await;
 
-    let (token, sub, email) = parity::second_identity(&app, &app.pool, "auditor").await;
+    let (token, _sub, email) = parity::second_identity(&app, &app.pool, "auditor").await;
     parity::grant_read_only(
         &app.pool,
         _finding,
@@ -1488,11 +1488,12 @@ async fn an_approved_reader_who_did_not_author_the_citation_records_an_audit(poo
         harness_id,
     )
     .await;
-    act_as_second(&svc, &token, &sub, &email).await;
+    // The second identity is its own parts: its real bearer crosses the door.
+    let other_parts = app.relay_parts_for(&token);
 
     let res = run_record_citation_audit(
         &svc,
-        &_parts,
+        &other_parts,
         json!({
             "block_id": block.to_string(),
             "source": {"kind": "resource", "value": source.to_string()},

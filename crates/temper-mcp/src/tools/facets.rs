@@ -1,26 +1,51 @@
-//! Facet tool — set (upsert) a typed property on a resource.
+//! Facet tools — the typed-property family (set on resource/edge, read both, retract-by-row).
 //!
-//! Mirrors the HTTP endpoint `POST /api/facets` (`temper-api/src/handlers/facets.rs`)
-//! and dispatches through `DbBackend` — the same write path the HTTP handler
-//! uses. The resource is a decorated ref (a UUID or the `slug-<uuid>` form)
-//! resolved via `parse_ref` into a `ResourceId`.
+//! Execution crosses the DEPLOYED API over the wire (beat G3c, the network door — the
+//! fourth family to cross): every tool drives a per-request temper-client HTTP relay
+//! built from the request's `Parts` and never touches the pool, the `DbBackend`, or a
+//! service function directly. The routes are the ones the CLI calls — `POST /api/facets`,
+//! `POST/GET/DELETE /api/relationships/{handle}/facets…`, `GET /api/resources/{id}/facets`
+//! — each forwarded on the caller's own bearer. The tool input's `ActInput` maps STRAIGHT
+//! THROUGH into each request's `act` — never defaulted, never dropped — so authorship and
+//! correlation ride the write the caller made, and the `origin: Surface::Mcp` stamp the
+//! direct binding put on each command is now the relay's planted carrier at the door.
+//!
+//! The consolidated dispatchers' refusals that name the INPUT SHAPE (a `property_key`
+//! beside `target=resource`, a `target=resource` retract, a missing `resource`/`edge_handle`)
+//! stay MCP-local, before any forward — they are naming refusals, not gate outcomes.
+//!
+//! # Declared parity deltas (the direct faces pinned by `ledger_graph_parity_test.rs`,
+//! re-derived at the door and flipped there deliberately)
+//!
+//! - **Closed-invocation 409**: the direct `map_err` had no `Conflict` arm, so the act
+//!   gate's non-open refusal fell to the `internal_error` catch-all. The wire's 409 is
+//!   caller-actionable — the run the correlation claim names is closed, which no retry
+//!   changes and no input edit repairs except naming an open run — so it renders
+//!   `invalid_params` with the server's own sentence, the `contexts.rs::map_api_error`
+//!   Conflict arm's precedent (`a taken slug is caller-fixable, not an internal error`).
+//!   The suite pinned `internal_error` pre-swap and pins the door's face now.
+//! - **NotFound prefixes**: the direct map prefixed every not-found with `{action}: `.
+//!   Over the wire, `ClientError::NotFound` carries the server's own sentence, and the
+//!   door does not re-apply prefixes the direct tool applied — the kind (`invalid_params`)
+//!   and the gate are identical, per the resources family's precedent (`resources.rs`'s
+//!   context-refusal arm). Only the prefix drops; every sentence the server speaks is
+//!   carried through verbatim.
+//!
+//! Every other arm maps arm-for-arm: `ForbiddenDetail` speaks the gate's own sentence
+//! under INVALID_REQUEST prefixed `{action}: ` (the direct face byte-for-byte), the terse
+//! `Forbidden` arm keeps the tool's fixed "cannot modify this resource" sentence, and the
+//! 400 face passes the server's sentence through bare — the direct binding's pass-through.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use temper_core::error::TemperError;
+use temper_client::error::ClientError;
 use temper_core::types::authorship::ActInput;
-use temper_core::types::facet_requests::{
-    EdgeFacetsResponse, FacetAck, FacetRetractAck, ResourceFacetsResponse,
-};
-use temper_core::types::ids::{EdgeId, ProfileId, PropertyId};
-use temper_core::types::property_owner::PropertyOwner;
-use temper_services::backend::DbBackend;
-use temper_workflow::operations::{Backend, RetractFacet, SetFacet, Surface};
+use temper_core::types::facet_requests::{EdgeFacetSetRequest, FacetSetRequest};
 use uuid::Uuid;
 
-use crate::service::TemperMcpService;
+use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 
 // ── Input structs ──────────────────────────────────────────────────────────────
 
@@ -48,20 +73,36 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
 }
 
-fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
+/// Map a facet-path error onto an MCP error, arm-for-arm with the direct binding.
+///
+/// The two declared parity deltas (409, NotFound prefix) and the arm-for-arm
+/// discipline are argued in the module doc. In short: `NotFound` speaks the server's
+/// sentence un-prefixed; `ForbiddenDetail` keeps the gate's own sentence under
+/// INVALID_REQUEST with the direct wrapper's `{action}: ` voice; `Forbidden` keeps the
+/// terse fixed sentence; the 400 passes the server's sentence through bare.
+fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
     match e {
-        TemperError::NotFound(msg) => {
-            rmcp::ErrorData::invalid_params(format!("{action}: {msg}"), None)
+        // The server's own sentence, un-prefixed: the direct binding's tool wrapped
+        // each not-found with "{action}: ", a prefix the door does not re-apply —
+        // the kind (invalid_params) and the gate are identical.
+        ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        // The door's 409 is caller-actionable — the direct catch-all rendered it
+        // internal_error (the declared delta).
+        ClientError::Conflict { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
         }
-        TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
         // A refusal that named the capability it withheld — carry the gate's own sentence. The
         // terse arm below stays exactly as it was, for the caller who may not even read the subject.
-        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::new(
+        ClientError::ForbiddenDetail { message } => rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_REQUEST,
-            format!("{action}: {msg}"),
+            format!("{action}: {message}"),
             None,
         ),
-        TemperError::Forbidden => rmcp::ErrorData::new(
+        ClientError::Forbidden => rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_REQUEST,
             format!("{action}: cannot modify this resource"),
             None,
@@ -74,41 +115,34 @@ fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
 
 /// Set a facet (typed property) on a resource — the steward's facet act.
 ///
-/// CLI equivalent: `temper resource facet <ref> --values '<json>'`.
+/// Forwards to `POST /api/facets` through the network door; the act rides the request
+/// verbatim. CLI equivalent: `temper resource facet <ref> --values '<json>'`.
 pub async fn facet_set(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: FacetSetInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
-
+    // MCP-local input shaping: the ref parse never touches the wire.
     let resource = temper_workflow::operations::parse_ref(&input.resource)
-        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?
+        .uuid();
 
-    let act = input
-        .act
-        .into_act_context()
-        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-
-    let cmd = SetFacet {
-        owner: PropertyOwner::resource(resource),
-        property_key: None,
-        values: serde_json::Value::Object(input.values),
+    let request = FacetSetRequest {
+        resource,
+        values: input.values,
         weight: input.weight.unwrap_or(1.0),
-        act,
-        origin: Surface::Mcp,
+        // Straight through: authorship and correlation the caller supplied are the
+        // write's authorship and correlation — never defaulted, never dropped.
+        act: input.act,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id);
-    let out = backend
-        .set_facet(cmd)
+    let client = svc.relay_client(parts)?;
+    let ack = client
+        .facets()
+        .set(&request)
         .await
-        .map_err(|e| map_err(e, "facet_set"))?;
+        .across_auth(|e| map_err(e, "facet_set"))?;
 
-    let ack = FacetAck {
-        property_ids: out.value.into_iter().map(Uuid::from).collect(),
-    };
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(to_text(&ack)),
     ]))
@@ -153,71 +187,56 @@ pub struct ResourceFacetsInput {
 
 /// Set a facet whose owner is an **edge** — a qualifier on a relationship rather than on a thing.
 ///
-/// Mirrors `POST /api/relationships/{edge_handle}/facets`. The edge is addressed by its handle, not
-/// a resource ref, and the write authorizes through the edge's own mutability clauses (its source
-/// resource plus container-write on its home) rather than through `can_modify_resource`.
+/// Forwards to `POST /api/relationships/{edge_handle}/facets` through the network door.
+/// The edge is addressed by its handle, not a resource ref, and the server authorizes the
+/// write through the edge's own mutability clauses (its source resource plus container-write
+/// on its home) rather than through `can_modify_resource`.
 ///
 /// CLI equivalent: `temper edge facet <edge-handle> --values '<json>'`.
 pub async fn edge_facet_set(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: EdgeFacetSetInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
-
-    let act = input
-        .act
-        .into_act_context()
-        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-
-    let cmd = SetFacet {
-        owner: PropertyOwner::edge(EdgeId::from(input.edge_handle)),
+    let request = EdgeFacetSetRequest {
+        values: input.values,
         property_key: input.property_key,
-        values: serde_json::Value::Object(input.values),
         weight: input.weight.unwrap_or(1.0),
-        act,
-        origin: Surface::Mcp,
+        // Straight through: never defaulted, never dropped.
+        act: input.act,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id);
-    let out = backend
-        .set_facet(cmd)
+    let client = svc.relay_client(parts)?;
+    let ack = client
+        .facets()
+        .set_on_edge(input.edge_handle, &request)
         .await
-        .map_err(|e| map_err(e, "edge_facet_set"))?;
+        .across_auth(|e| map_err(e, "edge_facet_set"))?;
 
-    let ack = FacetAck {
-        property_ids: out.value.into_iter().map(Uuid::from).collect(),
-    };
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(to_text(&ack)),
     ]))
 }
 
-/// Read the live facets of one edge. Service-direct, like every other read.
+/// Read the live facets of one edge, through the network door.
 pub async fn edge_facets(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: EdgeFacetsInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let facets = temper_services::services::edge_service::list_edge_facets(
-        &svc.api_state.pool,
-        profile.id,
-        input.edge_handle,
-    )
-    .await
-    .map_err(|e| map_err(TemperError::from(e), "edge_facets"))?;
+    let client = svc.relay_client(parts)?;
+    let out = client
+        .facets()
+        .list_for_edge(input.edge_handle)
+        .await
+        .across_auth(|e| map_err(e, "edge_facets"))?;
 
-    let out = EdgeFacetsResponse {
-        edge_handle: input.edge_handle,
-        facets,
-    };
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(to_text(&out)),
     ]))
 }
 
-/// Read the live facets of one resource. Service-direct, like every other read.
+/// Read the live facets of one resource, through the network door.
 ///
 /// The faithful view: one entry per live row, each with its weight and its author. `get_resource`
 /// carries a facet inside `open_meta` collapsed to a single newest-wins value with the weight
@@ -226,24 +245,21 @@ pub async fn edge_facets(
 /// CLI equivalent: `temper resource facets <ref>`.
 pub async fn resource_facets(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: ResourceFacetsInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
+    // MCP-local input shaping: the ref parse never touches the wire.
     let resource = temper_workflow::operations::parse_ref(&input.resource)
-        .map_err(|e| map_err(e, "resource_facets"))?;
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?
+        .uuid();
 
-    let facets = temper_services::services::facet_service::list_resource_facets(
-        &svc.api_state.pool,
-        ProfileId::from(profile.id),
-        resource,
-    )
-    .await
-    .map_err(|e| map_err(TemperError::from(e), "resource_facets"))?;
+    let client = svc.relay_client(parts)?;
+    let out = client
+        .facets()
+        .list_for_resource(resource)
+        .await
+        .across_auth(|e| map_err(e, "resource_facets"))?;
 
-    let out = ResourceFacetsResponse {
-        resource: Uuid::from(resource),
-        facets,
-    };
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(to_text(&out)),
     ]))
@@ -297,6 +313,7 @@ pub struct FacetSetUnifiedInput {
 /// Dispatch the consolidated facet-set tool.
 pub async fn facet_set_unified(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: FacetSetUnifiedInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.target {
@@ -317,6 +334,7 @@ pub async fn facet_set_unified(
             })?;
             facet_set(
                 svc,
+                parts,
                 FacetSetInput {
                     resource,
                     values: input.values,
@@ -335,6 +353,7 @@ pub async fn facet_set_unified(
             })?;
             edge_facet_set(
                 svc,
+                parts,
                 EdgeFacetSetInput {
                     edge_handle,
                     values: input.values,
@@ -379,6 +398,7 @@ pub struct FacetsReadInput {
 /// Dispatch the consolidated facets-read tool.
 pub async fn facets_read(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: FacetsReadInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.target {
@@ -389,7 +409,7 @@ pub async fn facets_read(
                     None,
                 )
             })?;
-            resource_facets(svc, ResourceFacetsInput { resource }).await
+            resource_facets(svc, parts, ResourceFacetsInput { resource }).await
         }
         FacetsReadTarget::Edge => {
             let edge_handle = input.edge_handle.ok_or_else(|| {
@@ -398,7 +418,7 @@ pub async fn facets_read(
                     None,
                 )
             })?;
-            edge_facets(svc, EdgeFacetsInput { edge_handle }).await
+            edge_facets(svc, parts, EdgeFacetsInput { edge_handle }).await
         }
     }
 }
@@ -438,10 +458,13 @@ pub struct FacetRetractInput {
 
 /// Retract one facet row owned by an edge.
 ///
-/// Mirrors `DELETE /api/relationships/{edge_handle}/facets/{property_id}`. The retraction is
-/// row-grain: one act per row, addressed by the id the facets read carries.
+/// Forwards to `DELETE /api/relationships/{edge_handle}/facets/{property_id}` through the
+/// network door. The retraction is row-grain: one act per row, addressed by the id the facets
+/// read carries. DELETE has no body, so the input's `ActInput` rides the request as query
+/// params — passed verbatim, never defaulted.
 pub async fn facet_retract(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: FacetRetractInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.target {
@@ -459,27 +482,13 @@ pub async fn facet_retract(
                     None,
                 )
             })?;
-            let profile = svc.require_profile().await?;
-            let act = input
-                .act
-                .into_act_context()
-                .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-
-            let cmd = RetractFacet {
-                edge_handle: EdgeId::from(edge_handle),
-                property_id: PropertyId::from(input.property_id),
-                act,
-                origin: Surface::Mcp,
-            };
-            let backend = DbBackend::new(svc.api_state.pool.clone(), ProfileId::from(profile.id));
-            let out = backend
-                .retract_facet(cmd)
+            let client = svc.relay_client(parts)?;
+            let ack = client
+                .facets()
+                .retract_on_edge(edge_handle, input.property_id, &input.act)
                 .await
-                .map_err(|e| map_err(e, "facet_retract"))?;
+                .across_auth(|e| map_err(e, "facet_retract"))?;
 
-            let ack = FacetRetractAck {
-                property_id: Uuid::from(out.value),
-            };
             Ok(CallToolResult::success(vec![
                 rmcp::model::ContentBlock::text(to_text(&ack)),
             ]))

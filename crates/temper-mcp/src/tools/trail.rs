@@ -1,10 +1,11 @@
 //! Element-trail tool — the MCP door onto the append-only event ledger.
 //!
-//! One read tool calling the same service-direct read path the API handler and the CLI both call
-//! (`event_service::element_trail`). The visibility gate lives INSIDE the SQL functions
-//! (`element_trail_edge` / `element_trail_node`), not here — this tool resolves a ref to a UUID and
-//! dispatches, exactly like `steward_ingest_delta` and the search tool. An unreadable or
-//! nonexistent element yields an empty trail, never an error: the gate is leak-safe by design.
+//! Execution crosses the DEPLOYED API over the wire (beat G3c, the network door — the
+//! fourth family to cross): the handler drives a per-request temper-client HTTP relay
+//! built from the request's `Parts` and never touches the pool or a service function
+//! directly, forwarding to `GET /api/graph/elements/{kind}/{id}/trail` — the same
+//! route the CLI calls — on the caller's own bearer. The one read below is MCP-local
+//! input shaping: `parse_ref` resolves the ref string to a UUID before the forward.
 //!
 //! # Why this is a read tool, not a write
 //!
@@ -16,21 +17,27 @@
 //!
 //! # Ref shape — one ref, two kinds
 //!
-//! `kind` selects the trail function (`node` → `element_trail_node`, `edge` → `element_trail_edge`).
+//! `kind` selects the trail route (`node` / `edge` are the route segments).
 //! `element` is a ref resolved trailing-UUID-only (`parse_ref`): a resource ref for a node, an edge
 //! UUID for an edge. The slug half of a decorated ref is parsed off and ignored, matching every
 //! other ref on every surface.
+//!
+//! # Parity posture
+//!
+//! The visibility gate lives INSIDE the SQL functions at the API (`element_trail_edge` /
+//! `element_trail_node`), not here — an unreadable or nonexistent element yields an empty trail,
+//! never an error: the gate is leak-safe by design, and the door carries the same 200-with-empty
+//! answer back unchanged. No parity deltas: the read's refusals (the MCP-local parse error and
+//! the API's 400 face) map arm-for-arm to the direct binding's renderings.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use temper_core::error::TemperError;
+use temper_client::error::ClientError;
 use temper_core::types::element_trail::{ElementKind, EventTrail};
-use temper_core::types::ids::ProfileId;
-use temper_services::services::event_service;
 
-use crate::service::TemperMcpService;
+use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 
 /// MCP input for `element_trail`: a kind (node | edge) and a ref.
 ///
@@ -52,9 +59,19 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
 }
 
-fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
+/// Map a trail-path error onto an MCP error, arm-for-arm with the direct binding.
+///
+/// A 400 speaks the server's own sentence as `invalid_params` (the
+/// `contexts.rs::map_api_error` BadRequest arm's precedent); everything else stays
+/// opaque under the direct wrapper's own voice. In practice the route answers 200 for
+/// readable AND unreadable elements alike, so this mapping is mostly defensive — the
+/// read's caller-facing refusals are the MCP-local parse error above.
+fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
     match e {
-        TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
         other => rmcp::ErrorData::internal_error(format!("{action}: {other}"), None),
     }
 }
@@ -62,29 +79,27 @@ fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
 /// Read an element's event trail — the append-only history of events that produced and mutated a
 /// single node (resource) or edge (relationship).
 ///
-/// Service-direct onto `event_service::element_trail`, the same path the API handler
-/// (`GET /api/graph/elements/{kind}/{id}/trail`) and the CLI (`temper trail <kind> <ref>`) call.
-/// Visibility is gated inside the SQL functions: nodes via `resources_visible_to`, edges via the
-/// `edges_visible_to` triple (home readable AND both endpoints readable). An unreadable or
-/// nonexistent element returns an empty trail, never an error.
+/// Forwards to `GET /api/graph/elements/{kind}/{id}/trail` through the network door on
+/// the caller's own bearer. Visibility is gated inside the API's SQL functions: nodes via
+/// `resources_visible_to`, edges via the `edges_visible_to` triple (home readable AND both
+/// endpoints readable). An unreadable or nonexistent element returns an empty trail, never an
+/// error.
 pub async fn element_trail(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: ElementTrailInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-
+    // MCP-local input shaping: the ref parse never touches the wire.
     let element_id = temper_workflow::operations::parse_ref(&input.element)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad element ref: {e}"), None))?
-        .0;
+        .uuid();
 
-    let trail: EventTrail = event_service::element_trail(
-        &svc.api_state.pool,
-        ProfileId::from(profile.id),
-        input.kind,
-        element_id,
-    )
-    .await
-    .map_err(|e| map_err(TemperError::from(e), "element_trail"))?;
+    let client = svc.relay_client(parts)?;
+    let trail: EventTrail = client
+        .events()
+        .element_trail(input.kind, element_id)
+        .await
+        .across_auth(|e| map_err(e, "element_trail"))?;
 
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(to_text(&trail)),

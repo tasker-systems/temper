@@ -23,6 +23,32 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **The ledger/graph MCP tools execute through the network door — element_trail, facets, relationships, and the citation audit cross as real relayed calls**
+  The four remaining ledger/graph tool families stop executing in-process and forward
+  to their deployed routes (`GET /api/graph/elements/{kind}/{id}/trail`,
+  `POST /api/facets`, the `/api/relationships/…` set/read/retract routes, and the
+  block-addressed `POST /api/citation-audits`) as temper-client calls, exactly as the
+  resources, search, and query families have since the door opened: the caller's
+  bearer re-issued, the service credential and the `mcp` carrier set by the relay,
+  refusals mapped arm-for-arm from the preserved bodies, and the direct methods'
+  `ensure_profile_from_parts` gates deleted whole — Level 1 + 2 execute at the API.
+  The MCP input's act envelope maps straight through into each request body (the
+  audit's `BlockCitationAuditRequest` is the tool input 1:1), so authorship and
+  correlation ride the wire act, and the audit's three-cause 404 sentence stays the
+  tool's own fixed string — the one-string-by-construction property survives the
+  wire. Tool names, wire schemas, and tool descriptions are byte-identical. Who
+  observes: an MCP-calling agent, whose visible changes are the two declared parity
+  deltas named in the parity suite's header — a closed-invocation 409 now renders
+  `invalid_params` with the server's own sentence (previously `internal_error` — no
+  `Conflict` arm in the direct map), and not-found refusals drop the direct map's
+  `{action}: ` prefix (the door carries the server's own sentence; kind and gate
+  identical). The audit's fixed sentence and the terse/detailed 403 faces are
+  unchanged.
+pr: self
+classes: behavioral
+surfaces: http, mcp
+status: signal-only
+
 - **The citation audit gains a block-addressed write — POST /api/citation-audits**
   The audit write's second route: the body names only the `(block, source)` citation
   pair plus the act envelope, and the server derives the authorization subject from

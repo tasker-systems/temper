@@ -21,69 +21,7 @@ mod common;
 use temper_core::types::facet_requests::FacetSetRequest;
 use temper_core::types::ingest::{pack_chunks, IngestPayload};
 use temper_core::types::resource_grant::ResourceGrantBody;
-use temper_services::auth_config::{AuthConfig, AuthMode};
-use temper_services::config::ApiConfig;
-use temper_services::state::{AppState, JwksKeyStore};
 use uuid::Uuid;
-
-/// An MCP service over the same pool. Local to this file, matching `auth_seam_m2m_e2e.rs`'s own
-/// copy — the suite's per-file convention, and the reason both files can evolve their harness
-/// independently.
-async fn build_mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMcpService {
-    let decoding_key =
-        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
-            .expect("decoding key");
-    let jwks_store = JwksKeyStore::with_static_key(decoding_key, jsonwebtoken::Algorithm::RS256);
-    let api_config = ApiConfig {
-        database_url: "unused".to_string(),
-        auth: AuthConfig {
-            issuer: "test-issuer".to_string(),
-            jwks_url: "unused".to_string(),
-            audience: common::TEST_AUDIENCE.to_string(),
-            mcp_audience: common::TEST_AUDIENCE.to_string(),
-            mode: AuthMode::ExternalIdp,
-        },
-        auth_provider_name: "test-provider".to_string(),
-        cors_origins: vec![],
-        port: 0,
-        enable_swagger: false,
-        internal_reconcile_secret: None,
-        embed_dispatch_secret: None,
-        mcp_service_secret: None,
-        vercel_connect: None,
-        slack_link: None,
-        slack_mint_secret: None,
-        rate_limit: None,
-        blob: None,
-        blob_disabled_by_policy: false,
-    };
-    let state = AppState::new(pool.clone(), jwks_store, api_config);
-    temper_mcp::service::TemperMcpService::new(
-        state,
-        temper_mcp::service::relay_off_config(),
-        temper_mcp::service::shared_relay_pool(),
-    )
-}
-
-/// Synthetic request parts carrying a `client_credentials` claim set — a machine principal as the
-/// MCP gate sees one.
-fn machine_parts(client_id: &str) -> axum::http::request::Parts {
-    axum::http::Request::builder()
-        .extension(temper_mcp::middleware::BearerToken("synthetic".to_string()))
-        .extension(temper_services::auth::RawJwtClaims {
-            sub: format!("{client_id}@clients"),
-            email: None,
-            email_verified: None,
-            azp: Some(client_id.to_string()),
-            gty: Some("client-credentials".to_string()),
-            exp: 0,
-            iat: 0,
-        })
-        .body(())
-        .expect("build request")
-        .into_parts()
-        .0
-}
 
 /// Seed a resource via the API client. Mirrors `edge_facet_e2e_test.rs`'s helper — the suite's
 /// per-file convention.
@@ -341,7 +279,10 @@ async fn an_unreadable_resource_and_a_nonexistent_one_answer_identically(pool: s
 async fn a_read_only_machine_principal_reads_facets_on_mcp_and_cannot_assert_one(
     pool: sqlx::PgPool,
 ) {
-    let app = common::setup(pool.clone()).await;
+    // The MCP tools cross the network door, so the harness is the relay-ready one:
+    // the service forwards to THIS process's listener and the API adjudicates each
+    // caller's REAL bearer — here, the machine's own `client_credentials` token.
+    let app = common::setup_relay(pool.clone()).await;
     app.client
         .profile()
         .get()
@@ -385,10 +326,8 @@ async fn a_read_only_machine_principal_reads_facets_on_mcp_and_cannot_assert_one
     .expect("seed machine registration");
     common::approve(&pool, machine_profile).await;
 
-    let svc = build_mcp_service(&pool).await;
-    svc.ensure_profile_from_parts(&machine_parts("facet-reader-client"))
-        .await
-        .expect("the mcp gate admits a registered, approved machine");
+    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let machine_parts = app.relay_parts_for(&common::generate_machine_jwt("facet-reader-client"));
 
     // ── the negative control, and it is not optional ──────────────────────────────────────────────
     // Without this, the success below proves nothing: a read that would have succeeded anyway —
@@ -397,6 +336,7 @@ async fn a_read_only_machine_principal_reads_facets_on_mcp_and_cannot_assert_one
     // changes the answer.
     let before_grant = temper_mcp::tools::facets::resource_facets(
         &svc,
+        &machine_parts,
         temper_mcp::tools::facets::ResourceFacetsInput {
             resource: resource.to_string(),
         },
@@ -428,6 +368,7 @@ async fn a_read_only_machine_principal_reads_facets_on_mcp_and_cannot_assert_one
 
     let read = temper_mcp::tools::facets::resource_facets(
         &svc,
+        &machine_parts,
         temper_mcp::tools::facets::ResourceFacetsInput {
             resource: resource.to_string(),
         },
@@ -467,6 +408,7 @@ async fn a_read_only_machine_principal_reads_facets_on_mcp_and_cannot_assert_one
     // family — refused.
     let denied = temper_mcp::tools::facets::facet_set(
         &svc,
+        &machine_parts,
         serde_json::from_value(serde_json::json!({
             "resource": resource.to_string(),
             "values": {"node_label": "planted-by-a-reader"},

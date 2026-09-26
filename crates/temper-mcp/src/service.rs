@@ -486,8 +486,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::trail::ElementTrailInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::trail::element_trail(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::trail::element_trail(self, &parts, input).await
     }
 
     // ── Blob (read 2→1, manage 2→1) ────────────────────────────────────
@@ -526,8 +527,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::relationships::RelationshipInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::relationships::relationship(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::relationships::relationship(self, &parts, input).await
     }
 
     // ── Citation audit (unchanged write) ───────────────────────────────
@@ -540,8 +542,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::citation_audits::RecordCitationAuditInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::citation_audits::record_citation_audit(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::citation_audits::record_citation_audit(self, &parts, input).await
     }
 
     // ── Facets (consolidated: 2→1 read, 2→1 write) ─────────────────────
@@ -554,8 +557,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::facets::FacetsReadInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::facets::facets_read(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::facets::facets_read(self, &parts, input).await
     }
 
     #[tool(
@@ -566,8 +570,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::facets::FacetSetUnifiedInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::facets::facet_set_unified(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::facets::facet_set_unified(self, &parts, input).await
     }
 
     #[tool(
@@ -578,8 +583,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::facets::FacetRetractInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::facets::facet_retract(self, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::facets::facet_retract(self, &parts, input).await
     }
 
     // ── Cogmap reads (consolidated 6→1) + list + create + materialize ─
@@ -888,6 +894,19 @@ impl<T> AcrossAuth<T> for Result<T, ClientError> {
 ///
 /// `None` for every other error — only post-edge refusals speak here; the tool's
 /// own mapping owns the rest.
+/// The 400/409 bodies carry the API's RENDERED Display (`Bad request: …` /
+/// `Conflict: …`) — exactly as the 401 bodies carry `Unauthorized: …` — so the
+/// label is the status echoed back, not part of the sentence. The caller-actionable
+/// arms speak the server's OWN sentence, so the label comes off first (the same
+/// care `map_post_edge_auth` applies to the 401 label); a body without either label
+/// passes through whole.
+pub(crate) fn api_error_cause(message: &str) -> &str {
+    message
+        .strip_prefix("Bad request: ")
+        .or_else(|| message.strip_prefix("Conflict: "))
+        .unwrap_or(message)
+}
+
 pub(crate) fn map_post_edge_refusal(refusal: &ClientError) -> Option<rmcp::ErrorData> {
     map_system_access_refusal(refusal).or_else(|| map_post_edge_auth(refusal))
 }
