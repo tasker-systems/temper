@@ -76,18 +76,24 @@ first release claims it — no local bootstrap upload.
    (Vercel) validate it on each deployment target before it can reach that target's
    production.
 
-2. **Consult the register.** [RELEASE_REGISTER.md](RELEASE_REGISTER.md) is the
+2. **Consult the register — and roll it.** [RELEASE_REGISTER.md](RELEASE_REGISTER.md) is the
    release-verdict register: a release whose surface class has an open gated entry
    waits. `tools/scripts/release/calculate-versions.sh` reads it — a retirement-train
    row refuses to compute a patch next (re-run with `--minor`; M is the reserved era
    level, moved only by the retirement release Pete calls), and a blocked row refuses
    a client-skin release unless the verdict owner's decision is passed explicitly.
+   **The release is not done until the register is rolled**: move the shipped rows
+   under a `## Shipped in <V>` section and retitle the window to `## Since <V> —
+   unreleased`. An unrolled window double-counts — the calculator reads the whole
+   `## Since` section, so rows that already shipped inflate the next release's
+   roll-up and its class arithmetic.
 
 3. **Bump `VERSION` on `main`.** The release spine in
    [`tools/scripts/release/`](tools/scripts/release/) does the arithmetic from the
    declared classes: `detect-changes.sh` (where changed) → `calculate-versions.sh`
    (bump + register gates) → `update-versions.sh` (one writer for every version
-   site) → `release-prepare.sh` (pre-flight through release PR).
+   site: the anchor, the temperkb-* closure specs, and the floats) →
+   `release-prepare.sh` (pre-flight through release PR).
    [`release-tag.yml`](.github/workflows/release-tag.yml) derives and pushes the
    `v<VERSION>` tag, which invokes `release.yml`.
    **When the bump is an M (a retirement release), the same release PR cuts the
@@ -104,8 +110,18 @@ first release claims it — no local bootstrap upload.
 
 4. **Verify the GitHub Release.** The Actions run should be green and the
    Release should list the three CLI binaries and the skill bundle; the npm,
-   Ruby, and Python publish lanes report in the run's summary table. That's
-   the whole release.
+   Ruby, Python, and crates.io publish lanes report in the run's summary
+   table. That's the whole release.
+
+   The crates.io lane publishes the `temperkb-*` client closure (see
+   `tools/scripts/release/publish-crates.sh`): trusted publishers are
+   configured on crates.io for all six names against this workflow, and the
+   per-crate versions-API probe makes re-runs and re-cuts idempotent — a
+   version already published skips loudly. Bumping the workspace anchor moves
+   the closure's `[workspace.dependencies]` specs with it, so every release
+   publishes the closure at the new version; the bootstrap 0.5.3 versions were
+   the one token-publishing exception (crates.io attaches publishers only to
+   existing crates), already spent.
 
 A release can also be (re-)run manually via **Actions → Release → Run workflow** with
 an explicit `tag` input — useful to re-cut binaries for an existing tag.

@@ -32,9 +32,15 @@
 # is wanted. The trusted publisher is registered on crates.io against this
 # repository and the workflow whose job performs the push (release.yml — the
 # identity claim names the job's OWN workflow file, the same rule the
-# RubyGems and PyPI registrations encode). crates.io accepts a pending
-# publisher for a not-yet-created crate, so the six names are pre-registered
-# there and the first CI publish claims them.
+# RubyGems and PyPI registrations encode), and is configured for all six
+# temperkb-* names.
+#
+# Bootstrap, for the record: crates.io attaches a trusted publisher only to an
+# EXISTING crate — there is no pending-publisher pre-registration — so the
+# 0.5.3 initial versions were published once with an API token via this same
+# script locally (auth falls back to the stored credential), and the token was
+# revoked when the publishers were configured. Every version after 0.5.3
+# rides the OIDC exchange only.
 #
 # Duplicate handling: crates.io's API answers unauthenticated (it requires a
 # User-Agent identifying the caller), so the probe is a real pre-push check —
