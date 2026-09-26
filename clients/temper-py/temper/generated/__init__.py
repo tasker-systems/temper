@@ -100,6 +100,7 @@ __all__ = [
     "BlobUploadProgress",
     "BlobUploadSegmentInfo",
     "BlockChunkRef",
+    "BlockCitationAuditRequest",
     "BlockFoldDisposition",
     "BlockFoldDispositionOneOf",
     "BlockFoldDispositionOneOf1",
@@ -480,6 +481,7 @@ from temper.generated.models.blob_upload_finalize_request import BlobUploadFinal
 from temper.generated.models.blob_upload_progress import BlobUploadProgress as BlobUploadProgress
 from temper.generated.models.blob_upload_segment_info import BlobUploadSegmentInfo as BlobUploadSegmentInfo
 from temper.generated.models.block_chunk_ref import BlockChunkRef as BlockChunkRef
+from temper.generated.models.block_citation_audit_request import BlockCitationAuditRequest as BlockCitationAuditRequest
 from temper.generated.models.block_fold_disposition import BlockFoldDisposition as BlockFoldDisposition
 from temper.generated.models.block_fold_disposition_one_of import BlockFoldDispositionOneOf as BlockFoldDispositionOneOf
 from temper.generated.models.block_fold_disposition_one_of1 import BlockFoldDispositionOneOf1 as BlockFoldDispositionOneOf1

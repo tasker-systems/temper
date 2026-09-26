@@ -61,6 +61,7 @@ from temper.generated.models.blob_upload_finalize_request import BlobUploadFinal
 from temper.generated.models.blob_upload_progress import BlobUploadProgress
 from temper.generated.models.blob_upload_segment_info import BlobUploadSegmentInfo
 from temper.generated.models.block_chunk_ref import BlockChunkRef
+from temper.generated.models.block_citation_audit_request import BlockCitationAuditRequest
 from temper.generated.models.block_fold_disposition import BlockFoldDisposition
 from temper.generated.models.block_fold_disposition_one_of import BlockFoldDispositionOneOf
 from temper.generated.models.block_fold_disposition_one_of1 import BlockFoldDispositionOneOf1

@@ -1562,6 +1562,100 @@
         "x-apidog-folder": "Reference/API Reference/Blobs"
       }
     },
+    "/api/citation-audits": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Resources"
+        ],
+        "summary": "Record a citation-audit verdict against a block's citation",
+        "description": "The authorization subject is the finding that owns `block_id`, resolved server-side; the caller\nnever names a finding, so a write can only ever land on the citation it addresses.\n\nThe act envelope in the body rides the ledger row as authorship and correlation metadata —\nit never moves standing; only `value` does.",
+        "operationId": "record_citation_audit_for_block",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockCitationAuditRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Citation audit recorded; returns the new kb_citation_audits.id",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload, a verdict value outside [-1.0, 1.0], or a (block, source) pair that is not a live citation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found — the finding is unreadable, the caller authored it (self-audit), the block does not exist (all three the same sentence), or the invocation correlator names no invocation the caller can read (\"invocation … not found\")",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — the invocation correlator names a closed run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
+      }
+    },
     "/api/cogmaps/{id}/graph/slice": {
       "parameters": [
         {
@@ -11254,6 +11348,46 @@
             "type": "string"
           }
         }
+      },
+      "BlockCitationAuditRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ActInput",
+            "description": "Per-act correlation and authorship. Flattened top-level keys; all optional. `confidence`\nis required when any other authorship field is supplied."
+          },
+          {
+            "type": "object",
+            "required": [
+              "block_id",
+              "source",
+              "value"
+            ],
+            "properties": {
+              "block_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The audited citation's block (`kb_content_blocks.id`). The server resolves this to its\nowning finding, and that resolved finding — never anything the caller names — is what\nauthorization is evaluated over."
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Optional free-text rationale, recorded on the ledger row."
+              },
+              "source": {
+                "$ref": "#/components/schemas/ProvenanceSource",
+                "description": "The cited source being assessed. Only `Resource`-kind citations are auditable: standing\nreads only resource-kind bases, so the write path refuses anything else rather than letting\nit land as a no-op the auditor could never detect."
+              },
+              "value": {
+                "type": "number",
+                "format": "double",
+                "description": "The signed verdict in `[-1.0, 1.0]` — how much defensibility this citation confers for the\nconnection it makes, never a claim about what the source says. Out-of-range is a 400; the\nledger column carries the same bound as a CHECK."
+              }
+            }
+          }
+        ],
+        "description": "Request body for `POST /api/citation-audits` — the block-addressed audit write.\n\nCarries exactly what [`CitationAuditRequest`] carries plus the act envelope, and drops the one\nthing that body's route has that this one does not: a finding in the path. The finding is not a\nfield the caller may supply under either route — under the finding-addressed route it is a\nrouting address the server refuses on mismatch; here there is no such address at all, so a\ncaller can only ever address the block whose citation it audits, and the server derives the\nauthorization subject from that block. There is nothing to transpose.\n\n**The act envelope is why this body exists as its own type.** An audit is an authored,\nper-act write: the auditor's confidence in its verdict, the invocation it fired under, and any\nfree-text reasoning ride the act (the auditor's confidence is metadata on the ledger row and is\nnever read by the standing projection — only the signed `value` moves standing). The\nfinding-addressed route's body predates this shape and carries no act fields; this route's\nwrites never silently drop authorship the caller supplied."
       },
       "BlockFoldDisposition": {
         "oneOf": [

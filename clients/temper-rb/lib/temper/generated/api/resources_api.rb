@@ -1105,6 +1105,81 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Record a citation-audit verdict against a block's citation
+    # The authorization subject is the finding that owns `block_id`, resolved server-side; the caller never names a finding, so a write can only ever land on the citation it addresses.  The act envelope in the body rides the ledger row as authorship and correlation metadata — it never moves standing; only `value` does.
+    # @param block_citation_audit_request [BlockCitationAuditRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [String]
+    def record_citation_audit_for_block(block_citation_audit_request, opts = {})
+      data, _status_code, _headers = record_citation_audit_for_block_with_http_info(block_citation_audit_request, opts)
+      data
+    end
+
+    # Record a citation-audit verdict against a block&#39;s citation
+    # The authorization subject is the finding that owns &#x60;block_id&#x60;, resolved server-side; the caller never names a finding, so a write can only ever land on the citation it addresses.  The act envelope in the body rides the ledger row as authorship and correlation metadata — it never moves standing; only &#x60;value&#x60; does.
+    # @param block_citation_audit_request [BlockCitationAuditRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(String, Integer, Hash)>] String data, response status code and response headers
+    def record_citation_audit_for_block_with_http_info(block_citation_audit_request, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: ResourcesApi.record_citation_audit_for_block ...'
+      end
+      # verify the required parameter 'block_citation_audit_request' is set
+      if @api_client.config.client_side_validation && block_citation_audit_request.nil?
+        fail ArgumentError, "Missing the required parameter 'block_citation_audit_request' when calling ResourcesApi.record_citation_audit_for_block"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/citation-audits'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['text/plain', 'application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(block_citation_audit_request)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'String'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"ResourcesApi.record_citation_audit_for_block",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: ResourcesApi#record_citation_audit_for_block\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Read a resource's evidential standing
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters

@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+use crate::types::authorship::ActInput;
 use crate::types::ids::{BlockId, ProfileId, ResourceId};
 use crate::types::provenance::ProvenanceSource;
 
@@ -52,6 +53,47 @@ pub struct CitationAuditRequest {
     pub value: f64,
     /// Optional free-text rationale, recorded on the ledger row.
     pub reason: Option<String>,
+}
+
+/// Request body for `POST /api/citation-audits` — the block-addressed audit write.
+///
+/// Carries exactly what [`CitationAuditRequest`] carries plus the act envelope, and drops the one
+/// thing that body's route has that this one does not: a finding in the path. The finding is not a
+/// field the caller may supply under either route — under the finding-addressed route it is a
+/// routing address the server refuses on mismatch; here there is no such address at all, so a
+/// caller can only ever address the block whose citation it audits, and the server derives the
+/// authorization subject from that block. There is nothing to transpose.
+///
+/// **The act envelope is why this body exists as its own type.** An audit is an authored,
+/// per-act write: the auditor's confidence in its verdict, the invocation it fired under, and any
+/// free-text reasoning ride the act (the auditor's confidence is metadata on the ledger row and is
+/// never read by the standing projection — only the signed `value` moves standing). The
+/// finding-addressed route's body predates this shape and carries no act fields; this route's
+/// writes never silently drop authorship the caller supplied.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "citation_audit.ts"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct BlockCitationAuditRequest {
+    /// The audited citation's block (`kb_content_blocks.id`). The server resolves this to its
+    /// owning finding, and that resolved finding — never anything the caller names — is what
+    /// authorization is evaluated over.
+    pub block_id: Uuid,
+    /// The cited source being assessed. Only `Resource`-kind citations are auditable: standing
+    /// reads only resource-kind bases, so the write path refuses anything else rather than letting
+    /// it land as a no-op the auditor could never detect.
+    pub source: ProvenanceSource,
+    /// The signed verdict in `[-1.0, 1.0]` — how much defensibility this citation confers for the
+    /// connection it makes, never a claim about what the source says. Out-of-range is a 400; the
+    /// ledger column carries the same bound as a CHECK.
+    pub value: f64,
+    /// Optional free-text rationale, recorded on the ledger row.
+    pub reason: Option<String>,
+    /// Per-act correlation and authorship. Flattened top-level keys; all optional. `confidence`
+    /// is required when any other authorship field is supplied.
+    #[serde(flatten)]
+    pub act: ActInput,
 }
 
 /// One audit of one citation, with its auditor named — an element of the response to
@@ -109,6 +151,7 @@ pub struct CitationAuditRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ids::InvocationId;
 
     /// The source rides as the tagged `{kind, value}` shape the SQL entry reads nested
     /// (`citation_audit` does `p_payload #>> '{source,kind}'`), so a request that serializes it
@@ -124,6 +167,30 @@ mod tests {
         let v = serde_json::to_value(&req).unwrap();
         assert_eq!(v["source"]["kind"], "resource");
         let back: CitationAuditRequest = serde_json::from_value(v).unwrap();
+        assert_eq!(back, req);
+    }
+
+    /// The block-addressed request flattens its act envelope to top-level keys (CONFORM to
+    /// `AssertRelationshipRequest`'s wire shape) while carrying the same tagged source shape.
+    /// Pins both, plus the round-trip.
+    #[test]
+    fn block_request_flattens_the_act_and_keeps_the_tagged_source_shape() {
+        let req = BlockCitationAuditRequest {
+            block_id: Uuid::now_v7(),
+            source: ProvenanceSource::Resource(Uuid::nil()),
+            value: -0.5,
+            reason: None,
+            act: ActInput {
+                invocation_id: Some(InvocationId::from(Uuid::now_v7())),
+                confidence: Some(crate::types::ConfidenceBand::Confident),
+                ..Default::default()
+            },
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["source"]["kind"], "resource");
+        assert!(v.get("act").is_none(), "act must flatten, not nest");
+        assert!(v.get("confidence").is_some(), "act keys land at top level");
+        let back: BlockCitationAuditRequest = serde_json::from_value(v).unwrap();
         assert_eq!(back, req);
     }
 

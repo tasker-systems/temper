@@ -23,6 +23,32 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.2 — unreleased
+- **The citation audit gains a block-addressed write — POST /api/citation-audits**
+  The audit write's second route: the body names only the `(block, source)` citation
+  pair plus the act envelope, and the server derives the authorization subject from
+  the block exactly as the direct path always has — no finding is ever caller-named,
+  so nothing can transpose. Who observes it: any bearer-authenticated client; the
+  same `AuditAuthority` gate answers through both routes (one `authorize` call, the
+  same three-cause 404 sentence, byte-identical by the new route-level equivalence
+  test), and the request type carries the act fields the finding-addressed body
+  type predates, so a write here never silently drops authorship or correlation.
+  Because the act envelope is caller-carried here for the first time on an HTTP
+  audit write, the route additionally answers the act gate's own arms — a 404
+  naming an unknown invocation and a 409 for a closed run — which the
+  finding-addressed route's always-empty act keeps unreachable; both sit after
+  `authorize`. No existing shape moves: the finding-addressed route, its request
+  type, and every response are untouched; the temper-client method
+  (`record_citation_audit_for_block`) and the generated SDK skins grow additively
+  around it. CLI-observable text only: the `CloudBackend::record_citation_audit`
+  stub's refusal message rewrites to point at the new route (the structural
+  impossibility it recorded no longer holds).
+  Release-relevant as additive surface only — a client that never calls the new
+  route observes nothing but the CLI stub's wording.
+pr: self
+classes: additive
+surfaces: http, clients, cli-stdout
+status: signal-only
+
 - **The eight remaining `$ref`-carrying MCP tool declarations go fully inline — no `$ref`, no `$defs` on the wire**
   The advertised input schemas of `create_resource`, `segmented_ingest`,
   `update_resource`, `update_resource_meta`, `commit_data_artifact`,
