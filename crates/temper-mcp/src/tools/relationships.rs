@@ -1,27 +1,51 @@
 //! Relationship tools — assert, retype, reweight, and fold graph edges.
 //!
-//! Each tool mirrors one HTTP endpoint from `temper-api/src/handlers/edges.rs`
-//! and dispatches through `DbBackend` — the same write path the HTTP handlers
-//! use. Both endpoints are decorated refs (a UUID or the `slug-<uuid>` form)
-//! resolved via `parse_ref` into a `ResourceId`.
+//! Execution crosses the DEPLOYED API over the wire (beat G3c, the network door — the
+//! fourth family to cross): every verb drives a per-request temper-client HTTP relay
+//! built from the request's `Parts` and never touches the pool, the `DbBackend`, or a
+//! service function directly, forwarding to the same `/api/relationships` routes the CLI
+//! calls on the caller's own bearer. The input's `ActInput` maps STRAIGHT THROUGH into
+//! each request's `act` — never defaulted, never dropped — and the `origin: Surface::Mcp`
+//! stamp the direct binding put on each command is now the relay's planted carrier at
+//! the door. The verbs' ref arguments (source/target/edge handles) are resolved
+//! MCP-local via `parse_ref` before the forward.
+//!
+//! # Declared parity deltas (the direct faces pinned by `ledger_graph_parity_test.rs`,
+//! re-derived at the door and flipped there deliberately)
+//!
+//! - **Closed-invocation 409**: the direct `map_err` had no `Conflict` arm, so the act
+//!   gate's non-open refusal fell to the `internal_error` catch-all. The wire's 409 is
+//!   caller-actionable — the run the correlation claim names is closed, which no retry
+//!   changes and no input edit repairs except naming an open run — so it renders
+//!   `invalid_params` with the server's own sentence, the `contexts.rs::map_api_error`
+//!   Conflict arm's precedent (`a taken slug is caller-fixable, not an internal error`).
+//!   The suite pinned `internal_error` pre-swap and pins the door's face now.
+//! - **NotFound prefixes**: the direct map prefixed every not-found with `{action}: `.
+//!   Over the wire, `ClientError::NotFound` carries the server's own sentence, and the
+//!   door does not re-apply prefixes the direct tool applied — the kind (`invalid_params`)
+//!   and the gate are identical, per the resources family's precedent (`resources.rs`'s
+//!   context-refusal arm). Only the prefix drops; every sentence the server speaks is
+//!   carried through verbatim.
+//!
+//! Every other arm maps arm-for-arm: `ForbiddenDetail` speaks the gate's own sentence
+//! under INVALID_REQUEST prefixed `{action}: ` (the direct face byte-for-byte), the terse
+//! `Forbidden` arm keeps the tool's fixed "cannot modify this resource" sentence, and the
+//! 400 face passes the server's sentence through bare — the direct binding's pass-through.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use temper_core::error::TemperError;
+use temper_client::error::ClientError;
 use temper_core::types::authorship::ActInput;
 use temper_core::types::graph::{EdgeKind, Polarity};
-use temper_core::types::ids::{EdgeId, ProfileId};
-use temper_core::types::relationship_requests::{RelationshipAck, RelationshipTarget};
-use temper_services::backend::DbBackend;
-use temper_workflow::operations::{
-    AssertRelationship, Backend, FoldRelationship, RetypeRelationship, ReweightRelationship,
-    Surface,
+use temper_core::types::relationship_requests::{
+    AssertRelationshipRequest, FoldRelationshipRequest, RelationshipTarget,
+    RetypeRelationshipRequest, ReweightRelationshipRequest,
 };
 
-use crate::service::TemperMcpService;
+use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 
 // ── Input structs ──────────────────────────────────────────────────────────────
 
@@ -99,20 +123,33 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
 }
 
-fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
+/// Map a relationship-path error onto an MCP error, arm-for-arm with the direct binding.
+///
+/// The two declared parity deltas (409, NotFound prefix) and the arm-for-arm
+/// discipline are argued in the module doc.
+fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
     match e {
-        TemperError::NotFound(msg) => {
-            rmcp::ErrorData::invalid_params(format!("{action}: {msg}"), None)
+        // The server's own sentence, un-prefixed: the direct binding's tool wrapped
+        // each not-found with "{action}: ", a prefix the door does not re-apply —
+        // the kind (invalid_params) and the gate are identical.
+        ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        // The door's 409 is caller-actionable — the direct catch-all rendered it
+        // internal_error (the declared delta).
+        ClientError::Conflict { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
         }
-        TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
         // A refusal that named the capability it withheld — carry the gate's own sentence. The
         // terse arm below stays exactly as it was, for the caller who may not even read the subject.
-        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::new(
+        ClientError::ForbiddenDetail { message } => rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_REQUEST,
-            format!("{action}: {msg}"),
+            format!("{action}: {message}"),
             None,
         ),
-        TemperError::Forbidden => rmcp::ErrorData::new(
+        ClientError::Forbidden => rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_REQUEST,
             format!("{action}: cannot modify this resource"),
             None,
@@ -125,23 +162,16 @@ fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
 
 pub async fn assert_relationship(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: AssertRelationshipInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
-
+    // MCP-local input shaping: the ref parses never touch the wire.
     let source = temper_workflow::operations::parse_ref(&input.source)
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
     let target = temper_workflow::operations::parse_ref(&input.target)
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 
-    let act = input
-        .act
-        .into_act_context()
-        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-
-    let cmd = AssertRelationship {
+    let request = AssertRelationshipRequest {
         source,
         target,
         target_table: input.target_table,
@@ -149,19 +179,17 @@ pub async fn assert_relationship(
         polarity: input.polarity,
         label: input.label,
         weight: input.weight,
-        act,
-        origin: Surface::Mcp,
+        // Straight through: never defaulted, never dropped.
+        act: input.act,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id);
-    let out = backend
-        .assert_relationship(cmd)
+    let client = svc.relay_client(parts)?;
+    let ack = client
+        .relationships()
+        .assert(&request)
         .await
-        .map_err(|e| map_err(e, "assert_relationship"))?;
+        .across_auth(|e| map_err(e, "assert_relationship"))?;
 
-    let ack = RelationshipAck {
-        edge_handle: Uuid::from(out.value),
-    };
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(to_text(&ack)),
     ]))
@@ -169,33 +197,22 @@ pub async fn assert_relationship(
 
 pub async fn retype_relationship(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: RetypeRelationshipInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
-
-    let act = input
-        .act
-        .into_act_context()
-        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-    let cmd = RetypeRelationship {
-        edge_handle: EdgeId::from(input.edge_handle),
+    let request = RetypeRelationshipRequest {
         edge_kind: input.edge_kind,
         polarity: input.polarity,
-        act,
-        origin: Surface::Mcp,
+        act: input.act,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id);
-    let out = backend
-        .retype_relationship(cmd)
+    let client = svc.relay_client(parts)?;
+    let ack = client
+        .relationships()
+        .retype(input.edge_handle, &request)
         .await
-        .map_err(|e| map_err(e, "retype_relationship"))?;
+        .across_auth(|e| map_err(e, "retype_relationship"))?;
 
-    let ack = RelationshipAck {
-        edge_handle: Uuid::from(out.value),
-    };
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(to_text(&ack)),
     ]))
@@ -203,32 +220,21 @@ pub async fn retype_relationship(
 
 pub async fn reweight_relationship(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: ReweightRelationshipInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
-
-    let act = input
-        .act
-        .into_act_context()
-        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-    let cmd = ReweightRelationship {
-        edge_handle: EdgeId::from(input.edge_handle),
+    let request = ReweightRelationshipRequest {
         weight: input.weight,
-        act,
-        origin: Surface::Mcp,
+        act: input.act,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id);
-    let out = backend
-        .reweight_relationship(cmd)
+    let client = svc.relay_client(parts)?;
+    let ack = client
+        .relationships()
+        .reweight(input.edge_handle, &request)
         .await
-        .map_err(|e| map_err(e, "reweight_relationship"))?;
+        .across_auth(|e| map_err(e, "reweight_relationship"))?;
 
-    let ack = RelationshipAck {
-        edge_handle: Uuid::from(out.value),
-    };
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(to_text(&ack)),
     ]))
@@ -236,33 +242,21 @@ pub async fn reweight_relationship(
 
 pub async fn fold_relationship(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: FoldRelationshipInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-    let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
-
-    let act = input
-        .act
-        .into_act_context()
-        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-
-    let cmd = FoldRelationship {
-        edge_handle: EdgeId::from(input.edge_handle),
+    let request = FoldRelationshipRequest {
         reason: input.reason,
-        act,
-        origin: Surface::Mcp,
+        act: input.act,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id);
-    let out = backend
-        .fold_relationship(cmd)
+    let client = svc.relay_client(parts)?;
+    let ack = client
+        .relationships()
+        .fold(input.edge_handle, &request)
         .await
-        .map_err(|e| map_err(e, "fold_relationship"))?;
+        .across_auth(|e| map_err(e, "fold_relationship"))?;
 
-    let ack = RelationshipAck {
-        edge_handle: Uuid::from(out.value),
-    };
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(to_text(&ack)),
     ]))
@@ -339,6 +333,7 @@ pub struct RelationshipInput {
 /// Dispatch the consolidated relationship tool.
 pub async fn relationship(
     svc: &TemperMcpService,
+    parts: &http::request::Parts,
     input: RelationshipInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.action {
@@ -363,6 +358,7 @@ pub async fn relationship(
             })?;
             assert_relationship(
                 svc,
+                parts,
                 AssertRelationshipInput {
                     source,
                     target,
@@ -388,6 +384,7 @@ pub async fn relationship(
             })?;
             retype_relationship(
                 svc,
+                parts,
                 RetypeRelationshipInput {
                     edge_handle,
                     edge_kind,
@@ -406,6 +403,7 @@ pub async fn relationship(
             })?;
             reweight_relationship(
                 svc,
+                parts,
                 ReweightRelationshipInput {
                     edge_handle,
                     weight,
@@ -420,6 +418,7 @@ pub async fn relationship(
             })?;
             fold_relationship(
                 svc,
+                parts,
                 FoldRelationshipInput {
                     edge_handle,
                     reason: input.reason,

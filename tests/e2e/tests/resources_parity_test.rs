@@ -822,6 +822,7 @@ async fn lineage_walks_derived_from_both_ways(pool: PgPool) {
 
     temper_mcp::tools::relationships::relationship(
         &svc,
+        &parts,
         input(json!({
             "action": "assert",
             "source": child_id,
