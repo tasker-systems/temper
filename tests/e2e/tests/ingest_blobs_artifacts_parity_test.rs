@@ -914,9 +914,14 @@ async fn blob_harness(
     axum::http::request::Parts,
     std::sync::Arc<temper_substrate::blob_store::InMemoryBlobStore>,
 ) {
+    // ONE ceiling for both doors: the app's commit threshold and the MCP door's read ceiling.
+    const SINGLE_REQUEST_MAX_BYTES: usize = 64;
     let store = std::sync::Arc::new(temper_substrate::blob_store::InMemoryBlobStore::default());
-    let app = common::setup_with_blob_store_shared(pool, store.clone(), 64).await;
-    let svc = app.mcp_relay_service_with_blob(64).await;
+    let app =
+        common::setup_with_blob_store_shared(pool, store.clone(), SINGLE_REQUEST_MAX_BYTES).await;
+    let svc = app
+        .mcp_relay_service_with_blob(SINGLE_REQUEST_MAX_BYTES)
+        .await;
     let parts = app.direct_parts();
     (app, svc, parts, store)
 }

@@ -9,8 +9,8 @@
 //! byte-for-byte?
 //!
 //! The topology mirrors the deployment (`api/mcp.rs`): the MCP router is its OWN server
-//! (`temper_mcp::build_router`), separate from the API server, sharing only the database and the
-//! auth configuration. The test profile is provisioned/approved through the API harness first —
+//! (`temper_mcp_server::build_router`), separate from the API server, sharing only the auth
+//! configuration — the MCP server holds no database handle and relays every act to the API. The test profile is provisioned/approved through the API harness first —
 //! the same standing the deployed profile would have — and the MCP surface resolves it per call
 //! from the JWT claims the auth middleware injects.
 //!

@@ -2,6 +2,7 @@ use crate::auth_config::{parse_auth_config, AuthConfig, ConfigError};
 use crate::broker::VercelConnectConfig;
 use crate::services::grant_crypto::VaultKey;
 use std::env;
+use temper_auth::config::shared_secret;
 
 /// The instance's whole configuration.
 ///
@@ -548,6 +549,24 @@ const SHARED_SECRET_VARS: [&str; 7] = [
     "TEMPER_MCP_SERVICE_SECRET",
 ];
 
+/// The gate secrets this process reads, each held to `temper_auth::config`'s strength floor.
+/// Only the secrets in this arc's scope are refused — the e2e harness's `e2e-mcp-relay-service-
+/// credential` constant is excluded from every check by being a *harness* constant, but
+/// a production deployment pasting it would now refuse to boot, as it should.
+const STRENGTH_CHECKED_SECRETS: [&str; 4] = [
+    "TEMPER_MCP_SERVICE_SECRET",
+    "INTERNAL_RECONCILE_SECRET",
+    "EMBED_DISPATCH_SECRET",
+    "SLACK_MINT_SECRET",
+];
+
+fn check_shared_secret_strength(
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<(), ConfigError> {
+    temper_auth::config::check_shared_secret_strength(lookup, &STRENGTH_CHECKED_SECRETS)?;
+    Ok(())
+}
+
 /// Refuse to boot when two shared secrets hold the same value.
 ///
 /// **This is the value-level twin of a structural check that already exists.**
@@ -568,26 +587,6 @@ const SHARED_SECRET_VARS: [&str; 7] = [
 ///
 /// Only [`ApiConfig::from_lookup`] runs this, so the in-process test harnesses that build an
 /// `ApiConfig` by struct literal are unaffected — correctly, since they are not deployments.
-use temper_auth::config::shared_secret;
-
-/// The gate secrets this process reads, each held to `temper_auth::config`'s strength floor.
-/// Only the secrets in this arc's scope are refused — the e2e harness's `e2e-mcp-relay-service-
-/// credential` constant is excluded from every check by being a *harness* constant, but
-/// a production deployment pasting it would now refuse to boot, as it should.
-const STRENGTH_CHECKED_SECRETS: [&str; 4] = [
-    "TEMPER_MCP_SERVICE_SECRET",
-    "INTERNAL_RECONCILE_SECRET",
-    "EMBED_DISPATCH_SECRET",
-    "SLACK_MINT_SECRET",
-];
-
-fn check_shared_secret_strength(
-    lookup: &impl Fn(&str) -> Option<String>,
-) -> Result<(), ConfigError> {
-    temper_auth::config::check_shared_secret_strength(lookup, &STRENGTH_CHECKED_SECRETS)?;
-    Ok(())
-}
-
 fn check_secret_distinctness(lookup: impl Fn(&str) -> Option<String>) -> Result<(), ConfigError> {
     // Empty is absent (the `.filter(|s| !s.is_empty())` convention every field above uses). Two
     // unset variables both reading "" are not a collision — they are two disabled endpoints.
@@ -805,8 +804,8 @@ mod tests {
         assert_eq!(check_shared_secret_strength(&lookup_of(&pairs)), Ok(()));
     }
     //
-    // The sibling assertion on `ConfigError::McpAudienceMismatch`
-    // (`auth_config::tests::errors_name_the_variable_and_never_print_values`) carries the same
+    // The sibling assertion on the auth-identity errors
+    // (`temper_auth::config::tests::errors_name_the_variable_and_never_print_values`) carries the same
     // obligation for a URL. Here the leaked value would be an actual credential, and the boot
     // failure is loud by design — panicked straight to the deployment log by all four entrypoints
     // (`api/axum.rs`, `api/mcp.rs`, `api/internal.rs`, `temper-api/src/main.rs`, each

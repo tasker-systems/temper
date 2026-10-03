@@ -111,7 +111,7 @@ where
 /// | signed internal routes | 64 KiB | `temper-api/src/middleware/internal_auth.rs` |
 /// | `/api/query` | 25 MB | `QUERY_MAX_BODY_BYTES`, `temper-api/src/routes/query.rs` |
 /// | GitHub webhook intake | 25 MiB | `GITHUB_MAX_WEBHOOK_BYTES`, `temper-api/src/routes/webhook_intake.rs` |
-/// | `/mcp` | 25 MB | `MCP_MAX_BODY_BYTES`, `temper-mcp/src/router.rs` |
+/// | `/mcp` | 25 MB | `MCP_MAX_BODY_BYTES`, `temper-mcp-server/src/router.rs` |
 ///
 /// **`/mcp` is not merely an exception — this constant cannot reach it.** That door is mounted with
 /// `nest_service` over a raw tower service, so no axum extractor runs and `DefaultBodyLimit` is

@@ -6,8 +6,8 @@ description = "MCP tool layer for agent access to the temper knowledge base"
 publish = false
 
 [features]
-# Gates the `#[sqlx::test]` suites in `tests/` — without it, `cargo make test`
-# (no database) compiles them out entirely. Same pattern as temper-api/temper-services.
+# Kept so `--features test-db` across the workspace still resolves; temper-mcp itself has no
+# database suites (it holds no pool).
 test-db = []
 
 [dependencies]
@@ -60,5 +60,7 @@ temper-services = { path = "../temper-services" }
 # The source gates (`src/source_gates.rs`) parse the crate's own tool modules: real function
 # bodies, real `#[cfg(test)]` attributes and real call/await chains instead of a hand lexer.
 syn = { version = "2", features = ["full", "visit"] }
+# Macro bodies are token streams; the gates read their identifiers.
+proc-macro2 = "1"
 # The exhaustive `AuthzError` witness constructs a typed `Refusal` for the system-access arm.
 temperkb-principal.workspace = true

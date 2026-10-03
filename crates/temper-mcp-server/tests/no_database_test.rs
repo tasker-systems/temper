@@ -22,6 +22,8 @@ const FORBIDDEN_NAMES: &[&str] = &[
     "PgPool",
     "PgPoolOptions",
     "pool",
+    "MIGRATOR",
+    "temper_api",
     "AppState",
     "ApiConfig",
     "api_state",
@@ -40,18 +42,27 @@ fn parse(path: &Path) -> syn::File {
     syn::parse_file(&src).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
 }
 
-/// `#[cfg(test)]` (or any `cfg` naming `test`).
+/// A `cfg` that can only hold in a test build: `cfg(test)`, or `cfg(all(…))` with a bare `test`
+/// among its arguments. Nothing else is exempt — `cfg(not(test))` is production code, and so is
+/// `cfg(any(test, …))` or a feature whose NAME merely contains "test" (review, 2026-10-03: a
+/// token-split match had exempted all three).
 fn is_test_only(attrs: &[syn::Attribute]) -> bool {
+    fn requires_test(meta: &syn::Meta) -> bool {
+        match meta {
+            syn::Meta::Path(p) => p.is_ident("test"),
+            syn::Meta::List(l) if l.path.is_ident("all") => l
+                .parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+                )
+                .map(|args| args.iter().any(requires_test))
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
     attrs.iter().any(|a| {
         a.path().is_ident("cfg")
-            && a.meta
-                .require_list()
-                .map(|l| {
-                    l.tokens
-                        .to_string()
-                        .split(|c: char| !c.is_alphanumeric())
-                        .any(|t| t == "test")
-                })
+            && a.parse_args::<syn::Meta>()
+                .map(|m| requires_test(&m))
                 .unwrap_or(false)
     })
 }
@@ -59,10 +70,17 @@ fn is_test_only(attrs: &[syn::Attribute]) -> bool {
 /// Every name a file's production items reach for — path segments (in `use` trees too), field
 /// and method names, fields defined and bindings named — and every string literal they contain.
 fn names_and_literals(file: &syn::File) -> (BTreeSet<String>, BTreeSet<String>) {
+    let (names, literals, _) = read(file);
+    (names, literals)
+}
+
+/// [`names_and_literals`], plus the source the walk cannot follow (`include!`, `#[path]`).
+fn read(file: &syn::File) -> (BTreeSet<String>, BTreeSet<String>, Vec<String>) {
     #[derive(Default)]
     struct V {
         names: BTreeSet<String>,
         literals: BTreeSet<String>,
+        unfollowed: Vec<String>,
     }
     impl<'a> Visit<'a> for V {
         fn visit_path_segment(&mut self, s: &'a syn::PathSegment) {
@@ -101,21 +119,37 @@ fn names_and_literals(file: &syn::File) -> (BTreeSet<String>, BTreeSet<String>) 
         // Macro bodies (`tracing::info!(…)`, `format!(…)`) are token streams, not syntax trees:
         // read their string literals so a `"DATABASE_URL"` inside one is still seen.
         fn visit_macro(&mut self, m: &'a syn::Macro) {
-            fn literals_in(tokens: proc_macro2::TokenStream, out: &mut BTreeSet<String>) {
+            fn walk(tokens: proc_macro2::TokenStream, v: &mut V) {
                 for tt in tokens {
                     match tt {
+                        proc_macro2::TokenTree::Ident(i) => {
+                            v.names.insert(i.to_string());
+                        }
                         proc_macro2::TokenTree::Literal(lit) => {
                             if let Ok(s) = syn::parse_str::<syn::LitStr>(&lit.to_string()) {
-                                out.insert(s.value());
+                                v.literals.insert(s.value());
                             }
                         }
-                        proc_macro2::TokenTree::Group(g) => literals_in(g.stream(), out),
+                        proc_macro2::TokenTree::Group(g) => walk(g.stream(), v),
                         _ => {}
                     }
                 }
             }
-            literals_in(m.tokens.clone(), &mut self.literals);
+            if m.path.is_ident("include") {
+                self.unfollowed
+                    .push("an `include!` the gate cannot follow".to_string());
+            }
+            walk(m.tokens.clone(), self);
             syn::visit::visit_macro(self, m);
+        }
+        fn visit_item_mod(&mut self, m: &'a syn::ItemMod) {
+            if m.attrs.iter().any(|a| a.path().is_ident("path")) {
+                self.unfollowed.push(format!(
+                    "a `#[path]` module `{}` the gate cannot follow",
+                    m.ident
+                ));
+            }
+            syn::visit::visit_item_mod(self, m);
         }
     }
     let mut v = V::default();
@@ -135,19 +169,28 @@ fn names_and_literals(file: &syn::File) -> (BTreeSet<String>, BTreeSet<String>) 
             v.visit_item(item);
         }
     }
-    (v.names, v.literals)
+    (v.names, v.literals, v.unfollowed)
 }
 
-/// The server's production modules plus its boot.
+/// The server's production modules (every `.rs` under `src/`, recursively) plus its boot.
 fn edge_sources() -> Vec<(String, syn::File)> {
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(manifest("src")).expect("read src") {
-        let path = entry.expect("dir entry").path();
-        if path.extension().and_then(|e| e.to_str()) == Some("rs") {
-            let rel = format!("src/{}", path.file_name().unwrap().to_string_lossy());
-            out.push((rel, parse(&path)));
+    fn walk(dir: &Path, out: &mut Vec<(String, syn::File)>) {
+        for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {dir:?}: {e}")) {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                let rel = path
+                    .strip_prefix(manifest(""))
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+                out.push((rel, parse(&path)));
+            }
         }
     }
+    let mut out = Vec::new();
+    walk(&manifest("src"), &mut out);
     out.push((
         "api/mcp.rs (the boot)".to_string(),
         parse(&manifest("../../api/mcp.rs")),
@@ -176,7 +219,8 @@ fn neither_the_edge_nor_its_boot_names_a_database_handle() {
 
     let mut offenders = Vec::new();
     for (rel, file) in &sources {
-        let (names, literals) = names_and_literals(file);
+        let (names, literals, unfollowed) = read(file);
+        offenders.extend(unfollowed.into_iter().map(|w| format!("{rel}: {w}")));
         for forbidden in FORBIDDEN_NAMES {
             if names.contains(*forbidden) {
                 offenders.push(format!("{rel} names `{forbidden}`"));
@@ -196,19 +240,53 @@ fn neither_the_edge_nor_its_boot_names_a_database_handle() {
     );
 }
 
-/// FAILS IF: the server's `[dependencies]` gain a database driver or the API crate — a pool
-/// constructible by a path the source walk does not parse.
+/// Every dependency a manifest declares for a non-test build, by the PACKAGE it resolves to (a
+/// renamed `db = { package = "sqlx" }` is `sqlx`): `[dependencies]`, `[build-dependencies]`, and
+/// both under every `[target.'cfg(…)']`.
+fn runtime_dependency_packages(cargo: &toml::Value) -> BTreeSet<String> {
+    let mut tables: Vec<&toml::value::Table> = Vec::new();
+    for key in ["dependencies", "build-dependencies"] {
+        if let Some(t) = cargo.get(key).and_then(|d| d.as_table()) {
+            tables.push(t);
+        }
+    }
+    if let Some(targets) = cargo.get("target").and_then(|t| t.as_table()) {
+        for target in targets.values() {
+            for key in ["dependencies", "build-dependencies"] {
+                if let Some(t) = target.get(key).and_then(|d| d.as_table()) {
+                    tables.push(t);
+                }
+            }
+        }
+    }
+    tables
+        .into_iter()
+        .flat_map(|t| t.iter())
+        .map(|(key, spec)| {
+            spec.get("package")
+                .and_then(|p| p.as_str())
+                .unwrap_or(key)
+                .to_string()
+        })
+        .collect()
+}
+
+/// FAILS IF: the server's runtime dependencies (every non-dev table, by resolved package) gain a
+/// database driver or the API crate — a pool constructible by a path the source walk does not
+/// parse. The boot, `api/mcp.rs`, compiles in the root package beside the API's own bins, which
+/// DO depend on sqlx; for it the source walk above is the barrier.
 #[test]
 fn the_edge_manifest_names_no_database_driver() {
     let raw = std::fs::read_to_string(manifest("Cargo.toml")).expect("read Cargo.toml");
     let cargo: toml::Value = toml::from_str(&raw).expect("Cargo.toml parses");
-    let deps = cargo
-        .get("dependencies")
-        .and_then(|d| d.as_table())
-        .expect("a [dependencies] table");
+    let deps = runtime_dependency_packages(&cargo);
+    assert!(
+        deps.contains("temper-mcp"),
+        "the walk missed the tool layer: {deps:?}"
+    );
     let offenders: Vec<&str> = ["sqlx", "temper-api", "temper-substrate"]
         .into_iter()
-        .filter(|name| deps.contains_key(*name))
+        .filter(|name| deps.contains(*name))
         .collect();
     assert!(
         offenders.is_empty(),
@@ -250,6 +328,35 @@ fn the_detector_sees_split_chains_use_trees_and_macro_literals() {
     }
     assert!(!names.contains("AppState"), "a test-only item was read");
     assert!(literals.contains("DATABASE_URL"), "{literals:?}");
+
+    // A macro body's identifiers are names; source the walk cannot follow is reported.
+    let file: syn::File = syn::parse_str(
+        "fn f() { tokio::join!(sqlx::postgres::PgPoolOptions::new()); include!(\"x.rs\"); } \
+         #[path = \"x.rs\"] mod m; #[cfg(not(test))] fn g() { let pool = 1; }",
+    )
+    .expect("parses");
+    let (names, _, unfollowed) = read(&file);
+    assert!(
+        names.contains("sqlx") && names.contains("PgPoolOptions"),
+        "{names:?}"
+    );
+    assert!(
+        names.contains("pool"),
+        "`cfg(not(test))` is production: {names:?}"
+    );
+    assert_eq!(unfollowed.len(), 2, "{unfollowed:?}");
+
+    // Renamed and target-specific dependencies resolve to their package.
+    let cargo: toml::Value = toml::from_str(
+        "[dependencies]\ndb = { package = \"sqlx\", version = \"0.8\" }\n\
+         [target.'cfg(unix)'.build-dependencies]\ntemper-api = { path = \"x\" }\n",
+    )
+    .expect("toml parses");
+    let deps = runtime_dependency_packages(&cargo);
+    assert!(
+        deps.contains("sqlx") && deps.contains("temper-api"),
+        "{deps:?}"
+    );
 
     let comment_only: syn::File = syn::parse_str("// DATABASE_URL\nfn f() {}").expect("parses");
     assert!(names_and_literals(&comment_only).1.is_empty());

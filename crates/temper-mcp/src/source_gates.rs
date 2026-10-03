@@ -40,7 +40,9 @@ const SERVER_STATE_NAMES: &[&str] = &[
     "PgPool",
     "PgPoolOptions",
     "pool",
+    "MIGRATOR",
     "temper_services",
+    "temper_api",
     "AppState",
     "ApiConfig",
     "api_state",
@@ -57,18 +59,27 @@ fn parse(path: &Path) -> syn::File {
     syn::parse_file(&src).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
 }
 
-/// `#[cfg(test)]` (or any `cfg` naming `test`) — test code is no tool's path.
+/// A `cfg` that can only hold in a test build: `cfg(test)`, or `cfg(all(…))` with a bare `test`
+/// among its arguments. Nothing else is exempt — `cfg(not(test))` is production code, and so is
+/// `cfg(any(test, …))` or a feature whose NAME merely contains "test" (review, 2026-10-03: a
+/// token-split match had exempted all three).
 fn is_test_only(attrs: &[syn::Attribute]) -> bool {
+    fn requires_test(meta: &syn::Meta) -> bool {
+        match meta {
+            syn::Meta::Path(p) => p.is_ident("test"),
+            syn::Meta::List(l) if l.path.is_ident("all") => l
+                .parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+                )
+                .map(|args| args.iter().any(requires_test))
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
     attrs.iter().any(|a| {
         a.path().is_ident("cfg")
-            && a.meta
-                .require_list()
-                .map(|l| {
-                    l.tokens
-                        .to_string()
-                        .split(|c: char| !c.is_alphanumeric())
-                        .any(|t| t == "test")
-                })
+            && a.parse_args::<syn::Meta>()
+                .map(|m| requires_test(&m))
                 .unwrap_or(false)
     })
 }
@@ -337,6 +348,23 @@ fn names_in<'a>(visit: impl FnOnce(&mut dyn Visit<'a>)) -> BTreeSet<String> {
             self.0.insert(p.ident.to_string());
             syn::visit::visit_pat_ident(self, p);
         }
+        // A macro body (`tokio::join!(…)`, `vec![…]`) is a token stream, not a syntax tree: every
+        // identifier in it counts, so `sqlx::…` inside one is still named.
+        fn visit_macro(&mut self, m: &'a syn::Macro) {
+            fn idents(tokens: proc_macro2::TokenStream, out: &mut BTreeSet<String>) {
+                for tt in tokens {
+                    match tt {
+                        proc_macro2::TokenTree::Ident(i) => {
+                            out.insert(i.to_string());
+                        }
+                        proc_macro2::TokenTree::Group(g) => idents(g.stream(), out),
+                        _ => {}
+                    }
+                }
+            }
+            idents(m.tokens.clone(), &mut self.0);
+            syn::visit::visit_macro(self, m);
+        }
     }
     let mut v = V::default();
     visit(&mut v);
@@ -544,6 +572,11 @@ fn no_module_in_the_tool_layer_holds_a_pool_or_server_state() {
     );
     let mut offenders = Vec::new();
     for (rel, file) in &sources {
+        offenders.extend(
+            unfollowed_sources(file)
+                .into_iter()
+                .map(|w| format!("{rel}: {w}")),
+        );
         for item in production_items(file) {
             let named = names_in(|v| v.visit_item(item));
             for forbidden in SERVER_STATE_NAMES {
@@ -563,18 +596,76 @@ fn no_module_in_the_tool_layer_holds_a_pool_or_server_state() {
     );
 }
 
-/// **Least privilege, structurally:** the tool layer's `[dependencies]` name no database driver
-/// and no server crate, so a pool cannot be constructed here even by a path the source gate does
+/// Source the walk cannot follow: an `include!` (code spliced from another file) or a
+/// `#[path]` module (a file outside the directory walk). Refused rather than skipped, so the
+/// gate never passes code it did not read.
+fn unfollowed_sources(file: &syn::File) -> Vec<String> {
+    #[derive(Default)]
+    struct V(Vec<String>);
+    impl<'a> Visit<'a> for V {
+        fn visit_macro(&mut self, m: &'a syn::Macro) {
+            if m.path.is_ident("include") {
+                self.0
+                    .push("an `include!` the gate cannot follow".to_string());
+            }
+            syn::visit::visit_macro(self, m);
+        }
+        fn visit_item_mod(&mut self, m: &'a syn::ItemMod) {
+            if m.attrs.iter().any(|a| a.path().is_ident("path")) {
+                self.0.push(format!(
+                    "a `#[path]` module `{}` the gate cannot follow",
+                    m.ident
+                ));
+            }
+            syn::visit::visit_item_mod(self, m);
+        }
+    }
+    let mut v = V::default();
+    v.visit_file(file);
+    v.0
+}
+
+/// Every dependency a manifest declares for a non-test build, by the PACKAGE it resolves to (a
+/// renamed `db = { package = "sqlx" }` is `sqlx`): `[dependencies]`, `[build-dependencies]`, and
+/// both under every `[target.'cfg(…)']`.
+pub(crate) fn runtime_dependency_packages(cargo: &toml::Value) -> BTreeSet<String> {
+    let mut tables: Vec<&toml::value::Table> = Vec::new();
+    for key in ["dependencies", "build-dependencies"] {
+        if let Some(t) = cargo.get(key).and_then(|d| d.as_table()) {
+            tables.push(t);
+        }
+    }
+    if let Some(targets) = cargo.get("target").and_then(|t| t.as_table()) {
+        for target in targets.values() {
+            for key in ["dependencies", "build-dependencies"] {
+                if let Some(t) = target.get(key).and_then(|d| d.as_table()) {
+                    tables.push(t);
+                }
+            }
+        }
+    }
+    tables
+        .into_iter()
+        .flat_map(|t| t.iter())
+        .map(|(key, spec)| {
+            spec.get("package")
+                .and_then(|p| p.as_str())
+                .unwrap_or(key)
+                .to_string()
+        })
+        .collect()
+}
+
+/// **Least privilege, structurally:** the tool layer's runtime dependencies (every non-dev table,
+/// target-specific ones included, by resolved package name) name no database driver and no
+/// server crate, so a pool cannot be constructed here even by a path the source gate does
 /// not parse (a macro, a build script). `temper-services` stays allowed as a DEV-dependency only
 /// (the `AuthzError` witness's oracle).
 #[test]
 fn the_tool_layer_manifest_names_no_database_or_services_crate() {
     let raw = std::fs::read_to_string(manifest("Cargo.toml")).expect("read Cargo.toml");
     let cargo: toml::Value = toml::from_str(&raw).expect("Cargo.toml parses");
-    let deps = cargo
-        .get("dependencies")
-        .and_then(|d| d.as_table())
-        .expect("a [dependencies] table");
+    let deps = runtime_dependency_packages(&cargo);
     assert!(deps.len() >= 10, "read only {} dependencies", deps.len());
     let forbidden = [
         "sqlx",
@@ -585,7 +676,7 @@ fn the_tool_layer_manifest_names_no_database_or_services_crate() {
     ];
     let offenders: Vec<&str> = forbidden
         .into_iter()
-        .filter(|name| deps.contains_key(*name))
+        .filter(|name| deps.contains(*name))
         .collect();
     assert!(
         offenders.is_empty(),
@@ -657,14 +748,46 @@ fn the_relay_send_detector_tells_a_send_from_a_build() {
         assert!(named.contains(n), "{n} unseen: {named:?}");
     }
 
-    // Test-only items are not production code.
+    // Test-only items are not production code — and only `cfg(test)` / `cfg(all(test, …))` is
+    // test-only: `not(test)`, `any(test, …)` and a feature named like a test are production.
     let file: syn::File = syn::parse_str(
-        "#[cfg(test)] use sqlx::PgPool; #[cfg(test)] mod tests { fn t() {} } fn real() {}",
+        "#[cfg(test)] use sqlx::PgPool; #[cfg(test)] mod tests { fn t() {} } \
+         #[cfg(all(test, feature = \"x\"))] fn t2() {} fn real() {} \
+         #[cfg(not(test))] fn prod_a() {} #[cfg(any(test, feature = \"x\"))] fn prod_b() {} \
+         #[cfg(feature = \"test-harness\")] fn prod_c() {}",
     )
     .expect("file parses");
     assert_eq!(
         production_items(&file).len(),
-        1,
-        "only `real` is production"
+        4,
+        "`real`, `prod_a`, `prod_b` and `prod_c` are production"
     );
+
+    // A macro body's identifiers are names.
+    let file: syn::File =
+        syn::parse_str("fn f() { tokio::join!(sqlx::postgres::PgPoolOptions::new()); }")
+            .expect("file parses");
+    let named = names_in(|v| v.visit_file(&file));
+    assert!(
+        named.contains("sqlx") && named.contains("PgPoolOptions"),
+        "{named:?}"
+    );
+
+    // Source the walk cannot follow is refused, not skipped.
+    let file: syn::File =
+        syn::parse_str("#[path = \"elsewhere.rs\"] mod m; fn f() { include!(\"x.rs\"); }")
+            .expect("file parses");
+    assert_eq!(unfollowed_sources(&file).len(), 2);
+
+    // Every runtime dependency table counts, by resolved package.
+    let cargo: toml::Value = toml::from_str(
+        "[dependencies]\ndb = { package = \"sqlx\", version = \"0.8\" }\n\
+         [build-dependencies]\nb = \"1\"\n\
+         [target.'cfg(unix)'.dependencies]\ntemper-services = { path = \"x\" }\n\
+         [dev-dependencies]\nd = \"1\"\n",
+    )
+    .expect("toml parses");
+    let deps = runtime_dependency_packages(&cargo);
+    assert!(deps.contains("sqlx") && deps.contains("temper-services") && deps.contains("b"));
+    assert!(!deps.contains("db") && !deps.contains("d"), "{deps:?}");
 }

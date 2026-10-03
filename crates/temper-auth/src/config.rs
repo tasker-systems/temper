@@ -85,7 +85,12 @@ impl AuthConfig {
 /// Every message names the offending environment variable and states the relation it must satisfy.
 /// **No message ever prints a value** — anyone who can act on the error can already read them, and a
 /// config value in a log is a liability with no upside.
+///
+/// `#[non_exhaustive]`: this is published surface, and a new boot refusal must be an additive
+/// release. (`AuthConfig` deliberately is NOT non-exhaustive: hosts and tests build it by struct
+/// literal, so a field added to it is a breaking change and is versioned as one.)
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum AuthConfigError {
     #[error("{0} is not set.")]
     Missing(&'static str),

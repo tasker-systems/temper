@@ -6269,6 +6269,7 @@ dependencies = [
  "chrono",
  "futures",
  "http",
+ "proc-macro2",
  "reqwest 0.12.28",
  "rmcp",
  "schemars",

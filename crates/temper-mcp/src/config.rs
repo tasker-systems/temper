@@ -31,8 +31,8 @@ pub struct OAuthStaticConfig {
 
 /// Configuration specific to the MCP server deployment.
 ///
-/// Deliberately carries **no audience**. An instance has exactly one, parsed into
-/// `temper_services::auth_config::AuthConfig` and read by both surfaces.
+/// Deliberately carries **no audience**. An instance's audiences are parsed once, into
+/// `temper_auth::config::AuthConfig` (temperkb-auth), and read by both surfaces.
 #[derive(Clone)]
 pub struct McpConfig {
     /// Public base URL of this MCP server, e.g. `https://temperkb.io`.
@@ -91,7 +91,7 @@ impl McpConfig {
 
 /// Parse the MCP deployment's configuration, or refuse to produce one.
 ///
-/// The lookup is injected for the same reason `temper_services::auth_config::parse_auth_config`
+/// The lookup is injected for the same reason `temper_auth::config::parse_auth_config`
 /// injects its own: an agreement between two environment variables is only worth asserting if the
 /// assertion itself is testable without a process environment.
 ///
@@ -167,7 +167,7 @@ pub fn parse_mcp_config(
 ///
 /// **No message prints a value.** Anyone who can act on one of these can already read the
 /// environment, and a config value in a serverless log is a liability with no upside — the same rule
-/// `temper_services::auth_config::ConfigError` states for the variables it owns.
+/// `temper_auth::config::AuthConfigError` states for the variables it owns.
 #[derive(Debug)]
 pub enum McpConfigError {
     /// The variable's name. Carried because the entrypoint aborts on `Display`, and "environment
