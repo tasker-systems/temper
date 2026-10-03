@@ -151,6 +151,11 @@ async fn reconcile_one_anchor(pool: &PgPool, anchor: HomeAnchor) -> ApiResult<us
     // Find the backlog: live artifacts whose shape in force is homed in this anchor and whose
     // staleness triple (shape_id, shape_version, content_hash) does not match any stored verdict.
     //
+    // An erased resource's artifacts are not backlog. The act empties their content but leaves
+    // them unfolded with their hash (D2 step 5), so a shape declared or amended after the act
+    // would select them, and the verdict writer refuses them (`_resource_write_guard`, D13): one
+    // such artifact would fail the whole anchor on every retry.
+    //
     // Uses _data_artifact_shape_in_force (which calls _data_artifact_anchor and
     // _data_artifact_kind_owner) rather than re-deriving the home — the cogmap tiebreak is
     // load-bearing (20260820000020:186-188).
@@ -170,7 +175,9 @@ async fn reconcile_one_anchor(pool: &PgPool, anchor: HomeAnchor) -> ApiResult<us
           JOIN kb_data_artifact_shapes sh ON sh.id = s.shape_id
             AND sh.home_anchor_table = $1
             AND sh.home_anchor_id    = $2
+          JOIN kb_resources r ON r.id = a.resource_id
          WHERE NOT a.is_folded
+           AND r.erased_at IS NULL
            AND NOT EXISTS (
                SELECT 1 FROM kb_data_artifact_verdicts v
                 WHERE v.artifact_id   = a.id
@@ -719,5 +726,130 @@ mod tests {
         )
         .await
         .expect("the owner must be able to declare a shape in their own context");
+    }
+
+    /// Run the erasure act on `resource` as `operator`, through the SQL act directly (the service
+    /// gate is the admin surface's concern, not reconcile's).
+    async fn erase(pool: &PgPool, resource: Uuid, operator: Uuid, emitter: Uuid) {
+        sqlx::query("SELECT resource_erasure_execute($1,$2,$3,$4)")
+            .bind(resource)
+            .bind(operator)
+            .bind(emitter)
+            .bind(Uuid::now_v7())
+            .execute(pool)
+            .await
+            .expect("the erasure act completes");
+    }
+
+    /// The `shape_version` of the verdict stored for `artifact`, if any.
+    async fn verdict_version(pool: &PgPool, artifact: DataArtifactId) -> Option<i32> {
+        sqlx::query_scalar(
+            "SELECT shape_version FROM kb_data_artifact_verdicts WHERE artifact_id = $1",
+        )
+        .bind(artifact.uuid())
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+    }
+
+    /// The statuses of every shape-reconcile job on a context anchor.
+    async fn reconcile_job_statuses(pool: &PgPool, context: Uuid) -> Vec<String> {
+        sqlx::query_scalar(
+            "SELECT status::text FROM kb_workflow_jobs \
+              WHERE context_id = $1 AND persona = 'shape' AND dispatch_type = 'shape-reconcile' \
+              ORDER BY enqueued_at, id",
+        )
+        .bind(context)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    /// An erased resource's artifact never blocks reconcile for its home. The guarded verdict
+    /// writer refuses it (D13), so the backlog must not reach it: the sibling is verdicted, the
+    /// anchor's job completes, and the erased artifact gains no verdict.
+    ///
+    /// The erased resource's artifact is committed first, so it leads the backlog; a filter that
+    /// merely let the sibling go first would still leave the anchor in flight, which the job
+    /// status and the returned count catch whatever the order.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_erased_resources_artifact_never_blocks_reconcile_for_its_home(pool: PgPool) {
+        let w = seed_world(&pool, "erased-reconcile").await;
+        let kind = "measurement";
+        let home = AnchorRef::context(ContextId::from(w.context));
+        let erased = ResourceId::from(w.resource);
+        let sibling = make_resource(
+            &pool,
+            ProfileId::from(w.owner),
+            EntityId::from(w.emitter),
+            home,
+            "sibling",
+        )
+        .await;
+
+        // 1. A shape in force in the home.
+        let declare = |schema: serde_json::Value| {
+            let pool = pool.clone();
+            async move {
+                declare_shape(
+                    &pool,
+                    DeclareShapeServiceParams {
+                        home,
+                        kind,
+                        kind_owner: None,
+                        schema: &schema,
+                        enforcement: EnforcementMode::Advisory,
+                        principal: ProfileId::from(w.owner),
+                        emitter: EntityId::from(w.emitter),
+                    },
+                )
+                .await
+                .unwrap();
+            }
+        };
+        declare(string_value_schema()).await;
+        assert_eq!(
+            reconcile_anchor(&pool, HomeAnchor::Context(ContextId::from(w.context)))
+                .await
+                .unwrap(),
+            0,
+            "the first declare's job finds an empty backlog"
+        );
+
+        // 2. One artifact of the family on each resource, the erased-to-be one first.
+        let content = serde_json::json!({"value": "42"});
+        let (erased_artifact, _) = commit_artifact(&pool, erased, kind, &content, w.emitter).await;
+        let (sibling_artifact, _) =
+            commit_artifact(&pool, sibling, kind, &content, w.emitter).await;
+
+        // 3. Erase the first resource.
+        erase(&pool, w.resource, w.owner, w.emitter).await;
+        let erased_before = verdict_version(&pool, erased_artifact).await;
+
+        // 4. Amend the shape: both triples go stale, so both artifacts are in the backlog.
+        let mut amended = string_value_schema();
+        amended["properties"]["unit"] = serde_json::json!({ "type": "string" });
+        declare(amended).await;
+
+        let written = reconcile_anchor(&pool, HomeAnchor::Context(ContextId::from(w.context)))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            reconcile_job_statuses(&pool, w.context).await,
+            vec!["done".to_owned(), "done".to_owned()],
+            "the amended shape's reconcile job completes; it is not left in flight for the reaper"
+        );
+        assert_eq!(written, 1, "exactly one verdict is written: the sibling's");
+        assert_eq!(
+            verdict_version(&pool, sibling_artifact).await,
+            Some(2),
+            "the sibling is verdicted against the amended shape"
+        );
+        assert_eq!(
+            verdict_version(&pool, erased_artifact).await,
+            erased_before,
+            "the erased resource's artifact gains no verdict"
+        );
     }
 }
