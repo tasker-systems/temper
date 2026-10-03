@@ -196,7 +196,8 @@ sum removed the routing drift (#384) and the shared ladder removed the construct
       require_mcp_auth verifies the JWT (JwksKeyStore, aud=mcp_audience)
       → injects RawJwtClaims + BearerToken into request extensions.
 
-3. ensure_profile_from_parts → temper_services::auth::authenticate_token(&state, &raw, tok):
+3. temper-mcp relays the bearer (relay_client) → temper-api's require_auth
+   → temper_services::auth::authenticate_token(&state, &raw, tok):
       classify(&raw) sees gty=client-credentials
       → Principal::Machine(AuthClaims { principal_kind: Machine, provider: "auth0-m2m",
                                         external_user_id: azp, email: "" }).

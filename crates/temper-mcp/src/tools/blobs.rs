@@ -49,7 +49,6 @@ use uuid::Uuid;
 use temper_client::error::ClientError;
 use temper_core::types::blob::{BlobRelationAssertRequest, BlobRelationDirection};
 use temper_core::types::graph::{EdgeKind, Polarity};
-use temper_services::error::ApiError;
 
 use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 
@@ -290,8 +289,9 @@ fn read_ceiling(svc: &TemperMcpService) -> i64 {
 /// The MCP door's own refusal — `blob_refusal`'s vocabulary, spelled at the door:
 /// no blob store configured → the MCP blob calls refuse with that, not with a relay
 /// to an app that has one (the deployment's blob posture is one config, but a
-/// test deployment can point them apart).
-fn map_local_blob_refusal(err: ApiError) -> rmcp::ErrorData {
+/// test deployment can point them apart). Takes the refusal by its `Display`, not as
+/// the services crate's `ApiError`: no tool module names a services type (teardown's witness).
+fn map_local_blob_refusal(err: impl std::fmt::Display) -> rmcp::ErrorData {
     rmcp::ErrorData::internal_error(format!("blob: {err}"), None)
 }
 

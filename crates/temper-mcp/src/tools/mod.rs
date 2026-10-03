@@ -1,4 +1,3 @@
-pub mod admin_ledger;
 pub mod blobs;
 pub mod citation_audits;
 pub mod cognitive_maps;
@@ -9,7 +8,6 @@ pub mod doc_types;
 pub mod facets;
 pub mod ingest;
 pub mod invocations;
-pub mod profiles;
 pub mod query;
 pub mod reblock;
 pub mod relationships;

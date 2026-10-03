@@ -1,82 +1,22 @@
 #![cfg(feature = "test-db")]
-//! Stage 4b: a machine (`client_credentials`) token, driven through the real mcp
-//! gate `ensure_profile_from_parts`. Since G3 Phase A, registration is fail-closed:
-//! an unregistered client is rejected and creates nothing; a registered one resolves
-//! to its pre-created agent profile. temper-mcp inherits the gate from
-//! `temper-services` — it has no gate of its own (D4).
+//! Stage 4b: a machine (`client_credentials`) token on the MCP surface. Since G3
+//! Phase A, registration is fail-closed: an unregistered client is rejected and
+//! creates nothing; a registered one resolves to its pre-created agent profile.
+//! temper-mcp has no gate of its own (D4): since the network door's teardown it
+//! holds no in-process gate at all, so these tests drive a relayed tool act with a
+//! real minted machine JWT, and the API's seam adjudicates it — the MCP rendering of
+//! that answer is what is pinned here. (They used to call the in-process gate
+//! `ensure_profile_from_parts`, which teardown deleted.)
 
 mod common;
 
-use temper_services::auth_config::{AuthConfig, AuthMode};
-use temper_services::config::ApiConfig;
-use temper_services::state::{AppState, JwksKeyStore};
-
-async fn build_mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMcpService {
-    let decoding_key =
-        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
-            .expect("decoding key");
-    let jwks_store = JwksKeyStore::with_static_key(decoding_key, jsonwebtoken::Algorithm::RS256);
-    let api_config = ApiConfig {
-        database_url: "unused".to_string(),
-        auth: AuthConfig {
-            issuer: "test-issuer".to_string(),
-            jwks_url: "unused".to_string(),
-            audience: common::TEST_AUDIENCE.to_string(),
-            mcp_audience: common::TEST_AUDIENCE.to_string(),
-            mode: AuthMode::ExternalIdp,
-        },
-        auth_provider_name: "test-provider".to_string(),
-        cors_origins: vec![],
-        port: 0,
-        enable_swagger: false,
-        internal_reconcile_secret: None,
-        embed_dispatch_secret: None,
-        mcp_service_secret: None,
-        vercel_connect: None,
-        slack_link: None,
-        slack_mint_secret: None,
-        rate_limit: None,
-        blob: None,
-        blob_disabled_by_policy: false,
-    };
-    let state = AppState::new(pool.clone(), jwks_store, api_config);
-    temper_mcp::service::TemperMcpService::new(
-        state,
-        temper_mcp::service::relay_off_config(),
-        temper_mcp::service::shared_relay_pool(),
-    )
-}
-
-fn machine_parts(client_id: &str) -> axum::http::request::Parts {
-    axum::http::Request::builder()
-        // The MCP JWT middleware injects the raw bearer alongside the claims; the auth
-        // seam needs it for the email ladder's /userinfo rung. Synthetic parts must
-        // carry both or the service rejects the request as unwired.
-        .extension(temper_mcp::middleware::BearerToken("synthetic".to_string()))
-        .extension(temper_services::auth::RawJwtClaims {
-            sub: format!("{client_id}@clients"),
-            email: None,
-            email_verified: None,
-            azp: Some(client_id.to_string()),
-            gty: Some("client-credentials".to_string()),
-            exp: 0,
-            iat: 0,
-        })
-        .body(())
-        .expect("build request")
-        .into_parts()
-        .0
-}
-
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn unregistered_machine_token_is_rejected_by_the_mcp_gate(pool: sqlx::PgPool) {
-    let _app = common::setup(pool.clone()).await;
-    let svc = build_mcp_service(&pool).await;
+    let app = common::setup_relay(pool.clone()).await;
 
-    let err = svc
-        .ensure_profile_from_parts(&machine_parts("steward-client-1"))
+    let err = common::mcp_act_as(&app, &common::generate_machine_jwt("steward-client-1"))
         .await
-        .expect_err("an unregistered machine must be rejected at the mcp gate");
+        .expect_err("an unregistered machine must be rejected through the mcp door");
     let rendered = format!("{err:?}");
     assert!(
         rendered.contains("not registered"),
@@ -103,8 +43,7 @@ async fn unregistered_machine_token_is_rejected_by_the_mcp_gate(pool: sqlx::PgPo
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn registered_machine_token_is_admitted_by_the_mcp_gate(pool: sqlx::PgPool) {
-    let _app = common::setup(pool.clone()).await;
-    let svc = build_mcp_service(&pool).await;
+    let app = common::setup_relay(pool.clone()).await;
 
     let profile_id = uuid::Uuid::now_v7();
     sqlx::query!(
@@ -127,23 +66,21 @@ async fn registered_machine_token_is_admitted_by_the_mcp_gate(pool: sqlx::PgPool
     // D11: a machine is born Denied; approve so the mcp system gate admits it.
     common::approve(&pool, profile_id).await;
 
-    let authed = svc
-        .ensure_profile_from_parts(&machine_parts("steward-client-1"))
+    let created = common::mcp_act_as(&app, &common::generate_machine_jwt("steward-client-1"))
         .await
-        .expect("mcp gate must admit a registered machine");
-    // Consume the gate's return: a registered machine resolves to ITS OWN
+        .expect("the mcp door must admit a registered machine");
+    // Read the act's owner back: a registered machine resolves to ITS OWN
     // pre-created agent profile, not to some ambient identity.
     assert_eq!(
-        authed.profile().id,
+        common::created_context_owner(&pool, &created).await,
         profile_id,
-        "the gate returns the machine's own registered profile"
+        "the act lands under the machine's own registered profile: {created}"
     );
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn temper_issued_machine_resolves_on_mcp(pool: sqlx::PgPool) {
-    let _app = common::setup(pool.clone()).await;
-    let svc = build_mcp_service(&pool).await;
+    let app = common::setup_relay(pool.clone()).await;
 
     // A temper-ISSUED row (issuer='temper', with a secret hash), as Phase B1's `issue` path
     // produces. The mcp gate is issuer-agnostic, so it resolves exactly like an auth0-m2m row.
@@ -169,13 +106,12 @@ async fn temper_issued_machine_resolves_on_mcp(pool: sqlx::PgPool) {
     // D11: a machine is born Denied; approve so the mcp system gate admits it.
     common::approve(&pool, profile_id).await;
 
-    let authed = svc
-        .ensure_profile_from_parts(&machine_parts("tmpr_mcp"))
+    let created = common::mcp_act_as(&app, &common::generate_machine_jwt("tmpr_mcp"))
         .await
         .expect("a temper-issued machine resolves on the MCP surface too (D4)");
     assert_eq!(
-        authed.profile().id,
+        common::created_context_owner(&pool, &created).await,
         profile_id,
-        "it resolves to its own profile"
+        "it resolves to its own profile: {created}"
     );
 }

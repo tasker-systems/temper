@@ -23,6 +23,25 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **MCP teardown: the context-ref anchor relays to `GET /api/contexts/resolve`; the last in-process gate and the unwired tool modules are deleted**
+  The context orientation tools (`context_read`'s shape/metrics/analytics views,
+  `context_materialize`) and `resource_reblock`'s `scope=context` resolve their context ref
+  through the route-first resolve route instead of reading the pool after an in-process
+  Level 1 + 2 gate, behind the same local parse. Every refusal face carries byte-exact —
+  `invalid context ref: …`, `context not found: {the resolver's sentence}`, and the `+<team>`
+  non-member's `context not found: Forbidden` — pinned against the in-process resolver
+  before the swap. `ensure_profile_from_parts` (with the in-process `AuthzError` mapping only
+  it used) and the never-wired `tools/admin_ledger.rs` / `tools/profiles.rs` are deleted; tool
+  names, schemas and descriptions are byte-identical (the declarations fixture is unchanged).
+  The source gate now requires every `#[tool]` to send a relay or sit on the named
+  pure-compute allowlist (`describe_schema`). Who observes: an MCP-calling agent, whose one
+  visible change is the declared delta — a fault behind the resolver (a database error) now
+  renders `internal_error` where it rendered `invalid_params` under the `context not found: `
+  prefix. User-visible: only on that fault path. Release relevance: signal-only.
+pr: self
+classes: behavioral
+surfaces: mcp
+status: signal-only
 - **The CLI's context-ref reads resolve through `GET /api/contexts/resolve` — refusal sentences change**
   `resolve_context_id_for_read` (behind `temper context transfer|rename|delete|shape|
   region-metrics|analytics|materialize|materialize-delta`, `graph … --in`, the data-artifact

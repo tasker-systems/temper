@@ -1,19 +1,19 @@
 //! MCP service — the central handler for all MCP tool calls.
 //!
-//! Each invocation creates a fresh `TemperMcpService`. The authenticated caller's
-//! profile is resolved on **every** request by handing the shared auth seam the
-//! `RawJwtClaims` + `BearerToken` the JWT middleware injected into the HTTP request
-//! extensions. This surface constructs no principal of its own: it presents a verified
-//! token and maps `AuthzError` to rmcp (see `map_authz_error`).
+//! Each invocation creates a fresh `TemperMcpService`. The service runs no auth seam
+//! of its own: the JWT edge (`require_mcp_auth`) validates the token before anything
+//! forwards, and every tool relays the caller's bearer across the network door, where
+//! Level 1 (resolve, deactivation) and Level 2 (system access) run at the API.
+//! Post-edge refusals come back as preserved 401/403 bodies and are mapped
+//! arm-for-arm (`AcrossAuth`, `map_post_edge_refusal`).
 //!
 //! The service carries NO auth state: the identity a request acts under exists only
 //! as a per-request value. Every tool handler extracts the HTTP `Parts` from rmcp's
-//! `Extension` and hands them to its tools module, which forwards the caller's bearer
-//! across the network door; Level 1 + 2 run at the API. `ensure_profile_from_parts`
-//! survives only for the in-process context-ref resolution (`context_anchor` in the
-//! cognitive_maps and reblock modules), which hands the profile it resolves straight
-//! back. A profile that crossed between requests is not a bug to guard — the compiler
-//! makes it unrepresentable.
+//! `Extension` and hands them to its tools module, which builds a per-request relay
+//! client from the bearer in them. The last in-process gate (`ensure_profile_from_parts`,
+//! kept for the context-ref resolution) left at teardown, when `context_anchor` began
+//! relaying to `GET /api/contexts/resolve`; the source gates (`source_gates.rs`)
+//! keep it from coming back.
 
 use rmcp::{
     handler::server::{common::Extension, wrapper::Parameters},
@@ -30,8 +30,6 @@ use std::sync::Arc;
 use temper_client::auth::MemoryTokenStore;
 use temper_client::error::ClientError;
 use temper_client::TemperClient;
-use temper_core::types::Profile;
-use temper_services::auth::RawJwtClaims;
 use temper_services::state::AppState;
 use temper_workflow::operations::{Surface, RELAYED_SURFACE_HEADER, SERVICE_CREDENTIAL_HEADER};
 
@@ -69,10 +67,9 @@ pub fn shared_relay_pool() -> reqwest::Client {
 
 /// An [`McpConfig`] with the relay OFF — no base URL, no service credential.
 ///
-/// The e2e suites that drive the in-process auth seam itself (`ensure_profile_from_parts`,
-/// with no tool dispatch) build their service with this: those tests never forward, so
-/// a relay-less config is their honest shape, and an accidental forwarding attempt
-/// answers the typed refuse-to-forward error instead of half-working.
+/// For a service that must never forward — a test of the edge or the transport, with no
+/// tool dispatch: a relay-less config is its honest shape, and an accidental forwarding
+/// attempt answers the typed refuse-to-forward error instead of half-working.
 pub fn relay_off_config() -> McpConfig {
     McpConfig {
         mcp_base_url: "https://temper.invalid".to_string(),
@@ -239,60 +236,6 @@ impl TemperMcpService {
                 .with_non_idempotent_attempts(RELAY_NON_IDEMPOTENT_ATTEMPTS)
                 .with_connection_pool(self.shared_http.clone())
         })
-    }
-
-    /// Resolve the profile from HTTP request parts and return it.
-    ///
-    /// In stateless mode each request creates a fresh service instance, and
-    /// the service carries no auth state at all, so the profile is resolved
-    /// per-request from the JWT claims that the auth middleware injected
-    /// into the HTTP extensions. The caller threads the returned profile
-    /// into its own tool functions — identity is a per-request value, never
-    /// a shared slot. **Trust invariant:** `parts` must be middleware-produced —
-    /// the gate reads the injected claims at face value and does not re-verify
-    /// the JWT; verification happened at the edge that built the extensions.
-    pub async fn ensure_profile_from_parts(
-        &self,
-        parts: &http::request::Parts,
-    ) -> Result<temper_services::auth::AuthenticatedProfile, rmcp::ErrorData> {
-        let (claims, token) = authed_request(parts)?;
-
-        // Level 1: classify → human email ladder → resolve → deactivation gate, all in
-        // the shared seam. This surface used to build the human `AuthClaims` itself,
-        // with `email: ""` and no ladder — the drift that let an unnamable human
-        // auto-provision a junk profile here while temper-api refused the same token.
-        // It no longer constructs a principal at all; it hands over the verified token.
-        let authed = temper_services::auth::authenticate_token(&self.api_state, claims, &token.0)
-            .await
-            .map_err(map_authz_error)?;
-
-        // Fill the `mcp_request` root span's deferred `profile_id` (declared Empty in
-        // `build_router`). Recorded here rather than in `require_mcp_auth` because that middleware
-        // only validates the JWT — this is the first point at which a *profile* exists. Same
-        // deferred-field pattern as temper-api's auth middleware.
-        tracing::Span::current().record("profile_id", tracing::field::display(authed.profile().id));
-
-        // `profile_id` is the identifier to carry here — the raw OAuth `sub` is deliberately NOT
-        // emitted. At this point the profile has resolved, so `sub` adds nothing an operator can act
-        // on that `profile_id` does not, while a `google-oauth2|…` value joins our exported traces to
-        // the same person in unrelated systems (Auth0's social-connection `user_id` embeds the Google
-        // account id). A `profile_id` is inert outside temper. Decided 2026-08-01; see the task's §5.
-        tracing::debug!(profile_id = %authed.profile().id, "Profile resolved");
-
-        // Level 2: system-access gate (shared seam). The denial is mapped HERE, not
-        // through `map_authz_error`, because the resolved profile must be in scope to
-        // render the remediation-bearing details — the same `SystemAccessDetails`
-        // temper-api's 403 carries (`map_system_access_denied`).
-        temper_services::auth::require_system_access(&self.api_state.pool, &authed)
-            .await
-            .map_err(|e| match e {
-                temper_services::auth::AuthzError::SystemAccessDenied { refusal, .. } => {
-                    map_system_access_denied(authed.profile(), refusal)
-                }
-                other => map_authz_error(other),
-            })?;
-
-        Ok(authed)
     }
 
     // ── Tools (consolidated: 64 → 26) ─────────────────────────────────
@@ -849,34 +792,12 @@ impl TemperMcpService {
     }
 }
 
-/// The two things the JWT middleware injects for an authenticated request: the
-/// decoded claims and the raw token the seam's `/userinfo` rung may need.
-///
-/// Their absence is not an authentication failure but a wiring bug — the middleware
-/// injects both or rejects the request — so it maps to an internal error, as the
-/// missing-claims case always has.
-fn authed_request(
-    parts: &http::request::Parts,
-) -> Result<(&RawJwtClaims, &BearerToken), rmcp::ErrorData> {
-    let claims = parts.extensions.get::<RawJwtClaims>().ok_or_else(|| {
-        tracing::warn!("RawJwtClaims not found in HTTP request extensions");
-        rmcp::ErrorData::internal_error("Not authenticated".to_string(), None)
-    })?;
-    let token = parts.extensions.get::<BearerToken>().ok_or_else(|| {
-        tracing::warn!("BearerToken not found in HTTP request extensions");
-        rmcp::ErrorData::internal_error("Not authenticated".to_string(), None)
-    })?;
-    Ok((claims, token))
-}
-
-/// The terminal sentences both refusal mappings speak. Two mappings consume them —
-/// the direct binding's `map_authz_error` (typed `AuthzError`, computed in-process)
-/// and the relay's `map_post_edge_auth` (the API's preserved 401 body text) — and the
-/// split between the two MAPPINGS is principled (different input types; ruling 7
-/// deliberately chose wire-messages over a schema change). What must not split is the
-/// SENTENCE: hand-copied literals drifted between the bindings once already
-/// (`EmailResolution` was missed — the catch-all spoke the raw API body). The repo's
-/// `REQUEST_ACCESS_COMMAND` precedent exists for exactly this.
+/// The terminal sentences the relay's `map_post_edge_auth` speaks (from the API's
+/// preserved 401 body text). Until teardown a second mapping — the direct binding's
+/// `map_authz_error`, over the typed `AuthzError` computed in-process — consumed them
+/// too, and hand-copied literals had drifted between the two once (`EmailResolution`
+/// was missed — the catch-all spoke the raw API body); the sentences stay named
+/// constants, after the repo's `REQUEST_ACCESS_COMMAND` precedent.
 const TERMINAL_MACHINE_GATE_SENTENCE: &str =
     "This token is machine-shaped but does not declare a valid \
      client_credentials grant. This error is terminal and should not be retried.";
@@ -1076,121 +997,6 @@ pub(crate) fn map_post_edge_auth(refusal: &ClientError) -> Option<rmcp::ErrorDat
     }
 }
 
-/// Map the shared seam's refusal vocabulary onto rmcp transport errors.
-/// The deactivation and access-required strings are terminal ("do not retry")
-/// and byte-identical to the pre-seam inline messages.
-fn map_authz_error(e: temper_services::auth::AuthzError) -> rmcp::ErrorData {
-    use temper_services::auth::AuthzError;
-    match e {
-        // Terminal, like the machine-gate denial below: the token is structurally
-        // incoherent (machine-shaped, but not coherently a machine), so retrying it
-        // changes nothing. The seam has already logged the `sub` and the reason.
-        AuthzError::Refused(_) => rmcp::ErrorData::new(
-            rmcp::model::ErrorCode::INVALID_REQUEST,
-            TERMINAL_MACHINE_GATE_SENTENCE.to_string(),
-            None,
-        ),
-        // Also terminal: a human token we cannot put a name to. Before the seam owned
-        // the email ladder this surface skipped it entirely and auto-provisioned a
-        // profile with `email: ''`; that junk-row path is closed on purpose. The token
-        // carries no `email` claim and no earlier sign-in cached one, so re-sending it
-        // resolves nothing — the fix is a token with an email claim, not a retry.
-        AuthzError::EmailResolution(err) => {
-            tracing::warn!(%err, "rejected: could not resolve an email for a human token");
-            rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INVALID_REQUEST,
-                TERMINAL_EMAIL_RESOLUTION_SENTENCE.to_string(),
-                None,
-            )
-        }
-        AuthzError::Deactivated { profile_id } => {
-            tracing::warn!(%profile_id, "rejected: profile is deactivated");
-            rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INVALID_REQUEST,
-                TERMINAL_DEACTIVATION_SENTENCE.to_string(),
-                None,
-            )
-        }
-        // The advertised remedy is the shared constant, not a literal: this surface
-        // and temper-api's 403 must name the same command, and it must be one that
-        // parses. Both drifted onto `temper team join` — which accepts a team
-        // invitation and has no `--message`, so it does not request access at all.
-        //
-        // The refusal is typed and carried from the gate (one computation, both
-        // surfaces), so an agent here can branch on the same `kind` the API's 403
-        // carries in `details.refusal` — Denied from Requested from Revoked — and
-        // the `reason()` rides the message for a caller that reads only text.
-        //
-        // This arm is UNREACHABLE from every path into `map_authz_error` in this
-        // crate: both bare call sites (the `authenticate_token` mappings — Level 1,
-        // which never constructs the variant) and the forwarding `other =>` arm in
-        // `ensure_profile_from_parts` (the variant is intercepted above it, where the
-        // resolved profile is in scope — see `map_system_access_denied`). It exists
-        // for match exhaustiveness only, and refuses loudly: a silent degraded
-        // rendering here — identity dropped, remediation as prose only — is exactly
-        // the unfaithfulness this mapping exists to prevent.
-        AuthzError::SystemAccessDenied { .. } => rmcp::ErrorData::internal_error(
-            "system-access denial reached the bare authz mapping without a resolved \
-             profile; render it at the gate call site instead"
-                .to_string(),
-            None,
-        ),
-        // An `Unauthorized` here is a terminal authentication denial, not a transient
-        // failure — most often the machine-principal registration gate rejecting an
-        // unregistered or revoked `client_id` (G3 Phase A). It must surface as a terminal
-        // error the way `Deactivated` / `SystemAccessDenied` do, so a conformant client (or
-        // a Sidekiq worker, per the temper-rb contract) does not retry a permanent denial.
-        // The HTTP surface already returns a 401 for the same case; this keeps the two
-        // surfaces consistent. Any other `ProfileResolution` error is a genuine internal
-        // fault (a DB failure mid-resolution) and stays retryable.
-        AuthzError::ProfileResolution(temper_services::error::ApiError::Unauthorized(msg)) => {
-            tracing::warn!(%msg, "rejected: machine principal not admitted by the gate");
-            rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INVALID_REQUEST,
-                format!("{msg} This error is terminal and should not be retried."),
-                None,
-            )
-        }
-        AuthzError::ProfileResolution(err) => {
-            rmcp::ErrorData::internal_error(format!("Failed to resolve profile: {err}"), None)
-        }
-        AuthzError::AccessCheck(err) => {
-            rmcp::ErrorData::internal_error(format!("Failed to check system access: {err}"), None)
-        }
-    }
-}
-
-/// Render the Level-2 system-access denial faithfully to what the API's 403 carries.
-///
-/// The full [`temper_core::types::access_gate::SystemAccessDetails`] — email,
-/// display_name, refusal, request_url, cli_command — is built by the one shared
-/// constructor temper-core owns (the same construction temper-api's 403 middleware
-/// renders) and rides the structured `data`; the existing `data.refusal` key and its
-/// serialized shape are unchanged, so existing readers keep working. The message
-/// names the identity: an agent operating under a credential it does not read can
-/// tell the human WHICH account needs approving — the same remediation a browser
-/// caller receives, not a degraded prose-only copy of it.
-fn map_system_access_denied(
-    profile: &Profile,
-    refusal: temper_principal::Refusal,
-) -> rmcp::ErrorData {
-    let reason = refusal.reason();
-    let details =
-        temper_core::types::access_gate::SystemAccessDetails::for_profile(profile, refusal);
-    let who = details.email.as_deref().unwrap_or("your account");
-    rmcp::ErrorData::new(
-        rmcp::model::ErrorCode::INVALID_REQUEST,
-        format!(
-            "Access to this temper instance requires approval for {who} — {reason}. \
-             Visit {} or run `{}` in the CLI to request access. \
-             This error is terminal and should not be retried.",
-            temper_core::types::access_gate::REQUEST_ACCESS_URL,
-            temper_core::types::access_gate::REQUEST_ACCESS_COMMAND
-        ),
-        Some(serde_json::to_value(details).expect("SystemAccessDetails always serializes")),
-    )
-}
-
 /// The blob tools, spelled once — the `list_tools` advertisement filter and the router
 /// tests both read this list.
 pub(crate) const BLOB_TOOL_NAMES: [&str; 2] = ["blob_read", "blob_manage"];
@@ -1360,6 +1166,117 @@ mod tests {
         BLOB_TOOL_NAMES,
     };
     use temper_client::error::ClientError;
+
+    /// The wire body temper-api renders for each `AuthzError`, as temper-client types it on the
+    /// relay — `None` where the API answers a fault (5xx), which no post-edge arm maps. Mirrors
+    /// `temper-api/src/middleware/auth.rs` (Level 1) and `middleware/system_access.rs` (Level 2);
+    /// temper-mcp cannot depend on temper-api, so the mirror is written here, and the `match`
+    /// below is EXHAUSTIVE on purpose: a new `AuthzError` variant fails to compile until someone
+    /// states what the API sends for it and what this surface answers.
+    fn api_wire_refusal(e: temper_services::auth::AuthzError) -> Option<ClientError> {
+        use temper_services::auth::AuthzError;
+        use temper_services::error::ApiError;
+        let unauthorized = |cause: String| ClientError::UnauthorizedDetails {
+            message: format!("Unauthorized: {cause}"),
+        };
+        match e {
+            AuthzError::Refused(why) => {
+                Some(unauthorized(format!("machine credential refused: {why}")))
+            }
+            AuthzError::Deactivated { .. } => {
+                Some(unauthorized("account is deactivated".to_string()))
+            }
+            AuthzError::EmailResolution(err) | AuthzError::ProfileResolution(err) => match err {
+                ApiError::Unauthorized(cause) => Some(unauthorized(cause)),
+                _ => None,
+            },
+            AuthzError::AccessCheck(_) => None,
+            AuthzError::SystemAccessDenied { refusal, .. } => Some(
+                ClientError::SystemAccessRequired(Box::new(temper_core::error::CliAccessDetails {
+                    email: Some("someone@example.com".to_string()),
+                    display_name: Some("Someone".to_string()),
+                    refusal: Some(refusal),
+                    request_url: None,
+                    cli_command: None,
+                })),
+            ),
+        }
+    }
+
+    /// **Every `AuthzError` the API can refuse with has an MCP face — compiler-forced.**
+    ///
+    /// Until teardown the direct binding's `map_authz_error` matched `AuthzError` exhaustively,
+    /// so a new variant could not compile without an MCP rendering. The relay maps the API's
+    /// 401/403 BODY instead (`map_post_edge_refusal`), which no compiler checks; this test
+    /// restores the forcing through [`api_wire_refusal`]'s exhaustive match, and pins each
+    /// variant's face: the terminal sentences for the machine gate, deactivation, the email
+    /// ladder and the registration gate, the system-access arm with its typed refusal, and no
+    /// post-edge answer at all for a fault (the tool's own mapping owns those).
+    #[test]
+    fn every_authz_refusal_has_an_mcp_face() {
+        use temper_services::auth::AuthzError;
+        use temper_services::error::ApiError;
+        let terminal = -32600;
+        let cases: Vec<(AuthzError, Option<(i32, &str)>)> = vec![
+            (
+                AuthzError::Refused("no grant type"),
+                Some((terminal, super::TERMINAL_MACHINE_GATE_SENTENCE)),
+            ),
+            (
+                AuthzError::Deactivated {
+                    profile_id: uuid::Uuid::nil(),
+                },
+                Some((terminal, super::TERMINAL_DEACTIVATION_SENTENCE)),
+            ),
+            (
+                AuthzError::EmailResolution(ApiError::Unauthorized(
+                    "Token missing email claim and userinfo lookup failed".to_string(),
+                )),
+                Some((terminal, super::TERMINAL_EMAIL_RESOLUTION_SENTENCE)),
+            ),
+            (
+                AuthzError::ProfileResolution(ApiError::Unauthorized(
+                    "machine client 'x' is not registered with this instance.".to_string(),
+                )),
+                Some((
+                    terminal,
+                    "machine client 'x' is not registered with this instance. This error is \
+                     terminal and should not be retried.",
+                )),
+            ),
+            (
+                AuthzError::ProfileResolution(ApiError::Internal("db".to_string())),
+                None,
+            ),
+            (
+                AuthzError::AccessCheck(ApiError::Internal("db".to_string())),
+                None,
+            ),
+            (
+                AuthzError::SystemAccessDenied {
+                    profile_id: uuid::Uuid::nil(),
+                    refusal: temper_principal::Refusal::Denied,
+                },
+                Some((
+                    terminal,
+                    "Access to this temper instance requires approval for someone@example.com",
+                )),
+            ),
+        ];
+        for (variant, expected) in cases {
+            let label = format!("{variant:?}");
+            let mapped =
+                api_wire_refusal(variant).and_then(|wire| super::map_post_edge_refusal(&wire));
+            match (mapped, expected) {
+                (None, None) => {}
+                (Some(err), Some((code, prefix))) => {
+                    assert_eq!(err.code.0, code, "{label}: {err}");
+                    assert!(err.message.starts_with(prefix), "{label}: {}", err.message);
+                }
+                (got, want) => panic!("{label}: got {got:?}, want {want:?}"),
+            }
+        }
+    }
 
     /// The JWKS-outage 401 ("Authentication service unavailable") is TRANSIENT — the
     /// one post-edge cause whose remedy is a retry [added — 2026-09-24, found in review]. The catch-all would
@@ -1887,112 +1804,6 @@ mod tests {
              `#[schemars(inline)]` to the enum:\n  {}",
             offenders.len(),
             offenders.join("\n  ")
-        );
-    }
-
-    /// **Every `#[tool]` method crosses the network door — and none gates in-process.**
-    ///
-    /// The MCP surface authenticates per-request. Every family now dispatches through its
-    /// tools module, handing it the request's `Parts`; the module calls
-    /// `svc.relay_client(parts)` and the API's own auth middleware performs Level 1 + 2 on
-    /// the caller's bearer, with the post-edge refusals mapped arm-for-arm from the
-    /// preserved bodies (`map_post_edge_auth`). The gate is the wire crossing itself; what
-    /// this test asserts is that the Parts reach the dispatch (no bearer ⇒ no forward).
-    ///
-    /// Until beat 5 (the steward pair) a second arm admitted DIRECT-binding methods that
-    /// called `ensure_profile_from_parts` before dispatching. With the last family across,
-    /// that arm could only admit a regression, so it is now the opposite: a method body
-    /// that calls `ensure_profile_from_parts` fails here — running the seam at the MCP
-    /// function as well as at the API is the duplicate resolution the door exists to remove
-    /// (the doubled-gate scar). The teardown beat tightens the remaining arm from this
-    /// shape heuristic to "relays, or sits on a named pure-compute allowlist".
-    ///
-    /// It parses this file's own source rather than reflecting on the router, because
-    /// the router's `Tool` entries carry only the description + schema + a function
-    /// pointer — there is no way to inspect the function body at runtime. Source parsing
-    /// is the cheapest faithful check.
-    ///
-    /// **What it covers:** every `#[tool]` method body in this file. The split is on
-    /// `#[tool(`, and each segment runs from the attribute to the next `#[tool(` or end
-    /// of file.
-    #[test]
-    fn every_tool_method_crosses_the_network_door() {
-        let source = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/service.rs"),
-        )
-        .expect("read service.rs");
-
-        // Parse only the tool-router impl block — the #[tool] methods live between
-        // `#[tool_router]` and `#[tool_handler]` (or `#[cfg(test)]`, whichever comes first).
-        // The test module's doc comments mention `#[tool(` in backticks, which would split
-        // as false segments; scoping to the impl block avoids that.
-        let impl_start = source
-            .find("#[tool_router]")
-            .expect("#[tool_router] attribute not found");
-        let impl_end = source[impl_start..]
-            .find("#[tool_handler]")
-            .or_else(|| source[impl_start..].find("#[cfg(test)]"))
-            .expect("end of tool-router impl not found");
-        let impl_block = &source[impl_start..impl_start + impl_end];
-
-        let tool_segments: Vec<&str> = impl_block.split("#[tool(").skip(1).collect();
-
-        assert!(
-            !tool_segments.is_empty(),
-            "no #[tool] attributes found in the tool-router impl — the split found nothing, \
-             so this test checks nothing"
-        );
-
-        let mut missing: Vec<String> = Vec::new();
-        for segment in &tool_segments {
-            // Scope each check to the method itself: the last `#[tool(` segment otherwise
-            // runs on through every non-tool helper to the end of the impl block, and a
-            // helper's comment naming the gate would read as the method calling it. A
-            // method's body closes at the impl's four-space indent.
-            let segment = segment.split("\n    }\n").next().unwrap_or(segment);
-            let gates_in_process = segment.contains("ensure_profile_from_parts");
-            // The families that have crossed the network door dispatch through their
-            // tools module HANDING IT THE PARTS — `tools::<family>::<name>(self,
-            // &parts, ...)`. A bare `tools::` match is satisfied by the input TYPE
-            // alone (`Parameters<tools::query::QueryInput>` names the family in the
-            // signature), which the bite probe exploited: a method with neither gate
-            // nor dispatch passed the old arm. The `(self, &parts` call shape is the
-            // discriminator — parts exist on the dispatch path to be forwarded.
-            //
-            // This is a source-scraping TRIPWIRE, not a control: the two substrings
-            // match independently, so a future method whose body hands `&parts` to a
-            // local helper (not a door dispatch) satisfies the arm while running
-            // unauthenticated at Level 2 (transport Level 1 still runs at the edge).
-            // Named so the next widening tightens the discriminator instead of
-            // compounding the heuristic.
-            let network_door = segment.contains("tools::") && segment.contains("(self, &parts");
-            if gates_in_process || !network_door {
-                let fn_name = segment
-                    .split("async fn ")
-                    .nth(1)
-                    .and_then(|s| s.split('(').next())
-                    .unwrap_or("<unknown>")
-                    .trim();
-                missing.push(if gates_in_process {
-                    format!(
-                        "{fn_name} (calls `ensure_profile_from_parts` — an in-process gate \
-                         beside the API's; the door is the only gate)"
-                    )
-                } else {
-                    format!(
-                        "{fn_name} (no network-door dispatch — a `tools::<family>::` call \
-                         handing it `&parts`)"
-                    )
-                });
-            }
-        }
-
-        assert!(
-            missing.is_empty(),
-            "these #[tool] methods do not cross the network door cleanly — every tool must \
-             dispatch through its tools module with the request's parts (its gate runs at \
-             the API) and must not gate in-process as well:\n  {}",
-            missing.join("\n  ")
         );
     }
 
