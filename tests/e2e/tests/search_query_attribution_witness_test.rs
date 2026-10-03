@@ -120,7 +120,7 @@ async fn the_familys_acts_cross_the_trusted_path(pool: PgPool) {
     let (layer, captured) = TestTracingLayer::new();
     let _guard = tracing_subscriber::registry().with(layer).set_default();
     let app = common::setup_relay(pool).await;
-    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
 
     let search = temper_mcp::tools::search::search(

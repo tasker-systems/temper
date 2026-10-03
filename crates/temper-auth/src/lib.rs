@@ -1,6 +1,6 @@
 //! Shared OAuth2 Authorization Code + PKCE mechanics.
 //!
-//! Pure: crypto and string building, no HTTP and no I/O. Both surfaces need these —
+//! Pure: crypto, string building and config parsing over an injected lookup, no HTTP and no I/O. Both surfaces need these —
 //! temper-client for the CLI's loopback login, temper-services for the server-side
 //! Slack account-link callback — and neither may depend on the other.
 //!
@@ -11,6 +11,7 @@
 //! would evaporate silently.
 
 pub mod authorize;
+pub mod config;
 pub mod pkce;
 pub mod token;
 

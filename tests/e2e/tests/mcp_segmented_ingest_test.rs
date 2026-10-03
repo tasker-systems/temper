@@ -271,7 +271,7 @@ async fn segmented_server_chunked_ingest_equals_a_one_shot_create(pool: sqlx::Pg
         .await
         .expect("context create");
 
-    let svc = app.mcp_relay_service(pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
     let profile = app.client.profile().get().await.expect("profile").id;
 
@@ -320,7 +320,7 @@ async fn an_interrupted_segmented_ingest_resumes_from_the_server_alone(pool: sql
         .await
         .expect("context create");
 
-    let svc = app.mcp_relay_service(pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
     let segments = corpus();
 
@@ -382,7 +382,7 @@ async fn re_appending_a_landed_segment_is_an_idempotent_no_op(pool: sqlx::PgPool
         .await
         .expect("context create");
 
-    let svc = app.mcp_relay_service(pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
     let segments = corpus();
 
@@ -425,7 +425,7 @@ async fn an_append_whose_content_does_not_hash_to_its_declared_hash_is_rejected(
         .await
         .expect("context create");
 
-    let svc = app.mcp_relay_service(pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
     let segments = corpus();
     let begin: SegmentedBeginResponse = parse_tool_json(
@@ -492,7 +492,7 @@ async fn appended_segments_record_block_aligned_provenance(pool: sqlx::PgPool) {
         .await
         .expect("context create");
 
-    let svc = app.mcp_relay_service(pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
     let segments = corpus();
 

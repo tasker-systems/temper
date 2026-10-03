@@ -273,19 +273,7 @@ impl ApiConfig {
         check_secret_distinctness(&lookup)?;
         check_shared_secret_strength(&lookup)?;
 
-        let cors_origins: Vec<String> = lookup("CORS_ORIGINS")
-            .unwrap_or_default()
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        if cors_origins.is_empty() {
-            tracing::info!(
-                "CORS_ORIGINS is not set — cross-origin requests will be denied. \
-                 Set CORS_ORIGINS=* for permissive mode in development."
-            );
-        }
+        let cors_origins = crate::cors::parse_cors_origins(&lookup);
 
         let enable_swagger = lookup("ENABLE_SWAGGER")
             .map(|v| v == "true" || v == "1")
@@ -345,7 +333,10 @@ impl ApiConfig {
 /// admit more; B-C5, final-pass review).
 const VERCEL_REQUEST_BODY_CAP_BYTES: usize = 4_500_000;
 
-fn parse_blob(lookup: impl Fn(&str) -> Option<String>) -> (Option<BlobConfig>, bool) {
+///
+/// Public because the MCP server reads the same posture at its own boot, without an `ApiConfig`:
+/// the door it advertises must be the door the API serves, so the two parse it once.
+pub fn parse_blob(lookup: impl Fn(&str) -> Option<String>) -> (Option<BlobConfig>, bool) {
     let get = |k| lookup(k).filter(|s: &String| !s.is_empty());
 
     if let Some(raw) = get("BLOB_ENABLED") {
@@ -577,46 +568,23 @@ const SHARED_SECRET_VARS: [&str; 7] = [
 ///
 /// Only [`ApiConfig::from_lookup`] runs this, so the in-process test harnesses that build an
 /// `ApiConfig` by struct literal are unaffected — correctly, since they are not deployments.
-/// A shared secret read from the environment. Compared against a header PRESENTED as
-/// its value, so the stored value and the presentation must agree byte-for-byte —
-/// surrounding whitespace is an operator artifact (a pasted value, a trailing newline
-/// from `$(cat /run/secrets/…)` or an env_file), never part of the secret. Trimming
-/// here keeps the gate from silently failing every presentation of an
-/// otherwise-correct secret, and keeps `check_secret_distinctness`'s compare on
-/// trimmed values honest about collisions like `"X"` vs `"X␣"`.
-fn shared_secret(lookup: &impl Fn(&str) -> Option<String>, name: &str) -> Option<String> {
-    lookup(name)
-        .map(|v| v.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
+use temper_auth::config::shared_secret;
 
-/// The floor a header-compared shared secret must clear. The values that would trip
-/// this — a committed test constant, an operator's pasted `"changeme"`, an
-/// under-generated placeholder — are the only ones with any business being refused
-/// here; a 16-char random string is the smallest secret a holder cannot guess.
-const MIN_SHARED_SECRET_CHARS: usize = 16;
-
-/// A production-level check the distinctness gate cannot express: EACH header-compared
-/// shared secret must be long enough to be a secret. The distinctness gate answers "are
-/// these two values different"; this answers "is this value a secret at all". Only the
-/// secrets in this arc's scope are refused — the e2e harness's `e2e-mcp-relay-service-
+/// The gate secrets this process reads, each held to `temper_auth::config`'s strength floor.
+/// Only the secrets in this arc's scope are refused — the e2e harness's `e2e-mcp-relay-service-
 /// credential` constant is excluded from every check by being a *harness* constant, but
 /// a production deployment pasting it would now refuse to boot, as it should.
+const STRENGTH_CHECKED_SECRETS: [&str; 4] = [
+    "TEMPER_MCP_SERVICE_SECRET",
+    "INTERNAL_RECONCILE_SECRET",
+    "EMBED_DISPATCH_SECRET",
+    "SLACK_MINT_SECRET",
+];
+
 fn check_shared_secret_strength(
     lookup: &impl Fn(&str) -> Option<String>,
 ) -> Result<(), ConfigError> {
-    for name in [
-        "TEMPER_MCP_SERVICE_SECRET",
-        "INTERNAL_RECONCILE_SECRET",
-        "EMBED_DISPATCH_SECRET",
-        "SLACK_MINT_SECRET",
-    ] {
-        if let Some(value) = shared_secret(lookup, name) {
-            if value.chars().count() < MIN_SHARED_SECRET_CHARS {
-                return Err(ConfigError::WeakSharedSecret(name));
-            }
-        }
-    }
+    temper_auth::config::check_shared_secret_strength(lookup, &STRENGTH_CHECKED_SECRETS)?;
     Ok(())
 }
 
@@ -815,7 +783,9 @@ mod tests {
         let pairs = with_secrets(&[("TEMPER_MCP_SERVICE_SECRET", "too-short".to_string())]);
         assert_eq!(
             check_shared_secret_strength(&lookup_of(&pairs)),
-            Err(ConfigError::WeakSharedSecret("TEMPER_MCP_SERVICE_SECRET")),
+            Err(ConfigError::Auth(
+                crate::auth_config::AuthConfigError::WeakSharedSecret("TEMPER_MCP_SERVICE_SECRET")
+            )),
         );
     }
 

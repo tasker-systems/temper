@@ -13,7 +13,7 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::router::McpAppState;
+use crate::router::McpEdgeState;
 
 /// RFC 9728 — Protected Resource Metadata.
 ///
@@ -55,10 +55,10 @@ fn protected_resource_metadata(base: &str, resource: &str) -> ProtectedResourceM
 }
 
 /// `GET /.well-known/oauth-protected-resource`
-pub async fn oauth_protected_resource(State(state): State<Arc<McpAppState>>) -> impl IntoResponse {
+pub async fn oauth_protected_resource(State(state): State<Arc<McpEdgeState>>) -> impl IntoResponse {
     Json(protected_resource_metadata(
         &state.mcp_config.mcp_base_url,
-        &state.api_state.config.auth.mcp_audience,
+        &state.auth.mcp_audience,
     ))
 }
 
@@ -102,7 +102,7 @@ struct ClientRegistrationResponse {
 /// Only redirect URIs listed in `mcp-server.toml` are echoed back.
 /// Returns 503 if `MCP_CLIENT_ID` is not configured.
 pub async fn register_client(
-    State(state): State<Arc<McpAppState>>,
+    State(state): State<Arc<McpEdgeState>>,
     Json(request): Json<ClientRegistrationRequest>,
 ) -> impl IntoResponse {
     let Some(ref client_id) = state.mcp_config.mcp_client_id else {

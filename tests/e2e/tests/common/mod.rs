@@ -77,7 +77,7 @@ impl E2eTestApp {
     /// [`Self::relay_parts`]: the bearer only.)
     pub fn direct_parts(&self) -> axum::http::request::Parts {
         axum::http::Request::builder()
-            .extension(temper_mcp::middleware::BearerToken(self.token.clone()))
+            .extension(temper_mcp::BearerToken(self.token.clone()))
             .extension(temper_services::auth::RawJwtClaims {
                 sub: "e2e-test-user".to_string(),
                 email: None,
@@ -98,7 +98,7 @@ impl E2eTestApp {
     /// share the one MCP service.
     pub fn relay_parts_for(&self, token: &str) -> axum::http::request::Parts {
         axum::http::Request::builder()
-            .extension(temper_mcp::middleware::BearerToken(token.to_string()))
+            .extension(temper_mcp::BearerToken(token.to_string()))
             .body(())
             .expect("relay parts build")
             .into_parts()
@@ -124,105 +124,35 @@ impl E2eTestApp {
     }
 
     /// The MCP service every suite drives. The relay config is ON (this app's
-    /// listener, the harness credential, the shared pool). The service carries NO
-    /// auth state: every tool forwards the bearer in the parts it is handed, so
+    /// listener, the harness credential, the shared HTTP connection pool) and the blob
+    /// door is closed, as on a blob-less deployment. The service holds no database pool
+    /// and carries NO auth state: every tool forwards the bearer in the parts it is handed, so
     /// each call acts as its own principal — the same path production dispatch
     /// takes.
-    pub async fn mcp_relay_service(&self, pool: PgPool) -> temper_mcp::service::TemperMcpService {
-        let decoding_key =
-            jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("../fixtures/test_rsa.pub"))
-                .expect("decoding key");
-        let jwks_store = JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256);
-        let api_config = ApiConfig {
-            database_url: "unused".to_string(),
-            auth: AuthConfig {
-                issuer: "test-issuer".to_string(),
-                jwks_url: "unused".to_string(),
-                audience: TEST_AUDIENCE.to_string(),
-                mcp_audience: TEST_AUDIENCE.to_string(),
-                mode: AuthMode::ExternalIdp,
-            },
-            auth_provider_name: "test-provider".to_string(),
-            cors_origins: vec![],
-            port: 0,
-            enable_swagger: false,
-            internal_reconcile_secret: None,
-            embed_dispatch_secret: None,
-            mcp_service_secret: None,
-            vercel_connect: None,
-            slack_link: None,
-            slack_mint_secret: None,
-            rate_limit: None,
-            blob: None,
-            blob_disabled_by_policy: false,
-        };
+    pub async fn mcp_relay_service(&self) -> temper_mcp::service::TemperMcpService {
         temper_mcp::service::TemperMcpService::new(
-            AppState::new(pool, jwks_store, api_config),
+            temper_mcp_server::config::blob_door(None, false),
             self.mcp_relay_config(),
             temper_mcp::service::shared_relay_pool(),
         )
     }
 
-    /// The relay service with a live in-memory blob store — the blob families'
-    /// harness (beat G4 parity suite). `single_request_max_bytes` is deliberately
-    /// small so the read-ceiling refusal is cheap to construct; the ceiling's own
-    /// number is the operator's knob the tool names verbatim. The store is the
-    /// CALLER'S (`Arc<InMemoryBlobStore>`) so a test can seed blobs directly where a
-    /// commit gate would get in the way (the read ceiling's over-threshold fixture
-    /// commits past the very threshold it pins).
+    /// The relay service with the blob door OPEN — the blob families' harness (beat G4
+    /// parity suite). The MCP side holds only the door's posture and its single-request
+    /// ceiling (the tool layer holds no store and no pool); the blobs themselves live in
+    /// the app listener's store, which the caller shares with the test
+    /// (`setup_with_blob_store_shared`) so a test can seed blobs directly where a commit
+    /// gate would get in the way. `single_request_max_bytes` is deliberately small so the
+    /// read-ceiling refusal is cheap to construct; the ceiling's own number is the
+    /// operator's knob the tool names verbatim.
     pub async fn mcp_relay_service_with_blob(
         &self,
-        pool: PgPool,
-        store: std::sync::Arc<temper_substrate::blob_store::InMemoryBlobStore>,
+        single_request_max_bytes: usize,
     ) -> temper_mcp::service::TemperMcpService {
-        let decoding_key =
-            jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("../fixtures/test_rsa.pub"))
-                .expect("decoding key");
-        let jwks_store = JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256);
-        let blob_config = temper_services::config::BlobConfig {
-            store_id: "test-blob-store".to_string(),
-            read_write_token: None,
-            credential_mode: temper_services::config::BlobCredentialMode::Token,
-            oidc_token_source: std::sync::Arc::new(|| None),
-            max_bytes: 100 * 1024 * 1024,
-            allowlist: vec![
-                "image/png".into(),
-                "image/jpeg".into(),
-                "image/webp".into(),
-                "image/svg+xml".into(),
-                "image/gif".into(),
-                "application/pdf".into(),
-                "text/plain".into(),
-            ],
-            single_request_max_bytes: 64,
-        };
-        let api_config = ApiConfig {
-            database_url: "unused".to_string(),
-            auth: AuthConfig {
-                issuer: "test-issuer".to_string(),
-                jwks_url: "unused".to_string(),
-                audience: TEST_AUDIENCE.to_string(),
-                mcp_audience: TEST_AUDIENCE.to_string(),
-                mode: AuthMode::ExternalIdp,
-            },
-            auth_provider_name: "test-provider".to_string(),
-            cors_origins: vec![],
-            port: 0,
-            enable_swagger: false,
-            internal_reconcile_secret: None,
-            embed_dispatch_secret: None,
-            mcp_service_secret: None,
-            vercel_connect: None,
-            slack_link: None,
-            slack_mint_secret: None,
-            rate_limit: None,
-            blob: Some(blob_config),
-            blob_disabled_by_policy: false,
-        };
-        let mut state = AppState::new(pool, jwks_store, api_config);
-        state.blob_store = Some(store);
         temper_mcp::service::TemperMcpService::new(
-            state,
+            temper_mcp::BlobDoor::Open {
+                single_request_max_bytes,
+            },
             self.mcp_relay_config(),
             temper_mcp::service::shared_relay_pool(),
         )
@@ -411,6 +341,32 @@ async fn spawn_temper(
 /// `validate_aud = false` — so these tokens carried no `aud` at all and the e2e suite never
 /// exercised audience validation on either surface. It does now.
 pub const TEST_AUDIENCE: &str = "test-audience";
+
+/// The MCP server's boot config for the router-level suites: the same auth identity the harness
+/// API validates (issuer `test-issuer`, [`TEST_AUDIENCE`]), no CORS origins, and the given blob
+/// door. No database URL and no pool — the deployed edge holds neither.
+pub fn mcp_server_config(blob_door: temper_mcp::BlobDoor) -> temper_mcp_server::McpServerConfig {
+    temper_mcp_server::McpServerConfig {
+        auth: temper_auth::config::AuthConfig {
+            issuer: "test-issuer".to_string(),
+            jwks_url: "unused".to_string(),
+            audience: TEST_AUDIENCE.to_string(),
+            mcp_audience: TEST_AUDIENCE.to_string(),
+            mode: temper_auth::config::AuthMode::ExternalIdp,
+        },
+        cors_origins: vec![],
+        blob_door,
+    }
+}
+
+/// The JWT edge's key store over the harness's RSA test key, so the MCP router verifies the
+/// tokens [`generate_test_jwt`] mints.
+pub fn mcp_test_jwks() -> JwksKeyStore {
+    let decoding_key =
+        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("../fixtures/test_rsa.pub"))
+            .expect("decoding key");
+    JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256)
+}
 
 /// The service credential the relay harness configures on BOTH sides of the network
 /// door: the API's relay-trust middleware validates it constant-time, and the MCP
@@ -1266,7 +1222,7 @@ pub async fn context_anchor_faces(app: &E2eTestApp) -> Vec<AnchorFace> {
 
     fn parts_for(token: &str, sub: &str, email: Option<&str>) -> axum::http::request::Parts {
         axum::http::Request::builder()
-            .extension(temper_mcp::middleware::BearerToken(token.to_string()))
+            .extension(temper_mcp::BearerToken(token.to_string()))
             .extension(temper_services::auth::RawJwtClaims {
                 sub: sub.to_string(),
                 email: email.map(str::to_string),
@@ -1407,7 +1363,7 @@ pub async fn mcp_act_as(
     app: &E2eTestApp,
     token: &str,
 ) -> Result<serde_json::Value, rmcp::ErrorData> {
-    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let res = temper_mcp::tools::contexts::context_manage(
         &svc,
         &app.relay_parts_for(token),

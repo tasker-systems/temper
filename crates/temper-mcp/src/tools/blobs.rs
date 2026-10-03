@@ -50,6 +50,7 @@ use temper_client::error::ClientError;
 use temper_core::types::blob::{BlobRelationAssertRequest, BlobRelationDirection};
 use temper_core::types::graph::{EdgeKind, Polarity};
 
+use crate::host::BlobDoor;
 use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 
 // ── Input structs ──────────────────────────────────────────────────────────────
@@ -269,19 +270,19 @@ fn refuse_short_stream(action: &str, collected: usize, declared: i64) -> rmcp::E
 /// (the same knob the commit threshold and the wire's single-request body cap ride); the
 /// default (4 MB) is the platform's own.
 fn read_ceiling(svc: &TemperMcpService) -> i64 {
-    svc.api_state
-        .config
-        .blob
-        .as_ref()
-        .map(|c| c.single_request_max_bytes as i64)
-        .unwrap_or(4 * 1024 * 1024)
+    match &svc.blob_door {
+        BlobDoor::Open {
+            single_request_max_bytes,
+        } => *single_request_max_bytes as i64,
+        BlobDoor::Closed { .. } => 4 * 1024 * 1024,
+    }
 }
 
 // ── The closed door ───────────────────────────────────────────────────────────
 //
 // A blob-disabled MCP instance refuses the pair — in its own unconfigured
 // vocabulary, not the app's. The advertisement posture and the refusal voice are the
-// same knob (`api_state.config.blob.is_none()`): the pair stays out of tools/list on
+// same knob (the host's `BlobDoor`): the pair stays out of tools/list on
 // the wire, and a direct tools/call against the hidden pair answers this refusal.
 // The wire's own blob-refusal can still arrive on a relay to a blob-disabled APP;
 // both refusal faces land in `map_api_error`'s Internal arm and keep the vocabulary.
@@ -298,10 +299,10 @@ fn map_local_blob_refusal(err: impl std::fmt::Display) -> rmcp::ErrorData {
 /// The blob door's check: this MCP instance is blob-configured, or the caller hears
 /// the unconfigured refusal — never a relay to an app whose answer would disagree.
 fn blob_door_open(svc: &TemperMcpService) -> Result<(), rmcp::ErrorData> {
-    if svc.api_state.config.blob.is_none() {
-        return Err(map_local_blob_refusal(svc.api_state.blob_refusal()));
+    match &svc.blob_door {
+        BlobDoor::Open { .. } => Ok(()),
+        BlobDoor::Closed { refusal } => Err(map_local_blob_refusal(refusal)),
     }
-    Ok(())
 }
 
 // ── Read handlers ──────────────────────────────────────────────────────────────

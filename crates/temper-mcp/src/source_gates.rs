@@ -10,6 +10,11 @@
 //!
 //! - [`every_tool_method_relays_or_is_allowlisted_pure`] — ruling (a), 2026-10-02.
 //! - [`no_tool_module_binds_to_the_database_or_a_service`] — the `teardown-completes` witness.
+//! - [`no_module_in_the_tool_layer_holds_a_pool_or_server_state`] and
+//!   [`the_tool_layer_manifest_names_no_database_or_services_crate`] — least privilege: the crate
+//!   holds no pool and no server state anywhere, not only in its tools (the follow-up to the
+//!   teardown's security review, finding 3). The deployed edge's own no-database gate lives in
+//!   `temper-mcp-server/tests/no_database_test.rs`.
 //!
 //! These are tripwires over the source, not controls: they catch the ordinary ways a tool could
 //! regain a direct path (a pool read, a services call, a tool that never forwards), and their
@@ -26,11 +31,20 @@ use syn::visit::Visit;
 /// held to "pure": nothing it reaches builds a relay or names `api_state` / `temper_services`.
 const PURE_COMPUTE_TOOLS: &[&str] = &["describe_schema"];
 
-/// The tools-module functions allowed to read `api_state` — and only its deployment config,
-/// never the pool: the blob door's own posture (`api_state.config.blob`) and size ceiling. Named
-/// by `(module, function)`; anything else naming `api_state` fails the witness.
-const API_STATE_CONFIG_READERS: &[(&str, &str)] =
-    &[("blobs", "read_ceiling"), ("blobs", "blob_door_open")];
+/// What the tool layer must never name, anywhere in its production source: the database
+/// (`sqlx`, a `PgPool`, its builder, a `pool` field), the services crate, and the server state
+/// that carried a pool (`AppState`, `ApiConfig`, the `api_state` field the service held until
+/// the least-privilege follow-up). The host hands this crate plain values instead (`host.rs`).
+const SERVER_STATE_NAMES: &[&str] = &[
+    "sqlx",
+    "PgPool",
+    "PgPoolOptions",
+    "pool",
+    "temper_services",
+    "AppState",
+    "ApiConfig",
+    "api_state",
+];
 
 // ── Parsing ──────────────────────────────────────────────────────────────────────────────────
 
@@ -432,12 +446,10 @@ fn every_tool_method_relays_or_is_allowlisted_pure() {
 }
 
 /// **`teardown-completes`, witnessed:** no tool module reads the database or calls a service
-/// directly. Fails if any production item under `src/tools/` names `temper_services`, `sqlx` or a
-/// `pool`, or names `api_state` outside the named config readers ([`API_STATE_CONFIG_READERS`]).
-/// Parsed, not grepped: a chain rustfmt splits across lines (`svc.api_state\n    .pool`) is the
-/// same field access. After teardown `temper_services` remains in this crate only at the JWT edge
-/// (`middleware.rs`), the router/transport (`router.rs`), config (`config.rs`) and boot
-/// (`AppState`, in `service.rs`).
+/// directly. Fails if any production item under `src/tools/` names `temper_services`, `sqlx`, a
+/// `pool` or `api_state`. Parsed, not grepped: a chain rustfmt splits across lines
+/// (`svc.api_state\n    .pool`) is the same field access. The blob door's two config readers that
+/// once named `api_state` read the host's plain `BlobDoor` now, so there is no exception left.
 #[test]
 fn no_tool_module_binds_to_the_database_or_a_service() {
     let mut offenders = Vec::new();
@@ -452,21 +464,9 @@ fn no_tool_module_binds_to_the_database_or_a_service() {
         let file = parse(&path);
         for item in production_items(&file) {
             let named = names_in(|v| v.visit_item(item));
-            for forbidden in ["temper_services", "sqlx", "pool"] {
+            for forbidden in ["temper_services", "sqlx", "pool", "api_state"] {
                 if named.contains(forbidden) {
                     offenders.push(format!("{module}.rs names `{forbidden}`"));
-                }
-            }
-            if named.contains("api_state") {
-                let reader = match item {
-                    syn::Item::Fn(f) => API_STATE_CONFIG_READERS
-                        .contains(&(module.as_str(), &*f.sig.ident.to_string())),
-                    _ => false,
-                };
-                if !reader {
-                    offenders.push(format!(
-                        "{module}.rs names `api_state` outside the named config readers"
-                    ));
                 }
             }
         }
@@ -480,6 +480,103 @@ fn no_tool_module_binds_to_the_database_or_a_service() {
         "a tool module binds past the network door — every tool relays to the API, which owns \
          the database and the services:\n  {}",
         offenders.join("\n  ")
+    );
+}
+
+/// Every production `.rs` file under `src/`, recursively, except this gate's own file (whose
+/// detector tests spell the forbidden names as inputs). Returned as (path relative to `src/`,
+/// parsed file).
+fn crate_sources() -> Vec<(String, syn::File)> {
+    fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, syn::File)>) {
+        for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {dir:?}: {e}")) {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                walk(&path, root, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+                if rel != "source_gates.rs" {
+                    out.push((rel, parse(&path)));
+                }
+            }
+        }
+    }
+    let root = manifest("src");
+    let mut out = Vec::new();
+    walk(&root, &root, &mut out);
+    out
+}
+
+/// **Least privilege, witnessed:** no module of the tool layer — the service, the tools, the
+/// resources, the config, the host values — names a database pool, the services crate, or the
+/// server state that once carried a pool ([`SERVER_STATE_NAMES`]). The crate has no boot of its
+/// own (the deployed edge, `temper-mcp-server`, boots it), so the rule has no exception: a pool
+/// reappearing anywhere here fails by file and name. Test-only items are exempt — the
+/// `AuthzError` witness in `service.rs` names the services' error types as its oracle.
+#[test]
+fn no_module_in_the_tool_layer_holds_a_pool_or_server_state() {
+    let sources = crate_sources();
+    assert!(
+        sources.len() >= 20,
+        "read only {} source files — the walk has broken",
+        sources.len()
+    );
+    assert!(
+        sources.iter().any(|(rel, _)| rel == "service.rs")
+            && sources.iter().any(|(rel, _)| rel == "tools/blobs.rs"),
+        "the walk missed the service or the tools"
+    );
+    let mut offenders = Vec::new();
+    for (rel, file) in &sources {
+        for item in production_items(file) {
+            let named = names_in(|v| v.visit_item(item));
+            for forbidden in SERVER_STATE_NAMES {
+                if named.contains(*forbidden) {
+                    offenders.push(format!("{rel} names `{forbidden}`"));
+                }
+            }
+        }
+    }
+    offenders.sort();
+    offenders.dedup();
+    assert!(
+        offenders.is_empty(),
+        "the tool layer holds server state — it relays every act to the API, which owns the \
+         database; a host hands it plain values (`host.rs`), never a pool:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// **Least privilege, structurally:** the tool layer's `[dependencies]` name no database driver
+/// and no server crate, so a pool cannot be constructed here even by a path the source gate does
+/// not parse (a macro, a build script). `temper-services` stays allowed as a DEV-dependency only
+/// (the `AuthzError` witness's oracle).
+#[test]
+fn the_tool_layer_manifest_names_no_database_or_services_crate() {
+    let raw = std::fs::read_to_string(manifest("Cargo.toml")).expect("read Cargo.toml");
+    let cargo: toml::Value = toml::from_str(&raw).expect("Cargo.toml parses");
+    let deps = cargo
+        .get("dependencies")
+        .and_then(|d| d.as_table())
+        .expect("a [dependencies] table");
+    assert!(deps.len() >= 10, "read only {} dependencies", deps.len());
+    let forbidden = [
+        "sqlx",
+        "temper-services",
+        "temper-api",
+        "temper-substrate",
+        "temper-mcp-server",
+    ];
+    let offenders: Vec<&str> = forbidden
+        .into_iter()
+        .filter(|name| deps.contains_key(*name))
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "the tool layer depends on a database or server crate at runtime: {offenders:?}"
     );
 }
 

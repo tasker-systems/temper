@@ -145,7 +145,7 @@ pub const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
 /// ```ignore
 /// apply_base_layers(app)
 ///     .layer(axum::middleware::from_fn(root_span))
-///     .layer(temper_services::cors::cors_layer(&config))
+///     .layer(temper_services::cors::cors_layer(&config.cors_origins))
 /// ```
 ///
 /// Ordering matters and is preserved from the stack this was extracted from: decompression runs

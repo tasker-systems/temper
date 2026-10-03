@@ -11,12 +11,14 @@ use rmcp::transport::streamable_http_server::{
 use std::sync::Arc;
 use tower_http::limit::RequestBodyLimitLayer;
 
-use temper_services::state::AppState;
+use temper_auth::config::AuthConfig;
+use temper_mcp::service::TemperMcpService;
+use temper_mcp::McpConfig;
+use temper_services::state::JwksKeyStore;
 
-use crate::config::McpConfig;
+use crate::config::McpServerConfig;
 use crate::discovery;
 use crate::middleware::require_mcp_auth;
-use crate::service::TemperMcpService;
 
 /// The largest request body this door will read.
 ///
@@ -43,20 +45,31 @@ use crate::service::TemperMcpService;
 /// the HTTP door. Closing it properly is a declaration-cap question, not a transport one.
 const MCP_MAX_BODY_BYTES: usize = 25 * 1024 * 1024;
 
-/// Shared state for discovery handlers and the MCP middleware.
+/// Shared state for discovery handlers and the MCP middleware: the JWT edge's verification
+/// inputs and the deployment config, and nothing else — no pool, no API configuration.
 #[derive(Clone, Debug)]
-pub struct McpAppState {
-    pub api_state: AppState,
+pub struct McpEdgeState {
+    /// The instance's auth identity — the issuer and audiences the edge checks, and the MCP
+    /// audience the protected-resource metadata advertises.
+    pub auth: AuthConfig,
+    pub jwks_store: Arc<JwksKeyStore>,
     pub mcp_config: McpConfig,
 }
 
-pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
-    // Taken before `api_state` is moved into the service factory below. `AppState::config` is an
-    // `Arc`, so this is a refcount bump rather than a copy of the configuration.
-    let cors_config = api_state.config.clone();
+pub fn build_router(
+    server_config: McpServerConfig,
+    jwks_store: JwksKeyStore,
+    mcp_config: McpConfig,
+) -> Router {
+    let McpServerConfig {
+        auth,
+        cors_origins,
+        blob_door,
+    } = server_config;
 
-    let shared = Arc::new(McpAppState {
-        api_state: api_state.clone(),
+    let shared = Arc::new(McpEdgeState {
+        auth,
+        jwks_store: Arc::new(jwks_store),
         mcp_config: mcp_config.clone(),
     });
 
@@ -95,7 +108,7 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
     // The relay's ONE pool: built once per process here, refcount-cloned into every
     // per-request service (the §D6 carve-out — a pool inside the factory closure would
     // be per-request, the fresh-TLS-per-call cost it exists to avoid).
-    let shared_relay_pool = crate::service::shared_relay_pool();
+    let shared_relay_pool = temper_mcp::service::shared_relay_pool();
 
     let mcp_service = StreamableHttpService::new(
         // Stateless mode calls this factory once per HTTP request, so every request
@@ -105,7 +118,7 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
             let shared_relay_pool = shared_relay_pool.clone();
             move || {
                 Ok(TemperMcpService::new(
-                    api_state.clone(),
+                    blob_door.clone(),
                     mcp_config.clone(),
                     shared_relay_pool.clone(),
                 ))
@@ -116,7 +129,7 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
     );
 
     // The limit is the OUTERMOST layer here, above `require_mcp_auth`, so an oversized body is
-    // refused without the database round trip that authentication performs. It is still INSIDE
+    // refused before the JWKS lookup and signature check that authentication performs. It is still INSIDE
     // `apply_base_layers`' decompression, which is applied to the merged router below — so it
     // measures decompressed bytes, the property `/api/query`'s limit has and the one that matters.
     let mcp_routes = Router::new()
@@ -156,9 +169,9 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
     // This was `CorsLayer::permissive()` — a literal, so `CORS_ORIGINS` was parsed into
     // `ApiConfig`, carried here inside `AppState`, and then dropped at the one layer that
     // acts. Tightening the allowlist changed nothing on the agent-facing door and nothing
-    // reported that. `temper_services::cors` now owns the policy so there is one place it
-    // can be read from and no second stack to forget.
-    .layer(temper_services::cors::cors_layer(&cors_config))
+    // reported that. `temper_services::cors` now owns the policy (and its parse) so there is
+    // one place it can be read from and no second stack to forget.
+    .layer(temper_services::cors::cors_layer(&cors_origins))
 }
 
 /// The `mcp_request` root span, and the end of its life.

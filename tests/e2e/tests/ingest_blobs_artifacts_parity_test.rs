@@ -229,7 +229,7 @@ mod parity {
         email: &str,
     ) -> axum::http::request::Parts {
         axum::http::Request::builder()
-            .extension(temper_mcp::middleware::BearerToken(token.to_string()))
+            .extension(temper_mcp::BearerToken(token.to_string()))
             .extension(temper_services::auth::RawJwtClaims {
                 sub: sub.to_string(),
                 email: Some(email.to_string()),
@@ -311,7 +311,7 @@ use parity::{
 /// service (direct mode until the swap), and the harness principal's direct parts.
 async fn harness(pool: PgPool) -> (E2eTestApp, TemperMcpService, axum::http::request::Parts) {
     let app = common::setup_relay(pool).await;
-    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.direct_parts();
     (app, svc, parts)
 }
@@ -916,9 +916,7 @@ async fn blob_harness(
 ) {
     let store = std::sync::Arc::new(temper_substrate::blob_store::InMemoryBlobStore::default());
     let app = common::setup_with_blob_store_shared(pool, store.clone(), 64).await;
-    let svc = app
-        .mcp_relay_service_with_blob(app.pool.clone(), store.clone())
-        .await;
+    let svc = app.mcp_relay_service_with_blob(64).await;
     let parts = app.direct_parts();
     (app, svc, parts, store)
 }
