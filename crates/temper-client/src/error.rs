@@ -105,6 +105,14 @@ pub enum ClientError {
     #[error("conflict: {message}")]
     Conflict { message: String },
 
+    /// An append or finalize on an ingest that has ended (HTTP 409, code
+    /// [`temper_core::error::INGEST_ENDED_CODE`]): the resource's ingest is `cancelled` or
+    /// `abandoned`. Distinct from [`Self::Conflict`] because it is **not** resumable: a resuming
+    /// caller drops its resume record and starts a new upload. Discriminated by the wire `code`,
+    /// as the `422` arm discriminates `CONTENT_INTEGRITY` — never by sniffing the message.
+    #[error("{message}")]
+    IngestEnded { message: String },
+
     /// A `400` from `POST /api/query`: the composition will not run, and **every** static reason
     /// came back at once.
     ///

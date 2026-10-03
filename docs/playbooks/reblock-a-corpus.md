@@ -90,12 +90,14 @@ per-class summary counts, the `in_progress` count for the scope, and the continu
 | `would_change` | Survey only: acting now would re-block. | Act, then re-survey. |
 | `denied` | Your grants stop at this resource. The batch continued around it. | Nothing, or grant more — the boundary is working, and it is visible per row on purpose. |
 | `in_progress` | A segmented upload is still arriving; a partition decision over it would be a guess. | Let the upload finish — the policy applies when it finalizes — or address the resource directly once complete. |
-| `byteless` | The resource stores no verbatim bytes (derived-shape content). | Nothing — it is outside the blocking policy's reach by design and stays as authored. |
+| `byteless` | The resource has no whole stored body to re-block: it stores no verbatim bytes (derived-shape content), or its upload ended (`cancelled` or `abandoned`) before the body was whole. The row's detail says which. An ended upload appears as a row only when you address the resource directly; a context or deployment walk skips it. | Nothing. Derived-shape content is outside the blocking policy's reach by design and stays as authored. An ended upload's resource stays as it is, with its body incomplete for good; re-upload it if you want a whole body. |
 | `drift` | A fresh chunking of the body does not reproduce the stored chunking, so no trustworthy baseline exists. | Re-save the resource with an ordinary whole-body update — the write applies the policy as it lands — then include the row in a later batch. |
 | `error` | The server hit an internal error on this row; the batch continued. | Retry that row alone. The real diagnostic is in the server logs, joined by the correlation id. |
 
 The summary's `in_progress` count names the still-arriving uploads in the scope that this
-invocation did not consider — the population stays visible instead of being silently skipped.
+invocation did not consider, so that population stays visible instead of being silently skipped.
+An ended upload (`cancelled` or `abandoned`) is neither a row nor counted in a context or
+deployment walk; address the resource directly to see it.
 
 ## Validate the walk
 

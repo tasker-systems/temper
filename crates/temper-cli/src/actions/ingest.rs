@@ -324,6 +324,49 @@ async fn begin_segmented_attempt(
     Ok((response, embed_elapsed, upload_start.elapsed()))
 }
 
+/// The segmented upload's answer to an append or finalize refused because the ingest has ended
+/// (`ClientError::IngestEnded`, wire code `INGEST_ENDED`): the resource's ingest was cancelled or
+/// abandoned on the server, and nothing can resume it. The resume manifest is then stale, and
+/// `find_resumable` would match it on every re-run and resume straight into the same refusal, so it
+/// is removed here and the user is told so; the next run starts a fresh upload. The ended
+/// resource itself is left as it is (an operator ended it, and its record stays).
+///
+/// `None` for every other error, which the caller maps as before: a resumable `Conflict` keeps the
+/// manifest so a re-run resumes the gap.
+#[cfg(feature = "embed")]
+fn ended_ingest_error(
+    e: &temper_client::error::ClientError,
+    manifest_path: &std::path::Path,
+    title: &str,
+) -> Option<TemperError> {
+    let temper_client::error::ClientError::IngestEnded { message } = e else {
+        return None;
+    };
+    let removed = match std::fs::remove_file(manifest_path) {
+        Ok(()) => true,
+        Err(err) => err.kind() == std::io::ErrorKind::NotFound,
+    };
+    let next = if removed {
+        crate::output::progress_line(
+            "  the upload was ended on the server and cannot be resumed; removed the local \
+             resume record"
+                .to_string(),
+        );
+        "The local resume record has been removed — re-run the same command to start a fresh \
+         upload."
+            .to_string()
+    } else {
+        format!(
+            "The local resume record at {} could not be removed — delete it, then re-run the \
+             same command to start a fresh upload.",
+            manifest_path.display()
+        )
+    };
+    Some(TemperError::IngestEnded(format!(
+        "the upload of {title:?} cannot be resumed: {message}. {next}"
+    )))
+}
+
 /// Stream a large body (`cmd.body` over `budget` bytes) through the segmented ingest
 /// endpoints: segment 0 lands via `begin_segmented` (the create path), segments `1..N` via
 /// `append_block`, then `finalize`. Writes the `.temper/` resume manifest after every landed
@@ -584,11 +627,17 @@ pub async fn run_segmented_create(
                 sources: Vec::new(),
             };
             let upload_start = std::time::Instant::now();
-            let response = client
+            let response = match client
                 .ingest()
                 .append_block(resource_id, &append_payload)
                 .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            {
+                Ok(response) => response,
+                Err(e) => {
+                    return Err(ended_ingest_error(&e, &manifest_path, &cmd.title)
+                        .unwrap_or_else(|| crate::actions::runtime::client_err_to_temper(e)))
+                }
+            };
             bump(&upload_ns, upload_start.elapsed());
             manifest.blocks = response.blocks;
             crate::output::progress_line(format!(
@@ -623,9 +672,10 @@ pub async fn run_segmented_create(
         // A content-integrity failure (HTTP 422) is NOT resumable: the committed bytes are wrong and
         // `block_append` refuses to overwrite a seq, so a re-run would resume straight back into the
         // same finalize failure. Discard the poisoned in_progress resource + the local resume manifest
-        // and stop with an actionable error — a re-run then does a clean, fresh upload. (A resumable
-        // 409 — block-count / body_hash — propagates unchanged, leaving the manifest so a re-run
-        // resumes the gap.)
+        // and stop with an actionable error — a re-run then does a clean, fresh upload. An ingest
+        // that has ended on the server (409 `INGEST_ENDED`) is not resumable either: its manifest
+        // is removed (`ended_ingest_error`). (A resumable 409 — block-count / body_hash —
+        // propagates unchanged, leaving the manifest so a re-run resumes the gap.)
         if let temper_client::error::ClientError::ContentIntegrity { message } = &e {
             crate::output::progress_line(
                 "  integrity check FAILED — the stored bytes do not match the source; \
@@ -643,6 +693,9 @@ pub async fn run_segmented_create(
                  discarded — re-run the same command to retry with a fresh upload.",
                 cmd.title
             )));
+        }
+        if let Some(ended) = ended_ingest_error(&e, &manifest_path, &cmd.title) {
+            return Err(ended);
         }
         return Err(crate::actions::runtime::client_err_to_temper(e));
     }
@@ -922,6 +975,41 @@ mod tests {
         assert_eq!(ingest_mode(101, 100), IngestMode::Segmented);
     }
 
+    // --- ended_ingest_error (the not-resumable 409's manifest cleanup) ---
+
+    // FAILS IF an `INGEST_ENDED` refusal leaves the resume manifest in place (every re-run would
+    // resume into the same 409), does not say the record was removed, or loses its code; or if a
+    // resumable `Conflict` removes the manifest (a re-run could no longer resume the gap).
+    #[cfg(feature = "embed")]
+    #[test]
+    fn an_ended_ingest_removes_the_resume_manifest_and_a_conflict_keeps_it() {
+        use temper_client::error::ClientError;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("attempt.json");
+
+        std::fs::write(&path, "{}").expect("write manifest");
+        let ended = ClientError::IngestEnded {
+            message: "Conflict: ingest cancelled — the ingest has ended and is not resumable"
+                .to_owned(),
+        };
+        let err =
+            ended_ingest_error(&ended, &path, "Big Doc").expect("an ended ingest is answered");
+        assert!(!path.exists(), "the stale manifest is removed");
+        assert!(
+            matches!(&err, TemperError::IngestEnded(m)
+                if m.contains("not resumable") && m.contains("resume record has been removed")),
+            "got {err:?}"
+        );
+        assert_eq!(err.code(), temper_core::error::INGEST_ENDED_CODE);
+
+        std::fs::write(&path, "{}").expect("write manifest");
+        let conflict = ClientError::Conflict {
+            message: "landed 1 of 2 blocks".to_owned(),
+        };
+        assert!(ended_ingest_error(&conflict, &path, "Big Doc").is_none());
+        assert!(path.exists(), "a resumable conflict keeps the manifest");
+    }
+
     // --- plan_segments (local, no-network segmented-create planning) ---
     //
     // No ONNX runtime needed — chunking + merkle hashing only, no embedding — so these run
@@ -1123,6 +1211,7 @@ mod tests {
             updated: chrono::Utc::now(),
             body_hash: None,
             ingest_state: Some(temper_core::types::resource::IngestState::Complete),
+            ingest_ended: None,
             body_storage: Some(temper_core::types::resource::BodyStorage::Derived),
             managed_meta: temper_core::types::managed_meta::ManagedMeta::default(),
             open_meta: None,

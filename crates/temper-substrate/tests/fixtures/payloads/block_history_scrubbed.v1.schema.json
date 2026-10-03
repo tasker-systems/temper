@@ -15,6 +15,10 @@
         }
       ]
     },
+    "cancelled_ingest": {
+      "description": "True when the scrub also cancelled an in-flight ingest. Replay reads this to reproduce\n`ingest_state = 'cancelled'`; absent means the ingest state was untouched.",
+      "type": "boolean"
+    },
     "subject_ids": {
       "type": "array",
       "items": {

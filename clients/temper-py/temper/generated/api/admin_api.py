@@ -21,6 +21,9 @@ from typing_extensions import Annotated
 from uuid import UUID
 from temper.generated.models.admin_profile_card import AdminProfileCard
 from temper.generated.models.admin_profiles_list_answer import AdminProfilesListAnswer
+from temper.generated.models.block_history_scrub_execute_response import BlockHistoryScrubExecuteResponse
+from temper.generated.models.block_history_scrub_request_body import BlockHistoryScrubRequestBody
+from temper.generated.models.block_history_scrub_survey import BlockHistoryScrubSurvey
 from temper.generated.models.close_review_body import CloseReviewBody
 from temper.generated.models.demote_admin_request import DemoteAdminRequest
 from temper.generated.models.erasure_execute_request import ErasureExecuteRequest
@@ -5667,6 +5670,310 @@ class AdminApi:
 
 
     @validate_call
+    def admin_scrub_block_history(
+        self,
+        block_history_scrub_request_body: BlockHistoryScrubRequestBody,
+        x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> BlockHistoryScrubExecuteResponse:
+        """Scrub the history of resource blocks
+
+        Empties the history of the named blocks of a resource that is not erased: every revision but the current one and every non-current chunk of a live block, and every revision and chunk of a folded block. An in-flight ingest is cancelled and recorded. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). The list is checked against the resource's blocks first, whatever the resource's state, so a recorded refusal names only real blocks of the resource. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.
+
+        :param block_history_scrub_request_body: (required)
+        :type block_history_scrub_request_body: BlockHistoryScrubRequestBody
+        :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+        :type x_temper_surface: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._admin_scrub_block_history_serialize(
+            block_history_scrub_request_body=block_history_scrub_request_body,
+            x_temper_surface=x_temper_surface,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '200': "BlockHistoryScrubExecuteResponse",
+            '400': "ErrorBody",
+            '401': "ErrorBody",
+            '403': "ErrorBody",
+            '404': "ErrorBody",
+            '422': None,
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        response_data.read()
+        return self.api_client.response_deserialize(
+            response_data=response_data,
+            response_types_map=_response_types_map,
+        ).data
+
+
+    @validate_call
+    def admin_scrub_block_history_with_http_info(
+        self,
+        block_history_scrub_request_body: BlockHistoryScrubRequestBody,
+        x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> ApiResponse[BlockHistoryScrubExecuteResponse]:
+        """Scrub the history of resource blocks
+
+        Empties the history of the named blocks of a resource that is not erased: every revision but the current one and every non-current chunk of a live block, and every revision and chunk of a folded block. An in-flight ingest is cancelled and recorded. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). The list is checked against the resource's blocks first, whatever the resource's state, so a recorded refusal names only real blocks of the resource. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.
+
+        :param block_history_scrub_request_body: (required)
+        :type block_history_scrub_request_body: BlockHistoryScrubRequestBody
+        :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+        :type x_temper_surface: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._admin_scrub_block_history_serialize(
+            block_history_scrub_request_body=block_history_scrub_request_body,
+            x_temper_surface=x_temper_surface,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '200': "BlockHistoryScrubExecuteResponse",
+            '400': "ErrorBody",
+            '401': "ErrorBody",
+            '403': "ErrorBody",
+            '404': "ErrorBody",
+            '422': None,
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        response_data.read()
+        return self.api_client.response_deserialize(
+            response_data=response_data,
+            response_types_map=_response_types_map,
+        )
+
+
+    @validate_call
+    def admin_scrub_block_history_without_preload_content(
+        self,
+        block_history_scrub_request_body: BlockHistoryScrubRequestBody,
+        x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> RESTResponseType:
+        """Scrub the history of resource blocks
+
+        Empties the history of the named blocks of a resource that is not erased: every revision but the current one and every non-current chunk of a live block, and every revision and chunk of a folded block. An in-flight ingest is cancelled and recorded. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). The list is checked against the resource's blocks first, whatever the resource's state, so a recorded refusal names only real blocks of the resource. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.
+
+        :param block_history_scrub_request_body: (required)
+        :type block_history_scrub_request_body: BlockHistoryScrubRequestBody
+        :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+        :type x_temper_surface: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._admin_scrub_block_history_serialize(
+            block_history_scrub_request_body=block_history_scrub_request_body,
+            x_temper_surface=x_temper_surface,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '200': "BlockHistoryScrubExecuteResponse",
+            '400': "ErrorBody",
+            '401': "ErrorBody",
+            '403': "ErrorBody",
+            '404': "ErrorBody",
+            '422': None,
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        return response_data.response
+
+
+    def _admin_scrub_block_history_serialize(
+        self,
+        block_history_scrub_request_body,
+        x_temper_surface,
+        _request_auth,
+        _content_type,
+        _headers,
+        _host_index,
+    ) -> RequestSerialized:
+
+        _host = None
+
+        _collection_formats: Dict[str, str] = {
+        }
+
+        _path_params: Dict[str, str] = {}
+        _query_params: List[Tuple[str, str]] = []
+        _header_params: Dict[str, Optional[str]] = _headers or {}
+        _form_params: List[Tuple[str, str]] = []
+        _files: Dict[
+            str, Union[str, bytes, List[str], List[bytes], List[Tuple[str, bytes]]]
+        ] = {}
+        _body_params: Optional[bytes] = None
+
+        # process the path parameters
+        # process the query parameters
+        # process the header parameters
+        if x_temper_surface is not None:
+            _header_params['X-Temper-Surface'] = x_temper_surface
+        # process the form parameters
+        # process the body parameter
+        if block_history_scrub_request_body is not None:
+            _body_params = block_history_scrub_request_body
+
+
+        # set the HTTP header `Accept`
+        if 'Accept' not in _header_params:
+            _header_params['Accept'] = self.api_client.select_header_accept(
+                [
+                    'application/json'
+                ]
+            )
+
+        # set the HTTP header `Content-Type`
+        if _content_type:
+            _header_params['Content-Type'] = _content_type
+        else:
+            _default_content_type = (
+                self.api_client.select_header_content_type(
+                    [
+                        'application/json'
+                    ]
+                )
+            )
+            if _default_content_type is not None:
+                _header_params['Content-Type'] = _default_content_type
+
+        # authentication setting
+        _auth_settings: List[str] = [
+            'bearer_auth'
+        ]
+
+        return self.api_client.param_serialize(
+            method='POST',
+            resource_path='/api/admin/resources/block-history-scrub',
+            path_params=_path_params,
+            query_params=_query_params,
+            header_params=_header_params,
+            body=_body_params,
+            post_params=_form_params,
+            files=_files,
+            auth_settings=_auth_settings,
+            collection_formats=_collection_formats,
+            _host=_host,
+            _request_auth=_request_auth
+        )
+
+
+
+
+    @validate_call
     def admin_show_profile(
         self,
         profile_id: Annotated[UUID, Field(description="Profile ID")],
@@ -5936,6 +6243,310 @@ class AdminApi:
         return self.api_client.param_serialize(
             method='GET',
             resource_path='/api/access/admin/profiles/{profile_id}',
+            path_params=_path_params,
+            query_params=_query_params,
+            header_params=_header_params,
+            body=_body_params,
+            post_params=_form_params,
+            files=_files,
+            auth_settings=_auth_settings,
+            collection_formats=_collection_formats,
+            _host=_host,
+            _request_auth=_request_auth
+        )
+
+
+
+
+    @validate_call
+    def admin_survey_block_history_scrub(
+        self,
+        block_history_scrub_request_body: BlockHistoryScrubRequestBody,
+        x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> BlockHistoryScrubSurvey:
+        """Survey a block history scrub
+
+        Reports what the block history scrub would do for the named blocks of a resource, without recording or changing anything: per block, whether it is folded and how many revisions and chunks it would empty, and whether an in-flight ingest would be cancelled. For a charter or an erased resource it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the list names only blocks of the resource. The warning that a block's current revision still carries a sensitivity finding arrives with the sensitivity sweep (build order 3c); this survey reports counts only. Requires a system admin. Any other caller gets 404, decided before any lookup.
+
+        :param block_history_scrub_request_body: (required)
+        :type block_history_scrub_request_body: BlockHistoryScrubRequestBody
+        :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+        :type x_temper_surface: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._admin_survey_block_history_scrub_serialize(
+            block_history_scrub_request_body=block_history_scrub_request_body,
+            x_temper_surface=x_temper_surface,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '200': "BlockHistoryScrubSurvey",
+            '400': "ErrorBody",
+            '401': "ErrorBody",
+            '403': "ErrorBody",
+            '404': "ErrorBody",
+            '422': None,
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        response_data.read()
+        return self.api_client.response_deserialize(
+            response_data=response_data,
+            response_types_map=_response_types_map,
+        ).data
+
+
+    @validate_call
+    def admin_survey_block_history_scrub_with_http_info(
+        self,
+        block_history_scrub_request_body: BlockHistoryScrubRequestBody,
+        x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> ApiResponse[BlockHistoryScrubSurvey]:
+        """Survey a block history scrub
+
+        Reports what the block history scrub would do for the named blocks of a resource, without recording or changing anything: per block, whether it is folded and how many revisions and chunks it would empty, and whether an in-flight ingest would be cancelled. For a charter or an erased resource it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the list names only blocks of the resource. The warning that a block's current revision still carries a sensitivity finding arrives with the sensitivity sweep (build order 3c); this survey reports counts only. Requires a system admin. Any other caller gets 404, decided before any lookup.
+
+        :param block_history_scrub_request_body: (required)
+        :type block_history_scrub_request_body: BlockHistoryScrubRequestBody
+        :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+        :type x_temper_surface: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._admin_survey_block_history_scrub_serialize(
+            block_history_scrub_request_body=block_history_scrub_request_body,
+            x_temper_surface=x_temper_surface,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '200': "BlockHistoryScrubSurvey",
+            '400': "ErrorBody",
+            '401': "ErrorBody",
+            '403': "ErrorBody",
+            '404': "ErrorBody",
+            '422': None,
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        response_data.read()
+        return self.api_client.response_deserialize(
+            response_data=response_data,
+            response_types_map=_response_types_map,
+        )
+
+
+    @validate_call
+    def admin_survey_block_history_scrub_without_preload_content(
+        self,
+        block_history_scrub_request_body: BlockHistoryScrubRequestBody,
+        x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> RESTResponseType:
+        """Survey a block history scrub
+
+        Reports what the block history scrub would do for the named blocks of a resource, without recording or changing anything: per block, whether it is folded and how many revisions and chunks it would empty, and whether an in-flight ingest would be cancelled. For a charter or an erased resource it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the list names only blocks of the resource. The warning that a block's current revision still carries a sensitivity finding arrives with the sensitivity sweep (build order 3c); this survey reports counts only. Requires a system admin. Any other caller gets 404, decided before any lookup.
+
+        :param block_history_scrub_request_body: (required)
+        :type block_history_scrub_request_body: BlockHistoryScrubRequestBody
+        :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+        :type x_temper_surface: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._admin_survey_block_history_scrub_serialize(
+            block_history_scrub_request_body=block_history_scrub_request_body,
+            x_temper_surface=x_temper_surface,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '200': "BlockHistoryScrubSurvey",
+            '400': "ErrorBody",
+            '401': "ErrorBody",
+            '403': "ErrorBody",
+            '404': "ErrorBody",
+            '422': None,
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        return response_data.response
+
+
+    def _admin_survey_block_history_scrub_serialize(
+        self,
+        block_history_scrub_request_body,
+        x_temper_surface,
+        _request_auth,
+        _content_type,
+        _headers,
+        _host_index,
+    ) -> RequestSerialized:
+
+        _host = None
+
+        _collection_formats: Dict[str, str] = {
+        }
+
+        _path_params: Dict[str, str] = {}
+        _query_params: List[Tuple[str, str]] = []
+        _header_params: Dict[str, Optional[str]] = _headers or {}
+        _form_params: List[Tuple[str, str]] = []
+        _files: Dict[
+            str, Union[str, bytes, List[str], List[bytes], List[Tuple[str, bytes]]]
+        ] = {}
+        _body_params: Optional[bytes] = None
+
+        # process the path parameters
+        # process the query parameters
+        # process the header parameters
+        if x_temper_surface is not None:
+            _header_params['X-Temper-Surface'] = x_temper_surface
+        # process the form parameters
+        # process the body parameter
+        if block_history_scrub_request_body is not None:
+            _body_params = block_history_scrub_request_body
+
+
+        # set the HTTP header `Accept`
+        if 'Accept' not in _header_params:
+            _header_params['Accept'] = self.api_client.select_header_accept(
+                [
+                    'application/json'
+                ]
+            )
+
+        # set the HTTP header `Content-Type`
+        if _content_type:
+            _header_params['Content-Type'] = _content_type
+        else:
+            _default_content_type = (
+                self.api_client.select_header_content_type(
+                    [
+                        'application/json'
+                    ]
+                )
+            )
+            if _default_content_type is not None:
+                _header_params['Content-Type'] = _default_content_type
+
+        # authentication setting
+        _auth_settings: List[str] = [
+            'bearer_auth'
+        ]
+
+        return self.api_client.param_serialize(
+            method='POST',
+            resource_path='/api/admin/resources/block-history-scrub/survey',
             path_params=_path_params,
             query_params=_query_params,
             header_params=_header_params,

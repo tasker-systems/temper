@@ -36,6 +36,10 @@
 //!   * **10** — artifacts gone: current, member, pinned and superseded artifacts all end `{}`.
 //!   * **12** — the joint-read columns: `header_path` NULL, audit `reason` NULL, artifact content
 //!     `{}`::jsonb.
+//!   * **D11 scope** — the one redaction body takes a block set: it runs steps (1)–(3) narrowed to
+//!     the named blocks and stops before the whole-resource steps, and the two-argument call the
+//!     act and the replay arm make still resolves. The scrub's own witnesses are
+//!     `block_history_scrub.rs`.
 //!   * **20** — no writer lands on the husk (D13): a block mutate or a property set holding its
 //!     transaction makes the act wait and is erased; a property set or a block mutate arriving
 //!     while the act holds R's row refuses; a citation audit, a finalize, a retype, a reweight
@@ -2498,11 +2502,40 @@ async fn the_operator_listed_blob_strike_verifies_and_strikes(pool: sqlx::PgPool
     );
 }
 
-/// The redaction body's scope parameter: `p_blocks` NULL is the whole resource (cut 1's only
-/// form); a non-NULL block set is refused until build order 2e, and the two-argument call
-/// text the act and the replay arm use still resolves (one function, no overload).
+async fn chunk_prose(pool: &PgPool, chunk: Uuid) -> String {
+    sqlx::query_scalar("SELECT content FROM kb_chunk_content WHERE chunk_id = $1")
+        .bind(chunk)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// What only the whole-resource steps touch: the search vector (step 4), the title and
+/// `erased_at` (step 9a).
+async fn whole_resource_state(
+    pool: &PgPool,
+    resource: ResourceId,
+) -> (String, String, Option<chrono::DateTime<chrono::Utc>>) {
+    sqlx::query_as(
+        "SELECT si.search_vector::text, r.title, r.erased_at
+           FROM kb_resources r JOIN kb_resource_search_index si ON si.resource_id = r.id
+          WHERE r.id = $1",
+    )
+    .bind(resource.uuid())
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// The redaction body's scope parameter (D11): a block set runs steps (1)–(3) narrowed to the
+/// named block and stops there, and the two-argument whole-resource call the act and the replay
+/// arm make still resolves (one function, no overload).
+///
+/// FAILS IF: the block-set call raises, leaves the named block's superseded chunk its prose, or
+/// reaches a whole-resource step (the search vector, the title, `erased_at`); or the
+/// two-argument call stops resolving or stops emptying the resource.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn the_redaction_body_refuses_a_block_scope_until_2e(pool: sqlx::PgPool) {
+async fn the_redaction_body_accepts_a_block_scope_and_stops_after_step_three(pool: sqlx::PgPool) {
     common::reset_schema(&pool).await;
     temper_substrate::scenario::bootseed::seed_system(&pool)
         .await
@@ -2521,19 +2554,38 @@ async fn the_redaction_body_refuses_a_block_scope_until_2e(pool: sqlx::PgPool) {
         .fetch_one(&pool)
         .await
         .unwrap();
+    let block: Uuid = sqlx::query_scalar("SELECT block_id FROM kb_chunks WHERE id = $1")
+        .bind(leak.old_chunk)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        chunk_prose(&pool, leak.old_chunk).await,
+        SECRET,
+        "setup: the superseded chunk carries the leak"
+    );
+    let before = whole_resource_state(&pool, leak.resource).await;
+    assert!(
+        !before.0.is_empty(),
+        "setup: the search vector is not empty"
+    );
 
-    let refused = sqlx::query("SELECT _resource_erasure_apply_redaction($1, $2, $3)")
+    sqlx::query("SELECT _resource_erasure_apply_redaction($1, $2, $3)")
         .bind(leak.resource.uuid())
         .bind(event)
-        .bind(vec![Uuid::now_v7()])
+        .bind(vec![block])
         .execute(&pool)
-        .await;
-    assert!(
-        refused
-            .unwrap_err()
-            .to_string()
-            .contains("a block-set scope lands with build order 2e"),
-        "a non-NULL p_blocks raises the 2e message"
+        .await
+        .expect("a block-set scope runs");
+    assert_eq!(
+        chunk_prose(&pool, leak.old_chunk).await,
+        "",
+        "the named block's superseded chunk is emptied (step (1))"
+    );
+    assert_eq!(
+        whole_resource_state(&pool, leak.resource).await,
+        before,
+        "the search vector, the title and erased_at are unchanged: steps (4)–(9) did not run"
     );
 
     sqlx::query("SELECT _resource_erasure_apply_redaction($1, $2)")
@@ -3393,7 +3445,13 @@ async fn an_embed_write_back_after_the_act_writes_nothing(pool: sqlx::PgPool) {
     execute_act(&pool, leak.resource.uuid()).await;
 
     let vector = format!("[{}]", vec!["0.1"; 768].join(","));
-    let first_chunk_sql = "SELECT id FROM kb_chunks WHERE resource_id = $1 ORDER BY id LIMIT 1";
+    // A current chunk of a live block: the write-back also refuses a superseded chunk or a folded
+    // block's (the drain's write-time currency check), so only such a chunk isolates the erasure
+    // guard as the thing that refuses the husk.
+    let first_chunk_sql = "SELECT c.id FROM kb_chunks c \
+                           JOIN kb_content_blocks b ON b.id = c.block_id \
+                           WHERE c.resource_id = $1 AND c.is_current AND NOT b.is_folded \
+                           ORDER BY c.id LIMIT 1";
     let husk_chunk: Uuid = sqlx::query_scalar(first_chunk_sql)
         .bind(leak.resource.uuid())
         .fetch_one(&pool)

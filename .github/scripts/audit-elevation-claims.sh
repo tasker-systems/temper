@@ -200,6 +200,11 @@ current_gates() {
 #
 # `gate <name> <fingerprint>` — code-only hash; see `fingerprint`.
 #
+# REVIEWED 2026-10-03 (resource erasure 2e) — handlers/block_history_scrub.rs bound to
+# `is_system_admin`: both doors mint `&SystemAdmin` through `require_erasure_operator`
+# (`require_system_admin`) before any lookup, a declined caller gets 404 and no ledger record —
+# the resource erasure doors' gate and posture. No over-claim.
+#
 # REVIEWED 2026-10-01 (resource erasure 2c, Step 3) — `grant` f1de797e6695 -> 38fca1c55861. The gate
 # NARROWED: `GrantAuthority::resolve`'s system-admin arm now refuses a dead `kb_resources` subject
 # (tombstone or erased husk), and the owner's derived grant arm floors on liveness (20261002000010).
@@ -216,6 +221,7 @@ read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
 claim crates/temper-api/src/handlers/admin_ledger.rs 2 is_system_admin,read_gates,grant,ledger_subject
+claim crates/temper-api/src/handlers/block_history_scrub.rs 6 is_system_admin
 claim crates/temper-api/src/handlers/reblock.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/cognitive_maps.rs 4 reconcile_regime,two_sided
 claim crates/temper-api/src/handlers/connections.rs 13 connection,machine,require_manage_on_team,can_manage

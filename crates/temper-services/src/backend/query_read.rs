@@ -1963,6 +1963,7 @@ mod tests {
             updated: chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).expect("epoch"),
             body_hash: None,
             ingest_state: None,
+            ingest_ended: None,
             body_storage: None,
             managed_meta: Default::default(),
             open_meta: None,

@@ -882,6 +882,7 @@ mod tests {
             updated: chrono::Utc::now(),
             body_hash: None,
             ingest_state: None,
+            ingest_ended: None,
             body_storage: None,
             managed_meta: ManagedMeta {
                 stage: Some(stage.to_string()),

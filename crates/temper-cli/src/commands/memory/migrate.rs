@@ -899,6 +899,7 @@ Never ship code with \"for now\".
             updated: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
             body_hash: None,
             ingest_state: Some(IngestState::Complete),
+            ingest_ended: None,
             body_storage: Some(BodyStorage::Derived),
             managed_meta: ManagedMeta::default(),
             open_meta: Some(open_meta),

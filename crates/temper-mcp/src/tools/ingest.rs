@@ -80,7 +80,7 @@ fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
         ClientError::ContentIntegrity { message } => {
             rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
         }
-        ClientError::Conflict { message } => {
+        ClientError::Conflict { message } | ClientError::IngestEnded { message } => {
             rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
         }
         // A refusal that named the capability it withheld — carry the gate's own sentence. The

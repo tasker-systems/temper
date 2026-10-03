@@ -1684,6 +1684,19 @@ pub enum ResourceErasureRefusalReason {
     AlreadyErased,
 }
 
+/// Which act a `resource_erasure_refused` event refuses. Absent on the payload reads as
+/// [`ErasureAct::Erasure`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ErasureAct {
+    /// The resource erasure act.
+    Erasure,
+    /// The block history scrub.
+    BlockHistoryScrub,
+}
+
 /// `resource_erasure_refused` — the negative face of resource erasure and of the block history
 /// scrub (resource erasure spec D5, D11). Keyed on the resource, spelled as [`ResourceErased`]
 /// spells it: every reason is a fact about the resource, whichever act was refused.
@@ -1700,6 +1713,13 @@ pub struct ResourceErasureRefused {
     /// The reason's evidence, e.g. the task that owns map-grain charter erasure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Which act was refused. Absent means [`ErasureAct::Erasure`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub act: Option<ErasureAct>,
+    /// The blocks a refused block history scrub named. Carried here, never in `subject_ids` or
+    /// `detail`; empty for an erasure refusal.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<Uuid>,
 }
 
 /// `block_history_scrubbed` — the remedy lighter than erasure (resource erasure spec D11): every
@@ -1720,6 +1740,10 @@ pub struct BlockHistoryScrubbed {
     /// Per-block outcomes (revisions and chunks emptied).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub targets: Vec<ErasureTargetOutcome>,
+    /// True when the scrub also cancelled an in-flight ingest. Replay reads this to reproduce
+    /// `ingest_state = 'cancelled'`; absent means the ingest state was untouched.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cancelled_ingest: bool,
 }
 
 /// `subscription_delivery_disposed` — a steward's judgment on one routed event (S2 chunk C).
@@ -2084,9 +2108,9 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 }
                 // Resource erasure's admin vocabulary (resource erasure spec D1/D5/D11).
                 // `resource_erasure_execute` emits `resource_erased` and `resource_erasure_refuse`
-                // emits `resource_erasure_refused` (migration 20260929040730), so per the rule
-                // below they get arms. `block_history_scrubbed` has no emitter until the block
-                // history scrub (build order 2e); its arm checks the first really-emitted payload.
+                // emits `resource_erasure_refused` (migration 20260929040730), and
+                // `block_history_scrub_execute` emits `block_history_scrubbed` (migration
+                // 20261003000210), so per the rule below they get arms.
                 "resource_erased" => {
                     serde_json::from_value::<ResourceErased>(r.payload.clone())?;
                 }
@@ -2228,23 +2252,25 @@ mod tests {
         );
     }
 
+    /// Asserts `v` carries none of the keys `element_trail_node` / `_edge` join on (the D1
+    /// join-key rule).
+    fn no_trail_key(v: &serde_json::Value, name: &str) {
+        const TRAIL_KEYS: [&str; 4] = ["resource_id", "block_id", "edge_id", "event_id"];
+        let text = v.to_string();
+        for key in TRAIL_KEYS {
+            assert!(
+                !text.contains(&format!("\"{key}\"")),
+                "{name} carries the trail join key {key:?}"
+            );
+        }
+    }
+
     /// Resource erasure's admin vocabulary (spec 2026-09-28, D1/D5/D11/D12). Beyond the round
     /// trip, this pins the join-key rule: no payload carries `resource_id`, `block_id`, `edge_id`
     /// or `event_id` as a key, because `element_trail_node` / `_edge` join on exactly those, and an
     /// admin payload must not match a trail even if the category firewall were removed.
     #[test]
     fn resource_erasure_payloads_roundtrip_and_carry_no_trail_join_key() {
-        const TRAIL_KEYS: [&str; 4] = ["resource_id", "block_id", "edge_id", "event_id"];
-        let no_trail_key = |v: &serde_json::Value, name: &str| {
-            let text = v.to_string();
-            for key in TRAIL_KEYS {
-                assert!(
-                    !text.contains(&format!("\"{key}\"")),
-                    "{name} carries the trail join key {key:?}"
-                );
-            }
-        };
-
         let fields = RedactedEventFields {
             event: EventId::from(Uuid::now_v7()),
             paths: vec!["title".into(), "origin_uri".into()],
@@ -2294,6 +2320,8 @@ mod tests {
             actor: Some(ProfileId::from(Uuid::now_v7())),
             reason: ResourceErasureRefusalReason::CharterResource,
             detail: Some("map-grain erasure: task 01a0e960-0ca2-7f42-b33e-1ed19b024e6b".into()),
+            act: None,
+            blocks: vec![],
         };
         let v = serde_json::to_value(&refused).unwrap();
         assert_eq!(v["reason"], "charter_resource");
@@ -2308,10 +2336,71 @@ mod tests {
             subject_ids: vec![Uuid::now_v7(), Uuid::now_v7()],
             actor: Some(ProfileId::from(Uuid::now_v7())),
             targets: vec![],
+            cancelled_ingest: false,
         };
         let v = serde_json::to_value(&scrubbed).unwrap();
         assert_eq!(v["subject_table"], "kb_content_blocks");
         no_trail_key(&v, "block_history_scrubbed");
+        assert_eq!(
+            serde_json::from_value::<BlockHistoryScrubbed>(v).unwrap(),
+            scrubbed
+        );
+    }
+
+    #[test]
+    fn refusal_without_act_reads_as_erasure() {
+        let v = serde_json::json!({
+            "subject_table": "kb_resources",
+            "subject_id": Uuid::now_v7(),
+            "reason": "already_erased",
+        });
+        let refused: ResourceErasureRefused = serde_json::from_value(v).unwrap();
+        assert_eq!(refused.act, None);
+        assert!(refused.blocks.is_empty());
+        let back = serde_json::to_value(&refused).unwrap();
+        assert!(back.get("act").is_none() && back.get("blocks").is_none());
+    }
+
+    #[test]
+    fn scrub_refusal_round_trips_its_act_and_blocks() {
+        let refused = ResourceErasureRefused {
+            subject_table: AnchorTable::Resources,
+            subject_id: Uuid::now_v7(),
+            actor: Some(ProfileId::from(Uuid::now_v7())),
+            reason: ResourceErasureRefusalReason::AlreadyErased,
+            detail: None,
+            act: Some(ErasureAct::BlockHistoryScrub),
+            blocks: vec![Uuid::now_v7(), Uuid::now_v7()],
+        };
+        let v = serde_json::to_value(&refused).unwrap();
+        assert_eq!(v["act"], "block_history_scrub");
+        assert_eq!(v["blocks"].as_array().unwrap().len(), 2);
+        no_trail_key(&v, "resource_erasure_refused (scrub)");
+        assert_eq!(
+            serde_json::from_value::<ResourceErasureRefused>(v).unwrap(),
+            refused
+        );
+    }
+
+    #[test]
+    fn scrub_serializes_cancelled_ingest_only_when_true() {
+        let mut scrubbed = BlockHistoryScrubbed {
+            subject_table: AnchorTable::ContentBlocks,
+            subject_ids: vec![Uuid::now_v7()],
+            actor: None,
+            targets: vec![],
+            cancelled_ingest: false,
+        };
+        let v = serde_json::to_value(&scrubbed).unwrap();
+        assert!(v.get("cancelled_ingest").is_none());
+        no_trail_key(&v, "block_history_scrubbed (not cancelled)");
+        let absent: BlockHistoryScrubbed = serde_json::from_value(v).unwrap();
+        assert!(!absent.cancelled_ingest);
+
+        scrubbed.cancelled_ingest = true;
+        let v = serde_json::to_value(&scrubbed).unwrap();
+        assert_eq!(v["cancelled_ingest"], true);
+        no_trail_key(&v, "block_history_scrubbed (cancelled)");
         assert_eq!(
             serde_json::from_value::<BlockHistoryScrubbed>(v).unwrap(),
             scrubbed

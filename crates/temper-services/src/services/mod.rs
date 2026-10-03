@@ -6,6 +6,7 @@ pub mod auditor_service;
 pub mod blob_provider;
 pub mod blob_reap_service;
 pub mod blob_service;
+pub mod block_history_scrub_service;
 pub mod citation_audit_service;
 pub mod cogmap_service;
 pub mod connection_service;
