@@ -63,10 +63,14 @@
 #   * Columns neither sibling manifest classes as a carrier: an `identifier` or `reference`, a
 #     `structural` text column, and any type both manifests leave out (text[], json, enums).
 #   * Schemas other than `public`. sensitivity.findings points at resources (target_table,
-#     target_id, resource_id) without a key. It holds no authored text, but it keeps a salted match
-#     fingerprint (sweep D11, kept deliberately), an unsalted digest of the scanned unit (which
-#     confirms a guessed short value such as a title), and the category, detector and match count
-#     (which say what kind of data R held). All of it survives the act; filed under the erasure goal.
+#     target_id, resource_id) without a key. It holds no authored text. Every digest the sweep
+#     stores is keyed by a salt that never enters the database: a finding's match fingerprints
+#     (sweep D11) and content_hash, the memo's hash of each unit a detector found nothing in, and
+#     place_observations' last hash of a mutable place. For a place the act reached (and one the
+#     block history scrub or the principal act emptied), the sweep drops the finding's digests and
+#     the memo rows carrying its hash 30 days after it first sees the finding closed (migration
+#     20261003210000), and the next head tick re-records the place's observation from the husk. The category, detector and match count, which say what kind of
+#     data R held, stay as the record of what was found. The act itself never names the schema.
 #
 # FORMAT (line-oriented; `#` comments and blank lines ignored)
 #   [tables]                                  section marker; cut 2 adds [payload] (D9's payload half)
