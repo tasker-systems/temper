@@ -10,8 +10,9 @@
 //!     sentinels: `erased_at` alone closes nothing (D2 as amended).
 //!   * **25** — the `blocked:cut-2` half, gated on the erasure trail scope (Q41). Its `remediable`
 //!     half needs erasure cut 2 (Q39).
-//!   * **26** — the erasure half, through the real write path and `resource_erasure_execute`. The
-//!     block-scrub half waits on erasure 2e.
+//!   * **26** — both halves, through the real write path: after `resource_erasure_execute` the title
+//!     and property findings close as sentinels; after `block_history_scrub_execute` (erasure 2e) a
+//!     finding confined to a prior revision closes and the current revision's stays open.
 //!
 //! Also the walk's guards: user-map keys are written `?`, including a resource's `anchored-at`; a row
 //! is scanned whole, or passed whole when oversize (Q40); jsonb units are never memoised (Q43); an
@@ -924,5 +925,102 @@ async fn a_resource_erasure_closes_its_title_and_property_findings_and_not_its_l
         ledger,
         vec![None],
         "cut 1 leaves the title in the trail, so its finding stays open (Q38, a guard on the view)"
+    );
+}
+
+// ── Witness 26, the scrub half: a finding confined to a prior revision closes ───────────────
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_block_history_scrub_closes_the_prior_revisions_finding_and_not_the_current(
+    pool: PgPool,
+) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+         VALUES ('kb_profiles', $1, 'scrub-home', 'scrub-home') RETURNING id",
+    )
+    .bind(owner.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let first = format!("the first draft quoted {SSN_A}");
+    let resource = writes::create_resource_with(
+        &pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "notes",
+            origin_uri: "test://scrub",
+            body: &first,
+            doc_type: "research",
+            home: AnchorRef::context(temper_core::types::ids::ContextId::from(home)),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        temper_substrate::events::EventContext::default(),
+    )
+    .await
+    .expect("create through the write path");
+    let block: Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_content_blocks WHERE resource_id = $1 LIMIT 1")
+            .bind(resource.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let second = format!("the revision still quotes {SSN_B}");
+    writes::update_resource(
+        &pool,
+        writes::UpdateParams {
+            resource,
+            body: Some(&second),
+            title: None,
+            origin_uri: None,
+            properties: &[],
+            unset_keys: &[],
+            chunks: None,
+            sources: vec![],
+            content_block: Some(block),
+            rehome_to: None,
+            emitter,
+        },
+    )
+    .await
+    .expect("a per-block revise");
+    let (prior, current): (Uuid, Uuid) = sqlx::query_as(
+        "SELECT (SELECT br.id FROM kb_block_revisions br WHERE br.block_id = b.id AND br.id <> b.current_revision_id), \
+                b.current_revision_id \
+           FROM kb_content_blocks b WHERE b.id = $1",
+    )
+    .bind(block)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!tick(&pool, "kb_block_content.content").await.failed);
+    assert_eq!(closed_by(&pool, prior).await, vec![None]);
+    assert_eq!(closed_by(&pool, current).await, vec![None]);
+
+    sqlx::query("SELECT block_history_scrub_execute($1, $2, $3, $4, $5)")
+        .bind(resource.uuid())
+        .bind(vec![block])
+        .bind(owner.uuid())
+        .bind(emitter)
+        .bind(Uuid::now_v7())
+        .execute(&pool)
+        .await
+        .expect("the scrub completes");
+
+    assert_eq!(
+        closed_by(&pool, prior).await,
+        vec![Some("content_empty".to_string())],
+        "the scrub empties the prior revision, so its finding closes"
+    );
+    assert_eq!(
+        closed_by(&pool, current).await,
+        vec![None],
+        "the current revision is kept, and so is its finding"
     );
 }
