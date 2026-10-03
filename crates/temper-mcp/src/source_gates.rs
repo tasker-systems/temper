@@ -299,7 +299,8 @@ fn reachable<'m>(
 
 /// The binding names a piece of code reaches for — every path segment (`temper_services::…`,
 /// `sqlx::…`, in `use` trees too), every field or method named (`api_state`, `pool`,
-/// `relay_client`). Whitespace and line breaks cannot hide a name from a syntax tree.
+/// `relay_client`), every field defined and every binding named. Whitespace and line breaks
+/// cannot hide a name from a syntax tree.
 fn names_in<'a>(visit: impl FnOnce(&mut dyn Visit<'a>)) -> BTreeSet<String> {
     #[derive(Default)]
     struct V(BTreeSet<String>);
@@ -323,6 +324,18 @@ fn names_in<'a>(visit: impl FnOnce(&mut dyn Visit<'a>)) -> BTreeSet<String> {
         fn visit_expr_method_call(&mut self, c: &'a syn::ExprMethodCall) {
             self.0.insert(c.method.to_string());
             syn::visit::visit_expr_method_call(self, c);
+        }
+        // A field DEFINED (`struct S { pool: P }`) and a binding NAMED (`fn f(api_state: S)`,
+        // `let pool = …`) are holding the thing as surely as a field read is.
+        fn visit_field(&mut self, f: &'a syn::Field) {
+            if let Some(i) = &f.ident {
+                self.0.insert(i.to_string());
+            }
+            syn::visit::visit_field(self, f);
+        }
+        fn visit_pat_ident(&mut self, p: &'a syn::PatIdent) {
+            self.0.insert(p.ident.to_string());
+            syn::visit::visit_pat_ident(self, p);
         }
     }
     let mut v = V::default();
@@ -634,6 +647,15 @@ fn the_relay_send_detector_tells_a_send_from_a_build() {
         syn::parse_str("svc\n    .api_state\n    .pool\n    .acquire()").expect("expr parses");
     let named = names_in(|v| v.visit_expr(&split));
     assert!(named.contains("pool"), "{named:?}");
+
+    // A field defined and a binding named are holds too.
+    let file: syn::File =
+        syn::parse_str("struct S { pool: P } fn f(api_state: S) { let sqlx = 1; }")
+            .expect("file parses");
+    let named = names_in(|v| v.visit_file(&file));
+    for n in ["pool", "api_state", "sqlx"] {
+        assert!(named.contains(n), "{n} unseen: {named:?}");
+    }
 
     // Test-only items are not production code.
     let file: syn::File = syn::parse_str(

@@ -57,7 +57,7 @@ fn is_test_only(attrs: &[syn::Attribute]) -> bool {
 }
 
 /// Every name a file's production items reach for — path segments (in `use` trees too), field
-/// and method names — and every string literal they contain.
+/// and method names, fields defined and bindings named — and every string literal they contain.
 fn names_and_literals(file: &syn::File) -> (BTreeSet<String>, BTreeSet<String>) {
     #[derive(Default)]
     struct V {
@@ -90,6 +90,10 @@ fn names_and_literals(file: &syn::File) -> (BTreeSet<String>, BTreeSet<String>) 
                 self.names.insert(i.to_string());
             }
             syn::visit::visit_field(self, f);
+        }
+        fn visit_pat_ident(&mut self, p: &'a syn::PatIdent) {
+            self.names.insert(p.ident.to_string());
+            syn::visit::visit_pat_ident(self, p);
         }
         fn visit_lit_str(&mut self, l: &'a syn::LitStr) {
             self.literals.insert(l.value());
@@ -220,7 +224,8 @@ fn the_detector_sees_split_chains_use_trees_and_macro_literals() {
         r#"
         use sqlx::postgres::PgPoolOptions;
         // DATABASE_URL in a comment is not a read.
-        fn boot(s: S) {
+        struct Held { kept: u8 }
+        fn boot(s: S, database_url: String) {
             let p = s
                 .api_state
                 .pool;
@@ -233,7 +238,14 @@ fn the_detector_sees_split_chains_use_trees_and_macro_literals() {
     )
     .expect("parses");
     let (names, literals) = names_and_literals(&file);
-    for n in ["sqlx", "PgPoolOptions", "api_state", "pool"] {
+    for n in [
+        "sqlx",
+        "PgPoolOptions",
+        "api_state",
+        "pool",
+        "kept",
+        "database_url",
+    ] {
         assert!(names.contains(n), "{n} unseen: {names:?}");
     }
     assert!(!names.contains("AppState"), "a test-only item was read");
