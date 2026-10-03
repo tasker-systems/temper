@@ -614,6 +614,11 @@ fn shared_secret(lookup: &impl Fn(&str) -> Option<String>, name: &str) -> Option
 /// here; a 16-char random string is the smallest secret a holder cannot guess.
 const MIN_SHARED_SECRET_CHARS: usize = 16;
 
+/// The sensitivity sweep's salt has a higher floor than the gate secrets (Q48). A gate secret is
+/// guessed online, one request at a time. The salt is attacked offline: any reader of the database
+/// holds a matched value beside its stored fingerprint, and can test candidate salts at hash speed.
+const MIN_SWEEP_SALT_CHARS: usize = 32;
+
 /// A production-level check the distinctness gate cannot express: EACH header-compared
 /// shared secret must be long enough to be a secret. The distinctness gate answers "are
 /// these two values different"; this answers "is this value a secret at all". Only the
@@ -628,12 +633,16 @@ fn check_shared_secret_strength(
         "INTERNAL_RECONCILE_SECRET",
         "EMBED_DISPATCH_SECRET",
         "SLACK_MINT_SECRET",
-        "SENSITIVITY_SWEEP_SALT",
     ] {
         if let Some(value) = shared_secret(lookup, name) {
             if value.chars().count() < MIN_SHARED_SECRET_CHARS {
                 return Err(ConfigError::WeakSharedSecret(name));
             }
+        }
+    }
+    if let Some(salt) = shared_secret(lookup, "SENSITIVITY_SWEEP_SALT") {
+        if salt.chars().count() < MIN_SWEEP_SALT_CHARS {
+            return Err(ConfigError::WeakSweepSalt);
         }
     }
     Ok(())
@@ -692,7 +701,12 @@ mod tests {
         SHARED_SECRET_VARS
             .iter()
             .enumerate()
-            .map(|(i, &name)| (name, format!("secret-value-number-{i}")))
+            .map(|(i, &name)| {
+                (
+                    name,
+                    format!("secret-value-number-{i}-long-enough-for-the-salt"),
+                )
+            })
             .collect()
     }
 
@@ -852,6 +866,58 @@ mod tests {
             "a-real-32-char-random-value!".to_string(),
         )]);
         assert_eq!(check_shared_secret_strength(&lookup_of(&pairs)), Ok(()));
+    }
+
+    // FAILS IF: a dictionary-length salt boots (Q48). The value is 16+ characters, so it would pass
+    // the gate secrets' floor: only the salt's own floor refuses it.
+    #[test]
+    fn a_salt_under_thirty_two_characters_refuses_to_boot() {
+        let pairs = with_secrets(&[(
+            "SENSITIVITY_SWEEP_SALT",
+            "changemechangeme-salt".to_string(),
+        )]);
+        assert_eq!(
+            check_shared_secret_strength(&lookup_of(&pairs)),
+            Err(ConfigError::WeakSweepSalt),
+        );
+        let pairs = with_secrets(&[(
+            "SENSITIVITY_SWEEP_SALT",
+            "Zb4qY0m8Vt1kP6sR2wX9nL3cH7jD5fGa".to_string(),
+        )]);
+        assert_eq!(check_shared_secret_strength(&lookup_of(&pairs)), Ok(()));
+    }
+
+    // FAILS IF: a config dump prints the salt. Presence survives, the value does not.
+    #[test]
+    fn the_config_debug_redacts_the_salt() {
+        let salt = "Zb4qY0m8Vt1kP6sR2wX9nL3cH7jD5fGa";
+        let pairs = with_secrets(&[("SENSITIVITY_SWEEP_SALT", salt.to_string())]);
+        let config = ApiConfig::from_lookup(lookup_of(&pairs)).expect("boots");
+        let dump = format!("{config:?}");
+        assert!(
+            !dump.contains(salt),
+            "the salt is in the config dump: {dump}"
+        );
+        assert!(
+            dump.contains(r#"sensitivity_sweep_salt: Some("redacted")"#),
+            "{dump}"
+        );
+    }
+
+    // FAILS IF: the salt can equal the cron bearer (Q44). Named, rather than left to the exhaustive
+    // pair test, because that test iterates SHARED_SECRET_VARS and stays green when the salt is
+    // removed from it.
+    #[test]
+    fn a_salt_equal_to_the_dispatch_secret_refuses_to_boot() {
+        let shared = "Zb4qY0m8Vt1kP6sR2wX9nL3cH7jD5fGa".to_string();
+        let pairs = with_secrets(&[
+            ("EMBED_DISPATCH_SECRET", shared.clone()),
+            ("SENSITIVITY_SWEEP_SALT", shared),
+        ]);
+        assert!(matches!(
+            check_secret_distinctness(lookup_of(&pairs)),
+            Err(ConfigError::SecretCollision(_, "SENSITIVITY_SWEEP_SALT"))
+        ));
     }
     //
     // The sibling assertion on `ConfigError::McpAudienceMismatch`

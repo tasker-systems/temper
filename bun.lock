@@ -43,7 +43,7 @@
     },
     "packages/temper-ui": {
       "name": "@temper/ui",
-      "version": "0.5.4",
+      "version": "0.5.3",
       "dependencies": {
         "@fontsource-variable/jetbrains-mono": "^5.3.0",
         "@fontsource-variable/source-serif-4": "^5.3.0",

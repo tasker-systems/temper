@@ -25,12 +25,16 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
 ## Since v0.5.4 — unreleased
 - **The sensitivity sweep's cron tick: `/api/sensitivity/sweep`, and the `SENSITIVITY_SWEEP_SALT` variable**
   A new internal route, gated by the shared `EMBED_DISPATCH_SECRET` bearer and kept out of the
-  contract. Every five minutes it claims one surface's work order and scans it. It answers with
-  counts and ids only, and reports the same facts on a `sensitivity_sweep` span. The migration
-  recreates `sensitivity_sweep_tick` with the same parameters and a wider integer-only result:
-  the door is its first caller. The API reads a new shared secret, `SENSITIVITY_SWEEP_SALT`. Like
-  the others, it refuses the boot when it is under 16 characters or equals another shared secret.
-  When it is unset, every tick records a failed run (`salt_missing`) and logs an error. Who
+  contract. Every five minutes it reaps, then claims and scans surfaces' work orders until about
+  240 s have passed or a whole rotation found nothing. It answers with a count of ticks and
+  booleans only; the per-tick counts go on a `sensitivity_sweep` span, and the call's outcome on
+  a `sensitivity_sweep_call` span. The migration recreates `sensitivity_sweep_claim` (one more
+  integer column) and `sensitivity_sweep_tick` (a wider integer-only result) with the same
+  parameters: the door is their first caller. The API reads a new secret,
+  `SENSITIVITY_SWEEP_SALT`, and refuses the boot when it is under 32 characters or equals another
+  shared secret. When it is unset, every tick records a failed run (`salt_missing`) and logs an
+  error. The door also logs an error while the database's logging settings could write the salt,
+  a bind parameter, to its log. Who
   observes: operators, through the span and the run rows; deployers, who must set the variable.
   No client request or response changes. User-visible: no. Release relevance: additive.
 pr: self

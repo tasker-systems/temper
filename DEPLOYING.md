@@ -499,6 +499,30 @@ surface is confined to these crons by design — `search` self-bounds at the 8s 
 and degrades to FTS+graph, and `ingest` defers embedding to the drain (#299) — so no other
 endpoint needs a raised timeout.
 
+## Sensitivity sweep (personal data that lands in the corpus by accident)
+
+`/api/sensitivity/sweep` runs every five minutes from `vercel.json`, behind the same
+`EMBED_DISPATCH_SECRET` bearer as the other internal crons. Each call claims and scans the
+enabled surfaces in turn for up to about four minutes, and stops early once a whole rotation
+finds nothing new. It stores where a finding is and what kind it is, never the matched value.
+
+1. **Set `SENSITIVITY_SWEEP_SALT`** on the Vercel project. Generate it with
+   `openssl rand -base64 32`; the API refuses to boot on a value under 32 characters or one
+   equal to any other shared secret. Every hash and fingerprint the sweep stores is keyed by
+   it, so **keep it stable**: changing it re-keys everything, and existing findings stop
+   matching their content. Unset, the sweep cannot scan: every tick records `salt_missing`
+   and the door logs an error on every call.
+2. **Keep the database from logging bind parameters.** The salt reaches Postgres as a bind
+   parameter. With `log_parameter_max_length` left at its default (unlimited), any
+   `log_min_duration_statement` that catches a tick, or `log_statement = all`, writes the
+   salt to the server log. Set `log_parameter_max_length = 0` on the database. The door
+   checks these settings on every call and logs an error while the salt could be written.
+3. **Watch the spans.** Each call emits one `sensitivity_sweep_call` span, with
+   `ended` = `idle`, `budget`, `slot_free`, `slot_leased`, `slot_blocked` or `lease_lapsed`,
+   and one `sensitivity_sweep` span per tick with its counts. A failed tick, a failed job
+   blocking the queue, a lapsed lease, an unset salt and a salt the database may log each
+   raise an ERROR event.
+
 ## Rollback
 
 Each target rolls back independently via Vercel's immutable deployments:

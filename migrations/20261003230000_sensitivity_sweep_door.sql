@@ -1,6 +1,40 @@
--- The sweep's door (sensitivity-sweep spec D8, D9; Q45; build order 3a PR D). The tick returns this
+-- The sweep's door (sensitivity-sweep spec D8, D9; Q45, Q46; build order 3a PR D). The tick returns this
 -- run's own facts for the span, as integers only: nothing in the signature can carry text.
 -- Rationale: temper-artifacts plans/2026-10-01-sensitivity-sweep-3a-core.md, "PR D".
+
+-- Q46: the door loops claim → tick inside one call, and stops after a rotation that found nothing.
+-- The claim also returns how many surfaces a rotation visits. C2's body otherwise, verbatim.
+DROP FUNCTION sensitivity_sweep_claim(int, int);
+
+CREATE FUNCTION sensitivity_sweep_claim(p_budget_rows int DEFAULT 2000, p_lease_seconds int DEFAULT 330)
+RETURNS TABLE (run_id uuid, job_id uuid, surfaces int)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_pick text;
+    v_job  record;
+BEGIN
+    SELECT s.surface INTO v_pick FROM sensitivity.surfaces s
+     WHERE s.enabled
+     ORDER BY (SELECT r.id FROM sensitivity.runs r WHERE r.surface = s.surface ORDER BY r.id DESC LIMIT 1)
+              NULLS FIRST, s.surface
+     LIMIT 1;
+    IF v_pick IS NOT NULL THEN
+        PERFORM workflow_job_enqueue_system('sensitivity', 'sensitivity-sweep',
+            jsonb_build_object('surface', v_pick, 'budget', p_budget_rows));
+    END IF;
+    SELECT c.id, c.attempts, c.payload INTO v_job
+      FROM workflow_job_claim_system('sensitivity', 'sensitivity-sweep', 1, p_lease_seconds) c;
+    IF v_job.id IS NULL THEN
+        RETURN;
+    END IF;
+    INSERT INTO sensitivity.runs (surface, job_id, attempt)
+    VALUES (v_job.payload ->> 'surface', v_job.id, v_job.attempts) RETURNING id INTO run_id;
+    job_id := v_job.id;
+    -- Q46: how many surfaces one rotation visits, so a door that loops can stop after an idle one.
+    SELECT count(*)::int INTO surfaces FROM sensitivity.surfaces s WHERE s.enabled;
+    RETURN NEXT;
+END;
+$$;
 
 -- The return type changes, so the function is dropped and created. No deployed binary calls it:
 -- this PR's door is its first caller.
@@ -118,5 +152,5 @@ $$;
 SELECT declare_migration(
     20261003230000,
     'additive',
-    'The sensitivity sweep tick returns its run facts for the door''s span (spec D9, Q45). DROP + CREATE of sensitivity_sweep_tick with the same parameters and a wider RETURNS TABLE: the seven prior columns keep their names, types and order, followed by outcome, failure, new_findings_head, new_findings_backfill, head_holdback_seconds and sev1-sev4, all integers. The body is 20261003150000''s verbatim except the final read. No deployed binary calls the tick: the door that calls it ships with this migration. No table, column, constraint or grant changes.'
+    'The sensitivity sweep''s door (spec D8, D9; Q45, Q46). DROP + CREATE of sensitivity_sweep_claim with the same parameters, returning surfaces (the enabled-surface count) after run_id and job_id; its body is 20261003150000''s plus that one read. DROP + CREATE of sensitivity_sweep_tick with the same parameters and a wider RETURNS TABLE: the seven prior columns keep their names, types and order, followed by outcome, failure, new_findings_head, new_findings_backfill, head_holdback_seconds and sev1-sev4, all integers. The body is 20261003150000''s verbatim except the final read. No deployed binary calls either function: the door that calls them ships with this migration. No table, column, constraint or grant changes.'
 );
