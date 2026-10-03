@@ -116,13 +116,13 @@ fn the_migration_literal_matches_the_committed_fixture() {
             &[
                 SUPERSEDED, // resource_erased: 20261002000020
                 SUPERSEDED, // resource_erasure_refused: 20260930000050
-                "block_history_scrubbed.v1.schema.json",
+                SUPERSEDED, // block_history_scrubbed: 20261003000210
             ],
         ),
         (
             "20260930000050_erasure_present_truth_wording.sql",
             &[
-                "resource_erasure_refused.v1.schema.json",
+                SUPERSEDED, // resource_erasure_refused: 20261003000210
                 "principal_erasure_refused.v1.schema.json",
             ],
         ),
@@ -131,6 +131,13 @@ fn the_migration_literal_matches_the_committed_fixture() {
             &[
                 "principal_erased.v1.schema.json",
                 "resource_erased.v1.schema.json",
+            ],
+        ),
+        (
+            "20261003000210_block_history_scrub.sql",
+            &[
+                "block_history_scrubbed.v1.schema.json",
+                "resource_erasure_refused.v1.schema.json",
             ],
         ),
     ] {

@@ -52,6 +52,9 @@ module Temper::Generated
     # A `kb_resources.id` value.
     attr_accessor :id
 
+    # Why the ingest stopped. Present only when the ingest ended before its body was whole (`ingest_state` then reads `in_progress`); absent otherwise.
+    attr_accessor :ingest_ended
+
     # Are all the bytes here? `Option` purely for version skew — the column is `NOT NULL` server-side, so `None` means the server predates W2 PR 1. Do not read `None` as \"incomplete\".
     attr_accessor :ingest_state
 
@@ -121,6 +124,7 @@ module Temper::Generated
         :'doc_type_name' => :'doc_type_name',
         :'embedding_status' => :'embedding_status',
         :'id' => :'id',
+        :'ingest_ended' => :'ingest_ended',
         :'ingest_state' => :'ingest_state',
         :'is_active' => :'is_active',
         :'kb_context_id' => :'kb_context_id',
@@ -162,6 +166,7 @@ module Temper::Generated
         :'doc_type_name' => :'String',
         :'embedding_status' => :'EmbeddingStatus',
         :'id' => :'String',
+        :'ingest_ended' => :'IngestEnded',
         :'ingest_state' => :'IngestState',
         :'is_active' => :'Boolean',
         :'kb_context_id' => :'String',
@@ -190,6 +195,7 @@ module Temper::Generated
         :'context_ref',
         :'context_slug',
         :'embedding_status',
+        :'ingest_ended',
         :'ingest_state',
         :'kb_context_id',
         :'open_meta',
@@ -268,6 +274,10 @@ module Temper::Generated
         self.id = attributes[:'id']
       else
         self.id = nil
+      end
+
+      if attributes.key?(:'ingest_ended')
+        self.ingest_ended = attributes[:'ingest_ended']
       end
 
       if attributes.key?(:'ingest_state')
@@ -533,6 +543,7 @@ module Temper::Generated
           doc_type_name == o.doc_type_name &&
           embedding_status == o.embedding_status &&
           id == o.id &&
+          ingest_ended == o.ingest_ended &&
           ingest_state == o.ingest_state &&
           is_active == o.is_active &&
           kb_context_id == o.kb_context_id &&
@@ -556,7 +567,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [body_hash, body_storage, cogmap_id, cogmap_name, content, context_name, context_owner_ref, context_ref, context_slug, created, doc_type_name, embedding_status, id, ingest_state, is_active, kb_context_id, managed_meta, open_meta, origin_uri, originator_profile_id, owner_handle, owner_profile_id, ref, title, updated].hash
+      [body_hash, body_storage, cogmap_id, cogmap_name, content, context_name, context_owner_ref, context_ref, context_slug, created, doc_type_name, embedding_status, id, ingest_ended, ingest_state, is_active, kb_context_id, managed_meta, open_meta, origin_uri, originator_profile_id, owner_handle, owner_profile_id, ref, title, updated].hash
     end
 
     # Builds the object from hash

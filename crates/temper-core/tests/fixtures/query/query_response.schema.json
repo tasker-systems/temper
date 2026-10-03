@@ -184,12 +184,27 @@
         }
       ]
     },
+    "IngestEnded": {
+      "description": "The terminal reason an ingest stopped before its body was whole. Present on a resource view only\nbeside `ingest_state = in_progress`; the body is incomplete and nothing more will arrive.",
+      "oneOf": [
+        {
+          "const": "cancelled",
+          "description": "An operator act ended the ingest: the block history scrub, when its `cancelled_ingest` is\ntrue.",
+          "type": "string"
+        },
+        {
+          "const": "abandoned",
+          "description": "Reserved for an abandoned-ingest reaper; nothing sets it yet.",
+          "type": "string"
+        }
+      ]
+    },
     "IngestState": {
-      "description": "A resource's ingest-completion state — a **projection** of the append-only `kb_events` ledger\n(`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.\nThe ledger is the state machine; this is its materialized current-state view, kept as a column so\nlist/search can filter it with a cheap read instead of scanning events.",
+      "description": "A resource's ingest state — a **projection** of the append-only `kb_events` ledger\n(`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.\nThe ledger is the state machine; this is its materialized current-state view, kept as a column so\nlist/search can filter it with a cheap read instead of scanning events.\n\nTwo wire values. `InProgress` is \"the body is not whole\": it covers an ingest still arriving and\nan ingest that ended before it finalized; [`IngestEnded`] says which, and names the reason.\n`Complete` is the whole body.",
       "oneOf": [
         {
           "const": "in_progress",
-          "description": "A segmented ingest has begun but not been finalized — the body is incomplete. Hidden from\nlist/search, still resumable and readable via `show`.",
+          "description": "The body is not whole: a segmented ingest has begun and not been finalized, or the ingest\nended before it finalized (see [`IngestEnded`]). Hidden from list/search, still readable via\n`show`.",
           "type": "string"
         },
         {
@@ -688,6 +703,17 @@
           "description": "A `kb_resources.id` value.",
           "format": "uuid",
           "type": "string"
+        },
+        "ingest_ended": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IngestEnded"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the ingest stopped. Present only when the ingest ended before its body was whole\n(`ingest_state` then reads `in_progress`); absent otherwise."
         },
         "ingest_state": {
           "anyOf": [

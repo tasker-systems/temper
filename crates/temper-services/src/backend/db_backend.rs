@@ -69,9 +69,9 @@ fn api_err(e: impl std::fmt::Display) -> TemperError {
 }
 
 /// Bridge an error raised inside a floored write transaction, or by a substrate write mapper's
-/// fallback ([`write_err`], [`conflict_if_unique_violation`], [`finalize_err`]): [`api_err`]'s
-/// `500`. A statement that lost a race (a deadlock or a serialization failure) is a fault like any
-/// other database error — every client already retries a `500` (ruled 2026-10-01).
+/// fallback ([`write_err`], [`conflict_if_unique_violation`], [`finalize_err`], [`append_err`]):
+/// [`api_err`]'s `500`. A statement that lost a race (a deadlock or a serialization failure) is a
+/// fault like any other database error — every client already retries a `500` (ruled 2026-10-01).
 fn tx_err<E: Into<anyhow::Error>>(e: E) -> TemperError {
     api_err(e.into())
 }
@@ -194,9 +194,11 @@ fn map_disposition(
     }
 }
 
-/// temper-substrate's `ReblockDecline` → temper-core's wire `ReblockOutcome` (identical 3-variant
-/// op-refusal taxonomy). Exhaustive match (the `map_disposition` pattern), NOT a stringly
-/// conversion: the class translates one-to-one by construction and the human detail rides along.
+/// temper-substrate's `ReblockDecline` → temper-core's wire `ReblockOutcome`. Exhaustive match
+/// (the `map_disposition` pattern), NOT a stringly conversion; the human detail rides along.
+/// `InProgress`, `Byteless` and `Drift` translate one-to-one. `IngestEnded` has no wire class of
+/// its own: it rides `Byteless`, whose judgment it shares — there is no whole stored body to
+/// re-block, and none will arrive — while its `detail` names the actual terminal ingest state.
 /// The wire `Denied` arm is never produced here — a gate refusal is authorization failing, not
 /// the op declining.
 fn map_decline(r: writes::ReblockDecline) -> ReblockOutcome {
@@ -204,7 +206,7 @@ fn map_decline(r: writes::ReblockDecline) -> ReblockOutcome {
     let writes::ReblockDecline { kind, detail } = r;
     match kind {
         K::InProgress => ReblockOutcome::InProgress { detail },
-        K::Byteless => ReblockOutcome::Byteless { detail },
+        K::Byteless | K::IngestEnded => ReblockOutcome::Byteless { detail },
         K::Drift => ReblockOutcome::Drift { detail },
     }
 }
@@ -4532,9 +4534,11 @@ impl Backend for DbBackend {
     /// the cursor rides the receipt. Complete-only enumeration is deliberate: the op refuses
     /// still-arriving rows, so enumerating them would burn the window on guaranteed declines.
     /// Because of it, one additional count per invocation reports the scope's still-arriving
-    /// (`in_progress`) population in the summary — the receipt names the population, it never
+    /// (`in_progress`) population in the summary — the receipt names that population, it never
     /// hides behind the gate; the addressed-resource arm needs no count, its own state refusal
-    /// reaching the receipt per row. `dry_run` routes every candidate to the read-only survey
+    /// reaching the receipt per row. An ended ingest (`cancelled` or `abandoned`) is neither a
+    /// candidate nor counted: a context or deployment walk skips it, and it appears only when
+    /// the resource is addressed directly, where it declines `byteless`. `dry_run` routes every candidate to the read-only survey
     /// (the same machinery the act runs, minus the write); the act is `reblock_resource_in_tx`
     /// under the invoking operator's emitter with a batch correlation id in the `EventContext`,
     /// in the candidate's own transaction behind the write floor (`reblock_candidate`).
@@ -4932,7 +4936,7 @@ impl Backend for DbBackend {
             EventContext::default(),
         )
         .await
-        .map_err(tx_err)?;
+        .map_err(append_err)?;
         tx.commit().await.map_err(tx_err)?;
 
         let landed = Self::landed_blocks(&self.pool, resource).await?;
@@ -5260,7 +5264,11 @@ fn conflict_if_unique_violation(e: anyhow::Error, conflict: &str) -> TemperError
 ///     append the gap, then re-finalize.
 ///   - `TF003` (raw-bytes integrity) → 422 [`TemperError::ContentIntegrity`] — **NOT resumable**: the
 ///     committed bytes are wrong and `block_append` refuses to overwrite a seq, so the caller must
-///     discard the resource and re-upload. The RAISE message is safe to surface (the caller's own state).
+///     discard the resource and re-upload.
+///   - `TF004` (the ingest is `cancelled` or `abandoned`) → 409 [`TemperError::IngestEnded`] via
+///     [`ingest_ended_conflict`] — **NOT resumable**: the ingest is terminal.
+///
+/// The RAISE messages are safe to surface (the caller's own state).
 fn finalize_err(e: anyhow::Error) -> TemperError {
     for cause in e.chain() {
         if let Some(sqlx::Error::Database(db)) = cause.downcast_ref::<sqlx::Error>() {
@@ -5269,11 +5277,37 @@ fn finalize_err(e: anyhow::Error) -> TemperError {
                     return TemperError::Conflict(db.message().to_string())
                 }
                 Some("TF003") => return TemperError::ContentIntegrity(db.message().to_string()),
+                Some("TF004") => return ingest_ended_conflict(db.message()),
                 _ => {}
             }
         }
     }
     tx_err(e)
+}
+
+/// Map a `block_append` write error: `TF004` (the ingest is `cancelled` or `abandoned`) →
+/// [`ingest_ended_conflict`]'s 409, everything else → [`tx_err`]. Walks the source chain like
+/// [`finalize_err`].
+fn append_err(e: anyhow::Error) -> TemperError {
+    for cause in e.chain() {
+        if let Some(sqlx::Error::Database(db)) = cause.downcast_ref::<sqlx::Error>() {
+            if db.code().as_deref() == Some("TF004") {
+                return ingest_ended_conflict(db.message());
+            }
+        }
+    }
+    tx_err(e)
+}
+
+/// The 409 for SQLSTATE `TF004`, raised by `resource_finalize` and `block_append` when the
+/// resource's ingest is terminal (`cancelled` or `abandoned`, migration 20261003000110). Unlike
+/// `TF001`/`TF002`'s 409 it is NOT resumable — no append or re-finalize can continue this ingest —
+/// so it travels under its own code (`INGEST_ENDED`), which a resuming client branches on to drop
+/// its resume record and start a new upload. The message says the same to a reader.
+fn ingest_ended_conflict(message: &str) -> TemperError {
+    TemperError::IngestEnded(format!(
+        "{message} — the ingest has ended and is not resumable; start a new upload"
+    ))
 }
 
 #[cfg(test)]

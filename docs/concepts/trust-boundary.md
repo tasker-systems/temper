@@ -103,6 +103,7 @@ is a stable string; `details` rides only `SYSTEM_ACCESS_REQUIRED` and `PLAN_REFU
 | 403 | `FORBIDDEN_DETAIL` | refused, message names the capability | obtain it | no |
 | 404 | `NOT_FOUND` | absent or masked (a probe is not an existence oracle) | infer nothing either way | no |
 | 400 | `PLAN_REFUSED` | composition invalid; `details.refusals[]` lists every reason | repair all in one round trip | no |
+| 409 | `INGEST_ENDED` | append or finalize on an ingest that has ended (`cancelled` or `abandoned`); not resumable | start a new upload | no |
 | 422 | `CONTENT_INTEGRITY` | stored bytes fail the hash; not resumable | re-upload from scratch | no |
 | 500 | `INTERNAL_ERROR` | server fault | back off | yes |
 

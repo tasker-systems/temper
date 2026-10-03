@@ -402,6 +402,159 @@ async fn finalize_block_count_mismatch_is_conflict_not_500(pool: PgPool) {
     );
 }
 
+// ─── Test: a cancelled ingest is a NOT-resumable 409 at both doors (TF004) ────────────────────
+
+/// Begin a segmented ingest over HTTP (one landed block), then set it `cancelled` directly. The
+/// block history scrub sets `cancelled` (`_block_history_scrub_apply`); this sets the state
+/// directly to isolate the finalize and append guards from the act. Returns the token and the
+/// resource id.
+async fn begin_then_cancel(app: &common::TestApp, pool: &PgPool, tag: &str) -> (String, Uuid) {
+    let (token, context_id) = auth(pool, tag).await;
+    let begin_payload = IngestPayload {
+        idempotency_key: None,
+        title: "Cancelled Doc".to_string(),
+        origin_uri: format!("test://cancelled-{}", Uuid::new_v4()),
+        context_ref: context_id.to_string(),
+        home_cogmap_id: None,
+        doc_type_name: "research".to_string(),
+        goal: None,
+        content_hash: None,
+        content: SEG1.to_string(),
+        metadata: None,
+        managed_meta: None,
+        open_meta: None,
+        chunks_packed: Some(one_chunk_packed(SEG1, "aa")),
+        sources: Vec::new(),
+        act: Default::default(),
+        segmented: Some(SegmentedBegin {
+            total_blocks_hint: Some(2),
+            block_budget: 262_144,
+            source_hash: Some("deadbeef".to_string()),
+        }),
+    };
+    let begin: SegmentedBeginResponse = app
+        .client
+        .post(app.url("/api/ingest"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&begin_payload)
+        .send()
+        .await
+        .expect("begin request failed")
+        .json()
+        .await
+        .expect("begin JSON");
+    sqlx::query("UPDATE kb_resources SET ingest_state = 'cancelled' WHERE id = $1")
+        .bind(begin.resource_id)
+        .execute(pool)
+        .await
+        .expect("cancel the ingest");
+    (token, begin.resource_id)
+}
+
+async fn assert_still_cancelled(pool: &PgPool, resource_id: Uuid) {
+    let state: String = sqlx::query_scalar("SELECT ingest_state FROM kb_resources WHERE id=$1")
+        .bind(resource_id)
+        .fetch_one(pool)
+        .await
+        .expect("fetch ingest_state");
+    assert_eq!(
+        state, "cancelled",
+        "the refusal leaves the ingest cancelled"
+    );
+}
+
+/// A finalize of a cancelled ingest — counts and hash both right, so only the state refuses it —
+/// answers 409 under the `INGEST_ENDED` code with a NOT-resumable message (TF004 →
+/// `finalize_err`), never a resumable-looking `CONFLICT` or an opaque 500.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn finalize_of_a_cancelled_ingest_is_a_not_resumable_conflict(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+    let (token, resource_id) = begin_then_cancel(&app, &pool, "cancel-fin").await;
+    let body_merkle: String = sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id=$1")
+        .bind(resource_id)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch body_hash");
+
+    let resp = app
+        .client
+        .post(app.url(&format!("/api/resources/{resource_id}/finalize")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&FinalizePayload {
+            expected_blocks: 1,
+            expected_body_hash: body_merkle,
+            expected_content_hash: None,
+        })
+        .send()
+        .await
+        .expect("finalize request failed");
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    assert_eq!(
+        status, 409,
+        "a cancelled ingest's finalize is a 409; body: {body}"
+    );
+    assert!(
+        body.contains("not resumable"),
+        "the 409 says the ingest is not resumable; body: {body}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("the 409 body is JSON");
+    assert_eq!(
+        parsed["error"]["code"],
+        temper_core::error::INGEST_ENDED_CODE,
+        "the 409 carries the not-resumable code a resuming client branches on; body: {body}"
+    );
+    assert_still_cancelled(&pool, resource_id).await;
+}
+
+/// An append of a new seq to a cancelled ingest answers 409 under the `INGEST_ENDED` code with a
+/// NOT-resumable message (TF004 → `append_err`), and no block lands.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn append_to_a_cancelled_ingest_is_a_not_resumable_conflict(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+    let (token, resource_id) = begin_then_cancel(&app, &pool, "cancel-app").await;
+
+    let resp = app
+        .client
+        .post(app.url(&format!("/api/resources/{resource_id}/blocks")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&AppendBlockPayload {
+            seq: 1,
+            content: SEG2.to_string(),
+            content_hash: temper_core::hash::sha256_hex(SEG2.as_bytes()),
+            chunks_packed: Some(one_chunk_packed(SEG2, "bb")),
+            sources: Vec::new(),
+        })
+        .send()
+        .await
+        .expect("append request failed");
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    assert_eq!(
+        status, 409,
+        "an append to a cancelled ingest is a 409; body: {body}"
+    );
+    assert!(
+        body.contains("not resumable"),
+        "the 409 says the ingest is not resumable; body: {body}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("the 409 body is JSON");
+    assert_eq!(
+        parsed["error"]["code"],
+        temper_core::error::INGEST_ENDED_CODE,
+        "the 409 carries the not-resumable code a resuming client branches on; body: {body}"
+    );
+    assert_still_cancelled(&pool, resource_id).await;
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_content_blocks WHERE resource_id=$1 AND NOT is_folded",
+    )
+    .bind(resource_id)
+    .fetch_one(&pool)
+    .await
+    .expect("block count");
+    assert_eq!(count, 1, "the refused append landed no block");
+}
+
 // ─── Test 2: cross-profile append → 403, no write lands ──────────────────────────────────────
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

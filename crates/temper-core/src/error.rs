@@ -55,6 +55,20 @@ pub const DATA_ARTIFACT_REFUSAL_CODE: &str = "DATA_ARTIFACT_REFUSAL";
 /// constant rather than two literals nothing checks.
 pub const RESOURCE_ERASED_CODE: &str = "RESOURCE_ERASED";
 
+/// The wire `error.code` an append or finalize on an ended ingest travels under — a `409` for
+/// SQLSTATE `TF004`: the resource's ingest is `cancelled` or `abandoned`, and no append or
+/// re-finalize can continue it.
+///
+/// **A code of its own rather than `CONFLICT`.** The other finalize `409`s (block count, body
+/// merkle) are resumable: a client re-lists the landed blocks and appends the gap. This one is
+/// not, and a resuming client branches on the code to drop its resume record and start a fresh
+/// upload; reusing `CONFLICT` would force it to sniff the message.
+///
+/// Spelled here for the same reason as [`FORBIDDEN_DETAIL_CODE`] — the producer
+/// (`temper-services`' `IntoResponse`) and the consumer (`temper-client`'s status mapper) name one
+/// constant rather than two literals nothing checks.
+pub const INGEST_ENDED_CODE: &str = "INGEST_ENDED";
+
 /// Details from a system access gate rejection (CLI error rendering).
 ///
 /// Distinct from `types::access_gate::SystemAccessDetails` which carries
@@ -135,6 +149,12 @@ pub enum TemperError {
 
     #[error("Conflict: {0}")]
     Conflict(String),
+    /// An append or finalize on an ingest that has ended (`cancelled` or `abandoned`, SQLSTATE
+    /// `TF004`). A `409` like [`Self::Conflict`], but **not** resumable, so it travels the wire
+    /// under [`INGEST_ENDED_CODE`]: a resuming client drops its resume record and starts a new
+    /// upload rather than resuming into the same refusal.
+    #[error("{0}")]
+    IngestEnded(String),
     /// A finalize raw-bytes integrity check failed — the stored bytes do not match the caller's
     /// declared hash (W2 PR 5). Distinct from `Conflict` because it is **not** resumable: the caller
     /// (e.g. the CLI's segmented upload) must discard the poisoned resource and re-upload, not retry.
@@ -214,6 +234,7 @@ impl TemperError {
             Self::ResourceErased(_) => RESOURCE_ERASED_CODE,
             Self::BadRequest(_) => "bad-request",
             Self::Conflict(_) => "conflict",
+            Self::IngestEnded(_) => INGEST_ENDED_CODE,
             Self::ContentIntegrity(_) => "content-integrity",
             Self::DataArtifactRefusal(_) => DATA_ARTIFACT_REFUSAL_CODE,
             Self::Forbidden => "forbidden",

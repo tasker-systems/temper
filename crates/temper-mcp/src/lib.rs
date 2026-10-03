@@ -13,5 +13,8 @@ pub mod router;
 pub mod service;
 pub mod tools;
 
+#[cfg(test)]
+mod source_gates;
+
 pub use config::McpConfig;
 pub use router::build_router;

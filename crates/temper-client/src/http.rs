@@ -957,6 +957,15 @@ pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
             let message = parse_error_field(body, "message").unwrap_or_else(|| "gone".to_owned());
             ClientError::Gone { message }
         }
+        // Keyed on the CODE, mirroring the 422 arm: an ended ingest and a resumable conflict share
+        // the status, and only the code tells a resuming client which one it met.
+        409 if parse_error_field(body, "code").as_deref()
+            == Some(temper_core::error::INGEST_ENDED_CODE) =>
+        {
+            let message = parse_error_field(body, "message")
+                .unwrap_or_else(|| "the ingest has ended and is not resumable".to_owned());
+            ClientError::IngestEnded { message }
+        }
         409 => {
             let message =
                 parse_error_field(body, "message").unwrap_or_else(|| "conflict".to_owned());
@@ -1191,6 +1200,25 @@ mod tests {
         let body = r#"{"error":{"code":"SOMETHING_ELSE","message":"nope"}}"#;
         let err = map_status_to_error(status(422), body);
         assert!(matches!(err, ClientError::Server { status: 422, .. }));
+    }
+
+    #[test]
+    fn test_409_ingest_ended_maps_to_distinct_variant() {
+        // An append or finalize on an ended ingest must surface as its own variant, NOT a generic
+        // Conflict — the CLI branches on it to drop its resume manifest rather than resume.
+        let body = format!(
+            r#"{{"error":{{"code":"{}","message":"Conflict: ingest cancelled — not resumable"}}}}"#,
+            temper_core::error::INGEST_ENDED_CODE
+        );
+        let err = map_status_to_error(status(409), &body);
+        assert!(
+            matches!(&err, ClientError::IngestEnded { message } if message.contains("not resumable")),
+            "got {err:?}"
+        );
+        // The same status under the generic code stays a resumable Conflict (no false positive).
+        let body = r#"{"error":{"code":"CONFLICT","message":"Conflict: not resumable"}}"#;
+        let err = map_status_to_error(status(409), body);
+        assert!(matches!(err, ClientError::Conflict { .. }), "got {err:?}");
     }
 
     #[test]

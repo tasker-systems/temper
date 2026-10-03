@@ -33,10 +33,20 @@ managed_meta: ManagedMeta | null,
 open_meta: JsonValue | null, };
 
 /**
- * A resource's ingest-completion state — a **projection** of the append-only `kb_events` ledger
+ * The terminal reason an ingest stopped before its body was whole. Present on a resource view only
+ * beside `ingest_state = in_progress`; the body is incomplete and nothing more will arrive.
+ */
+export type IngestEnded = "cancelled" | "abandoned";
+
+/**
+ * A resource's ingest state — a **projection** of the append-only `kb_events` ledger
  * (`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.
  * The ledger is the state machine; this is its materialized current-state view, kept as a column so
  * list/search can filter it with a cheap read instead of scanning events.
+ *
+ * Two wire values. `InProgress` is "the body is not whole": it covers an ingest still arriving and
+ * an ingest that ended before it finalized; [`IngestEnded`] says which, and names the reason.
+ * `Complete` is the whole body.
  */
 export type IngestState = "in_progress" | "complete";
 

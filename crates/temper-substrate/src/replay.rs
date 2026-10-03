@@ -976,13 +976,10 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // NOTHING by design — one reason-code event, and the refusal set must not admit
             // it. The walk stays a no-op; `PrincipalErased` graduated above.
             | EventKind::PrincipalErasureRefused
-            // Resource erasure's admin vocabulary (spec 2026-09-28). The refusal and the block
-            // history scrub stay no-ops by DESIGN: the refusal mutates nothing (the record's
-            // rule), and the scrub's arm lands with 2e, which narrows the same redaction
-            // definition to a block set. `ResourceErased` graduated with the act (build order
-            // 2b, migration 20260929040730): its arm follows.
-            | EventKind::ResourceErasureRefused
-            | EventKind::BlockHistoryScrubbed => {}
+            // Resource erasure's refusal (spec 2026-09-28): a no-op by DESIGN — it mutates
+            // nothing (the record's rule). `ResourceErased` (build order 2b, migration
+            // 20260929040730) and `BlockHistoryScrubbed` (build order 2e) have arms below.
+            | EventKind::ResourceErasureRefused => {}
             // The act's completion (spec 2026-09-28, D2/D12/D14). The body applies at the END of
             // the act's correlated span, not at this event's position: after the last event of
             // the act's own transaction sharing its correlation id (`apply_after`, above the
@@ -1014,6 +1011,31 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     Some(after) => pending.entry(*after).or_default().push((subject, id)),
                     None => apply_resource_erasure(&mut tx, subject, id).await?,
                 }
+            }
+            // The block history scrub (spec 2026-09-28, D11; migration 20261003000210). It applies
+            // AT THIS EVENT'S POSITION, with no `apply_after` deferral: the erasure above waits for
+            // the end of its correlated span because its own `relationship_folded` events must
+            // project first, and the scrub appends no correlated events, so its position is already
+            // right. The body is `_block_history_scrub_apply`, THE ONE projection of this event: it
+            // reads the payload (including `cancelled_ingest`, which decides the ingest cancel) and
+            // calls the narrowed redaction body. Re-implement any step here and there are two
+            // scrubs that drift.
+            EventKind::BlockHistoryScrubbed => {
+                let subject_table = payload["subject_table"]
+                    .as_str()
+                    .context("block_history_scrubbed payload missing subject_table")?;
+                anyhow::ensure!(
+                    subject_table == "kb_content_blocks",
+                    "block_history_scrubbed event {id} names subject_table {subject_table:?}, not \
+                     kb_content_blocks"
+                );
+                anyhow::ensure!(
+                    payload["subject_ids"]
+                        .as_array()
+                        .is_some_and(|ids| !ids.is_empty()),
+                    "block_history_scrubbed event {id} names no subject_ids"
+                );
+                apply_block_history_scrub(&mut tx, id).await?;
             }
             // A received webhook (S2 chunk B) touches no _project_* cognition half: intake appends
             // the event and projects delivery rows in Rust, in the same transaction. Without this
@@ -1073,6 +1095,16 @@ async fn apply_resource_erasure(
     )
     .fetch_one(&mut *conn)
     .await?;
+    Ok(())
+}
+
+/// The block history scrub at replay: THE ONE projection of a `block_history_scrubbed` event,
+/// called with that event's id. Macro form, like [`apply_resource_erasure`]: a fixed function call
+/// with bound parameters, so it converts and gains a `.sqlx` entry.
+async fn apply_block_history_scrub(conn: &mut sqlx::PgConnection, event: Uuid) -> Result<()> {
+    sqlx::query!("SELECT _block_history_scrub_apply($1)", event)
+        .fetch_one(&mut *conn)
+        .await?;
     Ok(())
 }
 

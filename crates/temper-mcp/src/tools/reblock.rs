@@ -8,12 +8,11 @@
 //! the route's per-row gate train and the deployment-wide `all` arm's system-admin
 //! gate live in the shared backend, unchanged.
 //!
-//! ONE in-process read is retained (declared, the G3d pattern pinned here): the
-//! `scope=context` arm resolves the `@me/…`/`+team/…` ref in-process
-//! (`context_anchor`) — the ref grammar is MCP-local input shaping and the wire
-//! request's `ReblockScope::Context` carries only a UUID. The resolver is
-//! visibility-gated exactly as before: claims and bearer derive from the ONE
-//! validated decode, so resolver and forwarded act cannot disagree on identity.
+//! The `scope=context` arm addresses its context by ref (`@me/…`, `+team/…`); the wire
+//! request's `ReblockScope::Context` carries only a UUID, so the ref resolves first through
+//! the shared `cognitive_maps::context_anchor` — itself a relay to
+//! `GET /api/contexts/resolve` (teardown). Its faces, and its one declared delta, are the
+//! context orientation tools' own: one anchor, one dialect.
 //!
 //! # Declared parity deltas (per the register's G3c delta format)
 //!
@@ -37,13 +36,12 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use temper_client::error::ClientError;
-use temper_core::context_ref::parse_context_ref;
-use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_core::types::ids::ResourceId;
 use temper_core::types::reblock::{ReblockScope, DEFAULT_REBLOCK_LIMIT};
-use temper_services::services::context_service::resolve_context_ref;
 use uuid::Uuid;
 
 use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
+use crate::tools::cognitive_maps::context_anchor;
 
 // ── Input structs ──────────────────────────────────────────────────────────────
 
@@ -90,31 +88,6 @@ pub struct ResourceReblockInput {
 
 fn to_text<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
-}
-
-/// Resolve a context ref (`@me/<slug>`, `+<team>/<slug>`, or a UUID) to its anchor
-/// id — the ONE retained in-process read for this tool (the G3d contexts family's
-/// `context_anchor` idiom, pinned here per Pete's 2026-09-27 ruling adopting the
-/// pattern for reblock's context scope; the wire request takes a UUID only). The
-/// resolver's refusals — parse error, unresolvable ref — stay MCP-local, pre-wire;
-/// the resolver is visibility-gated, so an unresolvable ref is exactly the "absent
-/// to me" face.
-async fn context_anchor(
-    svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
-    context_ref: &str,
-) -> Result<Uuid, rmcp::ErrorData> {
-    let cref = parse_context_ref(context_ref)
-        .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid context ref: {e}"), None))?;
-    let authed = svc.ensure_profile_from_parts(parts).await?;
-    let context = resolve_context_ref(
-        &svc.api_state.pool,
-        ProfileId::from(authed.profile().id),
-        &cref,
-    )
-    .await
-    .map_err(|e| rmcp::ErrorData::invalid_params(format!("context not found: {e}"), None))?;
-    Ok(*context)
 }
 
 /// Client errors into rmcp errors, in the G3c/G3d mapping idiom (see the module

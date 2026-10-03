@@ -500,7 +500,7 @@ pub struct ResourceRowParity {
     pub created: DateTime<Utc>,
     /// Real last-mutation timestamp — `kb_resources.updated` (event `occurred_at` at last write).
     pub updated: DateTime<Utc>,
-    /// Are all the bytes here? `complete` | `in_progress` — see `ResourceRow::ingest_state`. NOT a
+    /// Are all the bytes here? `in_progress` | `complete` | `cancelled` | `abandoned` — see `ResourceRow::ingest_state`. NOT a
     /// parity invariant: it is born from the create payload's `segmented` flag and advanced by
     /// `resource_finalized`, both of which replay reproduces.
     pub ingest_state: String,
@@ -2182,6 +2182,12 @@ pub async fn hit_identities(
                 })?,
                 None => ManagedMeta::default(),
             };
+            // Both columns are CHECK-constrained, so the projections are total in practice; an
+            // unparseable value is a schema violation, surfaced as None rather than coerced.
+            let (ingest_state, ingest_ended) = match IngestState::from_db(&row.ingest_state) {
+                Some((state, ended)) => (Some(state), ended),
+                None => (None, None),
+            };
             Ok(ResourceView {
                 id: ResourceId::from(row.id),
                 // Filled by `with_derived_refs` below — neither is a column.
@@ -2203,9 +2209,8 @@ pub async fn hit_identities(
                 created: row.created,
                 updated: row.updated,
                 body_hash: row.body_hash,
-                // Both columns are CHECK-constrained, so `from_wire` is total in practice; an
-                // unparseable value is a schema violation, surfaced as None rather than coerced.
-                ingest_state: IngestState::from_wire(&row.ingest_state),
+                ingest_state,
+                ingest_ended,
                 body_storage: BodyStorage::from_wire(&row.body_storage),
                 managed_meta,
                 // All three are sections this read does not serve — see the doc comment.

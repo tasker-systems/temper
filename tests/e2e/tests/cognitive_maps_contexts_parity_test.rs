@@ -125,18 +125,27 @@
 //!   the door's charter view is the show route plus a field projection. The declared
 //!   delta REALIZED: an unreadable map's charter flips from the direct 200-empty to
 //!   the show route's 404 sentence (the route family's own deny-is-an-error posture).
-//! - **Context refs resolve in-process** — the orientation routes are UUID-addressed
-//!   and the ref grammar (`@me/<slug>`, `+team/<slug>`) is MCP-local input shaping,
-//!   the resources family's retained-resolver precedent; the resolver keeps its
-//!   `context not found: …` face, profile resolved per-request from parts.
+//! - **Context refs resolved in-process at G3d; through the door since teardown** —
+//!   the orientation routes are UUID-addressed, so G3d kept the ref resolver
+//!   in-process (the resources family's retained-resolver precedent). Teardown moved
+//!   it onto `GET /api/contexts/resolve` (route-first #991) behind a local parse:
+//!   every anchor face — the parse refusal, `@me`'s slug-naming miss, the UUID and
+//!   `@<handle>` arms' uniform unreadable-equals-absent face, the `+<team>` arm's
+//!   absent-team, non-member `Forbidden` and member-miss faces — was pinned
+//!   byte-exact against the in-process resolver first
+//!   (`every_context_anchor_face_is_pinned_byte_exact`, the table shared with the
+//!   reblock suite) and carried through the swap unchanged. **One declared delta,
+//!   named not pinned:** a fault behind the resolver renders `internal_error` at the
+//!   door, where the in-process resolver rendered it `invalid_params` under the
+//!   `context not found: ` prefix.
 //!
 //! # How the tools are driven
 //!
 //! Through the tool functions — the same hop production dispatch makes. The drivers
 //! hand the request's `Parts` straight to the relayed tools: the parts carry the
-//! FULL production shape (the claims the middleware injects beside the bearer), the
-//! API adjudicates Level 1 + 2 from the wire, and the one retained in-process read
-//! (the context-anchor resolver) reads the claims. A second identity is its own
+//! FULL production shape (the claims the middleware injects beside the bearer), and
+//! the API adjudicates Level 1 + 2 from the wire; since teardown nothing in-process
+//! reads the claims. A second identity is its own
 //! parts: its real token, warmed through the listener, standing-approved — no
 //! synthetic claims. The suite header above still names the DIRECT faces the
 //! pre-swap pins held: a refusal sentence that survives the door unchanged is the
@@ -226,10 +235,10 @@ mod parity {
 
     /// The production parts shape for an ARBITRARY approved identity: the claims
     /// extension beside the bearer, exactly as the JWT middleware injects them. The
-    /// door forwards on the bearer alone; the one retained in-process read (the
-    /// context-anchor resolver) reads the claims — so a bare `relay_parts_for`
-    /// (bearer only) would blind THAT read. Identity is consistent by construction:
-    /// both halves come from the one `(token, sub, email)` triple.
+    /// door forwards on the bearer alone (since teardown nothing in-process reads the
+    /// claims), so the claims ride for production fidelity, not need. Identity is
+    /// consistent by construction: both halves come from the one `(token, sub, email)`
+    /// triple.
     pub fn identity_parts_for(
         _app: &super::common::E2eTestApp,
         token: &str,
@@ -291,8 +300,7 @@ use parity::{code_of, input, notice_then_body, one_text};
 
 /// The parity harness, once per test: the relay-ready app over this pool, the MCP
 /// service, and the harness principal's parts — the full production shape, claims
-/// beside bearer (the door forwards on the bearer; the retained context-anchor
-/// resolver reads the claims).
+/// beside bearer (the door forwards on the bearer).
 async fn harness(pool: PgPool) -> (E2eTestApp, TemperMcpService, axum::http::request::Parts) {
     let app = common::setup_relay(pool).await;
     let svc = app.mcp_relay_service(app.pool.clone()).await;
@@ -1154,6 +1162,38 @@ async fn an_unreadable_context_ref_refuses_at_the_resolve_gate(pool: PgPool) {
     .expect_err("another principal's private context is invisible");
     assert_eq!(code_of(&err), -32602);
     assert!(err.message.contains("context not found"), "{err}");
+}
+
+/// Every `context_anchor` refusal face, byte-exact, through each of the four tools that
+/// address a context by ref — the three orientation reads and the trigger. The table is shared
+/// with reblock's `scope=context` suite (`common::context_anchor_faces`), so the two anchors
+/// answer one dialect. Pinned green against the in-process resolver first, then carried through
+/// the relay to `GET /api/contexts/resolve` unchanged (teardown).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn every_context_anchor_face_is_pinned_byte_exact(pool: PgPool) {
+    let (app, svc, _parts) = harness(pool).await;
+    for face in common::context_anchor_faces(&app).await {
+        for view in ["shape", "metrics", "analytics"] {
+            let err = run_context_read(
+                &svc,
+                &face.parts,
+                json!({ "view": view, "context": face.context_ref }),
+            )
+            .await
+            .expect_err(face.label);
+            assert_eq!(code_of(&err), -32602, "{} ({view}): {err}", face.label);
+            assert_eq!(err.message, face.expected, "{} ({view})", face.label);
+        }
+        let err = run_context_materialize(
+            &svc,
+            &face.parts,
+            json!({ "context": face.context_ref, "threshold": 1 }),
+        )
+        .await
+        .expect_err(face.label);
+        assert_eq!(code_of(&err), -32602, "{} (materialize): {err}", face.label);
+        assert_eq!(err.message, face.expected, "{} (materialize)", face.label);
+    }
 }
 
 /// `list` answers the caller's own visible contexts.

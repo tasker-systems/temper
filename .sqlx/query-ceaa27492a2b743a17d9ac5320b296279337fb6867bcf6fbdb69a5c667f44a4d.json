@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT block_history_scrub_execute($1, $2, $3, $4, $5)\n               AS \"outcome: serde_json::Value\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "outcome: serde_json::Value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ceaa27492a2b743a17d9ac5320b296279337fb6867bcf6fbdb69a5c667f44a4d"
+}

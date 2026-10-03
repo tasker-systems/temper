@@ -46,7 +46,7 @@ use uuid::Uuid;
 use temper_core::types::ids::{BlobId, EdgeId, EntityId, ProfileId, PropertyId, ResourceId};
 use temper_substrate::blob_store::BlobStore;
 use temper_substrate::payloads::{
-    ErasureTargetOutcome, RedactedEventFields, ResourceErasureRefusalReason,
+    ErasureAct, ErasureTargetOutcome, RedactedEventFields, ResourceErasureRefusalReason,
 };
 use temper_substrate::writes::{release_blob_bytes, resolve_emitter};
 use temper_workflow::operations::Surface;
@@ -63,7 +63,7 @@ use crate::services::erasure_service::BlobStrikeOutcome;
 /// the same deadlock class (`erasure_fence_service::drain`). The act is one statement and one
 /// transaction, so a failed attempt commits nothing and each retry is a fresh statement against
 /// the post-conflict state.
-const MAX_ACT_RETRIES: u32 = 2;
+pub(super) const MAX_ACT_RETRIES: u32 = 2;
 
 /// The one refusal detail today: a charter resource's erasure is map-grain, filed as its own task
 /// (01a0e960-0ca2-7f42-b33e-1ed19b024e6b). Fixed text, because the refusal event is an admin
@@ -79,11 +79,11 @@ pub const MAP_GRAIN_ERASURE_DETAIL: &str =
 const POST_COMMIT_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The SQLSTATE Postgres raises when it resolves a deadlock by aborting one transaction.
-const DEADLOCK_DETECTED: &str = "40P01";
+pub(super) const DEADLOCK_DETECTED: &str = "40P01";
 
 /// The SQLSTATE of a bare `RAISE EXCEPTION` (no ERRCODE), which every raise the classifier
 /// matches by message is.
-const RAISE_EXCEPTION: &str = "P0001";
+pub(super) const RAISE_EXCEPTION: &str = "P0001";
 
 /// The prefix of every raise in `resource_erasure_execute` (migration 20260929040730).
 const EXECUTE_RAISE_PREFIX: &str = "resource_erasure_execute: ";
@@ -91,7 +91,7 @@ const EXECUTE_RAISE_PREFIX: &str = "resource_erasure_execute: ";
 /// The shape of a related-blob remainder entry the plan writes: `related blob <id>; hash …`.
 const RELATED_BLOB_PREFIX: &str = "related blob ";
 
-const RESOURCE_NOT_FOUND: &str = "resource not found";
+pub(super) const RESOURCE_NOT_FOUND: &str = "resource not found";
 
 /// The closed vocabulary of a refusal's `detail`. A type, not a `String`, so free text can never
 /// reach the never-redactable refusal event (the length bound the SQL lacks is unnecessary).
@@ -251,11 +251,11 @@ struct SurveyPlanWire {
 
 /// Who is attempting which act, under which reference: everything a refusal records.
 #[derive(Debug, Clone, Copy)]
-struct Attempt {
-    operator: ProfileId,
-    emitter: EntityId,
-    resource: ResourceId,
-    request_reference: Uuid,
+pub(super) struct Attempt {
+    pub(super) operator: ProfileId,
+    pub(super) emitter: EntityId,
+    pub(super) resource: ResourceId,
+    pub(super) request_reference: Uuid,
 }
 
 /// How one run of the act ended, once the classifier has read any failure.
@@ -331,7 +331,7 @@ async fn execute_with_release_timeout(
     let wire = match run_act(pool, &attempt, request.also_strike_blobs).await? {
         ActVerdict::Completed(wire) => wire,
         ActVerdict::Refused(reason, detail) => {
-            let refusal = refuse(pool, &attempt, reason, detail).await?;
+            let refusal = refuse(pool, &attempt, ErasureAct::Erasure, &[], reason, detail).await?;
             return Ok(ResourceErasureOutcome::Refused(refusal));
         }
     };
@@ -372,17 +372,27 @@ async fn execute_with_release_timeout(
 /// account of the request. The id is formatted through `BlobId`'s own `Display` (the hyphenated
 /// UUID).
 fn reject_duplicate_blobs(blobs: &[BlobId]) -> ApiResult<()> {
-    let mut seen = HashSet::with_capacity(blobs.len());
-    match blobs.iter().find(|b| !seen.insert(**b)) {
+    reject_duplicates(blobs, "blob", "struck")
+}
+
+/// A list naming one `noun` twice is a 400 naming the first repeated id, worded
+/// "`noun` `id` is listed more than once; list each `noun` once; nothing was `undone`". Shared
+/// by every act that takes an operator's list of ids.
+pub(super) fn reject_duplicates<T>(items: &[T], noun: &str, undone: &str) -> ApiResult<()>
+where
+    T: Copy + Eq + std::hash::Hash + std::fmt::Display,
+{
+    let mut seen = HashSet::with_capacity(items.len());
+    match items.iter().find(|i| !seen.insert(**i)) {
         Some(dup) => Err(ApiError::BadRequest(format!(
-            "blob {dup} is listed more than once; list each blob once; nothing was struck"
+            "{noun} {dup} is listed more than once; list each {noun} once; nothing was {undone}"
         ))),
         None => Ok(()),
     }
 }
 
 /// `None` when no such resource exists; otherwise whether it is already erased.
-async fn erased_state(pool: &PgPool, resource: ResourceId) -> ApiResult<Option<bool>> {
+pub(super) async fn erased_state(pool: &PgPool, resource: ResourceId) -> ApiResult<Option<bool>> {
     let erased = sqlx::query_scalar!(
         r#"SELECT erased_at IS NOT NULL AS "erased!" FROM kb_resources WHERE id = $1"#,
         resource.uuid(),
@@ -471,9 +481,22 @@ fn verdict_for(
 /// A 400 naming the blob the operator listed. The id comes from the raise only when it is one
 /// of the operator's own; otherwise the message names no id.
 fn blob_refusal(blob: Option<Uuid>, supplied: &[BlobId], reason: &str) -> ApiError {
-    match blob.filter(|b| supplied.iter().any(|s| s.uuid() == *b)) {
-        Some(blob) => ApiError::BadRequest(format!("blob {blob} {reason}")),
-        None => ApiError::BadRequest(format!("a listed blob {reason}")),
+    let supplied: Vec<Uuid> = supplied.iter().map(|s| s.uuid()).collect();
+    listed_refusal("blob", blob, &supplied, reason)
+}
+
+/// A 400 naming the `noun` the operator listed: the id parsed from a raise is named only when
+/// it is one of the operator's own (`supplied`); otherwise the message names no id. Shared by
+/// every act that refuses an operator's listed id.
+pub(super) fn listed_refusal(
+    noun: &str,
+    id: Option<Uuid>,
+    supplied: &[Uuid],
+    reason: &str,
+) -> ApiError {
+    match id.filter(|i| supplied.contains(i)) {
+        Some(id) => ApiError::BadRequest(format!("{noun} {id} {reason}")),
+        None => ApiError::BadRequest(format!("a listed {noun} {reason}")),
     }
 }
 
@@ -534,16 +557,26 @@ fn classify_execute_raise(rest: &str) -> ActFailure {
     }
 }
 
-fn between<'a>(s: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
+pub(super) fn between<'a>(s: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
     s.strip_prefix(prefix)?.strip_suffix(suffix)
 }
 
 /// Record an operator-facing refusal: ONE `resource_erasure_refused` event, nothing else mutated.
 /// Attributed to the operator through the request's surface, correlated by the attempt's
-/// reference.
-async fn refuse(
+/// reference. Both acts record their refusals here.
+///
+/// THE `act` RULE: the erasure records `p_act = NULL` and NULL blocks, so its refusal payloads
+/// carry neither key and stay the shape every earlier erasure refusal has (an absent `act` reads
+/// as [`ErasureAct::Erasure`]). The block history scrub records `p_act = 'block_history_scrub'`
+/// and the blocks the operator named, each a block of the resource: the scrub's doors check
+/// membership before they record a refusal. An empty `blocks` is passed as NULL; the SQL
+/// (`resource_erasure_refuse`, migration 20261003000210) accepts blocks only beside the scrub's
+/// act.
+pub(super) async fn refuse(
     pool: &PgPool,
     attempt: &Attempt,
+    act: ErasureAct,
+    blocks: &[Uuid],
     reason: ResourceErasureRefusalReason,
     detail: Option<ResourceErasureRefusalDetail>,
 ) -> ApiResult<ResourceErasureRefusal> {
@@ -552,15 +585,22 @@ async fn refuse(
         .as_str()
         .expect("a refusal reason serializes to a string")
         .to_string();
+    let recorded_act: Option<&str> = match act {
+        ErasureAct::Erasure => None,
+        ErasureAct::BlockHistoryScrub => Some("block_history_scrub"),
+    };
+    let recorded_blocks: Option<&[Uuid]> = (!blocks.is_empty()).then_some(blocks);
 
     let event_id: Uuid = sqlx::query_scalar!(
-        r#"SELECT resource_erasure_refuse($1, $2, $3, $4, $5, $6) AS "event: Uuid""#,
+        r#"SELECT resource_erasure_refuse($1, $2, $3, $4, $5, $6, $7, $8) AS "event: Uuid""#,
         attempt.resource.uuid(),
         attempt.operator.uuid(),
         attempt.emitter.uuid(),
         attempt.request_reference,
         reason_str,
         detail.map(ResourceErasureRefusalDetail::as_str),
+        recorded_act,
+        recorded_blocks,
     )
     .fetch_one(pool)
     .await?

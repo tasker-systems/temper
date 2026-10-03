@@ -147,9 +147,10 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
     // `http_request` that temper-api's root span and temper-client's request span both already
     // use: three different things under one name is unreadable once they are exported together.
     //
-    // `profile_id` is declared Empty and recorded in `service.rs`, not in `require_mcp_auth` —
-    // that middleware only validates the JWT, and a validated token is not yet a profile. Same
-    // deferred-field pattern temper-api uses in its auth middleware, one seam further in.
+    // `profile_id` is declared Empty (the field set is the shared macro's, one expansion for both
+    // surfaces) and stays empty here: `require_mcp_auth` only validates the JWT, and a validated
+    // token is not yet a profile. This surface resolves none — every tool relays, and the API's
+    // own root span records `profile_id` on the relayed hop, joined to this span by trace.
     .layer(axum::middleware::from_fn(root_span))
     // The same cross-origin policy the HTTP surfaces apply, from the same configured value.
     // This was `CorsLayer::permissive()` — a literal, so `CORS_ORIGINS` was parsed into

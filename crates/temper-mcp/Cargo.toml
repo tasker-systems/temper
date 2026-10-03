@@ -26,7 +26,6 @@ temperkb-client.workspace = true
 reqwest = { version = "0.12", default-features = false }
 temper-services = { path = "../temper-services" }
 
-temperkb-principal.workspace = true
 temperkb-core = { workspace = true, features = ["web-api", "mcp"] }
 temperkb-workflow = { workspace = true, features = ["web-api", "mcp"] }
 temperkb-telemetry.workspace = true
@@ -68,3 +67,8 @@ temper-services = { path = "../temper-services", features = ["test-harness"] }
 tower = { version = "0.5", features = ["util"] }
 # Builds the gzip body that witnesses the request-decompression layer.
 flate2 = "1"
+# The source gates (`src/source_gates.rs`) parse the crate's own tool modules: real function
+# bodies, real `#[cfg(test)]` attributes and real call/await chains instead of a hand lexer.
+syn = { version = "2", features = ["full", "visit"] }
+# The exhaustive `AuthzError` witness constructs a typed `Refusal` for the system-access arm.
+temperkb-principal.workspace = true

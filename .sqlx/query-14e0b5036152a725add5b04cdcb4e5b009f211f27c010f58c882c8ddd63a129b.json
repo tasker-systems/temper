@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT resource_erasure_refuse($1, $2, $3, $4, $5, $6) AS \"event: Uuid\"",
+  "query": "SELECT resource_erasure_refuse($1, $2, $3, $4, $5, $6, $7, $8) AS \"event: Uuid\"",
   "describe": {
     "columns": [
       {
@@ -16,12 +16,14 @@
         "Uuid",
         "Uuid",
         "Text",
-        "Text"
+        "Text",
+        "Text",
+        "UuidArray"
       ]
     },
     "nullable": [
       null
     ]
   },
-  "hash": "f2e1be35e115021eacb51478ed896aa83a2bb04ff1eadcfefaa494c59262d288"
+  "hash": "14e0b5036152a725add5b04cdcb4e5b009f211f27c010f58c882c8ddd63a129b"
 }

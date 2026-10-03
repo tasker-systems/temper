@@ -314,6 +314,7 @@ mod tests {
             updated: epoch,
             body_hash: None,
             ingest_state: None,
+            ingest_ended: None,
             body_storage: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,

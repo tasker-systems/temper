@@ -1394,6 +1394,81 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Scrub the history of resource blocks
+    # Empties the history of the named blocks of a resource that is not erased: every revision but the current one and every non-current chunk of a live block, and every revision and chunk of a folded block. An in-flight ingest is cancelled and recorded. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). The list is checked against the resource's blocks first, whatever the resource's state, so a recorded refusal names only real blocks of the resource. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.
+    # @param block_history_scrub_request_body [BlockHistoryScrubRequestBody] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [BlockHistoryScrubExecuteResponse]
+    def admin_scrub_block_history(block_history_scrub_request_body, opts = {})
+      data, _status_code, _headers = admin_scrub_block_history_with_http_info(block_history_scrub_request_body, opts)
+      data
+    end
+
+    # Scrub the history of resource blocks
+    # Empties the history of the named blocks of a resource that is not erased: every revision but the current one and every non-current chunk of a live block, and every revision and chunk of a folded block. An in-flight ingest is cancelled and recorded. The server mints the request reference. The answer is either a completion or a recorded refusal (&#x60;status&#x60;). The list is checked against the resource&#39;s blocks first, whatever the resource&#39;s state, so a recorded refusal names only real blocks of the resource. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.
+    # @param block_history_scrub_request_body [BlockHistoryScrubRequestBody] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(BlockHistoryScrubExecuteResponse, Integer, Hash)>] BlockHistoryScrubExecuteResponse data, response status code and response headers
+    def admin_scrub_block_history_with_http_info(block_history_scrub_request_body, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: AdminApi.admin_scrub_block_history ...'
+      end
+      # verify the required parameter 'block_history_scrub_request_body' is set
+      if @api_client.config.client_side_validation && block_history_scrub_request_body.nil?
+        fail ArgumentError, "Missing the required parameter 'block_history_scrub_request_body' when calling AdminApi.admin_scrub_block_history"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/admin/resources/block-history-scrub'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(block_history_scrub_request_body)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'BlockHistoryScrubExecuteResponse'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"AdminApi.admin_scrub_block_history",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: AdminApi#admin_scrub_block_history\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Show a profile's state card
     # One profile's admission state, governance, identity links, team memberships, pending invitations and open queue items. Requires a system admin.
     # @param profile_id [String] Profile ID
@@ -1460,6 +1535,81 @@ module Temper::Generated
       data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
       if @api_client.config.debugging
         @api_client.config.logger.debug "API called: AdminApi#admin_show_profile\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # Survey a block history scrub
+    # Reports what the block history scrub would do for the named blocks of a resource, without recording or changing anything: per block, whether it is folded and how many revisions and chunks it would empty, and whether an in-flight ingest would be cancelled. For a charter or an erased resource it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the list names only blocks of the resource. The warning that a block's current revision still carries a sensitivity finding arrives with the sensitivity sweep (build order 3c); this survey reports counts only. Requires a system admin. Any other caller gets 404, decided before any lookup.
+    # @param block_history_scrub_request_body [BlockHistoryScrubRequestBody] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [BlockHistoryScrubSurvey]
+    def admin_survey_block_history_scrub(block_history_scrub_request_body, opts = {})
+      data, _status_code, _headers = admin_survey_block_history_scrub_with_http_info(block_history_scrub_request_body, opts)
+      data
+    end
+
+    # Survey a block history scrub
+    # Reports what the block history scrub would do for the named blocks of a resource, without recording or changing anything: per block, whether it is folded and how many revisions and chunks it would empty, and whether an in-flight ingest would be cancelled. For a charter or an erased resource it reports the refusal the act would record (&#x60;refusal&#x60;, &#x60;detail&#x60;) and no plan, once the list names only blocks of the resource. The warning that a block&#39;s current revision still carries a sensitivity finding arrives with the sensitivity sweep (build order 3c); this survey reports counts only. Requires a system admin. Any other caller gets 404, decided before any lookup.
+    # @param block_history_scrub_request_body [BlockHistoryScrubRequestBody] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(BlockHistoryScrubSurvey, Integer, Hash)>] BlockHistoryScrubSurvey data, response status code and response headers
+    def admin_survey_block_history_scrub_with_http_info(block_history_scrub_request_body, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: AdminApi.admin_survey_block_history_scrub ...'
+      end
+      # verify the required parameter 'block_history_scrub_request_body' is set
+      if @api_client.config.client_side_validation && block_history_scrub_request_body.nil?
+        fail ArgumentError, "Missing the required parameter 'block_history_scrub_request_body' when calling AdminApi.admin_survey_block_history_scrub"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/admin/resources/block-history-scrub/survey'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(block_history_scrub_request_body)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'BlockHistoryScrubSurvey'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"AdminApi.admin_survey_block_history_scrub",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: AdminApi#admin_survey_block_history_scrub\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
       end
       return data, status_code, headers
     end

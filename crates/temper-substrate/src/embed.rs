@@ -38,9 +38,14 @@ pub async fn embed_chunks(pool: &PgPool) -> Result<()> {
                 .collect::<Vec<_>>()
                 .join(",")
         );
-        // The write guard (spec 2026-09-28 D13), as for `CHUNK_EMBEDDING_WRITE_BACK`.
+        // The write guards of `CHUNK_EMBEDDING_WRITE_BACK`: currency and erasure, re-checked at
+        // write time.
         sqlx::query(
             "UPDATE kb_chunks SET embedding = $1::vector WHERE id = $2 \
+             AND kb_chunks.is_current \
+             AND EXISTS (SELECT 1 FROM kb_content_blocks b \
+                          WHERE b.id = kb_chunks.block_id AND NOT b.is_folded \
+                          FOR KEY SHARE) \
              AND EXISTS (SELECT 1 FROM kb_resources r \
                           WHERE r.id = kb_chunks.resource_id AND r.erased_at IS NULL \
                           FOR KEY SHARE)",
@@ -115,7 +120,8 @@ pub const ERASED_HASH_EXCLUSION: &str = "NOT EXISTS ( \
 /// The last clause excludes every chunk of an **erased resource** (`erased_at IS NOT NULL`, spec
 /// 2026-09-28 D13) — the same exclusion-not-skip reasoning. The resource-erasure act empties the
 /// chunks and nulls `embedded_with` but enters no hash in `kb_erased_content`, and the drain's
-/// write-backs refuse an erased resource ([`CHUNK_EMBEDDING_WRITE_BACK`] and the blank stamp).
+/// write-backs refuse an erased resource ([`CHUNK_EMBEDDING_WRITE_BACK`] and
+/// [`stamp_blank_chunks`]).
 /// Without this clause those chunks would stay stale and unstampable forever: a job in flight
 /// across the act would report `remaining > 0` and re-enqueue every tick. With it, the husk's
 /// chunks are not work, and that job reports `remaining = 0` and completes.
@@ -149,18 +155,61 @@ mod predicate_pins {
 }
 
 /// The drain's vector write-back: the vector and its `embedded_with` provenance, together, for one
-/// chunk — **guarded against erasure** (spec 2026-09-28 D13). The drain computes a vector from prose
-/// it read before the inference; if the resource-erasure act commits in between, an unguarded
-/// write-back would put a vector computed from erased prose onto the husk the act just nulled. The
-/// `EXISTS … FOR KEY SHARE` re-reads the resource row under a lock that conflicts only with the
-/// act's `FOR UPDATE`: a write-back that races the act waits for it, then writes nothing.
+/// chunk. The drain reads its candidates under [`STALE_CHUNK_PREDICATE`] long before it writes: it
+/// reads up to a budget of chunks' prose, runs one batched inference, and only then writes each
+/// vector back. Whatever changed in between, the write re-checks on the target row, so a vector
+/// computed from prose that has since been removed never lands.
 ///
-/// A const so the erasure witness runs this exact statement.
+/// - **Currency** (spec 2026-09-28 D11). The chunk must still be current and its block not
+///   folded. The block history scrub empties exactly the chunks that stopped being current, or
+///   whose block was folded, in that window: a `block_mutate` supersedes the chunk, the scrub
+///   nulls its prose, header path and vector, and a write-back keyed only on the chunk id would
+///   put a vector computed from the scrubbed prose back onto the emptied row. `is_current` is a
+///   column of the target row, so a concurrent supersede is re-read on the newest row version.
+///   The block's fold is read from the statement's snapshot: a fold is a non-key update, so
+///   `FOR KEY SHARE` does not wait on it. A concurrent fold on a resource the scrub can reach is
+///   still caught: a `replaces_body` mutate and a re-block retire or reparent the folded block's
+///   current chunks in the same transaction, and the `is_current` re-check sees that change to
+///   the target row. A charter's fold leaves its chunks current, and the scrub refuses charters.
+/// - **Erasure** (spec 2026-09-28 D13). The `EXISTS … FOR KEY SHARE` re-reads the resource row
+///   under a lock that conflicts only with the resource-erasure act's `FOR UPDATE`: a write-back
+///   that races the act waits for it, then writes nothing.
+///
+/// A const so the erasure and block history scrub witnesses run this exact statement.
 pub const CHUNK_EMBEDDING_WRITE_BACK: &str =
     "UPDATE kb_chunks SET embedding = $1::vector, embedded_with = $2 WHERE id = $3 \
+     AND kb_chunks.is_current \
+     AND EXISTS (SELECT 1 FROM kb_content_blocks b \
+                  WHERE b.id = kb_chunks.block_id AND NOT b.is_folded \
+                  FOR KEY SHARE) \
      AND EXISTS (SELECT 1 FROM kb_resources r \
                   WHERE r.id = kb_chunks.resource_id AND r.erased_at IS NULL \
                   FOR KEY SHARE)";
+
+/// The drain's stamp for blank chunks: provenance with no vector, for chunks whose content has
+/// nothing to embed (see [`embed_resource_chunks`]). It carries the same write-time guards as
+/// [`CHUNK_EMBEDDING_WRITE_BACK`], for the same reason: the candidates were read before the write.
+/// Returns the rows stamped.
+///
+/// A function so the block history scrub witness runs this exact statement.
+pub async fn stamp_blank_chunks(pool: &PgPool, model: &str, chunk_ids: &[Uuid]) -> Result<u64> {
+    let stamped = sqlx::query!(
+        "UPDATE kb_chunks SET embedded_with = $1 WHERE id = ANY($2) \
+         AND kb_chunks.is_current \
+         AND EXISTS (SELECT 1 FROM kb_content_blocks b \
+                      WHERE b.id = kb_chunks.block_id AND NOT b.is_folded \
+                      FOR KEY SHARE) \
+         AND EXISTS (SELECT 1 FROM kb_resources r \
+                      WHERE r.id = kb_chunks.resource_id AND r.erased_at IS NULL \
+                      FOR KEY SHARE)",
+        model,
+        chunk_ids,
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(stamped)
+}
 
 /// Default chunk allowance for ONE dispatch invocation — **not** per resource.
 ///
@@ -268,17 +317,7 @@ pub async fn embed_resource_chunks(
     }
 
     if !blank.is_empty() {
-        // The write guard (spec 2026-09-28 D13), as for `CHUNK_EMBEDDING_WRITE_BACK`.
-        sqlx::query!(
-            "UPDATE kb_chunks SET embedded_with = $1 WHERE id = ANY($2) \
-             AND EXISTS (SELECT 1 FROM kb_resources r \
-                          WHERE r.id = kb_chunks.resource_id AND r.erased_at IS NULL \
-                          FOR KEY SHARE)",
-            model,
-            &blank,
-        )
-        .execute(pool)
-        .await?;
+        stamp_blank_chunks(pool, model, &blank).await?;
     }
 
     let mut embedded = 0u64;
@@ -314,8 +353,8 @@ pub async fn embed_resource_chunks(
             );
             // Vector and provenance are written together, always. Writing the vector without the stamp
             // would leave the chunk permanently stale and re-embedded on every tick forever.
-            // Counted only when the row was written: a write-back the erasure guard refused
-            // embedded nothing.
+            // Counted only when the row was written: a write-back its guards refused embedded
+            // nothing.
             let written = sqlx::query(CHUNK_EMBEDDING_WRITE_BACK)
                 .bind(vec_lit)
                 .bind(model)

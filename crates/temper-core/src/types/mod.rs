@@ -121,7 +121,7 @@ pub use merge::{MergeResult, MergeStrategy, PushKind};
 pub use ownership::ResourceOwnership;
 pub use profile::{DeactivationCheck, Profile, ProfileAuthLink, ProfileWithEntitlements};
 pub use reassign::{BulkReassignAck, BulkReassignRequest, ReassignAck, ReassignResourceRequest};
-pub use resource::{BodyStorage, IngestState};
+pub use resource::{BodyStorage, IngestEnded, IngestState};
 pub use resource_view::{ResourceSection, ResourceView, SectionSet};
 pub use slack::{
     IdpRevocation, SlackDisconnectRequest, SlackDisconnectResponse, SlackDisconnectedPrincipal,

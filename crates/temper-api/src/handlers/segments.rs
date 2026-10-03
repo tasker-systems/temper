@@ -38,6 +38,7 @@ use temper_workflow::operations::Backend;
         (status = 400, description = "Invalid chunks_packed"),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Caller cannot modify this resource"),
+        (status = 409, description = "The ingest has ended (cancelled or abandoned; code INGEST_ENDED); not resumable — start a new upload", body = ErrorBody),
         (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
     )
 )]
@@ -70,7 +71,7 @@ pub async fn append_block_handler(
         (status = 400, description = "The path id is not a UUID, or the request body is not syntactically valid JSON (the extractor's plain-text rejection). A landed block count or body hash mismatch is the 409, never a 400"),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Caller cannot modify this resource"),
-        (status = 409, description = "The landed block count or the body hash does not match what the caller declared", body = ErrorBody),
+        (status = 409, description = "The landed block count or the body hash does not match what the caller declared (code CONFLICT; resumable — append the gap and finalize again); or the ingest has ended (cancelled or abandoned; code INGEST_ENDED), which is not resumable — start a new upload", body = ErrorBody),
         (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
         (status = 422, description = "The stored bytes do not match the declared content hash (code CONTENT_INTEGRITY); not resumable — discard and re-upload", body = ErrorBody),
     )

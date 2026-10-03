@@ -176,7 +176,10 @@ human, so no write was attempted.
 | `ProfileResolution(e)` / `AccessCheck(e)` (any other) | the inner `ApiError` | `internal_error` (retryable — a genuine infra fault) |
 
 temper-api mappers: `middleware/auth.rs` (Level 1) and `middleware/system_access.rs`
-(Level 2). temper-mcp mapper: `service.rs::map_authz_error`.
+(Level 2). temper-mcp no longer maps `AuthzError`: since the network door's teardown it
+receives the API's rendering of each row above as a 401/403 body and maps that onto the
+same rmcp column (`service.rs::map_post_edge_refusal`, pinned arm by arm in
+`resources_wire_arms_test.rs`). The table's MCP column is the mapping it preserves.
 
 Both Level 2 mappers still have to *spell* the Level 1 variants (`Refused`,
 `EmailResolution`) because the enum is shared and `match` is exhaustive; they map them to an
@@ -204,11 +207,14 @@ its gate effect.
 > extensions via the `AuthUser` extractor.
 
 **temper-mcp.** `require_mcp_auth` verifies the JWT and injects **two** things into the HTTP
-extensions: the decoded `RawJwtClaims` and the raw `BearerToken` (the ladder's `/userinfo`
-rung needs the token itself, not its claims). `ensure_profile_from_parts` — called at the top
-of every tool — pulls both back out and calls `authenticate_token` then
-`require_system_access` back to back, caching the resolved profile for the tool body. Both
-refusals route through `map_authz_error`.
+extensions: the decoded `RawJwtClaims` and the raw `BearerToken`. Since the network door
+(the MCP door goal, torn down 2026-10-03) temper-mcp runs **no** seam call of its own: every
+tool relays the caller's bearer to temper-api through `relay_client`, where `require_auth`
+and `require_system_access` run exactly as for any HTTP caller. The API's 401/403 bodies come
+back preserved and are mapped arm-for-arm onto rmcp errors (`map_post_edge_refusal`). Until
+teardown, `ensure_profile_from_parts` called `authenticate_token` + `require_system_access`
+in-process; it is deleted, and the source gates in `crates/temper-mcp/src/source_gates.rs` keep any tool from gating
+in-process again.
 
 **temper-api's internal SAML reconcile handler** is the third caller, on the federated path:
 `handlers/internal_saml.rs` calls `resolve_federated_human`. See
@@ -232,8 +238,9 @@ constructing its own principal.
   `resolve_from_claims` directly as a best-effort cache seed, which bypassed Level 1's
   `is_active` check: a deactivated account was refused on every *tool call* but could still
   **open an MCP session**. It now goes through `authenticate_token`, and a refusal there
-  propagates rather than being warned past. (`initialize` runs Level 1 only; Level 2 still
-  runs per tool call in `ensure_profile_from_parts`.)
+  propagates rather than being warned past. (Both gaps are now closed structurally: since the
+  network door, temper-mcp resolves no principal at all — Levels 1 + 2 run at temper-api on
+  every relayed tool call.)
 
 ## The parity test — at the production caller's level
 
@@ -241,9 +248,11 @@ constructing its own principal.
 profile are refused **identically** on both surfaces:
 
 - The **API** surface is driven over HTTP through the real middleware stack.
-- The **MCP** surface is driven by constructing a `TemperMcpService` over the same test
-  pool and calling the production gate `ensure_profile_from_parts` with hand-built request
-  `Parts` carrying `RawJwtClaims` + `BearerToken` — exactly what `require_mcp_auth` injects.
+- The **MCP** surface is driven through the network door: a relay-ready `TemperMcpService`
+  over the same app's listener, and a relayed tool act (`common::mcp_act_as`) carrying the
+  same bearer. (Until teardown it called the in-process gate `ensure_profile_from_parts`;
+  with that gate deleted, the test holds the MCP rendering of the one seam's answers to the
+  API's.)
 
 This is the test the per-surface `is_active` gap would have failed. A direct-call unit test
 over `authenticate_token` / `authenticate` / `require_system_access` (which also exists, in

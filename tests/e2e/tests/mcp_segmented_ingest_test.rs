@@ -1,6 +1,5 @@
 //! Segmented ingest driven the way an MCP caller drives it: through the production tool functions
-//! (`tools::ingest::*` on the direct binding, whose caller the suite resolves through the service's
-//! one gate — `ensure_profile_from_parts` — and threads into each call), with no client-side
+//! (`tools::ingest::*`, relayed across the network door on the caller's bearer), with no client-side
 //! chunks, no embedder, and no `.temper/` manifest. The
 //! one-shot reference create crosses the network door (`relay_client` → the real `create_app`
 //! listener → the API's ingest door) on the same principal's bearer.

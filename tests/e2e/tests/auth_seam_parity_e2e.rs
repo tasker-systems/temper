@@ -1,15 +1,17 @@
 #![cfg(feature = "test-db")]
 //! Cross-surface auth parity: the gate a per-surface implementation would have
 //! missed. Proves `is_active` (deactivation) and `system_access` are enforced
-//! identically on temper-api (HTTP) and temper-mcp (`TemperMcpService`) — both
-//! now routing through the shared `temper-services::auth` seam.
+//! identically on temper-api (HTTP) and temper-mcp (`TemperMcpService`).
 //!
 //! The API surface is driven over HTTP through the real middleware stack via
-//! `app.reqwest_client`. The MCP surface is driven by constructing a
-//! `TemperMcpService` over the same test pool and calling the production gate
-//! `ensure_profile_from_parts` with hand-built request `Parts` carrying
-//! `RawJwtClaims` (mirroring the construction block in `act_authorship_mcp_e2e.rs`,
-//! minus the profile-cache seed — here the gate call is the thing under test).
+//! `app.reqwest_client`. The MCP surface is driven the way it runs since the network
+//! door's teardown: a relay-ready `TemperMcpService` over the same app's real listener,
+//! a tool call carrying the caller's bearer, Level 1 + 2 adjudicated at the API, and the
+//! post-edge refusals mapped arm-for-arm (`AcrossAuth`). Until teardown these MCP legs
+//! called the in-process gate `ensure_profile_from_parts`; that gate is gone (no tool
+//! resolves a profile in-process any more), so the legs witness the door instead — the
+//! parity now holds by construction (one seam), and these tests hold the MCP RENDERING
+//! of that seam's answers to the API's.
 
 mod common;
 
@@ -19,8 +21,8 @@ use temper_services::auth_config::{AuthConfig, AuthMode};
 use temper_services::config::ApiConfig;
 use temper_services::state::{AppState, JwksKeyStore};
 
-/// The `AppState` both MCP helpers below share — the same auth config temper-api runs with, so a
-/// difference in behavior between the surfaces can only come from the surfaces themselves.
+/// The `AppState` the spawned MCP router runs on — the same auth config temper-api runs with, so
+/// a difference in behavior between the surfaces can only come from the surfaces themselves.
 fn mcp_app_state(pool: &sqlx::PgPool) -> AppState {
     let decoding_key =
         jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
@@ -52,25 +54,12 @@ fn mcp_app_state(pool: &sqlx::PgPool) -> AppState {
     AppState::new(pool.clone(), jwks_store, api_config)
 }
 
-/// Construct a `TemperMcpService` over the test pool. CONSTRUCTION ONLY — no
-/// profile-cache seeding, because these tests assert REFUSAL: the gate call
-/// (`ensure_profile_from_parts`) is the thing under test and is made by the
-/// test body.
-async fn build_mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMcpService {
-    temper_mcp::service::TemperMcpService::new(
-        mcp_app_state(pool),
-        temper_mcp::service::relay_off_config(),
-        temper_mcp::service::shared_relay_pool(),
-    )
-}
-
 /// Spawn the **real** MCP router — `build_router`, the same one `api/mcp.rs` serves — on a random
 /// port, and return its base URL.
 ///
-/// The other MCP helpers here call `ensure_profile_from_parts` with hand-built `RawJwtClaims`,
-/// which enters *after* JWT verification. That means no test in this repo has ever driven
-/// `require_mcp_auth`, and so MCP's `aud` check has been entirely uncovered — on the one surface
-/// where the bug being fixed here originally diverged. This closes that.
+/// The tool-level MCP legs here enter through `context_manage` with hand-built parts, which is
+/// *after* JWT verification; this drives `require_mcp_auth` itself, so MCP's `aud` check — on the
+/// one surface where the audience bug originally diverged — is covered.
 async fn spawn_mcp_server(pool: &sqlx::PgPool) -> String {
     let mcp_config = temper_mcp::McpConfig {
         mcp_base_url: "http://localhost".to_string(),
@@ -95,37 +84,12 @@ async fn spawn_mcp_server(pool: &sqlx::PgPool) -> String {
     format!("http://{addr}")
 }
 
-/// Build request `Parts` carrying `RawJwtClaims` for `sub`, to drive the MCP
-/// surface's production gate. `exp: 0` is fine — the JWT was already validated
-/// by middleware in prod; here we inject claims directly and
-/// `ensure_profile_from_parts` does not re-check `exp`.
-fn mcp_parts(sub: &str) -> axum::http::request::Parts {
-    axum::http::Request::builder()
-        // The MCP JWT middleware injects the raw bearer alongside the claims; the auth
-        // seam needs it for the email ladder's /userinfo rung. Synthetic parts must
-        // carry both or the service rejects the request as unwired.
-        .extension(temper_mcp::middleware::BearerToken("synthetic".to_string()))
-        .extension(temper_services::auth::RawJwtClaims {
-            sub: sub.to_string(),
-            email: None,
-            email_verified: None,
-            azp: None,
-            gty: None,
-            exp: 0,
-            iat: 0,
-        })
-        .body(())
-        .expect("build request")
-        .into_parts()
-        .0
-}
-
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn active_approved_allowed_on_both_surfaces(pool: sqlx::PgPool) {
     // Positive control: the happy path is admitted identically on both surfaces,
     // so the parity truth-table is self-contained (refusal cases below prove the
     // negatives). Open mode → an active, authenticated profile has system access.
-    let app = common::setup(pool.clone()).await;
+    let app = common::setup_relay(pool.clone()).await;
 
     // API surface: a gated endpoint succeeds.
     let api = app
@@ -141,9 +105,9 @@ async fn active_approved_allowed_on_both_surfaces(pool: sqlx::PgPool) {
         "API must admit an active, approved profile"
     );
 
-    // MCP surface: the production gate resolves + authorizes without error — and
-    // returns the identity it admitted. Parity means the SAME profile the API
-    // resolves for the same bearer, so consume the return and compare.
+    // MCP surface: a relayed act is admitted — and lands under the identity the API
+    // resolved for the bearer. Parity means the SAME profile, so read the act's owner
+    // back and compare it with the API's own profile read.
     let api_profile = app
         .reqwest_client
         .get(app.url("/api/profile"))
@@ -161,14 +125,12 @@ async fn active_approved_allowed_on_both_surfaces(pool: sqlx::PgPool) {
         .parse()
         .expect("profile id parse");
 
-    let svc = build_mcp_service(&pool).await;
-    let authed = svc
-        .ensure_profile_from_parts(&mcp_parts("e2e-test-user"))
+    let created = common::mcp_act_as(&app, &app.token)
         .await
         .expect("MCP must admit an active, approved profile");
+    let owner_id = common::created_context_owner(&pool, &created).await;
     assert_eq!(
-        authed.profile().id,
-        api_profile_id,
+        owner_id, api_profile_id,
         "both surfaces must resolve the SAME profile for the same identity"
     );
 }
@@ -177,7 +139,7 @@ async fn active_approved_allowed_on_both_surfaces(pool: sqlx::PgPool) {
 async fn deactivated_profile_refused_on_both_surfaces(pool: sqlx::PgPool) {
     // Open mode — deactivation is gated BEFORE system_access in the seam, so it
     // refuses even without invite-only.
-    let app = common::setup(pool.clone()).await;
+    let app = common::setup_relay(pool.clone()).await;
 
     // Preflight to create the `e2e-test-user` profile.
     let resp = app
@@ -215,10 +177,9 @@ async fn deactivated_profile_refused_on_both_surfaces(pool: sqlx::PgPool) {
         "API must refuse deactivated profile"
     );
 
-    // MCP surface: refused (terminal rmcp error) through the real service gate.
-    let svc = build_mcp_service(&pool).await;
-    let err = svc
-        .ensure_profile_from_parts(&mcp_parts("e2e-test-user"))
+    // MCP surface: refused (terminal rmcp error) through the network door — the API's
+    // 401 body, mapped to the terminal deactivation sentence.
+    let err = common::mcp_act_as(&app, &app.token)
         .await
         .expect_err("MCP must refuse deactivated profile");
     assert!(
@@ -230,7 +191,7 @@ async fn deactivated_profile_refused_on_both_surfaces(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn no_system_access_refused_on_both_surfaces(pool: sqlx::PgPool) {
-    let app = common::setup(pool.clone()).await;
+    let app = common::setup_relay(pool.clone()).await;
 
     // Preflight to create the admin profile and resolve its id.
     let profile = app
@@ -284,11 +245,9 @@ async fn no_system_access_refused_on_both_surfaces(pool: sqlx::PgPool) {
     let api_body: serde_json::Value = api.json().await.expect("api 403 body");
     let api_kind = kind(&api_body["error"]["details"], "API");
 
-    // MCP surface: the `e2e-second-user` profile now exists; the gate must
-    // refuse it for lack of system access through the real service gate.
-    let svc = build_mcp_service(&pool).await;
-    let err = svc
-        .ensure_profile_from_parts(&mcp_parts("e2e-second-user"))
+    // MCP surface: the same bearer through the network door must be refused for lack
+    // of system access — the API's 403, mapped to the MCP system-access arm.
+    let err = common::mcp_act_as(&app, &second)
         .await
         .expect_err("MCP must refuse profile with no system access");
     assert!(
@@ -360,8 +319,7 @@ async fn no_system_access_refused_on_both_surfaces(pool: sqlx::PgPool) {
         "API refusal kind must follow the standing"
     );
 
-    let err_requested = svc
-        .ensure_profile_from_parts(&mcp_parts("e2e-second-user"))
+    let err_requested = common::mcp_act_as(&app, &second)
         .await
         .expect_err("MCP must refuse requested standing");
     let mcp_requested_data = err_requested
