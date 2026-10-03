@@ -4,7 +4,8 @@
 # WHY THIS EXISTS
 # ---------------
 # audit-route-auth.sh freezes the unauthenticated route set of crates/temper-api/src/routes/ —
-# and ONLY that file. temper-mcp's router (crates/temper-mcp/src/router.rs) is a second routing
+# and ONLY that file. The MCP server's router (crates/temper-mcp-server/src/router.rs — the
+# deployed edge around the temper-mcp tool layer) is a second routing
 # surface, built in a different shape: one `build_router` function assembling sub-routers inline
 # with `.merge()`. A new public route added to THAT surface trips no guard. This script freezes
 # the MCP router's route set and asserts the auth layer rides the block that must carry it:
@@ -39,10 +40,11 @@
 #     prints an UNPARSEABLE marker and fails — a non-literal path cannot be frozen.
 #
 # FIELD OF VIEW — stated so green is never mistaken for more than it checks:
-#   - THIS guard watches build_router's body in crates/temper-mcp/src/router.rs ONLY — and it
-#     MECHANICALLY backs the "only" with check (a2): Router::new() or Router::default() anywhere
-#     else under crates/temper-mcp/src fails, so a second router-assembly site cannot grow
-#     silently outside the frozen one.
+#   - THIS guard watches build_router's body in crates/temper-mcp-server/src/router.rs ONLY — and
+#     it MECHANICALLY backs the "only" with check (a2): Router::new() or Router::default()
+#     anywhere else under crates/temper-mcp-server/src, or ANYWHERE under the tool layer's
+#     crates/temper-mcp/src (which assembles no router at all), fails, so a second
+#     router-assembly site cannot grow silently outside the frozen one.
 #   - It does not watch temper-api's routes (audit-route-auth.sh), the AS's api/** entry points
 #     (audit-as-entry-points.sh), or service-layer predicate drift (audit-handler-authz-drift.sh).
 #     The api/*.rs BINS' contents are checked for assembly tokens by the AS guard, which owns
@@ -102,8 +104,10 @@ strip_comments() {
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-ROUTER_FILE="${ROUTER_FILE:-crates/temper-mcp/src/router.rs}"
-MCP_SRC_DIR="${MCP_SRC_DIR:-crates/temper-mcp/src}"
+ROUTER_FILE="${ROUTER_FILE:-crates/temper-mcp-server/src/router.rs}"
+MCP_SRC_DIR="${MCP_SRC_DIR:-crates/temper-mcp-server/src}"
+# The tool layer the server hosts: it must assemble no router anywhere (check (a2)).
+TOOL_LAYER_SRC_DIR="${TOOL_LAYER_SRC_DIR:-crates/temper-mcp/src}"
 # Absolute form of ROUTER_FILE: grep -rl prints paths relative to MCP_SRC_DIR's form, so the
 # self-exclusion in (a2) must compare like with like.
 ROUTER_ABS="$(cd "$(dirname "$ROUTER_FILE")" && pwd)/$(basename "$ROUTER_FILE")"
@@ -241,9 +245,10 @@ if [[ -n "$UNKNOWN_GROUPS" ]]; then
 fi
 
 # (a2) Router assembly must stay inside the one file this guard freezes. A second Router::new()
-# or Router::default() site elsewhere under the crate would be invisible to every check above —
-# this is the mechanical form of the field-of-view statement in the header.
-OTHER_ASSEMBLY="$(grep -rlE 'Router::(new|default)' "$MCP_SRC_DIR" --include='*.rs' | while IFS= read -r p; do
+# or Router::default() site elsewhere under the server crate, or anywhere in the tool layer it
+# hosts, would be invisible to every check above — this is the mechanical form of the
+# field-of-view statement in the header.
+OTHER_ASSEMBLY="$(grep -rlE 'Router::(new|default)' "$MCP_SRC_DIR" "$TOOL_LAYER_SRC_DIR" --include='*.rs' | while IFS= read -r p; do
   p_abs="$(cd "$(dirname "$p")" && pwd)/$(basename "$p")"
   [[ "$p_abs" != "$ROUTER_ABS" ]] && printf '%s\n' "$p"
 done || true)"

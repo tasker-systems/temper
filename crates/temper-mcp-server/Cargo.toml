@@ -40,6 +40,10 @@ tracing = "0.1"
 # "http://localhost.evil.com/…" as a loopback callback.
 url = "2"
 
+[package.metadata.cargo-machete]
+# Used only through `temper_telemetry::root_span!`'s expansion, which machete cannot see.
+ignored = ["temperkb-core"]
+
 [dev-dependencies]
 # The tests' static-key JWKS store needs the cfg-gated constructor; the dev-dep enables
 # temper-services' NARROW `test-harness` (never `test-db`).

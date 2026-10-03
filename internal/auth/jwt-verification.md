@@ -7,7 +7,9 @@ thing that does, because the audience differs legitimately. The shared machinery
 construction, the gates) is the seam's.
 
 Source: `crates/temper-services/src/state.rs` (`JwksKeyStore`),
-`crates/temper-api/src/middleware/auth.rs`, `crates/temper-mcp/src/middleware.rs`.
+`crates/temper-api/src/middleware/auth.rs`, `crates/temper-mcp-server/src/middleware.rs`. The auth
+identity itself is parsed once, in `temper_auth::config::parse_auth_config` (temperkb-auth), by
+both surfaces' boots.
 
 ## Two issuers, one verifier
 
@@ -52,7 +54,7 @@ fallback to `AUTH_AUDIENCE`. That is gone.
 | | issuer | audience |
 |---|--------|----------|
 | temper-api | `config.auth.issuer` | `config.auth.audience` |
-| temper-mcp | `config.auth.issuer` (same) | `config.auth.audience` (**the same**) |
+| temper-mcp-server | `auth.issuer` (same) | `auth.audience` (**the same**) |
 
 Both call `jwks_store.validation(issuer, audience, alg)` — note `audience: &str`, not
 `Option<&str>`. An instance has exactly **one** audience, parsed once at boot.

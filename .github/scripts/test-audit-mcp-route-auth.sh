@@ -39,7 +39,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AUDIT_SCRIPT="${SCRIPT_DIR}/audit-mcp-route-auth.sh"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-REAL_ROUTER="${REPO_ROOT}/crates/temper-mcp/src/router.rs"
+REAL_ROUTER="${REPO_ROOT}/crates/temper-mcp-server/src/router.rs"
 PASS=0
 FAIL=0
 
@@ -186,6 +186,15 @@ cp "$REAL_ROUTER" "$MCP_SRC_DEFAULT/router.rs"
 printf 'use axum::Router;\npub fn stray() -> Router {\n    Router::default()\n}\n' > "$MCP_SRC_DEFAULT/stray.rs"
 run_test "Router::default second site: fails" "${MCP_SRC_DEFAULT}/router.rs" 1 \
     "outside the frozen router file" "MCP_SRC_DIR=${MCP_SRC_DEFAULT}"
+
+# --- (9c) the tool layer assembles a router: fails even with a clean server src ---
+TOOL_SRC_FIX="${FIXTURE_DIR}/tool_src"
+MCP_SRC_CLEAN="${FIXTURE_DIR}/mcp_src_clean"
+mkdir -p "$TOOL_SRC_FIX" "$MCP_SRC_CLEAN"
+cp "$REAL_ROUTER" "$MCP_SRC_CLEAN/router.rs"
+printf 'use axum::Router;\npub fn stray() -> Router {\n    Router::new()\n}\n' > "$TOOL_SRC_FIX/stray.rs"
+run_test "router assembled in the tool layer: fails" "${MCP_SRC_CLEAN}/router.rs" 1 \
+    "outside the frozen router file" "MCP_SRC_DIR=${MCP_SRC_CLEAN} TOOL_LAYER_SRC_DIR=${TOOL_SRC_FIX}"
 
 # --- (10) a helper router merged in: its routes live outside the baseline ---
 HELPER_MERGE="${FIXTURE_DIR}/helper_merge.rs"

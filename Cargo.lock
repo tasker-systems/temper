@@ -6361,7 +6361,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "trybuild",
- "url",
  "utoipa",
  "uuid",
  "wiremock",
