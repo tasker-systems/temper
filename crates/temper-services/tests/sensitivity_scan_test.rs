@@ -532,13 +532,12 @@ async fn a_claim_that_is_never_scanned_is_reaped_with_its_attempt_and_its_run_le
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn the_claim_rotates_through_every_enabled_text_surface(pool: PgPool) {
-    let enabled: Vec<String> = sqlx::query_scalar(
-        "SELECT surface FROM sensitivity.surfaces WHERE enabled AND shape = 'text' ORDER BY 1",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
+async fn the_claim_rotates_through_every_enabled_surface(pool: PgPool) {
+    let enabled: Vec<String> =
+        sqlx::query_scalar("SELECT surface FROM sensitivity.surfaces WHERE enabled ORDER BY 1")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
     let mut picked = Vec::new();
     for _ in 0..enabled.len() {
         let (run, job): (Uuid, Uuid) =

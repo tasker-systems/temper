@@ -512,7 +512,8 @@ async fn the_seeded_detectors_are_cut_ones_nine(pool: PgPool) {
             *sev,
             v.map(str::to_string),
             true,
-            1,
+            // payment_card v2 stops reading cards out of hex runs (Q42, 20261003150000).
+            if *id == "payment_card" { 2 } else { 1 },
         )
     })
     .collect();
