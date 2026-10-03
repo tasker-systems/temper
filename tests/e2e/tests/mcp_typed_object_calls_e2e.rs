@@ -55,6 +55,7 @@ async fn spawn_mcp_router(pool: sqlx::PgPool, api_base_url: &str) -> std::net::S
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        sensitivity_sweep_salt: None,
         mcp_service_secret: Some(common::TEST_MCP_SERVICE_SECRET.to_string()),
         vercel_connect: None,
         slack_link: None,

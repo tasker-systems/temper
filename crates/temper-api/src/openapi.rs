@@ -550,6 +550,7 @@ mod tests {
             "/internal/saml/reconcile",
             "/api/embed/dispatch",
             "/api/erasure/drain",
+            "/api/sensitivity/sweep",
         ] {
             assert!(
                 !spec.paths.paths.contains_key(absent),

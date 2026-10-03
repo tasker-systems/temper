@@ -23,6 +23,21 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **The sensitivity sweep's cron tick: `/api/sensitivity/sweep`, and the `SENSITIVITY_SWEEP_SALT` variable**
+  A new internal route, gated by the shared `EMBED_DISPATCH_SECRET` bearer and kept out of the
+  contract. Every five minutes it claims one surface's work order and scans it. It answers with
+  counts and ids only, and reports the same facts on a `sensitivity_sweep` span. The migration
+  recreates `sensitivity_sweep_tick` with the same parameters and a wider integer-only result:
+  the door is its first caller. The API reads a new shared secret, `SENSITIVITY_SWEEP_SALT`. Like
+  the others, it refuses the boot when it is under 16 characters or equals another shared secret.
+  When it is unset, every tick records a failed run (`salt_missing`) and logs an error. Who
+  observes: operators, through the span and the run rows; deployers, who must set the variable.
+  No client request or response changes. User-visible: no. Release relevance: additive.
+pr: self
+classes: additive
+surfaces: http, internal, schema
+status: signal-only
+
 - **Two new admin doors: `POST /api/admin/resources/block-history-scrub` and its read-only `/survey`**
   The block history scrub (resource erasure D11) empties the history of named blocks of a resource
   that is not erased, behind two new operation ids (`admin_scrub_block_history`,

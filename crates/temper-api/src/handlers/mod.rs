@@ -36,6 +36,7 @@ pub mod resources;
 pub mod schema;
 pub mod search;
 pub mod segments;
+pub mod sensitivity_sweep;
 pub mod slack_disconnect;
 pub mod slack_link;
 pub mod slack_mint;

@@ -67,6 +67,7 @@ fn service_for_dispatch_witness() -> TemperMcpService {
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        sensitivity_sweep_salt: None,
         mcp_service_secret: None,
         vercel_connect: None,
         slack_link: None,

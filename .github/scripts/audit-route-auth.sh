@@ -114,6 +114,7 @@ embed_internal_routes	handlers::embed::warm
 embed_internal_routes	handlers::erasure::drain
 embed_internal_routes	handlers::internal_call_health::check_internal_calls
 embed_internal_routes	handlers::region::dispatch
+embed_internal_routes	handlers::sensitivity_sweep::sweep
 embed_internal_routes	handlers::slack_disconnect::reap_intents
 internal_routes	handlers::internal_saml::reconcile
 internal_routes	handlers::internal_saml::resolve_principal

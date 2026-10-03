@@ -303,6 +303,7 @@ async fn mcp_requests_produce_a_root_span(pool: sqlx::PgPool) {
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        sensitivity_sweep_salt: None,
         mcp_service_secret: None,
         vercel_connect: None,
         slack_link: None,
