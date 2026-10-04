@@ -863,13 +863,11 @@ mod tests {
         let pairs = with_secrets(&[("SENSITIVITY_SWEEP_SALT", salt.to_string())]);
         let config = ApiConfig::from_lookup(lookup_of(&pairs)).expect("boots");
         let dump = format!("{config:?}");
-        assert!(
-            !dump.contains(salt),
-            "the salt is in the config dump: {dump}"
-        );
+        // Neither message prints the dump: on failure it would carry the very value tested for.
+        assert!(!dump.contains(salt), "the salt is in the config dump");
         assert!(
             dump.contains(r#"sensitivity_sweep_salt: Some("redacted")"#),
-            "{dump}"
+            "the config dump does not report the salt as present and redacted"
         );
     }
 
