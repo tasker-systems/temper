@@ -842,7 +842,7 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
 
     // The network door: the relay client forwards on the caller's REAL bearer to this
     // app's listener; the API adjudicates and the gated read answers.
-    let svc = app.mcp_relay_service(pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
 
     let result = temper_mcp::tools::resources::get_resource(
@@ -971,7 +971,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
     // The network door: the relay client forwards on the caller's REAL bearer to this
     // app's listener; the API adjudicates and the gated list answers. Context-ref
     // resolution is absorbed server-side — the `@me/list-selector` string crosses as-is.
-    let svc = app.mcp_relay_service(pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
 
     // Filter by doctype=research → only the research row, enriched.

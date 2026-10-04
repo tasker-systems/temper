@@ -2,13 +2,15 @@ use crate::auth_config::{parse_auth_config, AuthConfig, ConfigError};
 use crate::broker::VercelConnectConfig;
 use crate::services::grant_crypto::VaultKey;
 use std::env;
+use temper_auth::config::shared_secret;
 
 /// The instance's whole configuration.
 ///
 /// `Debug` is hand-written to REDACT `internal_reconcile_secret`, `embed_dispatch_secret`,
-/// `slack_mint_secret` and `mcp_service_secret` — the plaintext shared secrets behind the
-/// signature and relay-trust gates, the last of which is what lets a caller claim MCP
-/// provenance at the ledger. A derived `Debug` would print them verbatim wherever an
+/// `slack_mint_secret`, `mcp_service_secret` and `sensitivity_sweep_salt` — the plaintext shared
+/// secrets behind the signature and relay-trust gates, the last of the gates being what lets a
+/// caller claim MCP provenance at the ledger, and the key to every hash the sensitivity sweep
+/// stores. A derived `Debug` would print them verbatim wherever an
 /// `ApiConfig` is formatted. This is the same reasoning already spelled out on
 /// [`SlackLinkConfig`] below ("would print it verbatim wherever this or the enclosing
 /// `ApiConfig` is formatted") — the nested config got the treatment before its parent did.
@@ -42,6 +44,15 @@ pub struct ApiConfig {
     /// shared with any other secret — `check_secret_distinctness` refuses the boot on a
     /// collision, because sharing would let every holder of the other key forge relay trust.
     pub mcp_service_secret: Option<String>,
+    /// The key every hash the sensitivity sweep stores is computed under (sensitivity-sweep spec
+    /// D11, Q34, Q44): passed to `sensitivity_sweep_tick` as a bind parameter and never written to
+    /// the database. `None` is not quiet: every tick then records a failed run (`salt_missing`) and
+    /// the door raises an error event, so an unconfigured deployment reports itself.
+    ///
+    /// Its own variable rather than derived from `EMBED_DISPATCH_SECRET` (Q44). Every holder of the
+    /// cron bearer could compute a derived salt, and with it confirm a guessed SSN against a stored
+    /// fingerprint. Rotating the bearer would also re-key every stored hash.
+    pub sensitivity_sweep_salt: Option<String>,
     /// Vercel Connect broker credentials. `None` when the four env vars are not all
     /// set — the deployment then has a `NullBroker` and mints fail clearly. Never
     /// hardcoded; a self-hosted operator sets their own.
@@ -226,6 +237,10 @@ impl std::fmt::Debug for ApiConfig {
                 "mcp_service_secret",
                 &self.mcp_service_secret.as_ref().map(|_| "redacted"),
             )
+            .field(
+                "sensitivity_sweep_salt",
+                &self.sensitivity_sweep_salt.as_ref().map(|_| "redacted"),
+            )
             .field("vercel_connect", &self.vercel_connect)
             .field("slack_link", &self.slack_link)
             .field(
@@ -273,19 +288,7 @@ impl ApiConfig {
         check_secret_distinctness(&lookup)?;
         check_shared_secret_strength(&lookup)?;
 
-        let cors_origins: Vec<String> = lookup("CORS_ORIGINS")
-            .unwrap_or_default()
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        if cors_origins.is_empty() {
-            tracing::info!(
-                "CORS_ORIGINS is not set — cross-origin requests will be denied. \
-                 Set CORS_ORIGINS=* for permissive mode in development."
-            );
-        }
+        let cors_origins = crate::cors::parse_cors_origins(&lookup);
 
         let enable_swagger = lookup("ENABLE_SWAGGER")
             .map(|v| v == "true" || v == "1")
@@ -307,6 +310,7 @@ impl ApiConfig {
             internal_reconcile_secret: shared_secret(&lookup, "INTERNAL_RECONCILE_SECRET"),
             embed_dispatch_secret: shared_secret(&lookup, "EMBED_DISPATCH_SECRET"),
             mcp_service_secret: shared_secret(&lookup, "TEMPER_MCP_SERVICE_SECRET"),
+            sensitivity_sweep_salt: shared_secret(&lookup, "SENSITIVITY_SWEEP_SALT"),
             vercel_connect: parse_vercel_connect(&lookup),
             slack_link: parse_slack_link(&lookup),
             slack_mint_secret: shared_secret(&lookup, "SLACK_MINT_SECRET"),
@@ -345,7 +349,10 @@ impl ApiConfig {
 /// admit more; B-C5, final-pass review).
 const VERCEL_REQUEST_BODY_CAP_BYTES: usize = 4_500_000;
 
-fn parse_blob(lookup: impl Fn(&str) -> Option<String>) -> (Option<BlobConfig>, bool) {
+///
+/// Public because the MCP server reads the same posture at its own boot, without an `ApiConfig`:
+/// the door it advertises must be the door the API serves, so the two parse it once.
+pub fn parse_blob(lookup: impl Fn(&str) -> Option<String>) -> (Option<BlobConfig>, bool) {
     let get = |k| lookup(k).filter(|s: &String| !s.is_empty());
 
     if let Some(raw) = get("BLOB_ENABLED") {
@@ -526,16 +533,18 @@ fn parse_slack_link(lookup: impl Fn(&str) -> Option<String>) -> Option<SlackLink
 }
 
 /// Every variable whose plaintext value is a standalone credential: hold the string, exercise the
-/// capability. Five gate a surface; the sixth decrypts what one of them protects.
+/// capability. Five gate a surface; the sixth decrypts what one of them protects; the salt keys the
+/// sensitivity sweep's stored hashes.
 ///
 /// | Variable                    | Capability it confers                                          |
 /// | --------------------------- | -------------------------------------------------------------- |
 /// | `INTERNAL_RECONCILE_SECRET` | call `/internal/saml/reconcile`                                  |
-/// | `EMBED_DISPATCH_SECRET`     | call the embed drain crons and the `/api/erasure/drain` byte-delete fence |
+/// | `EMBED_DISPATCH_SECRET`     | call the embed drain crons, the `/api/erasure/drain` byte-delete fence and the `/api/sensitivity/sweep` tick |
 /// | `SLACK_LINK_SECRET`         | ask `/internal/slack/link-state` *"is this principal linked?"*    |
 /// | `SLACK_MINT_SECRET`         | mint a token acting as **any linked human, with their full reach**|
 /// | `BLOB_READ_WRITE_TOKEN`     | write to the provider blob store                                  |
 /// | `SLACK_VAULT_ENC_KEY`       | decrypt **every** vaulted refresh token                           |
+/// | `SENSITIVITY_SWEEP_SALT`    | confirm a guessed value against any stored sensitivity fingerprint |
 ///
 /// The order is load-bearing only in that it fixes which pair a multi-way collision reports, so the
 /// error is deterministic rather than dependent on iteration order.
@@ -547,7 +556,7 @@ fn parse_slack_link(lookup: impl Fn(&str) -> Option<String>) -> Option<SlackLink
 /// stored grant. And `openssl rand -base64 32` is the documented generator for the vault key
 /// (`parse_slack_link` above says so), which makes "generate once, paste everywhere" the exact
 /// operator error this guards.
-const SHARED_SECRET_VARS: [&str; 7] = [
+const SHARED_SECRET_VARS: [&str; 8] = [
     "INTERNAL_RECONCILE_SECRET",
     "EMBED_DISPATCH_SECRET",
     "SLACK_LINK_SECRET",
@@ -555,7 +564,31 @@ const SHARED_SECRET_VARS: [&str; 7] = [
     "BLOB_READ_WRITE_TOKEN",
     "SLACK_VAULT_ENC_KEY",
     "TEMPER_MCP_SERVICE_SECRET",
+    "SENSITIVITY_SWEEP_SALT",
 ];
+
+/// The gate secrets this process reads, each held to `temper_auth::config`'s strength floor.
+/// Only the secrets in this arc's scope are refused — the e2e harness's `e2e-mcp-relay-service-
+/// credential` constant is excluded from every check by being a *harness* constant, but
+/// a production deployment pasting it would now refuse to boot, as it should.
+const STRENGTH_CHECKED_SECRETS: [&str; 4] = [
+    "TEMPER_MCP_SERVICE_SECRET",
+    "INTERNAL_RECONCILE_SECRET",
+    "EMBED_DISPATCH_SECRET",
+    "SLACK_MINT_SECRET",
+];
+
+fn check_shared_secret_strength(
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<(), ConfigError> {
+    temper_auth::config::check_shared_secret_strength(lookup, &STRENGTH_CHECKED_SECRETS)?;
+    if let Some(salt) = shared_secret(lookup, "SENSITIVITY_SWEEP_SALT") {
+        if salt.chars().count() < MIN_SWEEP_SALT_CHARS {
+            return Err(ConfigError::WeakSweepSalt);
+        }
+    }
+    Ok(())
+}
 
 /// Refuse to boot when two shared secrets hold the same value.
 ///
@@ -577,48 +610,10 @@ const SHARED_SECRET_VARS: [&str; 7] = [
 ///
 /// Only [`ApiConfig::from_lookup`] runs this, so the in-process test harnesses that build an
 /// `ApiConfig` by struct literal are unaffected — correctly, since they are not deployments.
-/// A shared secret read from the environment. Compared against a header PRESENTED as
-/// its value, so the stored value and the presentation must agree byte-for-byte —
-/// surrounding whitespace is an operator artifact (a pasted value, a trailing newline
-/// from `$(cat /run/secrets/…)` or an env_file), never part of the secret. Trimming
-/// here keeps the gate from silently failing every presentation of an
-/// otherwise-correct secret, and keeps `check_secret_distinctness`'s compare on
-/// trimmed values honest about collisions like `"X"` vs `"X␣"`.
-fn shared_secret(lookup: &impl Fn(&str) -> Option<String>, name: &str) -> Option<String> {
-    lookup(name)
-        .map(|v| v.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-/// The floor a header-compared shared secret must clear. The values that would trip
-/// this — a committed test constant, an operator's pasted `"changeme"`, an
-/// under-generated placeholder — are the only ones with any business being refused
-/// here; a 16-char random string is the smallest secret a holder cannot guess.
-const MIN_SHARED_SECRET_CHARS: usize = 16;
-
-/// A production-level check the distinctness gate cannot express: EACH header-compared
-/// shared secret must be long enough to be a secret. The distinctness gate answers "are
-/// these two values different"; this answers "is this value a secret at all". Only the
-/// secrets in this arc's scope are refused — the e2e harness's `e2e-mcp-relay-service-
-/// credential` constant is excluded from every check by being a *harness* constant, but
-/// a production deployment pasting it would now refuse to boot, as it should.
-fn check_shared_secret_strength(
-    lookup: &impl Fn(&str) -> Option<String>,
-) -> Result<(), ConfigError> {
-    for name in [
-        "TEMPER_MCP_SERVICE_SECRET",
-        "INTERNAL_RECONCILE_SECRET",
-        "EMBED_DISPATCH_SECRET",
-        "SLACK_MINT_SECRET",
-    ] {
-        if let Some(value) = shared_secret(lookup, name) {
-            if value.chars().count() < MIN_SHARED_SECRET_CHARS {
-                return Err(ConfigError::WeakSharedSecret(name));
-            }
-        }
-    }
-    Ok(())
-}
+/// The sensitivity sweep's salt has a higher floor than the gate secrets (Q48). A gate secret is
+/// guessed online, one request at a time. The salt is attacked offline: any reader of the database
+/// holds a matched value beside its stored fingerprint, and can test candidate salts at hash speed.
+const MIN_SWEEP_SALT_CHARS: usize = 32;
 
 fn check_secret_distinctness(lookup: impl Fn(&str) -> Option<String>) -> Result<(), ConfigError> {
     // Empty is absent (the `.filter(|s| !s.is_empty())` convention every field above uses). Two
@@ -673,7 +668,12 @@ mod tests {
         SHARED_SECRET_VARS
             .iter()
             .enumerate()
-            .map(|(i, &name)| (name, format!("secret-value-number-{i}")))
+            .map(|(i, &name)| {
+                (
+                    name,
+                    format!("secret-value-number-{i}-long-enough-for-the-salt"),
+                )
+            })
             .collect()
     }
 
@@ -815,7 +815,9 @@ mod tests {
         let pairs = with_secrets(&[("TEMPER_MCP_SERVICE_SECRET", "too-short".to_string())]);
         assert_eq!(
             check_shared_secret_strength(&lookup_of(&pairs)),
-            Err(ConfigError::WeakSharedSecret("TEMPER_MCP_SERVICE_SECRET")),
+            Err(ConfigError::Auth(
+                crate::auth_config::AuthConfigError::WeakSharedSecret("TEMPER_MCP_SERVICE_SECRET")
+            )),
         );
     }
 
@@ -834,9 +836,59 @@ mod tests {
         )]);
         assert_eq!(check_shared_secret_strength(&lookup_of(&pairs)), Ok(()));
     }
+
+    // FAILS IF: a dictionary-length salt boots (Q48). The value is 16+ characters, so it would pass
+    // the gate secrets' floor: only the salt's own floor refuses it.
+    #[test]
+    fn a_salt_under_thirty_two_characters_refuses_to_boot() {
+        let pairs = with_secrets(&[(
+            "SENSITIVITY_SWEEP_SALT",
+            "changemechangeme-salt".to_string(),
+        )]);
+        assert_eq!(
+            check_shared_secret_strength(&lookup_of(&pairs)),
+            Err(ConfigError::WeakSweepSalt),
+        );
+        let pairs = with_secrets(&[(
+            "SENSITIVITY_SWEEP_SALT",
+            "Zb4qY0m8Vt1kP6sR2wX9nL3cH7jD5fGa".to_string(),
+        )]);
+        assert_eq!(check_shared_secret_strength(&lookup_of(&pairs)), Ok(()));
+    }
+
+    // FAILS IF: a config dump prints the salt. Presence survives, the value does not.
+    #[test]
+    fn the_config_debug_redacts_the_salt() {
+        let salt = "Zb4qY0m8Vt1kP6sR2wX9nL3cH7jD5fGa";
+        let pairs = with_secrets(&[("SENSITIVITY_SWEEP_SALT", salt.to_string())]);
+        let config = ApiConfig::from_lookup(lookup_of(&pairs)).expect("boots");
+        let dump = format!("{config:?}");
+        // Neither message prints the dump: on failure it would carry the very value tested for.
+        assert!(!dump.contains(salt), "the salt is in the config dump");
+        assert!(
+            dump.contains(r#"sensitivity_sweep_salt: Some("redacted")"#),
+            "the config dump does not report the salt as present and redacted"
+        );
+    }
+
+    // FAILS IF: the salt can equal the cron bearer (Q44). Named, rather than left to the exhaustive
+    // pair test, because that test iterates SHARED_SECRET_VARS and stays green when the salt is
+    // removed from it.
+    #[test]
+    fn a_salt_equal_to_the_dispatch_secret_refuses_to_boot() {
+        let shared = "Zb4qY0m8Vt1kP6sR2wX9nL3cH7jD5fGa".to_string();
+        let pairs = with_secrets(&[
+            ("EMBED_DISPATCH_SECRET", shared.clone()),
+            ("SENSITIVITY_SWEEP_SALT", shared),
+        ]);
+        assert!(matches!(
+            check_secret_distinctness(lookup_of(&pairs)),
+            Err(ConfigError::SecretCollision(_, "SENSITIVITY_SWEEP_SALT"))
+        ));
+    }
     //
-    // The sibling assertion on `ConfigError::McpAudienceMismatch`
-    // (`auth_config::tests::errors_name_the_variable_and_never_print_values`) carries the same
+    // The sibling assertion on the auth-identity errors
+    // (`temper_auth::config::tests::errors_name_the_variable_and_never_print_values`) carries the same
     // obligation for a URL. Here the leaked value would be an actual credential, and the boot
     // failure is loud by design — panicked straight to the deployment log by all four entrypoints
     // (`api/axum.rs`, `api/mcp.rs`, `api/internal.rs`, `temper-api/src/main.rs`, each

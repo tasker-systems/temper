@@ -1,8 +1,12 @@
-//! Shared OAuth2 Authorization Code + PKCE mechanics.
+//! Shared OAuth2 Authorization Code + PKCE mechanics, and the instance auth-identity parser.
 //!
-//! Pure: crypto and string building, no HTTP and no I/O. Both surfaces need these —
-//! temper-client for the CLI's loopback login, temper-services for the server-side
-//! Slack account-link callback — and neither may depend on the other.
+//! Pure: crypto, string building and config parsing over an injected lookup — no HTTP and no
+//! I/O. The PKCE half serves temper-client (the CLI's loopback login) and temper-services (the
+//! server-side Slack account-link callback), neither of which may depend on the other. The
+//! [`config`] half is the one parser of an instance's auth identity, read by both verifying
+//! surfaces' boots: the API (through temper-services' `ApiConfig`) and the MCP server
+//! (temper-mcp-server's `McpServerConfig`), so they cannot disagree about which tokens name the
+//! instance.
 //!
 //! What deliberately does NOT live here: the claims -> profile seam. `authenticate` /
 //! `resolve_from_claims` are `pub(crate)` in temper-services *as a security property*
@@ -11,6 +15,7 @@
 //! would evaporate silently.
 
 pub mod authorize;
+pub mod config;
 pub mod pkce;
 pub mod token;
 

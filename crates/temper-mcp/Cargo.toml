@@ -2,12 +2,12 @@
 name = "temper-mcp"
 version.workspace = true
 edition.workspace = true
-description = "MCP server for agent access to the temper knowledge base"
+description = "MCP tool layer for agent access to the temper knowledge base"
 publish = false
 
 [features]
-# Gates the `#[sqlx::test]` suites in `tests/` — without it, `cargo make test`
-# (no database) compiles them out entirely. Same pattern as temper-api/temper-services.
+# Kept so `--features test-db` across the workspace still resolves; temper-mcp itself has no
+# database suites (it holds no pool).
 test-db = []
 
 [dependencies]
@@ -24,11 +24,13 @@ temperkb-client.workspace = true
 # Only for the shared connection pool's type; the feature set mirrors temper-client's
 # so workspace unification builds one reqwest.
 reqwest = { version = "0.12", default-features = false }
-temper-services = { path = "../temper-services" }
+# temper-services is deliberately ABSENT from [dependencies] (a dev-dependency only, for the
+# `AuthzError` witness): the tool layer holds no pool, no key store and no server config. The
+# deployed edge is `temper-mcp-server`, which hands this crate plain values (`host.rs`). A
+# source gate (`src/source_gates.rs`) and the manifest check beside it keep both absent.
 
 temperkb-core = { workspace = true, features = ["web-api", "mcp"] }
 temperkb-workflow = { workspace = true, features = ["web-api", "mcp"] }
-temperkb-telemetry.workspace = true
 
 # Blob commit/read carry bytes over the JSON-only MCP transport as base64.
 base64 = "0.22"
@@ -43,32 +45,22 @@ rmcp = { version = "3.4.1", features = [
 axum = { version = "0.8", features = ["json", "query"] }
 chrono = { version = "0.4", features = ["serde"] }
 http = "1"
-jsonwebtoken = "9"
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.6", features = ["limit"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 schemars = { version = "1", features = ["uuid1"] }
 tracing = "0.1"
-# Host-exact localhost checks in DCR — the prefix match it replaced blessed
-# "http://localhost.evil.com/…" as a loopback callback.
-url = "2"
 uuid = { version = "1", features = ["v7", "serde"] }
 
 [dev-dependencies]
-# The tests' in-process JWKS and the harness's static-key store need the cfg-gated
-# constructor; the dev-dep enables temper-services' NARROW `test-harness` (never
-# `test-db` — that gate compiles the crate's own #[sqlx::test] bodies, which the DB-less
-# unit lane would then run).
-temper-services = { path = "../temper-services", features = ["test-harness"] }
-# `ServiceExt::oneshot` — drives a request through the assembled router without binding a port.
-tower = { version = "0.5", features = ["util"] }
-# Builds the gzip body that witnesses the request-decompression layer.
-flate2 = "1"
+# Test-only: the exhaustive `AuthzError` witness (`service.rs`) mirrors the API's wire body for
+# each variant, so it names the services' error types. Never a runtime dependency (see above).
+temper-services = { path = "../temper-services" }
 # The source gates (`src/source_gates.rs`) parse the crate's own tool modules: real function
 # bodies, real `#[cfg(test)]` attributes and real call/await chains instead of a hand lexer.
 syn = { version = "2", features = ["full", "visit"] }
+# Macro bodies are token streams; the gates read their identifiers.
+proc-macro2 = "1"
 # The exhaustive `AuthzError` witness constructs a typed `Refusal` for the system-access arm.
 temperkb-principal.workspace = true

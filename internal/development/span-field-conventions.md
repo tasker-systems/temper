@@ -49,7 +49,7 @@ requires the carrying span **not** to be the root, identified by the absence of 
 | Span | Created by | Fields |
 |---|---|---|
 | `http_request` | `apply_transport_layers`, `crates/temper-api/src/routes/mod.rs` | `method`, `path`, `version`, `profile_id` (deferred), plus `ROOT_TRACE_FIELDS` (deferred) |
-| `mcp_request` | `build_router`, `crates/temper-mcp/src/router.rs` | same set; `profile_id` recorded in `service.rs` on profile resolution |
+| `mcp_request` | `build_router`, `crates/temper-mcp-server/src/router.rs` | same set; `profile_id` recorded in `service.rs` on profile resolution |
 | act spans | `#[act_span]` (`temper-macros`) on each write command in `crates/temper-services/src/backend/db_backend.rs` | `ACT_SPAN_FIELDS` — `correlation_id`, `invocation_id` (both deferred) |
 
 Act spans take the **method name** as the span name (`update_resource`, `set_facet`, …) rather than a

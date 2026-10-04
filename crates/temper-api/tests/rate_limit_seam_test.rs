@@ -212,6 +212,7 @@ fn limited_reconcile_app(pool: sqlx::PgPool) -> axum::Router {
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        sensitivity_sweep_salt: None,
         mcp_service_secret: None,
         vercel_connect: None,
         slack_link: None,
@@ -320,6 +321,7 @@ async fn an_unconfigured_layer_neither_refuses_nor_counts(pool: sqlx::PgPool) {
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        sensitivity_sweep_salt: None,
         mcp_service_secret: None,
         vercel_connect: None,
         slack_link: None,
@@ -437,6 +439,7 @@ async fn an_unsigned_caller_spends_no_budget(pool: sqlx::PgPool) {
         // not by a disabled endpoint.
         internal_reconcile_secret: Some("test-reconcile-secret".to_string()),
         embed_dispatch_secret: None,
+        sensitivity_sweep_salt: None,
         mcp_service_secret: None,
         vercel_connect: None,
         slack_link: None,

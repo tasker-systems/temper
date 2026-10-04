@@ -74,6 +74,7 @@ ALLOWLIST='/internal/saml/reconcile
 /api/internal-calls/health
 /api/region/dispatch
 /api/erasure/drain
+/api/sensitivity/sweep
 /api/intake/webhook'
 
 if [ -n "${1:-}" ] && [ ! -f "$1" ]; then

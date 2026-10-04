@@ -29,7 +29,7 @@ const PROBE_ORIGIN: &str = "https://app.example.com";
 /// Send a cross-origin GET to the router's public health route and return the
 /// `access-control-allow-origin` it answered with, if any.
 async fn allow_origin_for(cors_origins: Vec<String>) -> Option<String> {
-    let router = temper_mcp::build_router(
+    let router = common::build_router(
         common::state_with_cors_origins(cors_origins),
         common::mcp_config(),
     );

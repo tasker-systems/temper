@@ -1,7 +1,7 @@
 //! MCP service — the central handler for all MCP tool calls.
 //!
 //! Each invocation creates a fresh `TemperMcpService`. The service runs no auth seam
-//! of its own: the JWT edge (`require_mcp_auth`) validates the token before anything
+//! of its own: the host's JWT edge (`temper-mcp-server`'s `require_mcp_auth`) validates the token before anything
 //! forwards, and every tool relays the caller's bearer across the network door, where
 //! Level 1 (resolve, deactivation) and Level 2 (system access) run at the API.
 //! Post-edge refusals come back as preserved 401/403 bodies and are mapped
@@ -30,11 +30,10 @@ use std::sync::Arc;
 use temper_client::auth::MemoryTokenStore;
 use temper_client::error::ClientError;
 use temper_client::TemperClient;
-use temper_services::state::AppState;
 use temper_workflow::operations::{Surface, RELAYED_SURFACE_HEADER, SERVICE_CREDENTIAL_HEADER};
 
 use crate::config::McpConfig;
-use crate::middleware::BearerToken;
+use crate::host::{BearerToken, BlobDoor};
 use crate::tools;
 
 /// The relay's per-request client timeout, in seconds.
@@ -106,11 +105,14 @@ const RELAY_NON_IDEMPOTENT_ATTEMPTS: u32 = 2;
 /// generated associated function; no value of that type lives on this struct.
 #[derive(Clone)]
 pub struct TemperMcpService {
-    pub api_state: AppState,
+    /// The deployment's blob posture, a plain value the host read at boot — the only
+    /// per-process fact a tool consults besides the relay config. The service holds no
+    /// pool, no key store and no server configuration (the least-privilege follow-up to
+    /// the network door's teardown).
+    pub blob_door: BlobDoor,
     /// The relay's configuration — API base URL and service credential (injectable;
-    /// §D6). The resources family's tools cross the deployed API through a per-request
-    /// client built from these; every other family still executes direct against
-    /// `api_state` until its own beat.
+    /// §D6). Every tool crosses the deployed API through a per-request client built
+    /// from these.
     pub mcp_config: McpConfig,
     /// The shared connection pool (the statelessness carve-out, §D6/§11.5): built ONCE
     /// at boot with the relay timeout, reused by every per-request client — without it
@@ -121,7 +123,7 @@ pub struct TemperMcpService {
 impl std::fmt::Debug for TemperMcpService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TemperMcpService")
-            .field("api_state", &self.api_state)
+            .field("blob_door", &self.blob_door)
             .field(
                 "mcp_config.api_base_url",
                 &self.mcp_config.api_base_url.as_ref().map(|_| "set"),
@@ -143,9 +145,9 @@ impl std::fmt::Debug for TemperMcpService {
 
 #[tool_router]
 impl TemperMcpService {
-    pub fn new(api_state: AppState, mcp_config: McpConfig, shared_http: reqwest::Client) -> Self {
+    pub fn new(blob_door: BlobDoor, mcp_config: McpConfig, shared_http: reqwest::Client) -> Self {
         Self {
-            api_state,
+            blob_door,
             mcp_config,
             shared_http,
         }
@@ -1005,7 +1007,7 @@ pub(crate) const BLOB_TOOL_NAMES: [&str; 2] = ["blob_read", "blob_manage"];
 /// resolves, or `BLOB_ENABLED=false` closed it deliberately), the blob pair is NOT
 /// advertised — an agent discovering the surface only to learn it refuses is noise.
 /// Existence is untouched: `tools/call` on a closed door still answers the typed
-/// refusal (`blob_parts` hears `AppState::blob_refusal`), so a stale cached tool list
+/// refusal (`blob_door_open` answers the `BlobDoor::Closed` sentence), so a stale cached tool list
 /// degrades to the same voice it always had, never to silence.
 fn advertise_blob_tools(tools: Vec<rmcp::model::Tool>, blob_ready: bool) -> Vec<rmcp::model::Tool> {
     if blob_ready {
@@ -1061,7 +1063,7 @@ impl rmcp::ServerHandler for TemperMcpService {
         _request: Option<PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ListToolsResult, rmcp::ErrorData> {
-        Ok(list_tools_result(self.api_state.config.blob.is_some()))
+        Ok(list_tools_result(self.blob_door.is_open()))
     }
 
     /// No prompts are offered and the capability is not advertised, but a client that

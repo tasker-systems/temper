@@ -273,45 +273,13 @@ fn act_span_field_names_are_a_deliberate_edit() {
 ///
 /// The existing MCP e2e coverage builds `TemperMcpService` directly and never exercises the router,
 /// so nothing would have noticed the layer being dropped. This drives real HTTP through
-/// `build_router` instead. `/mcp/health` is public, which keeps the test about the transport layer
+/// `temper_mcp_server::build_router` instead. `/mcp/health` is public, which keeps the test about the transport layer
 /// rather than about auth.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn mcp_requests_produce_a_root_span(pool: sqlx::PgPool) {
-    use temper_services::auth_config::{AuthConfig, AuthMode};
-    use temper_services::config::ApiConfig;
-    use temper_services::state::{AppState, JwksKeyStore};
-
+async fn mcp_requests_produce_a_root_span(_pool: sqlx::PgPool) {
     let (layer, _events, spans) = TestTracingLayer::with_spans();
     let _guard = tracing_subscriber::registry().with(layer).set_default();
 
-    let decoding_key =
-        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
-            .expect("decoding key");
-    let jwks_store = JwksKeyStore::with_static_key(decoding_key, jsonwebtoken::Algorithm::RS256);
-    let api_config = ApiConfig {
-        database_url: "unused".to_string(),
-        auth: AuthConfig {
-            issuer: "test-issuer".to_string(),
-            jwks_url: "unused".to_string(),
-            audience: common::TEST_AUDIENCE.to_string(),
-            mcp_audience: common::TEST_AUDIENCE.to_string(),
-            mode: AuthMode::ExternalIdp,
-        },
-        auth_provider_name: "test-provider".to_string(),
-        cors_origins: vec![],
-        port: 0,
-        enable_swagger: false,
-        internal_reconcile_secret: None,
-        embed_dispatch_secret: None,
-        mcp_service_secret: None,
-        vercel_connect: None,
-        slack_link: None,
-        slack_mint_secret: None,
-        rate_limit: None,
-        blob: None,
-        blob_disabled_by_policy: false,
-    };
-    let state = AppState::new(pool, jwks_store, api_config);
     let mcp_config = temper_mcp::McpConfig {
         mcp_base_url: "http://localhost".to_string(),
         mcp_client_id: None,
@@ -322,7 +290,11 @@ async fn mcp_requests_produce_a_root_span(pool: sqlx::PgPool) {
             allow_localhost: true,
         },
     };
-    let app = temper_mcp::build_router(state, mcp_config);
+    let app = temper_mcp_server::build_router(
+        common::mcp_server_config(temper_mcp_server::config::blob_door(None, false)),
+        common::mcp_test_jwks(),
+        mcp_config,
+    );
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await

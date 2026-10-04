@@ -9,6 +9,7 @@
 //! - `/api/as/reap` — daily retention sweep for the three Authorization Server tables
 //!   (TMPR-56), and — since 2026-09-05 — for abandoned staged blob uploads, which ride
 //!   the same cron by ruling (task 01a0715d).
+//! - `/api/sensitivity/sweep` — the sensitivity sweep's five-minute tick (sensitivity-sweep spec D8).
 //!
 //! NOTE: `embed::dispatch`'s `#[utoipa::path]` declares `get` only, but the route
 //! mounts BOTH GET and POST on the same handler. This plain `.route()` (rather than
@@ -80,5 +81,13 @@ pub(super) fn embed_internal_routes() -> Router<AppState> {
         .route(
             "/api/erasure/drain",
             get(handlers::erasure::drain).post(handlers::erasure::drain),
+        )
+        // The sensitivity sweep's tick (sensitivity-sweep spec D8, build order 3a PR D): claims one
+        // surface's work order and scans it inside its time budget. Same self-gated posture and
+        // GET+POST shape as `dispatch`/`warm`. It belongs in this group for the 300s ceiling, and
+        // because `require_dispatch_secret` is already set wherever the other crons run.
+        .route(
+            "/api/sensitivity/sweep",
+            get(handlers::sensitivity_sweep::sweep).post(handlers::sensitivity_sweep::sweep),
         )
 }

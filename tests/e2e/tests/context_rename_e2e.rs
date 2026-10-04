@@ -285,7 +285,7 @@ async fn the_two_dialects_survive_every_surface(pool: sqlx::PgPool) {
     // this is the door where the rendering could diverge even though the decision cannot.
     // The tool crosses the network door (beat G3d), so the leg drives the relay with each
     // identity's REAL bearer — one shared service instance, identity per-call, not per-service.
-    let reader_svc = app.mcp_relay_service(pool.clone()).await;
+    let reader_svc = app.mcp_relay_service().await;
     let reader_parts = app.relay_parts_for(&reader_token);
     let reader_mcp =
         mcp_rename_refusal(&reader_svc, &reader_parts, *context.id, "Reader MCP").await;

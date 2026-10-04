@@ -137,7 +137,7 @@ fn code_of(err: &rmcp::ErrorData) -> i32 {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn expired_in_flight_speaks_the_re_authenticate_sentence(pool: PgPool) {
     let app = common::setup_relay(pool).await;
-    let svc: TemperMcpService = app.mcp_relay_service(app.pool.clone()).await;
+    let svc: TemperMcpService = app.mcp_relay_service().await;
     let expired = mint_expired_token("e2e-test-user", "e2e@test.example.com");
     let parts = parts_for(&app, &expired);
 
@@ -165,7 +165,7 @@ async fn expired_in_flight_speaks_the_re_authenticate_sentence(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn machine_credential_refusal_speaks_the_machine_gate_sentence(pool: PgPool) {
     let app = common::setup_relay(pool).await;
-    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = parts_for(&app, &mint_incoherent_machine_token());
 
     let err = temper_mcp::tools::resources::get_resource(
@@ -192,7 +192,7 @@ async fn machine_credential_refusal_speaks_the_machine_gate_sentence(pool: PgPoo
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_registration_gate_speaks_its_own_voice_framed_terminal(pool: PgPool) {
     let app = common::setup_relay(pool).await;
-    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = parts_for(&app, &mint_unregistered_machine_token());
 
     let err = temper_mcp::tools::resources::get_resource(
@@ -225,7 +225,7 @@ async fn the_registration_gate_speaks_its_own_voice_framed_terminal(pool: PgPool
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn deactivated_account_speaks_the_terminal_deactivation_sentence(pool: PgPool) {
     let app = common::setup_relay(pool).await;
-    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
 
     // Deactivate the harness principal through the standing table — the same row the
@@ -262,7 +262,7 @@ async fn deactivated_account_speaks_the_terminal_deactivation_sentence(pool: PgP
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_post_edge_401_on_delete_speaks_the_arm_not_the_fault(pool: PgPool) {
     let app = common::setup_relay(pool).await;
-    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
 
     sqlx::query(
@@ -308,7 +308,7 @@ async fn a_post_edge_401_on_delete_speaks_the_arm_not_the_fault(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_denied_standing_speaks_the_system_access_arm_through_the_door(pool: PgPool) {
     let app = common::setup_relay(pool).await;
-    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
 
     sqlx::query(
@@ -409,7 +409,7 @@ async fn a_body_just_under_the_ceiling_is_admitted_by_the_wire(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_create_just_over_the_ceiling_meets_the_bare_413(pool: PgPool) {
     let app = common::setup_relay(pool).await;
-    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
     let ctx = default_context_id(&app.pool).await;
 
@@ -455,7 +455,7 @@ fn assert_caller_data_cache_policy(wire: &serde_json::Value) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn protocol_list_browses_through_the_door(pool: PgPool) {
     let app = common::setup_relay(pool).await;
-    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
     let ctx = default_context_id(&app.pool).await;
 
@@ -500,7 +500,7 @@ async fn protocol_list_browses_through_the_door(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn protocol_reads_serve_metadata_content_and_context_pages(pool: PgPool) {
     let app = common::setup_relay(pool).await;
-    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
     let ctx = default_context_id(&app.pool).await;
 

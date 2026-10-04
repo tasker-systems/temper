@@ -48,6 +48,7 @@ path = "api/internal.rs"
 temper-api = { path = "crates/temper-api" }
 temper-services = { path = "crates/temper-services" }
 temper-mcp = { path = "crates/temper-mcp" }
+temper-mcp-server = { path = "crates/temper-mcp-server" }
 temperkb-telemetry.workspace = true
 vercel_runtime = { version = "2", features = ["axum"] }
 tokio = { version = "1", features = ["full"] }
