@@ -300,6 +300,7 @@ async fn a_jsonb_row_is_scanned_whole_under_a_one_row_budget(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_jsonb_unit_is_never_memoised(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     // Every detector finds nothing here, and payment_card's `[0-9]{4}` prefilter nominates both.
     let hash = "4c1f9e0a2b7d3e5f8a6c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a";
     let id = "01a10292-201d-7645-86c8-5d5fd98a09a2";
@@ -1536,6 +1537,14 @@ async fn bump_payment_card(pool: &PgPool, validator: &str) {
         "UPDATE sensitivity.detectors SET version = version + 1, validator = $1 WHERE id = 'payment_card'",
     )
     .bind(validator)
+    .execute(pool)
+    .await
+    .unwrap();
+    // A bump turns the detector off (Q53); the operator enables the version they reviewed.
+    sqlx::query(
+        "SELECT sensitivity.enable_detector(id, version) FROM sensitivity.detectors WHERE id = $1",
+    )
+    .bind("payment_card")
     .execute(pool)
     .await
     .unwrap();

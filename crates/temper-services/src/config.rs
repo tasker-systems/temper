@@ -338,10 +338,12 @@ fn parse_sensitivity_sweep_enabled(lookup: impl Fn(&str) -> Option<String>) -> b
     match raw.trim().to_ascii_lowercase().as_str() {
         "true" | "1" => true,
         "false" | "0" => false,
+        // The value is never echoed: a secret pasted into the wrong variable would reach the log.
         other => {
             tracing::error!(
-                "SENSITIVITY_SWEEP_ENABLED is set to an unrecognized value ({other}; expected \
-                 true/false/1/0): the sensitivity sweep stays off"
+                "SENSITIVITY_SWEEP_ENABLED is set to an unrecognized value ({} characters; \
+                 expected true/false/1/0): the sensitivity sweep stays off",
+                other.chars().count()
             );
             false
         }

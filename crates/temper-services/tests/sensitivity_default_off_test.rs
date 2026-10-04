@@ -16,7 +16,7 @@ use sqlx::migrate::Migrator;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use temper_services::services::sensitivity_sweep_service::sweep_within;
+use temper_services::services::sensitivity_sweep_service::{sweep, sweep_within};
 
 const SALT: &[u8] = b"default-off-witness-salt-of-thirty-two-plus";
 const SSN: &str = "219-45-6789";
@@ -146,25 +146,33 @@ async fn a_new_detector_is_the_organizations_and_does_not_scan(pool: PgPool) {
     assert_eq!(code(&bad), "23514", "{bad}");
 }
 
-/// With the deployment opted in and every detector off, the door's ticks scan nothing and leave no
-/// rows. Then one detector is enabled and the same content is found, so the silence was the
-/// detectors being off, not the plant being unreachable.
+/// With the deployment opted in and every detector off, the door claims nothing, so it leaves no
+/// run and no job, even while another transaction holds the head back (the case in which an idle
+/// tick keeps its rows, Q49). Then one detector is enabled and the same content is found, so the
+/// silence was the detectors being off, not the plant being unreachable.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn an_opted_in_door_with_every_detector_off_scans_nothing(pool: PgPool) {
     titled(&pool, &format!("Payroll note for {SSN}")).await;
     assert!(enabled(&pool).await.is_empty(), "a detector ships enabled");
+    let mut held = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1").execute(&mut *held).await.unwrap();
 
-    sweep_within(&pool, Some(SALT), Duration::from_secs(60))
+    let summary = sweep_within(&pool, Some(SALT), Duration::from_secs(60))
         .await
         .expect("sweep runs");
-    let (findings, runs, cursors): (i64, i64, i64) = sqlx::query_as(
-        "SELECT (SELECT count(*) FROM sensitivity.findings), (SELECT count(*) FROM sensitivity.runs), \
-                (SELECT count(*) FROM sensitivity.cursors)",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!((findings, runs, cursors), (0, 0, 0));
+    assert!(summary.ticks.is_empty(), "{summary:?}");
+    let left = |pool: PgPool| async move {
+        sqlx::query_as::<_, (i64, i64, i64, i64)>(
+            "SELECT (SELECT count(*) FROM sensitivity.findings), (SELECT count(*) FROM sensitivity.runs), \
+                    (SELECT count(*) FROM sensitivity.cursors), \
+                    (SELECT count(*) FROM kb_workflow_jobs WHERE persona = 'sensitivity')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(left(pool.clone()).await, (0, 0, 0, 0));
+    held.rollback().await.unwrap();
 
     sqlx::query("SELECT sensitivity.enable_detector('us_ssn_delimited', 1)")
         .execute(&pool)
@@ -183,6 +191,41 @@ async fn an_opted_in_door_with_every_detector_off_scans_nothing(pool: PgPool) {
     .await
     .unwrap();
     assert_eq!(found, 1, "the enabled detector must find the plant");
+}
+
+/// Erasure's promise outlives the sweep (Q50): a deployment that is not opted in still gives up the
+/// digests of a finding whose place an erasure act emptied, once its 30 days have passed.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_door_that_is_off_still_expires_erased_digests(pool: PgPool) {
+    // A finding on a remote source the erasure act deleted, closed and seen so 31 days ago.
+    let finding: Uuid = sqlx::query_scalar(
+        "INSERT INTO sensitivity.findings (surface, target_table, target_id, content_hash, detector_id, \
+             detector_version, category, severity, match_count, fingerprint_state) \
+         VALUES ('kb_remote_sources.uri', 'kb_remote_sources', $1, repeat('a', 64), \
+                 'us_ssn_delimited', 1, 'national_id', 4, 1, 'complete') RETURNING id",
+    )
+    .bind(Uuid::now_v7())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO sensitivity.erased_closures (finding_id, closed_seen_at) \
+         VALUES ($1, now() - interval '31 days')",
+    )
+    .bind(finding)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let summary = sweep(&pool, None, false).await.expect("sweep answers");
+    assert_eq!(summary.fingerprints_expired, 1, "{summary:?}");
+    let state: String =
+        sqlx::query_scalar("SELECT fingerprint_state FROM sensitivity.findings WHERE id = $1")
+            .bind(finding)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(state, "expired");
 }
 
 // ── Enabling and disabling ────────────────────────────────────────────────────────────────────
@@ -224,6 +267,38 @@ async fn enabling_by_name_refuses_a_version_that_is_not_current(pool: PgPool) {
     assert!(disable().fetch_one(&pool).await.unwrap());
     assert!(!disable().fetch_one(&pool).await.unwrap());
     assert!(enabled(&pool).await.is_empty());
+}
+
+/// A bump is a pattern nobody reviewed, so it turns the detector off, whoever provides it; the
+/// operator enables the new version by name.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_version_bump_turns_the_detector_off(pool: PgPool) {
+    sqlx::query("SELECT sensitivity.enable_detector('jwt', 1)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE sensitivity.detectors \
+            SET version = 2, pattern = 'eyJ[A-Za-z0-9_-]{12,}\\.[A-Za-z0-9_-]{12,}\\.[A-Za-z0-9_-]{12,}' \
+          WHERE id = 'jwt'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(
+        enabled(&pool).await.is_empty(),
+        "the bump left the new version scanning"
+    );
+    // The same statement without a bump leaves `enabled` alone.
+    sqlx::query("SELECT sensitivity.enable_detector('jwt', 2)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE sensitivity.detectors SET note = 'reworded' WHERE id = 'jwt'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(enabled(&pool).await, BTreeSet::from(["jwt".into()]));
 }
 
 /// Severity is a threshold: enable at least this serious, disable at most this serious, either
@@ -292,7 +367,7 @@ async fn dry_run(
     max_units: i32,
 ) -> Result<Vec<Surface>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT surface, shape, places_examined, places_matched, matches, places_oversize, complete, \
+        "SELECT surface, shape, rows_examined, places_matched, matches, skipped_oversize, complete, \
                 hotspots \
            FROM sensitivity.dry_run($1, $2, $3, $4, $5, $6)",
     )

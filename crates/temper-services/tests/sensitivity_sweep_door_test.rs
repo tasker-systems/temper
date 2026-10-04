@@ -376,6 +376,7 @@ async fn a_lapsed_lease_is_reaped_before_the_claim(pool: PgPool) {
 /// Wrapped in one transaction with the tick, the run would roll back with the error.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn the_claim_commits_before_the_tick_runs(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     order(&pool, "kb_resources.title").await;
     sqlx::query(
         "ALTER FUNCTION sensitivity_sweep_tick(uuid, uuid, bytea, interval, int) RENAME TO tick_gone",
@@ -407,6 +408,7 @@ async fn the_claim_commits_before_the_tick_runs(pool: PgPool) {
 /// job then holds the slot, which the call reports as blocked rather than as nothing to do.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn an_unset_salt_is_recorded_and_its_job_blocks_the_slot(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     old_resource(&pool, &format!("Payroll note for {SSN}")).await;
     order(&pool, "kb_resources.title").await;
 

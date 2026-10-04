@@ -511,11 +511,14 @@ value.
 1. **Opt in with `SENSITIVITY_SWEEP_ENABLED=true`** on the Vercel project. Unset, the call answers
    `enabled: false` and touches nothing: no claim, no row, no error event. Any value other than
    `true`/`1`/`false`/`0` leaves it off and logs an error at boot.
-2. **Enable the detectors you want**, in SQL with database access. Every detector ships off, and
-   no migration turns one on. List them with
+2. **Enable the detectors you want**, in SQL with database access. Temper's detectors ship off, a
+   detector you add is off unless you say otherwise, and no migration turns one on. (One you added
+   before this release keeps its state: temper's migrations never change your rows.) List them with
    `SELECT id, version, severity, category, provided_by, enabled FROM sensitivity.detectors`.
    - One detector, at the version you reviewed: `SELECT sensitivity.enable_detector('jwt', 1)`.
      A version that is no longer current refuses, so you never enable a pattern you did not read.
+     A version bump (a temper migration's, or your own) turns that detector off, and you enable
+     the new version by name once you have read it.
    - Everything at least as serious as a severity (1 to 4), optionally only temper's or only your
      own: `SELECT * FROM sensitivity.enable_detectors(3, 'temper')`. The matching
      `disable_detectors(2)` turns off everything at severity 2 or below;
@@ -526,18 +529,21 @@ value.
      may version, `organization` for one you add. A detector you `INSERT` is `organization` and
      off unless you say otherwise, and temper's migrations never change it.
    - **Try a detector before enabling it** with a dry run, which reads and counts but writes
-     nothing: `SELECT * FROM sensitivity.dry_run('jwt', 1, 'latest')` reads the newest 5,000 units
-     of each surface. The bound can instead be `'context'`, `'cogmap'`, `'profile'` or `'team'`
+     nothing: `SELECT * FROM sensitivity.dry_run('jwt', 1, 'latest')` reads the newest 5,000 rows
+     of each surface the sweep scans, within a 20-second budget. The bound can instead be `'context'`, `'cogmap'`, `'profile'` or `'team'`
      with that one's id, meaning the resources homed there (or owned by that profile, or homed in
      contexts that team owns). Each surface reports counts and its `hotspots`, the places with the
-     most matches, as ids. To try a pattern of your own, `INSERT` it as a detector inside a
+     most matches, as ids (a row, or a path in a JSON row). The budget is checked between rows, and
+     a bounded run over the event ledger works out each row's resource as it goes, so set
+     `SET statement_timeout = '60s'` in your session first to cap the whole call. To try a pattern
+     of your own, `INSERT` it as a detector inside a
      transaction, dry-run it, and `ROLLBACK`.
 3. **Set `SENSITIVITY_SWEEP_SALT`** on the Vercel project. Generate it with
    `openssl rand -base64 32`; the API refuses to boot on a value under 32 characters or one
    equal to any other shared secret. Every hash and fingerprint the sweep stores is keyed by
    it, so **keep it stable**: changing it re-keys everything, and existing findings stop
-   matching their content. Unset, the sweep cannot scan: every tick records `salt_missing`
-   and the door logs an error on every call.
+   matching their content. Unset on a deployment that has opted in, the sweep cannot scan: every
+   tick records `salt_missing` and the door logs an error on every call.
 4. **Keep the database from logging bind parameters.** The salt reaches Postgres as a bind
    parameter. With `log_parameter_max_length` left at its default (unlimited), any
    `log_min_duration_statement` that catches a tick, or `log_statement = all`, writes the
@@ -549,6 +555,7 @@ value.
      2026-10-04: `log_min_duration_statement = -1`, `log_statement = none`, sampling off. The
      exposure exists only if Neon enables that logging, and the door reports it if they do.
 5. **Watch the spans.** Each call emits one `sensitivity_sweep_call` span, with
+   `fingerprints_expired` (erasure's 30-day digest expiry runs on every call, opted in or not), and
    `ended` = `disabled` (not opted in), `idle`, `budget`, `slot_free`, `slot_leased`, `slot_blocked` or `lease_lapsed`,
    and one `sensitivity_sweep` span per tick with its counts. A failed tick, a failed job
    blocking the queue, a lapsed lease, an unset salt and a salt the database may log each

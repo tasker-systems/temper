@@ -154,6 +154,14 @@ async fn bump(pool: &PgPool, detector: &str) {
         .execute(pool)
         .await
         .unwrap();
+    // A bump turns the detector off (Q53); the operator enables the version they reviewed.
+    sqlx::query(
+        "SELECT sensitivity.enable_detector(id, version) FROM sensitivity.detectors WHERE id = $1",
+    )
+    .bind(detector)
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 /// Every row of every table in the `sensitivity` schema, and every sensitivity job, as text.
@@ -500,6 +508,7 @@ async fn a_tick_that_fails_on_a_planted_row_writes_a_code_and_never_the_value(po
 async fn a_claim_that_is_never_scanned_is_reaped_with_its_attempt_and_its_run_left_open(
     pool: PgPool,
 ) {
+    enable_seeded_detectors(&pool).await;
     let (run, job): (Uuid, Uuid) =
         sqlx::query_as("SELECT run_id, job_id FROM sensitivity_sweep_claim()")
             .fetch_one(&pool)
@@ -550,6 +559,7 @@ async fn a_claim_that_is_never_scanned_is_reaped_with_its_attempt_and_its_run_le
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn the_claim_rotates_through_every_enabled_surface(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let enabled: Vec<String> =
         sqlx::query_scalar("SELECT surface FROM sensitivity.surfaces WHERE enabled ORDER BY 1")
             .fetch_all(&pool)
@@ -624,6 +634,7 @@ async fn a_block_with_two_ssns_keeps_both_fingerprints_and_a_quote_of_either_mat
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_tick_without_a_salt_scans_nothing_and_says_why(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let place = block(&pool, resource(&pool, "u").await, SSN_A).await;
     for salt in [None, Some(&b"short"[..])] {
         let t = tick_salted(&pool, "kb_block_content.content", salt).await;
@@ -749,6 +760,7 @@ async fn an_acknowledged_title_stays_acknowledged_until_the_value_comes_back(poo
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_run_from_an_earlier_claim_of_the_same_job_is_refused(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let (stale, job): (Uuid, Uuid) =
         sqlx::query_as("SELECT run_id, job_id FROM sensitivity_sweep_claim()")
             .fetch_one(&pool)
@@ -870,6 +882,13 @@ async fn sightings_never_carry_across_a_category_change(pool: PgPool) {
             "UPDATE sensitivity.detectors SET version = version + 1, category = $1 WHERE id = 'us_ssn_delimited'",
         )
         .bind(category)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "SELECT sensitivity.enable_detector('us_ssn_delimited', version) \
+                       FROM sensitivity.detectors WHERE id = 'us_ssn_delimited'",
+        )
         .execute(&pool)
         .await
         .unwrap();

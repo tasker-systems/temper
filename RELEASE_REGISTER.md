@@ -26,23 +26,26 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
 - **The sensitivity sweep is off until an operator turns it on: `SENSITIVITY_SWEEP_ENABLED`, detectors off by default, and who provides each**
   A deployment scans only after its operator opts in (sweep Q52, Q53). The API reads a new
   variable, `SENSITIVITY_SWEEP_ENABLED`. Unless it is `true` or `1`, the cron call to
-  `/api/sensitivity/sweep` reaps, claims and ticks nothing, writes no row and raises none of the
-  sweep's error events (an unset salt included); it answers `enabled: false`. The answer gains that
-  one boolean. An unrecognised value leaves the sweep off and logs an error at boot. The migration
-  turns every temper-provided detector off on every deployment, and new detectors default to off.
-  An operator enables them in SQL: `sensitivity.enable_detector(id, version)` refuses a version
-  that is not current, and `sensitivity.enable_detectors(min_severity, provided_by)` and
+  `/api/sensitivity/sweep` reaps, claims and ticks nothing and raises none of the sweep's error
+  events (an unset salt included); it answers `enabled: false`, the one boolean the answer gains.
+  An unrecognised value leaves the sweep off and logs an error at boot. Erasure's 30-day digest
+  expiry (Q50) now runs on every call, opted in or not, so turning the sweep off never strands
+  it; a deployment that never swept holds nothing for it to expire. The migration turns every
+  temper-provided detector off on every deployment, new detectors default to off, a version bump
+  turns that detector off, and the claim claims nothing while no detector is enabled. An operator
+  enables detectors in SQL: `sensitivity.enable_detector(id, version)` refuses a version that is
+  not current, and `sensitivity.enable_detectors(min_severity, provided_by)` and
   `disable_detectors(max_severity, provided_by)` act on a severity threshold. Each detector now
   records `provided_by`, `temper` or `organization`; the nine seeded ids are `temper`, and a row an
   operator inserts is `organization` unless it says otherwise. Temper's migrations change only
-  `temper` rows. `sensitivity.dry_run(...)` measures one detector version over the newest units, or
+  `temper` rows. `sensitivity.dry_run(...)` measures one detector version over the newest rows, or
   over a context, cognitive map, profile or team by where resources are homed (Q54). It answers
   counts and pointers per surface, never a matched value, and writes nothing. A deployment running
   the sweep today stops scanning when this deploys, until its operator sets the variable and
   enables detectors; its cursors and findings stay, so enabling resumes where it stopped. A binary
-  that predates the variable keeps ticking against the migrated schema, and with every detector
-  off those ticks scan nothing and leave no rows. Who observes: operators and deployers. User-visible:
-  no. Release relevance: behavioral for every deployment that was sweeping.
+  that predates the variable keeps calling the claim, which claims nothing while every detector is
+  off, so it writes no run or job row. Who observes: operators and deployers. User-visible: no.
+  Release relevance: behavioral for every deployment that was sweeping.
 pr: self
 classes: additive, behavioral
 surfaces: http, internal, schema

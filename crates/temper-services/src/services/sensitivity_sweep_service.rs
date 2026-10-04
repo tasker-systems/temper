@@ -27,9 +27,14 @@
 //!
 //! ## Off until an operator opts in (Q52, Q53)
 //!
-//! A deployment whose operator has not set `SENSITIVITY_SWEEP_ENABLED` gets a door that answers
-//! and does nothing else: no reap, no claim, no tick, no row, and none of the error events below.
-//! The cron entry stays in `vercel.json` on every deployment, so the variable is the opt-in.
+//! A deployment whose operator has not set `SENSITIVITY_SWEEP_ENABLED` gets a door that does not
+//! sweep: no reap, no claim, no tick, no run, and none of the error events below. The cron entry
+//! stays in `vercel.json` on every deployment, so the variable is the opt-in.
+//!
+//! One thing runs on every call, opted in or not: erasure's digest expiry (Q50). Digests on a place
+//! an erasure act emptied go after 30 days whether or not the deployment still scans, so turning
+//! the sweep off never strands them. A deployment that never swept holds no finding, and the
+//! expiry writes nothing there.
 //!
 //! ## Loud, not quiet
 //!
@@ -77,7 +82,8 @@ pub const SENSITIVITY_SWEEP_RUN_FIELDS: [&str; 15] = [
 ];
 
 /// Fields every `sensitivity_sweep_call` span declares.
-pub const SENSITIVITY_SWEEP_CALL_FIELDS: [&str; 5] = [
+pub const SENSITIVITY_SWEEP_CALL_FIELDS: [&str; 6] = [
+    "fingerprints_expired",
     "enabled",
     "salt_configured",
     "salt_may_be_logged",
@@ -248,6 +254,8 @@ pub struct SweepSummary {
     pub salt_may_be_logged: bool,
     pub ticks: Vec<TickReport>,
     pub ended: Ended,
+    /// Findings whose salt-keyed digests this call's expiry gave up (Q50).
+    pub fingerprints_expired: i32,
 }
 
 /// The route's answer: counts of ticks and booleans, nothing a caller can learn the corpus from.
@@ -279,8 +287,8 @@ struct Claim {
     surfaces: i32,
 }
 
-/// One call of the door, with the deployed loop budget. `enabled` is the deployment's opt-in:
-/// false touches nothing in the database and raises no error event, only the call span.
+/// One call of the door, with the deployed loop budget. `enabled` is the deployment's opt-in: false
+/// runs erasure's expiry and nothing else, and raises no error event, only the call span.
 pub async fn sweep(pool: &PgPool, salt: Option<&[u8]>, enabled: bool) -> ApiResult<SweepSummary> {
     if !enabled {
         let summary = SweepSummary {
@@ -288,11 +296,20 @@ pub async fn sweep(pool: &PgPool, salt: Option<&[u8]>, enabled: bool) -> ApiResu
             salt_may_be_logged: false,
             ticks: Vec::new(),
             ended: Ended::Disabled,
+            fingerprints_expired: expire_erased_fingerprints(pool).await?,
         };
         emit_call_span(&summary);
         return Ok(summary);
     }
     sweep_within(pool, salt, LOOP_BUDGET).await
+}
+
+/// Erasure's digest expiry (Q50), which the door runs on every call whether or not it sweeps.
+async fn expire_erased_fingerprints(pool: &PgPool) -> ApiResult<i32> {
+    let n = sqlx::query_scalar!(r#"SELECT sensitivity_expire_erased_fingerprints() AS "expired!""#)
+        .fetch_one(pool)
+        .await?;
+    Ok(n)
 }
 
 /// One call of the door: reap, then claim and tick until `budget` is spent or a rotation is idle.
@@ -308,6 +325,7 @@ pub async fn sweep_within(
     // The incumbent drains reap before they claim (`embed_service::dispatch`): a lapsed lease
     // holds the single-flight slot until something does.
     workflow_job_service::reap(pool, "sensitivity lease expired").await?;
+    let fingerprints_expired = expire_erased_fingerprints(pool).await?;
 
     let mut conn = pool.acquire().await?;
     let salt_may_be_logged = guard_the_salt(&mut conn).await?;
@@ -316,6 +334,7 @@ pub async fn sweep_within(
         salt_may_be_logged,
         ticks: Vec::new(),
         ended: Ended::Budget,
+        fingerprints_expired,
     };
 
     let mut idle_streak = 0;
@@ -541,6 +560,7 @@ fn emit_call_span(summary: &SweepSummary) {
         salt_may_be_logged = summary.salt_may_be_logged,
         ticks = summary.ticks.len(),
         ended = summary.ended.as_str(),
+        fingerprints_expired = summary.fingerprints_expired,
         slot_attempts = tracing::field::Empty,
         slot_failure = tracing::field::Empty,
     );
