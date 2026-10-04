@@ -142,7 +142,8 @@ $$;
 COMMENT ON FUNCTION sensitivity.expire_erased_fingerprints(interval) IS
 'Starts the window for every closed finding on a place an erasure act emptied or reached (sensitivity.erased_place_findings), then, once a finding has been seen so for p_window (default 30 days, ruled 2026-10-03) and is still closed, deletes the memo rows carrying its keyed content_hash, drops its fingerprints and replaces that hash. fingerprint_state reads expired; the finding row stays. Run by every scanning sensitivity_sweep_tick. Returns the number of findings expired.';
 
--- 20261003230000's body (the sweep's door), verbatim except for the one PERFORM below.
+-- 20261003230000's body (the sweep's door), verbatim except for two changes: the one PERFORM below,
+-- and the head bound no longer counts autovacuum's transactions (see the comment at the bound).
 
 CREATE OR REPLACE FUNCTION sensitivity_sweep_tick(
     p_run uuid, p_job uuid, p_salt bytea, p_lag interval DEFAULT '5 minutes', p_budget_ms int DEFAULT 20000
@@ -179,10 +180,13 @@ BEGIN
     ELSE
         -- D4 rule 1: never past now() - lag, nor past the oldest transaction open here. Any open
         -- transaction may yet commit a row stamped before it wrote (Witness 5); the hold is
-        -- recorded, so a stalled head never reads as quiet.
+        -- recorded, so a stalled head never reads as quiet. Autovacuum's own transactions are not
+        -- counted: they never commit a row into a scanned table, and counting them held the head
+        -- back (and so kept an idle tick's rows, Q49) whenever one overlapped a tick.
         SELECT least(now(), coalesce(min(a.xact_start), now())) - p_lag INTO v_bound_at
           FROM pg_stat_activity a
-         WHERE a.datname = current_database() AND a.pid <> pg_backend_pid() AND a.xact_start IS NOT NULL;
+         WHERE a.datname = current_database() AND a.pid <> pg_backend_pid() AND a.xact_start IS NOT NULL
+           AND a.backend_type NOT IN ('autovacuum worker', 'autovacuum launcher');
         v_bound_id := sensitivity.v7_floor(v_bound_at);
         UPDATE sensitivity.runs
            SET head_holdback_seconds = least(ceil(extract(epoch FROM (now() - p_lag) - v_bound_at)), 100000)
@@ -269,5 +273,5 @@ $$;
 SELECT declare_migration(
     20261004000010,
     'additive',
-    'Findings on places an erasure act emptied (the resource act, the block history scrub, the principal act) give up their salt-keyed digests after 30 days (sensitivity sweep D11, Q44). Adds sensitivity.erased_closures, sensitivity.erased_place_findings and sensitivity.expire_erased_fingerprints (which also deletes the memo rows of the hashes it retires), and widens findings_fingerprint_state_check with ''expired''. CREATE OR REPLACEs sensitivity_sweep_tick with 20261003230000''s signature and return shape, which the deployed door reads; its body is 20261003230000''s verbatim plus one PERFORM of the new function. Additive: the tick''s signature and return shape are unchanged, no Rust names the sensitivity schema (the grep gate holds it), and a widened CHECK admits every row it admitted before.'
+    'Findings on places an erasure act emptied (the resource act, the block history scrub, the principal act) give up their salt-keyed digests after 30 days (sensitivity sweep D11, Q44). Adds sensitivity.erased_closures, sensitivity.erased_place_findings and sensitivity.expire_erased_fingerprints (which also deletes the memo rows of the hashes it retires), and widens findings_fingerprint_state_check with ''expired''. CREATE OR REPLACEs sensitivity_sweep_tick with 20261003230000''s signature and return shape, which the deployed door reads; its body is 20261003230000''s verbatim plus one PERFORM of the new function, and its head bound no longer counts autovacuum''s transactions (they never commit a scanned row, and counting them kept idle ticks'' rows). Additive: the tick''s signature and return shape are unchanged, no Rust names the sensitivity schema (the grep gate holds it), and a widened CHECK admits every row it admitted before.'
 );
