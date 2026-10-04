@@ -27,7 +27,7 @@ mod common;
 fn router() -> axum::Router {
     common::build_router(
         common::state_with_cors_origins(vec![]),
-        common::mcp_config(),
+        common::discovery_config(),
     )
 }
 
@@ -67,7 +67,10 @@ async fn the_mcp_endpoint_refuses_a_caller_with_no_token() {
 /// without the gate ever having judged the token.
 #[tokio::test]
 async fn the_mcp_endpoint_refuses_a_malformed_token() {
-    let router = common::build_router(common::state_with_static_jwt_key(), common::mcp_config());
+    let router = common::build_router(
+        common::state_with_static_jwt_key(),
+        common::discovery_config(),
+    );
 
     let status = router
         .oneshot(
@@ -158,7 +161,7 @@ fn hs256_token(aud: &str) -> String {
 async fn mcp_status_with_token(token: &str) -> StatusCode {
     let router = common::build_router(
         common::state_with_distinct_audiences(),
-        common::mcp_config(),
+        common::discovery_config(),
     );
     router
         .oneshot(

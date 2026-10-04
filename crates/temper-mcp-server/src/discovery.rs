@@ -57,7 +57,7 @@ fn protected_resource_metadata(base: &str, resource: &str) -> ProtectedResourceM
 /// `GET /.well-known/oauth-protected-resource`
 pub async fn oauth_protected_resource(State(state): State<Arc<McpEdgeState>>) -> impl IntoResponse {
     Json(protected_resource_metadata(
-        &state.mcp_config.mcp_base_url,
+        &state.discovery.mcp_base_url,
         &state.auth.mcp_audience,
     ))
 }
@@ -105,7 +105,7 @@ pub async fn register_client(
     State(state): State<Arc<McpEdgeState>>,
     Json(request): Json<ClientRegistrationRequest>,
 ) -> impl IntoResponse {
-    let Some(ref client_id) = state.mcp_config.mcp_client_id else {
+    let Some(ref client_id) = state.discovery.mcp_client_id else {
         tracing::warn!("DCR request received but MCP_CLIENT_ID is not configured");
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
@@ -122,7 +122,7 @@ pub async fn register_client(
 
     // Only echo back redirect URIs that are in our allowed list
     // (or localhost URIs when allow_localhost is enabled).
-    let oauth = &state.mcp_config.oauth;
+    let oauth = &state.discovery.oauth;
     let redirect_uris: Vec<String> = request
         .redirect_uris
         .unwrap_or_default()
