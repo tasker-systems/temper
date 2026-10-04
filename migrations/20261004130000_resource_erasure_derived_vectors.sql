@@ -470,6 +470,7 @@ DECLARE
     v_ingest        text;
     v_ledger        jsonb := '[]'::jsonb;
     v_genesis       uuid;
+    v_erased        uuid;
     v_home_ctx      uuid;
     v_is_goal       boolean;
     v_remainder     jsonb := '[]'::jsonb;
@@ -790,6 +791,8 @@ BEGIN
     -- completion pass re-deriving) would otherwise drop every telos copy without error. "Ever" —
     -- the created doc_type or any doc_type property event, normalized as the projection
     -- normalizes it — so a goal later re-typed still names the snapshots it contributed to.
+    -- Cut 2 must read this before it redacts R's trail: the property arm reads `property_key` and
+    -- `value`, which this plan's own CASE names for redaction (the created arm's `doc_type` is not).
     SELECT h.anchor_id INTO v_home_ctx FROM kb_resource_homes h
      WHERE h.resource_id = p_resource AND h.anchor_table = 'kb_contexts';
     v_is_goal := EXISTS (
@@ -800,13 +803,18 @@ BEGIN
       OR EXISTS (
         SELECT 1 FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id
          WHERE et.name IN ('property_set', 'property_asserted')
-           AND ev.payload #>> '{owner,table}' = 'kb_resources'
-           AND (ev.payload #>> '{owner,id}')::uuid = p_resource
+           AND (ev.payload -> 'owner') ->> 'table' = 'kb_resources'
+           AND ((ev.payload -> 'owner') ->> 'id')::uuid = p_resource
            AND ev.payload ->> 'property_key' = 'doc_type'
            AND _property_value_normalized('doc_type', ev.payload -> 'value') #>> '{}' = 'goal');
     SELECT ev.id INTO v_genesis
       FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id
      WHERE et.name = 'resource_created' AND (ev.payload ->> 'resource_id')::uuid = p_resource
+     ORDER BY ev.id
+     LIMIT 1;
+    SELECT ev.id INTO v_erased
+      FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id
+     WHERE et.name = 'resource_erased' AND ev.payload ->> 'subject_id' = p_resource::text
      ORDER BY ev.id
      LIMIT 1;
 
@@ -856,9 +864,12 @@ BEGIN
         -- ── The telos copies (ruled 2026-10-04): `ledger_remainder` names the ledger paths
         --    carrying R's content, not only R's own trail. When R was ever a goal, every telos
         --    snapshot its current home context's materializations and salience refreshes recorded
-        --    may average R's embedding in. No upper bound: a snapshot minted after the act by a
-        --    materialize already in flight is named whenever the plan is re-derived. A former
-        --    home's snapshots are not named. Named, never reached here: the ledger edit is
+        --    may average R's embedding in. Bounded by R's genesis below and, once R is erased,
+        --    by its `resource_erased` above (ruled 2026-10-04): later snapshots are the context's
+        --    own history, and a re-derive must name the same set the act recorded. Not named: a
+        --    snapshot that a materialize already in flight at the act minted after it (loaded
+        --    before the act, so its telos may still average R in; the region drain repairs the
+        --    stored snapshot, not that ledger copy), and a former home's snapshots. Named, never reached here: the ledger edit is
         --    cut 2's. Bounded below by R's genesis — R contributed nothing before it existed — and
         --    otherwise over-inclusive by design: a snapshot minted while R was done or unembedded
         --    is named too. Not in the trail scope (anchored on the context, not on R), so no
@@ -870,6 +881,7 @@ BEGIN
            AND et.name IN ('region_materialized', 'salience_refreshed')
            AND ev.producing_anchor_table = 'kb_contexts' AND ev.producing_anchor_id = v_home_ctx
            AND (v_genesis IS NULL OR ev.id > v_genesis)
+           AND (v_erased IS NULL OR ev.id < v_erased)
            AND jsonb_typeof(ev.payload -> 'telos_centroid') = 'string'
        ) s;
 

@@ -94,13 +94,16 @@ pub async fn tick(
     let events = replay::formation_touched_count_since(pool, anchor, watermark).await?;
     let threshold = threshold.unwrap_or(DEFAULT_MATERIALIZE_THRESHOLD);
     let deleted = replay::resource_deleted_since(pool, anchor, watermark).await?;
-    // `OR erased` — an erased resource still a member of a live region. The erasure act recomputes
-    // the live centroids it can see and queues a settling, but a materialize already in flight when
-    // the act commits loaded the resource before the act, writes it back as a live member (and may
-    // carry its share), stamps a fresh watermark, and absorbs the act's queued job. Its centroid is
-    // recomputed over the survivors FIRST, because the materialize below folds the region as it
-    // stands; the materialize then re-forms without the husk and re-arms the telos snapshot.
-    let erased = erased_live_members(pool, anchor).await?;
+    // `OR erased` — an erased resource still a member of a live region under THIS lens. The erasure
+    // act recomputes the live centroids it can see and queues a settling, but a materialize already
+    // in flight when the act commits loaded the resource before the act: it keeps it a live member
+    // under a fresh watermark (and may carry its share), and absorbs the act's queued job. Its
+    // centroid is recomputed over the survivors FIRST, because the materialize below folds the
+    // region as it stands; that materialize loads after the act, so the husk (inactive) leaves
+    // every region of this lens and the telos snapshot is re-armed. Lens-scoped because the
+    // materialize folds only this lens's regions: an erased member of another lens's live region
+    // would trip the gate forever. Those regions' centroids were recomputed by the act itself.
+    let erased = erased_live_members(pool, anchor, lens_id).await?;
     for resource in &erased {
         sqlx::query_scalar!(
             r#"SELECT 1 AS "one!" FROM (SELECT _resource_erasure_recompute_live_centroids($1)) s"#,
@@ -117,21 +120,25 @@ pub async fn tick(
     Ok(tick)
 }
 
-/// Erased resources that are still members of a live region on this anchor. Empty once every
-/// materialize that loaded one before its erasure has been followed by one that loaded after it.
+/// Erased resources that are still members of a live region on this anchor under `lens_id` — the
+/// lens a materialize of the anchor folds. Empty once a materialize of that lens has loaded after
+/// every such erasure, since the load excludes inactive resources.
 pub async fn erased_live_members(
     pool: &sqlx::PgPool,
     anchor: HomeAnchor,
+    lens_id: temper_substrate::ids::LensId,
 ) -> anyhow::Result<Vec<uuid::Uuid>> {
     Ok(sqlx::query_scalar!(
         "SELECT DISTINCT mem.member_id \
            FROM kb_cogmap_regions r \
            JOIN kb_cogmap_region_members mem ON mem.region_id = r.id \
            JOIN kb_resources res ON res.id = mem.member_id \
-          WHERE r.home_anchor_table = $1 AND r.home_anchor_id = $2 AND NOT r.is_folded \
+          WHERE r.home_anchor_table = $1 AND r.home_anchor_id = $2 AND r.lens_id = $3 \
+            AND NOT r.is_folded \
             AND mem.member_table = 'kb_resources' AND res.erased_at IS NOT NULL",
         anchor.table(),
         anchor.uuid(),
+        lens_id.uuid(),
     )
     .fetch_all(pool)
     .await?)

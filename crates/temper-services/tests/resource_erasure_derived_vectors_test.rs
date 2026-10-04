@@ -1055,7 +1055,8 @@ async fn assert_repaired(pool: &PgPool, p: &Planted, held_r: &[Uuid]) {
 
 /// (j) The in-flight race, end to end: the region drain is mid-job on C when the act commits. Its
 /// materialize loaded R while R was live, so R stays a live member under a fresh watermark and the
-/// snapshot is re-armed with R inside it (the act's queued job would fold into this one). When the job
+/// snapshot is re-armed with R inside it. The act runs as its SQL here, so its own post-commit
+/// enqueue is not exercised; the queued in-flight job stands in for the one it would fold into. When the job
 /// completes the drain queues another, and claims it in the same pass: the repair recomputes,
 /// re-forms without the husk, re-arms the snapshot from the live telos, and queues nothing more.
 ///
@@ -1078,6 +1079,22 @@ async fn an_inflight_drain_that_loaded_the_resource_is_followed_and_repaired(poo
         queued_region_jobs(&pool, p.ctx).await,
         0,
         "the follow-up terminates: nothing erased is live, so nothing is queued"
+    );
+    let after_the_act: i64 = sqlx::query_scalar(
+        "SELECT count(*) \
+           FROM jsonb_array_elements(resource_erasure_survey_plan($1)->'ledger_remainder') e \
+          WHERE e->'paths' = '[\"telos_centroid\"]'::jsonb \
+            AND (e->>'event')::uuid > ( \
+                SELECT a.id FROM kb_events a JOIN kb_event_types t ON t.id = a.event_type_id \
+                 WHERE t.name = 'resource_erased' AND a.payload->>'subject_id' = $1::text)",
+    )
+    .bind(p.r.uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("re-derive the plan");
+    assert_eq!(
+        after_the_act, 0,
+        "a re-derived plan names no telos snapshot minted after the act (bounded at resource_erased)"
     );
 }
 
@@ -1163,4 +1180,66 @@ async fn a_completed_job_is_followed_while_an_erased_member_is_live(pool: PgPool
         "once repaired, nothing is requeued"
     );
     assert_eq!(queued_region_jobs(&pool, p.ctx).await, 0);
+}
+
+/// (m) The gate is scoped to the lens a materialize folds. An erased member of a live region under
+/// ANOTHER lens on the anchor is never folded by the drain's materialize, so a lens-blind gate
+/// would force a materialize and requeue on every pass, forever. The act has already recomputed
+/// that region's centroid; the drain settles the default lens and stops.
+///
+/// FAILS with a lens-blind gate: the drain spins on the anchor until its deadline.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_erased_member_under_another_lens_does_not_spin_the_drain(pool: PgPool) {
+    let p = planted(&pool).await;
+    let other_lens: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_cogmap_lenses WHERE name = 'telos-default' AND home_anchor_id IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the global telos-default lens");
+    assert_ne!(
+        other_lens,
+        lens_of(&pool, p.ctx).await,
+        "precondition: a non-default lens"
+    );
+    let region: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_cogmap_regions \
+           (home_anchor_table, home_anchor_id, lens_id, centroid, salience, member_count, \
+            asserted_by_event_id, last_event_id, is_folded) \
+         VALUES ('kb_contexts', $1, $2, $3::vector, 1.0, 1, $4, $4, false) RETURNING id",
+    )
+    .bind(p.ctx.uuid())
+    .bind(other_lens)
+    .bind(vec_text(&axis(0)))
+    .bind(p.r_genesis)
+    .fetch_one(&pool)
+    .await
+    .expect("seed a live region under another lens");
+    sqlx::query(
+        "INSERT INTO kb_cogmap_region_members (region_id, member_table, member_id, affinity) \
+         VALUES ($1, 'kb_resources', $2, 1.0)",
+    )
+    .bind(region)
+    .bind(p.r.uuid())
+    .execute(&pool)
+    .await
+    .expect("R is a member of the other lens's region");
+
+    erase(&pool, p.r).await;
+    let started = std::time::Instant::now();
+    drain(&pool).await;
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "the drain must settle and stop, not spin on the other lens's region"
+    );
+    assert_eq!(
+        queued_region_jobs(&pool, p.ctx).await,
+        0,
+        "nothing is requeued"
+    );
+    assert!(
+        !region_is_folded(&pool, region).await,
+        "precondition of the hazard: the default-lens materialize never folds the other lens's region"
+    );
 }

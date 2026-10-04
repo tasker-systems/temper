@@ -34,7 +34,9 @@ use crate::error::{ApiError, ApiResult};
 use crate::services::drain_span::{self, JobOutcome};
 use crate::services::workflow_job_service;
 use temper_core::types::home::HomeAnchor;
+use temper_core::types::materialize::default_lens_for;
 use temper_core::types::workflow_job::{AnchorJobPayload, ClaimedAnchorJob, DispatchType, Persona};
+use temper_substrate::substrate;
 
 /// Wall-clock ceiling for one drain invocation, in seconds. Sits well under the `api/internal`
 /// function's `maxDuration: 300` so a claimed job that runs long still leaves room to complete and
@@ -82,20 +84,24 @@ enum RegionJobResult {
     Failed,
 }
 
-/// Queue another settling when an erased resource is still a live member of this anchor's
-/// regions — what a materialize already in flight when an erasure commits leaves behind (it loaded
-/// the resource before the act, and the act's own queued job folded into it). Runs AFTER the job
-/// completes: the in-flight uniqueness covers `in_progress`, so an enqueue before it would coalesce
-/// into the job just finished. Terminates: the next tick recomputes those centroids and forces a
-/// materialize that loads after the act, which drops the husk, so this then finds nothing.
+/// Queue another settling when an erased resource is still a live member of this anchor's regions
+/// under its default lens — what a materialize that loaded the resource before its erasure leaves
+/// behind (the drain's in-flight job, which absorbed the act's own queued job, or an endpoint
+/// materialize). Called AFTER a job completes: the in-flight uniqueness covers `in_progress`, so an
+/// enqueue before it would coalesce into the job just finished. Terminates: the next tick's
+/// erased-member gate forces a materialize of that lens that loads after the act, which drops the
+/// husk from every region of the lens, so this then finds nothing.
 pub async fn requeue_if_erased_members(
     pool: &PgPool,
     anchor: HomeAnchor,
     emitter: uuid::Uuid,
 ) -> ApiResult<bool> {
-    let erased = region_clocks::erased_live_members(pool, anchor)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let erased = async {
+        let (_, lens_id) = substrate::load_lens(pool, anchor, default_lens_for(anchor)).await?;
+        region_clocks::erased_live_members(pool, anchor, lens_id).await
+    }
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
     if erased.is_empty() {
         return Ok(false);
     }
@@ -115,15 +121,6 @@ pub async fn requeue_if_erased_members(
     Ok(true)
 }
 
-/// One claimed job, as its own span.
-///
-/// Extracted from the claim loop rather than inlined so the per-job facts land on a span of their
-/// own. With no child span, `Span::current().record(..)` resolves to the *tick* span and appears to
-/// work — right up until it silently doesn't. That is the trap CLAUDE.md's span-field convention
-/// exists for, and `crates/temper-services/tests/drain_span_test.rs` asserts against here.
-///
-/// `past_deadline` is passed rather than recomputed inside, so the caller keeps ownership of the
-/// invocation clock and this stays a pure function of its inputs.
 #[tracing::instrument(
     name = "region_job",
     skip_all,
@@ -176,7 +173,15 @@ async fn run_region_job(
     match region_clocks::tick(pool, job.anchor, job.emitter.into(), None).await {
         Ok(tick) => {
             workflow_job_service::complete_anchor(pool, job.anchor, persona, dispatch).await?;
-            requeue_if_erased_members(pool, job.anchor, job.emitter).await?;
+            // Best-effort, like the act's own post-commit enqueue: the job is already complete, and
+            // failing the pass here would strand the batch's other claimed job until lease expiry.
+            if let Err(e) = requeue_if_erased_members(pool, job.anchor, job.emitter).await {
+                tracing::warn!(
+                    error = %e,
+                    "failed to check for erased live members after a region job; the husk waits \
+                     for the next write to reach the anchor"
+                );
+            }
             span.record("outcome", JobOutcome::Completed.as_str());
             span.record("materialized", tick.materialized);
             span.record("salience_refreshed", tick.salience_refreshed);
