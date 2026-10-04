@@ -356,6 +356,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          # The job builds third-party crates (build scripts included) and needs no git
+          # credentials afterwards.
+          persist-credentials: false
 
       - uses: ./.github/actions/setup-rust
         with:
