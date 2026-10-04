@@ -368,7 +368,7 @@ holds the p_top places (a text row, or a path in a jsonb row) with the most matc
 and counts, never a matched value.$c$;
 
 SELECT declare_migration(
-    20261004130000,
+    20261004140000,
     'additive',
     'The sensitivity sweep defaults to off (sweep Q52, Q53, Q54). Adds sensitivity.detectors.provided_by (temper or organization, defaulting to organization; the nine seeded ids backfill as temper), sets the enabled default to false, and turns every temper-provided detector off. Adds a BEFORE UPDATE trigger that turns a detector off when its version rises, and enable_detector, disable_detector, enable_detectors, disable_detectors, check_severity_selection, dry_run and the public sensitivity_expire_erased_fingerprints and sensitivity_sweep_detectors_enabled, all new; replaces the COMMENT on sensitivity.expire_erased_fingerprints. CREATE OR REPLACEs sensitivity_sweep_claim with 20261003230000''s signature and return shape, its body verbatim plus a guard: with no detector enabled it enqueues and claims nothing. Additive: a NOT NULL column with a default, two defaults, one data update, a trigger and new functions; no signature the deployed door calls changes. A deployed binary that predates the opt-in keeps calling the claim, which now claims nothing, so it writes no run or job row; while every detector is off it no longer reaches the erased-fingerprint expiry, which the new door calls on every call (Q50).'
 );

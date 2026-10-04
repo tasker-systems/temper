@@ -22,7 +22,7 @@ const SALT: &[u8] = b"default-off-witness-salt-of-thirty-two-plus";
 const SSN: &str = "219-45-6789";
 const SSN_B: &str = "536-22-8147";
 /// The last migration before default-off: the state every deployment was in when it landed.
-const BEFORE_DEFAULT_OFF: i64 = 20261004120000;
+const BEFORE_DEFAULT_OFF: i64 = 20261004130000;
 
 const TEMPER_NINE: [&str; 9] = [
     "aba_routing",

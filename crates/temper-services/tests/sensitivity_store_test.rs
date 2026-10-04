@@ -511,7 +511,7 @@ async fn the_seeded_detectors_are_cut_ones_nine(pool: PgPool) {
             cat.to_string(),
             *sev,
             v.map(str::to_string),
-            // Off until an operator enables it (Q52, 20261004130000).
+            // Off until an operator enables it (Q52, 20261004140000).
             false,
             // payment_card v2 stops reading cards out of hex runs (Q42, 20261003150000); v3
             // requires an issuer at its length (Q51, 20261004120000).
