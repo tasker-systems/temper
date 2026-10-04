@@ -6,8 +6,7 @@
 use tower::ServiceBuilder;
 use vercel_runtime::axum::VercelLayer;
 
-use temper_mcp::McpConfig;
-use temper_mcp_server::McpServerConfig;
+use temper_mcp_server::{DiscoveryConfig, McpServerConfig};
 use temper_services::state::JwksKeyStore;
 
 #[tokio::main]
@@ -20,7 +19,7 @@ async fn main() -> Result<(), vercel_runtime::Error> {
 
     // `unwrap_or_else(panic!)` rather than `.expect()`: expect prints Debug, and these errors carry
     // their remedy in Display. An instance that cannot state which audience it validates must not
-    // serve traffic. This governs BOTH loads below — `McpConfig` used `.expect()` until
+    // serve traffic. This governs BOTH loads below — the discovery config used `.expect()` until
     // `[found — 2026-08-21]`, so a misconfigured MCP deployment aborted with a Debug dump instead
     // of the remedy, on the surface whose misconfiguration is hardest to notice.
     //
@@ -30,10 +29,11 @@ async fn main() -> Result<(), vercel_runtime::Error> {
     // variables are project-scoped; the API's function is the one that uses it).
     let server_config =
         McpServerConfig::from_env().unwrap_or_else(|e| panic!("refusing to start: {e}"));
-    let mcp_config = McpConfig::from_env().unwrap_or_else(|e| panic!("refusing to start: {e}"));
+    let discovery =
+        DiscoveryConfig::from_env().unwrap_or_else(|e| panic!("refusing to start: {e}"));
 
     let jwks_store = JwksKeyStore::new(server_config.auth.jwks_url.clone());
-    let app = temper_mcp_server::build_router(server_config, jwks_store, mcp_config);
+    let app = temper_mcp_server::build_router(server_config, jwks_store, discovery);
 
     let service = ServiceBuilder::new().layer(VercelLayer::new()).service(app);
 

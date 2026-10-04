@@ -68,7 +68,7 @@ pub struct GetArtifactInput {
 
 pub async fn list_artifacts(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: ListArtifactsInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let resource_id = parse_resource_ref(&input.resource_id)?;
@@ -96,7 +96,7 @@ pub async fn list_artifacts(
 
 pub async fn get_artifact(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: GetArtifactInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let artifact_id = parse_artifact_ref(&input.artifact_id)?;
@@ -165,7 +165,7 @@ pub struct CommitArtifactInput {
 
 pub async fn commit_artifact(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: CommitArtifactInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let resource_id = parse_resource_ref(&input.resource_id)?;

@@ -77,7 +77,7 @@ fn parse_cogmap(s: &str) -> Result<Uuid, rmcp::ErrorData> {
 
 pub async fn steward_ingest_delta(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: StewardDeltaInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let cogmap = parse_cogmap(&input.cogmap)?;
@@ -96,7 +96,7 @@ pub async fn steward_ingest_delta(
 
 pub async fn steward_advance_watermark(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: StewardAdvanceWatermarkInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let cogmap = parse_cogmap(&input.cogmap)?;
