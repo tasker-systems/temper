@@ -55,7 +55,8 @@ pub struct ApiConfig {
     pub sensitivity_sweep_salt: Option<String>,
     /// Whether this deployment's operator opted it into the sensitivity sweep (sweep Q52, Q53).
     /// Off unless `SENSITIVITY_SWEEP_ENABLED` is `true` or `1`: the door then answers without
-    /// claiming, ticking or writing a row, and raises none of the sweep's error events. A deploy
+    /// claiming or ticking, runs only erasure's digest expiry, and raises none of the sweep's
+    /// error events. A deploy
     /// never turns the sweep on; an operator does.
     pub sensitivity_sweep_enabled: bool,
     /// Vercel Connect broker credentials. `None` when the four env vars are not all

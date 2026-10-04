@@ -19,7 +19,7 @@ use temper_services::state::AppState;
 /// re-run only claims whatever is next, so a GET trigger is safe.
 ///
 /// Does nothing unless the deployment opted in with `SENSITIVITY_SWEEP_ENABLED` (Q52, Q53): it
-/// then answers `enabled: false` without touching the database.
+/// then answers `enabled: false` after running only erasure's digest expiry.
 ///
 /// Gated by the shared `EMBED_DISPATCH_SECRET` bearer via `embed::require_dispatch_secret`: no new
 /// gate secret (D8). The salt is a key, not a gate, and has its own variable (Q44).

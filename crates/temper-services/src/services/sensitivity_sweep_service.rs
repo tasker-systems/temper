@@ -221,6 +221,8 @@ pub enum Slot {
 pub enum Ended {
     /// The deployment has not opted in: nothing was reaped, claimed or ticked.
     Disabled,
+    /// Opted in, but no detector is enabled, so there is nothing to scan and nothing was claimed.
+    NoDetectors,
     /// The loop's time budget ran out.
     Budget,
     /// A whole rotation examined no row.
@@ -235,6 +237,7 @@ impl Ended {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Disabled => "disabled",
+            Self::NoDetectors => "no_detectors",
             Self::Budget => "budget",
             Self::Idle => "idle",
             Self::Unclaimed(Slot::Free) => "slot_free",
@@ -304,6 +307,13 @@ pub async fn sweep(pool: &PgPool, salt: Option<&[u8]>, enabled: bool) -> ApiResu
     sweep_within(pool, salt, LOOP_BUDGET).await
 }
 
+async fn detectors_enabled(conn: &mut PgConnection) -> ApiResult<bool> {
+    let any = sqlx::query_scalar!(r#"SELECT sensitivity_sweep_detectors_enabled() AS "any!""#)
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(any)
+}
+
 /// Erasure's digest expiry (Q50), which the door runs on every call whether or not it sweeps.
 async fn expire_erased_fingerprints(pool: &PgPool) -> ApiResult<i32> {
     let n = sqlx::query_scalar!(r#"SELECT sensitivity_expire_erased_fingerprints() AS "expired!""#)
@@ -336,6 +346,14 @@ pub async fn sweep_within(
         ended: Ended::Budget,
         fingerprints_expired,
     };
+
+    // Checked before the claim, which claims nothing in this state: a failed job waiting in the slot
+    // is not retried then, and reporting it as backing off would misname why nothing runs.
+    if !detectors_enabled(&mut conn).await? {
+        summary.ended = Ended::NoDetectors;
+        emit_call_span(&summary);
+        return Ok(summary);
+    }
 
     let mut idle_streak = 0;
     while started.elapsed() + TICK_HEADROOM <= budget {

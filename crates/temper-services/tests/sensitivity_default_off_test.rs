@@ -16,7 +16,7 @@ use sqlx::migrate::Migrator;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use temper_services::services::sensitivity_sweep_service::{sweep, sweep_within};
+use temper_services::services::sensitivity_sweep_service::{sweep, sweep_within, Ended};
 
 const SALT: &[u8] = b"default-off-witness-salt-of-thirty-two-plus";
 const SSN: &str = "219-45-6789";
@@ -161,6 +161,11 @@ async fn an_opted_in_door_with_every_detector_off_scans_nothing(pool: PgPool) {
         .await
         .expect("sweep runs");
     assert!(summary.ticks.is_empty(), "{summary:?}");
+    assert_eq!(
+        summary.ended,
+        Ended::NoDetectors,
+        "nothing enabled must not read as nothing new"
+    );
     let left = |pool: PgPool| async move {
         sqlx::query_as::<_, (i64, i64, i64, i64)>(
             "SELECT (SELECT count(*) FROM sensitivity.findings), (SELECT count(*) FROM sensitivity.runs), \

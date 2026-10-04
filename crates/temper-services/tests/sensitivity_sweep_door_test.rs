@@ -339,6 +339,7 @@ async fn one_call_sweeps_every_surface_and_stops_when_a_rotation_is_idle(pool: P
 /// Q46: a call never starts a tick it cannot finish inside its budget.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_call_starts_no_tick_it_cannot_finish(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let summary = sweep_within(&pool, Some(SALT), Duration::from_secs(1))
         .await
         .expect("sweep runs");
@@ -351,6 +352,7 @@ async fn a_call_starts_no_tick_it_cannot_finish(pool: PgPool) {
 /// is what it is: a failed job backing off, which the door reports as a blocked slot.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_lapsed_lease_is_reaped_before_the_claim(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     order(&pool, "kb_resources.title").await;
     sqlx::query(
         "UPDATE kb_workflow_jobs SET status = 'in_progress', attempts = 1,

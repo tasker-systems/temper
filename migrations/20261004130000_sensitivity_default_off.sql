@@ -99,6 +99,16 @@ LANGUAGE sql AS $$
     SELECT sensitivity.expire_erased_fingerprints();
 $$;
 
+-- Whether any detector is enabled, so the door can tell an opted-in deployment with nothing to scan
+-- from one with nothing new to scan (no Rust names the schema, witness 12).
+CREATE FUNCTION sensitivity_sweep_detectors_enabled() RETURNS boolean
+LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (SELECT 1 FROM sensitivity.detectors d WHERE d.enabled);
+$$;
+
+COMMENT ON FUNCTION sensitivity.expire_erased_fingerprints(interval) IS
+'Starts the window for every closed finding on a place an erasure act emptied or reached (sensitivity.erased_place_findings), then, once a finding has been seen so for p_window (default 30 days, ruled 2026-10-03) and is still closed, deletes the memo rows carrying its keyed content_hash, drops its fingerprints and replaces that hash. fingerprint_state reads expired; the finding row stays. Run on every door call through sensitivity_expire_erased_fingerprints, opted in or not (Q53), and by every scanning sensitivity_sweep_tick. Returns the number of findings expired.';
+
 -- ── Enabling and disabling (Q53) ────────────────────────────────────────────────────────────────
 -- An operator enables a detector by name at the version they reviewed. The table holds only the
 -- current version, so a version that is not current refuses: a bump since the review means the
@@ -223,7 +233,7 @@ Returns each detector it disabled.$c$;
 -- The answer is one row per surface: counts, and the places with the most matches as pointers.
 -- Never a matched value (§8, D1). STABLE, so Postgres refuses any write in the body's own statements;
 -- every function it reaches today (detector_matches, jsonb_units, the validators, the sources'
--- event_resource) is non-volatile too. The budget is checked between units, so one surface's opening
+-- event_resource) is non-volatile too. The budget is checked between rows, so one surface's opening
 -- sort can run past it, and a resource bound on the ledger surfaces derives each row's resource with
 -- sensitivity.event_resource. Set statement_timeout in the calling session to cap the whole call.
 -- Oversized units are skipped and counted as the sweep skips them, so the two agree on what is read.
@@ -360,5 +370,5 @@ and counts, never a matched value.$c$;
 SELECT declare_migration(
     20261004130000,
     'additive',
-    'The sensitivity sweep defaults to off (sweep Q52, Q53, Q54). Adds sensitivity.detectors.provided_by (temper or organization, defaulting to organization; the nine seeded ids backfill as temper), sets the enabled default to false, and turns every temper-provided detector off. Adds a BEFORE UPDATE trigger that turns a detector off when its version rises, and enable_detector, disable_detector, enable_detectors, disable_detectors, check_severity_selection, dry_run and the public sensitivity_expire_erased_fingerprints, all new. CREATE OR REPLACEs sensitivity_sweep_claim with 20261003230000''s signature and return shape, its body verbatim plus a guard: with no detector enabled it enqueues and claims nothing. Additive: a NOT NULL column with a default, two defaults, one data update, a trigger and new functions; no signature the deployed door calls changes. A deployed binary that predates the opt-in keeps calling the claim, which now claims nothing, so it writes no run or job row; while every detector is off it no longer reaches the erased-fingerprint expiry, which the new door calls on every call (Q50).'
+    'The sensitivity sweep defaults to off (sweep Q52, Q53, Q54). Adds sensitivity.detectors.provided_by (temper or organization, defaulting to organization; the nine seeded ids backfill as temper), sets the enabled default to false, and turns every temper-provided detector off. Adds a BEFORE UPDATE trigger that turns a detector off when its version rises, and enable_detector, disable_detector, enable_detectors, disable_detectors, check_severity_selection, dry_run and the public sensitivity_expire_erased_fingerprints and sensitivity_sweep_detectors_enabled, all new; replaces the COMMENT on sensitivity.expire_erased_fingerprints. CREATE OR REPLACEs sensitivity_sweep_claim with 20261003230000''s signature and return shape, its body verbatim plus a guard: with no detector enabled it enqueues and claims nothing. Additive: a NOT NULL column with a default, two defaults, one data update, a trigger and new functions; no signature the deployed door calls changes. A deployed binary that predates the opt-in keeps calling the claim, which now claims nothing, so it writes no run or job row; while every detector is off it no longer reaches the erased-fingerprint expiry, which the new door calls on every call (Q50).'
 );
