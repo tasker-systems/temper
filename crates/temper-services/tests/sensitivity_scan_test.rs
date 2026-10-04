@@ -545,13 +545,7 @@ async fn the_claim_rotates_through_every_enabled_surface(pool: PgPool) {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        sqlx::query("SELECT failed FROM sensitivity_sweep_tick($1, $2, $3)")
-            .bind(run)
-            .bind(job)
-            .bind(SALT)
-            .execute(&pool)
-            .await
-            .unwrap();
+        // Read before the tick: an idle tick deletes its own run row (Q49).
         picked.push(
             sqlx::query_scalar::<_, String>("SELECT surface FROM sensitivity.runs WHERE id = $1")
                 .bind(run)
@@ -559,6 +553,13 @@ async fn the_claim_rotates_through_every_enabled_surface(pool: PgPool) {
                 .await
                 .unwrap(),
         );
+        sqlx::query("SELECT failed FROM sensitivity_sweep_tick($1, $2, $3)")
+            .bind(run)
+            .bind(job)
+            .bind(SALT)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
     picked.sort();
     assert_eq!(

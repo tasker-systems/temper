@@ -34,7 +34,9 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   `SENSITIVITY_SWEEP_SALT`, and refuses the boot when it is under 32 characters or equals another
   shared secret. When it is unset, every tick records a failed run (`salt_missing`) and logs an
   error. The door also logs an error while the database's logging settings could write the salt,
-  a bind parameter, to its log. Who
+  a bind parameter, to its log. A tick that examined, found and held back nothing leaves no rows
+  (Q49): it stamps the new `sensitivity.surfaces.last_swept_at`, which the claim now rotates by,
+  and deletes its own run row and finished job row, so an idle deployment adds none. Who
   observes: operators, through the span and the run rows; deployers, who must set the variable.
   No client request or response changes. User-visible: no. Release relevance: additive.
 pr: self

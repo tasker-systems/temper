@@ -2,8 +2,13 @@
 -- run's own facts for the span, as integers only: nothing in the signature can carry text.
 -- Rationale: temper-artifacts plans/2026-10-01-sensitivity-sweep-3a-core.md, "PR D".
 
+-- Q49: an idle tick leaves no rows, so the rotation cannot be read off the runs any more. Each
+-- surface carries when a tick last visited it, and the claim rotates by that.
+ALTER TABLE sensitivity.surfaces ADD COLUMN last_swept_at timestamptz;
+
 -- Q46: the door loops claim → tick inside one call, and stops after a rotation that found nothing.
--- The claim also returns how many surfaces a rotation visits. C2's body otherwise, verbatim.
+-- The claim also returns how many surfaces a rotation visits, and rotates by last_swept_at (Q49).
+-- C2's body otherwise, verbatim.
 DROP FUNCTION sensitivity_sweep_claim(int, int);
 
 CREATE FUNCTION sensitivity_sweep_claim(p_budget_rows int DEFAULT 2000, p_lease_seconds int DEFAULT 330)
@@ -15,8 +20,7 @@ DECLARE
 BEGIN
     SELECT s.surface INTO v_pick FROM sensitivity.surfaces s
      WHERE s.enabled
-     ORDER BY (SELECT r.id FROM sensitivity.runs r WHERE r.surface = s.surface ORDER BY r.id DESC LIMIT 1)
-              NULLS FIRST, s.surface
+     ORDER BY s.last_swept_at NULLS FIRST, s.surface
      LIMIT 1;
     IF v_pick IS NOT NULL THEN
         PERFORM workflow_job_enqueue_system('sensitivity', 'sensitivity-sweep',
@@ -40,7 +44,7 @@ $$;
 -- this PR's door is its first caller.
 DROP FUNCTION sensitivity_sweep_tick(uuid, uuid, bytea, interval, int);
 
--- 20261003150000's body, verbatim apart from the return.
+-- 20261003150000's body, verbatim apart from the return and Q49's tail.
 CREATE FUNCTION sensitivity_sweep_tick(
     p_run uuid, p_job uuid, p_salt bytea, p_lag interval DEFAULT '5 minutes', p_budget_ms int DEFAULT 20000
 ) RETURNS TABLE (rows_examined int, hashes_examined int, cache_hits int, new_findings int,
@@ -145,6 +149,16 @@ BEGIN
            outcome, new_findings_head, new_findings_backfill, head_holdback_seconds,
            sev1, sev2, sev3, sev4
       FROM sensitivity.runs r WHERE r.id = p_run;
+    -- Q49: the visit is recorded on the surface, whatever the tick found. A tick that changed
+    -- nothing and saw nothing worth keeping leaves no rows: not its run, not its finished job. A
+    -- held-back head is kept, because a stalled head is a signal, not quiet.
+    UPDATE sensitivity.surfaces SET last_swept_at = clock_timestamp()
+     WHERE surface = v_job.payload ->> 'surface';
+    IF NOT failed AND rows_examined = 0 AND hashes_examined = 0 AND new_findings = 0
+       AND cursor_advances = 0 AND units_oversize = 0 AND head_holdback_seconds = 0 THEN
+        DELETE FROM sensitivity.runs WHERE id = p_run;
+        DELETE FROM kb_workflow_jobs WHERE id = p_job AND persona = 'sensitivity' AND status = 'done';
+    END IF;
     RETURN NEXT;
 END;
 $$;
@@ -152,5 +166,5 @@ $$;
 SELECT declare_migration(
     20261003230000,
     'additive',
-    'The sensitivity sweep''s door (spec D8, D9; Q45, Q46). DROP + CREATE of sensitivity_sweep_claim with the same parameters, returning surfaces (the enabled-surface count) after run_id and job_id; its body is 20261003150000''s plus that one read. DROP + CREATE of sensitivity_sweep_tick with the same parameters and a wider RETURNS TABLE: the seven prior columns keep their names, types and order, followed by outcome, failure, new_findings_head, new_findings_backfill, head_holdback_seconds and sev1-sev4, all integers. The body is 20261003150000''s verbatim except the final read. No deployed binary calls either function: the door that calls them ships with this migration. No table, column, constraint or grant changes.'
+    'The sensitivity sweep''s door (spec D8, D9; Q45, Q46). DROP + CREATE of sensitivity_sweep_claim with the same parameters, returning surfaces (the enabled-surface count) after run_id and job_id; its body is 20261003150000''s plus that one read. DROP + CREATE of sensitivity_sweep_tick with the same parameters and a wider RETURNS TABLE: the seven prior columns keep their names, types and order, followed by outcome, failure, new_findings_head, new_findings_backfill, head_holdback_seconds and sev1-sev4, all integers. The body is 20261003150000''s verbatim except the final read and Q49''s tail: it stamps sensitivity.surfaces.last_swept_at (a new nullable column the claim now rotates by), and a tick that examined, found, advanced and held back nothing deletes its own run row and its finished job row. No deployed binary calls either function: the door that calls them ships with this migration. The one schema change is that nullable column; no constraint or grant changes.'
 );

@@ -265,13 +265,56 @@ async fn one_call_sweeps_every_surface_and_stops_when_a_rotation_is_idle(pool: P
         "the call stopped before a full idle rotation"
     );
     assert!(!with_findings(&summary.ticks).is_empty());
+    let finder = with_findings(&summary.ticks)[0].run_id;
+    let kept: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM sensitivity.runs WHERE id = $1)")
+            .bind(finder)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        kept,
+        "a tick that found something keeps its run as the record"
+    );
 
+    // Q49: a quiet call leaves no rows behind, and still visits every surface.
+    let rows = |pool: PgPool| async move {
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT (SELECT count(*) FROM sensitivity.runs),
+                    (SELECT count(*) FROM kb_workflow_jobs WHERE persona = 'sensitivity')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    let before = rows(pool.clone()).await;
+    let since: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     let again = sweep(&pool, Some(SALT)).await.expect("sweep runs");
     assert_eq!(again.ended, Ended::Idle);
     assert_eq!(
         again.ticks.len() as i64,
         surfaces,
         "a quiet corpus costs exactly one rotation per call"
+    );
+    assert_eq!(
+        rows(pool.clone()).await,
+        before,
+        "an idle tick leaves neither a run row nor a finished job row (Q49)"
+    );
+    let unvisited: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sensitivity.surfaces
+          WHERE enabled AND (last_swept_at IS NULL OR last_swept_at < $1)",
+    )
+    .bind(since)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        unvisited, 0,
+        "the rotation must visit every surface, not revisit one"
     );
 }
 
