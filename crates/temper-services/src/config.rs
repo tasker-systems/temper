@@ -53,6 +53,12 @@ pub struct ApiConfig {
     /// cron bearer could compute a derived salt, and with it confirm a guessed SSN against a stored
     /// fingerprint. Rotating the bearer would also re-key every stored hash.
     pub sensitivity_sweep_salt: Option<String>,
+    /// Whether this deployment's operator opted it into the sensitivity sweep (sweep Q52, Q53).
+    /// Off unless `SENSITIVITY_SWEEP_ENABLED` is `true` or `1`: the door then answers without
+    /// claiming or ticking, runs only erasure's digest expiry, and raises none of the sweep's
+    /// error events. A deploy
+    /// never turns the sweep on; an operator does.
+    pub sensitivity_sweep_enabled: bool,
     /// Vercel Connect broker credentials. `None` when the four env vars are not all
     /// set — the deployment then has a `NullBroker` and mints fail clearly. Never
     /// hardcoded; a self-hosted operator sets their own.
@@ -241,6 +247,7 @@ impl std::fmt::Debug for ApiConfig {
                 "sensitivity_sweep_salt",
                 &self.sensitivity_sweep_salt.as_ref().map(|_| "redacted"),
             )
+            .field("sensitivity_sweep_enabled", &self.sensitivity_sweep_enabled)
             .field("vercel_connect", &self.vercel_connect)
             .field("slack_link", &self.slack_link)
             .field(
@@ -311,6 +318,7 @@ impl ApiConfig {
             embed_dispatch_secret: shared_secret(&lookup, "EMBED_DISPATCH_SECRET"),
             mcp_service_secret: shared_secret(&lookup, "TEMPER_MCP_SERVICE_SECRET"),
             sensitivity_sweep_salt: shared_secret(&lookup, "SENSITIVITY_SWEEP_SALT"),
+            sensitivity_sweep_enabled: parse_sensitivity_sweep_enabled(&lookup),
             vercel_connect: parse_vercel_connect(&lookup),
             slack_link: parse_slack_link(&lookup),
             slack_mint_secret: shared_secret(&lookup, "SLACK_MINT_SECRET"),
@@ -318,6 +326,28 @@ impl ApiConfig {
             blob,
             blob_disabled_by_policy,
         })
+    }
+}
+
+/// Read the sweep's opt-in (sweep Q52, Q53). Unset, empty, `false` or `0` leave it off. An
+/// unrecognised value leaves it off too, loudly: an operator who meant to opt in learns why the
+/// sweep is not running, and one who did not is never opted in by a typo.
+fn parse_sensitivity_sweep_enabled(lookup: impl Fn(&str) -> Option<String>) -> bool {
+    let Some(raw) = lookup("SENSITIVITY_SWEEP_ENABLED").filter(|s| !s.trim().is_empty()) else {
+        return false;
+    };
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" => true,
+        "false" | "0" => false,
+        // The value is never echoed: a secret pasted into the wrong variable would reach the log.
+        other => {
+            tracing::error!(
+                "SENSITIVITY_SWEEP_ENABLED is set to an unrecognized value ({} characters; \
+                 expected true/false/1/0): the sensitivity sweep stays off",
+                other.chars().count()
+            );
+            false
+        }
     }
 }
 
@@ -854,6 +884,30 @@ mod tests {
             "Zb4qY0m8Vt1kP6sR2wX9nL3cH7jD5fGa".to_string(),
         )]);
         assert_eq!(check_shared_secret_strength(&lookup_of(&pairs)), Ok(()));
+    }
+
+    // FAILS IF: a deployment scans without its operator opting in (Q52). Unset, an explicit no and
+    // a value the parser does not know all leave the sweep off; only `true` and `1` opt in.
+    #[test]
+    fn the_sweep_is_off_unless_the_operator_opts_in() {
+        let boots = |extra: &[(&'static str, String)]| {
+            ApiConfig::from_lookup(lookup_of(&with_secrets(extra)))
+                .expect("boots")
+                .sensitivity_sweep_enabled
+        };
+        assert!(!boots(&[]), "unset opted the deployment in");
+        for off in ["", "false", "0", "FALSE", "yes", "on", "enabled"] {
+            assert!(
+                !boots(&[("SENSITIVITY_SWEEP_ENABLED", off.to_string())]),
+                "SENSITIVITY_SWEEP_ENABLED={off:?} opted the deployment in"
+            );
+        }
+        for on in ["true", "1", "TRUE", " true "] {
+            assert!(
+                boots(&[("SENSITIVITY_SWEEP_ENABLED", on.to_string())]),
+                "SENSITIVITY_SWEEP_ENABLED={on:?} did not opt the deployment in"
+            );
+        }
     }
 
     // FAILS IF: a config dump prints the salt. Presence survives, the value does not.

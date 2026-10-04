@@ -488,7 +488,7 @@ async fn a_malformed_work_order_still_meets_the_check_first(pool: PgPool) {
 async fn the_seeded_detectors_are_cut_ones_nine(pool: PgPool) {
     let seeded: Vec<(String, String, i16, Option<String>, bool, i32)> = sqlx::query_as(
         "SELECT id, category, severity, validator, enabled, version \
-           FROM sensitivity.detectors ORDER BY id",
+           FROM sensitivity.detectors WHERE provided_by = 'temper' ORDER BY id",
     )
     .fetch_all(&pool)
     .await
@@ -511,7 +511,8 @@ async fn the_seeded_detectors_are_cut_ones_nine(pool: PgPool) {
             cat.to_string(),
             *sev,
             v.map(str::to_string),
-            true,
+            // Off until an operator enables it (Q52, 20261004140000).
+            false,
             // payment_card v2 stops reading cards out of hex runs (Q42, 20261003150000); v3
             // requires an issuer at its length (Q51, 20261004120000).
             if *id == "payment_card" { 3 } else { 1 },

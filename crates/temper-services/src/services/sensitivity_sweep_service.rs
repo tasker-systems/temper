@@ -25,6 +25,17 @@
 //! The service names the public functions and the queue table, never the schema behind them:
 //! that is witness 12's grep gate.
 //!
+//! ## Off until an operator opts in (Q52, Q53)
+//!
+//! A deployment whose operator has not set `SENSITIVITY_SWEEP_ENABLED` gets a door that does not
+//! sweep: no reap, no claim, no tick, no run, and none of the error events below. The cron entry
+//! stays in `vercel.json` on every deployment, so the variable is the opt-in.
+//!
+//! One thing runs on every call, opted in or not: erasure's digest expiry (Q50). Digests on a place
+//! an erasure act emptied go after 30 days whether or not the deployment still scans, so turning
+//! the sweep off never strands them. A deployment that never swept holds no finding, and the
+//! expiry writes nothing there.
+//!
 //! ## Loud, not quiet
 //!
 //! Every state in which the sweep is not scanning raises an error event: an unset salt (Q44), a
@@ -71,8 +82,14 @@ pub const SENSITIVITY_SWEEP_RUN_FIELDS: [&str; 15] = [
 ];
 
 /// Fields every `sensitivity_sweep_call` span declares.
-pub const SENSITIVITY_SWEEP_CALL_FIELDS: [&str; 4] =
-    ["salt_configured", "salt_may_be_logged", "ticks", "ended"];
+pub const SENSITIVITY_SWEEP_CALL_FIELDS: [&str; 6] = [
+    "fingerprints_expired",
+    "enabled",
+    "salt_configured",
+    "salt_may_be_logged",
+    "ticks",
+    "ended",
+];
 
 /// How a tick ended. Numbered in `sensitivity_sweep_tick` (Q45).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,6 +219,10 @@ pub enum Slot {
 /// Why a call stopped claiming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ended {
+    /// The deployment has not opted in: nothing was reaped, claimed or ticked.
+    Disabled,
+    /// Opted in, but no detector is enabled, so there is nothing to scan and nothing was claimed.
+    NoDetectors,
     /// The loop's time budget ran out.
     Budget,
     /// A whole rotation examined no row.
@@ -215,6 +236,8 @@ pub enum Ended {
 impl Ended {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Disabled => "disabled",
+            Self::NoDetectors => "no_detectors",
             Self::Budget => "budget",
             Self::Idle => "idle",
             Self::Unclaimed(Slot::Free) => "slot_free",
@@ -229,15 +252,20 @@ impl Ended {
 #[derive(Debug, Clone)]
 pub struct SweepSummary {
     pub salt_configured: bool,
-    /// The server's logging settings may write the salt bind parameter to its log (Q47).
+    /// The server's logging settings may write the salt bind parameter to its log (Q47). Not read,
+    /// and false, when the deployment has not opted in.
     pub salt_may_be_logged: bool,
     pub ticks: Vec<TickReport>,
     pub ended: Ended,
+    /// Findings whose salt-keyed digests this call's expiry gave up (Q50).
+    pub fingerprints_expired: i32,
 }
 
 /// The route's answer: counts of ticks and booleans, nothing a caller can learn the corpus from.
 #[derive(Debug, Clone, Serialize)]
 pub struct SweepAnswer {
+    /// Whether the deployment has opted in. False means the call did nothing at all.
+    pub enabled: bool,
     pub ticks: u32,
     pub failed_ticks: u32,
     pub salt_configured: bool,
@@ -247,6 +275,7 @@ pub struct SweepAnswer {
 impl SweepSummary {
     pub fn answer(&self) -> SweepAnswer {
         SweepAnswer {
+            enabled: !matches!(self.ended, Ended::Disabled),
             ticks: self.ticks.len() as u32,
             failed_ticks: self.ticks.iter().filter(|t| t.failed).count() as u32,
             salt_configured: self.salt_configured,
@@ -261,9 +290,36 @@ struct Claim {
     surfaces: i32,
 }
 
-/// One call of the door, with the deployed loop budget.
-pub async fn sweep(pool: &PgPool, salt: Option<&[u8]>) -> ApiResult<SweepSummary> {
+/// One call of the door, with the deployed loop budget. `enabled` is the deployment's opt-in: false
+/// runs erasure's expiry and nothing else, and raises no error event, only the call span.
+pub async fn sweep(pool: &PgPool, salt: Option<&[u8]>, enabled: bool) -> ApiResult<SweepSummary> {
+    if !enabled {
+        let summary = SweepSummary {
+            salt_configured: salt.is_some(),
+            salt_may_be_logged: false,
+            ticks: Vec::new(),
+            ended: Ended::Disabled,
+            fingerprints_expired: expire_erased_fingerprints(pool).await?,
+        };
+        emit_call_span(&summary);
+        return Ok(summary);
+    }
     sweep_within(pool, salt, LOOP_BUDGET).await
+}
+
+async fn detectors_enabled(conn: &mut PgConnection) -> ApiResult<bool> {
+    let any = sqlx::query_scalar!(r#"SELECT sensitivity_sweep_detectors_enabled() AS "any!""#)
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(any)
+}
+
+/// Erasure's digest expiry (Q50), which the door runs on every call whether or not it sweeps.
+async fn expire_erased_fingerprints(pool: &PgPool) -> ApiResult<i32> {
+    let n = sqlx::query_scalar!(r#"SELECT sensitivity_expire_erased_fingerprints() AS "expired!""#)
+        .fetch_one(pool)
+        .await?;
+    Ok(n)
 }
 
 /// One call of the door: reap, then claim and tick until `budget` is spent or a rotation is idle.
@@ -279,6 +335,7 @@ pub async fn sweep_within(
     // The incumbent drains reap before they claim (`embed_service::dispatch`): a lapsed lease
     // holds the single-flight slot until something does.
     workflow_job_service::reap(pool, "sensitivity lease expired").await?;
+    let fingerprints_expired = expire_erased_fingerprints(pool).await?;
 
     let mut conn = pool.acquire().await?;
     let salt_may_be_logged = guard_the_salt(&mut conn).await?;
@@ -287,7 +344,16 @@ pub async fn sweep_within(
         salt_may_be_logged,
         ticks: Vec::new(),
         ended: Ended::Budget,
+        fingerprints_expired,
     };
+
+    // Checked before the claim, which claims nothing in this state: a failed job waiting in the slot
+    // is not retried then, and reporting it as backing off would misname why nothing runs.
+    if !detectors_enabled(&mut conn).await? {
+        summary.ended = Ended::NoDetectors;
+        emit_call_span(&summary);
+        return Ok(summary);
+    }
 
     let mut idle_streak = 0;
     while started.elapsed() + TICK_HEADROOM <= budget {
@@ -504,16 +570,23 @@ fn emit_tick_span(claim: &Claim, report: Option<&TickReport>, errored: bool) {
 /// One `sensitivity_sweep_call` span per call, plus an error event for each state in which the
 /// sweep cannot work: these hold whether or not anything was claimed.
 fn emit_call_span(summary: &SweepSummary) {
+    let enabled = !matches!(summary.ended, Ended::Disabled);
     let span = tracing::info_span!(
         "sensitivity_sweep_call",
+        enabled,
         salt_configured = summary.salt_configured,
         salt_may_be_logged = summary.salt_may_be_logged,
         ticks = summary.ticks.len(),
         ended = summary.ended.as_str(),
+        fingerprints_expired = summary.fingerprints_expired,
         slot_attempts = tracing::field::Empty,
         slot_failure = tracing::field::Empty,
     );
     let _entered = span.enter();
+    // A deployment that has not opted in is not a sweep that cannot work: it raises nothing.
+    if !enabled {
+        return;
+    }
     if !summary.salt_configured {
         tracing::error!(
             "SENSITIVITY_SWEEP_SALT is unset: the sensitivity sweep cannot scan, and every tick \
