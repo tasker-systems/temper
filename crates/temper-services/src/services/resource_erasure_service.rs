@@ -43,7 +43,9 @@ use std::time::Duration;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{BlobId, EdgeId, EntityId, ProfileId, PropertyId, ResourceId};
+use temper_core::types::workflow_job::{AnchorJobPayload, DispatchType, Persona};
 use temper_substrate::blob_store::BlobStore;
 use temper_substrate::payloads::{
     ErasureAct, ErasureTargetOutcome, RedactedEventFields, ResourceErasureRefusalReason,
@@ -57,6 +59,7 @@ use crate::services::erasure_fence_service::{
     classify_blob_outcome, content_hash_of_pathname, BlobOutcomeClass, BLOB_TARGET,
 };
 use crate::services::erasure_service::BlobStrikeOutcome;
+use crate::services::workflow_job_service;
 
 /// How many times one act re-runs after a retryable failure (a deadlock or a raced edge fold)
 /// before it answers `Internal`. Two retries, three attempts: the byte-delete fence's bound for
@@ -353,6 +356,7 @@ async fn execute_with_release_timeout(
         )
         .await;
     }
+    queue_region_settling(pool, attempt.resource, attempt.emitter).await;
 
     Ok(ResourceErasureOutcome::Completed(
         ResourceErasureCompletion {
@@ -365,6 +369,72 @@ async fn execute_with_release_timeout(
             blob_strikes,
         },
     ))
+}
+
+/// Queue a region settling for every anchor whose formation watermark the act nulled (D2 step 6):
+/// the resource's home context, and each cogmap holding a LIVE region with the resource as a
+/// member — the same two predicates as the act's step 6, read after commit (the act keeps the home
+/// row and the member rows). The act has already recomputed those live centroids over the
+/// survivors; the settling is what removes the husk from the regions' membership, re-derives their
+/// readouts, and re-arms the context's telos snapshot the act nulled. A materialize already in
+/// flight absorbs this job; `region_service::requeue_if_erased_members` follows it with another.
+///
+/// **Never fails the act**, as `DbBackend::queue_region_clocks` never fails a write: the act has
+/// committed, and a failed enqueue leaves the regions to the next write that reaches the anchor.
+async fn queue_region_settling(pool: &PgPool, resource: ResourceId, emitter: EntityId) {
+    let anchors = match sqlx::query!(
+        r#"SELECT 'kb_contexts' AS "anchor_table!", h.anchor_id AS "anchor_id!"
+             FROM kb_resource_homes h
+            WHERE h.resource_id = $1 AND h.anchor_table = 'kb_contexts'
+           UNION
+           SELECT 'kb_cogmaps', r.home_anchor_id
+             FROM kb_cogmap_regions r
+             JOIN kb_cogmap_region_members mem ON mem.region_id = r.id
+            WHERE r.home_anchor_table = 'kb_cogmaps' AND NOT r.is_folded
+              AND mem.member_table = 'kb_resources' AND mem.member_id = $1"#,
+        resource.uuid(),
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(
+                resource = %resource.uuid(),
+                error = %e,
+                "failed to read the erased resource's region anchors; regions are stale until the next write re-drives them"
+            );
+            return;
+        }
+    };
+    for row in anchors {
+        let Some(anchor) = HomeAnchor::from_parts(&row.anchor_table, row.anchor_id) else {
+            tracing::warn!(
+                anchor_table = %row.anchor_table,
+                anchor = %row.anchor_id,
+                "unknown anchor table for an erased resource's region; no settling queued"
+            );
+            continue;
+        };
+        let payload = AnchorJobPayload {
+            emitter: emitter.uuid(),
+        };
+        if let Err(e) = workflow_job_service::enqueue_anchor(
+            pool,
+            anchor,
+            Persona::Region.as_str(),
+            DispatchType::Materialize.as_str(),
+            payload,
+        )
+        .await
+        {
+            tracing::warn!(
+                anchor = %anchor.uuid(),
+                error = %e,
+                "failed to queue region settling after erasure; regions are stale until the next write re-drives them"
+            );
+        }
+    }
 }
 
 /// A list naming one blob twice is refused before the act touches the resource: the act would

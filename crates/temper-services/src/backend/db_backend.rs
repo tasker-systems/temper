@@ -4513,6 +4513,20 @@ impl Backend for DbBackend {
         )
         .await
         .map_err(api_err)?;
+        // This materialize loaded outside its transaction, so it can have loaded a resource erased
+        // before it committed and kept it a live member. No job wraps this path, so follow it as the
+        // region drain follows a completed job. Never fails the materialize that already committed.
+        if let Err(e) = crate::services::region_service::requeue_if_erased_members(
+            &self.pool, cmd.anchor, emitter,
+        )
+        .await
+        {
+            tracing::warn!(
+                anchor = %cmd.anchor.uuid(),
+                error = %e,
+                "failed to check for erased live members after a materialize"
+            );
+        }
 
         Ok(CommandOutput::new(
             MaterializeAck::new(cmd.anchor, true, formation_events, threshold)

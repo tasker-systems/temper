@@ -335,11 +335,14 @@ fn is_identity(token: &str) -> bool {
             .is_some_and(|(alias, col)| is_ident(alias) && matches!(col, "id" | "n"))
 }
 
-/// Whether a whole SET value expression erases. Two shapes only:
+/// Whether a whole SET value expression erases. Three shapes only:
 ///
 /// - a constant from [`ERASURE_CONSTANTS`], optionally cast (`'{}'::jsonb`);
 /// - an `'erased…'` literal joined by `||` to an identity, optionally cast to text
-///   (`'erased-' || r.id::text`).
+///   (`'erased-' || r.id::text`);
+/// - the zero vector, `array_fill(0, ARRAY[n])::vector`: the erasure value of a NOT NULL vector
+///   column (`kb_cogmap_regions.centroid`, whose memberless convention it already is). Only a
+///   literal `0` fill and a literal dimension: a fill or dimension read from a row could carry it.
 ///
 /// Anything else is not an erasure, however it starts: `'erased-' || r.title` keeps the title,
 /// `'' || content` keeps the content, and `'{}'::jsonb || payload` keeps the payload.
@@ -354,8 +357,26 @@ fn is_erasure_value(expr: &[String]) -> bool {
         [v] => constant(v),
         [a, b, c] => (constant(a) && b == "::" && is_ident(c)) || sentinel(a, b, c),
         [v, op, id, cast, ty] => sentinel(v, op, id) && cast == "::" && ty == "text",
+        [f, open, zero, comma, dims, close, cast, ty] => {
+            f == "array_fill"
+                && open == "("
+                && zero == "0"
+                && comma == ","
+                && is_literal_dims(dims)
+                && close == ")"
+                && cast == "::"
+                && ty == "vector"
+        }
         _ => false,
     }
+}
+
+/// Whether `token` is `array[<digits>]`: a literal dimension list of one integer.
+fn is_literal_dims(token: &str) -> bool {
+    token
+        .strip_prefix("array[")
+        .and_then(|rest| rest.strip_suffix(']'))
+        .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// The tokens of a SET value starting at `start`, up to the `,` that ends it, the `;` that ends the
@@ -679,6 +700,53 @@ async fn reverting_the_joint_read_fixes_fails_the_fence(pool: PgPool) {
             "kb_citation_audits.reason".to_string()
         ],
         "reverting the joint-read fixes must unbind exactly those two columns"
+    );
+}
+
+/// FAILS IF: reverting the derived-vector statements (7b, 7c) leaves the fence green.
+///
+/// Ruled 2026-10-04: the act nulls the home context's telos snapshot and zeroes a folded region's
+/// centroid. This rewrites those two UPDATEs to keep the column's own value and asserts the binding
+/// reports exactly those two columns, so the zero-vector shape the fence learned for them binds
+/// only the erasing statement. Each rewrite must match exactly once.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn reverting_the_derived_vector_statements_fails_the_fence(pool: PgPool) {
+    let body = redaction_body(&pool).await;
+    assert!(
+        unbound(&body).is_empty(),
+        "precondition: every line is bound"
+    );
+
+    let mut reverted = body.clone();
+    for (fix, revert) in [
+        (
+            "SET telos_centroid = NULL",
+            "SET telos_centroid = telos_centroid",
+        ),
+        (
+            "SET centroid = array_fill(0, ARRAY[768])::vector",
+            "SET centroid = centroid",
+        ),
+    ] {
+        assert_eq!(
+            reverted.matches(fix).count(),
+            1,
+            "the probe expects `{fix}` exactly once in {REDACTION_FN}; the function changed shape"
+        );
+        reverted = reverted.replace(fix, revert);
+    }
+    sqlx::query(&reverted)
+        .execute(&pool)
+        .await
+        .expect("install the reverted function");
+
+    assert_eq!(
+        unbound(&redaction_body(&pool).await),
+        vec![
+            "kb_cogmap_regions.centroid".to_string(),
+            "kb_contexts.telos_centroid".to_string()
+        ],
+        "reverting the derived-vector statements must unbind exactly those two columns"
     );
 }
 
