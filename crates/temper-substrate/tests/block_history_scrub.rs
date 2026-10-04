@@ -30,6 +30,9 @@
 //!     `resource_erasure_refuse` records `act` and `blocks`, and its six-argument call still
 //!     appends a payload without `act`.
 //!   * **16h** — a tombstone is scrubbable (ruling 8) and stays a tombstone, never a husk.
+//!   * **16i** — a per-block mutate racing the scrub serializes on R's row: the scrub waits for a
+//!     mutate whose event is already minted, and live and replay stay byte-identical.
+//!   * **16j** — the same race with a whole-body replace (`resource_reblock` folding the block).
 //!   * **D10** — the survey reports exactly the counts the act's `targets` name, and those are the
 //!     rows the act empties.
 
@@ -1641,5 +1644,210 @@ async fn replay_refuses_a_block_history_scrubbed_naming_another_table(pool: PgPo
     assert!(
         chain.contains("names subject_table \"kb_resources\", not kb_content_blocks"),
         "{chain}"
+    );
+}
+
+/// The race 16i and 16j share. Holds `block`'s current chunks, starts `writer`, and waits until
+/// the writer's call to `entry_fn` is parked on them: past its mint, at its chunk supersede. Then
+/// it runs the scrub over `block` and gives it 2 seconds. Returns whether the scrub was still
+/// waiting when they ran out, and the scrub's event id, once the holder has released the writer
+/// and both have committed.
+async fn race_the_scrub(
+    pool: &PgPool,
+    resource: ResourceId,
+    block: Uuid,
+    entry_fn: &str,
+    writer: impl std::future::Future<Output = ()> + Send + 'static,
+) -> (bool, Uuid) {
+    let mut holder = pool.begin().await.unwrap();
+    let held: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM kb_chunks WHERE block_id = $1 AND is_current FOR UPDATE",
+    )
+    .bind(block)
+    .fetch_all(&mut *holder)
+    .await
+    .unwrap();
+    assert!(
+        !held.is_empty(),
+        "setup: the block has current chunks to hold"
+    );
+
+    let writing = tokio::spawn(writer);
+    let mut parked = false;
+    for _ in 0..100 {
+        parked = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+                             WHERE datname = current_database() AND wait_event_type = 'Lock'
+                               AND query LIKE '%' || $1 || '%')",
+        )
+        .bind(entry_fn)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        if parked {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(parked, "setup: {entry_fn} is parked on the held chunks");
+
+    let pool_for_scrub = pool.clone();
+    let mut scrubbing =
+        tokio::spawn(async move { try_scrub(&pool_for_scrub, resource.uuid(), &[block]).await });
+    let raced = tokio::time::timeout(std::time::Duration::from_secs(2), &mut scrubbing).await;
+    let scrub_waited = raced.is_err();
+
+    holder.rollback().await.unwrap();
+    writing.await.expect("the writer completes");
+    let scrubbed = match raced {
+        Ok(joined) => joined,
+        Err(_) => scrubbing.await,
+    }
+    .unwrap()
+    .expect("the scrub completes");
+    (scrub_waited, event_of(&scrubbed))
+}
+
+/// (16i) A per-block mutate racing the scrub serializes on R's row, so live and replay agree.
+///
+/// A third transaction holds the block's current chunks, which parks the mutate at its chunk
+/// supersede: its event is minted and it holds R FOR KEY SHARE, taken before the mint. The scrub
+/// then runs and waits on R until the mutate commits, so it keeps the mutate's revision as current
+/// and empties REV_THREE. The 2-second timeout that expires is the serialization signal, as in the
+/// act's witness 20.
+///
+/// Without that lock (`block_mutate` before 20261004000020), nothing held R at the park, so the
+/// scrub completed past the mutate: it kept REV_THREE as current and committed an event that sorts
+/// after the mutate's. The mutate then made REV_THREE history with its prose intact, while replay,
+/// walking the mutate first, emptied it.
+///
+/// FAILS IF: the scrub completes while the mutate is parked; the projection diverges under
+/// replay; or REV_THREE keeps its bytes.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_mutate_racing_the_scrub_serializes_on_the_resource(pool: PgPool) {
+    const REV_FOUR: &str = "revision four: written while the scrub ran";
+    let (owner, emitter) = setup(&pool).await;
+    // One block with three revisions. No second block: a per-block revise on a multi-block
+    // resource re-partitions the whole body, and this witness needs the plain mutate.
+    let home = make_home(&pool, owner, "scrub-race").await;
+    let resource = create(&pool, owner, emitter, home, "scrub-race", SECRET).await;
+    let block = first_live_block(&pool, resource).await;
+    for prose in [REV_TWO, REV_THREE] {
+        revise(&pool, resource, block, prose, emitter).await;
+    }
+
+    let pool_for_mutate = pool.clone();
+    let (scrub_waited, scrubbed) =
+        race_the_scrub(&pool, resource, block, "block_mutate", async move {
+            revise(&pool_for_mutate, resource, block, REV_FOUR, emitter).await;
+        })
+        .await;
+
+    assert_replay_byte_identical(&pool, "of a mutate that raced the scrub").await;
+    assert!(
+        scrub_waited,
+        "the scrub waited for the parked mutate instead of completing past it"
+    );
+    let mutated: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'block_mutated' ORDER BY e.id DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        mutated < scrubbed,
+        "the mutate, minted first, sorts before the scrub it held up"
+    );
+    assert_eq!(
+        present_of(&pool, block).await.0.as_deref(),
+        Some(REV_FOUR),
+        "the mutate's revision is the present"
+    );
+    assert_eq!(
+        revision_bytes(&pool, block).await,
+        vec![
+            String::new(),
+            String::new(),
+            String::new(),
+            REV_FOUR.to_owned()
+        ],
+        "the scrub saw the mutate's commit: every revision before REV_FOUR is empty, REV_THREE \
+         included"
+    );
+}
+
+/// (16j) A whole-body replace racing the scrub serializes on R's row, so live and replay agree.
+///
+/// A whole-body write over a single-block resource goes through `resource_reblock`, which folds
+/// the incumbent block B. Holding B's current chunks parks the reblock at its chunk supersede: its
+/// event is minted and it holds R FOR KEY SHARE, taken before the mint. The scrub over B waits on
+/// R until the reblock commits, finds B folded, and empties all of it.
+///
+/// Without that lock (`resource_reblock` before 20261004000020), the scrub completed past the
+/// reblock and kept B's current revision. The reblock then committed B folded with that prose,
+/// while replay, walking the reblock first, emptied it.
+///
+/// FAILS IF: the scrub completes while the reblock is parked; the projection diverges under
+/// replay; or B is not folded with every revision empty.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_reblock_racing_the_scrub_serializes_on_the_resource(pool: PgPool) {
+    const REPLACED: &str = "a whole new body, written while the scrub ran";
+    let (owner, emitter) = setup(&pool).await;
+    let home = make_home(&pool, owner, "scrub-reblock-race").await;
+    let resource = create(&pool, owner, emitter, home, "scrub-reblock-race", SECRET).await;
+    let block = first_live_block(&pool, resource).await;
+    revise(&pool, resource, block, REV_TWO, emitter).await;
+
+    let pool_for_reblock = pool.clone();
+    let (scrub_waited, scrubbed) =
+        race_the_scrub(&pool, resource, block, "resource_reblock", async move {
+            writes::update_resource(
+                &pool_for_reblock,
+                UpdateParams {
+                    resource,
+                    body: Some(REPLACED),
+                    title: None,
+                    origin_uri: None,
+                    properties: &[],
+                    unset_keys: &[],
+                    chunks: Some(vec![chunk(REPLACED, "replaced")]),
+                    sources: vec![],
+                    content_block: None,
+                    rehome_to: None,
+                    emitter,
+                },
+            )
+            .await
+            .expect("a whole-body replace");
+        })
+        .await;
+
+    assert_replay_byte_identical(&pool, "of a reblock that raced the scrub").await;
+    assert!(
+        scrub_waited,
+        "the scrub waited for the parked reblock instead of completing past it"
+    );
+    let reblocked: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'resource_reblocked' ORDER BY e.id DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        reblocked < scrubbed,
+        "the reblock, minted first, sorts before the scrub it held up"
+    );
+    let folded: bool = sqlx::query_scalar("SELECT is_folded FROM kb_content_blocks WHERE id = $1")
+        .bind(block)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(folded, "the reblock folded B");
+    assert_eq!(
+        revision_bytes(&pool, block).await,
+        vec![String::new(), String::new()],
+        "the scrub saw B folded and emptied every revision, the current one included"
     );
 }
