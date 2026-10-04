@@ -31,6 +31,14 @@ pub enum ConfigError {
     )]
     SecretCollision(&'static str, &'static str),
 
+    #[error(
+        "SENSITIVITY_SWEEP_SALT is set but weak: it must be at least 32 non-whitespace characters. \
+         It is not a gate a caller must guess online: anyone who can read the database holds pairs \
+         of a matched value and its stored fingerprint, and can test candidate salts offline. \
+         Generate it: `openssl rand -base64 32`."
+    )]
+    WeakSweepSalt,
+
     // --- the rate-limit seam (spec A7/A9: chosen values, default off) ---
     //
     // Both arms name the variable and the shape it must take, and print no value — the

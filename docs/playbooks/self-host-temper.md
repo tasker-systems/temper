@@ -41,7 +41,7 @@ functions** from a single deployment:
  CLI / MCP client   │  api/mcp.rs        MCP server          │
  ──────────────────▶│  api/axum.rs       REST API            │
                     │  api/internal.rs   drains + crons      │
- Vercel cron (×10)  │  api/oauth/*.ts    OAuth + SAML        │
+ Vercel cron (×11)  │  api/oauth/*.ts    OAuth + SAML        │
  ──────────────────▶│                                        │
                     └────────────────────────────────────────┘
                                │                │
@@ -57,7 +57,7 @@ routes match in order:
 | Route | Function | What it is |
 |---|---|---|
 | `/mcp`, `/mcp/(.*)` | `api/mcp.rs` | The MCP server. |
-| `/api/embed/dispatch`, `/api/embed/warm`, `/api/region/dispatch`, `/api/slack/intents/reap`, `/api/as/reap`, `/api/internal-calls/health`, `/api/erasure/drain` | `api/internal.rs` | Cron-driven work. **Not called by clients** — see below. |
+| `/api/embed/dispatch`, `/api/embed/warm`, `/api/region/dispatch`, `/api/slack/intents/reap`, `/api/as/reap`, `/api/internal-calls/health`, `/api/erasure/drain`, `/api/sensitivity/sweep` | `api/internal.rs` | Cron-driven work. **Not called by clients** — see below. |
 | `/internal/(.*)` | `api/internal.rs` | Server-to-server, HMAC-gated (the SAML reconcile channel). |
 | `/oauth/token`, `/oauth/jwks`, `/oauth/authorize`, `/oauth/clients`, `/oauth/saml/{login,acs,metadata}`, `/.well-known/oauth-authorization-server` | `api/oauth/*.ts` | The authorization server. TypeScript, not Rust. |
 | `/oauth/(.*)`, `/.well-known/(.*)` | `api/mcp.rs` | Whatever the named OAuth routes above did not claim. |
@@ -70,7 +70,7 @@ committed `.sqlx/` cache rather than a live database.
 ### The drains are not optional
 
 `api/internal.rs` runs the background work, and **nothing invokes it unless the
-crons are configured**. `vercel.json` declares ten:
+crons are configured**. `vercel.json` declares eleven:
 
 | Schedule | Path | What stalls without it |
 |---|---|---|
@@ -81,6 +81,7 @@ crons are configured**. `vercel.json` declares ten:
 | daily at 03:17 | `/api/as/reap` | Retention: the authorization server's tables and abandoned staged blob uploads are never reaped. |
 | every 15 minutes | `/api/internal-calls/health` | Reconcile-channel health: a fail-open internal call that never reached the instance produces no operator-visible signal. |
 | every minute | `/api/erasure/drain` | Erasure: deletion work is never processed off the request path. |
+| every 5 minutes | `/api/sensitivity/sweep` | Sensitivity sweep: personal data that lands in the corpus by accident is never found. |
 
 A deployment that skips them accepts writes and looks healthy while search
 results and cogmap regions silently stop advancing. `api/internal.rs` is given
@@ -262,6 +263,7 @@ deployment.
 | `MCP_PROXY_SECRET` | mcp | Yes | At least 32 characters (`openssl rand -base64 48`). Encrypts the state token in the loopback redirect proxy that every externally-fronted instance serves (Auth0 or Okta). Requests that need that key — a loopback `/oauth/authorize` and the `/api/auth/mcp-callback` relay — answer `503` naming this variable until it is set, so an MCP CLI client cannot sign in without it. `temper auth login` and browser clients with an HTTPS callback do not use the proxy's crypto and are unaffected. **Set it before the first deployment and redeploy after any change** — a function's environment is bound to its deployment. Rotating it fails sign-ins already in flight for up to 10 minutes; they succeed on retry. Not used in the SAML path |
 | `API_BASE_URL` | ui | No | Only for the optional [web UI](./deploy-the-web-ui.md) (a separate Vercel project); not required for API + MCP + CLI |
 | `BLOB_READ_WRITE_TOKEN` | api | Yes | Vercel Blob token — credentials for the binary-blob flow (`temper blob …`, `/api/blobs`, the MCP `blob_read`/`blob_manage` tools). Unset (with no `BLOB_STORE_ID`), the blob endpoints and tools answer a disabled refusal naming this variable. Policy knobs, all optional with defaults: `BLOB_ENABLED` (set `false` to close the blob doors deliberately — an explicit opt-out that wins even with credentials present; the endpoints then refuse naming this knob and the MCP tools are not advertised; an unrecognized value also fails closed), `BLOB_MAX_BYTES` (per-blob cap, 64 MB), `BLOB_CONTENT_TYPE_ALLOWLIST` (comma-separated media types; default png, jpeg, webp, svg, gif, pdf), `BLOB_SINGLE_REQUEST_MAX_BYTES` (single-request threshold, 4 MB — beyond it the CLI segments automatically), `BLOB_UPLOAD_STAGING_TTL_SECONDS` (how long a stalled staged upload survives before the reaper sweeps it, 24 hours) |
+| `SENSITIVITY_SWEEP_SALT` | api | Yes | The key the sensitivity sweep computes every stored hash and fingerprint under; it is passed to the database per tick and never stored there. At least 32 characters (`openssl rand -base64 32`), and the API refuses to boot if it is shorter or equals any other shared secret. Unset, the sweep cannot scan: every tick records a failed run (`salt_missing`) and logs an error. Keep the value stable: changing it re-keys every stored hash, so existing findings stop matching their content. It reaches Postgres as a bind parameter: where you hold a superuser, set `log_parameter_max_length = 0`. On Neon the owner role can neither set it nor turn on the duration or statement logging that would write the salt. Either way the sweep logs an error while the server's settings could write it |
 | `ENABLE_SWAGGER` | api | No | Set `true` to serve the Swagger UI at `/api-docs/ui` (with the OpenAPI document at `/api-docs/openapi.json`). A plain flag: the UI is served on any deployment that sets it, production included |
 | `PORT` | api | No | Platform-injected by Vercel; defaults to `3000`. Only relevant for local or non-Vercel runs |
 | `SQLX_OFFLINE` | build | Yes | Must be `true` — compile-time SQL checks run against the committed `.sqlx/` cache |
@@ -318,7 +320,7 @@ for why.
 
 The authoritative routing, function and cron configuration is `vercel.json` at
 the repo root. It declares three Rust functions (`api/axum.rs`, `api/mcp.rs`,
-`api/internal.rs`), 22 routes and 10 crons; the Topology section above
+`api/internal.rs`), 23 routes and 11 crons; the Topology section above
 summarises what each one is for.
 
 Do not hand-edit it without also updating the function it routes to.

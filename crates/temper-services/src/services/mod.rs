@@ -37,6 +37,7 @@ pub mod region_service;
 pub mod resource_erasure_service;
 pub mod resource_service;
 pub mod saml_provisioning_service;
+pub mod sensitivity_sweep_service;
 pub mod shape_service;
 pub mod slack_disconnect_service;
 pub mod slack_grant_vault_service;
