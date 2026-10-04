@@ -230,8 +230,7 @@ BEGIN
     --     vector is recoverable from it: the centroid itself when R was the only member, and
     --     `n·centroid − Σ survivors` from the member rows and the survivors' current chunks while
     --     they have not moved. The column is NOT NULL; the zero vector is the memberless
-    --     convention (write.rs `zero_centroid`). Member rows stay: pointers, not content. Live
-    --     regions are not touched here: the service's post-commit region job re-forms them. ────
+    --     convention (write.rs `zero_centroid`). Member rows stay: pointers, not content. ─────
     UPDATE kb_cogmap_regions r
        SET centroid = array_fill(0, ARRAY[768])::vector
      WHERE r.is_folded
@@ -785,15 +784,26 @@ BEGIN
                        || '; another resource''s block still cites it; named, kept');
     END LOOP;
 
-    -- R's home context, whether R is a goal there (the predicate `context_goal_liveness` reads:
-    -- a doc_type property row, unfolded), and R's genesis — inputs to the telos arm below.
+    -- R's home context, whether R was ever a goal, and R's genesis — inputs to the telos arm
+    -- below. Goal-ness is read from the LEDGER, not from kb_properties: step 9 sentinels and folds
+    -- R's doc_type row, so a plan computed after the act (the survey on the husk, cut 2's
+    -- completion pass re-deriving) would otherwise drop every telos copy without error. "Ever" —
+    -- the created doc_type or any doc_type property event, normalized as the projection
+    -- normalizes it — so a goal later re-typed still names the snapshots it contributed to.
     SELECT h.anchor_id INTO v_home_ctx FROM kb_resource_homes h
      WHERE h.resource_id = p_resource AND h.anchor_table = 'kb_contexts';
     v_is_goal := EXISTS (
-        SELECT 1 FROM kb_properties dt
-         WHERE dt.owner_table = 'kb_resources' AND dt.owner_id = p_resource
-           AND dt.property_key = 'doc_type' AND NOT dt.is_folded
-           AND dt.property_value #>> '{}' = 'goal');
+        SELECT 1 FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id
+         WHERE et.name = 'resource_created'
+           AND (ev.payload ->> 'resource_id')::uuid = p_resource
+           AND ev.payload ->> 'doc_type' = 'goal')
+      OR EXISTS (
+        SELECT 1 FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id
+         WHERE et.name IN ('property_set', 'property_asserted')
+           AND ev.payload #>> '{owner,table}' = 'kb_resources'
+           AND (ev.payload #>> '{owner,id}')::uuid = p_resource
+           AND ev.payload ->> 'property_key' = 'doc_type'
+           AND _property_value_normalized('doc_type', ev.payload -> 'value') #>> '{}' = 'goal');
     SELECT ev.id INTO v_genesis
       FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id
      WHERE et.name = 'resource_created' AND (ev.payload ->> 'resource_id')::uuid = p_resource
@@ -843,10 +853,12 @@ BEGIN
               JOIN kb_events ev ON ev.id = s.event_id
           ) t
          UNION ALL
-        -- ── The telos copies (ruled 2026-10-04): `ledger_remainder` is widened from R's OWN
-        --    paths to the ledger paths carrying R's content. When R is a goal homed in a
-        --    context, every telos snapshot that context's materializations and salience refreshes
-        --    recorded may average R's embedding in. Named, never reached here: the ledger edit is
+        -- ── The telos copies (ruled 2026-10-04): `ledger_remainder` names the ledger paths
+        --    carrying R's content, not only R's own trail. When R was ever a goal, every telos
+        --    snapshot its current home context's materializations and salience refreshes recorded
+        --    may average R's embedding in. No upper bound: a snapshot minted after the act by a
+        --    materialize already in flight is named whenever the plan is re-derived. A former
+        --    home's snapshots are not named. Named, never reached here: the ledger edit is
         --    cut 2's. Bounded below by R's genesis — R contributed nothing before it existed — and
         --    otherwise over-inclusive by design: a snapshot minted while R was done or unembedded
         --    is named too. Not in the trail scope (anchored on the context, not on R), so no
@@ -887,7 +899,7 @@ UPDATE kb_event_types
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ResourceErased",
-  "description": "`resource_erased` — the ONE admin event of a completed resource erasure (resource erasure\nspec D1).\n\nThe subject is keyed `subject_table` / `subject_id`, NEVER `resource_id`:\n`element_trail_node` joins on `payload->>'resource_id'`, and an admin payload never carries a\ntrail join-key shape, so the category firewall is not the only layer. The same rule keys\n`folded_edges` (not `edge_id`) and `RedactedEventFields::event` (not `event_id`).\n\nTwo remainders, deliberately separate: `remainder` names what the act leaves untouched by\ndesign (related blobs, derivers, cross-resource ledger text, shared remote-source URLs — D8),\nand `ledger_remainder` names the ledger paths carrying the resource's content that the act has\nnot yet reached (D12: every one of them before sanctioned field redaction ships, none after\nit): the resource's own trail, and, when it is a goal, the telos snapshots its home context\nrecorded (widened 2026-10-04). The completion pass reads `ledger_remainder`, never `remainder`.",
+  "description": "`resource_erased` — the ONE admin event of a completed resource erasure (resource erasure\nspec D1).\n\nThe subject is keyed `subject_table` / `subject_id`, NEVER `resource_id`:\n`element_trail_node` joins on `payload->>'resource_id'`, and an admin payload never carries a\ntrail join-key shape, so the category firewall is not the only layer. The same rule keys\n`folded_edges` (not `edge_id`) and `RedactedEventFields::event` (not `event_id`).\n\nTwo remainders, deliberately separate: `remainder` names what the act leaves untouched by\ndesign (related blobs, derivers, cross-resource ledger text, shared remote-source URLs — D8),\nand `ledger_remainder` names the ledger paths carrying the resource's content that the act has\nnot yet reached (D12: every one of them before sanctioned field redaction ships, none after\nit): the resource's own trail, and, when it was ever a goal, the telos snapshots its current\nhome context recorded. The completion pass reads `ledger_remainder`, never `remainder`.",
   "type": "object",
   "properties": {
     "actor": {
@@ -909,7 +921,7 @@ UPDATE kb_event_types
       }
     },
     "ledger_remainder": {
-      "description": "The ledger paths carrying the resource's content that the act has not reached yet (D12),\nin exactly the shape `redacted_fields` uses: its own trail's free text, and `telos_centroid`\non its home context's `region_materialized` / `salience_refreshed` events when it is a goal. The completion pass re-derives against the live ledger rather than\ntrusting this list blindly.",
+      "description": "The ledger paths carrying the resource's content that the act has not reached yet (D12),\nin exactly the shape `redacted_fields` uses: its own trail's free text, and\n`telos_centroid` on its current home context's `region_materialized` /\n`salience_refreshed` events when it was ever a goal. The completion pass re-derives against the live ledger rather than\ntrusting this list blindly.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/RedactedEventFields"

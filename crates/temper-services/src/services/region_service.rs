@@ -30,9 +30,10 @@ use serde::Serialize;
 use sqlx::PgPool;
 
 use crate::backend::region_clocks;
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::services::drain_span::{self, JobOutcome};
 use crate::services::workflow_job_service;
+use temper_core::types::home::HomeAnchor;
 use temper_core::types::workflow_job::{AnchorJobPayload, ClaimedAnchorJob, DispatchType, Persona};
 
 /// Wall-clock ceiling for one drain invocation, in seconds. Sits well under the `api/internal`
@@ -79,6 +80,39 @@ enum RegionJobResult {
         salience_refreshed: bool,
     },
     Failed,
+}
+
+/// Queue another settling when an erased resource is still a live member of this anchor's
+/// regions — what a materialize already in flight when an erasure commits leaves behind (it loaded
+/// the resource before the act, and the act's own queued job folded into it). Runs AFTER the job
+/// completes: the in-flight uniqueness covers `in_progress`, so an enqueue before it would coalesce
+/// into the job just finished. Terminates: the next tick recomputes those centroids and forces a
+/// materialize that loads after the act, which drops the husk, so this then finds nothing.
+pub async fn requeue_if_erased_members(
+    pool: &PgPool,
+    anchor: HomeAnchor,
+    emitter: uuid::Uuid,
+) -> ApiResult<bool> {
+    let erased = region_clocks::erased_live_members(pool, anchor)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if erased.is_empty() {
+        return Ok(false);
+    }
+    workflow_job_service::enqueue_anchor(
+        pool,
+        anchor,
+        Persona::Region.as_str(),
+        DispatchType::Materialize.as_str(),
+        AnchorJobPayload { emitter },
+    )
+    .await?;
+    tracing::info!(
+        anchor = %anchor.uuid(),
+        erased_members = erased.len(),
+        "an erased resource is still a live region member; queued another settling"
+    );
+    Ok(true)
 }
 
 /// One claimed job, as its own span.
@@ -142,6 +176,7 @@ async fn run_region_job(
     match region_clocks::tick(pool, job.anchor, job.emitter.into(), None).await {
         Ok(tick) => {
             workflow_job_service::complete_anchor(pool, job.anchor, persona, dispatch).await?;
+            requeue_if_erased_members(pool, job.anchor, job.emitter).await?;
             span.record("outcome", JobOutcome::Completed.as_str());
             span.record("materialized", tick.materialized);
             span.record("salience_refreshed", tick.salience_refreshed);

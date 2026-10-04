@@ -51,7 +51,7 @@
 #   * Derivation without reference. A vector computed from R's content is tied to R by no key: a
 #     region's centroid (a mean over its members) and a context's telos_centroid (a mean over its
 #     goals). The walk reaches both tables by other paths, so both have lines, but nothing structural
-#     would find the next such aggregate. Both are handled by step 6 since 2026-10-04.
+#     would find the next such aggregate. Both are handled by step 6.
 #   * References with neither a foreign key nor a CHECKed `*_table` discriminator:
 #     - kb_remote_sources, referenced by kb_block_provenance through (source_kind, source_id). Its
 #       `uri` is declared below because D2 step 9 does reach it; the test binds that line to the
@@ -116,7 +116,7 @@ kb_events.payload                       | out-of-scope  | the ledger: cut 1 leav
 kb_events.metadata                      | out-of-scope  | the ledger: authorship reasoning and rationale are cut 2's (D4 sentinel class), under D9's payload half
 
 # ── out of scope: derived vectors (filed under the erasure goal) ───────────────────────────
-kb_cogmap_regions.centroid              | handled:D2.6  | a FOLDED region holding R as a member is zeroed (never recomputed; R's vector was recoverable from it). A LIVE region holding R is recomputed over the survivors by _resource_erasure_recompute_live_centroids, which the body PERFORMs: a recompute is not an erasure constant, so this fence does not bind it; the act's witnesses do. The re-form the service queues after commit then folds a clean row (ruled 2026-10-04)
+kb_cogmap_regions.centroid              | handled:D2.6  | a FOLDED region holding R as a member is zeroed (never recomputed; R's vector was recoverable from it). A LIVE region holding R is recomputed over the survivors by _resource_erasure_recompute_live_centroids, which the body PERFORMs: a recompute is not an erasure constant, so this fence does not bind it; the act's witnesses do. The re-form the service queues after commit then folds a clean row; a materialize already in flight at the act, which loaded R live, is followed by the region drain's erased-member gate (region_clocks::tick), which recomputes and re-forms (ruled 2026-10-04)
 kb_contexts.telos_centroid              | handled:D2.6  | R's home context's snapshot nulled beside its watermark, whatever R's doc type; the drain's materialize re-arms it from the live telos, which already excludes R. The copies in region_materialized / salience_refreshed payloads are named in ledger_remainder when R is a goal, for cut 2 (ruled 2026-10-04)
 kb_cogmaps.telos_centroid               | out-of-scope  | derived from the charter's content, so R-derived only when R is the charter, which the act refuses (D5). The map-grain task owns it
 

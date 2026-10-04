@@ -373,14 +373,14 @@ async fn execute_with_release_timeout(
 
 /// Queue a region settling for every anchor whose formation watermark the act nulled (D2 step 6):
 /// the resource's home context, and each cogmap holding a LIVE region with the resource as a
-/// member — the same two predicates as the act's step 7, read after commit (the act keeps the home
-/// row and the member rows). Ruled 2026-10-04: the nulled watermark only arms a materialize, and
-/// nothing else queues one, so a quiet anchor would keep the husk's share in its live centroids
-/// indefinitely. The every-minute region drain re-forms each anchor without the husk (it is
-/// inactive) and re-arms the context's telos snapshot, which step 7b nulled.
+/// member — the same two predicates as the act's step 6, read after commit (the act keeps the home
+/// row and the member rows). The act has already recomputed those live centroids over the
+/// survivors; the settling is what removes the husk from the regions' membership, re-derives their
+/// readouts, and re-arms the context's telos snapshot the act nulled. A materialize already in
+/// flight absorbs this job; `region_service::requeue_if_erased_members` follows it with another.
 ///
 /// **Never fails the act**, as `DbBackend::queue_region_clocks` never fails a write: the act has
-/// committed, and a failed enqueue leaves the regions stale until the next write re-drives them.
+/// committed, and a failed enqueue leaves the regions to the next write that reaches the anchor.
 async fn queue_region_settling(pool: &PgPool, resource: ResourceId, emitter: EntityId) {
     let anchors = match sqlx::query!(
         r#"SELECT 'kb_contexts' AS "anchor_table!", h.anchor_id AS "anchor_id!"
@@ -409,6 +409,11 @@ async fn queue_region_settling(pool: &PgPool, resource: ResourceId, emitter: Ent
     };
     for row in anchors {
         let Some(anchor) = HomeAnchor::from_parts(&row.anchor_table, row.anchor_id) else {
+            tracing::warn!(
+                anchor_table = %row.anchor_table,
+                anchor = %row.anchor_id,
+                "unknown anchor table for an erased resource's region; no settling queued"
+            );
             continue;
         };
         let payload = AnchorJobPayload {

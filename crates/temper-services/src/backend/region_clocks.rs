@@ -94,12 +94,47 @@ pub async fn tick(
     let events = replay::formation_touched_count_since(pool, anchor, watermark).await?;
     let threshold = threshold.unwrap_or(DEFAULT_MATERIALIZE_THRESHOLD);
     let deleted = replay::resource_deleted_since(pool, anchor, watermark).await?;
-    if events >= threshold || deleted {
+    // `OR erased` — an erased resource still a member of a live region. The erasure act recomputes
+    // the live centroids it can see and queues a settling, but a materialize already in flight when
+    // the act commits loaded the resource before the act, writes it back as a live member (and may
+    // carry its share), stamps a fresh watermark, and absorbs the act's queued job. Its centroid is
+    // recomputed over the survivors FIRST, because the materialize below folds the region as it
+    // stands; the materialize then re-forms without the husk and re-arms the telos snapshot.
+    let erased = erased_live_members(pool, anchor).await?;
+    for resource in &erased {
+        sqlx::query_scalar!(
+            r#"SELECT 1 AS "one!" FROM (SELECT _resource_erasure_recompute_live_centroids($1)) s"#,
+            resource,
+        )
+        .fetch_one(pool)
+        .await?;
+    }
+    if events >= threshold || deleted || !erased.is_empty() {
         write::incremental_materialize(pool, anchor, lens_name, emitter).await?;
         tick.materialized = true;
     }
 
     Ok(tick)
+}
+
+/// Erased resources that are still members of a live region on this anchor. Empty once every
+/// materialize that loaded one before its erasure has been followed by one that loaded after it.
+pub async fn erased_live_members(
+    pool: &sqlx::PgPool,
+    anchor: HomeAnchor,
+) -> anyhow::Result<Vec<uuid::Uuid>> {
+    Ok(sqlx::query_scalar!(
+        "SELECT DISTINCT mem.member_id \
+           FROM kb_cogmap_regions r \
+           JOIN kb_cogmap_region_members mem ON mem.region_id = r.id \
+           JOIN kb_resources res ON res.id = mem.member_id \
+          WHERE r.home_anchor_table = $1 AND r.home_anchor_id = $2 AND NOT r.is_folded \
+            AND mem.member_table = 'kb_resources' AND res.erased_at IS NOT NULL",
+        anchor.table(),
+        anchor.uuid(),
+    )
+    .fetch_all(pool)
+    .await?)
 }
 
 /// The anchor a resource is homed in — the anchor whose clocks its write ticks.

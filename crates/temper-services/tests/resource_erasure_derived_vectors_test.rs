@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::materialize::default_lens_for;
+use temper_services::backend::region_clocks;
 use temper_services::services::region_service;
 use temper_services::services::resource_erasure_service::{
     execute_resource_erasure, ResourceErasureCompletion, ResourceErasureOutcome,
@@ -771,7 +772,7 @@ async fn the_region_live_at_the_act_folds_without_the_erased_resources_share(poo
 }
 
 /// (f) Ruling 3 when R is a context's ONLY goal: after the act and one drain the telos snapshot
-/// is NULL — the live telos is NULL, and the drain's materialize records that.
+/// is NULL. The act nulls it; the drain's materialize, whose live telos is NULL, leaves it so.
 ///
 /// FAILS ON MAIN BECAUSE the snapshot is never re-armed: the drift gate declines on a NULL live
 /// telos and no job is queued, so `telos_centroid` stays exactly R's embedding.
@@ -807,4 +808,359 @@ async fn a_context_whose_only_goal_is_erased_ends_with_no_telos_snapshot(pool: P
         None,
         "a context whose only goal was erased must carry no telos snapshot after the drain"
     );
+}
+
+/// (h) Ruling 4, re-derived: the plan computed AFTER the act names the same telos copies the record
+/// does. The act sentinels and folds R's `doc_type` row, so goal-ness must come from the ledger, or
+/// every re-derive (the survey on the husk, cut 2's completion pass) silently names none.
+///
+/// FAILS ON MAIN BECAUSE main names no telos copy at all; FAILS on a goal check that reads
+/// `kb_properties` because step 9 has destroyed the row it reads.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_plan_rederived_after_the_act_still_names_the_telos_copies(pool: PgPool) {
+    let p = planted(&pool).await;
+    let record = erase(&pool, p.r).await;
+    let telos_path = vec!["telos_centroid".to_owned()];
+    let recorded: BTreeSet<Uuid> = record
+        .ledger_remainder
+        .iter()
+        .filter(|f| f.paths == telos_path)
+        .map(|f| f.event.uuid())
+        .collect();
+    assert!(
+        !recorded.is_empty(),
+        "precondition: the record names telos copies"
+    );
+
+    let rederived: BTreeSet<Uuid> = sqlx::query_scalar::<_, Uuid>(
+        "SELECT (e->>'event')::uuid \
+           FROM jsonb_array_elements(resource_erasure_survey_plan($1)->'ledger_remainder') e \
+          WHERE e->'paths' = '[\"telos_centroid\"]'::jsonb",
+    )
+    .bind(p.r.uuid())
+    .fetch_all(&pool)
+    .await
+    .expect("re-derive the plan on the husk")
+    .into_iter()
+    .collect();
+    assert_eq!(
+        rederived, recorded,
+        "a plan re-derived after the act must name the telos copies the record named"
+    );
+}
+
+/// (i) Ruling 1, the cogmap arm: a cogmap holding a LIVE region with R as a member gets a region
+/// settle queued too, not only R's home context.
+///
+/// FAILS ON MAIN BECAUSE `execute_resource_erasure` enqueues no region job.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_act_queues_a_region_settle_for_a_cogmap_holding_the_resource(pool: PgPool) {
+    let p = planted(&pool).await;
+    let cogmap: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ('m', $1) RETURNING id",
+    )
+    .bind(p.s.uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("seed a cogmap chartered by a survivor");
+    let lens = lens_of(&pool, p.ctx).await;
+    let region: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_cogmap_regions \
+           (cogmap_id, home_anchor_table, home_anchor_id, lens_id, centroid, salience, member_count, \
+            asserted_by_event_id, last_event_id, is_folded) \
+         VALUES ($1, 'kb_cogmaps', $1, $2, $3::vector, 1.0, 1, $4, $4, false) RETURNING id",
+    )
+    .bind(cogmap)
+    .bind(lens)
+    .bind(vec_text(&axis(0)))
+    .bind(p.r_genesis)
+    .fetch_one(&pool)
+    .await
+    .expect("seed a live cogmap region");
+    sqlx::query(
+        "INSERT INTO kb_cogmap_region_members (region_id, member_table, member_id, affinity) \
+         VALUES ($1, 'kb_resources', $2, 1.0)",
+    )
+    .bind(region)
+    .bind(p.r.uuid())
+    .execute(&pool)
+    .await
+    .expect("R is a member of the cogmap region");
+
+    erase(&pool, p.r).await;
+
+    let queued: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_workflow_jobs \
+          WHERE cogmap_id = $1 AND persona = 'region' AND dispatch_type = 'materialize' \
+            AND status = 'pending'",
+    )
+    .bind(cogmap)
+    .fetch_one(&pool)
+    .await
+    .expect("count cogmap region jobs");
+    assert_eq!(
+        queued, 1,
+        "the act must queue a region settle for the cogmap"
+    );
+}
+
+/// Erased resources still listed as members of a live region on `ctx`.
+async fn erased_live_members(pool: &PgPool, ctx: ContextId) -> Vec<Uuid> {
+    sqlx::query_scalar(
+        "SELECT DISTINCT m.member_id FROM kb_cogmap_regions r \
+           JOIN kb_cogmap_region_members m ON m.region_id = r.id \
+           JOIN kb_resources res ON res.id = m.member_id \
+          WHERE r.home_anchor_table = 'kb_contexts' AND r.home_anchor_id = $1 AND NOT r.is_folded \
+            AND res.erased_at IS NOT NULL",
+    )
+    .bind(ctx.uuid())
+    .fetch_all(pool)
+    .await
+    .expect("erased live members")
+}
+
+/// How the in-flight settling runs while the act is uncommitted.
+#[derive(Clone, Copy)]
+enum InFlight {
+    /// The whole region drain: claims the queued job, ticks, completes, requeues, and keeps
+    /// claiming until the queue is empty.
+    Drain,
+    /// One tick of the clocks and nothing else — the state a single in-flight job leaves.
+    Tick,
+}
+
+/// Run the act's SQL inside an open transaction, start the in-flight settling against C, wait
+/// until it blocks on C's row (which the uncommitted act holds — by then it has loaded R while R
+/// was still live), then commit the act and let the settling finish. This is the materialize the
+/// act's own queued job folds into.
+async fn erase_under_an_inflight_settling(pool: &PgPool, p: &Planted, how: InFlight) {
+    // The formation clock must fire for the in-flight settling: count from the beginning.
+    sqlx::query("UPDATE kb_contexts SET shape_materialized_event_id = NULL WHERE id = $1")
+        .bind(p.ctx.uuid())
+        .execute(pool)
+        .await
+        .expect("arm the formation clock");
+    queue_region_job(pool, p.ctx).await;
+
+    let (op, emitter) = principal(pool).await;
+    test_support::grant_governance(pool, op.uuid()).await;
+    let mut act = pool.begin().await.expect("begin the act");
+    sqlx::query("SELECT resource_erasure_execute($1, $2, $3, $4, '{}')")
+        .bind(p.r.uuid())
+        .bind(op.uuid())
+        .bind(emitter.uuid())
+        .bind(Uuid::now_v7())
+        .execute(&mut *act)
+        .await
+        .expect("the act runs, uncommitted");
+
+    let inflight_pool = pool.clone();
+    let anchor = anchor_of(p.ctx);
+    let inflight = tokio::spawn(async move {
+        match how {
+            InFlight::Drain => drain(&inflight_pool).await,
+            InFlight::Tick => {
+                region_clocks::tick(&inflight_pool, anchor, emitter, None)
+                    .await
+                    .expect("the in-flight tick runs");
+            }
+        }
+    });
+    let mut waited = 0;
+    loop {
+        let blocked: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity \
+              WHERE datname = current_database() AND wait_event_type = 'Lock' \
+                AND query LIKE 'SELECT region_materialize%'",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("read lock waits");
+        if blocked > 0 {
+            break;
+        }
+        waited += 1;
+        assert!(
+            waited < 600,
+            "the in-flight materialize never blocked on the act's lock"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    act.commit().await.expect("commit the act");
+    inflight.await.expect("the in-flight settling finishes");
+}
+
+async fn queue_region_job(pool: &PgPool, ctx: ContextId) {
+    sqlx::query(
+        "INSERT INTO kb_workflow_jobs (context_id, persona, dispatch_type, payload) \
+         VALUES ($1, 'region', 'materialize', jsonb_build_object('emitter', \
+                 (SELECT id FROM kb_entities ORDER BY id LIMIT 1)))",
+    )
+    .bind(ctx.uuid())
+    .execute(pool)
+    .await
+    .expect("queue a region job");
+}
+
+/// `region_materialized` events on `ctx` minted after R's `resource_erased` event. With no race the
+/// settling loads after the act and materializes once; two or more means an in-flight materialize
+/// loaded R before the act and a follow-up repaired it.
+async fn materializes_after_the_act(pool: &PgPool, p: &Planted) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'region_materialized' \
+            AND e.producing_anchor_table = 'kb_contexts' AND e.producing_anchor_id = $1 \
+            AND e.id > ( \
+                SELECT a.id FROM kb_events a JOIN kb_event_types at ON at.id = a.event_type_id \
+                 WHERE at.name = 'resource_erased' AND a.payload->>'subject_id' = $2::text)",
+    )
+    .bind(p.ctx.uuid())
+    .bind(p.r.uuid())
+    .fetch_one(pool)
+    .await
+    .expect("count materializes after the act")
+}
+
+/// After the repair: nothing erased is live, every region the race wrote back is folded with its
+/// survivors' mean, and the snapshot is the live telos without R.
+async fn assert_repaired(pool: &PgPool, p: &Planted, held_r: &[Uuid]) {
+    assert!(
+        erased_live_members(pool, p.ctx).await.is_empty(),
+        "no live region may list an erased resource after the repair"
+    );
+    for region in held_r {
+        assert!(
+            region_is_folded(pool, *region).await,
+            "a region that held R live after the race must be folded by the repair's re-form"
+        );
+        let survivors = member_mean(pool, *region).await;
+        let gap = distance(pool, &region_centroid(pool, *region).await, &survivors).await;
+        assert!(
+            gap < SAME,
+            "that region must fold with its survivors' mean (distance {gap})"
+        );
+    }
+    let live = live_telos(pool, p.ctx)
+        .await
+        .expect("G2 is still a live goal");
+    let stored = stored_telos(pool, p.ctx)
+        .await
+        .expect("the repair's materialize re-arms the snapshot");
+    let gap = distance(pool, &stored, &live).await;
+    assert!(
+        gap < SAME,
+        "the snapshot must be the live telos without R (distance {gap})"
+    );
+}
+
+/// (j) The in-flight race, end to end: the region drain is mid-job on C when the act commits. Its
+/// materialize loaded R while R was live, so R stays a live member under a fresh watermark and the
+/// snapshot is re-armed with R inside it (the act's queued job would fold into this one). When the job
+/// completes the drain queues another, and claims it in the same pass: the repair recomputes,
+/// re-forms without the husk, re-arms the snapshot from the live telos, and queues nothing more.
+///
+/// FAILS ON MAIN BECAUSE nothing follows the in-flight job: R stays a live member and the snapshot
+/// keeps R's share. FAILS without the post-completion requeue for the same reason, and without the
+/// tick's erased-member gate because the in-flight materialize stamped a fresh watermark, so the
+/// follow-up tick does not materialize.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_inflight_drain_that_loaded_the_resource_is_followed_and_repaired(pool: PgPool) {
+    let p = planted(&pool).await;
+    erase_under_an_inflight_settling(&pool, &p, InFlight::Drain).await;
+
+    assert!(
+        materializes_after_the_act(&pool, &p).await >= 2,
+        "precondition: the in-flight materialize ran on a pre-act load and was followed (the race \
+         happened)"
+    );
+    assert_repaired(&pool, &p, &[p.live_region]).await;
+    assert_eq!(
+        queued_region_jobs(&pool, p.ctx).await,
+        0,
+        "the follow-up terminates: nothing erased is live, so nothing is queued"
+    );
+}
+
+/// (k) The repair's tick on its own: after ONE in-flight tick (no requeue), R is still a live member,
+/// under a fresh watermark. A tick that finds an erased live member recomputes that region's centroid
+/// over the survivors BEFORE re-forming, so the region folds clean even when its centroid carried
+/// R's share. Here the race's centroid statement ran after the act committed, so R's share is
+/// planted to stand in for an interleaving that computes it first (an anchor the act takes no row
+/// lock on).
+///
+/// FAILS without the gate: the in-flight materialize stamped a fresh watermark, so the tick does
+/// not materialize and R stays live. FAILS without the recompute: the region folds with R's share.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_tick_that_finds_an_erased_live_member_recomputes_then_reforms(pool: PgPool) {
+    let p = planted(&pool).await;
+    erase_under_an_inflight_settling(&pool, &p, InFlight::Tick).await;
+
+    assert_eq!(
+        erased_live_members(&pool, p.ctx).await,
+        vec![p.r.uuid()],
+        "precondition: R is still a live member after the in-flight tick (the race happened)"
+    );
+    let held_r: Vec<Uuid> = live_region_holding(&pool, p.ctx, &[p.r.uuid()])
+        .await
+        .into_iter()
+        .collect();
+    for region in &held_r {
+        sqlx::query("UPDATE kb_cogmap_regions SET centroid = $2::vector WHERE id = $1")
+            .bind(region)
+            .bind(&p.pre_act_centroid)
+            .execute(&pool)
+            .await
+            .expect("plant R's share in the R-holding centroid");
+        assert!(
+            distance(
+                &pool,
+                &p.pre_act_centroid,
+                &member_mean(&pool, *region).await
+            )
+            .await
+                > MOVED,
+            "vacuity guard: the survivors' mean must differ from the planted R-inclusive centroid"
+        );
+    }
+
+    let (_, emitter) = principal(&pool).await;
+    region_clocks::tick(&pool, anchor_of(p.ctx), emitter, None)
+        .await
+        .expect("the repairing tick runs");
+
+    assert_repaired(&pool, &p, &held_r).await;
+}
+
+/// (l) The post-completion requeue: while an erased resource is a live member of an anchor's
+/// regions, completing a region job queues another; once none is, it queues nothing (the
+/// termination condition).
+///
+/// FAILS ON MAIN BECAUSE nothing requeues (the function does not exist there).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_completed_job_is_followed_while_an_erased_member_is_live(pool: PgPool) {
+    let p = planted(&pool).await;
+    erase_under_an_inflight_settling(&pool, &p, InFlight::Tick).await;
+    sqlx::query("DELETE FROM kb_workflow_jobs WHERE persona = 'region'")
+        .execute(&pool)
+        .await
+        .expect("the in-flight job is done");
+    let (_, emitter) = principal(&pool).await;
+    let anchor = anchor_of(p.ctx);
+
+    assert!(
+        region_service::requeue_if_erased_members(&pool, anchor, emitter.uuid())
+            .await
+            .expect("requeue check"),
+        "an erased live member must queue another settling"
+    );
+    assert_eq!(queued_region_jobs(&pool, p.ctx).await, 1);
+
+    drain(&pool).await;
+    assert!(
+        !region_service::requeue_if_erased_members(&pool, anchor, emitter.uuid())
+            .await
+            .expect("requeue check"),
+        "once repaired, nothing is requeued"
+    );
+    assert_eq!(queued_region_jobs(&pool, p.ctx).await, 0);
 }
