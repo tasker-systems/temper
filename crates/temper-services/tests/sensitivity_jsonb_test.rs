@@ -22,7 +22,10 @@
 
 use sqlx::{PgPool, Row};
 use temper_core::types::ids::{EntityId, ProfileId};
-use temper_substrate::payloads::AnchorRef;
+use temper_substrate::affinity::EdgeKind;
+use temper_substrate::events::{fire, EdgeHome, SeedAction};
+use temper_substrate::ids::ResourceId;
+use temper_substrate::payloads::{AnchorRef, EdgePolarity, Incorporation, ProvenanceSource};
 use temper_substrate::scenario::bootseed;
 use temper_substrate::writes::{self, CreateParams};
 use uuid::Uuid;
@@ -1022,5 +1025,483 @@ async fn a_block_history_scrub_closes_the_prior_revisions_finding_and_not_the_cu
         closed_by(&pool, current).await,
         vec![None],
         "the current revision is kept, and so is its finding"
+    );
+}
+
+// ── Places the erasure act reached give up their digests after 30 days (D11, ruled 2026-10-03) ─
+
+/// `(fingerprint_state, content_hash, fingerprints held)` for each finding on `target`'s `surface`.
+async fn digests_at(pool: &PgPool, surface: &str, target: Uuid) -> Vec<(String, String, i64)> {
+    sqlx::query_as(
+        "SELECT f.fingerprint_state, f.content_hash, \
+                (SELECT count(*) FROM sensitivity.finding_fingerprints ff WHERE ff.finding_id = f.id) \
+           FROM sensitivity.findings f WHERE f.surface = $1 AND f.target_id = $2 \
+          ORDER BY f.path NULLS FIRST, f.detector_id",
+    )
+    .bind(surface)
+    .bind(target)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// Every recorded window started `days` ago.
+async fn windows_started_days_ago(pool: &PgPool, days: i32) {
+    sqlx::query(
+        "UPDATE sensitivity.erased_closures SET closed_seen_at = now() - make_interval(days => $1)",
+    )
+    .bind(days)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn tick_all(pool: &PgPool) {
+    for surface in [
+        "kb_resources.title",
+        "kb_events.payload",
+        "kb_edges.label",
+        "kb_properties.property_value",
+        "kb_remote_sources.uri",
+    ] {
+        assert!(!tick(pool, surface).await.failed, "{surface}");
+    }
+}
+
+async fn created_resource(
+    pool: &PgPool,
+    owner: ProfileId,
+    emitter: EntityId,
+    home: Uuid,
+    title: &str,
+) -> ResourceId {
+    writes::create_resource_with(
+        pool,
+        CreateParams {
+            idempotency_key: None,
+            title,
+            origin_uri: title,
+            body: "clean prose",
+            doc_type: "research",
+            home: AnchorRef::context(temper_core::types::ids::ContextId::from(home)),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        temper_substrate::events::EventContext::default(),
+    )
+    .await
+    .expect("create through the write path")
+}
+
+/// A closed finding on any place the act reached gives up its fingerprints and its keyed hash 30
+/// days after the sweep first sees it so; the row stays, closed. The places include those the scan
+/// does not attribute to R: the label of an edge INTO R (attributed to its source), a property on
+/// that edge (attributed to nothing), and R's remote source, which the act deletes. Each conjunct
+/// has a case that keeps its digests: a closed finding on a resource never erased, the erased
+/// places at 29 days, and the ledger's copy of R's title, which stays open until cut 2.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn every_place_the_act_reached_gives_up_its_digests_after_thirty_days(pool: PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+         VALUES ('kb_profiles', $1, 'expiry-home', 'expiry-home') RETURNING id",
+    )
+    .bind(owner.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let title = format!("Payroll for {SSN_A}");
+    let erased = created_resource(&pool, owner, emitter, home, &title).await;
+    let neighbour = created_resource(&pool, owner, emitter, home, "Neighbour").await;
+    // An edge from a live resource INTO the one erased: the scan attributes its label to the source.
+    let mut tx = pool.begin().await.unwrap();
+    let edge = fire(
+        &mut tx,
+        SeedAction::RelationshipAssert {
+            src: AnchorRef::resource(neighbour),
+            tgt: AnchorRef::resource(erased),
+            kind: EdgeKind::LeadsTo,
+            polarity: EdgePolarity::Forward,
+            label: Some(&format!("met {SSN_A}")),
+            weight: 1.0,
+            home: EdgeHome::Context(temper_core::types::ids::ContextId::from(home)),
+            emitter,
+        },
+    )
+    .await
+    .unwrap()
+    .relationship()
+    .unwrap()
+    .uuid();
+    tx.commit().await.unwrap();
+    let on_edge = property(
+        &pool,
+        "kb_edges",
+        edge,
+        "note",
+        serde_json::json!(format!("ssn {SSN_B}")),
+    )
+    .await;
+    let url = format!("https://example.com/case/{SSN_A}");
+    writes::annotate_block_sources(
+        &pool,
+        writes::AnnotateParams {
+            resource: erased,
+            sources: vec![Incorporation {
+                source: ProvenanceSource::Remote(url.clone()),
+                seq: 0,
+            }],
+            content_block: None,
+            emitter,
+        },
+    )
+    .await
+    .expect("the erased resource cites the URL");
+    let remote: Uuid = sqlx::query_scalar("SELECT id FROM kb_remote_sources WHERE uri = $1")
+        .bind(&url)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    // Closed by a later observation, never erased.
+    let live = bare_resource(&pool, &format!("Payroll for {SSN_B}")).await;
+    // An edge between two live resources: its label and its property close below without any
+    // erasure, so the erased-end condition of the edge arms is the only thing that keeps them.
+    let other = created_resource(&pool, owner, emitter, home, "Other").await;
+    let mut tx = pool.begin().await.unwrap();
+    let live_edge = fire(
+        &mut tx,
+        SeedAction::RelationshipAssert {
+            src: AnchorRef::resource(neighbour),
+            tgt: AnchorRef::resource(other),
+            kind: EdgeKind::LeadsTo,
+            polarity: EdgePolarity::Forward,
+            label: Some(&format!("met {SSN_B}")),
+            weight: 1.0,
+            home: EdgeHome::Context(temper_core::types::ids::ContextId::from(home)),
+            emitter,
+        },
+    )
+    .await
+    .unwrap()
+    .relationship()
+    .unwrap()
+    .uuid();
+    tx.commit().await.unwrap();
+    let on_live_edge = property(
+        &pool,
+        "kb_edges",
+        live_edge,
+        "note",
+        serde_json::json!(format!("ssn {SSN_B}")),
+    )
+    .await;
+    tick_all(&pool).await;
+    let ledger: Uuid = sqlx::query_scalar(
+        "SELECT f.target_id FROM sensitivity.findings f WHERE f.surface = 'kb_events.payload' \
+            AND f.path = '/title' AND f.resource_id = $1",
+    )
+    .bind(erased.uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("the ledger's copy of the title is found");
+
+    let places = [
+        ("kb_resources.title", erased.uuid()),
+        ("kb_edges.label", edge),
+        ("kb_properties.property_value", on_edge),
+        ("kb_remote_sources.uri", remote),
+    ];
+    let mut before = Vec::new();
+    for (surface, target) in places {
+        let d = digests_at(&pool, surface, target).await;
+        assert!(
+            !d.is_empty() && d.iter().all(|(s, _, n)| s == "complete" && *n > 0),
+            "{surface} is found and fingerprinted before the act: {d:?}"
+        );
+        before.push(d);
+    }
+    let ledger_before = digests_at(&pool, "kb_events.payload", ledger).await;
+    let live_before = digests_at(&pool, "kb_resources.title", live).await;
+    let live_edge_places = [
+        ("kb_edges.label", live_edge),
+        ("kb_properties.property_value", on_live_edge),
+    ];
+    let mut live_edge_before = Vec::new();
+    for (surface, target) in live_edge_places {
+        let d = digests_at(&pool, surface, target).await;
+        assert!(
+            !d.is_empty() && d.iter().all(|(s, _, n)| s == "complete" && *n > 0),
+            "{surface} on the live edge is found and fingerprinted: {d:?}"
+        );
+        live_edge_before.push(d);
+    }
+
+    sqlx::query("SELECT resource_erasure_execute($1, $2, $2, $3)")
+        .bind(erased.uuid())
+        .bind(emitter)
+        .bind(Uuid::now_v7())
+        .execute(&pool)
+        .await
+        .expect("the act completes");
+    sqlx::query(
+        "UPDATE kb_resources SET title = 'Payroll', updated = clock_timestamp() WHERE id = $1",
+    )
+    .bind(live)
+    .execute(&pool)
+    .await
+    .unwrap();
+    // The live edge's label and property emptied by hand: closed as content_empty, never erased.
+    sqlx::query("UPDATE kb_edges SET label = NULL WHERE id = $1")
+        .bind(live_edge)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE kb_properties SET property_value = '\"\"'::jsonb WHERE id = $1")
+        .bind(on_live_edge)
+        .execute(&pool)
+        .await
+        .unwrap();
+    tick_all(&pool).await;
+    for (_, target) in live_edge_places {
+        assert_eq!(
+            closed_by(&pool, target).await,
+            vec![Some("content_empty".to_string())],
+            "the live edge's place is closed"
+        );
+    }
+    for (surface, target) in places {
+        assert!(
+            closed_by(&pool, target).await.iter().all(Option::is_some),
+            "{surface} is closed by the act"
+        );
+    }
+    assert!(
+        closed_by(&pool, live).await.iter().all(Option::is_some),
+        "the live title is closed by its change"
+    );
+
+    windows_started_days_ago(&pool, 29).await;
+    tick_all(&pool).await;
+    for ((surface, target), b) in places.iter().zip(&before) {
+        assert_eq!(
+            &digests_at(&pool, surface, *target).await,
+            b,
+            "at 29 days {surface} keeps its digests"
+        );
+    }
+
+    windows_started_days_ago(&pool, 31).await;
+    tick_all(&pool).await;
+    for ((surface, target), b) in places.iter().zip(&before) {
+        let after = digests_at(&pool, surface, *target).await;
+        assert_eq!(after.len(), b.len(), "{surface}: the finding rows stay");
+        for ((state, hash, n), (_, old_hash, _)) in after.iter().zip(b) {
+            assert_eq!(state, "expired", "{surface}");
+            assert_eq!(*n, 0, "{surface}: no fingerprint is left");
+            assert_ne!(
+                hash, old_hash,
+                "{surface}: the keyed hash of the unit is gone"
+            );
+        }
+        assert!(
+            closed_by(&pool, *target).await.iter().all(Option::is_some),
+            "{surface}: the rewrite leaves the finding closed"
+        );
+    }
+    let confirms_title: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM sensitivity.findings \
+                  WHERE surface = 'kb_resources.title' AND target_id = $1 \
+                    AND content_hash = sensitivity.keyed_hash($2, $3)) \
+              + (SELECT count(*) FROM sensitivity.place_observations \
+                  WHERE surface = 'kb_resources.title' AND target_id = $1 \
+                    AND content_hash = sensitivity.keyed_hash($2, $3)) \
+              + (SELECT count(*) FROM sensitivity.memo \
+                  WHERE content_hash = sensitivity.keyed_hash($2, $3))",
+    )
+    .bind(erased.uuid())
+    .bind(SALT)
+    .bind(&title)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        confirms_title, 0,
+        "the salt no longer confirms the erased title anywhere the sweep stores a hash"
+    );
+    assert_eq!(
+        digests_at(&pool, "kb_events.payload", ledger).await,
+        ledger_before,
+        "an open finding keeps its digests: the ledger still holds the title until cut 2"
+    );
+    assert_eq!(
+        digests_at(&pool, "kb_resources.title", live).await,
+        live_before,
+        "a closed finding on a resource that was never erased keeps its digests"
+    );
+    for ((surface, target), b) in live_edge_places.iter().zip(&live_edge_before) {
+        assert_eq!(
+            &digests_at(&pool, surface, *target).await,
+            b,
+            "a closed {surface} on an edge with no erased end keeps its digests"
+        );
+    }
+}
+
+/// Places an erasure act empties while the resource lives on give up their digests too: the block
+/// history scrub's prior revision (through the real scrub), and the principal act's governed block
+/// content (its footprint planted by hand, as Witness 9 does: content emptied, hash kept). The
+/// scrub's kept current revision stays open, and keeps its digests.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn content_a_scrub_or_principal_erasure_emptied_gives_up_its_digests_after_thirty_days(
+    pool: PgPool,
+) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+         VALUES ('kb_profiles', $1, 'scrub-expiry', 'scrub-expiry') RETURNING id",
+    )
+    .bind(owner.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let resource = writes::create_resource_with(
+        &pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "notes",
+            origin_uri: "test://scrub-expiry",
+            body: &format!("the first draft quoted {SSN_A}"),
+            doc_type: "research",
+            home: AnchorRef::context(temper_core::types::ids::ContextId::from(home)),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        temper_substrate::events::EventContext::default(),
+    )
+    .await
+    .expect("create through the write path");
+    let scrubbed: Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_content_blocks WHERE resource_id = $1 LIMIT 1")
+            .bind(resource.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    writes::update_resource(
+        &pool,
+        writes::UpdateParams {
+            resource,
+            body: Some(&format!("the revision still quotes {SSN_B}")),
+            title: None,
+            origin_uri: None,
+            properties: &[],
+            unset_keys: &[],
+            chunks: None,
+            sources: vec![],
+            content_block: Some(scrubbed),
+            rehome_to: None,
+            emitter,
+        },
+    )
+    .await
+    .expect("a per-block revise");
+    let (prior, current): (Uuid, Uuid) = sqlx::query_as(
+        "SELECT (SELECT br.id FROM kb_block_revisions br WHERE br.block_id = b.id AND br.id <> b.current_revision_id), \
+                b.current_revision_id \
+           FROM kb_content_blocks b WHERE b.id = $1",
+    )
+    .bind(scrubbed)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let principal = bare_resource(&pool, "a governed note").await;
+    let governed = block(&pool, principal, &format!("SSN {SSN_A}")).await;
+    let surface = "kb_block_content.content";
+    assert!(!tick(&pool, surface).await.failed);
+    let emptied = [prior, governed];
+    let mut before = Vec::new();
+    for target in emptied {
+        let d = digests_at(&pool, surface, target).await;
+        assert!(
+            !d.is_empty() && d.iter().all(|(s, _, n)| s == "complete" && *n > 0),
+            "found and fingerprinted: {d:?}"
+        );
+        before.push(d);
+    }
+    let current_before = digests_at(&pool, surface, current).await;
+
+    sqlx::query("SELECT block_history_scrub_execute($1, $2, $3, $4, $5)")
+        .bind(resource.uuid())
+        .bind(vec![scrubbed])
+        .bind(owner.uuid())
+        .bind(emitter)
+        .bind(Uuid::now_v7())
+        .execute(&pool)
+        .await
+        .expect("the scrub completes");
+    sqlx::query("UPDATE kb_block_content SET content = '' WHERE block_revision_id = $1")
+        .bind(governed)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(!tick(&pool, surface).await.failed);
+    for target in emptied {
+        assert_eq!(
+            closed_by(&pool, target).await,
+            vec![Some("content_empty".to_string())]
+        );
+    }
+
+    windows_started_days_ago(&pool, 29).await;
+    assert!(!tick(&pool, surface).await.failed);
+    for (target, b) in emptied.iter().zip(&before) {
+        assert_eq!(
+            &digests_at(&pool, surface, *target).await,
+            b,
+            "at 29 days an emptied place keeps its digests"
+        );
+    }
+
+    windows_started_days_ago(&pool, 31).await;
+    assert!(!tick(&pool, surface).await.failed);
+    for (target, b) in emptied.iter().zip(&before) {
+        for ((state, hash, n), (_, old_hash, _)) in
+            digests_at(&pool, surface, *target).await.iter().zip(b)
+        {
+            assert_eq!(state, "expired");
+            assert_eq!(*n, 0, "no fingerprint is left");
+            assert_ne!(hash, old_hash, "the keyed hash of the unit is gone");
+            let left: i64 = sqlx::query_scalar(
+                "SELECT (SELECT count(*) FROM sensitivity.memo WHERE content_hash = $1) \
+                      + (SELECT count(*) FROM sensitivity.findings WHERE content_hash = $1)",
+            )
+            .bind(old_hash)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                left, 0,
+                "no memo row or finding still carries the retired hash"
+            );
+        }
+    }
+    assert_eq!(
+        closed_by(&pool, current).await,
+        vec![None],
+        "the current revision stays open"
+    );
+    assert_eq!(
+        digests_at(&pool, surface, current).await,
+        current_before,
+        "the scrub's kept current revision keeps its digests"
     );
 }
