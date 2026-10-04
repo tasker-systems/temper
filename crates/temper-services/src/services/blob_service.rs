@@ -218,13 +218,25 @@ pub fn blob_disabled() -> ApiError {
 /// unrecognized value for it (fail closed, loudly). Distinct vocabulary from
 /// [`blob_disabled`]: that sentence invites enabling by naming credentials; this one
 /// names the knob, because the credentials are not the thing standing in the door.
-/// Chosen per instance by `AppState::blob_refusal`, never picked by hand at a door.
+/// Chosen per instance by [`blob_refusal`], never picked by hand at a door.
 pub fn blob_disabled_by_policy() -> ApiError {
     ApiError::BadRequest(
         "blob endpoints are disabled by configuration — BLOB_ENABLED is set to a value \
          that disables the flow; remove the setting or set BLOB_ENABLED=true to enable them"
             .to_string(),
     )
+}
+
+/// The blob door's refusal for an instance whose door is closed: the policy vocabulary when
+/// `BLOB_ENABLED` closed it deliberately, else the unconfigured vocabulary. Spelled once —
+/// `AppState::blob_refusal` and the MCP server's boot both choose through this, so every
+/// surface hears the same voice.
+pub fn blob_refusal(disabled_by_policy: bool) -> ApiError {
+    if disabled_by_policy {
+        blob_disabled_by_policy()
+    } else {
+        blob_disabled()
+    }
 }
 
 /// Auth before writes — the placement gate, mirroring the incumbent two-step exactly:

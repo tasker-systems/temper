@@ -45,10 +45,6 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # the graph via reqwest.
 bytes = "1"
 futures-util = "0.3"
-# AUTH_AUDIENCE and MCP_AUDIENCE must parse as absolute URIs at boot — the MCP protected-resource
-# metadata advertises them as the RFC 9728 `resource`, which requires one. Already in the graph
-# via reqwest.
-url = "2"
 tracing = "0.1"
 thiserror = "2"
 uuid = { version = "1", features = ["v7", "serde"] }

@@ -1,13 +1,28 @@
+# Published to crates.io as `temperkb-mcp`; the LIBRARY keeps the `temper_mcp` name, so every
+# `use temper_mcp::…` — the deployed shell's, the e2e parity suites', a downstream host's — is
+# untouched by the registry rename (temperkb-core's manifest states the convention).
 [package]
-name = "temper-mcp"
+name = "temperkb-mcp"
 version.workspace = true
 edition.workspace = true
-description = "MCP server for agent access to the temper knowledge base"
-publish = false
+license.workspace = true
+repository.workspace = true
+description = "Temper's MCP tool layer: every temper knowledge-base tool, served by any host over a host-supplied identity"
+readme = "README.md"
+keywords = ["mcp", "temper", "knowledge-base", "agents", "rmcp"]
+categories = ["api-bindings", "development-tools"]
+
+[lib]
+name = "temper_mcp"
 
 [features]
-# Gates the `#[sqlx::test]` suites in `tests/` — without it, `cargo make test`
-# (no database) compiles them out entirely. Same pattern as temper-api/temper-services.
+default = ["telemetry"]
+# Opt-out, forwarded to temperkb-client (the same opt-out, same reasons — see its manifest): a
+# host that sets `default-features = false` inherits no OTel export stack, and loses only the
+# relay's `traceparent` propagation. The tool layer itself names no telemetry crate.
+telemetry = ["temperkb-client/telemetry"]
+# Kept so `--features test-db` across the workspace still resolves; the tool layer has no
+# database suites (it holds no pool).
 test-db = []
 
 [dependencies]
@@ -20,51 +35,53 @@ test-db = []
 # including in tests, where the harness binds a real listener serving `create_app` in
 # the TEST process. Keeping the crate out of this dependency graph makes that property
 # structural: a future `temper_api::create_app` call here cannot compile.
-temperkb-client.workspace = true
-# Only for the shared connection pool's type; the feature set mirrors temper-client's
-# so workspace unification builds one reqwest.
-reqwest = { version = "0.12", default-features = false }
-temper-services = { path = "../temper-services" }
+temperkb-client.workspace = true # default-features = false at the workspace entry
+# The shared connection pool, and the blob read's byte stream (`Response::bytes_stream`, behind
+# `stream`). Declared here, not borrowed from workspace unification: built alone (as a published
+# crate is), the blob read did not compile without it.
+reqwest = { version = "0.12", default-features = false, features = ["stream"] }
+# temper-services is deliberately ABSENT, from every dependency table: the tool layer holds no
+# pool, no key store and no server config, and the `AuthzError` witness lives in the deployed
+# host (`temper-mcp-server`), where the services' error types and this crate's refusal mapping
+# are both legitimately visible. A source gate (`src/source_gates.rs`) and the manifest check
+# beside it keep it absent.
 
-temperkb-principal.workspace = true
-temperkb-core = { workspace = true, features = ["web-api", "mcp"] }
-temperkb-workflow = { workspace = true, features = ["web-api", "mcp"] }
-temperkb-telemetry.workspace = true
+# Without `web-api`: the MCP server neither exposes nor expresses utoipa, and `cargo tree -p
+# temperkb-mcp -e normal` must show none (temperkb-client depends on both crates the same way).
+temperkb-core = { workspace = true, features = ["mcp"] }
+temperkb-workflow = { workspace = true, features = ["mcp"] }
 
 # Blob commit/read carry bytes over the JSON-only MCP transport as base64.
 base64 = "0.22"
 # Collecting the read-through `ByteStream` into a whole tool result.
 futures = "0.3"
 
+# A declared PUBLIC dependency, re-exported as `temper_mcp::rmcp`: a host mounts the service with
+# this rmcp, so an rmcp major bump is a breaking temperkb-mcp release.
 rmcp = { version = "3.4.1", features = [
     "server",
     "transport-streamable-http-server",
 ] }
 
-axum = { version = "0.8", features = ["json", "query"] }
 chrono = { version = "0.4", features = ["serde"] }
 http = "1"
-jsonwebtoken = "9"
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.6", features = ["limit"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
 schemars = { version = "1", features = ["uuid1"] }
 tracing = "0.1"
-# Host-exact localhost checks in DCR — the prefix match it replaced blessed
-# "http://localhost.evil.com/…" as a loopback callback.
-url = "2"
 uuid = { version = "1", features = ["v7", "serde"] }
 
 [dev-dependencies]
-# The tests' in-process JWKS and the harness's static-key store need the cfg-gated
-# constructor; the dev-dep enables temper-services' NARROW `test-harness` (never
-# `test-db` — that gate compiles the crate's own #[sqlx::test] bodies, which the DB-less
-# unit lane would then run).
-temper-services = { path = "../temper-services", features = ["test-harness"] }
-# `ServiceExt::oneshot` — drives a request through the assembled router without binding a port.
-tower = { version = "0.5", features = ["util"] }
-# Builds the gzip body that witnesses the request-decompression layer.
-flate2 = "1"
+# The source gates (`src/source_gates.rs`) parse the crate's own tool modules: real function
+# bodies, real `#[cfg(test)]` attributes and real call/await chains instead of a hand lexer.
+syn = { version = "2", features = ["full", "visit"] }
+# Macro bodies are token streams; the gates read their identifiers.
+proc-macro2 = "1"
+# The manifest gate reads this crate's own Cargo.toml.
+toml = "0.8"
+# `resources_read_error_test` serves a canned answer from a real listener.
+axum = "0.8"
+# `declarations_test` drives the mounted service through rmcp's real client over an in-memory
+# transport.
+rmcp = { version = "3.4.1", features = ["client"] }

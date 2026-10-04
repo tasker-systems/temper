@@ -46,10 +46,13 @@ verdict`. Entry points to enumerate:
   secret). Confirm `require_auth` rides the gated tier and that it **survives
   `split_for_parts()`** (empirically proven by e2e `no_auth_returns_401` hitting a gated route —
   keep that test).
-- **temper-mcp** — `crates/temper-mcp/src/router.rs` (which routes carry `require_mcp_auth`) and
-  `service.rs` (every `#[tool]` must call the `ensure_profile_from_parts` chokepoint →
-  `authenticate_token` + `require_system_access` as its first line). **Count `#[tool(` vs
-  chokepoint calls — they must be 1:1.** Discovery / `/oauth/register` / health are by-design
+- **temper-mcp** — `crates/temper-mcp-server/src/router.rs` (the deployed edge: which routes carry
+  `require_mcp_auth`) and the tool layer's `crates/temper-mcp/src/service.rs` (every `#[tool]` must relay through `relay_client` to temper-api, where
+  `require_auth` + `require_system_access` run on the forwarded bearer — or sit on the named
+  `PURE_COMPUTE_TOOLS` allowlist, today only `describe_schema`). Enforced by the source gates
+  `every_tool_method_relays_or_is_allowlisted_pure` and
+  `no_tool_module_binds_to_the_database_or_a_service` in `src/source_gates.rs`; confirm both are still
+  present and still bite. Discovery / `/oauth/register` / health are by-design
   unauth and must touch no user data.
 - **TypeScript** — `api/oauth/*`, `api/auth/*`, `packages/temper-cloud/src`. OAuth AS + SAML SP
   only. Confirm PKCE, SAML signature validation, allowlist fail-closed, constant-time secret

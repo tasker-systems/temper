@@ -2023,6 +2023,198 @@
         "x-apidog-folder": "Reference/API Reference/Admin Ledger"
       }
     },
+    "/api/admin/resources/block-history-scrub": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Scrub the history of resource blocks",
+        "description": "Empties the history of the named blocks of a resource that is not erased: every revision but the current one and every non-current chunk of a live block, and every revision and chunk of a folded block. An in-flight ingest is cancelled and recorded. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). The list is checked against the resource's blocks first, whatever the resource's state, so a recorded refusal names only real blocks of the resource. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.",
+        "operationId": "admin_scrub_block_history",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockHistoryScrubRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The act completed, or was refused and the refusal recorded (`status` says which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockHistoryScrubExecuteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`blocks` is empty, names a block twice, or names an id that is not a block of the resource, whatever the resource's state (checked before any refusal; nothing was scrubbed or recorded)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is JSON but not the expected shape, e.g. a missing or unknown field: a caller-supplied `request_reference` is refused, not ignored (a plain-text rejection, not an ErrorBody)"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/admin/resources/block-history-scrub/survey": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Survey a block history scrub",
+        "description": "Reports what the block history scrub would do for the named blocks of a resource, without recording or changing anything: per block, whether it is folded and how many revisions and chunks it would empty, and whether an in-flight ingest would be cancelled. For a charter or an erased resource it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the list names only blocks of the resource. The warning that a block's current revision still carries a sensitivity finding arrives with the sensitivity sweep (build order 3c); this survey reports counts only. Requires a system admin. Any other caller gets 404, decided before any lookup.",
+        "operationId": "admin_survey_block_history_scrub",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockHistoryScrubRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What the act would do (`plan`), or the refusal it would record (`refusal`); nothing is recorded or changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockHistoryScrubSurvey"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`blocks` is empty, names a block twice, or names an id that is not a block of the resource, whatever the resource's state (checked before any refusal is reported)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is JSON but not the expected shape, e.g. a missing or unknown field (a plain-text rejection, not an ErrorBody)"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
     "/api/admin/resources/erasure": {
       "parameters": [
         {
@@ -5606,6 +5798,100 @@
           },
           "409": {
             "description": "Context name already exists"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
+      }
+    },
+    "/api/contexts/resolve": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Contexts"
+        ],
+        "summary": "Resolve a context ref to its id",
+        "description": "The caller's own visibility bounds the answer: a context the caller cannot read answers\nexactly as one that does not exist (uniform 404, no existence oracle). The resolution is\n[`context_service::resolve_context_ref`] — the same one every ref-accepting route uses — so\neach ref form keeps the refusal it has everywhere else.",
+        "operationId": "resolve_context",
+        "parameters": [
+          {
+            "name": "context_ref",
+            "in": "query",
+            "description": "The context ref to resolve: `@me/<slug>`, `@<handle>/<slug>`, `+<team>/<slug>`, or a bare\nUUID. One grammar — `temper_core::context_ref::parse_context_ref`, the parser the CLI and\nthe MCP tools use.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ref resolved to a context the caller can read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextResolution"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed context ref (the parser's sentence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A `+<team>` ref whose team exists but does not count the caller as a member (the shared resolver's membership gate)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Context not found or not readable (uniform — no existence oracle)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -11118,6 +11404,16 @@
           "403": {
             "description": "Caller cannot modify this resource"
           },
+          "409": {
+            "description": "The ingest has ended (cancelled or abandoned; code INGEST_ENDED); not resumable — start a new upload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "410": {
             "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
             "content": {
@@ -11852,7 +12148,7 @@
             "description": "Caller cannot modify this resource"
           },
           "409": {
-            "description": "The landed block count or the body hash does not match what the caller declared",
+            "description": "The landed block count or the body hash does not match what the caller declared (code CONFLICT; resumable — append the gap and finalize again); or the ingest has ended (cancelled or abandoned; code INGEST_ENDED), which is not resumable — start a new upload",
             "content": {
               "application/json": {
                 "schema": {
@@ -16214,6 +16510,175 @@
         ],
         "description": "Where a folded block's content went, as the read surface states it (the defined-dangling-state\ndesign, D-D2). `located`/`content_gone` carry the fold event's disposition map; `unrecorded`\nis the defined arm for folds the ledger does not map — `charter_set`, historical\n`block_mutated` replaces-body folds, and any event predating the map. It states \"the ledger\ndoes not carry where this content went\", which is honest and never reads as a live citation —\na different true statement from \"gone\", never an approximation of it."
       },
+      "BlockHistoryScrubExecuteResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "request_reference",
+              "event_id",
+              "targets",
+              "cancelled_ingest",
+              "status"
+            ],
+            "properties": {
+              "cancelled_ingest": {
+                "type": "boolean",
+                "description": "True when the scrub cancelled an in-flight ingest."
+              },
+              "event_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "request_reference": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The server-minted reference the operator cites."
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "completed"
+                ]
+              },
+              "targets": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ErasureTargetOutcome"
+                },
+                "description": "One line per named block, in the operator's order, then the ingest line when the\nscrub cancelled an in-flight ingest."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "request_reference",
+              "event_id",
+              "reason",
+              "blocks",
+              "status"
+            ],
+            "properties": {
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "The blocks the refused act named, in the operator's order — the recorded refusal's\n`blocks`. Each is a block of the resource: the list is checked before a refusal is\nrecorded."
+              },
+              "detail": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "event_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/ResourceErasureRefusalReason"
+              },
+              "request_reference": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "refused"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What the execute door's act did: a completion and a refusal are different answers, so the\nresponse is a tagged enum. A refusal here is an operator-facing one (`charter_resource`,\n`already_erased`); a caller who is not a system admin never reaches the act."
+      },
+      "BlockHistoryScrubPlan": {
+        "type": "object",
+        "description": "The plan `block_history_scrub_survey` renders (D10: the act consumes the same computation).",
+        "required": [
+          "cancels_ingest",
+          "blocks"
+        ],
+        "properties": {
+          "blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockScrubCount"
+            },
+            "description": "Per named block, in the operator's order."
+          },
+          "cancels_ingest": {
+            "type": "boolean",
+            "description": "True when the scrub would cancel an in-flight ingest."
+          }
+        }
+      },
+      "BlockHistoryScrubRequestBody": {
+        "type": "object",
+        "description": "The request both doors take: the resource and the blocks whose history is scrubbed. Each\nblock must be a block of the resource, named once. `deny_unknown_fields`: the act's request\nreference is minted by the service, so a caller that sends one is refused, not ignored.",
+        "required": [
+          "resource",
+          "blocks"
+        ],
+        "properties": {
+          "blocks": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "resource": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlockHistoryScrubSurvey": {
+        "type": "object",
+        "description": "The read-only survey. Exactly one of `refusal` and `plan` is present: `refusal` when the act\nwould refuse (a charter, or an already-erased resource), with `detail` for a charter;\notherwise the per-block `plan`. Nothing is recorded either way.",
+        "required": [
+          "resource"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The refusal's fixed evidence (a charter's map-grain task)."
+          },
+          "plan": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BlockHistoryScrubPlan"
+              }
+            ]
+          },
+          "refusal": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResourceErasureRefusalReason",
+                "description": "The refusal the act would record now."
+              }
+            ]
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ResourceId"
+          }
+        }
+      },
       "BlockId": {
         "type": "string",
         "format": "uuid",
@@ -16389,6 +16854,34 @@
           }
         ],
         "description": "The three-state resolution of a block-addressed read (D-D1): every read surface states\n`live`, `folded`, or `absent` BY NAME. On HTTP these map 200 / 410 Gone / 404 Not Found —\nno redirect (D-D3): a Location would hand the caller a successor they may not be authorized\nto follow, so successor-naming rides as data inside the gated envelope instead."
+      },
+      "BlockScrubCount": {
+        "type": "object",
+        "description": "One named block in the plan: what the scrub would empty.",
+        "required": [
+          "block",
+          "folded",
+          "revisions_to_empty",
+          "chunks_to_empty"
+        ],
+        "properties": {
+          "block": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "chunks_to_empty": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "folded": {
+            "type": "boolean",
+            "description": "A folded block empties entirely; a live block keeps its current revision and chunks."
+          },
+          "revisions_to_empty": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
       },
       "BlockSuccessor": {
         "type": "object",
@@ -17356,6 +17849,18 @@
           },
           "residual": {
             "$ref": "#/components/schemas/ResidualGroups"
+          }
+        }
+      },
+      "ContextResolution": {
+        "type": "object",
+        "description": "Response of `GET /api/contexts/resolve` — a context ref resolved to its id, for the caller.\n\nDeliberately just the id: a caller that holds a ref (`@me/<slug>`, `@<handle>/<slug>`,\n`+<team>/<slug>`, or a bare UUID) and needs to address one of the id-keyed\n`/api/contexts/{id}/…` routes resolves once here, then calls the route it wanted. Anything\nmore about the context is `GET /api/contexts/{id}`'s to answer.",
+        "required": [
+          "context_id"
+        ],
+        "properties": {
+          "context_id": {
+            "$ref": "#/components/schemas/ContextId"
           }
         }
       },
@@ -19129,6 +19634,14 @@
           }
         }
       },
+      "IngestEnded": {
+        "type": "string",
+        "description": "The terminal reason an ingest stopped before its body was whole. Present on a resource view only\nbeside `ingest_state = in_progress`; the body is incomplete and nothing more will arrive.",
+        "enum": [
+          "cancelled",
+          "abandoned"
+        ]
+      },
       "IngestPayload": {
         "allOf": [
           {
@@ -19232,7 +19745,7 @@
       },
       "IngestState": {
         "type": "string",
-        "description": "A resource's ingest-completion state — a **projection** of the append-only `kb_events` ledger\n(`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.\nThe ledger is the state machine; this is its materialized current-state view, kept as a column so\nlist/search can filter it with a cheap read instead of scanning events.",
+        "description": "A resource's ingest state — a **projection** of the append-only `kb_events` ledger\n(`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.\nThe ledger is the state machine; this is its materialized current-state view, kept as a column so\nlist/search can filter it with a cheap read instead of scanning events.\n\nTwo wire values. `InProgress` is \"the body is not whole\": it covers an ingest still arriving and\nan ingest that ended before it finalized; [`IngestEnded`] says which, and names the reason.\n`Complete` is the whole body.",
         "enum": [
           "in_progress",
           "complete"
@@ -21356,14 +21869,14 @@
           },
           {
             "type": "object",
-            "description": "The candidate has no stored verbatim bytes to compose a body from — no live blocks, or a\nblock in a derived shape whose bytes were never stored.",
+            "description": "The candidate has no whole stored body to re-block: no stored verbatim bytes to compose\none from (no live blocks, or a block in a derived shape whose bytes were never stored), or\nan ingest that ended (`cancelled`/`abandoned`) before its body was whole. The row's\n`detail` names which.",
             "required": [
               "byteless"
             ],
             "properties": {
               "byteless": {
                 "type": "object",
-                "description": "The candidate has no stored verbatim bytes to compose a body from — no live blocks, or a\nblock in a derived shape whose bytes were never stored.",
+                "description": "The candidate has no whole stored body to re-block: no stored verbatim bytes to compose\none from (no live blocks, or a block in a derived shape whose bytes were never stored), or\nan ingest that ended (`cancelled`/`abandoned`) before its body was whole. The row's\n`detail` names which.",
                 "required": [
                   "detail"
                 ],
@@ -23611,6 +24124,17 @@
           },
           "id": {
             "$ref": "#/components/schemas/ResourceId"
+          },
+          "ingest_ended": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/IngestEnded",
+                "description": "Why the ingest stopped. Present only when the ingest ended before its body was whole\n(`ingest_state` then reads `in_progress`); absent otherwise."
+              }
+            ]
           },
           "ingest_state": {
             "oneOf": [

@@ -506,6 +506,8 @@ mod tests {
             "/api/access/admin/auto-join/reconcile",
             "/api/admin/erasure",
             "/api/admin/resources/erasure",
+            "/api/admin/resources/block-history-scrub",
+            "/api/admin/resources/block-history-scrub/survey",
             "/api/embed/admin/reembed",
             "/api/machine-clients/{id}/rebind",
         ] {
@@ -548,6 +550,7 @@ mod tests {
             "/internal/saml/reconcile",
             "/api/embed/dispatch",
             "/api/erasure/drain",
+            "/api/sensitivity/sweep",
         ] {
             assert!(
                 !spec.paths.paths.contains_key(absent),

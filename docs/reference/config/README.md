@@ -63,6 +63,7 @@ A single auth provider entry. Stored in `[[auth.providers]]` arrays in TOML.
 | `authorize_url` | string **(required)** | _unset_ | _(undocumented — this field has no doc comment in `TemperConfig`)_ |
 | `callback_url` | string | `""` (empty) | _(undocumented — this field has no doc comment in `TemperConfig`)_ |
 | `client_id` | string **(required)** | _unset_ | _(undocumented — this field has no doc comment in `TemperConfig`)_ |
+| `desktop_client_id` | string (optional) | _unset_ | The deployment's registration of the **desktop's own** OAuth public client — an Auth0 application for the hosted instance, an `AS_CLIENTS` entry for self-hosted. The CLI never sends this id. Absence is meaningful: a desktop sign-in with no registration here refuses rather than falling back to `client_id`, whose registered redirect this client does not share. |
 | `name` | string **(required)** | _unset_ | Provider name — referenced by `auth.provider` to pick the active entry. |
 | `scopes` | array of string | `[]` | _(undocumented — this field has no doc comment in `TemperConfig`)_ |
 | `token_url` | string **(required)** | _unset_ | _(undocumented — this field has no doc comment in `TemperConfig`)_ |
@@ -141,7 +142,7 @@ Vault path reference in cloud config.
 
 ## Undocumented fields
 
-9 of 28 fields carry no doc comment on the Rust struct, so this reference cannot describe them. They are listed rather than left as blank cells, because a documentation hole that renders as whitespace reads as documentation.
+9 of 29 fields carry no doc comment on the Rust struct, so this reference cannot describe them. They are listed rather than left as blank cells, because a documentation hole that renders as whitespace reads as documentation.
 
 - `auth.provider`
 - `auth.providers.audience`

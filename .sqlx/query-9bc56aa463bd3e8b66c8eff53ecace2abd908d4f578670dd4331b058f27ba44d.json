@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH s AS (SELECT name, setting FROM pg_settings\n                    WHERE name IN ('log_parameter_max_length', 'log_statement',\n                                   'log_min_duration_statement', 'log_min_duration_sample'))\n        -- `setting` is unitless; current_setting() answers '1s', which no cast reads.\n        SELECT (SELECT setting::int FROM s WHERE name = 'log_parameter_max_length') <> 0\n           AND ((SELECT setting FROM s WHERE name = 'log_statement') = 'all'\n                OR (SELECT setting::int FROM s WHERE name = 'log_min_duration_statement') >= 0\n                OR (SELECT setting::int FROM s WHERE name = 'log_min_duration_sample') >= 0)\n            AS \"may_log!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "may_log!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9bc56aa463bd3e8b66c8eff53ecace2abd908d4f578670dd4331b058f27ba44d"
+}

@@ -4,6 +4,17 @@
   "description": "`resource_erasure_refused` — the negative face of resource erasure and of the block history\nscrub (resource erasure spec D5, D11). Keyed on the resource, spelled as [`ResourceErased`]\nspells it: every reason is a fact about the resource, whichever act was refused.",
   "type": "object",
   "properties": {
+    "act": {
+      "description": "Which act was refused. Absent means [`ErasureAct::Erasure`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ErasureAct"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "actor": {
       "description": "Who attempted the act.",
       "anyOf": [
@@ -14,6 +25,14 @@
           "type": "null"
         }
       ]
+    },
+    "blocks": {
+      "description": "The blocks a refused block history scrub named. Carried here, never in `subject_ids` or\n`detail`; empty for an erasure refusal.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      }
     },
     "detail": {
       "description": "The reason's evidence, e.g. the task that owns map-grain charter erasure.",
@@ -55,6 +74,21 @@
         "kb_machine_clients",
         "kb_blobs",
         "kb_events"
+      ]
+    },
+    "ErasureAct": {
+      "description": "Which act a `resource_erasure_refused` event refuses. Absent on the payload reads as\n[`ErasureAct::Erasure`].",
+      "oneOf": [
+        {
+          "description": "The resource erasure act.",
+          "type": "string",
+          "const": "erasure"
+        },
+        {
+          "description": "The block history scrub.",
+          "type": "string",
+          "const": "block_history_scrub"
+        }
       ]
     },
     "ProfileId": {

@@ -259,3 +259,107 @@ async fn temper_context_shape_prints_the_regions(pool: sqlx::PgPool) {
         "the CLI must print the context's region\nstdout: {stdout}\nstderr: {stderr}"
     );
 }
+
+/// Run the real binary as the holder of `token`.
+async fn run_cli_as(app: &common::E2eTestApp, token: &str, args: &[&str]) -> (bool, String) {
+    let config_toml = toml::to_string(&app.config).expect("serialize test TemperConfig to TOML");
+    let config_path = app
+        .vault_dir
+        .path()
+        .join("orientation-other-user-config.toml");
+    std::fs::write(&config_path, config_toml).expect("write test config for CLI invocation");
+    let out = common::run_temper_cli_with_token(&app.base_url(), token, &config_path, args)
+        .await
+        .expect("spawn the temper binary");
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    (out.status.success(), error_message(&text))
+}
+
+/// The `message` of the JSON error envelope the non-TTY CLI prints (`{"code", "message"}`), or the
+/// raw output when there is none, so an assertion reads the sentence rather than its JSON escaping.
+fn error_message(text: &str) -> String {
+    text.find('{')
+        .and_then(|start| {
+            serde_json::Deserializer::from_str(&text[start..])
+                .into_iter::<serde_json::Value>()
+                .next()
+        })
+        .and_then(Result::ok)
+        .and_then(|v| v["message"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| text.to_owned())
+}
+
+/// The CLI's read resolver refuses through the server's resolve route: a context the caller cannot
+/// read answers exactly as one that does not exist (the server's sentence, with the ref named), a
+/// `+<team>` ref from a non-member names the membership gate, and a malformed ref is refused
+/// locally with the shared parser's sentence before any network call.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn temper_context_shape_refuses_through_the_resolver(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    provision_profile(&app, &app.token).await;
+    let stranger = common::generate_second_user_jwt();
+    provision_profile(&app, &stranger).await;
+
+    let ctx = app
+        .client
+        .contexts()
+        .create("cli-resolve-private", None)
+        .await
+        .expect("create context");
+    let owned = format!("{}/{}", ctx.owner_ref, ctx.slug);
+    let absent = format!("{}/no-such-context", ctx.owner_ref);
+
+    // Unreadable and absent: both refused, with the same server sentence, each naming its ref.
+    let (ok, unreadable) = run_cli_as(&app, &stranger, &["context", "shape", &owned]).await;
+    assert!(
+        !ok,
+        "a stranger cannot shape a private context: {unreadable}"
+    );
+    let (ok, missing) = run_cli_as(&app, &stranger, &["context", "shape", &absent]).await;
+    assert!(!ok, "an absent context is refused: {missing}");
+    assert!(
+        unreadable.contains("context not found or not readable")
+            && unreadable.contains(&format!("{owned:?}")),
+        "unreadable: the server's sentence, naming the ref: {unreadable}"
+    );
+    assert_eq!(
+        unreadable.replace(&format!("{owned:?}"), "<ref>"),
+        missing.replace(&format!("{absent:?}"), "<ref>"),
+        "unreadable and absent read alike, ref aside"
+    );
+
+    // `+<team>` from a non-member: the membership gate, said in words.
+    app.client
+        .teams()
+        .create(&temper_core::types::team::TeamCreateRequest {
+            slug: "cli-resolve-team".to_owned(),
+            name: None,
+            parent: None,
+            auto_join_role: None,
+        })
+        .await
+        .expect("create team");
+    let (ok, out) = run_cli_as(
+        &app,
+        &stranger,
+        &["context", "shape", "+cli-resolve-team/anything"],
+    )
+    .await;
+    assert!(!ok, "a non-member is refused: {out}");
+    assert!(
+        out.contains("you are not a member of that team"),
+        "the non-member refusal names the gate: {out}"
+    );
+
+    // Malformed: the shared parser's sentence, refused before any network call.
+    let sentence = temper_core::context_ref::parse_context_ref("not-a-ref")
+        .expect_err("the parser refuses a bare name")
+        .to_string();
+    let (ok, out) = run_cli_as(&app, &stranger, &["context", "shape", "not-a-ref"]).await;
+    assert!(!ok, "a malformed ref is refused: {out}");
+    assert!(
+        out.contains(&sentence),
+        "the malformed refusal carries the parser's sentence {sentence:?}: {out}"
+    );
+}

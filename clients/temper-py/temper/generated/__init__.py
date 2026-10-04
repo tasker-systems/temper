@@ -125,11 +125,18 @@ __all__ = [
     "BlockFoldDispositionOneOf",
     "BlockFoldDispositionOneOf1",
     "BlockFoldDispositionOneOf2",
+    "BlockHistoryScrubExecuteResponse",
+    "BlockHistoryScrubExecuteResponseOneOf",
+    "BlockHistoryScrubExecuteResponseOneOf1",
+    "BlockHistoryScrubPlan",
+    "BlockHistoryScrubRequestBody",
+    "BlockHistoryScrubSurvey",
     "BlockProvenanceRow",
     "BlockRead",
     "BlockReadOneOf",
     "BlockReadOneOf1",
     "BlockReadOneOf2",
+    "BlockScrubCount",
     "BlockSuccessor",
     "BlocksResponse",
     "BodyStorage",
@@ -168,6 +175,7 @@ __all__ = [
     "ContextOwnerRefOneOf",
     "ContextOwnerRefOneOf1",
     "ContextPanorama",
+    "ContextResolution",
     "ContextRow",
     "ContextRowWithCounts",
     "CreateCogmapOutcome",
@@ -240,6 +248,7 @@ __all__ = [
     "IllegalTransition",
     "IngestCreateResponse",
     "IngestDelta",
+    "IngestEnded",
     "IngestPayload",
     "IngestState",
     "InheritedReadGrant",
@@ -580,11 +589,18 @@ from temper.generated.models.block_fold_disposition import BlockFoldDisposition 
 from temper.generated.models.block_fold_disposition_one_of import BlockFoldDispositionOneOf as BlockFoldDispositionOneOf
 from temper.generated.models.block_fold_disposition_one_of1 import BlockFoldDispositionOneOf1 as BlockFoldDispositionOneOf1
 from temper.generated.models.block_fold_disposition_one_of2 import BlockFoldDispositionOneOf2 as BlockFoldDispositionOneOf2
+from temper.generated.models.block_history_scrub_execute_response import BlockHistoryScrubExecuteResponse as BlockHistoryScrubExecuteResponse
+from temper.generated.models.block_history_scrub_execute_response_one_of import BlockHistoryScrubExecuteResponseOneOf as BlockHistoryScrubExecuteResponseOneOf
+from temper.generated.models.block_history_scrub_execute_response_one_of1 import BlockHistoryScrubExecuteResponseOneOf1 as BlockHistoryScrubExecuteResponseOneOf1
+from temper.generated.models.block_history_scrub_plan import BlockHistoryScrubPlan as BlockHistoryScrubPlan
+from temper.generated.models.block_history_scrub_request_body import BlockHistoryScrubRequestBody as BlockHistoryScrubRequestBody
+from temper.generated.models.block_history_scrub_survey import BlockHistoryScrubSurvey as BlockHistoryScrubSurvey
 from temper.generated.models.block_provenance_row import BlockProvenanceRow as BlockProvenanceRow
 from temper.generated.models.block_read import BlockRead as BlockRead
 from temper.generated.models.block_read_one_of import BlockReadOneOf as BlockReadOneOf
 from temper.generated.models.block_read_one_of1 import BlockReadOneOf1 as BlockReadOneOf1
 from temper.generated.models.block_read_one_of2 import BlockReadOneOf2 as BlockReadOneOf2
+from temper.generated.models.block_scrub_count import BlockScrubCount as BlockScrubCount
 from temper.generated.models.block_successor import BlockSuccessor as BlockSuccessor
 from temper.generated.models.blocks_response import BlocksResponse as BlocksResponse
 from temper.generated.models.body_storage import BodyStorage as BodyStorage
@@ -623,6 +639,7 @@ from temper.generated.models.context_owner_ref import ContextOwnerRef as Context
 from temper.generated.models.context_owner_ref_one_of import ContextOwnerRefOneOf as ContextOwnerRefOneOf
 from temper.generated.models.context_owner_ref_one_of1 import ContextOwnerRefOneOf1 as ContextOwnerRefOneOf1
 from temper.generated.models.context_panorama import ContextPanorama as ContextPanorama
+from temper.generated.models.context_resolution import ContextResolution as ContextResolution
 from temper.generated.models.context_row import ContextRow as ContextRow
 from temper.generated.models.context_row_with_counts import ContextRowWithCounts as ContextRowWithCounts
 from temper.generated.models.create_cogmap_outcome import CreateCogmapOutcome as CreateCogmapOutcome
@@ -695,6 +712,7 @@ from temper.generated.models.idp_revocation import IdpRevocation as IdpRevocatio
 from temper.generated.models.illegal_transition import IllegalTransition as IllegalTransition
 from temper.generated.models.ingest_create_response import IngestCreateResponse as IngestCreateResponse
 from temper.generated.models.ingest_delta import IngestDelta as IngestDelta
+from temper.generated.models.ingest_ended import IngestEnded as IngestEnded
 from temper.generated.models.ingest_payload import IngestPayload as IngestPayload
 from temper.generated.models.ingest_state import IngestState as IngestState
 from temper.generated.models.inherited_read_grant import InheritedReadGrant as InheritedReadGrant

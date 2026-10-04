@@ -68,8 +68,10 @@ pub enum ReblockOutcome {
         /// What happened and what to do about it.
         detail: String,
     },
-    /// The candidate has no stored verbatim bytes to compose a body from — no live blocks, or a
-    /// block in a derived shape whose bytes were never stored.
+    /// The candidate has no whole stored body to re-block: no stored verbatim bytes to compose
+    /// one from (no live blocks, or a block in a derived shape whose bytes were never stored), or
+    /// an ingest that ended (`cancelled`/`abandoned`) before its body was whole. The row's
+    /// `detail` names which.
     Byteless {
         /// What happened and what to do about it.
         detail: String,

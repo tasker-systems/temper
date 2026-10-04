@@ -4,7 +4,7 @@ use crate::commands::resource::inject_context_ref;
 use crate::config;
 use crate::error::{Result, TemperError};
 use crate::output;
-use temper_core::context_ref::ContextOwnerRef;
+use temper_core::context_ref::{parse_context_ref, ContextOwnerRef, ContextRef};
 use temper_core::types::context::{
     ReassignContextRequest, RenameContextRequest, ShareContextRequest,
 };
@@ -453,46 +453,44 @@ pub async fn unshare_remote(
 /// the orientation reads accept `@me/<slug>` — it is the form every agent-facing surface already uses
 /// (`resource list --context @me/temper`), and refusing it here would be a gratuitous inconsistency.
 ///
-/// `@me` is matched on the caller's own profile id, not on a reconstructed `@handle` string.
+/// The ref is parsed here with the one shared grammar (`parse_context_ref`), so a malformed ref
+/// is refused before any network call. A bare UUID passes straight through: the route it then
+/// addresses gates visibility itself. Every other form is resolved by the server
+/// (`GET /api/contexts/resolve`), the same resolver every ref-accepting route uses, so `@me` is
+/// exact and an unreadable context answers exactly as an absent one.
 pub async fn resolve_context_id_for_read(
     client: &temper_client::TemperClient,
     context: &str,
 ) -> Result<Uuid> {
-    if let Ok(id) = Uuid::parse_str(context) {
+    let parsed = parse_context_ref(context)
+        .map_err(|e| TemperError::BadRequest(format!("invalid context ref {context:?}: {e}")))?;
+    if let ContextRef::Id(id) = parsed {
         return Ok(id);
     }
-    let (owner, slug) = context.split_once('/').ok_or_else(|| {
-        TemperError::BadRequest(format!(
-            "invalid context ref {context:?}: use a UUID or `@me/slug` / `@handle/slug` / `+team-slug/slug`"
-        ))
-    })?;
-
-    let contexts = client
+    client
         .contexts()
-        .list()
+        .resolve(context)
         .await
-        .map_err(crate::actions::runtime::client_err_to_temper)?;
+        .map(|r| *r.context_id)
+        .map_err(|e| map_resolve_err(context, e))
+}
 
-    let found = if owner == "@me" {
-        let me = client
-            .profile()
-            .get()
-            .await
-            .map_err(crate::actions::runtime::client_err_to_temper)?;
-        contexts
-            .into_iter()
-            .find(|c| c.kb_owner_table == "kb_profiles" && c.kb_owner_id == me.id && c.slug == slug)
-    } else {
-        contexts
-            .into_iter()
-            .find(|c| c.owner_ref == owner && c.slug == slug)
-    };
-
-    found.map(|c| *c.id).ok_or_else(|| {
-        TemperError::Api(format!(
-            "context '{context}' not found among the contexts you can see"
-        ))
-    })
+/// The resolve route's refusals, rendered for a CLI reader. The server's sentence is kept and the
+/// ref is named beside it: an `@<handle>` or UUID miss does not name the ref, and a command that
+/// resolves several anchors (`graph --in a --in b`) must say which one failed.
+fn map_resolve_err(context: &str, e: temper_client::error::ClientError) -> TemperError {
+    use temper_client::error::ClientError;
+    match e {
+        ClientError::NotFound { message } => {
+            TemperError::Api(format!("{message} (ref {context:?})"))
+        }
+        // A bare 403 here comes from the `+<team>` arm's membership gate; "forbidden" alone would
+        // not say why.
+        ClientError::Forbidden => TemperError::Api(format!(
+            "context ref {context:?}: you are not a member of that team"
+        )),
+        e => crate::actions::runtime::client_err_to_temper(e),
+    }
 }
 
 /// Optional lens ref → UUID (trailing-UUID-only, like every other ref on the CLI).

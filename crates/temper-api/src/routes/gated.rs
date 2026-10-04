@@ -113,6 +113,7 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
             handlers::contexts::list,
             handlers::contexts::create
         ))
+        .routes(routes!(handlers::contexts::resolve))
         .routes(routes!(handlers::contexts::get, handlers::contexts::delete))
         .routes(routes!(handlers::contexts::restore))
         .routes(routes!(handlers::contexts::share_team))

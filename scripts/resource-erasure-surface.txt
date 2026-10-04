@@ -1,0 +1,140 @@
+# The resource-erasure surface: what the act does with every carrier a resource reaches.
+#
+# Under goal "A single resource can be erased out of a live estate" (spec: temper-artifacts
+# specs/2026-09-28-resource-erasure-design.md, D9). Sibling of scripts/personal-data-surface.txt and
+# scripts/sensitivity-scan-surface.txt.
+#
+# WHY THIS FILE EXISTS.
+#
+# The erasure act (`_resource_erasure_apply_redaction`, D2) names the columns it empties by hand. The
+# first draft of that list missed `kb_chunks.header_path` and `kb_citation_audits.reason`: both were
+# prose, both were reachable from the resource, and nothing said so until a joint read with the
+# sensitivity sweep. This file is where that question is answered for every such column, and
+# resource_erasure_surface_test.rs fails until it is.
+#
+# THE INVARIANT. Every CARRIER in a table a resource reaches has a line here: handled by a numbered
+# D2 step, or out-of-scope with its reason. A carrier is (ruled 2026-10-02):
+#
+#   * a column sensitivity-scan-surface.txt classes `scan` (authored text), or
+#   * a column personal-data-surface.txt classes `content`, `incidental` or `derived` (jsonb, bytea,
+#     vector and search-index columns that hold or are computed from what someone wrote).
+#
+# NOTHING HERE DECIDES WHAT A COLUMN HOLDS. Those two manifests are the definitions; this file only
+# says what the act does about the columns they mark. A third classification would drift.
+#
+# NOTHING HERE LISTS TABLES. Reach is derived from the live catalog by the test (ruled 2026-10-02,
+# amended 2026-10-03):
+#
+#   roots  kb_resources, kb_content_blocks, kb_chunks, kb_block_revisions, kb_edges.
+#   edges  a foreign key makes its table a child of the table it references. A single-column CHECK
+#          on a `*_table` discriminator makes its table a child of each table it names: a
+#          polymorphic reference, which carries no foreign key.
+#   walk   every child of a reached table, recursively, the ledger included. A table reached only
+#          through a foreign key into kb_events is reached all the same: that is how
+#          kb_contexts.telos_centroid, which is computed from a context's goal resources, comes into
+#          view. Its lines say when the event key is the only path.
+#
+# Every base-table `*_table` column must carry a CHECK that enumerates the tables it may name
+# (`col IN ('kb_a', 'kb_b')` or `col = 'kb_a'`), or the test fails: a discriminator the walk cannot
+# read could point at a resource unseen.
+#
+# STEP NUMBERS are the spec's D2 numbering (1–9, 7a). The function's own section labels count
+# differently; read the spec, not the comment, to check a line.
+#
+# WHAT THIS FENCE DOES NOT SEE, STATED SO NOBODY INFERS COVERAGE FROM SILENCE.
+#   * Rows. A line is checked at column grain: the D2 function has a statement that writes the column
+#     with an erasure value (a constant, or an 'erased…' literal joined to an id). Which rows that
+#     statement reaches is the act's own witnesses' job. Where a handled column keeps rows tied to R
+#     that the act leaves, the line's note says so. The check reads statements, not control flow:
+#     an UPDATE under a branch never taken, after a RETURN, or with a WHERE that matches nothing
+#     still binds.
+#   * Derivation without reference. A vector computed from R's content is tied to R by no key: a
+#     region's centroid (a mean over its members) and a context's telos_centroid (a mean over its
+#     goals). The walk reaches both tables by other paths, so both have lines, but nothing structural
+#     would find the next such aggregate. Both are handled by step 6.
+#   * References with neither a foreign key nor a CHECKed `*_table` discriminator:
+#     - kb_remote_sources, referenced by kb_block_provenance through (source_kind, source_id). Its
+#       `uri` is declared below because D2 step 9 does reach it; the test binds that line to the
+#       function body instead of to the walk.
+#     - discriminators spelled `*_kind` (kb_block_provenance.source_kind,
+#       kb_citation_audits.source_kind). Both tables are reached through block_id.
+#     - bare uuid references: kb_idempotency_keys.resource_id, and kb_cogmap_components.member_ids
+#       (a uuid[] of members). Neither holds a carrier today.
+#   * Columns neither sibling manifest classes as a carrier: an `identifier` or `reference`, a
+#     `structural` text column, and any type both manifests leave out (text[], json, enums).
+#   * Schemas other than `public`. sensitivity.findings points at resources (target_table,
+#     target_id, resource_id) without a key. It holds no authored text. Every digest the sweep
+#     stores is keyed by a salt that never enters the database: a finding's match fingerprints
+#     (sweep D11) and content_hash, the memo's hash of each unit a detector found nothing in, and
+#     place_observations' last hash of a mutable place. For a place the act reached (and one the
+#     block history scrub or the principal act emptied), the sweep drops the finding's digests and
+#     the memo rows carrying its hash 30 days after it first sees the finding closed (migration
+#     20261004000010), and the next head tick re-records the place's observation from the husk. The category, detector and match count, which say what kind of
+#     data R held, stay as the record of what was found. The act itself never names the schema.
+#
+# FORMAT (line-oriented; `#` comments and blank lines ignored)
+#   [tables]                                  section marker; cut 2 adds [payload] (D9's payload half)
+#   <table>.<column> | <disposition> | <note>
+#
+# disposition
+#   handled:D2.<step>     the D2 step that empties or sentinels the column. The test checks that the
+#                         live `_resource_erasure_apply_redaction` assigns it, in an UPDATE of its
+#                         table, an erasure value: NULL, '', '{}' or '"erased"' (optionally cast), or
+#                         an 'erased…' literal joined by || to an id.
+#   repointed:D2.<step>:<table>.<column>
+#                         the rows citing it are re-pointed, through the named column, to a sentinel
+#                         row, and the original is deleted when nothing else cites it. The test checks
+#                         for a re-point that assigns something other than the column's own value, and
+#                         for the DELETE: statements, not the rows they reach.
+#   out-of-scope          the act deliberately leaves it; the reason in the note is REQUIRED.
+
+[tables]
+
+# ── handled: the content shape (D2) ─────────────────────────────────────────────────────────
+kb_chunk_content.content                | handled:D2.1  | every chunk of the resource, current and superseded, emptied to ''
+kb_chunks.header_path                   | handled:D2.1  | joint-read fix: the heading trail is authored prose
+kb_block_content.content                | handled:D2.2  | every revision of every block, live and folded
+kb_chunks.embedding                     | handled:D2.3  | nulled with embedded_with, together. Vectors computed FROM it (region centroids, a context's telos) are separate lines below
+kb_resource_search_index.search_vector  | handled:D2.4  | emptied to ''
+kb_data_artifact_content.content        | handled:D2.5  | every artifact of the resource, whatever its kind owner, intent or fold state
+kb_workflow_jobs.payload                | handled:D2.7  | jobs whose resource_id is R, in every status. Context-, cogmap- and system-scoped jobs are left (see last_error)
+kb_workflow_jobs.last_error             | handled:D2.7  | jobs whose resource_id is R, in every status. Context-, cogmap- and system-scoped jobs whose error text quotes R are left
+kb_ingestion_records.source_uri         | handled:D2.7a | the origin_uri class sentinel 'erased:<resource_id>'
+kb_data_artifact_verdicts.detail        | handled:D2.7a | every verdict on an artifact of the resource
+kb_citation_audits.reason               | handled:D2.8  | joint-read fix: audits whose block is R's. Audits by other findings that cite R are left, and named in the remainder only when their payload carries R's id
+
+# ── handled: projection-side sentinels (D2 step 9, D4 classes) ──────────────────────────────
+kb_resources.title                      | handled:D2.9  | D4 title: 'erased-<resource_id>'
+kb_resources.origin_uri                 | handled:D2.9  | D4 origin_uri: 'erased:<resource_id>'
+kb_properties.property_key              | handled:D2.9  | D4 'erased-key-<n>', for properties of R and of every edge touching it. Properties owned by R's blocks (today only the fixed-vocabulary block_role) are left: filed under the erasure goal
+kb_properties.property_value            | handled:D2.9  | D4 '"erased"', on the same rows as property_key
+kb_edges.label                          | handled:D2.9  | D4 edge label: NULL, on every edge touching the resource
+kb_remote_sources.uri                   | repointed:D2.9:kb_block_provenance.source_id | outside the walk (see header). The original row is deleted only when nothing else cites it; a URL another resource still cites stays, named by id in the remainder (D8)
+
+# ── out of scope: the ledger (cut 2) ────────────────────────────────────────────────────────
+kb_events.payload                       | out-of-scope  | the ledger: cut 1 leaves payloads unchanged and names the unreached paths of R's own trail in the record; cut 2 redacts them (D3) under D9's payload half. Events outside R's trail that quote R are not named
+kb_events.metadata                      | out-of-scope  | the ledger: authorship reasoning and rationale are cut 2's (D4 sentinel class), under D9's payload half
+
+# ── out of scope: derived vectors (filed under the erasure goal) ───────────────────────────
+kb_cogmap_regions.centroid              | handled:D2.6  | a FOLDED region holding R as a member is zeroed (never recomputed; R's vector was recoverable from it). A LIVE region holding R is recomputed over the survivors by _resource_erasure_recompute_live_centroids, which the body PERFORMs: a recompute is not an erasure constant, so this fence does not bind it; the act's witnesses do. The re-form the service queues after commit then folds a clean row; a materialize already in flight at the act, which loaded R live, is followed by the region drain's erased-member gate (region_clocks::tick), which recomputes and re-forms the anchor's default-lens regions (ruled 2026-10-04)
+kb_contexts.telos_centroid              | handled:D2.6  | R's home context's snapshot nulled beside its watermark, whatever R's doc type; the drain's materialize re-arms it from the live telos, which already excludes R. The copies in region_materialized / salience_refreshed payloads are named in ledger_remainder when R is a goal, for cut 2 (ruled 2026-10-04)
+kb_cogmaps.telos_centroid               | out-of-scope  | derived from the charter's content, so R-derived only when R is the charter, which the act refuses (D5). The map-grain task owns it
+
+# ── out of scope: the map's text ────────────────────────────────────────────────────────────
+kb_cogmaps.name                         | out-of-scope  | reached through kb_cogmaps.telos_resource_id. The act refuses a charter resource (D5); map-grain charter erasure is its own filed task
+kb_cogmap_lenses.name                   | out-of-scope  | reached through kb_cogmaps: the map author's name for a lens
+kb_cogmap_regions.label                 | out-of-scope  | reached through kb_cogmaps; also tied to R when R is a member. An optional agent-written label that may summarize its members, R included, and a folded region keeps it. Left as the map's text by judgement, not because it cannot carry R
+kb_invocations.outcome                  | out-of-scope  | reached incidentally, through its cogmap and its telos (a charter, refused by D5). An invocation over a map where R is only a region member is NOT refused, and its outcome may quote R. Its ledger copy, invocation_closed.outcome, is named in the remainder only when its payload carries R's id
+
+# ── out of scope: deliveries ────────────────────────────────────────────────────────────────
+kb_subscription_deliveries.rationale    | out-of-scope  | reached incidentally, through its invocation and subscription. Its real tie to R is the delivered event (event_id), when that event is one of R's. Neither this column nor its ledger copy (subscription_delivery_disposed) is named in the remainder in that case: filed under the erasure goal
+kb_subscription_deliveries.scope_reason | out-of-scope  | a caller's reason for a scope verdict, tied to R the same way as rationale. Not named anywhere, and not on D8's list: filed under the erasure goal
+
+# ── out of scope: containers and connections, reached only through an event key ────────────
+kb_contexts.name                        | out-of-scope  | reached only through an event key (shape_materialized_event_id). The name of R's home, chosen by its owner; not R's text
+kb_connections.reach_affirmation        | out-of-scope  | reached only through an event key, via kb_contexts. An operator's rationale for a connection's reach: configuration, not resource content
+kb_connections.credential               | out-of-scope  | reached only through an event key, via kb_contexts. Connection secret material: configuration, not resource content
+kb_connections.observed_reach           | out-of-scope  | reached only through an event key, via kb_contexts. What the connection's credential could see: configuration, not resource content
+
+# ── out of scope: blobs ─────────────────────────────────────────────────────────────────────
+kb_blob_upload_segments.bytes           | out-of-scope  | staged upload bytes, reached through a cogmap-homed upload. Blobs are homed in a context or cogmap, not the resource; the act strikes a blob only when the operator lists it (D8)

@@ -203,6 +203,7 @@ mod tests {
             audience: "https://api.example.com".to_string(),
             callback_url: callback_url.to_string(),
             scopes: vec!["openid".to_string()],
+            desktop_client_id: None,
         }
     }
 

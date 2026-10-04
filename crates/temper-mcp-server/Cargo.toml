@@ -1,0 +1,72 @@
+[package]
+name = "temper-mcp-server"
+version.workspace = true
+edition.workspace = true
+description = "The deployed MCP server: temper's JWT edge, OAuth discovery/registration and router around the temper-mcp tool layer"
+# The deployment's shell, never published: it holds the JWT edge (JWKS, the services' claims
+# type) and boots from the deployment's environment. The tool layer it serves is temper-mcp.
+publish = false
+
+[lib]
+name = "temper_mcp_server"
+
+[dependencies]
+# The tool layer this server hosts. Everything a tool needs arrives as a plain value
+# (`temper_mcp::host`), so the server is the only place deployment config is parsed.
+temperkb-mcp.workspace = true
+# The JWT edge (`JwksKeyStore`, `RawJwtClaims`), the shared transport layers, the CORS
+# policy, and the blob posture's one parser + refusal selector. NOT `AppState` and NOT
+# `ApiConfig`: this process holds no database pool and never reads `DATABASE_URL`
+# (a source gate, `tests/no_database_test.rs`, keeps it that way).
+temper-services = { path = "../temper-services" }
+# The instance's auth identity and the shared-secret floor — the same parser the API boots
+# with, so the two doors cannot disagree about which tokens name this instance.
+temperkb-auth.workspace = true
+temperkb-telemetry.workspace = true
+# `temper_telemetry::root_span!` expands to `temper_core` paths.
+temperkb-core.workspace = true
+# The deployed seam names the surface and the two header constants the API trusts — here, and
+# never in the tool layer.
+temperkb-workflow.workspace = true
+http = "1"
+
+rmcp = { version = "3.4.1", features = [
+    "server",
+    "transport-streamable-http-server",
+] }
+
+axum = { version = "0.8", features = ["json", "query"] }
+jsonwebtoken = "9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tower-http = { version = "0.6", features = ["limit"] }
+tracing = "0.1"
+# Host-exact localhost checks in DCR — the prefix match it replaced blessed
+# "http://localhost.evil.com/…" as a loopback callback.
+url = "2"
+
+[package.metadata.cargo-machete]
+# Used only through `temper_telemetry::root_span!`'s expansion, which machete cannot see.
+ignored = ["temperkb-core"]
+
+[dev-dependencies]
+# The tests' static-key JWKS store needs the cfg-gated constructor; the dev-dep enables
+# temper-services' NARROW `test-harness` (never `test-db`).
+temper-services = { path = "../temper-services", features = ["test-harness"] }
+# `ServiceExt::oneshot` — drives a request through the assembled router without binding a port.
+tower = { version = "0.5", features = ["util"] }
+# Builds the gzip body that witnesses the request-decompression layer.
+flate2 = "1"
+tokio = { version = "1", features = ["full"] }
+# The no-database gate parses this crate's source and the boot (`api/mcp.rs`).
+syn = { version = "2", features = ["full", "visit"] }
+proc-macro2 = "1"
+# The `AuthzError` witness (`tests/authz_refusal_witness_test.rs`) constructs a typed `Refusal`
+# and the `ClientError` the relay types each API refusal as.
+temperkb-principal.workspace = true
+temperkb-client = { workspace = true, features = ["telemetry"] }
+uuid = { version = "1", features = ["v7"] }
+# `steward_skill_recipe_test` reads the tool layer's input schemas the way rmcp derives them. It
+# lives here, not in the published tool layer, because it reads the monorepo's steward package.
+schemars = "1"

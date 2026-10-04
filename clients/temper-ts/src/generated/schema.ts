@@ -531,6 +531,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/resources/block-history-scrub": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Scrub the history of resource blocks
+         * @description Empties the history of the named blocks of a resource that is not erased: every revision but the current one and every non-current chunk of a live block, and every revision and chunk of a folded block. An in-flight ingest is cancelled and recorded. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). The list is checked against the resource's blocks first, whatever the resource's state, so a recorded refusal names only real blocks of the resource. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.
+         */
+        post: operations["admin_scrub_block_history"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/resources/block-history-scrub/survey": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Survey a block history scrub
+         * @description Reports what the block history scrub would do for the named blocks of a resource, without recording or changing anything: per block, whether it is folded and how many revisions and chunks it would empty, and whether an in-flight ingest would be cancelled. For a charter or an erased resource it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the list names only blocks of the resource. The warning that a block's current revision still carries a sensitivity finding arrives with the sensitivity sweep (build order 3c); this survey reports counts only. Requires a system admin. Any other caller gets 404, decided before any lookup.
+         */
+        post: operations["admin_survey_block_history_scrub"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/resources/erasure": {
         parameters: {
             query?: never;
@@ -1357,6 +1403,32 @@ export interface paths {
         put?: never;
         /** Create a context */
         post: operations["create_context"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/contexts/resolve": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolve a context ref to its id
+         * @description The caller's own visibility bounds the answer: a context the caller cannot read answers
+         *     exactly as one that does not exist (uniform 404, no existence oracle). The resolution is
+         *     [`context_service::resolve_context_ref`] — the same one every ref-accepting route uses — so
+         *     each ref form keeps the refusal it has everywhere else.
+         */
+        get: operations["resolve_context"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4429,6 +4501,73 @@ export interface components {
             disposition: "unrecorded";
         };
         /**
+         * @description What the execute door's act did: a completion and a refusal are different answers, so the
+         *     response is a tagged enum. A refusal here is an operator-facing one (`charter_resource`,
+         *     `already_erased`); a caller who is not a system admin never reaches the act.
+         */
+        BlockHistoryScrubExecuteResponse: {
+            /** @description True when the scrub cancelled an in-flight ingest. */
+            cancelled_ingest: boolean;
+            /** Format: uuid */
+            event_id: string;
+            /**
+             * Format: uuid
+             * @description The server-minted reference the operator cites.
+             */
+            request_reference: string;
+            /** @enum {string} */
+            status: "completed";
+            /**
+             * @description One line per named block, in the operator's order, then the ingest line when the
+             *     scrub cancelled an in-flight ingest.
+             */
+            targets: components["schemas"]["ErasureTargetOutcome"][];
+        } | {
+            /**
+             * @description The blocks the refused act named, in the operator's order — the recorded refusal's
+             *     `blocks`. Each is a block of the resource: the list is checked before a refusal is
+             *     recorded.
+             */
+            blocks: string[];
+            detail?: string | null;
+            /** Format: uuid */
+            event_id: string;
+            reason: components["schemas"]["ResourceErasureRefusalReason"];
+            /** Format: uuid */
+            request_reference: string;
+            /** @enum {string} */
+            status: "refused";
+        };
+        /** @description The plan `block_history_scrub_survey` renders (D10: the act consumes the same computation). */
+        BlockHistoryScrubPlan: {
+            /** @description Per named block, in the operator's order. */
+            blocks: components["schemas"]["BlockScrubCount"][];
+            /** @description True when the scrub would cancel an in-flight ingest. */
+            cancels_ingest: boolean;
+        };
+        /**
+         * @description The request both doors take: the resource and the blocks whose history is scrubbed. Each
+         *     block must be a block of the resource, named once. `deny_unknown_fields`: the act's request
+         *     reference is minted by the service, so a caller that sends one is refused, not ignored.
+         */
+        BlockHistoryScrubRequestBody: {
+            blocks: string[];
+            /** Format: uuid */
+            resource: string;
+        };
+        /**
+         * @description The read-only survey. Exactly one of `refusal` and `plan` is present: `refusal` when the act
+         *     would refuse (a charter, or an already-erased resource), with `detail` for a charter;
+         *     otherwise the per-block `plan`. Nothing is recorded either way.
+         */
+        BlockHistoryScrubSurvey: {
+            /** @description The refusal's fixed evidence (a charter's map-grain task). */
+            detail?: string | null;
+            plan?: null | components["schemas"]["BlockHistoryScrubPlan"];
+            refusal?: null | components["schemas"]["ResourceErasureRefusalReason"];
+            resource: components["schemas"]["ResourceId"];
+        };
+        /**
          * Format: uuid
          * @description A `kb_content_blocks.id` value — a resource's addressable interior unit.
          */
@@ -4527,6 +4666,17 @@ export interface components {
             block_id: string;
             /** @enum {string} */
             state: "absent";
+        };
+        /** @description One named block in the plan: what the scrub would empty. */
+        BlockScrubCount: {
+            /** Format: uuid */
+            block: string;
+            /** Format: int64 */
+            chunks_to_empty: number;
+            /** @description A folded block empties entirely; a live block keeps its current revision and chunks. */
+            folded: boolean;
+            /** Format: int64 */
+            revisions_to_empty: number;
         };
         /**
          * @description One named successor of a folded block's content. The disposition map's absorbers/carried
@@ -5203,6 +5353,17 @@ export interface components {
             containers: components["schemas"]["Territory"][];
             group_keys: components["schemas"]["GroupKeyMeta"][];
             residual: components["schemas"]["ResidualGroups"];
+        };
+        /**
+         * @description Response of `GET /api/contexts/resolve` — a context ref resolved to its id, for the caller.
+         *
+         *     Deliberately just the id: a caller that holds a ref (`@me/<slug>`, `@<handle>/<slug>`,
+         *     `+<team>/<slug>`, or a bare UUID) and needs to address one of the id-keyed
+         *     `/api/contexts/{id}/…` routes resolves once here, then calls the route it wanted. Anything
+         *     more about the context is `GET /api/contexts/{id}`'s to answer.
+         */
+        ContextResolution: {
+            context_id: components["schemas"]["ContextId"];
         };
         /** @description Response row for context endpoints. */
         ContextRow: {
@@ -6413,6 +6574,12 @@ export interface components {
             watermark?: string | null;
         };
         /**
+         * @description The terminal reason an ingest stopped before its body was whole. Present on a resource view only
+         *     beside `ingest_state = in_progress`; the body is incomplete and nothing more will arrive.
+         * @enum {string}
+         */
+        IngestEnded: "cancelled" | "abandoned";
+        /**
          * @description Wire payload for POST /api/ingest — resource + pre-processed chunks.
          *
          *     The CLI performs extract → chunk → embed locally and sends everything
@@ -6474,10 +6641,14 @@ export interface components {
             title: string;
         };
         /**
-         * @description A resource's ingest-completion state — a **projection** of the append-only `kb_events` ledger
+         * @description A resource's ingest state — a **projection** of the append-only `kb_events` ledger
          *     (`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.
          *     The ledger is the state machine; this is its materialized current-state view, kept as a column so
          *     list/search can filter it with a cheap read instead of scanning events.
+         *
+         *     Two wire values. `InProgress` is "the body is not whole": it covers an ingest still arriving and
+         *     an ingest that ended before it finalized; [`IngestEnded`] says which, and names the reason.
+         *     `Complete` is the whole body.
          * @enum {string}
          */
         IngestState: "in_progress" | "complete";
@@ -7738,8 +7909,10 @@ export interface components {
             };
         } | {
             /**
-             * @description The candidate has no stored verbatim bytes to compose a body from — no live blocks, or a
-             *     block in a derived shape whose bytes were never stored.
+             * @description The candidate has no whole stored body to re-block: no stored verbatim bytes to compose
+             *     one from (no live blocks, or a block in a derived shape whose bytes were never stored), or
+             *     an ingest that ended (`cancelled`/`abandoned`) before its body was whole. The row's
+             *     `detail` names which.
              */
             byteless: {
                 /** @description What happened and what to do about it. */
@@ -9052,6 +9225,7 @@ export interface components {
             doc_type_name: string;
             embedding_status?: null | components["schemas"]["EmbeddingStatus"];
             id: components["schemas"]["ResourceId"];
+            ingest_ended?: null | components["schemas"]["IngestEnded"];
             ingest_state?: null | components["schemas"]["IngestState"];
             is_active: boolean;
             kb_context_id?: null | components["schemas"]["ContextId"];
@@ -11820,6 +11994,146 @@ export interface operations {
             };
         };
     };
+    admin_scrub_block_history: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlockHistoryScrubRequestBody"];
+            };
+        };
+        responses: {
+            /** @description The act completed, or was refused and the refusal recorded (`status` says which) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockHistoryScrubExecuteResponse"];
+                };
+            };
+            /** @description `blocks` is empty, names a block twice, or names an id that is not a block of the resource, whatever the resource's state (checked before any refusal; nothing was scrubbed or recorded) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The body is JSON but not the expected shape, e.g. a missing or unknown field: a caller-supplied `request_reference` is refused, not ignored (a plain-text rejection, not an ErrorBody) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    admin_survey_block_history_scrub: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlockHistoryScrubRequestBody"];
+            };
+        };
+        responses: {
+            /** @description What the act would do (`plan`), or the refusal it would record (`refusal`); nothing is recorded or changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockHistoryScrubSurvey"];
+                };
+            };
+            /** @description `blocks` is empty, names a block twice, or names an id that is not a block of the resource, whatever the resource's state (checked before any refusal is reported) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The body is JSON but not the expected shape, e.g. a missing or unknown field (a plain-text rejection, not an ErrorBody) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     admin_erase_resource: {
         parameters: {
             query?: never;
@@ -14071,6 +14385,72 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    resolve_context: {
+        parameters: {
+            query: {
+                /**
+                 * @description The context ref to resolve: `@me/<slug>`, `@<handle>/<slug>`, `+<team>/<slug>`, or a bare
+                 *     UUID. One grammar — `temper_core::context_ref::parse_context_ref`, the parser the CLI and
+                 *     the MCP tools use.
+                 */
+                context_ref: string;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The ref resolved to a context the caller can read */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextResolution"];
+                };
+            };
+            /** @description Malformed context ref (the parser's sentence) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A `+<team>` ref whose team exists but does not count the caller as a member (the shared resolver's membership gate) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Context not found or not readable (uniform — no existence oracle) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };
@@ -17496,6 +17876,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description The ingest has ended (cancelled or abandoned; code INGEST_ENDED); not resumable — start a new upload */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403 */
             410: {
                 headers: {
@@ -17944,7 +18333,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The landed block count or the body hash does not match what the caller declared */
+            /** @description The landed block count or the body hash does not match what the caller declared (code CONFLICT; resumable — append the gap and finalize again); or the ingest has ended (cancelled or abandoned; code INGEST_ENDED), which is not resumable — start a new upload */
             409: {
                 headers: {
                     [name: string]: unknown;

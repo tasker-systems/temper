@@ -1,0 +1,114 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT rows_examined AS \"rows_examined!\", hashes_examined AS \"hashes_examined!\",\n               cache_hits AS \"cache_hits!\", new_findings AS \"new_findings!\",\n               cursor_advances AS \"cursor_advances!\", units_oversize AS \"units_oversize!\",\n               failed AS \"failed!\", outcome, failure,\n               new_findings_head AS \"new_findings_head!\",\n               new_findings_backfill AS \"new_findings_backfill!\",\n               head_holdback_seconds AS \"head_holdback_seconds!\",\n               sev1 AS \"sev1!\", sev2 AS \"sev2!\", sev3 AS \"sev3!\", sev4 AS \"sev4!\"\n          FROM sensitivity_sweep_tick($1, $2, $3)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "rows_examined!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "hashes_examined!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "cache_hits!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "new_findings!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "cursor_advances!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "units_oversize!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "failed!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "outcome",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 8,
+        "name": "failure",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 9,
+        "name": "new_findings_head!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "new_findings_backfill!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "head_holdback_seconds!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "sev1!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "sev2!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 14,
+        "name": "sev3!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 15,
+        "name": "sev4!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "5c6bc5da9716398e125af96605a7a6d6fa608526c614130d9e35e50753b9f102"
+}

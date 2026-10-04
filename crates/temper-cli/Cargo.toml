@@ -40,7 +40,7 @@ sigstore-trust-root = "0.11"
 sigstore-types = "0.11"
 sigstore-verify = "0.11"
 similar = "2"
-temperkb-client.workspace = true
+temperkb-client = { workspace = true, features = ["telemetry"] }
 temperkb-core.workspace = true
 temperkb-principal.workspace = true
 temperkb-workflow.workspace = true

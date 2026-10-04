@@ -815,6 +815,77 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Resolve a context ref to its id
+    # The caller's own visibility bounds the answer: a context the caller cannot read answers exactly as one that does not exist (uniform 404, no existence oracle). The resolution is [`context_service::resolve_context_ref`] — the same one every ref-accepting route uses — so each ref form keeps the refusal it has everywhere else.
+    # @param context_ref [String] The context ref to resolve: &#x60;@me/&lt;slug&gt;&#x60;, &#x60;@&lt;handle&gt;/&lt;slug&gt;&#x60;, &#x60;+&lt;team&gt;/&lt;slug&gt;&#x60;, or a bare UUID. One grammar — &#x60;temper_core::context_ref::parse_context_ref&#x60;, the parser the CLI and the MCP tools use.
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [ContextResolution]
+    def resolve_context(context_ref, opts = {})
+      data, _status_code, _headers = resolve_context_with_http_info(context_ref, opts)
+      data
+    end
+
+    # Resolve a context ref to its id
+    # The caller&#39;s own visibility bounds the answer: a context the caller cannot read answers exactly as one that does not exist (uniform 404, no existence oracle). The resolution is [&#x60;context_service::resolve_context_ref&#x60;] — the same one every ref-accepting route uses — so each ref form keeps the refusal it has everywhere else.
+    # @param context_ref [String] The context ref to resolve: &#x60;@me/&lt;slug&gt;&#x60;, &#x60;@&lt;handle&gt;/&lt;slug&gt;&#x60;, &#x60;+&lt;team&gt;/&lt;slug&gt;&#x60;, or a bare UUID. One grammar — &#x60;temper_core::context_ref::parse_context_ref&#x60;, the parser the CLI and the MCP tools use.
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(ContextResolution, Integer, Hash)>] ContextResolution data, response status code and response headers
+    def resolve_context_with_http_info(context_ref, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: ContextsApi.resolve_context ...'
+      end
+      # verify the required parameter 'context_ref' is set
+      if @api_client.config.client_side_validation && context_ref.nil?
+        fail ArgumentError, "Missing the required parameter 'context_ref' when calling ContextsApi.resolve_context"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/contexts/resolve'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+      query_params[:'context_ref'] = context_ref
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'ContextResolution'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"ContextsApi.resolve_context",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: ContextsApi#resolve_context\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Restore a retired context
     # @param id [String] Context ID
     # @param [Hash] opts the optional parameters

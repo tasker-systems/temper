@@ -235,8 +235,8 @@ mod tests {
     }
 
     /// Anything unrecognizable is deferred rather than refused here, so the error a caller reads
-    /// comes from the resolver that actually looked — "not found among the contexts you can see"
-    /// beats a local parse complaint that names the wrong grammar.
+    /// comes from the context resolver, which parses with the context-ref grammar — not a local
+    /// complaint from `parse_ref`, which names the resource-ref grammar.
     #[test]
     fn an_unrecognizable_anchor_is_deferred_rather_than_refused_locally() {
         assert_eq!(

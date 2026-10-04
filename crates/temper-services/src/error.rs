@@ -69,6 +69,13 @@ pub enum ApiError {
     PlanRefused { refusals: Vec<PlanRefusal> },
     #[error("Conflict: {0}")]
     Conflict(String),
+    /// An append or finalize on an ingest that has ended (`cancelled` or `abandoned`, SQLSTATE
+    /// `TF004`). Renders `409` with the same `Conflict:` sentence [`Self::Conflict`] renders, under
+    /// the distinct code [`temper_core::error::INGEST_ENDED_CODE`]: unlike a block-count/merkle
+    /// conflict it is **not resumable**, and a resuming client branches on the code, never on the
+    /// message.
+    #[error("Conflict: {0}")]
+    IngestEnded(String),
     /// Finalize's raw-bytes integrity check failed — the stored bytes do not hash to the caller's
     /// declared `expected_content_hash` (W2 PR 5). A 422 with a distinct code (`CONTENT_INTEGRITY`)
     /// because, unlike a block-count/merkle `Conflict`, this is **not resumable**: the committed bytes
@@ -214,6 +221,9 @@ impl IntoResponse for ApiError {
                 temper_core::error::PLAN_REFUSED_CODE,
             ),
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
+            ApiError::IngestEnded(_) => {
+                (StatusCode::CONFLICT, temper_core::error::INGEST_ENDED_CODE)
+            }
             ApiError::ContentIntegrity(_) => {
                 (StatusCode::UNPROCESSABLE_ENTITY, "CONTENT_INTEGRITY")
             }
@@ -241,7 +251,7 @@ impl IntoResponse for ApiError {
             ApiError::NotFound(_) => {
                 tracing::debug!(status_code, error_code = code, message = %bounded(&message), "not found");
             }
-            ApiError::Conflict(_) => {
+            ApiError::Conflict(_) | ApiError::IngestEnded(_) => {
                 tracing::info!(status_code, error_code = code, message = %bounded(&message), "conflict");
             }
             ApiError::ContentIntegrity(_) => {
@@ -407,6 +417,7 @@ impl From<ApiError> for temper_core::error::TemperError {
                     .join("; "),
             ),
             ApiError::Conflict(s) => TemperError::Conflict(s),
+            ApiError::IngestEnded(s) => TemperError::IngestEnded(s),
             ApiError::ContentIntegrity(s) => TemperError::ContentIntegrity(s),
             ApiError::DataArtifactRefusal(s) => TemperError::DataArtifactRefusal(s),
             // Degrades to BadRequest text rather than earning a `TemperError` arm of its
@@ -446,6 +457,7 @@ impl From<temper_core::error::TemperError> for ApiError {
             TemperError::Unauthorized(s) => ApiError::Unauthorized(s),
             TemperError::BadRequest(s) => ApiError::BadRequest(s),
             TemperError::Conflict(s) => ApiError::Conflict(s),
+            TemperError::IngestEnded(s) => ApiError::IngestEnded(s),
             TemperError::ContentIntegrity(s) => ApiError::ContentIntegrity(s),
             TemperError::DataArtifactRefusal(s) => ApiError::DataArtifactRefusal(s),
             TemperError::Api(s) => ApiError::Internal(s),
@@ -822,6 +834,26 @@ mod tests {
         assert_eq!(
             ApiError::ResourceErased(id).to_string(),
             TemperError::ResourceErased(id).to_string()
+        );
+    }
+
+    /// An ended ingest renders `409` under its own code, with the same `Conflict:` sentence a
+    /// resumable conflict renders, after crossing `DbBackend` (TemperError → ApiError). FAILS IF the
+    /// arm falls back to `CONFLICT` (a resuming client could not tell an ended ingest from a gap it
+    /// can append), or the conversion drops the variant.
+    #[tokio::test]
+    async fn an_ended_ingest_renders_409_under_its_own_code() {
+        let a: ApiError = TemperError::IngestEnded("the ingest has ended".to_string()).into();
+        let (status, body) = rendered(a).await;
+
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"]["code"], temper_core::error::INGEST_ENDED_CODE);
+        assert_eq!(body["error"]["message"], "Conflict: the ingest has ended");
+        let (status, body) = rendered(ApiError::Conflict("a gap".to_string())).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(
+            body["error"]["code"], "CONFLICT",
+            "a resumable conflict keeps its code"
         );
     }
 

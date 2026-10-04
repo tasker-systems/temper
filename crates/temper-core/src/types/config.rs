@@ -221,6 +221,14 @@ pub struct AuthProvider {
     pub callback_url: String,
     #[serde(default)]
     pub scopes: Vec<String>,
+    /// The deployment's registration of the **desktop's own** OAuth public
+    /// client — an Auth0 application for the hosted instance, an `AS_CLIENTS`
+    /// entry for self-hosted. The CLI never sends this id. Absence is
+    /// meaningful: a desktop sign-in with no registration here refuses rather
+    /// than falling back to `client_id`, whose registered redirect this
+    /// client does not share.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_client_id: Option<String>,
 }
 
 fn default_callback_url() -> String {
@@ -707,6 +715,104 @@ api_url = "https://temperkb.io"
         );
     }
 
+    // --- desktop_client_id: the desktop's own OAuth client registration ---
+
+    #[test]
+    fn auth_provider_without_desktop_client_id_parses_with_none() {
+        // A config written before the field existed must keep loading, with
+        // absence observable as `None` — the desktop's signal to refuse
+        // sign-in rather than fall back to the CLI's `client_id`.
+        let toml_str = r#"
+[vault]
+path = "~/projects/kb-vault"
+
+[auth]
+provider = "auth0"
+
+[[auth.providers]]
+name = "auth0"
+authorize_url = "https://temperkb.us.auth0.com/authorize"
+token_url = "https://temperkb.us.auth0.com/oauth/token"
+client_id = "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF"
+audience = "https://temperkb.io/api"
+callback_url = "https://temperkb.io/api/auth/cli-callback"
+scopes = ["openid", "profile", "email", "offline_access"]
+"#;
+        let cfg: TemperConfig = toml::from_str(toml_str).expect("old config must parse");
+        assert_eq!(cfg.auth.providers.len(), 1);
+        assert!(cfg.auth.providers[0].desktop_client_id.is_none());
+    }
+
+    #[test]
+    fn auth_provider_desktop_client_id_round_trips_through_toml() {
+        let toml_str = r#"
+[vault]
+path = "~/projects/kb-vault"
+
+[auth]
+provider = "auth0"
+
+[[auth.providers]]
+name = "auth0"
+authorize_url = "https://temperkb.us.auth0.com/authorize"
+token_url = "https://temperkb.us.auth0.com/oauth/token"
+client_id = "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF"
+audience = "https://temperkb.io/api"
+callback_url = "https://temperkb.io/api/auth/cli-callback"
+desktop_client_id = "desktop-client-abc"
+scopes = ["openid", "profile", "email", "offline_access"]
+"#;
+        let cfg: TemperConfig = toml::from_str(toml_str).expect("should parse");
+        assert_eq!(
+            cfg.auth.providers[0].desktop_client_id.as_deref(),
+            Some("desktop-client-abc")
+        );
+        let rendered = toml::to_string(&cfg.auth).expect("auth section serializes");
+        assert!(rendered.contains("desktop_client_id"));
+        let back: AuthConfig = toml::from_str(&rendered).expect("re-parses");
+        assert_eq!(
+            back.providers[0].desktop_client_id.as_deref(),
+            Some("desktop-client-abc")
+        );
+    }
+
+    #[test]
+    fn config_with_desktop_client_id_loads_without_the_field() {
+        // The forward-skew direction, verified rather than assumed: a reader
+        // compiled before the field existed (an older published temperkb-core)
+        // parses a newer config because serde ignores unknown fields —
+        // `AuthProvider` deliberately carries no `deny_unknown_fields`. The
+        // mirror below is the pre-field field set; it must accept a payload
+        // that carries the key.
+        #[derive(serde::Deserialize)]
+        #[allow(dead_code)]
+        struct ProviderWithoutDesktopClientId {
+            name: String,
+            authorize_url: String,
+            token_url: String,
+            client_id: String,
+            audience: String,
+            callback_url: String,
+            scopes: Vec<String>,
+        }
+
+        let provider = AuthProvider {
+            name: "auth0".to_string(),
+            authorize_url: "https://temperkb.us.auth0.com/authorize".to_string(),
+            token_url: "https://temperkb.us.auth0.com/oauth/token".to_string(),
+            client_id: "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF".to_string(),
+            audience: "https://temperkb.io/api".to_string(),
+            callback_url: "https://temperkb.io/api/auth/cli-callback".to_string(),
+            scopes: vec!["openid".to_string()],
+            desktop_client_id: Some("desktop-client-abc".to_string()),
+        };
+        let payload = toml::to_string(&provider).expect("provider serializes");
+        assert!(payload.contains("desktop_client_id"));
+        let legacy: ProviderWithoutDesktopClientId =
+            toml::from_str(&payload).expect("a reader without the field tolerates it");
+        assert_eq!(legacy.name, "auth0");
+    }
+
     #[test]
     fn default_config_is_unconfigured_for_cloud() {
         // No baked-in default: a fresh binary must not point at the hosted SaaS.
@@ -786,6 +892,7 @@ path = "~/vault"
             audience: "https://example.com/api".to_string(),
             callback_url: "https://example.com/callback".to_string(),
             scopes: vec![],
+            desktop_client_id: None,
         });
         let err = cfg.validate().unwrap_err();
         let s = format!("{err}");
@@ -806,6 +913,7 @@ path = "~/vault"
             audience: "https://example.com/api".to_string(),
             callback_url: "https://example.com/callback".to_string(),
             scopes: vec![],
+            desktop_client_id: None,
         });
         assert!(cfg.validate().is_err());
     }

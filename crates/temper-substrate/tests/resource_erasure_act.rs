@@ -36,6 +36,10 @@
 //!   * **10** — artifacts gone: current, member, pinned and superseded artifacts all end `{}`.
 //!   * **12** — the joint-read columns: `header_path` NULL, audit `reason` NULL, artifact content
 //!     `{}`::jsonb.
+//!   * **D11 scope** — the one redaction body takes a block set: it runs steps (1)–(3) narrowed to
+//!     the named blocks and stops before the whole-resource steps, and the two-argument call the
+//!     act and the replay arm make still resolves. The scrub's own witnesses are
+//!     `block_history_scrub.rs`.
 //!   * **20** — no writer lands on the husk (D13): a block mutate or a property set holding its
 //!     transaction makes the act wait and is erased; a property set or a block mutate arriving
 //!     while the act holds R's row refuses; a citation audit, a finalize, a retype, a reweight
@@ -60,6 +64,9 @@
 //!   * **24** — the record attests and never repeats (D8): the ingestion record's `source_uri`,
 //!     `done`/`dead` job excerpts and a verdict's `detail` are reached; `targets` names every
 //!     reached table and none it did not reach; the payload carries no planted string.
+//!   * **25** — the facet regrain cannot re-inflate a husk (goal §8): `_facet_regrain_from_events`
+//!     over the erased resource, over an edge into it, or over every owner raises on the write
+//!     guard and changes nothing, although the ledger still carries the original facet values.
 //!
 //! The doors (Rust) land in PR 2; this file pins the SQL behavior the doors consume.
 
@@ -2498,11 +2505,40 @@ async fn the_operator_listed_blob_strike_verifies_and_strikes(pool: sqlx::PgPool
     );
 }
 
-/// The redaction body's scope parameter: `p_blocks` NULL is the whole resource (cut 1's only
-/// form); a non-NULL block set is refused until build order 2e, and the two-argument call
-/// text the act and the replay arm use still resolves (one function, no overload).
+async fn chunk_prose(pool: &PgPool, chunk: Uuid) -> String {
+    sqlx::query_scalar("SELECT content FROM kb_chunk_content WHERE chunk_id = $1")
+        .bind(chunk)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// What only the whole-resource steps touch: the search vector (step 4), the title and
+/// `erased_at` (step 9a).
+async fn whole_resource_state(
+    pool: &PgPool,
+    resource: ResourceId,
+) -> (String, String, Option<chrono::DateTime<chrono::Utc>>) {
+    sqlx::query_as(
+        "SELECT si.search_vector::text, r.title, r.erased_at
+           FROM kb_resources r JOIN kb_resource_search_index si ON si.resource_id = r.id
+          WHERE r.id = $1",
+    )
+    .bind(resource.uuid())
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// The redaction body's scope parameter (D11): a block set runs steps (1)–(3) narrowed to the
+/// named block and stops there, and the two-argument whole-resource call the act and the replay
+/// arm make still resolves (one function, no overload).
+///
+/// FAILS IF: the block-set call raises, leaves the named block's superseded chunk its prose, or
+/// reaches a whole-resource step (the search vector, the title, `erased_at`); or the
+/// two-argument call stops resolving or stops emptying the resource.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn the_redaction_body_refuses_a_block_scope_until_2e(pool: sqlx::PgPool) {
+async fn the_redaction_body_accepts_a_block_scope_and_stops_after_step_three(pool: sqlx::PgPool) {
     common::reset_schema(&pool).await;
     temper_substrate::scenario::bootseed::seed_system(&pool)
         .await
@@ -2521,19 +2557,38 @@ async fn the_redaction_body_refuses_a_block_scope_until_2e(pool: sqlx::PgPool) {
         .fetch_one(&pool)
         .await
         .unwrap();
+    let block: Uuid = sqlx::query_scalar("SELECT block_id FROM kb_chunks WHERE id = $1")
+        .bind(leak.old_chunk)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        chunk_prose(&pool, leak.old_chunk).await,
+        SECRET,
+        "setup: the superseded chunk carries the leak"
+    );
+    let before = whole_resource_state(&pool, leak.resource).await;
+    assert!(
+        !before.0.is_empty(),
+        "setup: the search vector is not empty"
+    );
 
-    let refused = sqlx::query("SELECT _resource_erasure_apply_redaction($1, $2, $3)")
+    sqlx::query("SELECT _resource_erasure_apply_redaction($1, $2, $3)")
         .bind(leak.resource.uuid())
         .bind(event)
-        .bind(vec![Uuid::now_v7()])
+        .bind(vec![block])
         .execute(&pool)
-        .await;
-    assert!(
-        refused
-            .unwrap_err()
-            .to_string()
-            .contains("a block-set scope lands with build order 2e"),
-        "a non-NULL p_blocks raises the 2e message"
+        .await
+        .expect("a block-set scope runs");
+    assert_eq!(
+        chunk_prose(&pool, leak.old_chunk).await,
+        "",
+        "the named block's superseded chunk is emptied (step (1))"
+    );
+    assert_eq!(
+        whole_resource_state(&pool, leak.resource).await,
+        before,
+        "the search vector, the title and erased_at are unchanged: steps (4)–(9) did not run"
     );
 
     sqlx::query("SELECT _resource_erasure_apply_redaction($1, $2)")
@@ -3393,7 +3448,13 @@ async fn an_embed_write_back_after_the_act_writes_nothing(pool: sqlx::PgPool) {
     execute_act(&pool, leak.resource.uuid()).await;
 
     let vector = format!("[{}]", vec!["0.1"; 768].join(","));
-    let first_chunk_sql = "SELECT id FROM kb_chunks WHERE resource_id = $1 ORDER BY id LIMIT 1";
+    // A current chunk of a live block: the write-back also refuses a superseded chunk or a folded
+    // block's (the drain's write-time currency check), so only such a chunk isolates the erasure
+    // guard as the thing that refuses the husk.
+    let first_chunk_sql = "SELECT c.id FROM kb_chunks c \
+                           JOIN kb_content_blocks b ON b.id = c.block_id \
+                           WHERE c.resource_id = $1 AND c.is_current AND NOT b.is_folded \
+                           ORDER BY c.id LIMIT 1";
     let husk_chunk: Uuid = sqlx::query_scalar(first_chunk_sql)
         .bind(leak.resource.uuid())
         .fetch_one(&pool)
@@ -4754,4 +4815,178 @@ async fn replay_projects_a_lawful_write_that_sorts_after_the_act(pool: sqlx::PgP
         late_rows, 1,
         "the walk projected the write at its position after the act"
     );
+}
+
+/// (25) The facet regrain cannot re-inflate a husk. `_facet_regrain_from_events` deletes an owner's
+/// `facet` rows and re-projects them from the ledger, and cut 1 leaves the ledger's facet payloads
+/// in plain text. What stops it is the write guard both property projectors call first: a regrain
+/// that reaches R, an edge into R, or every owner raises and rolls back whole. The control at the
+/// end runs the same regrain under the replay walk's guard bypass and watches the planted value
+/// come back, so the absence checks above it can see a re-inflation.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_facet_regrain_cannot_reinflate_an_erased_resource(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "regrain-home").await;
+    let create = |title: &'static str, origin_uri: &'static str| {
+        let pool = pool.clone();
+        async move {
+            writes::create_resource_with(
+                &pool,
+                CreateParams {
+                    idempotency_key: None,
+                    title,
+                    origin_uri,
+                    body: "regrain body",
+                    doc_type: "research",
+                    home: AnchorRef::context(home),
+                    owner,
+                    originator: owner,
+                    emitter,
+                    properties: &[],
+                    chunks: None,
+                    sources: vec![],
+                },
+                EventContext::default(),
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let r = create("the erased one", "test://regrain-r").await;
+    let s = create("the survivor", "test://regrain-s").await;
+
+    // A facet R owns, and a facet on a live edge S→R.
+    writes::set_facet(
+        &pool,
+        PropertyOwner::resource(r),
+        &serde_json::json!({"owner": "jane smith"}),
+        1.0,
+        emitter,
+    )
+    .await
+    .unwrap();
+    let edge = writes::assert_relationship(
+        &pool,
+        AssertParams {
+            src: s,
+            tgt: r,
+            kind: EdgeKind::LeadsTo,
+            polarity: EdgePolarity::Forward,
+            label: None,
+            weight: 1.0,
+            home,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    writes::set_facet(
+        &pool,
+        PropertyOwner::edge(edge),
+        &serde_json::json!({"diagnosis": "stage 3"}),
+        1.0,
+        emitter,
+    )
+    .await
+    .unwrap();
+
+    // A planted value on a row, or an original facet key on R's or the edge's rows.
+    let leaked_sql = "SELECT count(*) FROM kb_properties \
+          WHERE property_value::text LIKE ANY (ARRAY['%jane smith%', '%stage 3%']) \
+             OR (property_key = 'facet' AND owner_id = ANY($1))";
+    let leaked = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, i64>(leaked_sql)
+            .bind(vec![r.uuid(), edge.uuid()])
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+    assert_eq!(
+        leaked(pool.clone()).await,
+        2,
+        "setup: one facet row on R, one on the edge"
+    );
+
+    execute_act(&pool, r.uuid()).await;
+    assert_eq!(
+        leaked(pool.clone()).await,
+        0,
+        "the act sentineled both facets"
+    );
+
+    // The premise: the ledger still holds both original facet payloads.
+    let ledger: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events \
+          WHERE payload->>'property_key' = 'facet' \
+            AND (payload#>>'{owner,id}')::uuid = ANY($1) \
+            AND payload::text LIKE ANY (ARRAY['%jane smith%', '%stage 3%'])",
+    )
+    .bind(vec![r.uuid(), edge.uuid()])
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        ledger, 2,
+        "premise: cut 1 leaves both facet payloads in the ledger"
+    );
+
+    let props_sql = "SELECT id, owner_id, property_key, property_value, is_folded \
+          FROM kb_properties ORDER BY id";
+    type PropRow = (Uuid, Uuid, String, serde_json::Value, bool);
+    let props_before: Vec<PropRow> = sqlx::query_as(props_sql).fetch_all(&pool).await.unwrap();
+
+    for (scope, owner_arg) in [
+        ("the erased resource", Some(r.uuid())),
+        ("an edge into it", Some(edge.uuid())),
+        ("every owner", None),
+    ] {
+        let err = sqlx::query("SELECT * FROM _facet_regrain_from_events($1)")
+            .bind(owner_arg)
+            .execute(&pool)
+            .await
+            .expect_err(&format!("a regrain over {scope} must refuse"));
+        assert!(
+            err.to_string().contains(&format!(
+                "resource {} is erased; writes are refused",
+                r.uuid()
+            )),
+            "a regrain over {scope} raises on R's write guard; got {err}"
+        );
+    }
+    let props_after: Vec<PropRow> = sqlx::query_as(props_sql).fetch_all(&pool).await.unwrap();
+    assert_eq!(
+        props_after, props_before,
+        "the refused regrains changed no kb_properties row"
+    );
+    assert_eq!(
+        leaked(pool.clone()).await,
+        0,
+        "no original facet key or value is back"
+    );
+
+    // Control: the same regrain past the guard re-projects R's original value from the ledger.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("SELECT * FROM _facet_regrain_from_events($1)")
+        .bind(r.uuid())
+        .execute(&mut *tx)
+        .await
+        .expect("past the guard, the regrain runs");
+    let reinflated: i64 = sqlx::query_scalar(leaked_sql)
+        .bind(vec![r.uuid(), edge.uuid()])
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    assert!(
+        reinflated > 0,
+        "control: without the guard the regrain re-projects R's facet, so the checks can see it"
+    );
+    tx.rollback().await.unwrap();
 }

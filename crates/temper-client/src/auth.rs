@@ -642,12 +642,17 @@ pub fn stored_auth_from_env() -> Result<Option<StoredAuth>> {
 // Device ID helper
 // ---------------------------------------------------------------------------
 
-/// Load an existing device_id from auth.json, or generate a new UUIDv7.
+/// Load an existing device_id from the given store, or generate a new UUIDv7.
 ///
-/// Called during login to ensure every auth.json has a stable device_id.
-/// If the user already has one (re-login), it is preserved.
-pub fn load_or_create_device_id() -> String {
-    if let Ok(Some(auth)) = load_auth() {
+/// The store handed in decides the custody: `login()` passes the caller's
+/// store, so a [`MemoryTokenStore`] session resolves the device id from
+/// memory and never from the global CLI auth file — the disk contamination
+/// the `TokenStore` seam exists to prevent. A non-empty stored id wins
+/// (re-login keeps the machine's identity); a store with nothing usable —
+/// no stored auth, no id, an empty id, or an unreadable one — mints fresh,
+/// and the caller's `save` persists it.
+pub fn load_or_create_device_id_from(store: &dyn TokenStore) -> String {
+    if let Ok(Some(auth)) = store.load() {
         if let Some(id) = auth.device_id {
             if !id.is_empty() {
                 return id;
@@ -655,6 +660,17 @@ pub fn load_or_create_device_id() -> String {
         }
     }
     uuid::Uuid::now_v7().to_string()
+}
+
+/// Load an existing device_id from the default disk store, or generate a new
+/// UUIDv7.
+///
+/// Disk-custody convenience for callers whose store *is* the global auth
+/// file (the CLI's `auth token` import). Reads the same env-then-disk
+/// precedence [`load_auth`] does; callers holding a non-disk store must use
+/// [`load_or_create_device_id_from`] instead.
+pub fn load_or_create_device_id() -> String {
+    load_or_create_device_id_from(&DiskTokenStore::default_path())
 }
 
 /// Load the device_id from auth.json.
@@ -1059,6 +1075,100 @@ mod tests {
         let meta = std::fs::metadata(&path).unwrap();
         let mode = meta.permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "auth.json should be owner-read/write only");
+    }
+
+    // --- device id: custody resolves from the passed store ---
+
+    /// The env slice for the device-id custody tests: the cloud-mode vars
+    /// cleared (via [`cleared_env`]) plus `TEMPER_AUTH_PATH` pointed at the
+    /// given path, so the global auth file the no-arg disk read would have
+    /// used is pinned to a fixture the test controls.
+    fn custody_env(global_path: &Path) -> Vec<(&'static str, Option<&str>)> {
+        let mut vars: Vec<(&'static str, Option<&str>)> = cleared_env().to_vec();
+        vars.push((
+            temper_core::types::config::TEMPER_AUTH_PATH_ENV,
+            Some(global_path.to_str().unwrap()),
+        ));
+        vars
+    }
+
+    #[test]
+    fn device_id_from_empty_memory_store_mints_uuidv7_and_no_global_file() {
+        // login() resolves the device id from the store it is handed. An
+        // empty MemoryTokenStore must mint fresh — and nothing may appear at
+        // the global auth path, the disk this session's store does not own.
+        let dir = TempDir::new().unwrap();
+        let global = dir.path().join("auth.json");
+        temp_env::with_vars(custody_env(&global), || {
+            let id = load_or_create_device_id_from(&MemoryTokenStore::empty());
+            let uuid = uuid::Uuid::parse_str(&id).expect("minted id parses as a UUID");
+            assert_eq!(uuid.get_version_num(), 7, "minted ids are UUIDv7");
+        });
+        assert!(
+            !global.exists(),
+            "device-id resolution must not create the global auth file"
+        );
+    }
+
+    #[test]
+    fn device_id_from_prepopulated_store_preserves_the_stored_id() {
+        // Re-login (or any resolution against a store that already carries a
+        // device id) keeps the id — per-device identity is stable across
+        // re-auth because it lives in the caller's custody.
+        let store = MemoryTokenStore::with_auth(make_auth(Utc::now() + Duration::hours(1)));
+        let id = load_or_create_device_id_from(&store);
+        assert_eq!(id, "test-device-id");
+    }
+
+    #[test]
+    fn device_id_ignores_an_empty_stored_id() {
+        // A stored id must be non-empty to win — carried from the pre-store
+        // helper's rule, so a legacy `device_id = ""` mints rather than sticks.
+        let mut auth = make_auth(Utc::now() + Duration::hours(1));
+        auth.device_id = Some(String::new());
+        let store = MemoryTokenStore::with_auth(auth);
+        let id = load_or_create_device_id_from(&store);
+        let uuid = uuid::Uuid::parse_str(&id).expect("minted id parses as a UUID");
+        assert_eq!(uuid.get_version_num(), 7);
+    }
+
+    #[test]
+    fn device_id_from_memory_store_ignores_the_global_auth_file() {
+        // The custody rule this seam exists for: a caller holding a
+        // MemoryTokenStore must not inherit a device id from the global CLI
+        // auth file even when TEMPER_AUTH_PATH points at a populated one —
+        // the disk contamination the TokenStore seam names.
+        let dir = TempDir::new().unwrap();
+        let global = dir.path().join("auth.json");
+        let mut disk_auth = make_auth(Utc::now() + Duration::hours(1));
+        disk_auth.device_id = Some("from-global-disk".to_string());
+        save_auth_to(&disk_auth, &global).unwrap();
+        let disk_bytes = std::fs::read(&global).unwrap();
+
+        temp_env::with_vars(custody_env(&global), || {
+            let store = MemoryTokenStore::empty();
+            let id = load_or_create_device_id_from(&store);
+            assert_ne!(id, "from-global-disk", "the disk id must not leak in");
+            let uuid = uuid::Uuid::parse_str(&id).expect("minted id parses as a UUID");
+            assert_eq!(uuid.get_version_num(), 7);
+
+            // The login tail: the resolved id rides the StoredAuth through
+            // the passed store's save, and reads back from that store only.
+            let mut stored = make_auth(Utc::now() + Duration::hours(1));
+            stored.device_id = Some(id);
+            store.save(&stored).unwrap();
+            assert_eq!(
+                store.load().unwrap().unwrap().device_id,
+                stored.device_id,
+                "the minted id is persisted through the passed store"
+            );
+        });
+
+        assert_eq!(
+            std::fs::read(&global).unwrap(),
+            disk_bytes,
+            "the global auth file is neither consumed nor rewritten"
+        );
     }
 
     // --- JWT parsing + env-var bootstrap ---

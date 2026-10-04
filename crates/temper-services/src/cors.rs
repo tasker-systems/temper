@@ -2,7 +2,8 @@
 //!
 //! This lives here rather than in a transport crate because both surfaces reach it and neither
 //! depends on the other: temper-api applies it in `apply_transport_layers` (shared by the public
-//! and internal apps) and temper-mcp applies it when assembling its own router.
+//! and internal apps) and temper-mcp-server applies it when assembling its own router. It takes
+//! the origins, not an `ApiConfig`, so the MCP server needs no API configuration to apply it.
 //!
 //! It is shared for a reason paid for once. The MCP router previously ended in a literal
 //! `CorsLayer::permissive()`, so `CORS_ORIGINS` was read into `ApiConfig`, carried into
@@ -13,7 +14,25 @@
 
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::config::ApiConfig;
+/// Read `CORS_ORIGINS` — comma-separated, trimmed, empties dropped. The one parse both surfaces'
+/// boots run, so the allowlist the API applies and the one the MCP server applies cannot differ
+/// in how they read the same variable.
+pub fn parse_cors_origins(lookup: impl Fn(&str) -> Option<String>) -> Vec<String> {
+    let cors_origins: Vec<String> = lookup("CORS_ORIGINS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if cors_origins.is_empty() {
+        tracing::info!(
+            "CORS_ORIGINS is not set — cross-origin requests will be denied. \
+             Set CORS_ORIGINS=* for permissive mode in development."
+        );
+    }
+    cors_origins
+}
 
 /// Build the CORS layer this instance's configuration asks for.
 ///
@@ -25,16 +44,15 @@ use crate::config::ApiConfig;
 ///
 /// An origin that fails to parse is skipped rather than fataled, which means a typo narrows the
 /// allowlist instead of widening it.
-pub fn cors_layer(config: &ApiConfig) -> CorsLayer {
-    if config.cors_origins.is_empty() {
+pub fn cors_layer(cors_origins: &[String]) -> CorsLayer {
+    if cors_origins.is_empty() {
         CorsLayer::new()
-    } else if config.cors_origins.len() == 1 && config.cors_origins[0] == "*" {
+    } else if cors_origins.len() == 1 && cors_origins[0] == "*" {
         CorsLayer::permissive()
     } else {
         CorsLayer::new()
             .allow_origin(
-                config
-                    .cors_origins
+                cors_origins
                     .iter()
                     .filter_map(|o| o.parse().ok())
                     .collect::<Vec<_>>(),

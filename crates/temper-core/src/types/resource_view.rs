@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::managed_meta::ManagedMeta;
-use super::resource::{BodyStorage, IngestState};
+use super::resource::{BodyStorage, IngestEnded, IngestState};
 use super::workflow_job::EmbeddingStatus;
 use crate::error::TemperError;
 use crate::refs::decorated_ref;
@@ -144,6 +144,10 @@ pub struct ResourceView {
     /// read `None` as "incomplete".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ingest_state: Option<IngestState>,
+    /// Why the ingest stopped. Present only when the ingest ended before its body was whole
+    /// (`ingest_state` then reads `in_progress`); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingest_ended: Option<IngestEnded>,
     /// Do the bytes read back exactly, or only approximately? `Option` purely for
     /// version skew, as with `ingest_state`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -497,6 +501,7 @@ mod tests {
             updated: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
             body_hash: None,
             ingest_state: Some(IngestState::Complete),
+            ingest_ended: None,
             body_storage: Some(BodyStorage::Derived),
             managed_meta: ManagedMeta::default(),
             open_meta: None,

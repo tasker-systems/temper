@@ -57,6 +57,7 @@ export function makeRow(partial: Partial<ResourceView> = {}): ResourceView {
 		cogmap_name: null,
 		body_hash: null,
 		ingest_state: 'complete',
+		ingest_ended: null,
 		body_storage: 'derived',
 		managed_meta: { ...MANAGED },
 		open_meta: null,

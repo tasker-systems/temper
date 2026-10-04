@@ -309,3 +309,18 @@ pub struct RestoreContextOutcome {
     /// `restore_reports_a_change_when_it_lands_on_a_freed_sibling_address`.
     pub slug_changed: bool,
 }
+
+/// Response of `GET /api/contexts/resolve` — a context ref resolved to its id, for the caller.
+///
+/// Deliberately just the id: a caller that holds a ref (`@me/<slug>`, `@<handle>/<slug>`,
+/// `+<team>/<slug>`, or a bare UUID) and needs to address one of the id-keyed
+/// `/api/contexts/{id}/…` routes resolves once here, then calls the route it wanted. Anything
+/// more about the context is `GET /api/contexts/{id}`'s to answer.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "context.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextResolution {
+    pub context_id: ContextId,
+}

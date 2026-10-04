@@ -1691,6 +1691,7 @@ mod enriched_resource_tests {
             updated: chrono::Utc::now(),
             body_hash: None,
             ingest_state: Some(temper_core::types::resource::IngestState::Complete),
+            ingest_ended: None,
             body_storage: Some(temper_core::types::resource::BodyStorage::Derived),
             managed_meta: ManagedMeta {
                 stage: Some("in-progress".to_string()),

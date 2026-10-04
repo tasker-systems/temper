@@ -144,7 +144,9 @@ pub async fn login(config: &OAuthConfig, store: &dyn auth::TokenStore) -> Result
         claims.expires_at
     };
 
-    let device_id = auth::load_or_create_device_id();
+    // The device id resolves from the store the caller handed in — never
+    // from the global auth path — and `store.save` below persists it.
+    let device_id = auth::load_or_create_device_id_from(store);
 
     let stored = StoredAuth {
         provider: auth::Provider::auth0(auth::default_auth0_domain()),

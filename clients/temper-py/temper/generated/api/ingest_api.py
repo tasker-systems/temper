@@ -109,6 +109,7 @@ class IngestApi:
             '400': None,
             '401': "ErrorBody",
             '403': None,
+            '409': "ErrorBody",
             '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
@@ -187,6 +188,7 @@ class IngestApi:
             '400': None,
             '401': "ErrorBody",
             '403': None,
+            '409': "ErrorBody",
             '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
@@ -265,6 +267,7 @@ class IngestApi:
             '400': None,
             '401': "ErrorBody",
             '403': None,
+            '409': "ErrorBody",
             '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(

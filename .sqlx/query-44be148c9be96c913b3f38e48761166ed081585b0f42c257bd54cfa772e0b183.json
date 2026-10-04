@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT sensitivity_expire_erased_fingerprints() AS \"expired!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "expired!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "44be148c9be96c913b3f38e48761166ed081585b0f42c257bd54cfa772e0b183"
+}

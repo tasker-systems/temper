@@ -6,12 +6,14 @@ use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
+use temper_core::context_ref::parse_context_ref;
 use temper_core::types::cognitive_maps::{AnchorShape, CogmapRegionMetricsRow, CogmapStaleness};
+use temper_core::types::context::ContextResolution;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_core::types::materialize::{MaterializeAck, MaterializeDelta, MaterializeRequest};
 use temper_services::backend::DbBackend;
-use temper_services::error::{ApiError, ApiResult};
+use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::context_service::{
     self, ContextCreateRequest, ContextRow, ContextRowWithCounts, ReassignContextOutcome,
     ReassignContextRequest, RenameContextOutcome, RenameContextRequest, RestoreContextOutcome,
@@ -83,6 +85,48 @@ pub async fn create(
     let row =
         context_service::create(&state.pool, caller, &owner_table, owner_id, &body.name).await?;
     Ok((StatusCode::CREATED, Json(row)))
+}
+
+/// Query params for [`resolve`].
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct ResolveContextQuery {
+    /// The context ref to resolve: `@me/<slug>`, `@<handle>/<slug>`, `+<team>/<slug>`, or a bare
+    /// UUID. One grammar — `temper_core::context_ref::parse_context_ref`, the parser the CLI and
+    /// the MCP tools use.
+    pub context_ref: String,
+}
+
+/// Resolve a context ref to its id
+///
+/// The caller's own visibility bounds the answer: a context the caller cannot read answers
+/// exactly as one that does not exist (uniform 404, no existence oracle). The resolution is
+/// [`context_service::resolve_context_ref`] — the same one every ref-accepting route uses — so
+/// each ref form keeps the refusal it has everywhere else.
+#[utoipa::path(
+    get,
+    operation_id = "resolve_context",
+    path = "/api/contexts/resolve",
+    tag = "Contexts",
+    params(ResolveContextQuery),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The ref resolved to a context the caller can read", body = ContextResolution),
+        (status = 400, description = "Malformed context ref (the parser's sentence)", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "A `+<team>` ref whose team exists but does not count the caller as a member (the shared resolver's membership gate)", body = ErrorBody),
+        (status = 404, description = "Context not found or not readable (uniform — no existence oracle)", body = ErrorBody),
+    )
+)]
+pub async fn resolve(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(q): Query<ResolveContextQuery>,
+) -> ApiResult<Json<ContextResolution>> {
+    let cref =
+        parse_context_ref(&q.context_ref).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let principal = ProfileId::from(auth.0.profile().id);
+    let context_id = context_service::resolve_context_ref(&state.pool, principal, &cref).await?;
+    Ok(Json(ContextResolution { context_id }))
 }
 
 /// Get one context

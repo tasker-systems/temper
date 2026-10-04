@@ -189,14 +189,15 @@ pub async fn check_context_staleness(
             return StalenessOutcome::Skipped;
         }
     };
-    // `me` is deliberately not resolved here: this runs in the warmup pre-flight,
-    // and a `GET /api/profile` round-trip to sharpen the `@me` arm is not worth
-    // paying on every orientation. The residual is the loose `@me` match named on
-    // [`resolve_context_row`] — a staleness verdict for a same-slug context shared
-    // in from another profile. Wrong verdict, never a wrong write.
-    let Some(context_id) = resolve_context_row(client, context, None)
+    // One round trip, resolved by the server: `@me` is exact (no loose
+    // same-slug match against a context shared in from another profile), and no
+    // profile lookup or full context list is paid in the warmup pre-flight.
+    let Some(context_id) = client
+        .contexts()
+        .resolve(context)
         .await
-        .map(|c| Uuid::from(c.id))
+        .ok()
+        .map(|r| *r.context_id)
     else {
         tracing::debug!("staleness check skipped: could not resolve context '{context}'");
         return StalenessOutcome::Skipped;
@@ -1344,6 +1345,7 @@ mod tests {
             updated: Utc::now(),
             body_hash: None,
             ingest_state: None,
+            ingest_ended: None,
             body_storage: None,
             managed_meta: Default::default(),
             open_meta: None,

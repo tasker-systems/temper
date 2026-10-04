@@ -644,8 +644,9 @@ pub async fn update_resource_in_tx(
             // no event the write path fires any longer carries it (the projector arm stays for
             // replay of shipped events).
             //
-            // A partition decision over a still-arriving body is a guess (the shipped op's own
-            // decline — the check moves from the hook into the arm, same Fatal face).
+            // A partition decision over an incomplete body is a guess — one still arriving, or one
+            // whose ingest ended before it finalized (the shipped op's own decline — the check
+            // moves from the hook into the arm, same Fatal face).
             let ingest_state: String = sqlx::query_scalar!(
                 "SELECT ingest_state FROM kb_resources WHERE id = $1",
                 p.resource.uuid()
@@ -653,10 +654,10 @@ pub async fn update_resource_in_tx(
             .fetch_one(&mut *conn)
             .await
             .with_context(|| format!("update_resource: resource {} not found", p.resource))?;
-            if ingest_state == "in_progress" {
+            if ingest_state != "complete" {
                 anyhow::bail!(
-                    "update_resource: resource {} is mid-ingest (in_progress) — a partition \
-                     decision over a still-arriving body would be a guess",
+                    "update_resource: resource {} ingest is {ingest_state}, not complete — a \
+                     partition decision over an incomplete body would be a guess",
                     p.resource
                 );
             }
@@ -875,8 +876,8 @@ pub async fn annotate_block_sources_in_tx(
 /// Re-block one resource's blocks. No options: the partition is a function of the body (heading
 /// sections via `temper_ingest::section`), the kept/created/folded mapping is a function of the
 /// live blocks' derived hashes, and the refusals are the design's refusal face (a derived-shape
-/// resource, a still-arriving `in_progress` resource, an unreproducible chunking — decline rather
-/// than guess).
+/// resource, a still-arriving `in_progress` resource, an ingest that ended before it finalized,
+/// an unreproducible chunking — decline rather than guess).
 #[derive(Debug)]
 pub struct ReblockParams {
     pub resource: ResourceId,
@@ -908,6 +909,9 @@ pub enum ReblockDeclineKind {
     /// The body is still arriving (`ingest_state = 'in_progress'`) — a partition decision over
     /// it would be a guess.
     InProgress,
+    /// The ingest ended before it finalized (`ingest_state` is `cancelled` or `abandoned`) — the
+    /// body is incomplete and nothing more will arrive, so there is no whole body to partition.
+    IngestEnded,
     /// The resource stores no verbatim bytes to compose a body from: no live blocks at all, or
     /// a live block in a derived shape whose bytes were never stored. Both are the same
     /// judgment — there are no stored bytes to re-block.
@@ -922,11 +926,12 @@ pub enum ReblockDeclineKind {
 /// - [`ReblockOutcome::NoOp`] — the partition already matches; the ledger is indistinguishable
 ///   from the operation never having run.
 /// - [`ReblockOutcome::Declined`] — a precondition for a trustworthy partition decision did not
-///   hold (mid-ingest, no stored bytes, or a stored chunking that a fresh chunking of the body
-///   does not reproduce). Returned as a VALUE, not an error, because the right handling is the
-///   CALLER's: the write-path hook declines silently on finalize (stranding an upload forever is
-///   worse than an unpartitioned commit) and treats a decline as fatal elsewhere; a direct
-///   caller (adoption tooling) gets the typed class and detail to surface.
+///   hold (mid-ingest, an ingest that ended before it finalized, no stored bytes, or a stored
+///   chunking that a fresh chunking of the body does not reproduce). Returned as a VALUE, not an
+///   error, because the right handling is the CALLER's: the write-path hook declines silently on
+///   finalize (stranding an upload forever is worse than an unpartitioned commit) and treats a
+///   decline as fatal elsewhere; a direct caller (adoption tooling) gets the typed class and
+///   detail to surface.
 /// - [`ReblockOutcome::Reblocked`] — the manifest fired; the ledger carries the act.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReblockOutcome {
@@ -1899,7 +1904,7 @@ pub async fn reblock_resource_in_tx(
 }
 
 /// The act's classification half, read-only: everything [`reblock_resource_in_tx`] does up to
-/// the fire — the `in_progress` state read, the live blocks/chunks/attributions, the body
+/// the fire — the `ingest_state` read, the live blocks/chunks/attributions, the body
 /// composed from stored verbatim bytes, and the partition computation. The survey
 /// ([`survey_reblock_resource`]) and the act share THIS one computation so they cannot drift:
 /// a survey class and the act's outcome for the same row come from the same code path by
@@ -1908,7 +1913,8 @@ async fn reblock_partition_in_tx(
     conn: &mut sqlx::PgConnection,
     resource: ResourceId,
 ) -> Result<Partition> {
-    // A partition decision over a still-arriving body is a guess.
+    // A partition decision over an incomplete body is a guess: one still arriving, or one whose
+    // ingest ended before it finalized.
     let ingest_state: String = sqlx::query_scalar!(
         "SELECT ingest_state FROM kb_resources WHERE id = $1",
         resource.uuid()
@@ -1916,14 +1922,26 @@ async fn reblock_partition_in_tx(
     .fetch_one(&mut *conn)
     .await
     .with_context(|| format!("reblock_resource: resource {} not found", resource))?;
-    if ingest_state == "in_progress" {
-        return Ok(Partition::Declined(ReblockDecline {
-            kind: ReblockDeclineKind::InProgress,
-            detail: format!(
-                "resource {resource} is mid-ingest (in_progress) — a partition decision over a \
-                 still-arriving body would be a guess"
-            ),
-        }));
+    match ingest_state.as_str() {
+        "complete" => {}
+        "in_progress" => {
+            return Ok(Partition::Declined(ReblockDecline {
+                kind: ReblockDeclineKind::InProgress,
+                detail: format!(
+                    "resource {resource} is mid-ingest (in_progress) — a partition decision over \
+                     a still-arriving body would be a guess"
+                ),
+            }));
+        }
+        ended => {
+            return Ok(Partition::Declined(ReblockDecline {
+                kind: ReblockDeclineKind::IngestEnded,
+                detail: format!(
+                    "resource {resource} ingest is {ended} — it ended before it finalized, so its \
+                     body is incomplete and will not arrive; there is nothing whole to partition"
+                ),
+            }));
+        }
     }
 
     let live_blocks: Vec<LiveBlock> = read_live_blocks(&mut *conn, resource).await?;
@@ -3174,13 +3192,13 @@ pub async fn finalize_ingest_in_tx(
         expected_content_hash: p.expected_content_hash,
     };
     // Finalize and everything that must be atomic with "this resource is now complete" share one
-    // transaction. `resource_finalize` is a plain plpgsql function (20260715000030 — it RAISEs
-    // TF001/TF002/TF003 on mismatch and appends + projects inside its caller's tx), so wrapping it
-    // in a scoped tx is behavior-preserving for the error paths (the raise rolls the whole thing
-    // back, exactly as its own implicit tx did) — and it is what lets the write-path policy
-    // application (see `apply_blocking_policy_in_tx`) run in the same atomic step: the resource
-    // becomes complete and policy-partitioned in one commit, with no observer able to read a
-    // complete resource whose partition contradicts policy.
+    // transaction. `resource_finalize` is a plain plpgsql function (20261003000110 — it RAISEs
+    // TF004 on a terminal ingest and TF001/TF002/TF003 on mismatch, and appends + projects inside
+    // its caller's tx), so wrapping it in a scoped tx is behavior-preserving for the error paths
+    // (the raise rolls the whole thing back, exactly as its own implicit tx did) — and it is what
+    // lets the write-path policy application (see `apply_blocking_policy_in_tx`) run in the same
+    // atomic step: the resource becomes complete and policy-partitioned in one commit, with no
+    // observer able to read a complete resource whose partition contradicts policy.
     let ev = sqlx::query_scalar!(
         "SELECT resource_finalize($1,$2,$3,$4)",
         serde_json::to_value(&payload)?,

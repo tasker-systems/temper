@@ -8,9 +8,10 @@ use crate::http::HttpClient;
 use temper_core::context_ref::ContextOwnerRef;
 use temper_core::types::cognitive_maps::{AnchorShape, CogmapRegionMetricsRow, CogmapStaleness};
 use temper_core::types::context::{
-    ContextCreateRequest, ContextRow, ContextRowWithCounts, ReassignContextOutcome,
-    ReassignContextRequest, RenameContextOutcome, RenameContextRequest, RestoreContextOutcome,
-    RetireContextOutcome, ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
+    ContextCreateRequest, ContextResolution, ContextRow, ContextRowWithCounts,
+    ReassignContextOutcome, ReassignContextRequest, RenameContextOutcome, RenameContextRequest,
+    RestoreContextOutcome, RetireContextOutcome, ShareContextOutcome, ShareContextRequest,
+    UnshareContextOutcome,
 };
 use temper_core::types::materialize::{MaterializeAck, MaterializeDelta, MaterializeRequest};
 
@@ -49,6 +50,21 @@ impl<'a> ContextClient<'a> {
         let req = self.http.get(path);
         self.http
             .send_json(&Method::GET, path, req, Some(&token))
+            .await
+    }
+
+    /// GET `/api/contexts/resolve` — resolve a context ref (`@me/<slug>`, `@<handle>/<slug>`,
+    /// `+<team>/<slug>`, or a bare UUID) to the context id, within the caller's visibility. A
+    /// context the caller cannot read answers as absent (404), and a malformed ref as 400 with
+    /// the parser's sentence.
+    ///
+    /// The ref rides the query string, not the logged path: this client records
+    /// `"{method} {path}"` as an exported span attribute, and a ref names an owner and a slug.
+    pub async fn resolve(&self, context_ref: &str) -> Result<ContextResolution> {
+        let token = self.http.resolve_token()?;
+        let req = resolve_request(self.http, context_ref);
+        self.http
+            .send_json(&Method::GET, CONTEXT_RESOLVE_PATH, req, Some(&token))
             .await
     }
 
@@ -288,6 +304,60 @@ fn context_materialize_delta_path(context_id: Uuid, threshold: Option<i64>) -> S
     match threshold {
         Some(t) => format!("{base}?threshold={t}"),
         None => base,
+    }
+}
+
+const CONTEXT_RESOLVE_PATH: &str = "/api/contexts/resolve";
+
+/// The resolve request: the fixed path, with the ref as the `context_ref` query parameter
+/// (percent-encoded by reqwest — a ref carries `@`, `+` and `/`).
+fn resolve_request(http: &HttpClient, context_ref: &str) -> reqwest::RequestBuilder {
+    http.get(CONTEXT_RESOLVE_PATH)
+        .query(&[("context_ref", context_ref)])
+}
+
+#[cfg(test)]
+mod resolve_request_tests {
+    use super::*;
+    use temper_workflow::operations::Surface;
+
+    fn http() -> HttpClient {
+        HttpClient::new("http://127.0.0.1:9", None, Surface::CliCloud, None)
+            .expect("loopback client")
+    }
+
+    #[test]
+    fn resolve_carries_the_ref_as_an_encoded_query_parameter() {
+        let req = resolve_request(&http(), "+tasker-systems/general")
+            .build()
+            .expect("request builds");
+        assert_eq!(req.method(), reqwest::Method::GET);
+        assert_eq!(req.url().path(), "/api/contexts/resolve");
+        assert_eq!(
+            req.url().query(),
+            Some("context_ref=%2Btasker-systems%2Fgeneral")
+        );
+        let pairs: Vec<(String, String)> = req.url().query_pairs().into_owned().collect();
+        assert_eq!(
+            pairs,
+            vec![(
+                "context_ref".to_owned(),
+                "+tasker-systems/general".to_owned()
+            )],
+            "the ref survives the encoding round trip byte for byte"
+        );
+    }
+
+    #[test]
+    fn resolve_encodes_the_at_me_form_too() {
+        let req = resolve_request(&http(), "@me/temper")
+            .build()
+            .expect("request builds");
+        let pairs: Vec<(String, String)> = req.url().query_pairs().into_owned().collect();
+        assert_eq!(
+            pairs,
+            vec![("context_ref".to_owned(), "@me/temper".to_owned())]
+        );
     }
 }
 

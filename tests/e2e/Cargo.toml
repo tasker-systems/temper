@@ -44,7 +44,7 @@ sqlx = { version = "0.8", features = [
 temper-api = { path = "../../crates/temper-api" }
 temper-services = { path = "../../crates/temper-services" }
 temper-cli = { path = "../../crates/temper-cli" }
-temperkb-client.workspace = true
+temperkb-client = { workspace = true, features = ["telemetry"] }
 temperkb-core.workspace = true
 # Referenced only by the `test-embed`-gated server-query-embedding regression (#297) to build
 # real-embedding chunks and assert server/CLI query-vector parity. Already in the graph via
@@ -55,7 +55,12 @@ temper-ingest = { path = "../../crates/temper-ingest", features = ["embed"] }
 # temper-api → temper-services → temper-substrate, so naming it adds no new linked footprint.
 temper-substrate = { path = "../../crates/temper-substrate" }
 temperkb-workflow.workspace = true
-temper-mcp = { path = "../../crates/temper-mcp" }
+temperkb-mcp.workspace = true
+# The deployed MCP edge (router, JWT check, boot config) the router-level suites spawn.
+temper-mcp-server = { path = "../../crates/temper-mcp-server" }
+# The request parts a host's identity seam reads (`second_host_e2e`).
+http = "1"
+temperkb-auth.workspace = true
 # `test-support` installs an in-memory span exporter so `mcp_span_link_test` can read the spans the
 # MCP router really exported, rather than a replica of its layer stack.
 temperkb-telemetry = { workspace = true, features = ["test-support"] }

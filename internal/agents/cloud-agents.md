@@ -89,16 +89,21 @@ crates/
     error.rs          # ApiError enum → HTTP status codes
   temper-core/src/
     types/            # Shared domain types (serde + sqlx::FromRow + optional ts-rs)
-  temper-mcp/src/     # MCP server (rmcp, Streamable HTTP transport)
+  temper-mcp/src/     # MCP tool layer (rmcp) — relays every tool to the API; no DB pool
     tools/            # Tool implementations
+    host.rs           # Plain values a host supplies per process (BlobDoor)
+    seam.rs           # IdentitySeam, OutgoingIdentity, RelayConfig — per-request identity
+    service.rs        # TemperMcpService handler; builds every relay client
+  temper-mcp-server/src/  # The deployed MCP edge (Streamable HTTP transport)
+    config.rs         # McpServerConfig — boot config (relay included); never reads DATABASE_URL
+    seam.rs           # The deployed identity seam + BearerToken (attribution rides here)
     discovery.rs      # OAuth well-known endpoints + DCR
     middleware.rs     # JWT validation for MCP
-    service.rs        # TemperMcpService handler
     router.rs         # Axum router assembly
 migrations/           # sqlx migrations (sequential timestamps)
 api/
   axum.rs             # Vercel entry point for temper-api
-  mcp.rs              # Vercel entry point for temper-mcp
+  mcp.rs              # Vercel entry point for temper-mcp-server
 ```
 
 #### 3. Database Schema

@@ -101,11 +101,18 @@ lib/temper/generated/models/block_fold_disposition.rb
 lib/temper/generated/models/block_fold_disposition_one_of.rb
 lib/temper/generated/models/block_fold_disposition_one_of1.rb
 lib/temper/generated/models/block_fold_disposition_one_of2.rb
+lib/temper/generated/models/block_history_scrub_execute_response.rb
+lib/temper/generated/models/block_history_scrub_execute_response_one_of.rb
+lib/temper/generated/models/block_history_scrub_execute_response_one_of1.rb
+lib/temper/generated/models/block_history_scrub_plan.rb
+lib/temper/generated/models/block_history_scrub_request_body.rb
+lib/temper/generated/models/block_history_scrub_survey.rb
 lib/temper/generated/models/block_provenance_row.rb
 lib/temper/generated/models/block_read.rb
 lib/temper/generated/models/block_read_one_of.rb
 lib/temper/generated/models/block_read_one_of1.rb
 lib/temper/generated/models/block_read_one_of2.rb
+lib/temper/generated/models/block_scrub_count.rb
 lib/temper/generated/models/block_successor.rb
 lib/temper/generated/models/blocks_response.rb
 lib/temper/generated/models/body_storage.rb
@@ -144,6 +151,7 @@ lib/temper/generated/models/context_owner_ref.rb
 lib/temper/generated/models/context_owner_ref_one_of.rb
 lib/temper/generated/models/context_owner_ref_one_of1.rb
 lib/temper/generated/models/context_panorama.rb
+lib/temper/generated/models/context_resolution.rb
 lib/temper/generated/models/context_row.rb
 lib/temper/generated/models/context_row_with_counts.rb
 lib/temper/generated/models/create_cogmap_outcome.rb
@@ -216,6 +224,7 @@ lib/temper/generated/models/idp_revocation.rb
 lib/temper/generated/models/illegal_transition.rb
 lib/temper/generated/models/ingest_create_response.rb
 lib/temper/generated/models/ingest_delta.rb
+lib/temper/generated/models/ingest_ended.rb
 lib/temper/generated/models/ingest_payload.rb
 lib/temper/generated/models/ingest_state.rb
 lib/temper/generated/models/inherited_read_grant.rb

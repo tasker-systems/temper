@@ -70,16 +70,14 @@ impl E2eTestApp {
         self.relay_parts_for(&self.token)
     }
 
-    /// Request parts for the DIRECT families' one resolution path: both extensions
-    /// the gate reads (`RawJwtClaims` + `BearerToken`, as the JWT middleware injects
-    /// them in production) naming this app's principal. A direct family resolves its
-    /// caller by passing these to `svc.ensure_profile_from_parts` and threading the
-    /// returned profile into the tool call — there is no service-side cache to seed.
-    /// (Contrast [`Self::relay_parts`]: those parts cross the network door and need
-    /// only the bearer, because the API adjudicates them from the wire.)
+    /// Request parts in the full production shape: both extensions the JWT middleware
+    /// injects (`RawJwtClaims` + `BearerToken`) naming this app's principal. Until the
+    /// network door's teardown an in-process gate read the claims; nothing does now —
+    /// every tool forwards the bearer alone — so the claims ride for fidelity. (Contrast
+    /// [`Self::relay_parts`]: the bearer only.)
     pub fn direct_parts(&self) -> axum::http::request::Parts {
         axum::http::Request::builder()
-            .extension(temper_mcp::middleware::BearerToken(self.token.clone()))
+            .extension(temper_mcp_server::BearerToken(self.token.clone()))
             .extension(temper_services::auth::RawJwtClaims {
                 sub: "e2e-test-user".to_string(),
                 email: None,
@@ -100,135 +98,51 @@ impl E2eTestApp {
     /// share the one MCP service.
     pub fn relay_parts_for(&self, token: &str) -> axum::http::request::Parts {
         axum::http::Request::builder()
-            .extension(temper_mcp::middleware::BearerToken(token.to_string()))
+            .extension(temper_mcp_server::BearerToken(token.to_string()))
             .body(())
             .expect("relay parts build")
             .into_parts()
             .0
     }
 
-    /// A relay-READY [`temper_mcp::config::McpConfig`]: the API base URL pointed at
-    /// this app's real listener and the service credential at the harness secret, so
-    /// [`temper_mcp::service::TemperMcpService::relay_client`] forwards instead of
-    /// answering the typed refuse-to-forward error. The listener is BOUND HERE, in
-    /// the test process — temper-mcp never constructs one (the §8 trap).
-    pub fn mcp_relay_config(&self) -> temper_mcp::config::McpConfig {
-        temper_mcp::config::McpConfig {
-            mcp_base_url: "https://temper.invalid".to_string(),
-            mcp_client_id: None,
-            api_base_url: Some(self.base_url()),
-            mcp_service_secret: Some(TEST_MCP_SERVICE_SECRET.to_string()),
-            oauth: temper_mcp::config::OAuthStaticConfig {
-                redirect_uris: vec![],
-                allow_localhost: false,
-            },
-        }
+    /// The deployed relay pointed at THIS app's real listener, built by the shell's own reader
+    /// (`temper_mcp_server::config::deployed_relay`) from the two variables the deployment sets —
+    /// so the harness relays with exactly the production seam (the edge-verified bearer,
+    /// `Surface::Mcp`, the service credential and the `mcp` carrier). The listener is BOUND
+    /// HERE, in the test process — temper-mcp never constructs one (the §8 trap).
+    pub fn mcp_deployed_relay(&self) -> temper_mcp_server::config::DeployedRelay {
+        deployed_relay_to(&self.base_url())
     }
 
-    /// The MCP service every suite drives. The relay config is ON (this app's
-    /// listener, the harness credential, the shared pool) beside the direct
-    /// families over the same pool. The service carries NO auth state: a
-    /// direct family's caller is whatever profile the SUITE resolves through
-    /// the one gate (`svc.ensure_profile_from_parts(&parts)`) and threads
-    /// into the tool function — the same path production dispatch takes, so
-    /// each call acts as its own principal.
-    pub async fn mcp_relay_service(&self, pool: PgPool) -> temper_mcp::service::TemperMcpService {
-        let decoding_key =
-            jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("../fixtures/test_rsa.pub"))
-                .expect("decoding key");
-        let jwks_store = JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256);
-        let api_config = ApiConfig {
-            database_url: "unused".to_string(),
-            auth: AuthConfig {
-                issuer: "test-issuer".to_string(),
-                jwks_url: "unused".to_string(),
-                audience: TEST_AUDIENCE.to_string(),
-                mcp_audience: TEST_AUDIENCE.to_string(),
-                mode: AuthMode::ExternalIdp,
-            },
-            auth_provider_name: "test-provider".to_string(),
-            cors_origins: vec![],
-            port: 0,
-            enable_swagger: false,
-            internal_reconcile_secret: None,
-            embed_dispatch_secret: None,
-            mcp_service_secret: None,
-            vercel_connect: None,
-            slack_link: None,
-            slack_mint_secret: None,
-            rate_limit: None,
-            blob: None,
-            blob_disabled_by_policy: false,
-        };
-        temper_mcp::service::TemperMcpService::new(
-            AppState::new(pool, jwks_store, api_config),
-            self.mcp_relay_config(),
-            temper_mcp::service::shared_relay_pool(),
+    /// The MCP service every suite drives: the deployed door's tool service
+    /// (`temper_mcp_server::tool_service`, the one `build_router` mounts) relaying to this app's
+    /// listener, with the blob door closed, as on a blob-less deployment. The service holds no
+    /// database pool and carries NO auth state: every tool forwards the bearer in the parts it is
+    /// handed, so each call acts as its own principal — the same path production dispatch takes.
+    pub async fn mcp_relay_service(&self) -> temper_mcp::service::TemperMcpService {
+        temper_mcp_server::tool_service(
+            temper_mcp_server::config::blob_door(None, false),
+            self.mcp_deployed_relay(),
         )
     }
 
-    /// The relay service with a live in-memory blob store — the blob families'
-    /// harness (beat G4 parity suite). `single_request_max_bytes` is deliberately
-    /// small so the read-ceiling refusal is cheap to construct; the ceiling's own
-    /// number is the operator's knob the tool names verbatim. The store is the
-    /// CALLER'S (`Arc<InMemoryBlobStore>`) so a test can seed blobs directly where a
-    /// commit gate would get in the way (the read ceiling's over-threshold fixture
-    /// commits past the very threshold it pins).
+    /// The relay service with the blob door OPEN — the blob families' harness (beat G4
+    /// parity suite). The MCP side holds only the door's posture and its single-request
+    /// ceiling (the tool layer holds no store and no pool); the blobs themselves live in
+    /// the app listener's store, which the caller shares with the test
+    /// (`setup_with_blob_store_shared`) so a test can seed blobs directly where a commit
+    /// gate would get in the way. `single_request_max_bytes` is deliberately small so the
+    /// read-ceiling refusal is cheap to construct; the ceiling's own number is the
+    /// operator's knob the tool names verbatim.
     pub async fn mcp_relay_service_with_blob(
         &self,
-        pool: PgPool,
-        store: std::sync::Arc<temper_substrate::blob_store::InMemoryBlobStore>,
+        single_request_max_bytes: usize,
     ) -> temper_mcp::service::TemperMcpService {
-        let decoding_key =
-            jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("../fixtures/test_rsa.pub"))
-                .expect("decoding key");
-        let jwks_store = JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256);
-        let blob_config = temper_services::config::BlobConfig {
-            store_id: "test-blob-store".to_string(),
-            read_write_token: None,
-            credential_mode: temper_services::config::BlobCredentialMode::Token,
-            oidc_token_source: std::sync::Arc::new(|| None),
-            max_bytes: 100 * 1024 * 1024,
-            allowlist: vec![
-                "image/png".into(),
-                "image/jpeg".into(),
-                "image/webp".into(),
-                "image/svg+xml".into(),
-                "image/gif".into(),
-                "application/pdf".into(),
-                "text/plain".into(),
-            ],
-            single_request_max_bytes: 64,
-        };
-        let api_config = ApiConfig {
-            database_url: "unused".to_string(),
-            auth: AuthConfig {
-                issuer: "test-issuer".to_string(),
-                jwks_url: "unused".to_string(),
-                audience: TEST_AUDIENCE.to_string(),
-                mcp_audience: TEST_AUDIENCE.to_string(),
-                mode: AuthMode::ExternalIdp,
+        temper_mcp_server::tool_service(
+            temper_mcp::BlobDoor::Open {
+                single_request_max_bytes,
             },
-            auth_provider_name: "test-provider".to_string(),
-            cors_origins: vec![],
-            port: 0,
-            enable_swagger: false,
-            internal_reconcile_secret: None,
-            embed_dispatch_secret: None,
-            mcp_service_secret: None,
-            vercel_connect: None,
-            slack_link: None,
-            slack_mint_secret: None,
-            rate_limit: None,
-            blob: Some(blob_config),
-            blob_disabled_by_policy: false,
-        };
-        let mut state = AppState::new(pool, jwks_store, api_config);
-        state.blob_store = Some(store);
-        temper_mcp::service::TemperMcpService::new(
-            state,
-            self.mcp_relay_config(),
-            temper_mcp::service::shared_relay_pool(),
+            self.mcp_deployed_relay(),
         )
     }
 }
@@ -415,6 +329,70 @@ async fn spawn_temper(
 /// `validate_aud = false` — so these tokens carried no `aud` at all and the e2e suite never
 /// exercised audience validation on either surface. It does now.
 pub const TEST_AUDIENCE: &str = "test-audience";
+
+/// The deployed relay to `api_base_url`, read by the shell's own reader from the two variables a
+/// deployment sets (`TEMPER_API_BASE_URL`, `TEMPER_MCP_SERVICE_SECRET` = [`TEST_MCP_SERVICE_SECRET`]).
+pub fn deployed_relay_to(api_base_url: &str) -> temper_mcp_server::config::DeployedRelay {
+    let api_base_url = api_base_url.to_string();
+    temper_mcp_server::config::deployed_relay(&move |key: &str| match key {
+        "TEMPER_API_BASE_URL" => Some(api_base_url.clone()),
+        "TEMPER_MCP_SERVICE_SECRET" => Some(TEST_MCP_SERVICE_SECRET.to_string()),
+        _ => None,
+    })
+}
+
+/// The router-level suites' discovery config: no client id (registration answers 503), the
+/// compiled-in loopback rule on, and the given public base URL.
+pub fn mcp_discovery_config(mcp_base_url: &str) -> temper_mcp_server::DiscoveryConfig {
+    temper_mcp_server::DiscoveryConfig {
+        mcp_base_url: mcp_base_url.to_string(),
+        mcp_client_id: None,
+        oauth: temper_mcp_server::discovery_config::OAuthStaticConfig {
+            redirect_uris: vec![],
+            allow_localhost: true,
+        },
+    }
+}
+
+/// [`mcp_server_config`] relaying to `api_base_url` through the deployed seam.
+pub fn mcp_server_config_relaying(
+    blob_door: temper_mcp::BlobDoor,
+    api_base_url: &str,
+) -> temper_mcp_server::McpServerConfig {
+    temper_mcp_server::McpServerConfig {
+        relay: deployed_relay_to(api_base_url),
+        ..mcp_server_config(blob_door)
+    }
+}
+
+/// The MCP server's boot config for the router-level suites: the same auth identity the harness
+/// API validates (issuer `test-issuer`, [`TEST_AUDIENCE`]), no CORS origins, and the given blob
+/// door. No database URL and no pool — the deployed edge holds neither. The relay is unset (the
+/// tool door is dark, answering the deployment's own sentence); [`mcp_server_config_relaying`]
+/// sets it.
+pub fn mcp_server_config(blob_door: temper_mcp::BlobDoor) -> temper_mcp_server::McpServerConfig {
+    temper_mcp_server::McpServerConfig {
+        auth: temper_auth::config::AuthConfig {
+            issuer: "test-issuer".to_string(),
+            jwks_url: "unused".to_string(),
+            audience: TEST_AUDIENCE.to_string(),
+            mcp_audience: TEST_AUDIENCE.to_string(),
+            mode: temper_auth::config::AuthMode::ExternalIdp,
+        },
+        cors_origins: vec![],
+        blob_door,
+        relay: temper_mcp_server::config::deployed_relay(&|_: &str| None),
+    }
+}
+
+/// The JWT edge's key store over the harness's RSA test key, so the MCP router verifies the
+/// tokens [`generate_test_jwt`] mints.
+pub fn mcp_test_jwks() -> JwksKeyStore {
+    let decoding_key =
+        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("../fixtures/test_rsa.pub"))
+            .expect("decoding key");
+    JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256)
+}
 
 /// The service credential the relay harness configures on BOTH sides of the network
 /// door: the API's relay-trust middleware validates it constant-time, and the MCP
@@ -1007,6 +985,8 @@ async fn setup_with_recorder_and_blob(
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        sensitivity_sweep_salt: None,
+        sensitivity_sweep_enabled: false,
         mcp_service_secret: relay_secret.map(str::to_string),
         vercel_connect: None,
         slack_link: None,
@@ -1134,6 +1114,8 @@ pub async fn setup_eddsa_with_provider(pool: PgPool, provider: &str) -> E2eTestA
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
+        sensitivity_sweep_salt: None,
+        sensitivity_sweep_enabled: false,
         mcp_service_secret: None,
         vercel_connect: None,
         slack_link: None,
@@ -1231,4 +1213,212 @@ pub fn chunked(text: &str, fill: f32) -> Vec<temper_core::types::ingest::PackedC
             embedded_with: None,
         })
         .collect()
+}
+
+/// One refusal face of the MCP `context_anchor` resolver (`@me/<slug>`, `@<handle>/<slug>`,
+/// `+<team>/<slug>`, or a UUID → the context id), as a caller of a context-addressed tool meets
+/// it: the ref, the identity that sends it, and the byte-exact `invalid_params` sentence it
+/// answers.
+pub struct AnchorFace {
+    pub label: &'static str,
+    pub context_ref: String,
+    pub parts: axum::http::request::Parts,
+    pub expected: String,
+}
+
+/// Every refusal face of `context_anchor`, constructed against this app, for the two tools that
+/// address a context by ref (the context orientation family in `cognitive_maps.rs` and
+/// `resource_reblock`'s `scope=context`). Both suites pin the SAME table through their own tool,
+/// so the two anchors cannot drift apart.
+///
+/// Built once, pinned green against the in-process resolver, then carried through the relay to
+/// `GET /api/contexts/resolve` (the network door's teardown). The faces, per resolver arm:
+///
+/// - a malformed ref refuses at the local parse, with the shared grammar's sentence;
+/// - the `@me` arm's miss names the caller's own slug;
+/// - **no existence oracle** on the UUID and `@<handle>` arms: a stranger's view of the owner's
+///   private context, an id naming nothing, the owner's real ref, an absent slug and an unknown
+///   handle all answer one sentence;
+/// - the `+<team>` arm: an absent team names the team; an existing team the caller is not in
+///   answers the resolver's existing `Forbidden` (which discloses the team exists — documented at
+///   the resolver, kept, not introduced here); a member's miss names the slug.
+///
+/// Every parts value carries the claims extension beside the bearer, as the JWT middleware
+/// injects them, so the same table drives the in-process resolver (which reads the claims) and
+/// the relay (which forwards the bearer).
+pub async fn context_anchor_faces(app: &E2eTestApp) -> Vec<AnchorFace> {
+    use temper_core::context_ref::ContextOwnerRef;
+    use temper_core::types::team::TeamCreateRequest;
+
+    fn parts_for(token: &str, sub: &str, email: Option<&str>) -> axum::http::request::Parts {
+        axum::http::Request::builder()
+            .extension(temper_mcp_server::BearerToken(token.to_string()))
+            .extension(temper_services::auth::RawJwtClaims {
+                sub: sub.to_string(),
+                email: email.map(str::to_string),
+                email_verified: None,
+                azp: None,
+                gty: None,
+                exp: (Utc::now() + Duration::hours(1)).timestamp(),
+                iat: 0,
+            })
+            .body(())
+            .expect("anchor-face parts build")
+            .into_parts()
+            .0
+    }
+
+    app.client.profile().get().await.expect("owner profile");
+    provision_and_approve_second(app).await;
+    let owner = || app.direct_parts();
+    let stranger_token = generate_second_user_jwt();
+    let stranger = || {
+        parts_for(
+            &stranger_token,
+            "e2e-second-user",
+            Some("second@test.example.com"),
+        )
+    };
+
+    let private = app
+        .client
+        .contexts()
+        .create("anchor faces private", None)
+        .await
+        .expect("create the owner's private context");
+    app.client
+        .teams()
+        .create(&TeamCreateRequest {
+            slug: "anchor-faces-team".to_owned(),
+            name: None,
+            parent: None,
+            auto_join_role: None,
+        })
+        .await
+        .expect("create the owner's team");
+    let team_ctx = app
+        .client
+        .contexts()
+        .create(
+            "anchor faces team home",
+            Some(ContextOwnerRef::Team("anchor-faces-team".to_owned())),
+        )
+        .await
+        .expect("create the team's context");
+
+    const UNREADABLE: &str = "context not found: context not found or not readable";
+    let face = |label, context_ref: String, parts, expected: &str| AnchorFace {
+        label,
+        context_ref,
+        parts,
+        expected: expected.to_owned(),
+    };
+    vec![
+        face(
+            "malformed: a bare name",
+            "not a ref".to_owned(),
+            owner(),
+            "invalid context ref: not a context ref: bare names are not addressable — use a UUID \
+             or `@owner/slug` (got \"not a ref\")",
+        ),
+        face(
+            "malformed: owner without a slug",
+            "@me".to_owned(),
+            owner(),
+            "invalid context ref: context ref is missing the `/slug` after the owner (got \"@me\")",
+        ),
+        face(
+            "@me: the caller's own miss names the slug",
+            "@me/no-such-slug".to_owned(),
+            owner(),
+            "context not found: context no-such-slug not found or not readable",
+        ),
+        face(
+            "UUID: another principal's private context",
+            private.id.to_string(),
+            stranger(),
+            UNREADABLE,
+        ),
+        face(
+            "UUID: an id naming nothing",
+            uuid::Uuid::now_v7().to_string(),
+            stranger(),
+            UNREADABLE,
+        ),
+        face(
+            "@handle: another principal's real ref",
+            format!("{}/{}", private.owner_ref, private.slug),
+            stranger(),
+            UNREADABLE,
+        ),
+        face(
+            "@handle: an absent slug",
+            format!("{}/no-such-context", private.owner_ref),
+            stranger(),
+            UNREADABLE,
+        ),
+        face(
+            "@handle: an unknown handle",
+            "@no-such-handle/no-such-context".to_owned(),
+            stranger(),
+            UNREADABLE,
+        ),
+        face(
+            "+team: an absent team",
+            "+no-such-team/no-such-context".to_owned(),
+            stranger(),
+            "context not found: team no-such-team not found or not readable",
+        ),
+        face(
+            "+team: an existing team, caller not a member",
+            format!("+anchor-faces-team/{}", team_ctx.slug),
+            stranger(),
+            "context not found: Forbidden",
+        ),
+        face(
+            "+team: a member's miss names the slug",
+            "+anchor-faces-team/no-such-context".to_owned(),
+            owner(),
+            "context not found: context no-such-context not found or not readable",
+        ),
+    ]
+}
+
+/// One MCP act through the network door as the holder of `token`: `context_manage`'s
+/// `create`, a relayed write — so an admission is witnessed by the profile the API
+/// resolved for the bearer (the created context's `owner_ref`), and a refusal by the
+/// post-edge mapping of the API's own 401/403. The auth-seam suites' MCP leg since the
+/// network door's teardown removed the in-process gate they used to call.
+pub async fn mcp_act_as(
+    app: &E2eTestApp,
+    token: &str,
+) -> Result<serde_json::Value, rmcp::ErrorData> {
+    let svc = app.mcp_relay_service().await;
+    let res = temper_mcp::tools::contexts::context_manage(
+        &svc,
+        &app.relay_parts_for(token),
+        serde_json::from_value(serde_json::json!({
+            "action": "create",
+            "name": format!("auth seam {}", uuid::Uuid::now_v7()),
+        }))
+        .expect("context_manage input deserializes"),
+    )
+    .await?;
+    let text = res.content[0].as_text().expect("a text part").text.clone();
+    Ok(serde_json::from_str(&text).expect("the created context row"))
+}
+
+/// The profile that owns the context `mcp_act_as` created — the identity the API resolved for
+/// the act's bearer, read back from the row itself rather than from a rendered handle.
+pub async fn created_context_owner(pool: &PgPool, created: &serde_json::Value) -> uuid::Uuid {
+    let context_id: uuid::Uuid = created["id"]
+        .as_str()
+        .expect("created context id")
+        .parse()
+        .expect("context id parse");
+    sqlx::query_scalar("SELECT owner_id FROM kb_contexts WHERE id = $1")
+        .bind(context_id)
+        .fetch_one(pool)
+        .await
+        .expect("the created context's owner")
 }

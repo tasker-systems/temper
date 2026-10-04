@@ -80,7 +80,7 @@ fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
         ClientError::ContentIntegrity { message } => {
             rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
         }
-        ClientError::Conflict { message } => {
+        ClientError::Conflict { message } | ClientError::IngestEnded { message } => {
             rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
         }
         // A refusal that named the capability it withheld — carry the gate's own sentence. The
@@ -262,7 +262,7 @@ fn wire_begin(input: IngestBeginInput) -> Result<IngestPayload, rmcp::ErrorData>
 
 pub async fn ingest_begin(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: IngestBeginInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     // Segment 0's integrity is checked here, on the surface: it travels as the create body, so the
@@ -295,7 +295,7 @@ pub async fn ingest_begin(
 
 pub async fn ingest_append(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: IngestAppendInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let resource = parse_resource(&input.resource)?;
@@ -337,7 +337,7 @@ pub async fn ingest_append(
 
 pub async fn ingest_finalize(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: IngestFinalizeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let resource = parse_resource(&input.resource)?;
@@ -368,7 +368,7 @@ pub async fn ingest_finalize(
 
 pub async fn ingest_blocks(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: IngestBlocksInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let resource = parse_resource(&input.resource)?;
@@ -492,7 +492,7 @@ fn begin_input_from(input: SegmentedIngestInput) -> Result<IngestBeginInput, rmc
 /// Dispatch the consolidated segmented-ingest tool.
 pub async fn segmented_ingest(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: SegmentedIngestInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.action {

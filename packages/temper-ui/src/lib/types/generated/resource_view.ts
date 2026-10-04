@@ -2,6 +2,7 @@
 import type { BodyStorage } from "./resource";
 import type { ContextId } from "./ContextId";
 import type { EmbeddingStatus } from "./EmbeddingStatus";
+import type { IngestEnded } from "./resource";
 import type { IngestState } from "./resource";
 import type { JsonValue } from "./serde_json/JsonValue";
 import type { ManagedMeta } from "./managed_meta";
@@ -102,6 +103,11 @@ body_hash: string | null,
  * read `None` as "incomplete".
  */
 ingest_state: IngestState | null, 
+/**
+ * Why the ingest stopped. Present only when the ingest ended before its body was whole
+ * (`ingest_state` then reads `in_progress`); absent otherwise.
+ */
+ingest_ended: IngestEnded | null, 
 /**
  * Do the bytes read back exactly, or only approximately? `Option` purely for
  * version skew, as with `ingest_state`.

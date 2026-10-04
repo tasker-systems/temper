@@ -26,7 +26,7 @@ from pydantic_core import to_jsonable_python
 
 class ReblockOutcomeOneOf2(BaseModel):
     """
-    The candidate has no stored verbatim bytes to compose a body from — no live blocks, or a block in a derived shape whose bytes were never stored.
+    The candidate has no whole stored body to re-block: no stored verbatim bytes to compose one from (no live blocks, or a block in a derived shape whose bytes were never stored), or an ingest that ended (`cancelled`/`abandoned`) before its body was whole. The row's `detail` names which.
     """ # noqa: E501
     byteless: ReblockOutcomeOneOf1InProgress
     __properties: ClassVar[List[str]] = ["byteless"]

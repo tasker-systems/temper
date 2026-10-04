@@ -11,10 +11,10 @@
 //! Every tool here forwards to its deployed route (the same routes the CLI calls) through a
 //! per-request temper-client HTTP relay built from the request's `Parts`: Level 1 + 2 run at the
 //! API on the caller's own bearer; the service credential + `mcp` carrier ride the default
-//! headers, so the act is attributed `@mcp` at the ledger. The ONE retained in-process read is
-//! the context-ref resolver (`@me/<slug>` is MCP-local input shaping whose `@me` only exists
-//! here — the resources family's retained-resolver precedent; it resolves the profile from parts
-//! the way the direct binding's gate did). MCP-local ref parsing stays pre-wire.
+//! headers, so the act is attributed `@mcp` at the ledger. The context tools' ref resolves
+//! through the door too (`context_anchor` → `GET /api/contexts/resolve`, teardown); G3d had
+//! retained it in-process, and that was the last direct read in this module. MCP-local ref
+//! parsing stays pre-wire.
 //!
 //! `cogmap_read_charter` crosses by PROJECTION, not a new route: the door's charter view is the
 //! show route plus a field projection (`CogmapDetail.charter` is composed from the same
@@ -50,12 +50,10 @@ use temper_core::types::cognitive_maps::{
     BindTeamRequest, CogmapAnalyticsInput, CogmapGrantBody, CogmapRegionMetricsInput,
     CogmapRevokeBody, CogmapShapeInput, ContextAnalyticsInput, ContextShapeInput,
 };
-use temper_core::types::ids::ProfileId;
 use temper_core::types::materialize::{
     ContextMaterializeInput, MaterializeAck, MaterializeDeltaInput, MaterializeTriggerInput,
 };
 use temper_core::types::reconcile::CreateCogmapRequest;
-use temper_services::services::context_service::resolve_context_ref;
 
 use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 
@@ -661,30 +659,72 @@ pub async fn cogmap_revoke(
 // Context orientation tools (spec §3.7, T8).
 //
 // The region reads beneath these are the SAME routes the cogmap tools forward to — only the
-// addressing differs. A context is named by context ref (`@me/temper`), which resolves
-// IN-PROCESS (the one retained read): the ref grammar is MCP-local input shaping and `@me`
-// only exists at this surface, so the profile resolves from parts the way the direct
-// binding's gate did, then the resolved UUID crosses the wire.
+// addressing differs. A context is named by context ref (`@me/temper`), which the API resolves
+// at `GET /api/contexts/resolve` (route-first, #991): the one resolver every ref-accepting route
+// uses, so `@me` means the caller's own namespace at either door. The resolved UUID then crosses
+// to the id-keyed route the tool wanted — one extra round trip per anchored call, the cost
+// accepted when the mechanism was ruled.
 
-/// Resolve a context ref (`@me/<slug>`, `+<team>/<slug>`, or a UUID) to its anchor id.
-/// The resolver is visibility-gated exactly as before; its two refusals — the parse
-/// error and `context not found: …` — stay MCP-local, pre-wire.
-async fn context_anchor(
+/// Resolve a context ref (`@me/<slug>`, `+<team>/<slug>`, `@<handle>/<slug>`, or a UUID) to its
+/// anchor id, through the network door. Shared by the context orientation tools here and
+/// `resource_reblock`'s `scope=context`, so the two anchors speak one dialect.
+///
+/// The ref is parsed locally first, with the shared grammar (the CLI's posture since #993): a
+/// malformed ref costs no round trip and refuses `invalid context ref: …`. Everything the
+/// resolver answers is carried byte-exact from the in-process resolver this replaced (teardown;
+/// the faces are pinned by `common::context_anchor_faces`):
+///
+/// - a 404 — the resolver's uniform unreadable-equals-absent sentence, or the self-namespace
+///   arms' slug-naming one — renders `context not found: {sentence}`;
+/// - the `+<team>` arm's non-member 403 renders `context not found: Forbidden`, the in-process
+///   `ApiError::Forbidden` Display it always carried;
+/// - a 400 (the server's parse — unreachable behind the local parse, kept as the backstop)
+///   renders `invalid context ref: {parser sentence}`.
+///
+/// **Declared delta:** a fault behind the resolver (a database error) used to render
+/// `invalid_params` carrying the fault under the `context not found: ` prefix; at the door it is
+/// a 5xx, and renders `internal_error` — a fault, not the caller's mistake. Post-edge refusals
+/// (Level 1's 401s, Level 2's system-access 403) map through `AcrossAuth` arm-for-arm, as every
+/// relayed call's do.
+pub(crate) async fn context_anchor(
     svc: &TemperMcpService,
     parts: &http::request::Parts,
     context_ref: &str,
 ) -> Result<Uuid, rmcp::ErrorData> {
-    let cref = parse_context_ref(context_ref)
+    parse_context_ref(context_ref)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid context ref: {e}"), None))?;
-    let authed = svc.ensure_profile_from_parts(parts).await?;
-    let context = resolve_context_ref(
-        &svc.api_state.pool,
-        ProfileId::from(authed.profile().id),
-        &cref,
-    )
-    .await
-    .map_err(|e| rmcp::ErrorData::invalid_params(format!("context not found: {e}"), None))?;
-    Ok(*context)
+    let resolved = svc
+        .relay_client(parts)?
+        .contexts()
+        .resolve(context_ref)
+        .await
+        .across_auth(map_anchor_err)?;
+    Ok(*resolved.context_id)
+}
+
+/// The anchor's mapper — see [`context_anchor`] for the faces and the one declared delta.
+fn map_anchor_err(e: ClientError) -> rmcp::ErrorData {
+    match e {
+        ClientError::NotFound { message } => {
+            rmcp::ErrorData::invalid_params(format!("context not found: {message}"), None)
+        }
+        // A detailed 403 renders the same face as the bare one, its detail dropped: the resolver
+        // never sends one today, and if a future arm did, its sentence must not reach the caller
+        // as an internal fault carrying the raw body (fail closed, security review of #995).
+        ClientError::Forbidden | ClientError::ForbiddenDetail { .. } => {
+            rmcp::ErrorData::invalid_params("context not found: Forbidden".to_string(), None)
+        }
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(
+            format!("invalid context ref: {}", api_error_cause(&message)),
+            None,
+        ),
+        other => {
+            rmcp::ErrorData::internal_error(format!("context ref resolution failed: {other}"), None)
+        }
+    }
 }
 
 /// Optional lens ref → UUID.
@@ -920,6 +960,19 @@ pub async fn cogmap_read(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A detailed 403 on the anchor fails closed: the same face as the bare 403, never an
+    /// internal fault carrying the server's sentence.
+    #[test]
+    fn a_detailed_403_on_the_anchor_renders_the_bare_forbidden_face() {
+        let bare = map_anchor_err(ClientError::Forbidden);
+        let detailed = map_anchor_err(ClientError::ForbiddenDetail {
+            message: "a sentence naming something private".to_string(),
+        });
+        assert_eq!(detailed.code, bare.code);
+        assert_eq!(detailed.message, bare.message);
+        assert_eq!(detailed.message, "context not found: Forbidden");
+    }
 
     #[test]
     fn cogmap_grant_input_deserializes() {

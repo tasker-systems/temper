@@ -23,6 +23,268 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **The sensitivity sweep is off until an operator turns it on: `SENSITIVITY_SWEEP_ENABLED`, detectors off by default, and who provides each**
+  A deployment scans only after its operator opts in (sweep Q52, Q53). The API reads a new
+  variable, `SENSITIVITY_SWEEP_ENABLED`. Unless it is `true` or `1`, the cron call to
+  `/api/sensitivity/sweep` reaps, claims and ticks nothing and raises none of the sweep's error
+  events (an unset salt included); it answers `enabled: false`, the one boolean the answer gains.
+  An unrecognised value leaves the sweep off and logs an error at boot. Erasure's 30-day digest
+  expiry (Q50) now runs on every call, opted in or not, so turning the sweep off never strands
+  it; a deployment that never swept holds nothing for it to expire. The migration turns every
+  temper-provided detector off on every deployment, new detectors default to off, a version bump
+  turns that detector off, and the claim claims nothing while no detector is enabled. An operator
+  enables detectors in SQL: `sensitivity.enable_detector(id, version)` refuses a version that is
+  not current, and `sensitivity.enable_detectors(min_severity, provided_by)` and
+  `disable_detectors(max_severity, provided_by)` act on a severity threshold. Each detector now
+  records `provided_by`, `temper` or `organization`; the nine seeded ids are `temper`, and a row an
+  operator inserts is `organization` unless it says otherwise. Temper's migrations change only
+  `temper` rows. `sensitivity.dry_run(...)` measures one detector version over the newest rows, or
+  over a context, cognitive map, profile or team by where resources are homed (Q54). It answers
+  counts and pointers per surface, never a matched value, and writes nothing. A deployment running
+  the sweep today stops scanning when this deploys, until its operator sets the variable and
+  enables detectors; its cursors and findings stay, so enabling resumes where it stopped. A binary
+  that predates the variable keeps calling the claim, which claims nothing while every detector is
+  off, so it writes no run or job row. Who observes: operators and deployers. User-visible: no.
+  Release relevance: behavioral for every deployment that was sweeping.
+pr: self
+classes: additive, behavioral
+surfaces: http, internal, schema
+status: signal-only
+
+- **Resource erasure: vectors derived from the erased resource no longer outlive the act; `ledger_remainder` names a goal's telos copies**
+  No shape moves. The act now recomputes the centroids of live regions holding the resource over
+  their surviving members, sets folded ones to the zero vector, nulls its home context's telos
+  snapshot, and queues a region settling for each affected anchor after commit. The region drain
+  follows a completed job with another while an erased resource is still a live member of the
+  anchor's default-lens regions, and forces a re-form on that tick. `ledger_remainder` on the
+  execute and survey responses and on `resource_erased` may now carry `(event,
+  ["telos_centroid"])` entries for the home context's `region_materialized` /
+  `salience_refreshed` events when the resource was ever a goal; the field's type is unchanged and
+  the payload schema's re-registration changes description text only. Who observes: system admins
+  reading the erasure record or survey. User-visible: operators only. Release relevance:
+  behavioral, signal-only.
+pr: self
+classes: behavioral
+surfaces: http, internal
+status: signal-only
+
+- **The MCP tool layer is publish-ready as `temperkb-mcp`: shipped declarations, `pub use rmcp`, an opt-out `telemetry` feature**
+  The tool layer's package is renamed `temper-mcp` → `temperkb-mcp`, and its library keeps the
+  `temper_mcp` name, so no `use temper_mcp::…` moves. It becomes publishable at the lockstep
+  version (license, repository, readme, a `[workspace.dependencies]` entry). It is not yet
+  published, and it is not in the crates.io lane: the name is claimed by a one-time local publish
+  first. New public surface: `temper_mcp::rmcp` (the SDK, re-exported; an rmcp major bump is a
+  breaking release of this crate), the `telemetry` feature (default on, forwarded to
+  `temperkb-client`), and `temper_mcp::declarations`. That module ships the `tools/list` answer as
+  a fixture (`TOOLS_LIST`, blob door open) with check and assert helpers a host calls on its own
+  wire answer. A closed blob door is checked against the set without the blob pair, and
+  `resultType: "complete"` reads as absent. The deployed shell's declaration witness now calls
+  that helper. The workspace's `temperkb-client` entry drops its default features so the opt-out
+  can reach a host; the members that used them name `telemetry` explicitly. Two monorepo-reading
+  tests (the shipped-skill tool names, the steward recipe) move from the tool layer to the shell.
+  On the MCP wire nothing changes: the closed-door projection of the new fixture is
+  byte-identical to the old one. Who observes: Rust code that hosts the tool layer, and
+  temper's release lane later. User-visible: no. Release relevance: additive; it enables the
+  crate's first publish.
+pr: self
+classes: additive
+surfaces: clients, internal
+status: signal-only
+
+- **The MCP tool layer relays on a host-supplied identity: `IdentitySeam`, `RelayConfig`, and a second in-repo host**
+  `temper-mcp` no longer knows whom the deployed door relays as. A host implements
+  `IdentitySeam`: per request it yields an `OutgoingIdentity` (bearer, `Surface`, opaque extra
+  headers, optional `correlation_id`) or nothing. The crate builds every relay client itself,
+  with the shared pool, the attempt count and the no-redirect policy. It takes a plain
+  `RelayConfig { api_base_url, request_timeout }` and reads no environment variable. The
+  deployed shell's seam (`temper_mcp_server::DeployedDoorSeam`) sends what the relay sent
+  before: the edge-verified bearer, `Surface::Mcp`, the service credential and the `mcp` carrier,
+  and no device id. A wire-capture test pins that, and the e2e attribution witnesses are green.
+  `McpConfig` is split: discovery moves to the shell as `DiscoveryConfig`, and the relay
+  variables, the 45 s timeout and the misconfiguration sentences move to `McpServerConfig`.
+  `map_post_edge_refusal`, `map_post_edge_auth` and the terminal sentences become public. The
+  `AuthzError` witness moves to the shell, and `temper-mcp` keeps no temper-services dependency
+  of any kind. `temperkb-core` and `temperkb-workflow` are now depended on without `web-api`, so
+  there is no utoipa in its tree. `reqwest`'s `stream` feature is declared; the blob read only
+  compiled before because of workspace unification.
+  On the MCP wire, the tool declarations fixture is byte-identical. On the deployed door every
+  call carries a verified bearer, so no answer there changes. Where no identity reaches the tool
+  layer, every tool and both resource reads now answer one host-neutral not-connected refusal
+  (`-32600`). Before, relayed tools and the resource reads answered `-32603` "Not
+  authenticated", `describe_schema` answered normally, and a transport without HTTP parts failed
+  extraction with `-32602`. That transport now gets empty parts. A host's extra headers that
+  restate a header the relay sets itself (`authorization`, the surface, the device id, trace
+  context) refuse the call. In the unpublished shell, `McpServerConfig` gains a public `relay`
+  field, and its `Debug` now shows the API base URL where it showed "set". Who observes: Rust
+  code that hosts the tool layer (in-repo only until the publish). User-visible: no. Release
+  relevance: additive.
+pr: self
+classes: additive
+surfaces: mcp, internal
+status: signal-only
+
+- **The sensitivity sweep's cron tick: `/api/sensitivity/sweep`, and the `SENSITIVITY_SWEEP_SALT` variable**
+  A new internal route, gated by the shared `EMBED_DISPATCH_SECRET` bearer and kept out of the
+  contract. Every five minutes it reaps, then claims and scans surfaces' work orders until about
+  240 s have passed or a whole rotation found nothing. It answers with a count of ticks and
+  booleans only; the per-tick counts go on a `sensitivity_sweep` span, and the call's outcome on
+  a `sensitivity_sweep_call` span. The migration recreates `sensitivity_sweep_claim` (one more
+  integer column) and `sensitivity_sweep_tick` (a wider integer-only result) with the same
+  parameters: the door is their first caller. The API reads a new secret,
+  `SENSITIVITY_SWEEP_SALT`, and refuses the boot when it is under 32 characters or equals another
+  shared secret. When it is unset, every tick records a failed run (`salt_missing`) and logs an
+  error. The door also logs an error while the database's logging settings could write the salt,
+  a bind parameter, to its log. On Neon, production's duration and statement logging are off
+  and the owner role cannot turn them on (checked 2026-10-04). A tick that examined, found and held back nothing leaves no rows
+  (Q49): it stamps the new `sensitivity.surfaces.last_swept_at`, which the claim now rotates by,
+  and deletes its own run row and finished job row, so an idle deployment adds none. Who
+  observes: operators, through the span and the run rows; deployers, who must set the variable.
+  No client request or response changes. User-visible: no. Release relevance: additive.
+pr: self
+classes: additive
+surfaces: http, internal, schema
+status: signal-only
+
+- **The MCP function holds no database pool: its edge becomes `temper-mcp-server`, and `temperkb-auth` gains the instance auth-config parser**
+  Least privilege at the agent-facing door. Every MCP tool already relayed to the API, but the
+  MCP process still built the API's whole `AppState` with a live `PgPool`. It now boots from its
+  own `McpServerConfig` (auth identity, CORS origins, blob posture), never reads `DATABASE_URL`
+  and opens no connection. The deployed edge (JWT check, OAuth discovery/DCR, router) moves to a
+  new unpublished crate, `temper-mcp-server`, and `api/mcp.rs` builds from it. `temper-mcp`, the
+  tool layer, loses its runtime dependency on temper-services and takes plain values from its
+  host. Nothing on the MCP wire moves: the tool declarations fixture is byte-identical, and the
+  JWT edge, discovery, CORS and the blob door's advertisement and refusal sentence are unchanged.
+  The MCP boot no longer runs the API-only checks: the shared-secret distinctness check, the
+  strength floor on secrets it never holds, and rate-limit parsing. It keeps the floor on
+  `TEMPER_MCP_SERVICE_SECRET`, and the API function still refuses on the rest from the same
+  project environment. The published `temperkb-auth` gains a public `config` module
+  (`parse_auth_config`, `AuthConfig`, `AuthMode`, `AuthConfigError`, `shared_secret`,
+  `check_shared_secret_strength`), moved from `temper_services::auth_config`, which re-exports it.
+  Who observes: operators (no deployment-env change is needed; on Vercel `DATABASE_URL` stays in
+  the shared project environment, unread by this function), and Rust consumers of
+  `temperkb-auth`. User-visible: no. Release relevance: additive.
+pr: self
+classes: additive
+surfaces: mcp, clients, internal
+status: signal-only
+- **Two new admin doors: `POST /api/admin/resources/block-history-scrub` and its read-only `/survey`**
+  The block history scrub (resource erasure D11) empties the history of named blocks of a resource
+  that is not erased, behind two new operation ids (`admin_scrub_block_history`,
+  `admin_survey_block_history_scrub`) under the `Admin` tag. No existing shape moves: the request,
+  execute response and survey schemas are new, and a refused scrub is recorded on the existing
+  `resource_erasure_refused` event with its new optional `act` and `blocks`. A list naming an id
+  that is not a block of the resource is a 400 that records nothing, whatever the resource's
+  state, so a recorded refusal names only real blocks of it. The migration re-registers the
+  `block_history_scrubbed` and `resource_erasure_refused` payload schemas with optional
+  properties only, adds the scrub's DB functions, and re-creates `resource_erasure_execute` with
+  the same signature: its `kb_resources.ingest_state` target line is written only for an
+  in-progress ingest, so an erasure after a scrub cancelled the ingest does not claim to have
+  ended it. Who observes: system admins and SDK clients that call the new operations; a non-admin
+  gets the erasure doors' 404. User-visible: operators only. Release relevance: additive.
+pr: self
+classes: additive
+surfaces: http, clients, schema
+status: signal-only
+- **`ResourceView` gains `ingest_ended` — a resource whose ingest ended before its body was whole (`cancelled` by the block history scrub; `abandoned` is reserved for an abandoned-ingest reaper, and nothing sets it yet)**
+  `ingest_state` keeps its two wire values, and an ended ingest reads `in_progress` there (it is
+  not whole, and it stays hidden from list and search as an in-progress one is), with the new
+  optional `ingest_ended` (`cancelled` | `abandoned`, skipped when absent) naming the reason. The
+  DB column gains the two terminal states (migration `20261003000110`); a finalize or an append on
+  an ended ingest answers 409 not-resumable (SQLSTATE TF004) under a new error code,
+  `INGEST_ENDED` (additive: the other 409s keep `CONFLICT`), where it previously would have
+  continued. The CLI's segmented upload, meeting that code, removes its resume record and says
+  so, so the next run starts a fresh upload; its JSON error payload carries the same code. A
+  re-block of a resource addressed directly declines an ended ingest under the existing
+  `byteless` class, which now also covers an upload that ended before its body was whole; a
+  context or deployment walk skips ended ingests. Who observes: API/SDK/CLI/MCP readers of `show`
+  on a resource whose ingest a scrub cancelled, and a client resuming such an upload; only the
+  scrub sets a terminal state. User-visible: yes, on such resources only. Release relevance:
+  additive.
+pr: self
+classes: additive, behavioral
+surfaces: http, mcp, cli-stdout, clients, schema
+status: signal-only
+- **MCP teardown: the context-ref anchor relays to `GET /api/contexts/resolve`; the last in-process gate and the unwired tool modules are deleted**
+  The context orientation tools (`context_read`'s shape/metrics/analytics views,
+  `context_materialize`) and `resource_reblock`'s `scope=context` resolve their context ref
+  through the route-first resolve route instead of reading the pool after an in-process
+  Level 1 + 2 gate, behind the same local parse. Every refusal face carries byte-exact —
+  `invalid context ref: …`, `context not found: {the resolver's sentence}`, and the `+<team>`
+  non-member's `context not found: Forbidden` — pinned against the in-process resolver
+  before the swap. `ensure_profile_from_parts` (with the in-process `AuthzError` mapping only
+  it used) and the never-wired `tools/admin_ledger.rs` / `tools/profiles.rs` are deleted; tool
+  names, schemas and descriptions are byte-identical (the declarations fixture is unchanged).
+  The source gate now requires every `#[tool]` to send a relay or sit on the named
+  pure-compute allowlist (`describe_schema`). Who observes: an MCP-calling agent, whose one
+  visible change is the declared delta — a fault behind the resolver (a database error) now
+  renders `internal_error` where it rendered `invalid_params` under the `context not found: `
+  prefix. User-visible: only on that fault path. Release relevance: signal-only.
+pr: self
+classes: behavioral
+surfaces: mcp
+status: signal-only
+- **The CLI's context-ref reads resolve through `GET /api/contexts/resolve` — refusal sentences change**
+  `resolve_context_id_for_read` (behind `temper context transfer|rename|delete|shape|
+  region-metrics|analytics|materialize|materialize-delta`, `graph … --in`, the data-artifact
+  shape commands' `--context` and the admin commands' context filters) stops listing every
+  visible context and filtering client-side; it parses the ref with the shared `parse_context_ref`
+  and lets the server resolve it, the same resolver every ref-accepting route uses. The warmup
+  staleness pre-flight resolves the same way, which makes its `@me` match exact (it previously
+  matched any `@`-owned context by slug, to avoid a profile round trip). A bare UUID still passes
+  straight through. What a CLI reader sees changes; the error kind does not, with one exception
+  named below. A context the caller cannot
+  read, or that does not exist, now reads `context not found or not readable (ref "<ref>")` (the
+  `@me/<slug>` form names the slug) where it read `context '<ref>' not found among the contexts
+  you can see` — still `api`; a malformed ref is refused with the parser's own sentence — still
+  `bad_request`, and the exception: a sigil-less `name/slug`, which was reported missing (`api`),
+  is now refused there (`bad_request`);
+  and a `+<team>/<slug>` from a non-member now reads `context ref "<ref>": you are not a member of
+  that team` where it read "not found". Who observes: CLI users and agents reading CLI errors.
+  User-visible: yes, in refusal wording only. Release relevance: signal-only.
+pr: self
+classes: behavioral
+surfaces: cli-stdout
+status: signal-only
+- **`desktop_client_id` on `AuthProvider` — the deployment names the desktop's own OAuth client; `login()` resolves the device id from the store it is handed**
+  The provider entry grows an optional `desktop_client_id` (`serde(default)`, skipped when
+  absent): where the deployment registers the desktop's own public client — an Auth0
+  application for the hosted instance, an `AS_CLIENTS` entry for self-hosted. The CLI never
+  reads it and there is no fallback to `client_id`: absence stays observable so a desktop
+  sign-in can refuse rather than present the CLI's client registration to a redirect that
+  was never registered for it. Alongside, `login()`'s device-id resolution moves off the
+  free no-arg disk read (`load_auth()`: env, then the global CLI auth file) onto the
+  `TokenStore` it is already handed — an empty `MemoryTokenStore` mints a fresh UUIDv7 and
+  persists it through that store, a populated one keeps its id, and a caller holding a
+  non-disk store never consults the global auth path. The CLI is unchanged: the no-arg
+  helper now delegates to the default `DiskTokenStore`, whose load carries the same
+  env-then-disk precedence. Who observes: nobody at runtime today — the field has no CLI
+  reader and the CLI's custody is the disk either way; the desktop consumer
+  (temper-contrib) reads the field and inherits clean device-id custody when it lands.
+  `docs/reference/config` re-renders with the field.
+pr: self
+classes: additive
+surfaces: schema, clients
+status: signal-only
+- **`GET /api/contexts/resolve` — a context ref resolved to its id, for the caller (the route-first half of the network door's teardown)**
+  A new route, nothing changed beside it: `GET /api/contexts/resolve?context_ref=<ref>` answers
+  `{ "context_id": <uuid> }` (`ContextResolution`) for `@me/<slug>`, `@<handle>/<slug>`,
+  `+<team>/<slug>` or a bare UUID. It is `context_service::resolve_context_ref` behind a route —
+  the resolver every ref-accepting route already uses — so each ref form keeps exactly the answer
+  it has elsewhere: a context the caller cannot read answers as one that does not exist (uniform
+  404 on the UUID and `@<handle>` arms, an unknown handle included), a malformed ref answers 400
+  with the shared parser's sentence, and the `+<team>` arm keeps its existing non-member 403. The
+  ref grammar is the one `parse_context_ref`; no server-side dialect. Typed client method
+  `ContextClient::resolve` (temperkb-client), with the ref in the query string, not the logged
+  path. `openapi.json` gains the path and the schema (86 lines added, none removed); the three
+  SDKs and the ts-rs `context.ts` regenerate with the addition only. Why: the MCP
+  `context_anchor` resolver (`cognitive_maps.rs`, `reblock.rs`) is the last database read in a
+  tool module; this route is what it relays to in teardown, one call per anchored tool. Who
+  observes: API and SDK callers, who gain a route and a client method; no existing request or
+  response shape changes. User-visible: no. Release relevance: additive.
+pr: self
+classes: additive
+surfaces: http,clients
+status: signal-only
 - **Beat 5: the steward pair crosses the network door — `steward_ingest_delta` and `steward_advance_watermark` forward to `/api/steward`; no MCP tool executes on the direct binding**
   The last two direct handlers stop executing in-process and forward to
   `GET /api/steward/{cogmap}/delta` and `POST /api/steward/{cogmap}/watermark` as

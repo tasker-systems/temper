@@ -2,6 +2,16 @@
 import type { ContextId } from "./ContextId";
 
 /**
+ * Response of `GET /api/contexts/resolve` — a context ref resolved to its id, for the caller.
+ *
+ * Deliberately just the id: a caller that holds a ref (`@me/<slug>`, `@<handle>/<slug>`,
+ * `+<team>/<slug>`, or a bare UUID) and needs to address one of the id-keyed
+ * `/api/contexts/{id}/…` routes resolves once here, then calls the route it wanted. Anything
+ * more about the context is `GET /api/contexts/{id}`'s to answer.
+ */
+export type ContextResolution = { context_id: ContextId, };
+
+/**
  * Response row for context endpoints.
  */
 export type ContextRow = { id: ContextId, name: string, kb_owner_table: string, kb_owner_id: string, created: string, updated: string, 

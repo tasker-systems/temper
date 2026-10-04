@@ -29,7 +29,12 @@
 //!   `invalid_params` "invalid ref: ..."; a malformed context ref renders
 //!   `invalid_params` prefixed `invalid context ref: `; a context the caller cannot
 //!   resolve renders prefixed `context not found: `. All at the resolve callsite, never
-//!   reaching the backend.
+//!   reaching the backend. **Teardown:** the resolver relays to
+//!   `GET /api/contexts/resolve` (one `context_anchor`, shared with the context
+//!   orientation tools); every face was pinned byte-exact against the in-process
+//!   resolver first (`every_context_anchor_face_is_pinned_byte_exact`, the shared
+//!   table) and carried unchanged. The one declared delta — a fault behind the
+//!   resolver renders `internal_error`, not `invalid_params` — is named, not pinned.
 //! - *Declared deltas, carried-forward note* — the module header declares a NotFound
 //!   prefix-drop and a Conflict-arm addition for this family; neither face is
 //!   pinned here (the direct suite never constructed a reblock NotFound or 409 —
@@ -213,11 +218,10 @@ mod parity {
 
     /// The production parts shape for an ARBITRARY approved identity: the claims
     /// extension beside the bearer, exactly as the JWT middleware injects them. The
-    /// door forwards on the bearer alone; the one retained in-process read (the
-    /// context-anchor resolver, the reblock tool's scope=context arm) reads the
-    /// claims — so a bare relay-parts shape (bearer only) would blind THAT read.
-    /// Identity is consistent by construction: both halves come from the one
-    /// `(token, sub, email)` triple.
+    /// door forwards on the bearer alone (since teardown nothing in-process reads the
+    /// claims), so the claims ride for production fidelity, not need. Identity is
+    /// consistent by construction: both halves come from the one `(token, sub, email)`
+    /// triple.
     pub fn direct_parts_for(
         _app: &super::common::E2eTestApp,
         token: &str,
@@ -225,7 +229,7 @@ mod parity {
         email: &str,
     ) -> axum::http::request::Parts {
         axum::http::Request::builder()
-            .extension(temper_mcp::middleware::BearerToken(token.to_string()))
+            .extension(temper_mcp_server::BearerToken(token.to_string()))
             .extension(temper_services::auth::RawJwtClaims {
                 sub: sub.to_string(),
                 email: Some(email.to_string()),
@@ -307,7 +311,7 @@ use parity::{
 /// service (direct mode until the swap), and the harness principal's direct parts.
 async fn harness(pool: PgPool) -> (E2eTestApp, TemperMcpService, axum::http::request::Parts) {
     let app = common::setup_relay(pool).await;
-    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.direct_parts();
     (app, svc, parts)
 }
@@ -503,6 +507,26 @@ async fn reblock_garbage_refs_refuse_at_the_parse_callsite(pool: PgPool) {
         "the arm names the parse failure: {}",
         err.message
     );
+}
+
+/// Every `context_anchor` refusal face, byte-exact, through `scope=context` — the same table
+/// the context orientation suite pins (`common::context_anchor_faces`), so the two anchors
+/// answer one dialect. Pinned green against the in-process resolver first, then carried through
+/// the relay to `GET /api/contexts/resolve` unchanged (teardown).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn every_context_anchor_face_is_pinned_byte_exact(pool: PgPool) {
+    let (app, svc, _parts) = harness(pool).await;
+    for face in common::context_anchor_faces(&app).await {
+        let err = run_reblock(
+            &svc,
+            &face.parts,
+            json!({"scope": "context", "context": face.context_ref, "dry_run": true}),
+        )
+        .await
+        .expect_err(face.label);
+        assert_eq!(code_of(&err), -32602, "{}: {err}", face.label);
+        assert_eq!(err.message, face.expected, "{}", face.label);
+    }
 }
 
 /// scope=context over the harness's own default context, dry_run: the answer is a
@@ -890,10 +914,13 @@ async fn blob_harness(
     axum::http::request::Parts,
     std::sync::Arc<temper_substrate::blob_store::InMemoryBlobStore>,
 ) {
+    // ONE ceiling for both doors: the app's commit threshold and the MCP door's read ceiling.
+    const SINGLE_REQUEST_MAX_BYTES: usize = 64;
     let store = std::sync::Arc::new(temper_substrate::blob_store::InMemoryBlobStore::default());
-    let app = common::setup_with_blob_store_shared(pool, store.clone(), 64).await;
+    let app =
+        common::setup_with_blob_store_shared(pool, store.clone(), SINGLE_REQUEST_MAX_BYTES).await;
     let svc = app
-        .mcp_relay_service_with_blob(app.pool.clone(), store.clone())
+        .mcp_relay_service_with_blob(SINGLE_REQUEST_MAX_BYTES)
         .await;
     let parts = app.direct_parts();
     (app, svc, parts, store)

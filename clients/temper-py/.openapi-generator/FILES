@@ -103,11 +103,18 @@ temper/generated/models/block_fold_disposition.py
 temper/generated/models/block_fold_disposition_one_of.py
 temper/generated/models/block_fold_disposition_one_of1.py
 temper/generated/models/block_fold_disposition_one_of2.py
+temper/generated/models/block_history_scrub_execute_response.py
+temper/generated/models/block_history_scrub_execute_response_one_of.py
+temper/generated/models/block_history_scrub_execute_response_one_of1.py
+temper/generated/models/block_history_scrub_plan.py
+temper/generated/models/block_history_scrub_request_body.py
+temper/generated/models/block_history_scrub_survey.py
 temper/generated/models/block_provenance_row.py
 temper/generated/models/block_read.py
 temper/generated/models/block_read_one_of.py
 temper/generated/models/block_read_one_of1.py
 temper/generated/models/block_read_one_of2.py
+temper/generated/models/block_scrub_count.py
 temper/generated/models/block_successor.py
 temper/generated/models/blocks_response.py
 temper/generated/models/body_storage.py
@@ -146,6 +153,7 @@ temper/generated/models/context_owner_ref.py
 temper/generated/models/context_owner_ref_one_of.py
 temper/generated/models/context_owner_ref_one_of1.py
 temper/generated/models/context_panorama.py
+temper/generated/models/context_resolution.py
 temper/generated/models/context_row.py
 temper/generated/models/context_row_with_counts.py
 temper/generated/models/create_cogmap_outcome.py
@@ -218,6 +226,7 @@ temper/generated/models/idp_revocation.py
 temper/generated/models/illegal_transition.py
 temper/generated/models/ingest_create_response.py
 temper/generated/models/ingest_delta.py
+temper/generated/models/ingest_ended.py
 temper/generated/models/ingest_payload.py
 temper/generated/models/ingest_state.py
 temper/generated/models/inherited_read_grant.py

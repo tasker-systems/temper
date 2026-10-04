@@ -49,8 +49,8 @@ use uuid::Uuid;
 use temper_client::error::ClientError;
 use temper_core::types::blob::{BlobRelationAssertRequest, BlobRelationDirection};
 use temper_core::types::graph::{EdgeKind, Polarity};
-use temper_services::error::ApiError;
 
+use crate::host::BlobDoor;
 use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 
 // ── Input structs ──────────────────────────────────────────────────────────────
@@ -270,19 +270,19 @@ fn refuse_short_stream(action: &str, collected: usize, declared: i64) -> rmcp::E
 /// (the same knob the commit threshold and the wire's single-request body cap ride); the
 /// default (4 MB) is the platform's own.
 fn read_ceiling(svc: &TemperMcpService) -> i64 {
-    svc.api_state
-        .config
-        .blob
-        .as_ref()
-        .map(|c| c.single_request_max_bytes as i64)
-        .unwrap_or(4 * 1024 * 1024)
+    match &svc.blob_door {
+        BlobDoor::Open {
+            single_request_max_bytes,
+        } => *single_request_max_bytes as i64,
+        BlobDoor::Closed { .. } => 4 * 1024 * 1024,
+    }
 }
 
 // ── The closed door ───────────────────────────────────────────────────────────
 //
 // A blob-disabled MCP instance refuses the pair — in its own unconfigured
 // vocabulary, not the app's. The advertisement posture and the refusal voice are the
-// same knob (`api_state.config.blob.is_none()`): the pair stays out of tools/list on
+// same knob (the host's `BlobDoor`): the pair stays out of tools/list on
 // the wire, and a direct tools/call against the hidden pair answers this refusal.
 // The wire's own blob-refusal can still arrive on a relay to a blob-disabled APP;
 // both refusal faces land in `map_api_error`'s Internal arm and keep the vocabulary.
@@ -290,25 +290,26 @@ fn read_ceiling(svc: &TemperMcpService) -> i64 {
 /// The MCP door's own refusal — `blob_refusal`'s vocabulary, spelled at the door:
 /// no blob store configured → the MCP blob calls refuse with that, not with a relay
 /// to an app that has one (the deployment's blob posture is one config, but a
-/// test deployment can point them apart).
-fn map_local_blob_refusal(err: ApiError) -> rmcp::ErrorData {
+/// test deployment can point them apart). Takes the refusal by its `Display`, not as
+/// the services crate's `ApiError`: no tool module names a services type (teardown's witness).
+fn map_local_blob_refusal(err: impl std::fmt::Display) -> rmcp::ErrorData {
     rmcp::ErrorData::internal_error(format!("blob: {err}"), None)
 }
 
 /// The blob door's check: this MCP instance is blob-configured, or the caller hears
 /// the unconfigured refusal — never a relay to an app whose answer would disagree.
 fn blob_door_open(svc: &TemperMcpService) -> Result<(), rmcp::ErrorData> {
-    if svc.api_state.config.blob.is_none() {
-        return Err(map_local_blob_refusal(svc.api_state.blob_refusal()));
+    match &svc.blob_door {
+        BlobDoor::Open { .. } => Ok(()),
+        BlobDoor::Closed { refusal } => Err(map_local_blob_refusal(refusal)),
     }
-    Ok(())
 }
 
 // ── Read handlers ──────────────────────────────────────────────────────────────
 
 pub async fn blob_read(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: BlobReadInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     blob_door_open(svc)?;
@@ -320,7 +321,7 @@ pub async fn blob_read(
 
 async fn read_blob(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: BlobReadInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     const ACTION: &str = "blob_read";
@@ -342,12 +343,12 @@ async fn read_blob(
     // `blob.content_bytes`).
     let headers = response.headers();
     let declared: i64 = headers
-        .get(axum::http::header::CONTENT_LENGTH)
+        .get(http::header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0);
     let content_type = headers
-        .get(axum::http::header::CONTENT_TYPE)
+        .get(http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_string();
@@ -392,7 +393,7 @@ async fn read_blob(
 
 async fn list_blobs(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: BlobReadInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     const ACTION: &str = "blob_list";
@@ -439,7 +440,7 @@ async fn list_blobs(
 
 pub async fn blob_manage(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: BlobManageInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     blob_door_open(svc)?;
@@ -451,7 +452,7 @@ pub async fn blob_manage(
 
 async fn commit_blob(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: BlobManageInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     const ACTION: &str = "blob_commit";
@@ -501,7 +502,7 @@ async fn commit_blob(
 
 async fn relate_blob(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: BlobManageInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     const ACTION: &str = "blob_relate";

@@ -31,7 +31,8 @@ exactly how the drift above keeps recurring one level down.
     · verify JWT (JwksKeyStore)                · verify JWT (same JwksKeyStore)
     · aud = config.auth.audience               · aud = config.auth.audience (the SAME one)
     ↓ decode → RawJwtClaims                    ↓ inject RawJwtClaims + BearerToken
-        │                                      ensure_profile_from_parts (service.rs)
+        │                                      relay_client → temper-api (the network door:
+        │                                        the bearer is forwarded; Levels 1 + 2 run there)
         │                                          │
         └──────────────┐          ┌────────────────┘
                        ▼          ▼
@@ -94,10 +95,14 @@ tool requires Level 2.) See [authorization-seam.md](./authorization-seam.md).
       identity through the upstream-connector chain instead. See
       [authorization-seam.md](./authorization-seam.md); `audit-passport-identity-header.sh`
       pins it.
-- [ ] **New `AuthzError` variant?** Map it in **both** transport mappers:
-      `temper-api` `middleware/auth.rs` (Level 1) + `middleware/system_access.rs`
-      (Level 2), and `temper-mcp` `service.rs::map_authz_error`. The compiler's
-      exhaustiveness check enforces this. There are **six** variants today.
+- [ ] **New `AuthzError` variant?** Map it in temper-api's transport mappers:
+      `middleware/auth.rs` (Level 1) + `middleware/system_access.rs` (Level 2) — the
+      compiler's exhaustiveness check enforces those. There are **six** variants today.
+      temper-mcp has had no typed mapper since the network door's teardown: the API's
+      401/403 body reaches `service.rs::map_post_edge_refusal`, which splits arms on the
+      body text. A new variant's body needs its own arm there (otherwise it falls to the
+      terminal catch-all) — **not** compiler-enforced, so pin the face in
+      `tests/e2e/tests/resources_wire_arms_test.rs`.
 - [ ] **New token shape / issuer?** See [jwt-verification.md](./jwt-verification.md) and
       the [machine-token contract](./machine-token-contract.md) — one claim contract both
       issuers conform to; the Rust seam normalizes exactly one machine shape.
