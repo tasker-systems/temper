@@ -17,50 +17,13 @@ mod common;
 
 use reqwest::StatusCode;
 
-use temper_services::auth_config::{AuthConfig, AuthMode};
-use temper_services::config::ApiConfig;
-use temper_services::state::{AppState, JwksKeyStore};
-
-/// The `AppState` the spawned MCP router runs on — the same auth config temper-api runs with, so
-/// a difference in behavior between the surfaces can only come from the surfaces themselves.
-fn mcp_app_state(pool: &sqlx::PgPool) -> AppState {
-    let decoding_key =
-        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
-            .expect("decoding key");
-    let jwks_store = JwksKeyStore::with_static_key(decoding_key, jsonwebtoken::Algorithm::RS256);
-    let api_config = ApiConfig {
-        database_url: "unused".to_string(),
-        auth: AuthConfig {
-            issuer: "test-issuer".to_string(),
-            jwks_url: "unused".to_string(),
-            audience: common::TEST_AUDIENCE.to_string(),
-            mcp_audience: common::TEST_AUDIENCE.to_string(),
-            mode: AuthMode::ExternalIdp,
-        },
-        auth_provider_name: "test-provider".to_string(),
-        cors_origins: vec![],
-        port: 0,
-        enable_swagger: false,
-        internal_reconcile_secret: None,
-        embed_dispatch_secret: None,
-        mcp_service_secret: None,
-        vercel_connect: None,
-        slack_link: None,
-        slack_mint_secret: None,
-        rate_limit: None,
-        blob: None,
-        blob_disabled_by_policy: false,
-    };
-    AppState::new(pool.clone(), jwks_store, api_config)
-}
-
-/// Spawn the **real** MCP router — `build_router`, the same one `api/mcp.rs` serves — on a random
+/// Spawn the **real** MCP router — `temper_mcp_server::build_router`, the same one `api/mcp.rs` serves — on a random
 /// port, and return its base URL.
 ///
 /// The tool-level MCP legs here enter through `context_manage` with hand-built parts, which is
 /// *after* JWT verification; this drives `require_mcp_auth` itself, so MCP's `aud` check — on the
 /// one surface where the audience bug originally diverged — is covered.
-async fn spawn_mcp_server(pool: &sqlx::PgPool) -> String {
+async fn spawn_mcp_server() -> String {
     let mcp_config = temper_mcp::McpConfig {
         mcp_base_url: "http://localhost".to_string(),
         mcp_client_id: None,
@@ -71,7 +34,14 @@ async fn spawn_mcp_server(pool: &sqlx::PgPool) -> String {
             allow_localhost: true,
         },
     };
-    let router = temper_mcp::router::build_router(mcp_app_state(pool), mcp_config);
+    // The same auth identity temper-api runs with in the harness (`common::mcp_server_config`),
+    // so a difference in behavior between the surfaces can only come from the surfaces
+    // themselves. The edge holds no pool: nothing past the JWT check runs here.
+    let router = temper_mcp_server::build_router(
+        common::mcp_server_config(temper_mcp_server::config::blob_door(None, false)),
+        common::mcp_test_jwks(),
+        mcp_config,
+    );
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -374,7 +344,7 @@ async fn foreign_audience_token_is_refused_on_both_surfaces(pool: sqlx::PgPool) 
     // ── temper-mcp ────────────────────────────────────────────────────────────────
     // Driven through `build_router` — the real production router, and therefore the real
     // `require_mcp_auth`. This is the surface that had NO coverage of its `aud` check.
-    let mcp_url = spawn_mcp_server(&pool).await;
+    let mcp_url = spawn_mcp_server().await;
     let client = reqwest::Client::new();
 
     let mcp_ok = client
@@ -436,7 +406,7 @@ async fn token_with_no_audience_claim_is_refused_on_both_surfaces(pool: sqlx::Pg
         "API: a token with NO aud claim must be refused, not accepted by default"
     );
 
-    let mcp_url = spawn_mcp_server(&pool).await;
+    let mcp_url = spawn_mcp_server().await;
     let mcp = reqwest::Client::new()
         .post(format!("{mcp_url}/mcp"))
         .header("Authorization", format!("Bearer {audless}"))

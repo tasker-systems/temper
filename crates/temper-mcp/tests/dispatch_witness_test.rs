@@ -33,53 +33,19 @@ use rmcp::{
     service::{serve_directly, RequestContext},
     ServerHandler,
 };
-use sqlx::postgres::PgPoolOptions;
 use temper_mcp::config::McpConfig;
 use temper_mcp::service::TemperMcpService;
-use temper_services::{
-    auth_config::{AuthConfig, AuthMode},
-    config::ApiConfig,
-    state::{AppState, JwksKeyStore},
-};
+use temper_mcp::BlobDoor;
 
-/// Build a `TemperMcpService` backed by a lazy (never-connected) pool.
+/// Build a `TemperMcpService` with no relay and a closed blob door.
 ///
-/// The dispatch witness never reaches a tool body, so the pool is never used — it only has to
-/// exist for `AppState::new`. `connect_lazy` produces a pool that will not attempt a connection
-/// until a query is issued, which this test never does.
+/// The dispatch witness never reaches a tool body, and the service holds nothing a tool body
+/// could reach for besides the relay config — no pool, no key store.
 fn service_for_dispatch_witness() -> TemperMcpService {
-    let pool = PgPoolOptions::new()
-        .connect_lazy("postgres://__witness_no_db__")
-        .expect("lazy pool constructs without a server");
-
-    let config = ApiConfig {
-        database_url: "unused".to_string(),
-        auth: AuthConfig {
-            issuer: "unused".to_string(),
-            jwks_url: "unused".to_string(),
-            audience: "unused".to_string(),
-            mcp_audience: "unused".to_string(),
-            mode: AuthMode::ExternalIdp,
-        },
-        auth_provider_name: "unused".to_string(),
-        cors_origins: vec![],
-        port: 0,
-        enable_swagger: false,
-        internal_reconcile_secret: None,
-        embed_dispatch_secret: None,
-        mcp_service_secret: None,
-        vercel_connect: None,
-        slack_link: None,
-        slack_mint_secret: None,
-        rate_limit: None,
-        blob: None,
-        blob_disabled_by_policy: false,
-    };
-
-    let jwks = JwksKeyStore::new("https://example.invalid/.well-known/jwks.json".to_string());
-    let state = AppState::new(pool, jwks, config);
     TemperMcpService::new(
-        state,
+        BlobDoor::Closed {
+            refusal: "unused".to_string(),
+        },
         McpConfig {
             mcp_base_url: "https://temper.invalid".to_string(),
             mcp_client_id: None,

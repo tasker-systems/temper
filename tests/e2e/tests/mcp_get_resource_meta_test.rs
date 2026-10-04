@@ -104,7 +104,7 @@ async fn mcp_get_resource_carries_both_meta_tiers(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    let svc = app.mcp_relay_service(pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
 
     let seeded_open = serde_json::json!({"tags": ["alpha", "mcp"], "weight": 3});
@@ -163,7 +163,7 @@ async fn mcp_get_resource_surfaces_empty_open_meta(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    let svc = app.mcp_relay_service(pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
 
     let id = seed_resource(
@@ -216,7 +216,7 @@ async fn mcp_list_emits_ref_for_every_row(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    let svc = app.mcp_relay_service(pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
 
     let id_a = seed_resource(
@@ -295,7 +295,7 @@ async fn mcp_list_envelope_carries_paging_state(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    let svc = app.mcp_relay_service(pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
 
     for n in 0..3 {
@@ -375,7 +375,7 @@ async fn mcp_list_carries_both_meta_tiers_for_every_row(pool: sqlx::PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    let svc = app.mcp_relay_service(pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
 
     let id_a = seed_resource(

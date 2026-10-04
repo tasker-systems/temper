@@ -246,7 +246,7 @@ mod parity {
         email: &str,
     ) -> axum::http::request::Parts {
         axum::http::Request::builder()
-            .extension(temper_mcp::middleware::BearerToken(token.to_string()))
+            .extension(temper_mcp::BearerToken(token.to_string()))
             .extension(temper_services::auth::RawJwtClaims {
                 sub: sub.to_string(),
                 email: Some(email.to_string()),
@@ -303,7 +303,7 @@ use parity::{code_of, input, notice_then_body, one_text};
 /// beside bearer (the door forwards on the bearer).
 async fn harness(pool: PgPool) -> (E2eTestApp, TemperMcpService, axum::http::request::Parts) {
     let app = common::setup_relay(pool).await;
-    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.direct_parts();
     (app, svc, parts)
 }

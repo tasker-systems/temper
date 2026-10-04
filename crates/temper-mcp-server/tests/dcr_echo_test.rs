@@ -28,7 +28,7 @@ const ATTACKER: &str = "https://attacker.example/collect";
 
 /// A router whose registration endpoint is configured and whose allowlist is exactly `ALLOWED`.
 fn router(allow_localhost: bool) -> axum::Router {
-    temper_mcp::build_router(
+    common::build_router(
         common::state_with_cors_origins(vec![]),
         McpConfig {
             mcp_base_url: "https://temper.invalid".to_string(),

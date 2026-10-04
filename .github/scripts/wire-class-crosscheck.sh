@@ -16,7 +16,8 @@
 # The pattern's incumbents are the two scripts this one extends to the openapi/register side:
 # audit-migration-declarations.sh (silence fails) and sqlx-schema-crosscheck.sh (the claim is
 # cross-checked against what the wire actually did). This is that logic pointed at
-# crates/temper-api/, crates/temper-mcp/, crates/temper-client/, openapi.json, clients/, and
+# crates/temper-api/, crates/temper-mcp/, crates/temper-mcp-server/, crates/temper-client/,
+# openapi.json, clients/, and
 # packages/. The diff base comes from the same mechanism those use: WIRE_DIFF_BASE /
 # GITHUB_BASE_SHA / GITHUB_BASE_REF / merge-base with origin/main / HEAD~1.
 #
@@ -122,7 +123,7 @@ done
 
 # The wire surface, per spec §4/§5 — the same trees detect-changes.sh classes as WIRE,
 # CLIENTS, and PACKAGES. openapi.json is exact; the rest are prefixes.
-WIRE_PREFIXES="crates/temper-api/ crates/temper-mcp/ crates/temper-client/ clients/ packages/"
+WIRE_PREFIXES="crates/temper-api/ crates/temper-mcp/ crates/temper-mcp-server/ crates/temper-client/ clients/ packages/"
 
 # ── The diff base — the incumbents' candidate list, copied ──────────────────────────────────────
 derive_base() {

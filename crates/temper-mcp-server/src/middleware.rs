@@ -2,9 +2,9 @@
 //!
 //! Re-uses temper-api's `JwksKeyStore` for token validation. Simpler than
 //! the full `require_auth` middleware — we validate the JWT and inject the
-//! decoded [`RawJwtClaims`] plus the raw [`BearerToken`], which the service
-//! hands to `temper_services::auth::authenticate_token` to classify, resolve
-//! and gate the principal.
+//! decoded [`RawJwtClaims`] plus the raw [`BearerToken`], which the tool layer's
+//! relay re-issues to the API, where Level 1 + 2 classify, resolve and gate the
+//! principal.
 
 use axum::{
     body::Body,
@@ -16,34 +16,11 @@ use axum::{
 use jsonwebtoken::decode;
 use std::sync::Arc;
 
+use temper_mcp::BearerToken;
 use temper_services::auth::RawJwtClaims;
 use temper_services::state::KeyLookupError;
 
-use crate::router::McpAppState;
-
-/// The raw, already-verified bearer token of the current request.
-///
-/// A newtype rather than a bare `String` so it cannot be confused with any other
-/// string in the extensions map. It travels beside [`RawJwtClaims`] because the
-/// shared auth seam's human email ladder may need to present it to the IdP's
-/// `/userinfo` endpoint — the one rung that needs the token itself, not its claims.
-#[derive(Clone)]
-pub struct BearerToken(pub String);
-
-impl std::fmt::Debug for BearerToken {
-    /// Hand-written, not derived — presence, never value (the McpConfig redaction's
-    /// shape, 2026-09-24 review). `http::request::Parts` derives `Debug` and formats
-    /// its extension map, so a future `tracing::debug!(?parts)` on the relay path
-    /// would have printed the live caller bearer verbatim. The
-    /// `audit-credential-debug` tripwire cannot see tuple structs (its regex reads
-    /// `name: Type` field position only), which is exactly why this impl exists
-    /// rather than a baseline entry.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BearerToken")
-            .field("0", &"<redacted>")
-            .finish()
-    }
-}
+use crate::router::McpEdgeState;
 
 /// Validate the Auth0 Bearer JWT on every MCP request.
 ///
@@ -51,7 +28,7 @@ impl std::fmt::Debug for BearerToken {
 /// On failure, returns 401 with a `WWW-Authenticate` header that triggers
 /// the MCP client's OAuth flow (per MCP 2025-03-26 auth spec).
 pub async fn require_mcp_auth(
-    State(state): State<Arc<McpAppState>>,
+    State(state): State<Arc<McpEdgeState>>,
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
@@ -60,12 +37,7 @@ pub async fn require_mcp_auth(
         None => return unauthorized(&state),
     };
 
-    let vk = match state
-        .api_state
-        .jwks_store
-        .get_decoding_key_for_token(&token)
-        .await
-    {
+    let vk = match state.jwks_store.get_decoding_key_for_token(&token).await {
         Ok(k) => k,
         // A `kid` this instance does not publish is a bad TOKEN, so it takes the same 401 +
         // `WWW-Authenticate` path as any other bad token — which is what makes an MCP client
@@ -92,10 +64,9 @@ pub async fn require_mcp_auth(
     // The set is `AuthConfig::accepted_audiences` — the ONE definition both doors consume, so
     // neither can drift about which tokens name this instance. With `MCP_AUDIENCE` unset the
     // two resolve to one value and this is the single-audience check it always was.
-    let auth = &state.api_state.config.auth;
+    let auth = &state.auth;
     let audiences = auth.accepted_audiences();
     let validation = state
-        .api_state
         .jwks_store
         .validation(&auth.issuer, &audiences, vk.algorithm);
 
@@ -124,7 +95,7 @@ pub async fn require_mcp_auth(
     }
 }
 
-fn unauthorized(state: &McpAppState) -> Response {
+fn unauthorized(state: &McpEdgeState) -> Response {
     let base = &state.mcp_config.mcp_base_url;
     let www_auth = format!(
         r#"Bearer realm="temper", resource_metadata="{base}/.well-known/oauth-protected-resource""#
@@ -141,25 +112,4 @@ fn extract_bearer(request: &Request<Body>) -> Option<String> {
     let h = request.headers().get(header::AUTHORIZATION)?;
     let v = h.to_str().ok()?;
     v.strip_prefix("Bearer ").map(|s| s.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The Debug impl is the whole contract: the bearer must never render, in full or
-    /// in prefix. FAILS IF: the formatted output contains any substring of the token.
-    #[test]
-    fn bearer_token_debug_never_renders_the_token() {
-        let token = "aaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbb.cccccccccccccccc";
-        let rendered = format!("{:?}", BearerToken(token.to_string()));
-        assert!(
-            !rendered.contains("bbbbbbbbbbbbbbbb"),
-            "Debug leaks the token payload: {rendered}"
-        );
-        assert!(
-            rendered.contains("redacted"),
-            "presence-preserving shape: {rendered}"
-        );
-    }
 }

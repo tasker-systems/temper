@@ -7,7 +7,9 @@ thing that does, because the audience differs legitimately. The shared machinery
 construction, the gates) is the seam's.
 
 Source: `crates/temper-services/src/state.rs` (`JwksKeyStore`),
-`crates/temper-api/src/middleware/auth.rs`, `crates/temper-mcp/src/middleware.rs`.
+`crates/temper-api/src/middleware/auth.rs`, `crates/temper-mcp-server/src/middleware.rs`. The auth
+identity itself is parsed once, in `temper_auth::config::parse_auth_config` (temperkb-auth), by
+both surfaces' boots.
 
 ## Two issuers, one verifier
 
@@ -49,13 +51,16 @@ There used to be a **per-surface audience split** here: temper-api validated `co
 while temper-mcp validated `mcp_config.mcp_audience`, parsed separately from `MCP_AUDIENCE` with a
 fallback to `AUTH_AUDIENCE`. That is gone.
 
-| | issuer | audience |
+| | issuer | accepted audiences |
 |---|--------|----------|
-| temper-api | `config.auth.issuer` | `config.auth.audience` |
-| temper-mcp | `config.auth.issuer` (same) | `config.auth.audience` (**the same**) |
+| temper-api | `config.auth.issuer` | `config.auth.accepted_audiences()` |
+| temper-mcp-server | `auth.issuer` (same) | `auth.accepted_audiences()` (**the same set**) |
 
-Both call `jwks_store.validation(issuer, audience, alg)` — note `audience: &str`, not
-`Option<&str>`. An instance has exactly **one** audience, parsed once at boot.
+Both call `jwks_store.validation(issuer, &audiences, alg)` over `AuthConfig::accepted_audiences()`:
+`MCP_AUDIENCE` (the MCP surface's RFC 8707 resource indicator) when set, and `AUTH_AUDIENCE`,
+deduped — so with `MCP_AUDIENCE` unset it is the single audience. Neither is ever optional, and
+both are parsed once at boot by the one parser both surfaces use
+(`temper_auth::config::parse_auth_config`).
 
 Two parsers for one concept is precisely how the surfaces came to disagree: an empty
 `AUTH_AUDIENCE` made temper-api set `validate_aud = false` and accept everything, while an empty

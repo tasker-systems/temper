@@ -49,6 +49,7 @@
 # ── Surfaces: transport only ──────────────────────────────────────────────────────────────────────
 /crates/temper-api/                 @jcoletaylor
 /crates/temper-mcp/                 @jcoletaylor
+/crates/temper-mcp-server/          @jcoletaylor
 /api/                               @jcoletaylor
 /openapi.json                       @jcoletaylor
 

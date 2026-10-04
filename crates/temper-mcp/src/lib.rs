@@ -1,15 +1,14 @@
-//! temper-mcp — MCP (Model Context Protocol) server for agent workflows.
+//! temper-mcp — the MCP tool layer for agent workflows.
 //!
-//! Exposes the temper knowledge base to LLM agents via Claude Desktop,
-//! Claude Code, and other MCP-compatible clients. Deployed as a Vercel
-//! serverless function alongside the main temper-api.
+//! Declares temper's MCP tools and relays every act across the network door to the API.
+//! It holds no database handle and no server configuration: the deployed edge (the JWT
+//! check, OAuth discovery/registration, the router and its boot) is `temper-mcp-server`,
+//! which hands this crate plain values ([`host`]) and serves the [`service`] it builds.
 
 pub(crate) mod cache_policy;
 pub mod config;
-pub mod discovery;
-pub mod middleware;
+pub mod host;
 pub mod resources;
-pub mod router;
 pub mod service;
 pub mod tools;
 
@@ -17,4 +16,5 @@ pub mod tools;
 mod source_gates;
 
 pub use config::McpConfig;
-pub use router::build_router;
+pub use host::{BearerToken, BlobDoor};
+pub use service::TemperMcpService;
