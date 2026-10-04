@@ -25,6 +25,9 @@ A host does three things.
 3. **Mounts `TemperMcpService`** with its own transport. Construct it once and clone it per
    connection or request; the clone shares one connection pool.
 
+Besides `temperkb-mcp`, a host depends on `http` (the seam reads `http::request::Parts`) and
+`temperkb-workflow` (for `Surface`), at the versions this crate uses.
+
 ```rust
 use std::sync::Arc;
 use std::time::Duration;
@@ -64,15 +67,15 @@ The crate ships its `tools/list` answer as a fixture, `temper_mcp::declarations:
 host runs one test that sends `tools/list` through its own transport and checks the answer:
 
 ```rust
-// the raw JSON-RPC response bytes your transport answered…
-temper_mcp::declarations::assert_tools_list_response(&bytes);
+// the raw JSON-RPC response bytes your transport answered, and the BlobDoor you built with…
+temper_mcp::declarations::assert_tools_list_response(&bytes, &blob_door);
 // …or the `result` value, if your client already parsed it
-temper_mcp::declarations::assert_tools_list(&result);
+temper_mcp::declarations::assert_tools_list(&result, &blob_door);
 ```
 
 If the host advertises anything else, its test goes red. That covers a changed declaration, a
-different rmcp resolved into the host's graph, or middleware rewriting the answer. A host with a
-closed blob door is checked against the set without the two blob tools.
+different rmcp resolved into the host's graph, or middleware rewriting the answer. A closed blob
+door is held to the set without the two blob tools, an open one to the whole set.
 
 ## Features
 

@@ -28,6 +28,7 @@ cd "$REPO_ROOT"
 CLOSURE=(temperkb-principal temperkb-auth temperkb-core temperkb-workflow temperkb-telemetry temperkb-client)
 PACKAGES=("${CLOSURE[@]}" temperkb-mcp)
 
+TARGET_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
 VERSION="$(awk -F'"' '/^\[workspace\.package\]/{p=1; next} /^\[/{p=0} p && /^version = /{print $2; exit}' Cargo.toml)"
 
 ARGS=()
@@ -45,7 +46,7 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 for p in "${PACKAGES[@]}"; do
-    tar -xzf "target/package/${p}-${VERSION}.crate" -C "$WORK"
+    tar -xzf "${TARGET_DIR}/package/${p}-${VERSION}.crate" -C "$WORK"
 done
 
 # Config from a parent directory applies to the extracted crate without editing its manifest.
@@ -57,10 +58,15 @@ mkdir -p "$WORK/.cargo"
     done
 } > "$WORK/.cargo/config.toml"
 
+# A second, outside-the-workspace build: keep it lean (no debuginfo) and remove it afterwards.
+TEST_TARGET="${TARGET_DIR}/package-test"
+trap 'rm -rf "$WORK" "$TEST_TARGET"' EXIT
+export CARGO_PROFILE_DEV_DEBUG=0
+
 echo "==> temperkb-mcp's tests from its packaged tarball"
-(cd "$WORK/temperkb-mcp-${VERSION}" && CARGO_TARGET_DIR="$REPO_ROOT/target/package-test" cargo test)
+(cd "$WORK/temperkb-mcp-${VERSION}" && CARGO_TARGET_DIR="$TEST_TARGET" cargo test)
 
 echo "==> ...and with default-features = false"
-(cd "$WORK/temperkb-mcp-${VERSION}" && CARGO_TARGET_DIR="$REPO_ROOT/target/package-test" cargo test --no-default-features)
+(cd "$WORK/temperkb-mcp-${VERSION}" && CARGO_TARGET_DIR="$TEST_TARGET" cargo test --no-default-features)
 
 echo "==> temperkb-mcp ${VERSION} packages, verifies and tests from its tarball."

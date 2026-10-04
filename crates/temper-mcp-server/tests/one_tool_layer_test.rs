@@ -10,7 +10,7 @@
 //! items included: a tool is a declaration wherever it is written. Its limit: a `#[tool]` inside
 //! a macro body is tokens, not an attribute, and is not seen. The positive half is that the
 //! router serves the tool layer's service, which the declaration witness
-//! (`tool_declaration_witness_test.rs`) holds byte for byte.
+//! (`tool_declaration_witness_test.rs`) holds to the shipped declarations.
 
 use std::path::{Path, PathBuf};
 

@@ -348,8 +348,8 @@ jobs:
     # temperkb-mcp is publish-ready but not yet in the release lane (its first publish claims the
     # name by hand; see publish-crates.sh's header), so nothing else would notice it stop packaging
     # before that publish. Needs neither Postgres nor the model: it packages, verifies and runs the
-    # tool layer's own tests, none of which touch a database. temperkb-core's `query!` sites
-    # resolve against the committed `.sqlx` cache.
+    # tool layer's own tests, none of which touch a database. SQLX_OFFLINE keeps any sqlx macro in
+    # the closure from reaching for one.
     env:
       SQLX_OFFLINE: "true"
 

@@ -117,7 +117,14 @@ async fn the_deployed_door_advertises_the_shipped_declarations() {
     // The declarations are the tool layer's (temperkb-mcp ships them as a fixture); this host
     // asserts its own wire answer against them through the crate's public helper, exactly as
     // any other host does. The fixture is regenerated in the crate (its `declarations_test`).
-    temper_mcp::declarations::assert_tools_list_response(&bytes);
+    // The posture is the one this router was built with (the fixture state's own `BlobDoor`), so
+    // a router wired open when its config says closed goes red here too.
+    let blob_door = common::state_with_distinct_audiences().config.blob_door;
+    assert!(
+        !blob_door.is_open(),
+        "the fixture state closes the blob door"
+    );
+    temper_mcp::declarations::assert_tools_list_response(&bytes, &blob_door);
     let envelope: Value = serde_json::from_slice(&bytes).expect("tools/list answers JSON");
     assert_eq!(envelope["id"], 2, "the response answers this request's id");
 }

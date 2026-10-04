@@ -8,12 +8,12 @@
 //! must pass.
 
 use serde_json::Value;
-use temper_mcp::declarations::{assert_tools_list, canonical_json};
+use temper_mcp::declarations::{assert_tools_list, canonical_json, without_complete_result_type};
 use temper_mcp::{BlobDoor, TemperMcpService};
 
 /// The `tools/list` result a client receives from a service with this blob door.
-async fn tools_list(blob_door: BlobDoor) -> Value {
-    let service = TemperMcpService::unavailable(blob_door, "this test host relays nowhere");
+async fn tools_list(blob_door: &BlobDoor) -> Value {
+    let service = TemperMcpService::unavailable(blob_door.clone(), "this test host relays nowhere");
     let (server_io, client_io) = tokio::io::duplex(1 << 22);
     let server = tokio::spawn(async move {
         let running = rmcp::serve_server(service, server_io).await.expect("serve");
@@ -34,27 +34,32 @@ fn open() -> BlobDoor {
 
 #[tokio::test]
 async fn the_mounted_service_advertises_the_shipped_declarations() {
-    let advertised = tools_list(open()).await;
+    let advertised = tools_list(&open()).await;
 
     if std::env::var("UPDATE_MCP_DECLARATIONS").is_ok() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("src/declarations/tools_list.json");
-        std::fs::write(&path, canonical_json(&advertised)).expect("fixture writes");
+        // Normalized, so a negotiated `resultType: "complete"` never lands in the fixture.
+        std::fs::write(
+            &path,
+            canonical_json(&without_complete_result_type(&advertised)),
+        )
+        .expect("fixture writes");
         panic!(
             "fixture regenerated at {}; run again WITHOUT UPDATE_MCP_DECLARATIONS to assert it",
             path.display()
         );
     }
 
-    assert_tools_list(&advertised);
+    assert_tools_list(&advertised, &open());
 }
 
 #[tokio::test]
 async fn a_closed_blob_door_advertises_the_shipped_declarations_without_the_blob_pair() {
-    let advertised = tools_list(BlobDoor::Closed {
+    let closed = BlobDoor::Closed {
         refusal: "no blob store".into(),
-    })
-    .await;
+    };
+    let advertised = tools_list(&closed).await;
     let names: Vec<&str> = advertised["tools"]
         .as_array()
         .expect("tools")
@@ -62,5 +67,5 @@ async fn a_closed_blob_door_advertises_the_shipped_declarations_without_the_blob
         .filter_map(|t| t["name"].as_str())
         .collect();
     assert!(!names.contains(&"blob_read") && !names.contains(&"blob_manage"));
-    assert_tools_list(&advertised);
+    assert_tools_list(&advertised, &closed);
 }
