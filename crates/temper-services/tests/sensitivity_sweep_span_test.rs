@@ -130,8 +130,18 @@ async fn release(pool: &PgPool) {
     .unwrap();
 }
 
+/// The operator's act on a deployment that opts in (Q52, Q53): every seeded detector is off until
+/// someone turns it on, and these witnesses are about what an enabled detector does.
+async fn enable_seeded_detectors(pool: &PgPool) {
+    sqlx::query("SELECT sensitivity.enable_detectors(1, 'temper')")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn the_sweep_spans_tell_every_stalled_state_from_a_quiet_one(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let exporter = InMemorySpanExporter::default();
     assert!(
         temper_telemetry::export::install_test_provider(exporter.clone()),
@@ -163,6 +173,42 @@ async fn the_sweep_spans_tell_every_stalled_state_from_a_quiet_one(pool: PgPool)
         .await
         .unwrap();
 
+    // ── Pass 0: the deployment has not opted in (Q52, Q53). The salt is unset and an order waits,
+    //    which an opted-in call would claim and fail loudly on. This one claims nothing, writes
+    //    nothing and raises nothing: the call span says it was off, and that is all.
+    order(&pool, "kb_resources.title").await;
+    logs.take();
+    spans(&exporter);
+    let summary = sweep(&pool, None, false).await.expect("sweep answers");
+    assert!(summary.ticks.is_empty(), "{summary:?}");
+    assert!(!summary.answer().enabled);
+    let emitted = spans(&exporter);
+    assert!(
+        ticks(&emitted).is_empty(),
+        "a call that is off ticks nothing"
+    );
+    let call = the_call(&emitted);
+    assert_eq!(attr(call, "enabled").as_deref(), Some("false"));
+    assert_eq!(attr(call, "ended").as_deref(), Some("disabled"));
+    let off = logs.take();
+    assert!(
+        !off.contains(" ERROR "),
+        "a deployment that has not opted in raises nothing:\n{off}"
+    );
+    let (runs, claimed): (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM sensitivity.runs), \
+                (SELECT count(*) FROM kb_workflow_jobs \
+                  WHERE persona = 'sensitivity' AND status <> 'pending')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (runs, claimed),
+        (0, 0),
+        "a call that is off wrote or claimed"
+    );
+
     // ── Pass 1: the store refuses the finding, so the tick fails with the salt set; the failed job
     //    then holds the slot. Witness 14's trigger, which quotes the value in its message.
     sqlx::query(&format!(
@@ -183,7 +229,7 @@ async fn the_sweep_spans_tell_every_stalled_state_from_a_quiet_one(pool: PgPool)
     // The setup's own statements quote the value (the trigger's message); judge only the sweep's.
     logs.take();
     spans(&exporter);
-    let summary = sweep(&pool, Some(SALT)).await.expect("sweep runs");
+    let summary = sweep(&pool, Some(SALT), true).await.expect("sweep runs");
     assert_eq!(summary.ticks.len(), 1, "{summary:?}");
     let emitted = spans(&exporter);
     let failed = logs.take();
@@ -208,7 +254,7 @@ async fn the_sweep_spans_tell_every_stalled_state_from_a_quiet_one(pool: PgPool)
         .await
         .unwrap();
     release(&pool).await;
-    let summary = sweep(&pool, Some(SALT)).await.expect("sweep runs");
+    let summary = sweep(&pool, Some(SALT), true).await.expect("sweep runs");
     assert!(
         summary.ticks.iter().any(|t| t.new_findings >= 1),
         "the SSN must be found, or the absence below proves nothing: {summary:?}"
@@ -249,7 +295,7 @@ async fn the_sweep_spans_tell_every_stalled_state_from_a_quiet_one(pool: PgPool)
     assert_carries_none(&emitted, &found);
 
     // ── Pass 3: the salt is unset. The tick fails, and the error names the variable.
-    let summary = sweep(&pool, None).await.expect("sweep runs");
+    let summary = sweep(&pool, None, true).await.expect("sweep runs");
     assert_eq!(summary.ticks.len(), 1);
     let emitted = spans(&exporter);
     assert_eq!(
@@ -267,7 +313,7 @@ async fn the_sweep_spans_tell_every_stalled_state_from_a_quiet_one(pool: PgPool)
     );
 
     // ── That job is backing off, so the claim finds nothing. Still loud.
-    let summary = sweep(&pool, None).await.expect("sweep runs");
+    let summary = sweep(&pool, None, true).await.expect("sweep runs");
     assert!(summary.ticks.is_empty());
     let emitted = spans(&exporter);
     assert!(
@@ -295,7 +341,7 @@ async fn the_sweep_spans_tell_every_stalled_state_from_a_quiet_one(pool: PgPool)
     .execute(&pool)
     .await
     .unwrap();
-    assert!(sweep(&pool, Some(SALT)).await.is_err());
+    assert!(sweep(&pool, Some(SALT), true).await.is_err());
     let emitted = spans(&exporter);
     let raised = ticks(&emitted);
     assert_eq!(raised.len(), 1, "the claimed tick still reports");

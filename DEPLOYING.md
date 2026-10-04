@@ -501,18 +501,44 @@ endpoint needs a raised timeout.
 
 ## Sensitivity sweep (personal data that lands in the corpus by accident)
 
-`/api/sensitivity/sweep` runs every five minutes from `vercel.json`, behind the same
-`EMBED_DISPATCH_SECRET` bearer as the other internal crons. Each call claims and scans the
-enabled surfaces in turn for up to about four minutes, and stops early once a whole rotation
-finds nothing new. It stores where a finding is and what kind it is, never the matched value.
+`/api/sensitivity/sweep` is called every five minutes from `vercel.json`, behind the same
+`EMBED_DISPATCH_SECRET` bearer as the other internal crons. **It does nothing until you opt the
+deployment in**, and then it runs only the detectors you enable. Once on, each call claims and
+scans the enabled surfaces in turn for up to about four minutes, and stops early once a whole
+rotation finds nothing new. It stores where a finding is and what kind it is, never the matched
+value.
 
-1. **Set `SENSITIVITY_SWEEP_SALT`** on the Vercel project. Generate it with
+1. **Opt in with `SENSITIVITY_SWEEP_ENABLED=true`** on the Vercel project. Unset, the call answers
+   `enabled: false` and touches nothing: no claim, no row, no error event. Any value other than
+   `true`/`1`/`false`/`0` leaves it off and logs an error at boot.
+2. **Enable the detectors you want**, in SQL with database access. Every detector ships off, and
+   no migration turns one on. List them with
+   `SELECT id, version, severity, category, provided_by, enabled FROM sensitivity.detectors`.
+   - One detector, at the version you reviewed: `SELECT sensitivity.enable_detector('jwt', 1)`.
+     A version that is no longer current refuses, so you never enable a pattern you did not read.
+   - Everything at least as serious as a severity (1 to 4), optionally only temper's or only your
+     own: `SELECT * FROM sensitivity.enable_detectors(3, 'temper')`. The matching
+     `disable_detectors(2)` turns off everything at severity 2 or below;
+     `disable_detector('payment_card')` turns off one.
+   - Disabling keeps a detector's findings and cursors, so enabling it again resumes where it
+     stopped.
+   - `provided_by` says whose a detector is: `temper` for the ones temper's migrations seed and
+     may version, `organization` for one you add. A detector you `INSERT` is `organization` and
+     off unless you say otherwise, and temper's migrations never change it.
+   - **Try a detector before enabling it** with a dry run, which reads and counts but writes
+     nothing: `SELECT * FROM sensitivity.dry_run('jwt', 1, 'latest')` reads the newest 5,000 units
+     of each surface. The bound can instead be `'context'`, `'cogmap'`, `'profile'` or `'team'`
+     with that one's id, meaning the resources homed there (or owned by that profile, or homed in
+     contexts that team owns). Each surface reports counts and its `hotspots`, the places with the
+     most matches, as ids. To try a pattern of your own, `INSERT` it as a detector inside a
+     transaction, dry-run it, and `ROLLBACK`.
+3. **Set `SENSITIVITY_SWEEP_SALT`** on the Vercel project. Generate it with
    `openssl rand -base64 32`; the API refuses to boot on a value under 32 characters or one
    equal to any other shared secret. Every hash and fingerprint the sweep stores is keyed by
    it, so **keep it stable**: changing it re-keys everything, and existing findings stop
    matching their content. Unset, the sweep cannot scan: every tick records `salt_missing`
    and the door logs an error on every call.
-2. **Keep the database from logging bind parameters.** The salt reaches Postgres as a bind
+4. **Keep the database from logging bind parameters.** The salt reaches Postgres as a bind
    parameter. With `log_parameter_max_length` left at its default (unlimited), any
    `log_min_duration_statement` that catches a tick, or `log_statement = all`, writes the
    salt to the server log. The door checks these settings on every call and logs an error
@@ -522,8 +548,8 @@ finds nothing new. It stores where a finding is and what kind it is, never the m
      duration or statement logging that would write the salt. Checked on production
      2026-10-04: `log_min_duration_statement = -1`, `log_statement = none`, sampling off. The
      exposure exists only if Neon enables that logging, and the door reports it if they do.
-3. **Watch the spans.** Each call emits one `sensitivity_sweep_call` span, with
-   `ended` = `idle`, `budget`, `slot_free`, `slot_leased`, `slot_blocked` or `lease_lapsed`,
+5. **Watch the spans.** Each call emits one `sensitivity_sweep_call` span, with
+   `ended` = `disabled` (not opted in), `idle`, `budget`, `slot_free`, `slot_leased`, `slot_blocked` or `lease_lapsed`,
    and one `sensitivity_sweep` span per tick with its counts. A failed tick, a failed job
    blocking the queue, a lapsed lease, an unset salt and a salt the database may log each
    raise an ERROR event.

@@ -23,6 +23,31 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **The sensitivity sweep is off until an operator turns it on: `SENSITIVITY_SWEEP_ENABLED`, detectors off by default, and who provides each**
+  A deployment scans only after its operator opts in (sweep Q52, Q53). The API reads a new
+  variable, `SENSITIVITY_SWEEP_ENABLED`. Unless it is `true` or `1`, the cron call to
+  `/api/sensitivity/sweep` reaps, claims and ticks nothing, writes no row and raises none of the
+  sweep's error events (an unset salt included); it answers `enabled: false`. The answer gains that
+  one boolean. An unrecognised value leaves the sweep off and logs an error at boot. The migration
+  turns every temper-provided detector off on every deployment, and new detectors default to off.
+  An operator enables them in SQL: `sensitivity.enable_detector(id, version)` refuses a version
+  that is not current, and `sensitivity.enable_detectors(min_severity, provided_by)` and
+  `disable_detectors(max_severity, provided_by)` act on a severity threshold. Each detector now
+  records `provided_by`, `temper` or `organization`; the nine seeded ids are `temper`, and a row an
+  operator inserts is `organization` unless it says otherwise. Temper's migrations change only
+  `temper` rows. `sensitivity.dry_run(...)` measures one detector version over the newest units, or
+  over a context, cognitive map, profile or team by where resources are homed (Q54). It answers
+  counts and pointers per surface, never a matched value, and writes nothing. A deployment running
+  the sweep today stops scanning when this deploys, until its operator sets the variable and
+  enables detectors; its cursors and findings stay, so enabling resumes where it stopped. A binary
+  that predates the variable keeps ticking against the migrated schema, and with every detector
+  off those ticks scan nothing and leave no rows. Who observes: operators and deployers. User-visible:
+  no. Release relevance: behavioral for every deployment that was sweeping.
+pr: self
+classes: additive, behavioral
+surfaces: http, internal, schema
+status: signal-only
+
 - **The MCP tool layer relays on a host-supplied identity: `IdentitySeam`, `RelayConfig`, and a second in-repo host**
   `temper-mcp` no longer knows whom the deployed door relays as. A host implements
   `IdentitySeam`: per request it yields an `OutgoingIdentity` (bearer, `Surface`, opaque extra

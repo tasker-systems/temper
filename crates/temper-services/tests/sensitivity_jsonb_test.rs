@@ -168,8 +168,18 @@ fn assert_holds_none_of(haystack: &str, planted: &str, what: &str) {
 
 // ── Q26: a jsonb finding is a structural path, and a user's keys are never written ────────────
 
+/// The operator's act on a deployment that opts in (Q52, Q53): every seeded detector is off until
+/// someone turns it on, and these witnesses are about what an enabled detector does.
+async fn enable_seeded_detectors(pool: &PgPool) {
+    sqlx::query("SELECT sensitivity.enable_detectors(1, 'temper')")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_user_map_key_is_written_as_a_question_mark_and_still_scanned(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let e = event(
         &pool,
         "property_set",
@@ -210,6 +220,7 @@ async fn a_user_map_key_is_written_as_a_question_mark_and_still_scanned(pool: Pg
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_webhook_document_is_scanned_at_hidden_paths_and_tallied(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let e = event(
         &pool,
         "webhook_received",
@@ -256,6 +267,7 @@ async fn a_webhook_document_is_scanned_at_hidden_paths_and_tallied(pool: PgPool)
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_jsonb_row_is_scanned_whole_under_a_one_row_budget(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     // History first, so the one-row budget is spent by the head on this event alone.
     let e = event(
         &pool,
@@ -318,6 +330,7 @@ async fn a_jsonb_unit_is_never_memoised(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn an_oversize_row_is_passed_whole_and_named_and_the_next_row_is_scanned(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let mut body = serde_json::Map::new();
     for i in 0..5_000 {
         body.insert(format!("k{i}"), serde_json::json!(format!("v{i}")));
@@ -366,6 +379,7 @@ async fn an_oversize_row_is_passed_whole_and_named_and_the_next_row_is_scanned(p
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn an_event_type_off_the_tally_shape_is_counted_not_fatal(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     sqlx::query(
         "INSERT INTO kb_event_types (name, payload_schema, schema_version, category) \
          VALUES ('Oauth2.Linked', NULL, 1, 'domain')",
@@ -406,6 +420,7 @@ async fn an_event_type_off_the_tally_shape_is_counted_not_fatal(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_hex_hash_v1_read_as_a_card_is_not_one(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let hash: String = sqlx::query_scalar(
         "SELECT x FROM (SELECT encode(sha256(g::text::bytea), 'hex') x FROM generate_series(1, 5000) g) h \
           WHERE EXISTS (SELECT 1 FROM sensitivity.detector_matches('payment_card', 1, x)) LIMIT 1",
@@ -457,6 +472,7 @@ async fn property(
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_resources_anchored_at_value_keeps_its_keys_hidden(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let doc = serde_json::json!({ "jane_doe": { "spouse": format!("ssn {SSN_A}") } });
     let on_resource = property(
         &pool,
@@ -590,6 +606,7 @@ async fn a_jsonb_surface_cannot_take_a_mutable_cursor(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn remediability_is_read_per_event_type_and_path(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let r = Uuid::now_v7().to_string();
     let created = event(
         &pool,
@@ -719,6 +736,7 @@ async fn bare_resource(pool: &PgPool, title: &str) -> Uuid {
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn closure_reads_emptied_content_and_a_changed_title_never_a_missing_hash(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let r = bare_resource(&pool, &format!("Payroll for {SSN_A}")).await;
     let emptied = block(&pool, r, &format!("SSN {SSN_A}")).await;
     let kept = block(&pool, r, &format!("SSN {SSN_B}")).await;
@@ -812,6 +830,7 @@ async fn system_actor(pool: &PgPool) -> (ProfileId, EntityId) {
 async fn a_resource_erasure_closes_its_title_and_property_findings_and_not_its_ledger(
     pool: PgPool,
 ) {
+    enable_seeded_detectors(&pool).await;
     bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let home: Uuid = sqlx::query_scalar(
@@ -937,6 +956,7 @@ async fn a_resource_erasure_closes_its_title_and_property_findings_and_not_its_l
 async fn a_block_history_scrub_closes_the_prior_revisions_finding_and_not_the_current(
     pool: PgPool,
 ) {
+    enable_seeded_detectors(&pool).await;
     bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let home: Uuid = sqlx::query_scalar(
@@ -1105,6 +1125,7 @@ async fn created_resource(
 /// places at 29 days, and the ledger's copy of R's title, which stays open until cut 2.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn every_place_the_act_reached_gives_up_its_digests_after_thirty_days(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let home: Uuid = sqlx::query_scalar(
@@ -1360,6 +1381,7 @@ async fn every_place_the_act_reached_gives_up_its_digests_after_thirty_days(pool
 async fn content_a_scrub_or_principal_erasure_emptied_gives_up_its_digests_after_thirty_days(
     pool: PgPool,
 ) {
+    enable_seeded_detectors(&pool).await;
     bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let home: Uuid = sqlx::query_scalar(
@@ -1542,6 +1564,7 @@ async fn card_dispositions_at(
 async fn a_card_finding_the_current_version_would_not_make_closes_as_a_false_positive(
     pool: PgPool,
 ) {
+    enable_seeded_detectors(&pool).await;
     const STAMP: &str = "20261003000050"; // a migration stamp that passes Luhn
     const CARD: &str = "4111 1111 1111 1111";
     bump_payment_card(&pool, "luhn_valid").await;

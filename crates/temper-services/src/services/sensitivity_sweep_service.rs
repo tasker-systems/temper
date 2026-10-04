@@ -25,6 +25,12 @@
 //! The service names the public functions and the queue table, never the schema behind them:
 //! that is witness 12's grep gate.
 //!
+//! ## Off until an operator opts in (Q52, Q53)
+//!
+//! A deployment whose operator has not set `SENSITIVITY_SWEEP_ENABLED` gets a door that answers
+//! and does nothing else: no reap, no claim, no tick, no row, and none of the error events below.
+//! The cron entry stays in `vercel.json` on every deployment, so the variable is the opt-in.
+//!
 //! ## Loud, not quiet
 //!
 //! Every state in which the sweep is not scanning raises an error event: an unset salt (Q44), a
@@ -71,8 +77,13 @@ pub const SENSITIVITY_SWEEP_RUN_FIELDS: [&str; 15] = [
 ];
 
 /// Fields every `sensitivity_sweep_call` span declares.
-pub const SENSITIVITY_SWEEP_CALL_FIELDS: [&str; 4] =
-    ["salt_configured", "salt_may_be_logged", "ticks", "ended"];
+pub const SENSITIVITY_SWEEP_CALL_FIELDS: [&str; 5] = [
+    "enabled",
+    "salt_configured",
+    "salt_may_be_logged",
+    "ticks",
+    "ended",
+];
 
 /// How a tick ended. Numbered in `sensitivity_sweep_tick` (Q45).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,6 +213,8 @@ pub enum Slot {
 /// Why a call stopped claiming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ended {
+    /// The deployment has not opted in: nothing was reaped, claimed or ticked.
+    Disabled,
     /// The loop's time budget ran out.
     Budget,
     /// A whole rotation examined no row.
@@ -215,6 +228,7 @@ pub enum Ended {
 impl Ended {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Disabled => "disabled",
             Self::Budget => "budget",
             Self::Idle => "idle",
             Self::Unclaimed(Slot::Free) => "slot_free",
@@ -229,7 +243,8 @@ impl Ended {
 #[derive(Debug, Clone)]
 pub struct SweepSummary {
     pub salt_configured: bool,
-    /// The server's logging settings may write the salt bind parameter to its log (Q47).
+    /// The server's logging settings may write the salt bind parameter to its log (Q47). Not read,
+    /// and false, when the deployment has not opted in.
     pub salt_may_be_logged: bool,
     pub ticks: Vec<TickReport>,
     pub ended: Ended,
@@ -238,6 +253,8 @@ pub struct SweepSummary {
 /// The route's answer: counts of ticks and booleans, nothing a caller can learn the corpus from.
 #[derive(Debug, Clone, Serialize)]
 pub struct SweepAnswer {
+    /// Whether the deployment has opted in. False means the call did nothing at all.
+    pub enabled: bool,
     pub ticks: u32,
     pub failed_ticks: u32,
     pub salt_configured: bool,
@@ -247,6 +264,7 @@ pub struct SweepAnswer {
 impl SweepSummary {
     pub fn answer(&self) -> SweepAnswer {
         SweepAnswer {
+            enabled: !matches!(self.ended, Ended::Disabled),
             ticks: self.ticks.len() as u32,
             failed_ticks: self.ticks.iter().filter(|t| t.failed).count() as u32,
             salt_configured: self.salt_configured,
@@ -261,8 +279,19 @@ struct Claim {
     surfaces: i32,
 }
 
-/// One call of the door, with the deployed loop budget.
-pub async fn sweep(pool: &PgPool, salt: Option<&[u8]>) -> ApiResult<SweepSummary> {
+/// One call of the door, with the deployed loop budget. `enabled` is the deployment's opt-in:
+/// false touches nothing in the database and raises no error event, only the call span.
+pub async fn sweep(pool: &PgPool, salt: Option<&[u8]>, enabled: bool) -> ApiResult<SweepSummary> {
+    if !enabled {
+        let summary = SweepSummary {
+            salt_configured: salt.is_some(),
+            salt_may_be_logged: false,
+            ticks: Vec::new(),
+            ended: Ended::Disabled,
+        };
+        emit_call_span(&summary);
+        return Ok(summary);
+    }
     sweep_within(pool, salt, LOOP_BUDGET).await
 }
 
@@ -504,8 +533,10 @@ fn emit_tick_span(claim: &Claim, report: Option<&TickReport>, errored: bool) {
 /// One `sensitivity_sweep_call` span per call, plus an error event for each state in which the
 /// sweep cannot work: these hold whether or not anything was claimed.
 fn emit_call_span(summary: &SweepSummary) {
+    let enabled = !matches!(summary.ended, Ended::Disabled);
     let span = tracing::info_span!(
         "sensitivity_sweep_call",
+        enabled,
         salt_configured = summary.salt_configured,
         salt_may_be_logged = summary.salt_may_be_logged,
         ticks = summary.ticks.len(),
@@ -514,6 +545,10 @@ fn emit_call_span(summary: &SweepSummary) {
         slot_failure = tracing::field::Empty,
     );
     let _entered = span.enter();
+    // A deployment that has not opted in is not a sweep that cannot work: it raises nothing.
+    if !enabled {
+        return;
+    }
     if !summary.salt_configured {
         tracing::error!(
             "SENSITIVITY_SWEEP_SALT is unset: the sensitivity sweep cannot scan, and every tick \

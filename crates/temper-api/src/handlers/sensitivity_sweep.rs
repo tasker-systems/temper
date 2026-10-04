@@ -18,6 +18,9 @@ use temper_services::state::AppState;
 /// crons in `embed_internal_routes`. Vercel Cron invokes with GET; POST exists for manual ops. A
 /// re-run only claims whatever is next, so a GET trigger is safe.
 ///
+/// Does nothing unless the deployment opted in with `SENSITIVITY_SWEEP_ENABLED` (Q52, Q53): it
+/// then answers `enabled: false` without touching the database.
+///
 /// Gated by the shared `EMBED_DISPATCH_SECRET` bearer via `embed::require_dispatch_secret`: no new
 /// gate secret (D8). The salt is a key, not a gate, and has its own variable (Q44).
 ///
@@ -38,7 +41,7 @@ pub async fn sweep(
         .as_deref()
         .map(str::as_bytes);
     Ok(Json(
-        sensitivity_sweep_service::sweep(&state.pool, salt)
+        sensitivity_sweep_service::sweep(&state.pool, salt, state.config.sensitivity_sweep_enabled)
             .await?
             .answer(),
     ))

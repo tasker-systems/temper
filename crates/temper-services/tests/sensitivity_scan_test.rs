@@ -196,8 +196,18 @@ fn assert_holds_none_of(haystack: &str, planted: &str, what: &str) {
 
 // ── Witness 1, the planted half: a finding is a pointer and a category ────────────────────────
 
+/// The operator's act on a deployment that opts in (Q52, Q53): every seeded detector is off until
+/// someone turns it on, and these witnesses are about what an enabled detector does.
+async fn enable_seeded_detectors(pool: &PgPool) {
+    sqlx::query("SELECT sensitivity.enable_detectors(1, 'temper')")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_planted_ssn_yields_a_finding_and_nothing_the_sweep_wrote_holds_it(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let r = resource(&pool, &format!("Payroll for {SSN_A}")).await;
     let t = tick(&pool, "kb_resources.title").await;
 
@@ -231,6 +241,7 @@ async fn a_planted_ssn_yields_a_finding_and_nothing_the_sweep_wrote_holds_it(poo
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn identical_prose_in_three_resources_scans_once_and_yields_three_findings(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let prose = format!("Employee record: SSN {SSN_A}, start date in March.");
     let mut places = Vec::new();
     for title in ["one", "two", "three"] {
@@ -271,6 +282,7 @@ async fn identical_prose_in_three_resources_scans_once_and_yields_three_findings
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_second_tick_with_no_new_content_examines_nothing(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     remote_source(&pool, "https://docs.example/history").await;
     let install = tick(&pool, "kb_remote_sources.uri").await;
     assert_eq!(
@@ -295,6 +307,7 @@ async fn a_second_tick_with_no_new_content_examines_nothing(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_row_committed_after_a_tick_beneath_its_watermark_is_still_found(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     // Install the cursors first, so both rows below land above the backfill floor and only the
     // head can find them.
     tick(&pool, "kb_remote_sources.uri").await;
@@ -335,6 +348,7 @@ async fn a_row_committed_after_a_tick_beneath_its_watermark_is_still_found(pool:
 async fn a_transaction_that_reads_first_then_writes_beneath_the_watermark_is_still_found(
     pool: PgPool,
 ) {
+    enable_seeded_detectors(&pool).await;
     let target = resource(&pool, "Onboarding notes").await;
     tick(&pool, "kb_resources.title").await;
 
@@ -367,6 +381,7 @@ async fn a_transaction_that_reads_first_then_writes_beneath_the_watermark_is_sti
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_title_only_update_is_detected(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let r = resource(&pool, "Quarterly planning").await;
     tick(&pool, "kb_resources.title").await;
     assert!(findings_at(&pool, r).await.is_empty());
@@ -392,6 +407,7 @@ async fn a_title_only_update_is_detected(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_bump_backfills_only_its_detector_and_the_head_keeps_moving(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let old = remote_source(&pool, &format!("https://hr.example/{SSN_A}")).await;
     remote_source(&pool, "https://docs.example/plain").await;
     tick(&pool, "kb_remote_sources.uri").await;
@@ -429,6 +445,7 @@ async fn a_bump_backfills_only_its_detector_and_the_head_keeps_moving(pool: PgPo
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_tick_that_fails_on_a_planted_row_writes_a_code_and_never_the_value(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     sqlx::query(&format!(
         "CREATE FUNCTION witness_boom() RETURNS trigger LANGUAGE plpgsql AS $$ \
          BEGIN RAISE EXCEPTION 'cannot store {SSN_A}'; END $$"
@@ -572,6 +589,7 @@ async fn the_claim_rotates_through_every_enabled_surface(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_block_with_two_ssns_keeps_both_fingerprints_and_a_quote_of_either_matches(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let leak = block(
         &pool,
         resource(&pool, "leak").await,
@@ -630,6 +648,7 @@ async fn a_tick_without_a_salt_scans_nothing_and_says_why(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_capped_fingerprint_set_says_it_is_truncated(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let many: Vec<String> = (100..165).map(|area| format!("{area}-01-0001")).collect();
     let capped = block(&pool, resource(&pool, "c").await, &many.join(" ")).await;
     tick(&pool, "kb_block_content.content").await;
@@ -640,6 +659,7 @@ async fn a_capped_fingerprint_set_says_it_is_truncated(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_header_only_match_is_not_fingerprinted(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let key = |body: &str| {
         format!("-----BEGIN RSA PRIVATE KEY-----\n{body}\n-----END RSA PRIVATE KEY-----")
     };
@@ -682,6 +702,7 @@ async fn last_seen_after_decision(pool: &PgPool, finding: Uuid, decided: Uuid) -
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn an_acknowledged_title_stays_acknowledged_until_the_value_comes_back(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let leaked = format!("Employee {SSN_A}");
     let r = resource(&pool, &leaked).await;
     tick(&pool, "kb_resources.title").await;
@@ -781,6 +802,7 @@ async fn a_run_from_an_earlier_claim_of_the_same_job_is_refused(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn an_oversize_unit_is_named_as_unscanned(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let big = format!("{SSN_A} {}", "x".repeat(1_048_577));
     let place = block(&pool, resource(&pool, "dump").await, &big).await;
 
@@ -808,6 +830,7 @@ async fn an_oversize_unit_is_named_as_unscanned(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_declared_hash_cannot_steer_the_memo(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     block(&pool, resource(&pool, "clean").await, "hello world").await;
     tick(&pool, "kb_block_content.content").await;
 
@@ -839,6 +862,7 @@ async fn a_declared_hash_cannot_steer_the_memo(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn sightings_never_carry_across_a_category_change(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     let r = resource(&pool, &format!("Employee {SSN_A}")).await;
     tick(&pool, "kb_resources.title").await;
     for category in ["identifier", "national_id"] {

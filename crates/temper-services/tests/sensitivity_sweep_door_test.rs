@@ -50,6 +50,15 @@ fn with_findings(ticks: &[TickReport]) -> Vec<&TickReport> {
     ticks.iter().filter(|t| t.new_findings > 0).collect()
 }
 
+/// The operator's act on a deployment that opts in (Q52, Q53): every seeded detector is off until
+/// someone turns it on, and these witnesses are about what an enabled detector does.
+async fn enable_seeded_detectors(pool: &PgPool) {
+    sqlx::query("SELECT sensitivity.enable_detectors(1, 'temper')")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
 /// Witness 2, the signature half: neither function the door calls can return text. Read from the
 /// catalog, so a column added later in any type but these fails here.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -139,13 +148,14 @@ async fn the_tick_s_codes_are_the_rust_vocabulary(pool: PgPool) {
 /// call makes the head's holdback non-zero, and the title carries two severities.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_tick_reports_its_run_row_field_by_field(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     old_resource(&pool, &format!("Payroll {SSN} in /Users/jdoe/notes.md")).await;
     order(&pool, "kb_resources.title").await;
     let mut held = pool.begin().await.unwrap();
     sqlx::query("SELECT 1").execute(&mut *held).await.unwrap();
     tokio::time::sleep(Duration::from_millis(1_100)).await;
 
-    let summary = sweep(&pool, Some(SALT)).await.expect("sweep runs");
+    let summary = sweep(&pool, Some(SALT), true).await.expect("sweep runs");
     held.rollback().await.unwrap();
     let t = with_findings(&summary.ticks)[0];
 
@@ -198,10 +208,11 @@ async fn a_tick_reports_its_run_row_field_by_field(pool: PgPool) {
 /// caller could learn the corpus from.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_found_ssn_is_not_in_the_door_s_answer(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     old_resource(&pool, &format!("Payroll note for {SSN}")).await;
     order(&pool, "kb_resources.title").await;
 
-    let summary = sweep(&pool, Some(SALT)).await.expect("sweep runs");
+    let summary = sweep(&pool, Some(SALT), true).await.expect("sweep runs");
     assert!(
         with_findings(&summary.ticks)
             .iter()
@@ -219,7 +230,13 @@ async fn a_found_ssn_is_not_in_the_door_s_answer(pool: PgPool) {
     keys.sort_unstable();
     assert_eq!(
         keys,
-        ["failed_ticks", "salt_configured", "slot_blocked", "ticks"],
+        [
+            "enabled",
+            "failed_ticks",
+            "salt_configured",
+            "slot_blocked",
+            "ticks"
+        ],
         "the answer is counts of ticks and booleans, nothing per tick"
     );
     let wire = wire.to_string();
@@ -235,6 +252,7 @@ async fn a_found_ssn_is_not_in_the_door_s_answer(pool: PgPool) {
 /// after a rotation in which no tick examined a row.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn one_call_sweeps_every_surface_and_stops_when_a_rotation_is_idle(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
     old_resource(&pool, &format!("Payroll note for {SSN}")).await;
     let surfaces: i64 =
         sqlx::query_scalar("SELECT count(*) FROM sensitivity.surfaces WHERE enabled")
@@ -242,7 +260,7 @@ async fn one_call_sweeps_every_surface_and_stops_when_a_rotation_is_idle(pool: P
             .await
             .unwrap();
 
-    let summary = sweep(&pool, Some(SALT)).await.expect("sweep runs");
+    let summary = sweep(&pool, Some(SALT), true).await.expect("sweep runs");
     assert_eq!(summary.ended, Ended::Idle, "an idle rotation ends the call");
     assert!(
         summary.ticks.len() as i64 > surfaces,
@@ -292,7 +310,7 @@ async fn one_call_sweeps_every_surface_and_stops_when_a_rotation_is_idle(pool: P
         .fetch_one(&pool)
         .await
         .unwrap();
-    let again = sweep(&pool, Some(SALT)).await.expect("sweep runs");
+    let again = sweep(&pool, Some(SALT), true).await.expect("sweep runs");
     assert_eq!(again.ended, Ended::Idle);
     assert_eq!(
         again.ticks.len() as i64,
@@ -343,7 +361,7 @@ async fn a_lapsed_lease_is_reaped_before_the_claim(pool: PgPool) {
     .await
     .unwrap();
 
-    let summary = sweep(&pool, Some(SALT)).await.expect("sweep runs");
+    let summary = sweep(&pool, Some(SALT), true).await.expect("sweep runs");
     assert_eq!(
         summary.ended,
         Ended::Unclaimed(Slot::Blocked {
@@ -367,7 +385,7 @@ async fn the_claim_commits_before_the_tick_runs(pool: PgPool) {
     .unwrap();
 
     assert!(
-        sweep(&pool, Some(SALT)).await.is_err(),
+        sweep(&pool, Some(SALT), true).await.is_err(),
         "the tick call must fail"
     );
 
@@ -392,7 +410,7 @@ async fn an_unset_salt_is_recorded_and_its_job_blocks_the_slot(pool: PgPool) {
     old_resource(&pool, &format!("Payroll note for {SSN}")).await;
     order(&pool, "kb_resources.title").await;
 
-    let summary = sweep(&pool, None).await.expect("sweep runs");
+    let summary = sweep(&pool, None, true).await.expect("sweep runs");
     assert!(!summary.salt_configured);
     let tick = &summary.ticks[0];
     assert_eq!(tick.outcome, TickOutcome::Failed);
