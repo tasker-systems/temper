@@ -31,7 +31,9 @@ LANGUAGE sql IMMUTABLE STRICT AS $$
                WHEN d ~ '^3(0[0-5]|095|[689])'                           THEN length(d) BETWEEN 14 AND 19
                -- Maestro, Dankort
                WHEN d ~ '^(5018|5019|5020|5038|5893|6304|6759|676[1-3])' THEN length(d) BETWEEN 13 AND 19
-               -- Verve and Elo (506), RuPay (508, 60, 81, 82), Discover, InstaPayment, UnionPay
+               -- Verve and Elo (506), RuPay (508, 60, 81, 82), Discover, InstaPayment, UnionPay.
+               -- Wider than those networks on purpose (all of 60 and 62-65): the bound that matters
+               -- is 16 digits, which no stamp, epoch or id measured in production reaches.
                WHEN d ~ '^(506|508|60|6[2-5]|8[12])'                     THEN length(d) BETWEEN 16 AND 19
                -- Troy
                WHEN d ~ '^9792'                                          THEN length(d) = 16

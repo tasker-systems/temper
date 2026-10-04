@@ -1567,7 +1567,8 @@ async fn a_card_finding_the_current_version_would_not_make_closes_as_a_false_pos
         );
     }
 
-    // An operator already ruled on one; the title changed, so its place closes on its own.
+    // An operator already ruled on `ruled`. The title changes, and the sweep's next look at it
+    // closes its place as changed.
     sqlx::query(
         "INSERT INTO sensitivity.dispositions (finding_id, state) \
          SELECT id, 'acknowledged' FROM sensitivity.findings \
