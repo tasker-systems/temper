@@ -326,7 +326,7 @@ async fn a_read_only_machine_principal_reads_facets_on_mcp_and_cannot_assert_one
     .expect("seed machine registration");
     common::approve(&pool, machine_profile).await;
 
-    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let machine_parts = app.relay_parts_for(&common::generate_machine_jwt("facet-reader-client"));
 
     // ── the negative control, and it is not optional ──────────────────────────────────────────────

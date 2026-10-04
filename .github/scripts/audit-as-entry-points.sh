@@ -42,7 +42,7 @@
 # FIELD OF VIEW — stated so green is never mistaken for more than it checks:
 #   - THIS guard watches `find api -type f`, vercel.json's parsed content, and the three bins'
 #     text for `Router::` assembly tokens only. It does not parse handler logic, and it does not
-#     watch temper-api's route set (audit-route-auth.sh) or temper-mcp's router
+#     watch temper-api's route set (audit-route-auth.sh) or temper-mcp-server's router
 #     (audit-mcp-route-auth.sh).
 #   - `routes[0]` is `{ "handle": "filesystem" }`: every api/** file is ALSO reachable at its own
 #     path with no vercel.json line naming it. That is why there is no "orphan file" check — a
@@ -212,7 +212,7 @@ for bin in "${API_BINS[@]}"; do
   if [[ -f "$bin" ]] && sed 's#//.*##' "$bin" | grep -qE 'Router::|\.route\(|\.nest\(|\.merge\(|\.nest_service\('; then
     echo "$GUARD_NAME: FAIL — router assembly or route-declaration token in $bin." >&2
     echo "  The Vercel bins are entry points, not assembly sites; the routers live in the crates," >&2
-    echo "  whose guards freeze them. Route through temper_mcp::build_router / temper_api's" >&2
+    echo "  whose guards freeze them. Route through temper_mcp_server::build_router / temper_api's" >&2
     echo "  create_app, or extend this guard deliberately." >&2
     fail=1
   fi

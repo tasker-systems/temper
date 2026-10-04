@@ -19,7 +19,6 @@
 
 mod common;
 
-use jsonwebtoken::Algorithm;
 use rmcp::model::{CacheScope, CallToolRequestParams, ClientConfig, PaginatedRequestParams};
 use rmcp::service::ServiceExt;
 use rmcp::transport::streamable_http_client::{
@@ -27,44 +26,11 @@ use rmcp::transport::streamable_http_client::{
 };
 use serde_json::{json, Value};
 use temper_mcp::config::McpConfig;
-use temper_services::auth_config::{AuthConfig, AuthMode};
-use temper_services::config::ApiConfig;
-use temper_services::state::{AppState, JwksKeyStore};
 
 /// The MCP router as its own server (the deployment topology), wired for the relay:
 /// the harness API's base URL and the harness service credential, so `run_query`
 /// executes through the network door exactly as deployed.
-async fn spawn_mcp_router(pool: sqlx::PgPool, api_base_url: &str) -> std::net::SocketAddr {
-    let decoding_key =
-        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
-            .expect("load test RSA public key");
-    let jwks_store = JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256);
-
-    let api_config = ApiConfig {
-        database_url: "unused".to_string(),
-        auth: AuthConfig {
-            issuer: "test-issuer".to_string(),
-            jwks_url: "unused".to_string(),
-            audience: common::TEST_AUDIENCE.to_string(),
-            mcp_audience: common::TEST_AUDIENCE.to_string(),
-            mode: AuthMode::ExternalIdp,
-        },
-        auth_provider_name: "test-provider".to_string(),
-        cors_origins: vec![],
-        port: 0,
-        enable_swagger: false,
-        internal_reconcile_secret: None,
-        embed_dispatch_secret: None,
-        sensitivity_sweep_salt: None,
-        mcp_service_secret: Some(common::TEST_MCP_SERVICE_SECRET.to_string()),
-        vercel_connect: None,
-        slack_link: None,
-        slack_mint_secret: None,
-        rate_limit: None,
-        blob: None,
-        blob_disabled_by_policy: false,
-    };
-
+async fn spawn_mcp_router(api_base_url: &str) -> std::net::SocketAddr {
     let mcp_config = McpConfig {
         mcp_base_url: "http://mcp.test".to_string(),
         mcp_client_id: None,
@@ -83,7 +49,11 @@ async fn spawn_mcp_router(pool: sqlx::PgPool, api_base_url: &str) -> std::net::S
     tokio::spawn(async move {
         axum::serve(
             listener,
-            temper_mcp::build_router(AppState::new(pool, jwks_store, api_config), mcp_config),
+            temper_mcp_server::build_router(
+                common::mcp_server_config(temper_mcp_server::config::blob_door(None, false)),
+                common::mcp_test_jwks(),
+                mcp_config,
+            ),
         )
         .await
         .expect("mcp server");
@@ -137,7 +107,7 @@ async fn typed_object_calls_drive_both_formerly_ref_carrying_instances_end_to_en
         .await
         .expect("resource create failed");
 
-    let mcp_addr = spawn_mcp_router(app.pool.clone(), &app.base_url()).await;
+    let mcp_addr = spawn_mcp_router(&app.base_url()).await;
     let transport = StreamableHttpClientTransport::with_client(
         reqwest13::Client::new(),
         StreamableHttpClientTransportConfig::with_uri(format!("http://{mcp_addr}/mcp"))

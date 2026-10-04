@@ -44,6 +44,28 @@ classes: additive
 surfaces: http, internal, schema
 status: signal-only
 
+- **The MCP function holds no database pool: its edge becomes `temper-mcp-server`, and `temperkb-auth` gains the instance auth-config parser**
+  Least privilege at the agent-facing door. Every MCP tool already relayed to the API, but the
+  MCP process still built the API's whole `AppState` with a live `PgPool`. It now boots from its
+  own `McpServerConfig` (auth identity, CORS origins, blob posture), never reads `DATABASE_URL`
+  and opens no connection. The deployed edge (JWT check, OAuth discovery/DCR, router) moves to a
+  new unpublished crate, `temper-mcp-server`, and `api/mcp.rs` builds from it. `temper-mcp`, the
+  tool layer, loses its runtime dependency on temper-services and takes plain values from its
+  host. Nothing on the MCP wire moves: the tool declarations fixture is byte-identical, and the
+  JWT edge, discovery, CORS and the blob door's advertisement and refusal sentence are unchanged.
+  The MCP boot no longer runs the API-only checks: the shared-secret distinctness check, the
+  strength floor on secrets it never holds, and rate-limit parsing. It keeps the floor on
+  `TEMPER_MCP_SERVICE_SECRET`, and the API function still refuses on the rest from the same
+  project environment. The published `temperkb-auth` gains a public `config` module
+  (`parse_auth_config`, `AuthConfig`, `AuthMode`, `AuthConfigError`, `shared_secret`,
+  `check_shared_secret_strength`), moved from `temper_services::auth_config`, which re-exports it.
+  Who observes: operators (no deployment-env change is needed; on Vercel `DATABASE_URL` stays in
+  the shared project environment, unread by this function), and Rust consumers of
+  `temperkb-auth`. User-visible: no. Release relevance: additive.
+pr: self
+classes: additive
+surfaces: mcp, clients, internal
+status: signal-only
 - **Two new admin doors: `POST /api/admin/resources/block-history-scrub` and its read-only `/survey`**
   The block history scrub (resource erasure D11) empties the history of named blocks of a resource
   that is not erased, behind two new operation ids (`admin_scrub_block_history`,

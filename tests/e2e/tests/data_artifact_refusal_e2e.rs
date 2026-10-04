@@ -61,7 +61,7 @@ async fn relay_service_and_parts(
     temper_mcp::service::TemperMcpService,
     axum::http::request::Parts,
 ) {
-    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     (svc, app.relay_parts())
 }
 

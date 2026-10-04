@@ -49,7 +49,7 @@ fn mcp_bearer() -> String {
 /// POSTs one JSON-RPC request at `/mcp` with the headers a real client sends, and returns
 /// the status plus the RAW body (no re-serialization — the bytes are the wire).
 async fn post_mcp(request_body: Value) -> (StatusCode, Vec<u8>) {
-    let router = temper_mcp::build_router(
+    let router = common::build_router(
         common::state_with_distinct_audiences(),
         common::mcp_config(),
     );
@@ -155,8 +155,10 @@ async fn tool_declarations_are_byte_identical_across_the_sdk_upgrade() {
     );
     let canonical = canonical_json(&bytes);
 
+    // The fixture belongs to the tool layer (temper-mcp declares the tools); this witness reads
+    // it through the deployed router, so the bytes it pins are the ones the wire carries.
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/tool_declarations_bytes.json");
+        .join("../temper-mcp/tests/fixtures/tool_declarations_bytes.json");
     if std::env::var("UPDATE_MCP_DECLARATIONS").is_ok() {
         std::fs::create_dir_all(fixture_path.parent().unwrap()).expect("fixture dir");
         std::fs::write(&fixture_path, canonical.as_bytes()).expect("fixture writes");

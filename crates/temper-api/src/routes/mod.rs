@@ -333,7 +333,7 @@ pub fn create_internal_app(state: AppState) -> Router {
 /// tracing, CORS) and bind `state`. Shared by [`create_app`] and
 /// [`create_internal_app`] so both surfaces observe and trace requests identically.
 fn apply_transport_layers(app: Router<AppState>, state: AppState) -> Router {
-    let cors = temper_services::cors::cors_layer(&state.config);
+    let cors = temper_services::cors::cors_layer(&state.config.cors_origins);
 
     temper_services::transport::apply_base_layers(app)
         .layer(axum::middleware::from_fn(root_span))

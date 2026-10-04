@@ -91,7 +91,7 @@ async fn a_body_past_the_ceiling_is_refused_and_a_small_one_is_not() {
 
 /// Assemble the real router over a never-queried pool.
 fn router() -> axum::Router {
-    temper_mcp::build_router(
+    common::build_router(
         common::state_with_cors_origins(vec![]),
         common::mcp_config(),
     )

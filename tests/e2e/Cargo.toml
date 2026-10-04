@@ -56,6 +56,9 @@ temper-ingest = { path = "../../crates/temper-ingest", features = ["embed"] }
 temper-substrate = { path = "../../crates/temper-substrate" }
 temperkb-workflow.workspace = true
 temper-mcp = { path = "../../crates/temper-mcp" }
+# The deployed MCP edge (router, JWT check, boot config) the router-level suites spawn.
+temper-mcp-server = { path = "../../crates/temper-mcp-server" }
+temperkb-auth.workspace = true
 # `test-support` installs an in-memory span exporter so `mcp_span_link_test` can read the spans the
 # MCP router really exported, rather than a replica of its layer stack.
 temperkb-telemetry = { workspace = true, features = ["test-support"] }

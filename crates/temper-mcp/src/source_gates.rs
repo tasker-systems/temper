@@ -10,6 +10,11 @@
 //!
 //! - [`every_tool_method_relays_or_is_allowlisted_pure`] — ruling (a), 2026-10-02.
 //! - [`no_tool_module_binds_to_the_database_or_a_service`] — the `teardown-completes` witness.
+//! - [`no_module_in_the_tool_layer_holds_a_pool_or_server_state`] and
+//!   [`the_tool_layer_manifest_names_no_database_or_services_crate`] — least privilege: the crate
+//!   holds no pool and no server state anywhere, not only in its tools (the follow-up to the
+//!   teardown's security review, finding 3). The deployed edge's own no-database gate lives in
+//!   `temper-mcp-server/tests/no_database_test.rs`.
 //!
 //! These are tripwires over the source, not controls: they catch the ordinary ways a tool could
 //! regain a direct path (a pool read, a services call, a tool that never forwards), and their
@@ -26,11 +31,22 @@ use syn::visit::Visit;
 /// held to "pure": nothing it reaches builds a relay or names `api_state` / `temper_services`.
 const PURE_COMPUTE_TOOLS: &[&str] = &["describe_schema"];
 
-/// The tools-module functions allowed to read `api_state` — and only its deployment config,
-/// never the pool: the blob door's own posture (`api_state.config.blob`) and size ceiling. Named
-/// by `(module, function)`; anything else naming `api_state` fails the witness.
-const API_STATE_CONFIG_READERS: &[(&str, &str)] =
-    &[("blobs", "read_ceiling"), ("blobs", "blob_door_open")];
+/// What the tool layer must never name, anywhere in its production source: the database
+/// (`sqlx`, a `PgPool`, its builder, a `pool` field), the services crate, and the server state
+/// that carried a pool (`AppState`, `ApiConfig`, the `api_state` field the service held until
+/// the least-privilege follow-up). The host hands this crate plain values instead (`host.rs`).
+const SERVER_STATE_NAMES: &[&str] = &[
+    "sqlx",
+    "PgPool",
+    "PgPoolOptions",
+    "pool",
+    "MIGRATOR",
+    "temper_services",
+    "temper_api",
+    "AppState",
+    "ApiConfig",
+    "api_state",
+];
 
 // ── Parsing ──────────────────────────────────────────────────────────────────────────────────
 
@@ -43,18 +59,27 @@ fn parse(path: &Path) -> syn::File {
     syn::parse_file(&src).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
 }
 
-/// `#[cfg(test)]` (or any `cfg` naming `test`) — test code is no tool's path.
+/// A `cfg` that can only hold in a test build: `cfg(test)`, or `cfg(all(…))` with a bare `test`
+/// among its arguments. Nothing else is exempt — `cfg(not(test))` is production code, and so is
+/// `cfg(any(test, …))` or a feature whose NAME merely contains "test" (review, 2026-10-03: a
+/// token-split match had exempted all three).
 fn is_test_only(attrs: &[syn::Attribute]) -> bool {
+    fn requires_test(meta: &syn::Meta) -> bool {
+        match meta {
+            syn::Meta::Path(p) => p.is_ident("test"),
+            syn::Meta::List(l) if l.path.is_ident("all") => l
+                .parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+                )
+                .map(|args| args.iter().any(requires_test))
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
     attrs.iter().any(|a| {
         a.path().is_ident("cfg")
-            && a.meta
-                .require_list()
-                .map(|l| {
-                    l.tokens
-                        .to_string()
-                        .split(|c: char| !c.is_alphanumeric())
-                        .any(|t| t == "test")
-                })
+            && a.parse_args::<syn::Meta>()
+                .map(|m| requires_test(&m))
                 .unwrap_or(false)
     })
 }
@@ -285,7 +310,8 @@ fn reachable<'m>(
 
 /// The binding names a piece of code reaches for — every path segment (`temper_services::…`,
 /// `sqlx::…`, in `use` trees too), every field or method named (`api_state`, `pool`,
-/// `relay_client`). Whitespace and line breaks cannot hide a name from a syntax tree.
+/// `relay_client`), every field defined and every binding named. Whitespace and line breaks
+/// cannot hide a name from a syntax tree.
 fn names_in<'a>(visit: impl FnOnce(&mut dyn Visit<'a>)) -> BTreeSet<String> {
     #[derive(Default)]
     struct V(BTreeSet<String>);
@@ -309,6 +335,35 @@ fn names_in<'a>(visit: impl FnOnce(&mut dyn Visit<'a>)) -> BTreeSet<String> {
         fn visit_expr_method_call(&mut self, c: &'a syn::ExprMethodCall) {
             self.0.insert(c.method.to_string());
             syn::visit::visit_expr_method_call(self, c);
+        }
+        // A field DEFINED (`struct S { pool: P }`) and a binding NAMED (`fn f(api_state: S)`,
+        // `let pool = …`) are holding the thing as surely as a field read is.
+        fn visit_field(&mut self, f: &'a syn::Field) {
+            if let Some(i) = &f.ident {
+                self.0.insert(i.to_string());
+            }
+            syn::visit::visit_field(self, f);
+        }
+        fn visit_pat_ident(&mut self, p: &'a syn::PatIdent) {
+            self.0.insert(p.ident.to_string());
+            syn::visit::visit_pat_ident(self, p);
+        }
+        // A macro body (`tokio::join!(…)`, `vec![…]`) is a token stream, not a syntax tree: every
+        // identifier in it counts, so `sqlx::…` inside one is still named.
+        fn visit_macro(&mut self, m: &'a syn::Macro) {
+            fn idents(tokens: proc_macro2::TokenStream, out: &mut BTreeSet<String>) {
+                for tt in tokens {
+                    match tt {
+                        proc_macro2::TokenTree::Ident(i) => {
+                            out.insert(i.to_string());
+                        }
+                        proc_macro2::TokenTree::Group(g) => idents(g.stream(), out),
+                        _ => {}
+                    }
+                }
+            }
+            idents(m.tokens.clone(), &mut self.0);
+            syn::visit::visit_macro(self, m);
         }
     }
     let mut v = V::default();
@@ -432,12 +487,10 @@ fn every_tool_method_relays_or_is_allowlisted_pure() {
 }
 
 /// **`teardown-completes`, witnessed:** no tool module reads the database or calls a service
-/// directly. Fails if any production item under `src/tools/` names `temper_services`, `sqlx` or a
-/// `pool`, or names `api_state` outside the named config readers ([`API_STATE_CONFIG_READERS`]).
-/// Parsed, not grepped: a chain rustfmt splits across lines (`svc.api_state\n    .pool`) is the
-/// same field access. After teardown `temper_services` remains in this crate only at the JWT edge
-/// (`middleware.rs`), the router/transport (`router.rs`), config (`config.rs`) and boot
-/// (`AppState`, in `service.rs`).
+/// directly. Fails if any production item under `src/tools/` names `temper_services`, `sqlx`, a
+/// `pool` or `api_state`. Parsed, not grepped: a chain rustfmt splits across lines
+/// (`svc.api_state\n    .pool`) is the same field access. The blob door's two config readers that
+/// once named `api_state` read the host's plain `BlobDoor` now, so there is no exception left.
 #[test]
 fn no_tool_module_binds_to_the_database_or_a_service() {
     let mut offenders = Vec::new();
@@ -452,21 +505,9 @@ fn no_tool_module_binds_to_the_database_or_a_service() {
         let file = parse(&path);
         for item in production_items(&file) {
             let named = names_in(|v| v.visit_item(item));
-            for forbidden in ["temper_services", "sqlx", "pool"] {
+            for forbidden in ["temper_services", "sqlx", "pool", "api_state"] {
                 if named.contains(forbidden) {
                     offenders.push(format!("{module}.rs names `{forbidden}`"));
-                }
-            }
-            if named.contains("api_state") {
-                let reader = match item {
-                    syn::Item::Fn(f) => API_STATE_CONFIG_READERS
-                        .contains(&(module.as_str(), &*f.sig.ident.to_string())),
-                    _ => false,
-                };
-                if !reader {
-                    offenders.push(format!(
-                        "{module}.rs names `api_state` outside the named config readers"
-                    ));
                 }
             }
         }
@@ -480,6 +521,166 @@ fn no_tool_module_binds_to_the_database_or_a_service() {
         "a tool module binds past the network door — every tool relays to the API, which owns \
          the database and the services:\n  {}",
         offenders.join("\n  ")
+    );
+}
+
+/// Every production `.rs` file under `src/`, recursively, except this gate's own file (whose
+/// detector tests spell the forbidden names as inputs). Returned as (path relative to `src/`,
+/// parsed file).
+fn crate_sources() -> Vec<(String, syn::File)> {
+    fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, syn::File)>) {
+        for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {dir:?}: {e}")) {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                walk(&path, root, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+                if rel != "source_gates.rs" {
+                    out.push((rel, parse(&path)));
+                }
+            }
+        }
+    }
+    let root = manifest("src");
+    let mut out = Vec::new();
+    walk(&root, &root, &mut out);
+    out
+}
+
+/// **Least privilege, witnessed:** no module of the tool layer — the service, the tools, the
+/// resources, the config, the host values — names a database pool, the services crate, or the
+/// server state that once carried a pool ([`SERVER_STATE_NAMES`]). The crate has no boot of its
+/// own (the deployed edge, `temper-mcp-server`, boots it), so the rule has no exception: a pool
+/// reappearing anywhere here fails by file and name. Test-only items are exempt — the
+/// `AuthzError` witness in `service.rs` names the services' error types as its oracle.
+#[test]
+fn no_module_in_the_tool_layer_holds_a_pool_or_server_state() {
+    let sources = crate_sources();
+    assert!(
+        sources.len() >= 20,
+        "read only {} source files — the walk has broken",
+        sources.len()
+    );
+    assert!(
+        sources.iter().any(|(rel, _)| rel == "service.rs")
+            && sources.iter().any(|(rel, _)| rel == "tools/blobs.rs"),
+        "the walk missed the service or the tools"
+    );
+    let mut offenders = Vec::new();
+    for (rel, file) in &sources {
+        offenders.extend(
+            unfollowed_sources(file)
+                .into_iter()
+                .map(|w| format!("{rel}: {w}")),
+        );
+        for item in production_items(file) {
+            let named = names_in(|v| v.visit_item(item));
+            for forbidden in SERVER_STATE_NAMES {
+                if named.contains(*forbidden) {
+                    offenders.push(format!("{rel} names `{forbidden}`"));
+                }
+            }
+        }
+    }
+    offenders.sort();
+    offenders.dedup();
+    assert!(
+        offenders.is_empty(),
+        "the tool layer holds server state — it relays every act to the API, which owns the \
+         database; a host hands it plain values (`host.rs`), never a pool:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// Source the walk cannot follow: an `include!` (code spliced from another file) or a
+/// `#[path]` module (a file outside the directory walk). Refused rather than skipped, so the
+/// gate never passes code it did not read.
+fn unfollowed_sources(file: &syn::File) -> Vec<String> {
+    #[derive(Default)]
+    struct V(Vec<String>);
+    impl<'a> Visit<'a> for V {
+        fn visit_macro(&mut self, m: &'a syn::Macro) {
+            if m.path.is_ident("include") {
+                self.0
+                    .push("an `include!` the gate cannot follow".to_string());
+            }
+            syn::visit::visit_macro(self, m);
+        }
+        fn visit_item_mod(&mut self, m: &'a syn::ItemMod) {
+            if m.attrs.iter().any(|a| a.path().is_ident("path")) {
+                self.0.push(format!(
+                    "a `#[path]` module `{}` the gate cannot follow",
+                    m.ident
+                ));
+            }
+            syn::visit::visit_item_mod(self, m);
+        }
+    }
+    let mut v = V::default();
+    v.visit_file(file);
+    v.0
+}
+
+/// Every dependency a manifest declares for a non-test build, by the PACKAGE it resolves to (a
+/// renamed `db = { package = "sqlx" }` is `sqlx`): `[dependencies]`, `[build-dependencies]`, and
+/// both under every `[target.'cfg(…)']`.
+pub(crate) fn runtime_dependency_packages(cargo: &toml::Value) -> BTreeSet<String> {
+    let mut tables: Vec<&toml::value::Table> = Vec::new();
+    for key in ["dependencies", "build-dependencies"] {
+        if let Some(t) = cargo.get(key).and_then(|d| d.as_table()) {
+            tables.push(t);
+        }
+    }
+    if let Some(targets) = cargo.get("target").and_then(|t| t.as_table()) {
+        for target in targets.values() {
+            for key in ["dependencies", "build-dependencies"] {
+                if let Some(t) = target.get(key).and_then(|d| d.as_table()) {
+                    tables.push(t);
+                }
+            }
+        }
+    }
+    tables
+        .into_iter()
+        .flat_map(|t| t.iter())
+        .map(|(key, spec)| {
+            spec.get("package")
+                .and_then(|p| p.as_str())
+                .unwrap_or(key)
+                .to_string()
+        })
+        .collect()
+}
+
+/// **Least privilege, structurally:** the tool layer's runtime dependencies (every non-dev table,
+/// target-specific ones included, by resolved package name) name no database driver and no
+/// server crate, so a pool cannot be constructed here even by a path the source gate does
+/// not parse (a macro, a build script). `temper-services` stays allowed as a DEV-dependency only
+/// (the `AuthzError` witness's oracle).
+#[test]
+fn the_tool_layer_manifest_names_no_database_or_services_crate() {
+    let raw = std::fs::read_to_string(manifest("Cargo.toml")).expect("read Cargo.toml");
+    let cargo: toml::Value = toml::from_str(&raw).expect("Cargo.toml parses");
+    let deps = runtime_dependency_packages(&cargo);
+    assert!(deps.len() >= 10, "read only {} dependencies", deps.len());
+    let forbidden = [
+        "sqlx",
+        "temper-services",
+        "temper-api",
+        "temper-substrate",
+        "temper-mcp-server",
+    ];
+    let offenders: Vec<&str> = forbidden
+        .into_iter()
+        .filter(|name| deps.contains(*name))
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "the tool layer depends on a database or server crate at runtime: {offenders:?}"
     );
 }
 
@@ -538,14 +739,55 @@ fn the_relay_send_detector_tells_a_send_from_a_build() {
     let named = names_in(|v| v.visit_expr(&split));
     assert!(named.contains("pool"), "{named:?}");
 
-    // Test-only items are not production code.
+    // A field defined and a binding named are holds too.
+    let file: syn::File =
+        syn::parse_str("struct S { pool: P } fn f(api_state: S) { let sqlx = 1; }")
+            .expect("file parses");
+    let named = names_in(|v| v.visit_file(&file));
+    for n in ["pool", "api_state", "sqlx"] {
+        assert!(named.contains(n), "{n} unseen: {named:?}");
+    }
+
+    // Test-only items are not production code — and only `cfg(test)` / `cfg(all(test, …))` is
+    // test-only: `not(test)`, `any(test, …)` and a feature named like a test are production.
     let file: syn::File = syn::parse_str(
-        "#[cfg(test)] use sqlx::PgPool; #[cfg(test)] mod tests { fn t() {} } fn real() {}",
+        "#[cfg(test)] use sqlx::PgPool; #[cfg(test)] mod tests { fn t() {} } \
+         #[cfg(all(test, feature = \"x\"))] fn t2() {} fn real() {} \
+         #[cfg(not(test))] fn prod_a() {} #[cfg(any(test, feature = \"x\"))] fn prod_b() {} \
+         #[cfg(feature = \"test-harness\")] fn prod_c() {}",
     )
     .expect("file parses");
     assert_eq!(
         production_items(&file).len(),
-        1,
-        "only `real` is production"
+        4,
+        "`real`, `prod_a`, `prod_b` and `prod_c` are production"
     );
+
+    // A macro body's identifiers are names.
+    let file: syn::File =
+        syn::parse_str("fn f() { tokio::join!(sqlx::postgres::PgPoolOptions::new()); }")
+            .expect("file parses");
+    let named = names_in(|v| v.visit_file(&file));
+    assert!(
+        named.contains("sqlx") && named.contains("PgPoolOptions"),
+        "{named:?}"
+    );
+
+    // Source the walk cannot follow is refused, not skipped.
+    let file: syn::File =
+        syn::parse_str("#[path = \"elsewhere.rs\"] mod m; fn f() { include!(\"x.rs\"); }")
+            .expect("file parses");
+    assert_eq!(unfollowed_sources(&file).len(), 2);
+
+    // Every runtime dependency table counts, by resolved package.
+    let cargo: toml::Value = toml::from_str(
+        "[dependencies]\ndb = { package = \"sqlx\", version = \"0.8\" }\n\
+         [build-dependencies]\nb = \"1\"\n\
+         [target.'cfg(unix)'.dependencies]\ntemper-services = { path = \"x\" }\n\
+         [dev-dependencies]\nd = \"1\"\n",
+    )
+    .expect("toml parses");
+    let deps = runtime_dependency_packages(&cargo);
+    assert!(deps.contains("sqlx") && deps.contains("temper-services") && deps.contains("b"));
+    assert!(!deps.contains("db") && !deps.contains("d"), "{deps:?}");
 }

@@ -18,15 +18,11 @@ use opentelemetry_sdk::trace::InMemorySpanExporter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use temper_services::auth_config::{AuthConfig, AuthMode};
-use temper_services::config::ApiConfig;
-use temper_services::state::{AppState, JwksKeyStore};
-
 const SPEC_TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 const SPEC_TRACE_ID: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn mcp_links_an_authenticated_callers_trace_and_no_one_elses(pool: sqlx::PgPool) {
+async fn mcp_links_an_authenticated_callers_trace_and_no_one_elses(_pool: sqlx::PgPool) {
     let exporter = InMemorySpanExporter::default();
     assert!(
         temper_telemetry::export::install_test_provider(exporter.clone()),
@@ -36,35 +32,6 @@ async fn mcp_links_an_authenticated_callers_trace_and_no_one_elses(pool: sqlx::P
         .expect("the layer must exist once a provider is installed");
     tracing_subscriber::registry().with(layer).init();
 
-    let decoding_key =
-        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
-            .expect("decoding key");
-    let jwks_store = JwksKeyStore::with_static_key(decoding_key, jsonwebtoken::Algorithm::RS256);
-    let api_config = ApiConfig {
-        database_url: "unused".to_string(),
-        auth: AuthConfig {
-            issuer: "test-issuer".to_string(),
-            jwks_url: "unused".to_string(),
-            audience: common::TEST_AUDIENCE.to_string(),
-            mcp_audience: common::TEST_AUDIENCE.to_string(),
-            mode: AuthMode::ExternalIdp,
-        },
-        auth_provider_name: "test-provider".to_string(),
-        cors_origins: vec![],
-        port: 0,
-        enable_swagger: false,
-        internal_reconcile_secret: None,
-        embed_dispatch_secret: None,
-        sensitivity_sweep_salt: None,
-        mcp_service_secret: None,
-        vercel_connect: None,
-        slack_link: None,
-        slack_mint_secret: None,
-        rate_limit: None,
-        blob: None,
-        blob_disabled_by_policy: false,
-    };
-    let state = AppState::new(pool, jwks_store, api_config);
     let mcp_config = temper_mcp::McpConfig {
         mcp_base_url: "http://localhost".to_string(),
         mcp_client_id: None,
@@ -75,7 +42,11 @@ async fn mcp_links_an_authenticated_callers_trace_and_no_one_elses(pool: sqlx::P
             allow_localhost: true,
         },
     };
-    let app = temper_mcp::build_router(state, mcp_config);
+    let app = temper_mcp_server::build_router(
+        common::mcp_server_config(temper_mcp_server::config::blob_door(None, false)),
+        common::mcp_test_jwks(),
+        mcp_config,
+    );
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await

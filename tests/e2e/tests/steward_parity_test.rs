@@ -101,7 +101,7 @@ use parity::{code_of, input, one_text, EMAIL};
 /// parts the family's tools are driven with.
 async fn harness(pool: PgPool) -> (E2eTestApp, TemperMcpService, axum::http::request::Parts) {
     let app = common::setup_relay(pool).await;
-    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
     (app, svc, parts)
 }

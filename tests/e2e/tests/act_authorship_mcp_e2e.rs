@@ -67,7 +67,7 @@ async fn mcp_create_under_invocation_stamps_act_with_authorship(pool: sqlx::PgPo
     // Create a resource through the MCP tool, carrying the invocation + graded authorship.
     // The tool crosses the network door: the relay client forwards on the caller's REAL
     // bearer to this app's listener, the API adjudicates Level 1 + 2 and lands the act.
-    let svc = app.mcp_relay_service(pool.clone()).await;
+    let svc = app.mcp_relay_service().await;
     let parts = app.relay_parts();
     let input = temper_mcp::tools::resources::CreateResourceInput {
         goal: None,
