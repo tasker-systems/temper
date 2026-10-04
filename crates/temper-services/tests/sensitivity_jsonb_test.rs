@@ -1505,3 +1505,127 @@ async fn content_a_scrub_or_principal_erasure_emptied_gives_up_its_digests_after
         "the scrub's kept current revision keeps its digests"
     );
 }
+
+// ── Q51: payment_card's noise closes as false positives, never a card ───────────────────────────
+
+/// Moves payment_card to its next version under `validator`, as a migration would.
+async fn bump_payment_card(pool: &PgPool, validator: &str) {
+    sqlx::query(
+        "UPDATE sensitivity.detectors SET version = version + 1, validator = $1 WHERE id = 'payment_card'",
+    )
+    .bind(validator)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// `(path, state)` of every payment_card finding at `target` and its dispositions, in path order.
+async fn card_dispositions_at(
+    pool: &PgPool,
+    target: Uuid,
+) -> Vec<(Option<String>, Option<String>)> {
+    sqlx::query_as(
+        "SELECT f.path, d.state FROM sensitivity.findings f \
+           LEFT JOIN sensitivity.dispositions d ON d.finding_id = f.id \
+          WHERE f.target_id = $1 AND f.detector_id = 'payment_card' ORDER BY f.path NULLS FIRST, d.state",
+    )
+    .bind(target)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// v2's validator was Luhn alone, and production's first sweep found no card with it. The noise
+/// closes as false positives; a place where the current version still finds a card stays open,
+/// because Q27 would carry the ruling onto that card's re-detection.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_card_finding_the_current_version_would_not_make_closes_as_a_false_positive(
+    pool: PgPool,
+) {
+    const STAMP: &str = "20261003000050"; // a migration stamp that passes Luhn
+    const CARD: &str = "4111 1111 1111 1111";
+    bump_payment_card(&pool, "luhn_valid").await;
+
+    let r = bare_resource(&pool, &format!("Release {STAMP}")).await;
+    let stamp = block(&pool, r, &format!("ran {STAMP}")).await;
+    let card = block(&pool, r, &format!("card {CARD}")).await;
+    let ruled = block(&pool, r, &format!("again {STAMP}")).await;
+    let doc = event(
+        &pool,
+        "resource_created",
+        serde_json::json!({ "title": format!("card {CARD}"), "body": format!("at {STAMP}") }),
+        serde_json::json!({}),
+    )
+    .await;
+    tick(&pool, "kb_block_content.content").await;
+    tick(&pool, "kb_resources.title").await;
+    tick(&pool, "kb_events.payload").await;
+    for place in [stamp, card, ruled, r, doc] {
+        assert!(
+            !card_dispositions_at(&pool, place).await.is_empty(),
+            "the Luhn-only version found something at {place}, or nothing below witnesses"
+        );
+    }
+
+    // An operator already ruled on `ruled`. The title changes, and the sweep's next look at it
+    // closes its place as changed.
+    sqlx::query(
+        "INSERT INTO sensitivity.dispositions (finding_id, state) \
+         SELECT id, 'acknowledged' FROM sensitivity.findings \
+          WHERE target_id = $1 AND detector_id = 'payment_card'",
+    )
+    .bind(ruled)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE kb_resources SET title = 'Release', updated = clock_timestamp() WHERE id = $1",
+    )
+    .bind(r)
+    .execute(&pool)
+    .await
+    .unwrap();
+    tick(&pool, "kb_resources.title").await;
+
+    bump_payment_card(&pool, "card_valid").await;
+    let closed: i32 = sqlx::query_scalar("SELECT sensitivity.close_cardless_card_findings()")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let fp = || Some("false_positive".to_string());
+    assert_eq!(
+        card_dispositions_at(&pool, stamp).await,
+        vec![(None, fp())],
+        "noise closes"
+    );
+    assert_eq!(
+        card_dispositions_at(&pool, card).await,
+        vec![(None, None)],
+        "a card stays open"
+    );
+    assert_eq!(
+        card_dispositions_at(&pool, ruled).await,
+        vec![(None, Some("acknowledged".to_string()))],
+        "an operator's ruling is not joined by another"
+    );
+    assert_eq!(
+        card_dispositions_at(&pool, r).await,
+        vec![(None, None)],
+        "a place that closed as changed takes no disposition"
+    );
+    assert_eq!(
+        card_dispositions_at(&pool, doc).await,
+        vec![
+            (Some("/body".to_string()), fp()),
+            (Some("/title".to_string()), None),
+        ],
+        "a document is read at each finding's path"
+    );
+    assert_eq!(closed, 2);
+    let again: i32 = sqlx::query_scalar("SELECT sensitivity.close_cardless_card_findings()")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(again, 0, "a second call closes nothing more");
+}

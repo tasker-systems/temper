@@ -499,7 +499,7 @@ async fn the_seeded_detectors_are_cut_ones_nine(pool: PgPool) {
         ("connection_string_password", "credential", 4, None),
         ("jwt", "credential", 3, None),
         ("local_path_username", "identifier", 1, None),
-        ("payment_card", "payment_card", 4, Some("luhn_valid")),
+        ("payment_card", "payment_card", 4, Some("card_valid")),
         ("private_key_block", "secret_material", 4, None),
         ("us_ssn_contextual", "national_id", 4, Some("ssn_valid")),
         ("us_ssn_delimited", "national_id", 4, Some("ssn_valid")),
@@ -512,8 +512,9 @@ async fn the_seeded_detectors_are_cut_ones_nine(pool: PgPool) {
             *sev,
             v.map(str::to_string),
             true,
-            // payment_card v2 stops reading cards out of hex runs (Q42, 20261003150000).
-            if *id == "payment_card" { 2 } else { 1 },
+            // payment_card v2 stops reading cards out of hex runs (Q42, 20261003150000); v3
+            // requires an issuer at its length (Q51, 20261004120000).
+            if *id == "payment_card" { 3 } else { 1 },
         )
     })
     .collect();
@@ -693,6 +694,87 @@ async fn a_card_beside_its_cvv_expiry_or_other_digits_is_found(pool: PgPool) {
         matches(&pool, "payment_card", "4111 1111-1111 1111").await,
         0
     );
+}
+
+/// Q51: every payment_card finding in production's first sweep was a digit run that passes Luhn
+/// and carries no card issuer: 1,103 of 1,186 matches were 14-digit `YYYYMMDDhhmmss` migration
+/// stamps, the rest epoch milliseconds and snowflake ids. Each value here passes Luhn, so v2 read
+/// every one as a card.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_digit_run_with_no_card_issuer_is_not_a_card(pool: PgPool) {
+    for (shape, text) in [
+        (
+            "migration stamp",
+            "migrations/20261003000050_sensitivity.sql",
+        ),
+        ("epoch milliseconds", r#"{"ts": 1727900000008}"#),
+        ("epoch microseconds", "at 1759288472991175 us"),
+        ("snowflake id", "message 175928847299117062"),
+        ("no issuer", "ref 9100000000000000"),
+    ] {
+        assert!(
+            validator(&pool, "luhn_valid", text).await,
+            "{shape}: the fixture must pass Luhn, or it witnesses nothing"
+        );
+        assert_eq!(
+            matches(&pool, "payment_card", text).await,
+            0,
+            "{shape}: {text}"
+        );
+    }
+}
+
+/// An issuer prefix counts only at a length that issuer uses, and Luhn still decides.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn card_valid_requires_an_issuer_at_its_length(pool: PgPool) {
+    for (valid, what, card) in [
+        (true, "Visa 16", "4111 1111 1111 1111"),
+        (true, "Visa 13", "4222222222222"),
+        (true, "Visa 19", "4111111111111111110"),
+        (true, "Mastercard 5-series", "5555-5555-5555-4444"),
+        (true, "Mastercard 2-series", "2223003122003222"),
+        (true, "Amex", "3782 822463 10005"),
+        (true, "Discover", "6011111111111117"),
+        (true, "JCB", "3530111333300000"),
+        (true, "Diners 14", "3056 930902 5904"),
+        (true, "UnionPay", "6200000000000005"),
+        (true, "UnionPay 81", "8171000000000006"),
+        (true, "Mir", "2200000000000004"),
+        (true, "Mir 19", "2204000000000000006"),
+        (true, "Maestro", "6759000000000018"),
+        (true, "Maestro 13", "5018000000007"),
+        (true, "RuPay 60", "6074000000000008"),
+        (true, "RuPay 508", "5085000000000007"),
+        (true, "Verve", "5061000000000005"),
+        (true, "Troy", "9792000000000003"),
+        (true, "Discover 644", "6445000000000018"),
+        (true, "Diners 3095", "30950000000018"),
+        (true, "Diners 38", "38000000000006"),
+        (true, "JCB 3528", "3528000000000007"),
+        (true, "JCB 3589", "3589000000000003"),
+        (true, "Mastercard 2221", "2221000000000009"),
+        (true, "Mastercard 2720", "2720000000000005"),
+        (false, "below Mastercard 2221", "2220000000000018"),
+        (false, "above Mastercard 2720", "2721000000000004"),
+        (false, "below JCB 3528", "3527000000000008"),
+        (false, "above JCB 3589", "3590000000000018"),
+        (false, "beside Diners 3095", "30940000000001"),
+        (false, "beside Troy", "9793000000000002"),
+        (false, "Troy prefix at 17", "97920000000000003"),
+        (false, "Mir prefix at 15", "220000000000004"),
+        (false, "Amex prefix at 16", "3782822463100052"),
+        (false, "Visa prefix at 15", "411111111111116"),
+        (false, "Mastercard prefix at 15", "555555555555442"),
+        (false, "no issuer", "9100000000000000"),
+        (false, "migration stamp", "20261003000050"),
+        (false, "issuer, failing Luhn", "4111 1111 1111 1112"),
+    ] {
+        assert_eq!(
+            validator(&pool, "card_valid", card).await,
+            valid,
+            "{what}: {card}"
+        );
+    }
 }
 
 /// A detector is operator data (D5), so a bad regex must fail when it is written, not mid-scan,
