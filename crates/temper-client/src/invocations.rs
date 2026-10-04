@@ -5,11 +5,11 @@
 //! `show`/`list` read the envelope projections. Cogmap/invocation ids are substrate
 //! UUIDs, not resource refs.
 
-use reqwest::Method;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::types::invocation::{InvocationSummary, InvocationView};
 use temper_core::types::invocation_requests::{
     CloseInvocationRequest, InvocationAck, OpenInvocationRequest,
@@ -34,10 +34,11 @@ impl<'a> InvocationsClient<'a> {
     /// POST /api/invocations — open an invocation envelope. Returns the minted id.
     pub async fn open(&self, req: &OpenInvocationRequest) -> Result<InvocationAck> {
         let token = self.http.resolve_token()?;
-        let path = "/api/invocations";
-        let req_builder = self.http.post(path).json(req);
+        let op = &ops::OPEN;
+        let path = op.path(&[]);
+        let req_builder = self.http.request(op, &path).json(req);
         self.http
-            .send_json(&Method::POST, path, req_builder, Some(&token))
+            .send_json(&op.method(), &path, req_builder, Some(&token))
             .await
     }
 
@@ -45,10 +46,11 @@ impl<'a> InvocationsClient<'a> {
     /// **204 No Content**, so there is no body to deserialize.
     pub async fn close(&self, invocation_id: Uuid, req: &CloseInvocationRequest) -> Result<()> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/invocations/{invocation_id}/close");
-        let req_builder = self.http.post(&path).json(req);
+        let op = &ops::CLOSE;
+        let path = op.path(&[&invocation_id]);
+        let req_builder = self.http.request(op, &path).json(req);
         self.http
-            .send(&Method::POST, &path, req_builder, Some(&token))
+            .send(&op.method(), &path, req_builder, Some(&token))
             .await?;
         Ok(())
     }
@@ -56,10 +58,11 @@ impl<'a> InvocationsClient<'a> {
     /// GET /api/invocations/{id} — read one envelope plus its acts.
     pub async fn show(&self, invocation_id: Uuid) -> Result<InvocationView> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/invocations/{invocation_id}");
-        let req = self.http.get(&path);
+        let op = &ops::SHOW;
+        let path = op.path(&[&invocation_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -71,10 +74,11 @@ impl<'a> InvocationsClient<'a> {
         status: Option<String>,
     ) -> Result<Vec<InvocationSummary>> {
         let token = self.http.resolve_token()?;
+        let op = &ops::LIST_INVOCATIONS;
         let path = list_path(cogmap, status.as_deref());
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }
@@ -89,10 +93,11 @@ fn list_path(cogmap: Option<Uuid>, status: Option<&str>) -> String {
     if let Some(s) = status {
         params.push(format!("status={s}"));
     }
+    let base = ops::LIST_INVOCATIONS.path(&[]);
     if params.is_empty() {
-        "/api/invocations".to_string()
+        base
     } else {
-        format!("/api/invocations?{}", params.join("&"))
+        format!("{base}?{}", params.join("&"))
     }
 }
 

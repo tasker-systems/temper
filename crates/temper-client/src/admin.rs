@@ -1,10 +1,10 @@
 //! Typed sub-client for the `/api/access/admin/*` endpoints (Chunk 6).
 
-use reqwest::Method;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::types::access_gate::{
     JoinRequest, JoinRequestStatus, JoinRequestWithProfile, QueueCount, ReconcileAutoJoinOutcome,
     ReviewRequestWithProfile, SystemSettings,
@@ -36,20 +36,22 @@ impl<'a> AdminClient<'a> {
     /// Read full system settings (admin only).
     pub async fn get_settings(&self) -> Result<SystemSettings> {
         let token = self.http.resolve_token()?;
-        let path = "/api/access/admin/settings";
-        let req = self.http.get(path);
+        let op = &ops::ADMIN_GET_SETTINGS;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Partial-update system settings (admin only).
     pub async fn update_settings(&self, body: &UpdateSettingsRequest) -> Result<SystemSettings> {
         let token = self.http.resolve_token()?;
-        let path = "/api/access/admin/settings";
-        let req = self.http.patch(path).json(body);
+        let op = &ops::ADMIN_UPDATE_SETTINGS;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::PATCH, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -59,10 +61,11 @@ impl<'a> AdminClient<'a> {
     /// the subject. So an error here means "nothing you may read", not "nothing exists".
     pub async fn ledger(&self, query: &AdminLedgerQuery) -> Result<AdminLedgerResponse> {
         let token = self.http.resolve_token()?;
-        let path = "/api/admin/ledger";
-        let req = self.http.get(path).query(query);
+        let op = &ops::LIST_ADMIN_LEDGER;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).query(query);
         self.http
-            .send_json(&Method::GET, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -76,10 +79,11 @@ impl<'a> AdminClient<'a> {
         query: &AdminProfilesListQuery,
     ) -> Result<AdminDirectoryListResponse> {
         let token = self.http.resolve_token()?;
-        let path = "/api/access/admin/profiles";
-        let req = self.http.get(path).query(query);
+        let op = &ops::ADMIN_LIST_PROFILES;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).query(query);
         self.http
-            .send_json(&Method::GET, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -95,33 +99,36 @@ impl<'a> AdminClient<'a> {
     /// bridge).
     pub async fn profile_card_by_email(&self, email: &str) -> Result<AdminProfileCard> {
         let token = self.http.resolve_token()?;
-        let path = "/api/access/admin/profiles";
-        let req = self.http.get(path).query(&AdminProfilesListQuery {
+        let op = &ops::ADMIN_LIST_PROFILES;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).query(&AdminProfilesListQuery {
             email: Some(email.to_string()),
             ..Default::default()
         });
         self.http
-            .send_json(&Method::GET, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// The principal state card (admin only) — the deep read behind the list row.
     pub async fn show_profile(&self, profile_id: Uuid) -> Result<AdminProfileCard> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/access/admin/profiles/{profile_id}");
-        let req = self.http.get(&path);
+        let op = &ops::ADMIN_SHOW_PROFILE;
+        let path = op.path(&[&profile_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Promote a profile to `owner` on a team (admin only).
     pub async fn promote(&self, body: &PromoteAdminRequest) -> Result<TeamMemberRow> {
         let token = self.http.resolve_token()?;
-        let path = "/api/access/admin/promote";
-        let req = self.http.post(path).json(body);
+        let op = &ops::ADMIN_PROMOTE;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -131,13 +138,14 @@ impl<'a> AdminClient<'a> {
     /// (`revoke`/`deactivate` demote). Not team-scoped.
     pub async fn demote(&self, profile_id: Uuid) -> Result<()> {
         let token = self.http.resolve_token()?;
-        let path = "/api/access/admin/demote";
+        let op = &ops::ADMIN_DEMOTE;
+        let path = op.path(&[]);
         let req = self
             .http
-            .post(path)
+            .request(op, &path)
             .json(&DemoteAdminRequest { profile_id });
         self.http
-            .send(&Method::POST, path, req, Some(&token))
+            .send(&op.method(), &path, req, Some(&token))
             .await?;
         Ok(())
     }
@@ -145,20 +153,22 @@ impl<'a> AdminClient<'a> {
     /// List pending join requests for the gating team (admin only).
     pub async fn list_requests(&self) -> Result<Vec<JoinRequestWithProfile>> {
         let token = self.http.resolve_token()?;
-        let path = "/api/access/admin/requests";
-        let req = self.http.get(path);
+        let op = &ops::ADMIN_LIST_JOIN_REQUESTS;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// List undecided reconsideration requests — the D15 inbox (admin only).
     pub async fn list_reviews(&self) -> Result<Vec<ReviewRequestWithProfile>> {
         let token = self.http.resolve_token()?;
-        let path = "/api/access/admin/reviews";
-        let req = self.http.get(path);
+        let op = &ops::ADMIN_LIST_REVIEWS;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -169,11 +179,12 @@ impl<'a> AdminClient<'a> {
     /// list raises, so "not yours to see" never arrives as a `0`.
     pub async fn count_requests(&self) -> Result<i32> {
         let token = self.http.resolve_token()?;
-        let path = "/api/access/admin/requests/count";
-        let req = self.http.get(path);
+        let op = &ops::ADMIN_COUNT_JOIN_REQUESTS;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
         let body: QueueCount = self
             .http
-            .send_json(&Method::GET, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await?;
         Ok(body.count)
     }
@@ -183,11 +194,12 @@ impl<'a> AdminClient<'a> {
     /// [`Self::list_reviews`] without the rows; same refusal posture as [`Self::count_requests`].
     pub async fn count_reviews(&self) -> Result<i32> {
         let token = self.http.resolve_token()?;
-        let path = "/api/access/admin/reviews/count";
-        let req = self.http.get(path);
+        let op = &ops::ADMIN_COUNT_REVIEWS;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
         let body: QueueCount = self
             .http
-            .send_json(&Method::GET, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await?;
         Ok(body.count)
     }
@@ -203,13 +215,14 @@ impl<'a> AdminClient<'a> {
         decision_note: Option<String>,
     ) -> Result<()> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/access/admin/reviews/{request_id}");
+        let op = &ops::ADMIN_CLOSE_REVIEW;
+        let path = op.path(&[&request_id]);
         let req = self
             .http
-            .patch(&path)
+            .request(op, &path)
             .json(&CloseReviewBody { decision_note });
         self.http
-            .send(&Method::PATCH, &path, req, Some(&token))
+            .send(&op.method(), &path, req, Some(&token))
             .await?;
         Ok(())
     }
@@ -221,10 +234,11 @@ impl<'a> AdminClient<'a> {
     /// re-run — staleness is derived, not marked, so it only ever queues what genuinely needs it.
     pub async fn reembed(&self, body: &ReembedRequest) -> Result<ReembedSummary> {
         let token = self.http.resolve_token()?;
-        let path = "/api/embed/admin/reembed";
-        let req = self.http.post(path).json(body);
+        let op = &ops::ADMIN_REEMBED;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -238,10 +252,11 @@ impl<'a> AdminClient<'a> {
     /// already-conforming resource is a no-op that fires nothing.
     pub async fn reblock(&self, body: &ReblockRequest) -> Result<ReblockReceipt> {
         let token = self.http.resolve_token()?;
-        let path = "/api/resources/reblock";
-        let req = self.http.post(path).json(body);
+        let op = &ops::REBLOCK_RESOURCES;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -253,36 +268,44 @@ impl<'a> AdminClient<'a> {
         decision_note: Option<String>,
     ) -> Result<JoinRequest> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/access/admin/requests/{request_id}");
+        let op = &ops::ADMIN_REVIEW_JOIN_REQUEST;
+        let path = op.path(&[&request_id]);
         let body = ReviewBody {
             status: decision,
             decision_note,
         };
-        let req = self.http.patch(&path).json(&body);
+        let req = self.http.request(op, &path).json(&body);
         self.http
-            .send_json(&Method::PATCH, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Approve a principal directly (admin only) — the machine/direct-grant door (D14/D16).
     pub async fn approve_principal(&self, profile_id: Uuid) -> Result<()> {
-        self.standing_act(profile_id, "approve", None).await
+        self.standing_act(&ops::ADMIN_APPROVE_PRINCIPAL, profile_id, None)
+            .await
     }
 
     /// Revoke a principal's admission (admin only). `reason` is required (D15).
     pub async fn revoke_principal(&self, profile_id: Uuid, reason: &str) -> Result<()> {
-        self.standing_act(profile_id, "revoke", Some(RevokeBody { reason }))
-            .await
+        self.standing_act(
+            &ops::ADMIN_REVOKE_PRINCIPAL,
+            profile_id,
+            Some(RevokeBody { reason }),
+        )
+        .await
     }
 
     /// Deactivate a principal (admin only).
     pub async fn deactivate_principal(&self, profile_id: Uuid) -> Result<()> {
-        self.standing_act(profile_id, "deactivate", None).await
+        self.standing_act(&ops::ADMIN_DEACTIVATE_PRINCIPAL, profile_id, None)
+            .await
     }
 
     /// Reactivate a deactivated principal, restoring its prior standing (admin only).
     pub async fn reactivate_principal(&self, profile_id: Uuid) -> Result<()> {
-        self.standing_act(profile_id, "reactivate", None).await
+        self.standing_act(&ops::ADMIN_REACTIVATE_PRINCIPAL, profile_id, None)
+            .await
     }
 
     /// Converge every auto-join team's roster to the standing-approved population (admin only).
@@ -290,28 +313,29 @@ impl<'a> AdminClient<'a> {
     /// group mappings; an empty `added` means already converged.
     pub async fn reconcile_auto_join(&self) -> Result<ReconcileAutoJoinOutcome> {
         let token = self.http.resolve_token()?;
-        let path = "/api/access/admin/auto-join/reconcile";
-        let req = self.http.post(path).json(&serde_json::json!({}));
+        let op = &ops::ADMIN_RECONCILE_AUTO_JOIN;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(&serde_json::json!({}));
         self.http
-            .send_json(&Method::POST, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Shared POST for the standing acts. They return `200 OK` with no body.
     async fn standing_act(
         &self,
+        op: &ops::Op,
         profile_id: Uuid,
-        verb: &str,
         body: Option<RevokeBody<'_>>,
     ) -> Result<()> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/access/admin/principals/{profile_id}/{verb}");
-        let mut req = self.http.post(&path);
+        let path = op.path(&[&profile_id]);
+        let mut req = self.http.request(op, &path);
         if let Some(body) = body {
             req = req.json(&body);
         }
         self.http
-            .send(&Method::POST, &path, req, Some(&token))
+            .send(&op.method(), &path, req, Some(&token))
             .await?;
         Ok(())
     }

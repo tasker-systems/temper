@@ -1,9 +1,8 @@
 //! Typed sub-client for the `/api/search` endpoint.
 
-use reqwest::Method;
-
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::types::api::{ExactHit, SearchParams, SearchResponse, WideHit};
 
 /// Sub-client for search operations.
@@ -90,10 +89,12 @@ impl<'a> SearchClient<'a> {
     /// path are all gone with it.
     pub async fn search_with_params(&self, params: &SearchParams) -> Result<SearchResponse> {
         let token = self.http.resolve_token()?;
-        let req = self.http.post("/api/search").json(params);
+        let op = &ops::SEARCH;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(params);
         let resp = self
             .http
-            .send(&Method::POST, "/api/search", req, Some(&token))
+            .send(&op.method(), &path, req, Some(&token))
             .await?;
         let bytes = resp.bytes().await?;
         Ok(serde_json::from_slice(&bytes)?)

@@ -1,10 +1,10 @@
 //! Typed sub-client for the `/api/contexts` endpoints.
 
-use reqwest::Method;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::context_ref::ContextOwnerRef;
 use temper_core::types::cognitive_maps::{AnchorShape, CogmapRegionMetricsRow, CogmapStaleness};
 use temper_core::types::context::{
@@ -34,9 +34,11 @@ impl<'a> ContextClient<'a> {
     /// List all visible contexts with resource counts.
     pub async fn list(&self) -> Result<Vec<ContextRowWithCounts>> {
         let token = self.http.resolve_token()?;
-        let req = self.http.get("/api/contexts");
+        let op = &ops::LIST_CONTEXTS;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, "/api/contexts", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -46,10 +48,11 @@ impl<'a> ContextClient<'a> {
     /// means), so it can only ever be listed by someone who could have retired it.
     pub async fn list_retired(&self) -> Result<Vec<ContextRowWithCounts>> {
         let token = self.http.resolve_token()?;
-        let path = "/api/contexts?retired=true";
-        let req = self.http.get(path);
+        let op = &ops::LIST_CONTEXTS;
+        let path = format!("{}?retired=true", op.path(&[]));
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -62,19 +65,22 @@ impl<'a> ContextClient<'a> {
     /// `"{method} {path}"` as an exported span attribute, and a ref names an owner and a slug.
     pub async fn resolve(&self, context_ref: &str) -> Result<ContextResolution> {
         let token = self.http.resolve_token()?;
-        let req = resolve_request(self.http, context_ref);
+        let op = &ops::RESOLVE_CONTEXT;
+        let path = op.path(&[]);
+        let req = resolve_request(self.http, &path, context_ref);
         self.http
-            .send_json(&Method::GET, CONTEXT_RESOLVE_PATH, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Get a single context by ID.
     pub async fn get(&self, id: Uuid) -> Result<ContextRow> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/contexts/{id}");
-        let req = self.http.get(&path);
+        let op = &ops::GET_CONTEXT;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -87,9 +93,11 @@ impl<'a> ContextClient<'a> {
             name: name.to_owned(),
             owner,
         };
-        let req = self.http.post("/api/contexts").json(&body);
+        let op = &ops::CREATE_CONTEXT;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(&body);
         self.http
-            .send_json(&Method::POST, "/api/contexts", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -101,10 +109,11 @@ impl<'a> ContextClient<'a> {
     /// original address no longer resolves once the row is hidden and the slug has moved.
     pub async fn delete(&self, context_id: Uuid) -> Result<RetireContextOutcome> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/contexts/{context_id}");
-        let req = self.http.delete(&path);
+        let op = &ops::DELETE_CONTEXT;
+        let path = op.path(&[&context_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::DELETE, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -113,10 +122,11 @@ impl<'a> ContextClient<'a> {
     /// the returned slug can differ from the one the caller retired under.
     pub async fn restore(&self, context_id: Uuid) -> Result<RestoreContextOutcome> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/contexts/{context_id}/restore");
-        let req = self.http.post(&path);
+        let op = &ops::RESTORE_CONTEXT;
+        let path = op.path(&[&context_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -127,10 +137,11 @@ impl<'a> ContextClient<'a> {
         body: &ShareContextRequest,
     ) -> Result<ShareContextOutcome> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/contexts/{context_id}/teams");
-        let req = self.http.post(&path).json(body);
+        let op = &ops::SHARE_TEAM;
+        let path = op.path(&[&context_id]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -141,10 +152,11 @@ impl<'a> ContextClient<'a> {
         team_id: Uuid,
     ) -> Result<UnshareContextOutcome> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/contexts/{context_id}/teams/{team_id}");
-        let req = self.http.delete(&path);
+        let op = &ops::UNSHARE_TEAM;
+        let path = op.path(&[&context_id, &team_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::DELETE, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -155,10 +167,11 @@ impl<'a> ContextClient<'a> {
         body: &ReassignContextRequest,
     ) -> Result<ReassignContextOutcome> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/contexts/{context_id}/reassign");
-        let req = self.http.post(&path).json(body);
+        let op = &ops::REASSIGN;
+        let path = op.path(&[&context_id]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -172,10 +185,11 @@ impl<'a> ContextClient<'a> {
         body: &RenameContextRequest,
     ) -> Result<RenameContextOutcome> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/contexts/{context_id}/rename");
-        let req = self.http.post(&path).json(body);
+        let op = &ops::RENAME;
+        let path = op.path(&[&context_id]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }
@@ -200,10 +214,11 @@ impl ContextClient<'_> {
     /// a `lens` that matched nothing is `lens_narrowed`. Four cases that were one bare `[]` before.
     pub async fn shape(&self, context_id: Uuid, lens: Option<Uuid>) -> Result<AnchorShape> {
         let token = self.http.resolve_token()?;
+        let op = &ops::CONTEXT_SHAPE;
         let path = context_shape_path(context_id, lens);
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -214,10 +229,11 @@ impl ContextClient<'_> {
         lens: Option<Uuid>,
     ) -> Result<Vec<CogmapRegionMetricsRow>> {
         let token = self.http.resolve_token()?;
+        let op = &ops::CONTEXT_REGION_METRICS;
         let path = context_region_metrics_path(context_id, lens);
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -233,10 +249,11 @@ impl ContextClient<'_> {
     /// same posture as `materialize_delta` below and the cogmap peer.
     pub async fn analytics(&self, context_id: Uuid) -> Result<CogmapStaleness> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/contexts/{context_id}/analytics");
-        let req = self.http.get(&path);
+        let op = &ops::CONTEXT_ANALYTICS;
+        let path = op.path(&[&context_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -254,10 +271,11 @@ impl ContextClient<'_> {
         threshold: Option<i64>,
     ) -> Result<MaterializeDelta> {
         let token = self.http.resolve_token()?;
+        let op = &ops::CONTEXT_MATERIALIZE_DELTA;
         let path = context_materialize_delta_path(context_id, threshold);
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -270,18 +288,19 @@ impl ContextClient<'_> {
         threshold: Option<i64>,
     ) -> Result<MaterializeAck> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/contexts/{context_id}/materialize");
+        let op = &ops::CONTEXT_MATERIALIZE;
+        let path = op.path(&[&context_id]);
         let body = MaterializeRequest { threshold };
-        let req = self.http.post(&path).json(&body);
+        let req = self.http.request(op, &path).json(&body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }
 
 /// `/api/contexts/{id}/shape` with an optional `?lens=` query — shared by the method and its test.
 fn context_shape_path(context_id: Uuid, lens: Option<Uuid>) -> String {
-    let base = format!("/api/contexts/{context_id}/shape");
+    let base = ops::CONTEXT_SHAPE.path(&[&context_id]);
     match lens {
         Some(l) => format!("{base}?lens={l}"),
         None => base,
@@ -290,7 +309,7 @@ fn context_shape_path(context_id: Uuid, lens: Option<Uuid>) -> String {
 
 /// `/api/contexts/{id}/region-metrics` with an optional `?lens=` query.
 fn context_region_metrics_path(context_id: Uuid, lens: Option<Uuid>) -> String {
-    let base = format!("/api/contexts/{context_id}/region-metrics");
+    let base = ops::CONTEXT_REGION_METRICS.path(&[&context_id]);
     match lens {
         Some(l) => format!("{base}?lens={l}"),
         None => base,
@@ -300,19 +319,17 @@ fn context_region_metrics_path(context_id: Uuid, lens: Option<Uuid>) -> String {
 /// `/api/contexts/{id}/materialize-delta` with an optional `?threshold=` query — shared by the method
 /// and its test.
 fn context_materialize_delta_path(context_id: Uuid, threshold: Option<i64>) -> String {
-    let base = format!("/api/contexts/{context_id}/materialize-delta");
+    let base = ops::CONTEXT_MATERIALIZE_DELTA.path(&[&context_id]);
     match threshold {
         Some(t) => format!("{base}?threshold={t}"),
         None => base,
     }
 }
 
-const CONTEXT_RESOLVE_PATH: &str = "/api/contexts/resolve";
-
 /// The resolve request: the fixed path, with the ref as the `context_ref` query parameter
 /// (percent-encoded by reqwest — a ref carries `@`, `+` and `/`).
-fn resolve_request(http: &HttpClient, context_ref: &str) -> reqwest::RequestBuilder {
-    http.get(CONTEXT_RESOLVE_PATH)
+fn resolve_request(http: &HttpClient, path: &str, context_ref: &str) -> reqwest::RequestBuilder {
+    http.request(&ops::RESOLVE_CONTEXT, path)
         .query(&[("context_ref", context_ref)])
 }
 
@@ -328,7 +345,7 @@ mod resolve_request_tests {
 
     #[test]
     fn resolve_carries_the_ref_as_an_encoded_query_parameter() {
-        let req = resolve_request(&http(), "+tasker-systems/general")
+        let req = resolve_request(&http(), "/api/contexts/resolve", "+tasker-systems/general")
             .build()
             .expect("request builds");
         assert_eq!(req.method(), reqwest::Method::GET);
@@ -350,7 +367,7 @@ mod resolve_request_tests {
 
     #[test]
     fn resolve_encodes_the_at_me_form_too() {
-        let req = resolve_request(&http(), "@me/temper")
+        let req = resolve_request(&http(), "/api/contexts/resolve", "@me/temper")
             .build()
             .expect("request builds");
         let pairs: Vec<(String, String)> = req.url().query_pairs().into_owned().collect();

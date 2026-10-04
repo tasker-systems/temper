@@ -9,11 +9,11 @@
 //! so a repeated-param encoding hands the service a single unparseable uuid and 400s.
 //! The path builders below are pure and unit-tested for exactly that reason.
 
-use reqwest::Method;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::types::graph_atlas::{AtlasEntry, AtlasSubgraph};
 
 /// Join ids the way both graph query params expect: comma-separated, one param.
@@ -34,17 +34,18 @@ pub(crate) fn entry_path(anchors: &[Uuid], k: Option<i32>) -> String {
     if let Some(k) = k {
         params.push(format!("k={k}"));
     }
+    let base = ops::ENTRY.path(&[]);
     if params.is_empty() {
-        "/api/graph/entry".to_string()
+        base
     } else {
-        format!("/api/graph/entry?{}", params.join("&"))
+        format!("{base}?{}", params.join("&"))
     }
 }
 
 /// `GET /api/graph/traverse` — `from` is required, `depth` is omitted when the caller
 /// names none so the default stays in one place (the handler's `unwrap_or(1)`).
 pub(crate) fn traverse_path(seeds: &[Uuid], depth: Option<i32>) -> String {
-    let mut path = format!("/api/graph/traverse?from={}", join_ids(seeds));
+    let mut path = format!("{}?from={}", ops::TRAVERSE.path(&[]), join_ids(seeds));
     if let Some(depth) = depth {
         path.push_str(&format!("&depth={depth}"));
     }
@@ -74,10 +75,11 @@ impl<'a> GraphClient<'a> {
     /// ranks across the whole visible corpus.
     pub async fn entry(&self, anchors: &[Uuid], k: Option<i32>) -> Result<AtlasEntry> {
         let token = self.http.resolve_token()?;
+        let op = &ops::ENTRY;
         let path = entry_path(anchors, k);
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -87,10 +89,11 @@ impl<'a> GraphClient<'a> {
     /// reader's whole visible corpus from these seeds.
     pub async fn traverse(&self, seeds: &[Uuid], depth: Option<i32>) -> Result<AtlasSubgraph> {
         let token = self.http.resolve_token()?;
+        let op = &ops::TRAVERSE;
         let path = traverse_path(seeds, depth);
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }

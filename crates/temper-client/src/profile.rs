@@ -1,9 +1,8 @@
 //! Typed sub-client for the `/api/profile` endpoints.
 
-use reqwest::Method;
-
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::types::api::ProfileUpdateRequest;
 use temper_core::types::profile::{Profile, ProfileAuthLink, ProfileWithEntitlements};
 
@@ -32,9 +31,11 @@ impl<'a> ProfileClient<'a> {
     /// will make the round trip and throw the answer away.
     pub async fn get(&self) -> Result<Profile> {
         let token = self.http.resolve_token()?;
-        let req = self.http.get("/api/profile");
+        let op = &ops::GET_PROFILE;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, "/api/profile", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -48,27 +49,33 @@ impl<'a> ProfileClient<'a> {
     /// queue reports denial for exactly the people most likely to hold access.
     pub async fn get_with_entitlements(&self) -> Result<ProfileWithEntitlements> {
         let token = self.http.resolve_token()?;
-        let req = self.http.get("/api/profile");
+        let op = &ops::GET_PROFILE;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, "/api/profile", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Update the authenticated user's profile.
     pub async fn update(&self, request: &ProfileUpdateRequest) -> Result<Profile> {
         let token = self.http.resolve_token()?;
-        let req = self.http.patch("/api/profile").json(request);
+        let op = &ops::UPDATE_PROFILE;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::PATCH, "/api/profile", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// List external auth provider links for the authenticated user.
     pub async fn auth_links(&self) -> Result<Vec<ProfileAuthLink>> {
         let token = self.http.resolve_token()?;
-        let req = self.http.get("/api/profile/auth-links");
+        let op = &ops::LIST_AUTH_LINKS;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, "/api/profile/auth-links", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }

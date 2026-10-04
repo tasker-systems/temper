@@ -24,6 +24,7 @@ pub mod invocations;
 pub mod login;
 mod login_page;
 pub mod machine;
+pub(crate) mod ops;
 pub mod profile;
 pub mod query;
 pub mod relationships;

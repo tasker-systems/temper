@@ -3,11 +3,11 @@
 //! Sends a fully-processed payload (content + chunks + embeddings) as JSON.
 //! The CLI handles extract → chunk → embed locally.
 
-use reqwest::Method;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::types::ingest::{
     AppendBlockPayload, BlocksResponse, FinalizePayload, IngestPayload, SegmentedBeginResponse,
 };
@@ -45,17 +45,19 @@ impl<'a> IngestClient<'a> {
     /// unkeyed create keeps the safe-method-only retry policy.
     pub async fn create(&self, payload: &IngestPayload) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
-        let req = self.http.post("/api/ingest").json(payload);
+        let op = &ops::CREATE_INGEST;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(payload);
         match payload.idempotency_key {
             Some(key) => {
                 let req = req.header(IDEMPOTENCY_KEY_HEADER, key.to_string());
                 self.http
-                    .send_json_idempotent(&Method::POST, "/api/ingest", req, Some(&token))
+                    .send_json_idempotent(&op.method(), &path, req, Some(&token))
                     .await
             }
             None => {
                 self.http
-                    .send_json(&Method::POST, "/api/ingest", req, Some(&token))
+                    .send_json(&op.method(), &path, req, Some(&token))
                     .await
             }
         }
@@ -64,10 +66,11 @@ impl<'a> IngestClient<'a> {
     /// PUT /api/ingest/:id — update resource content with new chunks.
     pub async fn update(&self, id: Uuid, payload: &IngestPayload) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/ingest/{id}");
-        let req = self.http.put(&path).json(payload);
+        let op = &ops::UPDATE_INGEST;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path).json(payload);
         self.http
-            .send_json(&Method::PUT, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -76,7 +79,9 @@ impl<'a> IngestClient<'a> {
     /// one-shot `ResourceView`.
     pub async fn begin_segmented(&self, payload: &IngestPayload) -> Result<SegmentedBeginResponse> {
         let token = self.http.resolve_token()?;
-        let req = self.http.post("/api/ingest").json(payload);
+        let op = &ops::CREATE_INGEST;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(payload);
         // A keyed begin is idempotent-retryable exactly like a keyed one-shot create: block 0 lands
         // through the same `create_resource_impl` claim, so a replayed begin converges on the
         // committed resource (returning its landed block set) instead of minting a twin. See
@@ -85,12 +90,12 @@ impl<'a> IngestClient<'a> {
             Some(key) => {
                 let req = req.header(IDEMPOTENCY_KEY_HEADER, key.to_string());
                 self.http
-                    .send_json_idempotent(&Method::POST, "/api/ingest", req, Some(&token))
+                    .send_json_idempotent(&op.method(), &path, req, Some(&token))
                     .await
             }
             None => {
                 self.http
-                    .send_json(&Method::POST, "/api/ingest", req, Some(&token))
+                    .send_json(&op.method(), &path, req, Some(&token))
                     .await
             }
         }
@@ -104,10 +109,11 @@ impl<'a> IngestClient<'a> {
         payload: &AppendBlockPayload,
     ) -> Result<BlocksResponse> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{resource_id}/blocks");
-        let req = self.http.post(&path).json(payload);
+        let op = &ops::APPEND_BLOCK;
+        let path = op.path(&[&resource_id]);
+        let req = self.http.request(op, &path).json(payload);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -115,10 +121,11 @@ impl<'a> IngestClient<'a> {
     /// responds `204 No Content` on success; there is no JSON body to decode.
     pub async fn finalize(&self, resource_id: Uuid, payload: &FinalizePayload) -> Result<()> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{resource_id}/finalize");
-        let req = self.http.post(&path).json(payload);
+        let op = &ops::FINALIZE_RESOURCE;
+        let path = op.path(&[&resource_id]);
+        let req = self.http.request(op, &path).json(payload);
         self.http
-            .send(&Method::POST, &path, req, Some(&token))
+            .send(&op.method(), &path, req, Some(&token))
             .await?;
         Ok(())
     }
@@ -126,10 +133,11 @@ impl<'a> IngestClient<'a> {
     /// GET /api/resources/:id/blocks — the currently landed segment set (resume/progress read).
     pub async fn list_blocks(&self, resource_id: Uuid) -> Result<BlocksResponse> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{resource_id}/blocks");
-        let req = self.http.get(&path);
+        let op = &ops::LIST_BLOCKS;
+        let path = op.path(&[&resource_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }

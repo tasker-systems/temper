@@ -1,10 +1,10 @@
 //! Typed sub-client for the operator-only `/api/subscriptions` endpoints.
 
-use reqwest::Method;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::types::subscription::{CreateSubscriptionRequest, Subscription};
 
 /// Sub-client for subscription management.
@@ -28,9 +28,11 @@ impl<'a> SubscriptionsClient<'a> {
     /// grant held) runs server-side before the INSERT.
     pub async fn create(&self, body: &CreateSubscriptionRequest) -> Result<Subscription> {
         let token = self.http.resolve_token()?;
-        let req = self.http.post("/api/subscriptions").json(body);
+        let op = &ops::CREATE_SUBSCRIPTION;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, "/api/subscriptions", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -41,23 +43,25 @@ impl<'a> SubscriptionsClient<'a> {
         connection_id: Option<Uuid>,
     ) -> Result<Vec<Subscription>> {
         let token = self.http.resolve_token()?;
-        let mut path = format!("/api/subscriptions?include_revoked={include_revoked}");
+        let op = &ops::LIST_SUBSCRIPTIONS;
+        let mut path = format!("{}?include_revoked={include_revoked}", op.path(&[]));
         if let Some(cid) = connection_id {
             path.push_str(&format!("&connection_id={cid}"));
         }
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Load one subscription.
     pub async fn get(&self, id: Uuid) -> Result<Subscription> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/subscriptions/{id}");
-        let req = self.http.get(&path);
+        let op = &ops::GET_SUBSCRIPTION;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -65,10 +69,11 @@ impl<'a> SubscriptionsClient<'a> {
     /// but stays resolvable for the delivery row's research-corpus property.
     pub async fn revoke(&self, id: Uuid) -> Result<Subscription> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/subscriptions/{id}");
-        let req = self.http.delete(&path);
+        let op = &ops::REVOKE_SUBSCRIPTION;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::DELETE, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }

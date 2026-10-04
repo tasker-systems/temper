@@ -4,11 +4,11 @@
 //! moves the cursor forward. The cogmap is a substrate UUID (the CLI resolves any decorated ref to
 //! its trailing UUID before calling).
 
-use reqwest::Method;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::types::steward::{AdvanceWatermarkAck, AdvanceWatermarkRequest, IngestDelta};
 
 /// Sub-client for steward ingest-trigger operations.
@@ -30,10 +30,11 @@ impl<'a> StewardClient<'a> {
     /// GET /api/steward/{cogmap}/delta[?threshold=] — read the ingest delta.
     pub async fn delta(&self, cogmap: Uuid, threshold: Option<i64>) -> Result<IngestDelta> {
         let token = self.http.resolve_token()?;
+        let op = &ops::DELTA;
         let path = delta_path(cogmap, threshold);
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -48,14 +49,15 @@ impl<'a> StewardClient<'a> {
         boundary_fingerprint: Option<String>,
     ) -> Result<AdvanceWatermarkAck> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/steward/{cogmap}/watermark");
+        let op = &ops::ADVANCE;
+        let path = op.path(&[&cogmap]);
         let body = AdvanceWatermarkRequest {
             event_id,
             boundary_fingerprint,
         };
-        let req = self.http.post(&path).json(&body);
+        let req = self.http.request(op, &path).json(&body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }
@@ -63,9 +65,10 @@ impl<'a> StewardClient<'a> {
 /// `/api/steward/{cogmap}/delta` with an optional `threshold` query param — omitted when absent.
 /// Shared by the method and its test.
 fn delta_path(cogmap: Uuid, threshold: Option<i64>) -> String {
+    let base = ops::DELTA.path(&[&cogmap]);
     match threshold {
-        Some(t) => format!("/api/steward/{cogmap}/delta?threshold={t}"),
-        None => format!("/api/steward/{cogmap}/delta"),
+        Some(t) => format!("{base}?threshold={t}"),
+        None => base,
     }
 }
 
