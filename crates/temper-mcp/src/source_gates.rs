@@ -555,8 +555,8 @@ fn crate_sources() -> Vec<(String, syn::File)> {
 /// resources, the config, the host values — names a database pool, the services crate, or the
 /// server state that once carried a pool ([`SERVER_STATE_NAMES`]). The crate has no boot of its
 /// own (the deployed edge, `temper-mcp-server`, boots it), so the rule has no exception: a pool
-/// reappearing anywhere here fails by file and name. Test-only items are exempt — the
-/// `AuthzError` witness in `service.rs` names the services' error types as its oracle.
+/// reappearing anywhere here fails by file and name. Test-only items are exempt (the crate has
+/// no services dependency even for tests — see the manifest gate below).
 #[test]
 fn no_module_in_the_tool_layer_holds_a_pool_or_server_state() {
     let sources = crate_sources();
@@ -594,6 +594,234 @@ fn no_module_in_the_tool_layer_holds_a_pool_or_server_state() {
          database; a host hands it plain values (`host.rs`), never a pool:\n  {}",
         offenders.join("\n  ")
     );
+}
+
+/// What a production item reads from the process or says about a host: every `env::…` read
+/// (`std::env::var`, `var_os`, `vars`, `vars_os`), every `option_env!`, every `env!` other than
+/// cargo's compile-time `CARGO_*`, every `from_env`, every string literal naming a `TEMPER_`
+/// variable, and every name of the deployed host's credential or attribution carrier — whether
+/// spelled as its constant, its header text, or the surface it pins.
+fn host_configuration_reads(item: &syn::Item) -> BTreeSet<String> {
+    #[derive(Default)]
+    struct V(BTreeSet<String>);
+    fn literal(v: &mut BTreeSet<String>, text: &str) {
+        let lower = text.to_ascii_lowercase();
+        if text.contains("TEMPER_") {
+            v.insert(format!("the variable literal {text:?}"));
+        }
+        for header in ["service-credential", "relayed-surface"] {
+            if lower.contains(header) {
+                v.insert(format!("the header literal {text:?}"));
+            }
+        }
+    }
+    fn tokens(v: &mut BTreeSet<String>, stream: proc_macro2::TokenStream) {
+        let flat: Vec<proc_macro2::TokenTree> = stream.into_iter().collect();
+        for (i, tt) in flat.iter().enumerate() {
+            match tt {
+                proc_macro2::TokenTree::Literal(l) => literal(v, &l.to_string()),
+                proc_macro2::TokenTree::Group(g) => tokens(v, g.stream()),
+                proc_macro2::TokenTree::Ident(id) => {
+                    let id = id.to_string();
+                    if HOST_NAMES.contains(&id.as_str()) {
+                        v.insert(format!("`{id}`"));
+                    }
+                    // `env :: var` / `Surface :: Mcp` spelled inside a macro body.
+                    let next = |n: usize| match flat.get(i + n) {
+                        Some(proc_macro2::TokenTree::Ident(x)) => Some(x.to_string()),
+                        _ => None,
+                    };
+                    if let Some(after) = next(3) {
+                        if id == "env" && ENV_READS.contains(&after.as_str()) {
+                            v.insert(format!("`env::{after}`"));
+                        }
+                        if id == "Surface" && after == "Mcp" {
+                            v.insert("`Surface::Mcp`".to_string());
+                        }
+                    }
+                }
+                proc_macro2::TokenTree::Punct(_) => {}
+            }
+        }
+    }
+    const ENV_READS: &[&str] = &["var", "var_os", "vars", "vars_os"];
+    const HOST_NAMES: &[&str] = &[
+        "SERVICE_CREDENTIAL_HEADER",
+        "RELAYED_SURFACE_HEADER",
+        "from_env",
+        "option_env",
+    ];
+    impl<'a> Visit<'a> for V {
+        fn visit_path(&mut self, p: &'a syn::Path) {
+            let segs: Vec<String> = p.segments.iter().map(|s| s.ident.to_string()).collect();
+            for w in segs.windows(2) {
+                if w[0] == "env" && ENV_READS.contains(&w[1].as_str()) {
+                    self.0.insert(format!("`env::{}`", w[1]));
+                }
+                if w[0] == "Surface" && w[1] == "Mcp" {
+                    self.0.insert("`Surface::Mcp`".to_string());
+                }
+            }
+            for s in &segs {
+                if HOST_NAMES.contains(&s.as_str()) {
+                    self.0.insert(format!("`{s}`"));
+                }
+            }
+            syn::visit::visit_path(self, p);
+        }
+        fn visit_use_name(&mut self, n: &'a syn::UseName) {
+            let id = n.ident.to_string();
+            if HOST_NAMES.contains(&id.as_str()) || ENV_READS.contains(&id.as_str()) {
+                self.0.insert(format!("`{id}` (imported)"));
+            }
+        }
+        // `use …::SERVICE_CREDENTIAL_HEADER as H;` / `use std::env::var as getenv;` — the
+        // rename hides every later use, so the import itself is the offence.
+        fn visit_use_rename(&mut self, r: &'a syn::UseRename) {
+            let id = r.ident.to_string();
+            if HOST_NAMES.contains(&id.as_str()) || ENV_READS.contains(&id.as_str()) {
+                self.0
+                    .insert(format!("`{id}` (imported as `{}`)", r.rename));
+            }
+        }
+        // `use …::Surface::Mcp;` / `use …::Surface::*;` / `use std::env::*;` — importing the
+        // variant (or everything beside it) lets a bare `Mcp` or `var` through.
+        fn visit_use_path(&mut self, p: &'a syn::UsePath) {
+            let id = p.ident.to_string();
+            let tree = &*p.tree;
+            let names_it = |want: &str| match tree {
+                syn::UseTree::Name(n) => n.ident == want,
+                syn::UseTree::Rename(r) => r.ident == want,
+                syn::UseTree::Glob(_) => true,
+                syn::UseTree::Group(g) => g.items.iter().any(|i| match i {
+                    syn::UseTree::Name(n) => n.ident == want,
+                    syn::UseTree::Rename(r) => r.ident == want,
+                    syn::UseTree::Glob(_) => true,
+                    _ => false,
+                }),
+                syn::UseTree::Path(_) => false,
+            };
+            if id == "Surface" && names_it("Mcp") {
+                self.0.insert("`Surface::Mcp` (imported)".to_string());
+            }
+            if id == "env" && matches!(tree, syn::UseTree::Glob(_)) {
+                self.0.insert("`env::*` (imported)".to_string());
+            }
+            syn::visit::visit_use_path(self, p);
+        }
+        fn visit_ident(&mut self, i: &'a proc_macro2::Ident) {
+            if i == "from_env" {
+                self.0.insert("`from_env`".to_string());
+            }
+        }
+        fn visit_lit_str(&mut self, l: &'a syn::LitStr) {
+            literal(&mut self.0, &l.value());
+        }
+        fn visit_macro(&mut self, m: &'a syn::Macro) {
+            let name = m.path.segments.last().map(|s| s.ident.to_string());
+            match name.as_deref() {
+                Some("option_env") => {
+                    self.0.insert("`option_env!`".to_string());
+                }
+                Some("env") => {
+                    let arg = m.tokens.to_string();
+                    if !arg.trim_start_matches('"').starts_with("CARGO_") {
+                        self.0.insert(format!("`env!({arg})`"));
+                    }
+                }
+                _ => tokens(&mut self.0, m.tokens.clone()),
+            }
+            syn::visit::visit_macro(self, m);
+        }
+    }
+    let mut v = V::default();
+    v.visit_item(item);
+    v.0
+}
+
+/// **The crate accepts configuration and never reads it; the host's credential is opaque.**
+/// No production item of the tool layer reads the process environment, defines or calls a
+/// `from_env`, names a `TEMPER_` variable, or names the deployed host's service credential or
+/// `mcp` attribution carrier (by constant, header text, or `Surface::Mcp`). Those belong to the
+/// host's seam impl (`temper-mcp-server`), which hands this crate an opaque identity per request
+/// and a `RelayConfig` per process. Fails by file and name.
+#[test]
+fn the_tool_layer_reads_no_configuration_and_names_no_host_credential() {
+    let sources = crate_sources();
+    assert!(
+        sources.iter().any(|(rel, _)| rel == "seam.rs")
+            && sources.iter().any(|(rel, _)| rel == "service.rs"),
+        "the walk missed the seam or the service"
+    );
+    let mut offenders = Vec::new();
+    for (rel, file) in &sources {
+        for item in production_items(file) {
+            offenders.extend(
+                host_configuration_reads(item)
+                    .into_iter()
+                    .map(|what| format!("{rel} names {what}")),
+            );
+        }
+    }
+    offenders.sort();
+    offenders.dedup();
+    assert!(
+        offenders.is_empty(),
+        "the tool layer reads configuration or names a host's credential — a host supplies \
+         both through `RelayConfig` and its `IdentitySeam`:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// The detector itself, against each shape it must catch and the shapes it must pass — so a
+/// refactor of the reader cannot quietly turn the gate into one that passes everything.
+#[test]
+fn the_host_configuration_detector_catches_each_shape() {
+    let item = |src: &str| -> syn::Item { syn::parse_str(src).expect("item parses") };
+    let caught = [
+        "fn f() { let _ = std::env::var(\"X\"); }",
+        "fn f() { let _ = env::var_os(\"X\"); }",
+        "use std::env::vars;",
+        "fn f() { let _ = option_env!(\"X\"); }",
+        "fn f() { let _ = env!(\"HOME\"); }",
+        "impl C { fn from_env() -> Self { todo!() } }",
+        "fn f() { C::from_env(); }",
+        "const K: &str = \"TEMPER_API_BASE_URL\";",
+        "fn f() { tracing::info!(\"read TEMPER_MCP_SERVICE_SECRET\"); }",
+        "use temper_workflow::operations::SERVICE_CREDENTIAL_HEADER;",
+        "fn f() { h.insert(RELAYED_SURFACE_HEADER, v); }",
+        "fn f() { h.insert(\"X-Temper-Service-Credential\", v); }",
+        "fn f() { let s = Surface::Mcp; }",
+        "fn f() { vec![Surface::Mcp]; }",
+        "fn f() { tokio::join!(std::env::var(\"X\")); }",
+        "use temper_workflow::operations::SERVICE_CREDENTIAL_HEADER as H;",
+        "use std::env::var as getenv;",
+        "use std::env::{var_os as v, args};",
+        "use std::env::*;",
+        "use temper_workflow::operations::Surface::Mcp;",
+        "use temper_workflow::operations::Surface::*;",
+        "use temper_workflow::operations::Surface::{CliCloud, Mcp};",
+    ];
+    for src in caught {
+        assert!(
+            !host_configuration_reads(&item(src)).is_empty(),
+            "the detector missed: {src}"
+        );
+    }
+    let passed = [
+        "fn f() { let _ = env!(\"CARGO_PKG_VERSION\"); }",
+        "fn f() { let s = Surface::CliCloud; let v = vars_of(x); }",
+        "const K: &str = \"temper\";",
+        "use temper_workflow::operations::{Surface, RELAYED_ATTRS as R};",
+        "use temper_workflow::operations::Surface::CliCloud;",
+    ];
+    for src in passed {
+        assert!(
+            host_configuration_reads(&item(src)).is_empty(),
+            "the detector flagged an innocent shape: {src} → {:?}",
+            host_configuration_reads(&item(src))
+        );
+    }
 }
 
 /// Source the walk cannot follow: an `include!` (code spliced from another file) or a
@@ -659,8 +887,7 @@ pub(crate) fn runtime_dependency_packages(cargo: &toml::Value) -> BTreeSet<Strin
 /// **Least privilege, structurally:** the tool layer's runtime dependencies (every non-dev table,
 /// target-specific ones included, by resolved package name) name no database driver and no
 /// server crate, so a pool cannot be constructed here even by a path the source gate does
-/// not parse (a macro, a build script). `temper-services` stays allowed as a DEV-dependency only
-/// (the `AuthzError` witness's oracle).
+/// not parse (a macro, a build script).
 #[test]
 fn the_tool_layer_manifest_names_no_database_or_services_crate() {
     let raw = std::fs::read_to_string(manifest("Cargo.toml")).expect("read Cargo.toml");
@@ -682,6 +909,81 @@ fn the_tool_layer_manifest_names_no_database_or_services_crate() {
         offenders.is_empty(),
         "the tool layer depends on a database or server crate at runtime: {offenders:?}"
     );
+}
+
+/// **No temper-services dependency of any kind** — not even for a test. The `AuthzError`
+/// witness, the one test that named the services' error types, lives in the deployed host
+/// (`temper-mcp-server`), which may see both sides. Every dependency table is read, dev and
+/// target-specific included, by resolved package name.
+#[test]
+fn the_tool_layer_has_no_services_dependency_even_for_tests() {
+    let raw = std::fs::read_to_string(manifest("Cargo.toml")).expect("read Cargo.toml");
+    let cargo: toml::Value = toml::from_str(&raw).expect("Cargo.toml parses");
+    let deps = every_dependency_package(&cargo);
+    assert!(
+        deps.contains("syn") && deps.contains("rmcp"),
+        "the walk missed a table: {deps:?}"
+    );
+    for forbidden in ["temper-services", "temper-api", "temper-mcp-server"] {
+        assert!(
+            !deps.contains(forbidden),
+            "the tool layer depends on `{forbidden}` (in some table)"
+        );
+    }
+}
+
+/// **No utoipa in the published graph.** The MCP server neither exposes nor expresses utoipa, so
+/// the two temper crates that gate it behind `web-api` are depended on without it (as
+/// temperkb-client depends on them), and no runtime table names utoipa directly. Paired with
+/// `cargo tree -p temper-mcp -e normal`, which the PR records showing none.
+#[test]
+fn the_tool_layer_pulls_no_web_api_surface() {
+    let raw = std::fs::read_to_string(manifest("Cargo.toml")).expect("read Cargo.toml");
+    let cargo: toml::Value = toml::from_str(&raw).expect("Cargo.toml parses");
+    let deps = cargo["dependencies"].as_table().expect("[dependencies]");
+    for name in ["temperkb-core", "temperkb-workflow"] {
+        let features: Vec<&str> = deps[name]
+            .get("features")
+            .and_then(|f| f.as_array())
+            .map(|f| f.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        assert!(
+            !features.contains(&"web-api"),
+            "`{name}` is depended on with `web-api`, which pulls utoipa into the tool layer"
+        );
+    }
+    assert!(
+        !runtime_dependency_packages(&cargo).contains("utoipa"),
+        "the tool layer names utoipa directly"
+    );
+}
+
+/// [`runtime_dependency_packages`] plus `[dev-dependencies]`, top-level and per target.
+fn every_dependency_package(cargo: &toml::Value) -> BTreeSet<String> {
+    let mut out = runtime_dependency_packages(cargo);
+    let mut tables: Vec<&toml::value::Table> = Vec::new();
+    if let Some(t) = cargo.get("dev-dependencies").and_then(|d| d.as_table()) {
+        tables.push(t);
+    }
+    if let Some(targets) = cargo.get("target").and_then(|t| t.as_table()) {
+        for target in targets.values() {
+            if let Some(t) = target.get("dev-dependencies").and_then(|d| d.as_table()) {
+                tables.push(t);
+            }
+        }
+    }
+    out.extend(
+        tables
+            .into_iter()
+            .flat_map(|t| t.iter())
+            .map(|(key, spec)| {
+                spec.get("package")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or(key)
+                    .to_string()
+            }),
+    );
+    out
 }
 
 /// The gates' own detectors, against the shapes they must accept and the shapes review showed

@@ -74,7 +74,7 @@ CREDENTIAL_FIELDS='access_token|refresh_token|id_token|client_secret|hmac_secret
 # LIMIT, named 2026-09-24 (review): the field matcher reads `name: Type` declaration position,
 # so a TUPLE struct carrying a credential — `pub struct BearerToken(pub String)` — never matches.
 # The convention's answer is to hand-write a redacting Debug on such a type (which also removes
-# it from this baseline); temper-mcp's `BearerToken` is the instance.
+# it from this baseline); temper-mcp-server's `BearerToken` is the instance.
 read -r -d '' BASELINE <<'EOF' || true
 crates/temper-cli/src/saml/mod.rs	SamlProvisionConfig
 crates/temper-client/src/auth.rs	TokenResponse

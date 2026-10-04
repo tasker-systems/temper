@@ -24,23 +24,13 @@ use reqwest::StatusCode;
 /// *after* JWT verification; this drives `require_mcp_auth` itself, so MCP's `aud` check — on the
 /// one surface where the audience bug originally diverged — is covered.
 async fn spawn_mcp_server() -> String {
-    let mcp_config = temper_mcp::McpConfig {
-        mcp_base_url: "http://localhost".to_string(),
-        mcp_client_id: None,
-        api_base_url: None,
-        mcp_service_secret: None,
-        oauth: temper_mcp::config::OAuthStaticConfig {
-            redirect_uris: vec![],
-            allow_localhost: true,
-        },
-    };
     // The same auth identity temper-api runs with in the harness (`common::mcp_server_config`),
     // so a difference in behavior between the surfaces can only come from the surfaces
     // themselves. The edge holds no pool: nothing past the JWT check runs here.
     let router = temper_mcp_server::build_router(
         common::mcp_server_config(temper_mcp_server::config::blob_door(None, false)),
         common::mcp_test_jwks(),
-        mcp_config,
+        common::mcp_discovery_config("http://localhost"),
     );
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

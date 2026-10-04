@@ -18,15 +18,34 @@
 //! environment — environment variables are project-scoped and the API shares the project — but
 //! this process neither requires, reads nor connects with it.)
 //!
+//! It also states the relay, which the tool layer accepts as plain values and never reads: the
+//! API's base URL (`TEMPER_API_BASE_URL`, with the [`RELAY_REQUEST_TIMEOUT`] this function's
+//! budget allows) and the service credential the deployed seam presents. Either missing leaves
+//! the edge up and the tool door dark, refusing every relayed act with [`DeployedRelay`]'s
+//! sentence — the deployment-misconfiguration wording is this shell's, never the tool layer's.
+//!
 //! What the API's boot checks and this one does not: the cross-secret distinctness check and the
 //! strength floor on secrets this process never holds. The API function boots from the same
 //! project environment and still refuses on them.
 
+use std::time::Duration;
 use temper_auth::config::{
-    check_shared_secret_strength, parse_auth_config, AuthConfig, AuthConfigError,
+    check_shared_secret_strength, parse_auth_config, shared_secret, AuthConfig, AuthConfigError,
 };
-use temper_mcp::BlobDoor;
+
+use temper_mcp::{BlobDoor, RelayConfig};
 use temper_services::config::BlobConfig;
+
+use crate::seam::DeployedDoorSeam;
+
+/// The relay's per-request client timeout.
+///
+/// Strictly below the 60 s `maxDuration` this function runs inside (`vercel.json`), with
+/// shaping margin — a hung API call must surface as the rmcp-shaped refusal the tool layer
+/// maps, never as the platform killing the function mid-flight (design §2.1, ruling 6).
+/// The stock temper-client ceiling (75 s) is sized ABOVE the server's budget on purpose —
+/// for a CLI that must observe what the server did — and is exactly inverted here.
+pub const RELAY_REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// The one shared secret this process presents (on every relayed act), held to the floor.
 const PRESENTED_SECRETS: [&str; 1] = ["TEMPER_MCP_SERVICE_SECRET"];
@@ -41,6 +60,49 @@ pub struct McpServerConfig {
     pub cors_origins: Vec<String>,
     /// The deployment's blob posture, as the tool layer consumes it.
     pub blob_door: BlobDoor,
+    /// Where and as whom the tool layer relays, or why it cannot.
+    pub relay: DeployedRelay,
+}
+
+/// The deployed relay: configured, or dark with the sentence every relayed act answers.
+#[derive(Clone, Debug)]
+pub enum DeployedRelay {
+    /// `TEMPER_API_BASE_URL` and `TEMPER_MCP_SERVICE_SECRET` are both set and usable.
+    Ready {
+        config: RelayConfig,
+        seam: DeployedDoorSeam,
+    },
+    /// The tool door is dark; health and discovery stay up. The sentence names the variable.
+    Unavailable(&'static str),
+}
+
+const BASE_URL_UNSET: &str = "This MCP deployment is not configured to forward tool calls: \
+     TEMPER_API_BASE_URL is unset. Health and discovery remain available; contact the operator.";
+const SECRET_UNSET: &str = "This MCP deployment is not configured to forward tool calls: \
+     TEMPER_MCP_SERVICE_SECRET is unset. Health and discovery remain available; contact the \
+     operator.";
+const SECRET_NOT_A_HEADER: &str = "TEMPER_MCP_SERVICE_SECRET is not a valid header value; \
+     refusing to forward. Contact the operator.";
+
+/// The relay this deployment's environment states. Both values are trimmed; the secret through
+/// the API's own reader (`shared_secret`), so the value presented is the value the API compares.
+pub fn deployed_relay(lookup: &impl Fn(&str) -> Option<String>) -> DeployedRelay {
+    let Some(api_base_url) = lookup("TEMPER_API_BASE_URL")
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+    else {
+        return DeployedRelay::Unavailable(BASE_URL_UNSET);
+    };
+    let Some(secret) = shared_secret(lookup, "TEMPER_MCP_SERVICE_SECRET") else {
+        return DeployedRelay::Unavailable(SECRET_UNSET);
+    };
+    match DeployedDoorSeam::new(&secret) {
+        Ok(seam) => DeployedRelay::Ready {
+            config: RelayConfig::new(api_base_url, RELAY_REQUEST_TIMEOUT),
+            seam,
+        },
+        Err(_) => DeployedRelay::Unavailable(SECRET_NOT_A_HEADER),
+    }
 }
 
 impl McpServerConfig {
@@ -65,6 +127,7 @@ impl McpServerConfig {
             auth,
             cors_origins,
             blob_door: blob_door(blob.as_ref(), disabled_by_policy),
+            relay: deployed_relay(&lookup),
         })
     }
 }

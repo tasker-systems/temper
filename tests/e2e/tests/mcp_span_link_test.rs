@@ -32,20 +32,10 @@ async fn mcp_links_an_authenticated_callers_trace_and_no_one_elses(_pool: sqlx::
         .expect("the layer must exist once a provider is installed");
     tracing_subscriber::registry().with(layer).init();
 
-    let mcp_config = temper_mcp::McpConfig {
-        mcp_base_url: "http://localhost".to_string(),
-        mcp_client_id: None,
-        api_base_url: None,
-        mcp_service_secret: None,
-        oauth: temper_mcp::config::OAuthStaticConfig {
-            redirect_uris: vec![],
-            allow_localhost: true,
-        },
-    };
     let app = temper_mcp_server::build_router(
         common::mcp_server_config(temper_mcp_server::config::blob_door(None, false)),
         common::mcp_test_jwks(),
-        mcp_config,
+        common::mcp_discovery_config("http://localhost"),
     );
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

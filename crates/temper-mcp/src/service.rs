@@ -30,57 +30,10 @@ use std::sync::Arc;
 use temper_client::auth::MemoryTokenStore;
 use temper_client::error::ClientError;
 use temper_client::TemperClient;
-use temper_workflow::operations::{Surface, RELAYED_SURFACE_HEADER, SERVICE_CREDENTIAL_HEADER};
 
-use crate::config::McpConfig;
-use crate::host::{BearerToken, BlobDoor};
+use crate::host::BlobDoor;
+use crate::seam::{not_connected, IdentitySeam, OutgoingIdentity, RelayConfig};
 use crate::tools;
-
-/// The relay's per-request client timeout, in seconds.
-///
-/// Strictly below the 60 s `maxDuration` this function runs inside (`vercel.json`), with
-/// shaping margin — a hung API call must surface as the rmcp-shaped refusal the tool layer
-/// maps, never as the platform killing the function mid-flight (design §2.1, ruling 6).
-/// The stock temper-client ceiling (75 s) is sized ABOVE the server's budget on purpose —
-/// for a CLI that must observe what the server did — and is exactly inverted here.
-pub(crate) const RELAY_REQUEST_TIMEOUT_SECS: u64 = 45;
-
-/// Build the relay's ONE connection pool: called once per process at router assembly,
-/// and handed (refcount-cloned) to every per-request client the service factory builds.
-/// This is the §D6 carve-out made structural — a pool built in `TemperMcpService::new`
-/// would be per-request, which is exactly the fresh-TLS-per-call cost the carve-out
-/// exists to avoid.
-pub fn shared_relay_pool() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(RELAY_REQUEST_TIMEOUT_SECS))
-        // [added — 2026-09-24, found in review] Redirects are refused, never followed: the pool's clients carry the
-        // shared service credential and the caller's bearer as default headers, and
-        // reqwest replays default headers on every redirect hop — a 3xx answered by
-        // anything in front of the pinned `api_base_url` must not be able to re-send
-        // either secret to an origin of its choosing. No API route emits a 3xx; this
-        // makes the relay's behavior independent of that fact.
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("failed to build the relay's shared HTTP client")
-}
-
-/// An [`McpConfig`] with the relay OFF — no base URL, no service credential.
-///
-/// For a service that must never forward — a test of the edge or the transport, with no
-/// tool dispatch: a relay-less config is its honest shape, and an accidental forwarding
-/// attempt answers the typed refuse-to-forward error instead of half-working.
-pub fn relay_off_config() -> McpConfig {
-    McpConfig {
-        mcp_base_url: "https://temper.invalid".to_string(),
-        mcp_client_id: None,
-        api_base_url: None,
-        mcp_service_secret: None,
-        oauth: crate::config::OAuthStaticConfig {
-            redirect_uris: vec![],
-            allow_localhost: false,
-        },
-    }
-}
 
 /// Total attempts for a non-idempotent (unkeyed) tool act. The ruled "1 retry on
 /// non-idempotent tool acts" (design §2.1/§11.6): a cold-start 500 on the API function is
@@ -89,154 +42,177 @@ pub fn relay_off_config() -> McpConfig {
 /// round trip. Safe/idempotent-keyed requests keep temper-client's stock budget.
 const RELAY_NON_IDEMPOTENT_ATTEMPTS: u32 = 2;
 
-/// Central MCP service. One instance per client session.
+/// Headers the relay client sets itself — the identity it re-issues (`authorization`, the
+/// surface, the device id), the trace context, and the transport's own. A host's extra headers
+/// may not restate them.
+const RESERVED_HEADERS: &[&str] = &[
+    "authorization",
+    "x-temper-surface",
+    "x-temper-device-id",
+    "traceparent",
+    "tracestate",
+    "host",
+    "content-length",
+    "content-type",
+];
+
+/// The identity `call_tool` resolved for one call, carried to `relay_client` in the request's
+/// parts. Crate-private: a host or caller cannot plant one — only the dispatch gate does.
+#[derive(Clone)]
+struct ResolvedIdentity(OutgoingIdentity);
+
+/// How this service relays: through a host's seam, or not at all.
+#[derive(Clone)]
+enum Door {
+    /// The relay is configured: the API's base URL, the ONE connection pool (built once, in
+    /// [`TemperMcpService::new`], and refcount-cloned into every per-request client), and the
+    /// host's seam.
+    Relay {
+        api_base_url: Arc<str>,
+        connections: reqwest::Client,
+        seam: Arc<dyn IdentitySeam>,
+    },
+    /// The host cannot relay at all — it says why, in its own words, and every relayed act
+    /// answers that sentence (a dark tool door beats a silently mis-attributed one).
+    Unavailable(Arc<str>),
+}
+
+/// Central MCP service.
+///
+/// **Build it once per process and clone it per request.** Construction builds the relay's
+/// connection pool; a clone shares it. Temper's deployed host runs the streamable-HTTP transport
+/// in stateless mode, whose factory is called once per HTTP request — so the factory clones a
+/// service built at router assembly, and no tool call pays a fresh TLS handshake.
 ///
 /// The `ToolRouter` is **not** stored as a field. Under rmcp ≥ 1.4 the `#[tool_handler]` macro
-/// defaults to `Self::tool_router()` — rebuilding the router per `call_tool` / `list_tools`
-/// call — so a stored field would be dead weight: built in `new` and never read. Temper runs the
-/// streamable-HTTP transport in **stateless mode** (`with_legacy_session_mode(false)` in
-/// `router::build_router`), which calls the service factory — and thus `new` — once per HTTP
-/// request, so each service instance serves exactly one call. Building the router in `new` and
-/// reading it in `call_tool` is the same number of builds as building it in `call_tool` alone;
-/// the field bought nothing. Removing it also keeps the code aligned with the doc below: each
-/// invocation creates a fresh service, and the router is just as fresh.
+/// defaults to `Self::tool_router()` — rebuilding the router per call — so a stored field would
+/// be dead weight. `ToolRouter<Self>` is imported only because the `#[tool_router]` macro
+/// references it in its generated associated function; no value of that type lives here.
 ///
-/// `ToolRouter<Self>` is imported only because the `#[tool_router]` macro references it in its
-/// generated associated function; no value of that type lives on this struct.
+/// The service carries NO auth state: who a request acts as is answered per request by the
+/// host's [`IdentitySeam`], and exists only as that request's client.
 #[derive(Clone)]
 pub struct TemperMcpService {
     /// The deployment's blob posture, a plain value the host read at boot — the only
-    /// per-process fact a tool consults besides the relay config. The service holds no
-    /// pool, no key store and no server configuration (the least-privilege follow-up to
-    /// the network door's teardown).
+    /// per-process fact a tool consults besides the relay.
     pub blob_door: BlobDoor,
-    /// The relay's configuration — API base URL and service credential (injectable;
-    /// §D6). Every tool crosses the deployed API through a per-request client built
-    /// from these.
-    pub mcp_config: McpConfig,
-    /// The shared connection pool (the statelessness carve-out, §D6/§11.5): built ONCE
-    /// at boot with the relay timeout, reused by every per-request client — without it
-    /// each tool call pays a fresh TLS handshake plus a possible API cold start.
-    shared_http: reqwest::Client,
+    door: Door,
 }
 
 impl std::fmt::Debug for TemperMcpService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let door = match &self.door {
+            Door::Relay { .. } => "relay",
+            Door::Unavailable(_) => "unavailable",
+        };
         f.debug_struct("TemperMcpService")
             .field("blob_door", &self.blob_door)
-            .field(
-                "mcp_config.api_base_url",
-                &self.mcp_config.api_base_url.as_ref().map(|_| "set"),
-            )
-            .field(
-                "mcp_config.mcp_service_secret",
-                // Presence-preserving redaction: whether the credential is configured is
-                // exactly the operational fact; its value must never reach a sink.
-                &self
-                    .mcp_config
-                    .mcp_service_secret
-                    .as_ref()
-                    .map(|_| "redacted"),
-            )
-            .field("shared_http", &"reqwest::Client")
+            .field("door", &door)
             .finish_non_exhaustive()
     }
 }
 
 #[tool_router]
 impl TemperMcpService {
-    pub fn new(blob_door: BlobDoor, mcp_config: McpConfig, shared_http: reqwest::Client) -> Self {
+    /// A service that relays every tool act to `relay.api_base_url`, as whoever `seam` says
+    /// each request acts as. Builds the relay's connection pool — call once, clone per request.
+    pub fn new(blob_door: BlobDoor, relay: RelayConfig, seam: Arc<dyn IdentitySeam>) -> Self {
         Self {
             blob_door,
-            mcp_config,
-            shared_http,
+            door: Door::Relay {
+                connections: relay.connection_pool(),
+                api_base_url: relay.api_base_url.into(),
+                seam,
+            },
         }
     }
 
-    /// Build the per-request relay client: the caller's bearer re-issued by THIS
-    /// process (never the inbound header bytes copied — the relay parses and
-    /// re-issues), the service credential and attribution carrier as
-    /// constructor-level default headers so they ride retries in one place, the
-    /// shared pool underneath, and the ruled transport figures (§2.1/§11.6).
+    /// A service whose host cannot relay: every relayed act answers `refusal`, the host's own
+    /// sentence (the crate never words a host's misconfiguration). The tool list is unchanged.
+    pub fn unavailable(blob_door: BlobDoor, refusal: impl Into<String>) -> Self {
+        Self {
+            blob_door,
+            door: Door::Unavailable(refusal.into().into()),
+        }
+    }
+
+    /// The identity this request acts as, from the host's seam — or the refusal a request
+    /// without one answers. `Ok(None)` only on an unavailable door, whose refusal the relay
+    /// itself speaks.
+    fn outgoing_identity(
+        &self,
+        parts: &http::request::Parts,
+    ) -> Result<Option<OutgoingIdentity>, rmcp::ErrorData> {
+        match &self.door {
+            Door::Relay { seam, .. } => seam
+                .outgoing_identity(parts)
+                .map(Some)
+                .ok_or_else(not_connected),
+            Door::Unavailable(_) => Ok(None),
+        }
+    }
+
+    /// Build the per-request relay client — the ONE place any host's client is built.
     ///
-    /// The MCP edge drops any caller-supplied values of the credential and carrier
-    /// headers by never copying them: only the bearer crosses, and these two are
-    /// SET here. `device_id` is pinned absent — the relay is not a device.
+    /// The identity's bearer is re-issued by THIS process (never inbound header bytes copied),
+    /// the host's extra headers ride as constructor-level default headers so they cross retries
+    /// in one place, the shared pool sits underneath, and the ruled transport figures apply
+    /// (§2.1/§11.6). `device_id` is pinned absent — a relay is not a device.
     ///
-    /// **Refuse-to-forward (ruling 4):** an unconfigured base URL or service secret
-    /// turns every tool act into a typed rmcp error naming the misconfiguration,
-    /// while `/mcp/health` and discovery stay up — a dark tool door beats a
-    /// silently mis-attributed one.
+    /// An unavailable door answers its host's sentence; a seam that yields no identity answers
+    /// the crate's not-connected refusal.
     pub fn relay_client(
         &self,
         parts: &http::request::Parts,
     ) -> Result<TemperClient, rmcp::ErrorData> {
-        let base_url = self.mcp_config.api_base_url.as_deref().ok_or_else(|| {
-            rmcp::ErrorData::internal_error(
-                "This MCP deployment is not configured to forward tool calls: \
-                 TEMPER_API_BASE_URL is unset. Health and discovery remain available; \
-                 contact the operator."
-                    .to_string(),
+        let (api_base_url, connections, seam) = match &self.door {
+            Door::Relay {
+                api_base_url,
+                connections,
+                seam,
+            } => (api_base_url, connections, seam),
+            Door::Unavailable(refusal) => {
+                return Err(rmcp::ErrorData::internal_error(refusal.to_string(), None))
+            }
+        };
+        // The identity `call_tool` resolved for this call, when it did — so the client is built
+        // from the identity the dispatch gate checked and the correlation fill used, never from a
+        // second consultation that might answer differently. Otherwise (the resources protocol, a
+        // direct call) the seam is consulted here.
+        let identity = match parts.extensions.get::<ResolvedIdentity>() {
+            Some(ResolvedIdentity(identity)) => identity.clone(),
+            None => seam.outgoing_identity(parts).ok_or_else(not_connected)?,
+        };
+        let (bearer, surface, extra_headers) = identity.into_parts();
+        if let Some(name) = extra_headers
+            .keys()
+            .find(|name| RESERVED_HEADERS.contains(&name.as_str()))
+        {
+            // Fail closed: a default header that restates identity would ride BESIDE the one
+            // the client sets (reqwest appends), and which copy a reader honours is not ours to
+            // leave to chance.
+            return Err(rmcp::ErrorData::internal_error(
+                format!(
+                    "This host's identity carries the reserved header `{name}`, which the relay \
+                     sets itself; refusing to forward."
+                ),
                 None,
-            )
-        })?;
-        let secret = self
-            .mcp_config
-            .mcp_service_secret
-            .as_deref()
-            .ok_or_else(|| {
-                rmcp::ErrorData::internal_error(
-                    "This MCP deployment is not configured to forward tool calls: \
-                     TEMPER_MCP_SERVICE_SECRET is unset. Health and discovery remain \
-                     available; contact the operator."
-                        .to_string(),
-                    None,
-                )
-            })?;
-        let bearer = parts
-            .extensions
-            .get::<BearerToken>()
-            .ok_or_else(|| rmcp::ErrorData::internal_error("Not authenticated".to_string(), None))?
-            .0
-            .clone();
-
-        let mut default_headers = reqwest::header::HeaderMap::new();
-        // HeaderName/Value construction refuses malformed bytes; both values here are
-        // constants or operator-configured ASCII, and a malformed secret surfaces at the
-        // first tool call rather than poisoning the pool.
-        let credential_name = reqwest::header::HeaderName::try_from(SERVICE_CREDENTIAL_HEADER)
-            .expect("the service credential header name is a valid header name");
-        let carrier_name = reqwest::header::HeaderName::try_from(RELAYED_SURFACE_HEADER)
-            .expect("the relayed surface header name is a valid header name");
-        default_headers.insert(
-            credential_name,
-            reqwest::header::HeaderValue::from_str(secret).map_err(|_| {
-                rmcp::ErrorData::internal_error(
-                    "TEMPER_MCP_SERVICE_SECRET is not a valid header value; refusing to \
-                     forward. Contact the operator."
-                        .to_string(),
-                    None,
-                )
-            })?,
-        );
-        default_headers.insert(
-            carrier_name,
-            reqwest::header::HeaderValue::from_static("mcp"),
-        );
+            ));
+        }
 
         TemperClient::with_token(
-            base_url,
+            api_base_url,
             None,
-            Surface::Mcp,
+            surface,
             bearer,
             Arc::new(MemoryTokenStore::empty()),
         )
         .map_err(|e| rmcp::ErrorData::internal_error(format!("relay client: {e}"), None))
         .map(|client| {
             client
-                .with_default_headers(default_headers)
+                .with_default_headers(extra_headers)
                 .with_non_idempotent_attempts(RELAY_NON_IDEMPOTENT_ATTEMPTS)
-                .with_connection_pool(self.shared_http.clone())
+                .with_connection_pool(connections.clone())
         })
     }
 
@@ -800,12 +776,12 @@ impl TemperMcpService {
 /// too, and hand-copied literals had drifted between the two once (`EmailResolution`
 /// was missed — the catch-all spoke the raw API body); the sentences stay named
 /// constants, after the repo's `REQUEST_ACCESS_COMMAND` precedent.
-const TERMINAL_MACHINE_GATE_SENTENCE: &str =
+pub const TERMINAL_MACHINE_GATE_SENTENCE: &str =
     "This token is machine-shaped but does not declare a valid \
      client_credentials grant. This error is terminal and should not be retried.";
-const TERMINAL_DEACTIVATION_SENTENCE: &str =
+pub const TERMINAL_DEACTIVATION_SENTENCE: &str =
     "This account has been deactivated. This error is terminal and should not be retried.";
-const TERMINAL_EMAIL_RESOLUTION_SENTENCE: &str =
+pub const TERMINAL_EMAIL_RESOLUTION_SENTENCE: &str =
     "Could not resolve an email address for this token. \
      This error is terminal and should not be retried.";
 
@@ -850,7 +826,7 @@ pub(crate) fn api_error_cause(message: &str) -> &str {
         .unwrap_or(message)
 }
 
-pub(crate) fn map_post_edge_refusal(refusal: &ClientError) -> Option<rmcp::ErrorData> {
+pub fn map_post_edge_refusal(refusal: &ClientError) -> Option<rmcp::ErrorData> {
     map_system_access_refusal(refusal).or_else(|| map_post_edge_auth(refusal))
 }
 
@@ -923,7 +899,7 @@ fn map_system_access_refusal(refusal: &ClientError) -> Option<rmcp::ErrorData> {
 ///
 /// `None` for every other error — only authentication refusals speak here; the tool's
 /// own mapping owns the rest.
-pub(crate) fn map_post_edge_auth(refusal: &ClientError) -> Option<rmcp::ErrorData> {
+pub fn map_post_edge_auth(refusal: &ClientError) -> Option<rmcp::ErrorData> {
     let ClientError::UnauthorizedDetails { message } = refusal else {
         return None;
     };
@@ -1032,6 +1008,37 @@ fn list_tools_result(blob_ready: bool) -> ListToolsResult {
     .with_cache_scope(crate::cache_policy::DEPLOYMENT_SURFACE_SCOPE)
 }
 
+/// The request's HTTP parts, or empty parts when the transport carried none.
+fn request_parts(extensions: &rmcp::model::Extensions) -> http::request::Parts {
+    extensions
+        .get::<http::request::Parts>()
+        .cloned()
+        .unwrap_or_else(|| http::Request::new(()).into_parts().0)
+}
+
+/// The host's `correlation_id`, applied to a call only when the tool declares the argument and
+/// the agent sent none (absent or `null`). An agent-supplied value is never overridden, and a
+/// tool without the argument is never given one.
+fn fill_correlation_id(request: &mut rmcp::model::CallToolRequestParams, id: uuid::Uuid) {
+    let declares = TemperMcpService::tool_router()
+        .get(request.name.as_ref())
+        .and_then(|tool| tool.input_schema.get("properties").cloned())
+        .is_some_and(|props| props.get("correlation_id").is_some());
+    if !declares {
+        return;
+    }
+    let arguments = request.arguments.get_or_insert_with(Default::default);
+    if arguments
+        .get("correlation_id")
+        .is_none_or(serde_json::Value::is_null)
+    {
+        arguments.insert(
+            "correlation_id".to_string(),
+            serde_json::Value::String(id.to_string()),
+        );
+    }
+}
+
 #[tool_handler]
 impl rmcp::ServerHandler for TemperMcpService {
     fn get_info(&self) -> ServerConfig {
@@ -1049,6 +1056,40 @@ impl rmcp::ServerHandler for TemperMcpService {
             "Access and manage your Temper knowledge base. \
                  Search notes, list resources, create new content, and explore contexts.",
         )
+    }
+
+    /// Manual override — `#[tool_handler]` generates `call_tool` only when the impl lacks one.
+    /// Every tool call crosses the host's seam here, before dispatch:
+    ///
+    /// - a transport that carries no HTTP parts gets empty ones, so every tool (each takes
+    ///   `Extension<Parts>`) and every seam sees the same shape on every transport;
+    /// - a seam that yields no identity answers the not-connected refusal for EVERY tool,
+    ///   relayed or not — a host that supplies nothing gets refusals, never answers (an
+    ///   unavailable door has no seam: its relayed tools answer the host's sentence, and a
+    ///   pure-compute tool still answers);
+    /// - the identity is resolved ONCE here and carried to `relay_client` in the parts, so a
+    ///   seam that would answer differently on a second consultation cannot split one call;
+    /// - the identity's `correlation_id`, if any, fills the call's `correlation_id` argument
+    ///   when the tool declares one and the agent sent none (`fill_correlation_id`).
+    async fn call_tool(
+        &self,
+        mut request: rmcp::model::CallToolRequestParams,
+        mut context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        let mut parts = request_parts(&context.extensions);
+        // Any identity riding in from elsewhere is discarded: only this gate resolves one.
+        parts.extensions.remove::<ResolvedIdentity>();
+        if let Some(identity) = self.outgoing_identity(&parts)? {
+            if let Some(correlation_id) = identity.correlation_id() {
+                fill_correlation_id(&mut request, correlation_id);
+            }
+            parts.extensions.insert(ResolvedIdentity(identity));
+        }
+        // The tools read the parts from the context: replace them with the resolved ones (or
+        // supply empty ones when the transport carried none).
+        context.extensions.insert(parts);
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        Self::tool_router().call(tcc).await
     }
 
     /// Manual override — `#[tool_handler]` generates `list_tools` only when the impl
@@ -1123,16 +1164,10 @@ impl rmcp::ServerHandler for TemperMcpService {
         request: Option<PaginatedRequestParams>,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ListResourcesResult, rmcp::ErrorData> {
-        if let Some(parts) = context.extensions.get::<http::request::Parts>() {
-            // The network door: the browse read crosses the wire on the caller's own
-            // bearer; visibility is decided at the API (design §3).
-            let client = self.relay_client(parts)?;
-            return crate::resources::list_resources(&client, request).await;
-        }
-        Err(rmcp::ErrorData::internal_error(
-            "Not authenticated".to_string(),
-            None,
-        ))
+        // The network door: the browse read crosses the wire on the request's own identity;
+        // visibility is decided at the API (design §3).
+        let client = self.relay_client(&request_parts(&context.extensions))?;
+        crate::resources::list_resources(&client, request).await
     }
 
     async fn list_resource_templates(
@@ -1148,16 +1183,10 @@ impl rmcp::ServerHandler for TemperMcpService {
         request: ReadResourceRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ReadResourceResponse, rmcp::ErrorData> {
-        if let Some(parts) = context.extensions.get::<http::request::Parts>() {
-            let client = self.relay_client(parts)?;
-            return crate::resources::read_resource(&client, request)
-                .await
-                .map(ReadResourceResponse::from);
-        }
-        Err(rmcp::ErrorData::internal_error(
-            "Not authenticated".to_string(),
-            None,
-        ))
+        let client = self.relay_client(&request_parts(&context.extensions))?;
+        crate::resources::read_resource(&client, request)
+            .await
+            .map(ReadResourceResponse::from)
     }
 }
 
@@ -1169,115 +1198,158 @@ mod tests {
     };
     use temper_client::error::ClientError;
 
-    /// The wire body temper-api renders for each `AuthzError`, as temper-client types it on the
-    /// relay — `None` where the API answers a fault (5xx), which no post-edge arm maps. Mirrors
-    /// `temper-api/src/middleware/auth.rs` (Level 1) and `middleware/system_access.rs` (Level 2);
-    /// temper-mcp cannot depend on temper-api, so the mirror is written here, and the `match`
-    /// below is EXHAUSTIVE on purpose: a new `AuthzError` variant fails to compile until someone
-    /// states what the API sends for it and what this surface answers.
-    fn api_wire_refusal(e: temper_services::auth::AuthzError) -> Option<ClientError> {
-        use temper_services::auth::AuthzError;
-        use temper_services::error::ApiError;
-        let unauthorized = |cause: String| ClientError::UnauthorizedDetails {
-            message: format!("Unauthorized: {cause}"),
-        };
-        match e {
-            AuthzError::Refused(why) => {
-                Some(unauthorized(format!("machine credential refused: {why}")))
-            }
-            AuthzError::Deactivated { .. } => {
-                Some(unauthorized("account is deactivated".to_string()))
-            }
-            AuthzError::EmailResolution(err) | AuthzError::ProfileResolution(err) => match err {
-                ApiError::Unauthorized(cause) => Some(unauthorized(cause)),
-                _ => None,
-            },
-            AuthzError::AccessCheck(_) => None,
-            AuthzError::SystemAccessDenied { refusal, .. } => Some(
-                ClientError::SystemAccessRequired(Box::new(temper_core::error::CliAccessDetails {
-                    email: Some("someone@example.com".to_string()),
-                    display_name: Some("Someone".to_string()),
-                    refusal: Some(refusal),
-                    request_url: None,
-                    cli_command: None,
-                })),
-            ),
+    fn call(name: &'static str, args: serde_json::Value) -> rmcp::model::CallToolRequestParams {
+        let mut p = rmcp::model::CallToolRequestParams::new(name);
+        p.arguments = args.as_object().cloned();
+        p
+    }
+
+    /// The host's `correlation_id` fills a declared, absent argument — and only that.
+    /// FAILS IF: the fill overrides an agent's value, skips a `null`, or gives the argument to a
+    /// tool that does not declare it.
+    #[test]
+    fn the_host_correlation_id_fills_only_a_declared_argument_the_agent_left_empty() {
+        let host = uuid::Uuid::now_v7();
+        let agent = "01a10000-0000-7000-8000-000000000001";
+
+        let mut absent = call("create_resource", serde_json::json!({"title": "t"}));
+        super::fill_correlation_id(&mut absent, host);
+        assert_eq!(
+            absent.arguments.unwrap()["correlation_id"],
+            serde_json::json!(host.to_string())
+        );
+
+        let mut null = call("relationship", serde_json::json!({"correlation_id": null}));
+        super::fill_correlation_id(&mut null, host);
+        assert_eq!(
+            null.arguments.unwrap()["correlation_id"],
+            serde_json::json!(host.to_string())
+        );
+
+        let mut sent = call(
+            "create_resource",
+            serde_json::json!({"correlation_id": agent}),
+        );
+        super::fill_correlation_id(&mut sent, host);
+        assert_eq!(
+            sent.arguments.unwrap()["correlation_id"],
+            serde_json::json!(agent),
+            "the agent's value is never overridden"
+        );
+
+        let mut read = call("search", serde_json::json!({"query": "q"}));
+        super::fill_correlation_id(&mut read, host);
+        assert!(
+            !read.arguments.unwrap().contains_key("correlation_id"),
+            "a tool that does not declare the argument is never given it"
+        );
+    }
+
+    struct FixedSeam(Option<crate::seam::OutgoingIdentity>);
+    impl crate::seam::IdentitySeam for FixedSeam {
+        fn outgoing_identity(
+            &self,
+            _parts: &http::request::Parts,
+        ) -> Option<crate::seam::OutgoingIdentity> {
+            self.0.clone()
         }
     }
 
-    /// **Every `AuthzError` the API can refuse with has an MCP face — compiler-forced.**
-    ///
-    /// Until teardown the direct binding's `map_authz_error` matched `AuthzError` exhaustively,
-    /// so a new variant could not compile without an MCP rendering. The relay maps the API's
-    /// 401/403 BODY instead (`map_post_edge_refusal`), which no compiler checks; this test
-    /// restores the forcing through [`api_wire_refusal`]'s exhaustive match, and pins each
-    /// variant's face: the terminal sentences for the machine gate, deactivation, the email
-    /// ladder and the registration gate, the system-access arm with its typed refusal, and no
-    /// post-edge answer at all for a fault (the tool's own mapping owns those).
+    fn relaying(seam: FixedSeam) -> TemperMcpService {
+        TemperMcpService::new(
+            crate::BlobDoor::Closed {
+                refusal: "unused".to_string(),
+            },
+            crate::RelayConfig::new("http://127.0.0.1:9", std::time::Duration::from_secs(1)),
+            std::sync::Arc::new(seam),
+        )
+    }
+
+    fn empty_parts() -> http::request::Parts {
+        http::Request::new(()).into_parts().0
+    }
+
+    /// FAILS IF: a host's extra headers may restate a header the relay sets itself — reqwest
+    /// would send both copies, and which one a reader honours would decide the identity.
     #[test]
-    fn every_authz_refusal_has_an_mcp_face() {
-        use temper_services::auth::AuthzError;
-        use temper_services::error::ApiError;
-        let terminal = -32600;
-        let cases: Vec<(AuthzError, Option<(i32, &str)>)> = vec![
-            (
-                AuthzError::Refused("no grant type"),
-                Some((terminal, super::TERMINAL_MACHINE_GATE_SENTENCE)),
-            ),
-            (
-                AuthzError::Deactivated {
-                    profile_id: uuid::Uuid::nil(),
-                },
-                Some((terminal, super::TERMINAL_DEACTIVATION_SENTENCE)),
-            ),
-            (
-                AuthzError::EmailResolution(ApiError::Unauthorized(
-                    "Token missing email claim and userinfo lookup failed".to_string(),
-                )),
-                Some((terminal, super::TERMINAL_EMAIL_RESOLUTION_SENTENCE)),
-            ),
-            (
-                AuthzError::ProfileResolution(ApiError::Unauthorized(
-                    "machine client 'x' is not registered with this instance.".to_string(),
-                )),
-                Some((
-                    terminal,
-                    "machine client 'x' is not registered with this instance. This error is \
-                     terminal and should not be retried.",
-                )),
-            ),
-            (
-                AuthzError::ProfileResolution(ApiError::Internal("db".to_string())),
-                None,
-            ),
-            (
-                AuthzError::AccessCheck(ApiError::Internal("db".to_string())),
-                None,
-            ),
-            (
-                AuthzError::SystemAccessDenied {
-                    profile_id: uuid::Uuid::nil(),
-                    refusal: temper_principal::Refusal::Denied,
-                },
-                Some((
-                    terminal,
-                    "Access to this temper instance requires approval for someone@example.com",
-                )),
-            ),
-        ];
-        for (variant, expected) in cases {
-            let label = format!("{variant:?}");
-            let mapped =
-                api_wire_refusal(variant).and_then(|wire| super::map_post_edge_refusal(&wire));
-            match (mapped, expected) {
-                (None, None) => {}
-                (Some(err), Some((code, prefix))) => {
-                    assert_eq!(err.code.0, code, "{label}: {err}");
-                    assert!(err.message.starts_with(prefix), "{label}: {}", err.message);
-                }
-                (got, want) => panic!("{label}: got {got:?}, want {want:?}"),
+    fn a_host_header_that_restates_identity_refuses_the_call() {
+        use temper_workflow::operations::Surface;
+        for reserved in [
+            "authorization",
+            "x-temper-surface",
+            "x-temper-device-id",
+            "traceparent",
+        ] {
+            let mut headers = http::HeaderMap::new();
+            headers.insert(
+                http::HeaderName::from_static(reserved),
+                http::HeaderValue::from_static("smuggled"),
+            );
+            let svc = relaying(FixedSeam(Some(
+                crate::seam::OutgoingIdentity::new("bearer", Surface::CliCloud)
+                    .with_extra_headers(headers),
+            )));
+            let err = svc.relay_client(&empty_parts()).unwrap_err();
+            assert!(
+                err.message.contains(reserved),
+                "{reserved}: {}",
+                err.message
+            );
+        }
+        let mut opaque = http::HeaderMap::new();
+        opaque.insert("x-opaque", http::HeaderValue::from_static("fine"));
+        relaying(FixedSeam(Some(
+            crate::seam::OutgoingIdentity::new("bearer", Surface::CliCloud)
+                .with_extra_headers(opaque),
+        )))
+        .relay_client(&empty_parts())
+        .expect("an opaque header is the host's business");
+    }
+
+    /// The identity the dispatch gate resolved is the one the client is built from: a seam that
+    /// would now answer nothing cannot split the call. FAILS IF: `relay_client` re-consults the
+    /// seam when the call already carries its resolved identity.
+    #[test]
+    fn the_resolved_identity_outranks_a_second_consultation() {
+        use temper_workflow::operations::Surface;
+        let svc = relaying(FixedSeam(None));
+        let mut parts = empty_parts();
+        assert!(
+            svc.relay_client(&parts).is_err(),
+            "the seam alone answers nothing"
+        );
+        parts
+            .extensions
+            .insert(super::ResolvedIdentity(crate::seam::OutgoingIdentity::new(
+                "bearer",
+                Surface::CliCloud,
+            )));
+        svc.relay_client(&parts)
+            .expect("the call's resolved identity builds the client");
+    }
+
+    /// Every tool that carries the agent's act fields carries `correlation_id` where the fill
+    /// can see it (top-level `properties`). FAILS IF: a tool's input schema stops flattening the
+    /// act fields (a tagged enum, an `allOf`), which would silently exempt it from a host's thread.
+    #[test]
+    fn every_tool_with_act_fields_declares_correlation_id_where_the_fill_reads() {
+        let mut authored = 0;
+        for tool in TemperMcpService::tool_router().list_all() {
+            let props = tool.input_schema.get("properties");
+            let has = |k: &str| props.is_some_and(|p| p.get(k).is_some());
+            let mentions_reasoning = serde_json::to_string(&*tool.input_schema)
+                .unwrap()
+                .contains("\"reasoning\"");
+            if mentions_reasoning {
+                authored += 1;
+                assert!(
+                    has("reasoning") && has("correlation_id"),
+                    "`{}` carries act fields the correlation fill cannot see",
+                    tool.name
+                );
             }
         }
+        assert!(authored >= 10, "found only {authored} authored tools");
     }
 
     /// The JWKS-outage 401 ("Authentication service unavailable") is TRANSIENT — the

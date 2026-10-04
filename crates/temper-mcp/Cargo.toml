@@ -21,16 +21,20 @@ test-db = []
 # the TEST process. Keeping the crate out of this dependency graph makes that property
 # structural: a future `temper_api::create_app` call here cannot compile.
 temperkb-client.workspace = true
-# Only for the shared connection pool's type; the feature set mirrors temper-client's
-# so workspace unification builds one reqwest.
-reqwest = { version = "0.12", default-features = false }
-# temper-services is deliberately ABSENT from [dependencies] (a dev-dependency only, for the
-# `AuthzError` witness): the tool layer holds no pool, no key store and no server config. The
-# deployed edge is `temper-mcp-server`, which hands this crate plain values (`host.rs`). A
-# source gate (`src/source_gates.rs`) and the manifest check beside it keep both absent.
+# The shared connection pool, and the blob read's byte stream (`Response::bytes_stream`, behind
+# `stream`). Declared here, not borrowed from workspace unification: built alone (as a published
+# crate is), the blob read did not compile without it.
+reqwest = { version = "0.12", default-features = false, features = ["stream"] }
+# temper-services is deliberately ABSENT, from every dependency table: the tool layer holds no
+# pool, no key store and no server config, and the `AuthzError` witness lives in the deployed
+# host (`temper-mcp-server`), where the services' error types and this crate's refusal mapping
+# are both legitimately visible. A source gate (`src/source_gates.rs`) and the manifest check
+# beside it keep it absent.
 
-temperkb-core = { workspace = true, features = ["web-api", "mcp"] }
-temperkb-workflow = { workspace = true, features = ["web-api", "mcp"] }
+# Without `web-api`: the MCP server neither exposes nor expresses utoipa, and `cargo tree -p
+# temper-mcp -e normal` must show none (temperkb-client depends on both crates the same way).
+temperkb-core = { workspace = true, features = ["mcp"] }
+temperkb-workflow = { workspace = true, features = ["mcp"] }
 
 # Blob commit/read carry bytes over the JSON-only MCP transport as base64.
 base64 = "0.22"
@@ -42,25 +46,22 @@ rmcp = { version = "3.4.1", features = [
     "transport-streamable-http-server",
 ] }
 
-axum = { version = "0.8", features = ["json", "query"] }
 chrono = { version = "0.4", features = ["serde"] }
 http = "1"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
 schemars = { version = "1", features = ["uuid1"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v7", "serde"] }
 
 [dev-dependencies]
-# Test-only: the exhaustive `AuthzError` witness (`service.rs`) mirrors the API's wire body for
-# each variant, so it names the services' error types. Never a runtime dependency (see above).
-temper-services = { path = "../temper-services" }
 # The source gates (`src/source_gates.rs`) parse the crate's own tool modules: real function
 # bodies, real `#[cfg(test)]` attributes and real call/await chains instead of a hand lexer.
 syn = { version = "2", features = ["full", "visit"] }
 # Macro bodies are token streams; the gates read their identifiers.
 proc-macro2 = "1"
-# The exhaustive `AuthzError` witness constructs a typed `Refusal` for the system-access arm.
-temperkb-principal.workspace = true
+# The manifest gate reads this crate's own Cargo.toml.
+toml = "0.8"
+# `resources_read_error_test` serves a canned answer from a real listener.
+axum = "0.8"

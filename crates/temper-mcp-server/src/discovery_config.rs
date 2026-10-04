@@ -1,3 +1,6 @@
+//! The deployment's OAuth discovery and registration configuration (moved from the tool layer
+//! when the seam split `McpConfig`: the tool layer reads no configuration).
+
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::env;
@@ -17,7 +20,7 @@ pub struct OAuthStaticConfig {
     /// The redirect URIs registration may echo back.
     ///
     /// **On an AS-mode instance this is replaced at boot** by the entry `AS_CLIENTS` holds for this
-    /// instance's MCP client id — see [`parse_mcp_config`]. The value compiled in from
+    /// instance's MCP client id — see [`parse_discovery_config`]. The value compiled in from
     /// `mcp-server.toml` is the external-IdP (Auth0) list, where `AS_CLIENTS` is not the authority
     /// and this file is.
     pub redirect_uris: Vec<String>,
@@ -29,12 +32,13 @@ pub struct OAuthStaticConfig {
     pub allow_localhost: bool,
 }
 
-/// Configuration specific to the MCP server deployment.
+/// The deployment's OAuth discovery and registration configuration: what the protected-resource
+/// metadata advertises and what `/oauth/register` echoes. Nothing here reaches the tool layer.
 ///
 /// Deliberately carries **no audience**. An instance's audiences are parsed once, into
 /// `temper_auth::config::AuthConfig` (temperkb-auth), and read by both surfaces.
-#[derive(Clone)]
-pub struct McpConfig {
+#[derive(Clone, Debug)]
+pub struct DiscoveryConfig {
     /// Public base URL of this MCP server, e.g. `https://temperkb.io`.
     /// Used in WWW-Authenticate headers and oauth-protected-resource responses.
     pub mcp_base_url: String,
@@ -48,48 +52,15 @@ pub struct McpConfig {
     /// OAuth config: compiled in from `mcp-server.toml`, with the redirect-URI list replaced by
     /// the authoritative one on AS-mode instances.
     pub oauth: OAuthStaticConfig,
-
-    /// Base URL of the deployed API this relay forwards tool acts to (the network door,
-    /// design §D6/§11.1). In production AND previews the deployment pins this to its own
-    /// URL, so rotation/rollback skew structurally cannot open; `TEMPER_API_BASE_URL` is
-    /// the override for local/self-hosted. `None` ⇒ the forwarding path refuses (dark tool
-    /// door beats silently mis-routed tool door); `/mcp/health` and discovery stay up.
-    pub api_base_url: Option<String>,
-
-    /// The service-to-service credential presented on every forwarded request
-    /// (`TEMPER_MCP_SERVICE_SECRET`, design §D2). `None` ⇒ refuse-to-forward only —
-    /// the same posture as the base URL. Never shared with any other secret; the API's
-    /// boot gate refuses a collision.
-    pub mcp_service_secret: Option<String>,
 }
 
-/// Hand-written, not derived: `mcp_service_secret` is a live credential, and a derived
-/// `Debug` prints it verbatim — one `{:?}` away from the platform log, where it is
-/// retained, indexed, and not revoked by fixing the code afterwards (the
-/// `audit-credential-debug` tripwire's exact case). Presence, never value: whether the
-/// credential is configured is the operational fact worth seeing.
-impl std::fmt::Debug for McpConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("McpConfig")
-            .field("mcp_base_url", &self.mcp_base_url)
-            .field("mcp_client_id", &self.mcp_client_id)
-            .field("oauth", &self.oauth)
-            .field("api_base_url", &self.api_base_url)
-            .field(
-                "mcp_service_secret",
-                &self.mcp_service_secret.as_ref().map(|_| "redacted"),
-            )
-            .finish()
+impl DiscoveryConfig {
+    pub fn from_env() -> Result<Self, DiscoveryConfigError> {
+        parse_discovery_config(|k| env::var(k).ok())
     }
 }
 
-impl McpConfig {
-    pub fn from_env() -> Result<Self, McpConfigError> {
-        parse_mcp_config(|k| env::var(k).ok())
-    }
-}
-
-/// Parse the MCP deployment's configuration, or refuse to produce one.
+/// Parse the deployment's discovery configuration, or refuse to produce one.
 ///
 /// The lookup is injected for the same reason `temper_auth::config::parse_auth_config`
 /// injects its own: an agreement between two environment variables is only worth asserting if the
@@ -119,9 +90,9 @@ impl McpConfig {
 ///
 /// An **unset** `MCP_CLIENT_ID` is not a mismatch. It means this deployment does not offer
 /// registration at all, and the endpoint answers `503`; that is a supported posture and boots fine.
-pub fn parse_mcp_config(
+pub fn parse_discovery_config(
     lookup: impl Fn(&str) -> Option<String>,
-) -> Result<McpConfig, McpConfigError> {
+) -> Result<DiscoveryConfig, DiscoveryConfigError> {
     let get = |key: &str| {
         lookup(key)
             .map(|v| v.trim().to_string())
@@ -129,7 +100,7 @@ pub fn parse_mcp_config(
     };
 
     let server_file: McpServerFile =
-        toml::from_str(MCP_SERVER_TOML).map_err(McpConfigError::Toml)?;
+        toml::from_str(MCP_SERVER_TOML).map_err(DiscoveryConfigError::Toml)?;
     let mut oauth = server_file.oauth;
 
     // Trailing slashes trimmed so every `{base}/…` derivation is single-slashed — in particular the
@@ -138,28 +109,26 @@ pub fn parse_mcp_config(
     let mcp_base_url = get("MCP_BASE_URL")
         .map(|v| v.trim_end_matches('/').to_string())
         .filter(|v| !v.is_empty())
-        .ok_or(McpConfigError::Missing("MCP_BASE_URL"))?;
+        .ok_or(DiscoveryConfigError::Missing("MCP_BASE_URL"))?;
     let mcp_client_id = get("MCP_CLIENT_ID");
 
     let as_mode = get("AS_ISSUER").is_some();
     if let (true, Some(client_id)) = (as_mode, mcp_client_id.as_deref()) {
         let raw = get("AS_CLIENTS").unwrap_or_else(|| "{}".to_string());
         let registry: HashMap<String, Vec<String>> =
-            serde_json::from_str(&raw).map_err(|_| McpConfigError::AsClientsMalformed)?;
+            serde_json::from_str(&raw).map_err(|_| DiscoveryConfigError::AsClientsMalformed)?;
 
         let authoritative = registry
             .get(client_id)
-            .ok_or(McpConfigError::McpClientIdNotRegistered)?;
+            .ok_or(DiscoveryConfigError::McpClientIdNotRegistered)?;
 
         oauth.redirect_uris = authoritative.clone();
     }
 
-    Ok(McpConfig {
+    Ok(DiscoveryConfig {
         mcp_base_url,
         mcp_client_id,
         oauth,
-        api_base_url: get("TEMPER_API_BASE_URL"),
-        mcp_service_secret: get("TEMPER_MCP_SERVICE_SECRET"),
     })
 }
 
@@ -169,7 +138,7 @@ pub fn parse_mcp_config(
 /// environment, and a config value in a serverless log is a liability with no upside — the same rule
 /// `temper_auth::config::AuthConfigError` states for the variables it owns.
 #[derive(Debug)]
-pub enum McpConfigError {
+pub enum DiscoveryConfigError {
     /// The variable's name. Carried because the entrypoint aborts on `Display`, and "environment
     /// variable not found" with no name is a remedy an operator cannot act on.
     Missing(&'static str),
@@ -178,7 +147,7 @@ pub enum McpConfigError {
     McpClientIdNotRegistered,
 }
 
-impl std::fmt::Display for McpConfigError {
+impl std::fmt::Display for DiscoveryConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Missing(name) => write!(f, "environment variable {name} is not set."),
@@ -200,7 +169,7 @@ impl std::fmt::Display for McpConfigError {
     }
 }
 
-impl std::error::Error for McpConfigError {}
+impl std::error::Error for DiscoveryConfigError {}
 
 #[cfg(test)]
 mod tests {
@@ -234,9 +203,9 @@ mod tests {
         out
     }
 
-    fn parse(pairs: Vec<(&'static str, String)>) -> Result<McpConfig, McpConfigError> {
+    fn parse(pairs: Vec<(&'static str, String)>) -> Result<DiscoveryConfig, DiscoveryConfigError> {
         let owned: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        parse_mcp_config(env(&owned))
+        parse_discovery_config(env(&owned))
     }
 
     /// The allowlist an AS-mode instance uses is the authoritative one, not the compiled-in one.
@@ -293,7 +262,10 @@ mod tests {
         ]))
         .expect_err("an unregistered client id must not boot");
 
-        assert!(matches!(err, McpConfigError::McpClientIdNotRegistered));
+        assert!(matches!(
+            err,
+            DiscoveryConfigError::McpClientIdNotRegistered
+        ));
         let message = err.to_string();
         assert!(
             message.contains("MCP_CLIENT_ID") && message.contains("AS_CLIENTS"),
@@ -316,7 +288,10 @@ mod tests {
         let err = parse(as_mode(&[("MCP_CLIENT_ID", CLIENT)]))
             .expect_err("no registry means the client is not registered");
 
-        assert!(matches!(err, McpConfigError::McpClientIdNotRegistered));
+        assert!(matches!(
+            err,
+            DiscoveryConfigError::McpClientIdNotRegistered
+        ));
     }
 
     /// No client id is a posture, not a mismatch.
@@ -379,6 +354,6 @@ mod tests {
         ]))
         .expect_err("a malformed registry must not boot");
 
-        assert!(matches!(err, McpConfigError::AsClientsMalformed));
+        assert!(matches!(err, DiscoveryConfigError::AsClientsMalformed));
     }
 }

@@ -309,7 +309,7 @@ fn blob_door_open(svc: &TemperMcpService) -> Result<(), rmcp::ErrorData> {
 
 pub async fn blob_read(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: BlobReadInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     blob_door_open(svc)?;
@@ -321,7 +321,7 @@ pub async fn blob_read(
 
 async fn read_blob(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: BlobReadInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     const ACTION: &str = "blob_read";
@@ -343,12 +343,12 @@ async fn read_blob(
     // `blob.content_bytes`).
     let headers = response.headers();
     let declared: i64 = headers
-        .get(axum::http::header::CONTENT_LENGTH)
+        .get(http::header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0);
     let content_type = headers
-        .get(axum::http::header::CONTENT_TYPE)
+        .get(http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_string();
@@ -393,7 +393,7 @@ async fn read_blob(
 
 async fn list_blobs(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: BlobReadInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     const ACTION: &str = "blob_list";
@@ -440,7 +440,7 @@ async fn list_blobs(
 
 pub async fn blob_manage(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: BlobManageInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     blob_door_open(svc)?;
@@ -452,7 +452,7 @@ pub async fn blob_manage(
 
 async fn commit_blob(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: BlobManageInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     const ACTION: &str = "blob_commit";
@@ -502,7 +502,7 @@ async fn commit_blob(
 
 async fn relate_blob(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: BlobManageInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     const ACTION: &str = "blob_relate";
