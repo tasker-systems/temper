@@ -130,7 +130,7 @@ fn the_migration_literal_matches_the_committed_fixture() {
             "20261002000020_erasure_payload_drops_propagated_to_clients.sql",
             &[
                 "principal_erased.v1.schema.json",
-                "resource_erased.v1.schema.json",
+                SUPERSEDED, // resource_erased: 20261004130000
             ],
         ),
         (
@@ -139,6 +139,10 @@ fn the_migration_literal_matches_the_committed_fixture() {
                 "block_history_scrubbed.v1.schema.json",
                 "resource_erasure_refused.v1.schema.json",
             ],
+        ),
+        (
+            "20261004130000_resource_erasure_derived_vectors.sql",
+            &["resource_erased.v1.schema.json"],
         ),
     ] {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../migrations/");

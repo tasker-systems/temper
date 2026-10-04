@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ResourceErased",
-  "description": "`resource_erased` — the ONE admin event of a completed resource erasure (resource erasure\nspec D1).\n\nThe subject is keyed `subject_table` / `subject_id`, NEVER `resource_id`:\n`element_trail_node` joins on `payload->>'resource_id'`, and an admin payload never carries a\ntrail join-key shape, so the category firewall is not the only layer. The same rule keys\n`folded_edges` (not `edge_id`) and `RedactedEventFields::event` (not `event_id`).\n\nTwo remainders, deliberately separate: `remainder` names what the act leaves untouched by\ndesign (related blobs, derivers, cross-resource ledger text, shared remote-source URLs — D8),\nand `ledger_remainder` names the resource's OWN ledger paths the act has not yet reached (D12:\nevery one of them before sanctioned field redaction ships, none after it). The completion pass\nreads `ledger_remainder`, never `remainder`.",
+  "description": "`resource_erased` — the ONE admin event of a completed resource erasure (resource erasure\nspec D1).\n\nThe subject is keyed `subject_table` / `subject_id`, NEVER `resource_id`:\n`element_trail_node` joins on `payload->>'resource_id'`, and an admin payload never carries a\ntrail join-key shape, so the category firewall is not the only layer. The same rule keys\n`folded_edges` (not `edge_id`) and `RedactedEventFields::event` (not `event_id`).\n\nTwo remainders, deliberately separate: `remainder` names what the act leaves untouched by\ndesign (related blobs, derivers, cross-resource ledger text, shared remote-source URLs — D8),\nand `ledger_remainder` names the ledger paths carrying the resource's content that the act has\nnot yet reached (D12: every one of them before sanctioned field redaction ships, none after\nit): the resource's own trail, and, when it is a goal, the telos snapshots its home context\nrecorded (widened 2026-10-04). The completion pass reads `ledger_remainder`, never `remainder`.",
   "type": "object",
   "properties": {
     "actor": {
@@ -23,7 +23,7 @@
       }
     },
     "ledger_remainder": {
-      "description": "The resource's own ledger paths the act has not reached yet (D12), in exactly the shape\n`redacted_fields` uses. The completion pass re-derives against the live ledger rather than\ntrusting this list blindly.",
+      "description": "The ledger paths carrying the resource's content that the act has not reached yet (D12),\nin exactly the shape `redacted_fields` uses: its own trail's free text, and `telos_centroid`\non its home context's `region_materialized` / `salience_refreshed` events when it is a goal. The completion pass re-derives against the live ledger rather than\ntrusting this list blindly.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/RedactedEventFields"

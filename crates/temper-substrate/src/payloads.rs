@@ -1630,9 +1630,10 @@ pub struct RedactedEventFields {
 ///
 /// Two remainders, deliberately separate: `remainder` names what the act leaves untouched by
 /// design (related blobs, derivers, cross-resource ledger text, shared remote-source URLs — D8),
-/// and `ledger_remainder` names the resource's OWN ledger paths the act has not yet reached (D12:
-/// every one of them before sanctioned field redaction ships, none after it). The completion pass
-/// reads `ledger_remainder`, never `remainder`.
+/// and `ledger_remainder` names the ledger paths carrying the resource's content that the act has
+/// not yet reached (D12: every one of them before sanctioned field redaction ships, none after
+/// it): the resource's own trail, and, when it is a goal, the telos snapshots its home context
+/// recorded (widened 2026-10-04). The completion pass reads `ledger_remainder`, never `remainder`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct ResourceErased {
@@ -1656,8 +1657,9 @@ pub struct ResourceErased {
     /// What the act names but does not touch, by design (D8). Never silent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub remainder: Vec<ErasureTargetOutcome>,
-    /// The resource's own ledger paths the act has not reached yet (D12), in exactly the shape
-    /// `redacted_fields` uses. The completion pass re-derives against the live ledger rather than
+    /// The ledger paths carrying the resource's content that the act has not reached yet (D12),
+    /// in exactly the shape `redacted_fields` uses: its own trail's free text, and `telos_centroid`
+    /// on its home context's `region_materialized` / `salience_refreshed` events when it is a goal. The completion pass re-derives against the live ledger rather than
     /// trusting this list blindly.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ledger_remainder: Vec<RedactedEventFields>,
