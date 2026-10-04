@@ -14,14 +14,16 @@
 -- the erasure act take, so ordinary writers never wait on each other. A mutate that arrives while
 -- the scrub holds R waits, then mints its id after the scrub commits. A scrub that arrives after
 -- the mutate has the lock waits for the mutate's commit and reads the present the mutate left.
--- Either way, ledger order matches what each act saw. In block_mutate the lock also precedes the
+-- Either way, the second act mints its event only after the first has committed, so it never acts
+-- on a state the first act's event will later change. In block_mutate the lock also precedes the
 -- no-op suppression's reads, so those reads see the state the scrub committed.
 --
 -- Both bodies are their live definitions (block_mutate from 20260911000000, resource_reblock from
 -- 20260908000010), verbatim except for the lock and its comment. Signatures, return types and
 -- COMMENTs are unchanged.
 --
--- Witness: block_history_scrub.rs, a_mutate_racing_the_scrub_serializes_on_the_resource (16i).
+-- Witnesses: block_history_scrub.rs, a_mutate_racing_the_scrub_serializes_on_the_resource (16i)
+-- and a_reblock_racing_the_scrub_serializes_on_the_resource (16j).
 
 CREATE OR REPLACE FUNCTION public.block_mutate(p_payload jsonb, p_content jsonb, p_emitter uuid, p_metadata jsonb DEFAULT '{}'::jsonb, p_invocation uuid DEFAULT NULL::uuid, p_correlation uuid DEFAULT NULL::uuid)
  RETURNS uuid
