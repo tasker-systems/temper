@@ -41,7 +41,7 @@ functions** from a single deployment:
  CLI / MCP client   │  api/mcp.rs        MCP server          │
  ──────────────────▶│  api/axum.rs       REST API            │
                     │  api/internal.rs   drains + crons      │
- Vercel cron (×10)  │  api/oauth/*.ts    OAuth + SAML        │
+ Vercel cron (×11)  │  api/oauth/*.ts    OAuth + SAML        │
  ──────────────────▶│                                        │
                     └────────────────────────────────────────┘
                                │                │
@@ -320,7 +320,7 @@ for why.
 
 The authoritative routing, function and cron configuration is `vercel.json` at
 the repo root. It declares three Rust functions (`api/axum.rs`, `api/mcp.rs`,
-`api/internal.rs`), 22 routes and 10 crons; the Topology section above
+`api/internal.rs`), 23 routes and 11 crons; the Topology section above
 summarises what each one is for.
 
 Do not hand-edit it without also updating the function it routes to.
