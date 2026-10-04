@@ -246,7 +246,7 @@ mod parity {
         email: &str,
     ) -> axum::http::request::Parts {
         axum::http::Request::builder()
-            .extension(temper_mcp::BearerToken(token.to_string()))
+            .extension(temper_mcp_server::BearerToken(token.to_string()))
             .extension(temper_services::auth::RawJwtClaims {
                 sub: sub.to_string(),
                 email: Some(email.to_string()),

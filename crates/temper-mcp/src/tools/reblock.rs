@@ -135,7 +135,7 @@ fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
 /// CLI equivalent: `temper admin reblock --resource|--context|--all`.
 pub async fn resource_reblock(
     svc: &TemperMcpService,
-    parts: &axum::http::request::Parts,
+    parts: &http::request::Parts,
     input: ResourceReblockInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     // The tool's discriminator shape maps onto the wire request's scope enum; the per-arm

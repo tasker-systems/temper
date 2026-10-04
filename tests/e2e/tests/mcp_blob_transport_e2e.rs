@@ -27,7 +27,6 @@ use rmcp::transport::streamable_http_client::{
     StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
 };
 use sha2::{Digest, Sha256};
-use temper_mcp::config::{McpConfig, OAuthStaticConfig};
 
 /// Spawn the MCP router as its own server, on the harness's auth config. With a blob config,
 /// the door is OPEN at its single-request ceiling; with `None`, it is CLOSED at the same wiring
@@ -38,23 +37,12 @@ async fn spawn_mcp_server(
     blob_config: Option<temper_services::config::BlobConfig>,
     api_base_url: &str,
 ) -> std::net::SocketAddr {
-    let server_config = common::mcp_server_config(temper_mcp_server::config::blob_door(
-        blob_config.as_ref(),
-        false,
-    ));
-
     // The network door: tool calls forward to the app's real listener on the caller's
     // bearer + the relay carrier; the local blob door drives the advertisement.
-    let mcp_config = McpConfig {
-        mcp_base_url: "http://mcp.test".to_string(),
-        mcp_client_id: None,
-        api_base_url: Some(api_base_url.to_string()),
-        mcp_service_secret: Some(common::TEST_MCP_SERVICE_SECRET.to_string()),
-        oauth: OAuthStaticConfig {
-            redirect_uris: vec![],
-            allow_localhost: true,
-        },
-    };
+    let server_config = common::mcp_server_config_relaying(
+        temper_mcp_server::config::blob_door(blob_config.as_ref(), false),
+        api_base_url,
+    );
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -63,7 +51,11 @@ async fn spawn_mcp_server(
     tokio::spawn(async move {
         axum::serve(
             listener,
-            temper_mcp_server::build_router(server_config, common::mcp_test_jwks(), mcp_config),
+            temper_mcp_server::build_router(
+                server_config,
+                common::mcp_test_jwks(),
+                common::mcp_discovery_config("http://mcp.test"),
+            ),
         )
         .await
         .expect("mcp server");

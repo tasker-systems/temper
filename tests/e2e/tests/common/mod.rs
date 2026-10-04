@@ -77,7 +77,7 @@ impl E2eTestApp {
     /// [`Self::relay_parts`]: the bearer only.)
     pub fn direct_parts(&self) -> axum::http::request::Parts {
         axum::http::Request::builder()
-            .extension(temper_mcp::BearerToken(self.token.clone()))
+            .extension(temper_mcp_server::BearerToken(self.token.clone()))
             .extension(temper_services::auth::RawJwtClaims {
                 sub: "e2e-test-user".to_string(),
                 email: None,
@@ -98,42 +98,31 @@ impl E2eTestApp {
     /// share the one MCP service.
     pub fn relay_parts_for(&self, token: &str) -> axum::http::request::Parts {
         axum::http::Request::builder()
-            .extension(temper_mcp::BearerToken(token.to_string()))
+            .extension(temper_mcp_server::BearerToken(token.to_string()))
             .body(())
             .expect("relay parts build")
             .into_parts()
             .0
     }
 
-    /// A relay-READY [`temper_mcp::config::McpConfig`]: the API base URL pointed at
-    /// this app's real listener and the service credential at the harness secret, so
-    /// [`temper_mcp::service::TemperMcpService::relay_client`] forwards instead of
-    /// answering the typed refuse-to-forward error. The listener is BOUND HERE, in
-    /// the test process — temper-mcp never constructs one (the §8 trap).
-    pub fn mcp_relay_config(&self) -> temper_mcp::config::McpConfig {
-        temper_mcp::config::McpConfig {
-            mcp_base_url: "https://temper.invalid".to_string(),
-            mcp_client_id: None,
-            api_base_url: Some(self.base_url()),
-            mcp_service_secret: Some(TEST_MCP_SERVICE_SECRET.to_string()),
-            oauth: temper_mcp::config::OAuthStaticConfig {
-                redirect_uris: vec![],
-                allow_localhost: false,
-            },
-        }
+    /// The deployed relay pointed at THIS app's real listener, built by the shell's own reader
+    /// (`temper_mcp_server::config::deployed_relay`) from the two variables the deployment sets —
+    /// so the harness relays with exactly the production seam (the edge-verified bearer,
+    /// `Surface::Mcp`, the service credential and the `mcp` carrier). The listener is BOUND
+    /// HERE, in the test process — temper-mcp never constructs one (the §8 trap).
+    pub fn mcp_deployed_relay(&self) -> temper_mcp_server::config::DeployedRelay {
+        deployed_relay_to(&self.base_url())
     }
 
-    /// The MCP service every suite drives. The relay config is ON (this app's
-    /// listener, the harness credential, the shared HTTP connection pool) and the blob
-    /// door is closed, as on a blob-less deployment. The service holds no database pool
-    /// and carries NO auth state: every tool forwards the bearer in the parts it is handed, so
-    /// each call acts as its own principal — the same path production dispatch
-    /// takes.
+    /// The MCP service every suite drives: the deployed door's tool service
+    /// (`temper_mcp_server::tool_service`, the one `build_router` mounts) relaying to this app's
+    /// listener, with the blob door closed, as on a blob-less deployment. The service holds no
+    /// database pool and carries NO auth state: every tool forwards the bearer in the parts it is
+    /// handed, so each call acts as its own principal — the same path production dispatch takes.
     pub async fn mcp_relay_service(&self) -> temper_mcp::service::TemperMcpService {
-        temper_mcp::service::TemperMcpService::new(
+        temper_mcp_server::tool_service(
             temper_mcp_server::config::blob_door(None, false),
-            self.mcp_relay_config(),
-            temper_mcp::service::shared_relay_pool(),
+            self.mcp_deployed_relay(),
         )
     }
 
@@ -149,12 +138,11 @@ impl E2eTestApp {
         &self,
         single_request_max_bytes: usize,
     ) -> temper_mcp::service::TemperMcpService {
-        temper_mcp::service::TemperMcpService::new(
+        temper_mcp_server::tool_service(
             temper_mcp::BlobDoor::Open {
                 single_request_max_bytes,
             },
-            self.mcp_relay_config(),
-            temper_mcp::service::shared_relay_pool(),
+            self.mcp_deployed_relay(),
         )
     }
 }
@@ -342,9 +330,46 @@ async fn spawn_temper(
 /// exercised audience validation on either surface. It does now.
 pub const TEST_AUDIENCE: &str = "test-audience";
 
+/// The deployed relay to `api_base_url`, read by the shell's own reader from the two variables a
+/// deployment sets (`TEMPER_API_BASE_URL`, `TEMPER_MCP_SERVICE_SECRET` = [`TEST_MCP_SERVICE_SECRET`]).
+pub fn deployed_relay_to(api_base_url: &str) -> temper_mcp_server::config::DeployedRelay {
+    let api_base_url = api_base_url.to_string();
+    temper_mcp_server::config::deployed_relay(&move |key: &str| match key {
+        "TEMPER_API_BASE_URL" => Some(api_base_url.clone()),
+        "TEMPER_MCP_SERVICE_SECRET" => Some(TEST_MCP_SERVICE_SECRET.to_string()),
+        _ => None,
+    })
+}
+
+/// The router-level suites' discovery config: no client id (registration answers 503), the
+/// compiled-in loopback rule on, and the given public base URL.
+pub fn mcp_discovery_config(mcp_base_url: &str) -> temper_mcp_server::DiscoveryConfig {
+    temper_mcp_server::DiscoveryConfig {
+        mcp_base_url: mcp_base_url.to_string(),
+        mcp_client_id: None,
+        oauth: temper_mcp_server::discovery_config::OAuthStaticConfig {
+            redirect_uris: vec![],
+            allow_localhost: true,
+        },
+    }
+}
+
+/// [`mcp_server_config`] relaying to `api_base_url` through the deployed seam.
+pub fn mcp_server_config_relaying(
+    blob_door: temper_mcp::BlobDoor,
+    api_base_url: &str,
+) -> temper_mcp_server::McpServerConfig {
+    temper_mcp_server::McpServerConfig {
+        relay: deployed_relay_to(api_base_url),
+        ..mcp_server_config(blob_door)
+    }
+}
+
 /// The MCP server's boot config for the router-level suites: the same auth identity the harness
 /// API validates (issuer `test-issuer`, [`TEST_AUDIENCE`]), no CORS origins, and the given blob
-/// door. No database URL and no pool — the deployed edge holds neither.
+/// door. No database URL and no pool — the deployed edge holds neither. The relay is unset (the
+/// tool door is dark, answering the deployment's own sentence); [`mcp_server_config_relaying`]
+/// sets it.
 pub fn mcp_server_config(blob_door: temper_mcp::BlobDoor) -> temper_mcp_server::McpServerConfig {
     temper_mcp_server::McpServerConfig {
         auth: temper_auth::config::AuthConfig {
@@ -356,6 +381,7 @@ pub fn mcp_server_config(blob_door: temper_mcp::BlobDoor) -> temper_mcp_server::
         },
         cors_origins: vec![],
         blob_door,
+        relay: temper_mcp_server::config::deployed_relay(&|_: &str| None),
     }
 }
 
@@ -1224,7 +1250,7 @@ pub async fn context_anchor_faces(app: &E2eTestApp) -> Vec<AnchorFace> {
 
     fn parts_for(token: &str, sub: &str, email: Option<&str>) -> axum::http::request::Parts {
         axum::http::Request::builder()
-            .extension(temper_mcp::BearerToken(token.to_string()))
+            .extension(temper_mcp_server::BearerToken(token.to_string()))
             .extension(temper_services::auth::RawJwtClaims {
                 sub: sub.to_string(),
                 email: email.map(str::to_string),

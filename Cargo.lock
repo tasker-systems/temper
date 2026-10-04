@@ -6176,7 +6176,6 @@ version = "0.5.4"
 dependencies = [
  "sqlx",
  "temper-api",
- "temper-mcp",
  "temper-mcp-server",
  "temper-services",
  "temperkb-telemetry",
@@ -6196,6 +6195,7 @@ dependencies = [
  "clap",
  "filetime",
  "hex",
+ "http",
  "jsonwebtoken",
  "opentelemetry",
  "opentelemetry_sdk",
@@ -6276,10 +6276,8 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.117",
- "temper-services",
  "temperkb-client",
  "temperkb-core",
- "temperkb-principal",
  "temperkb-workflow",
  "tokio",
  "toml 0.8.23",
@@ -6293,6 +6291,7 @@ version = "0.5.4"
 dependencies = [
  "axum",
  "flate2",
+ "http",
  "jsonwebtoken",
  "proc-macro2",
  "rmcp",
@@ -6302,14 +6301,18 @@ dependencies = [
  "temper-mcp",
  "temper-services",
  "temperkb-auth",
+ "temperkb-client",
  "temperkb-core",
+ "temperkb-principal",
  "temperkb-telemetry",
+ "temperkb-workflow",
  "tokio",
  "toml 0.8.23",
  "tower",
  "tower-http",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]

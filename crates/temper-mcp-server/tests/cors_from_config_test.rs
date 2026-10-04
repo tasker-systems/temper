@@ -31,7 +31,7 @@ const PROBE_ORIGIN: &str = "https://app.example.com";
 async fn allow_origin_for(cors_origins: Vec<String>) -> Option<String> {
     let router = common::build_router(
         common::state_with_cors_origins(cors_origins),
-        common::mcp_config(),
+        common::discovery_config(),
     );
 
     let response = router

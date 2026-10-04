@@ -91,10 +91,12 @@ crates/
     types/            # Shared domain types (serde + sqlx::FromRow + optional ts-rs)
   temper-mcp/src/     # MCP tool layer (rmcp) — relays every tool to the API; no DB pool
     tools/            # Tool implementations
-    host.rs           # Plain values a host supplies (BearerToken, BlobDoor)
-    service.rs        # TemperMcpService handler
+    host.rs           # Plain values a host supplies per process (BlobDoor)
+    seam.rs           # IdentitySeam, OutgoingIdentity, RelayConfig — per-request identity
+    service.rs        # TemperMcpService handler; builds every relay client
   temper-mcp-server/src/  # The deployed MCP edge (Streamable HTTP transport)
-    config.rs         # McpServerConfig — boot config; never reads DATABASE_URL
+    config.rs         # McpServerConfig — boot config (relay included); never reads DATABASE_URL
+    seam.rs           # The deployed identity seam + BearerToken (attribution rides here)
     discovery.rs      # OAuth well-known endpoints + DCR
     middleware.rs     # JWT validation for MCP
     router.rs         # Axum router assembly

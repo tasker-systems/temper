@@ -51,7 +51,7 @@ fn mcp_bearer() -> String {
 async fn post_mcp(request_body: Value) -> (StatusCode, Vec<u8>) {
     let router = common::build_router(
         common::state_with_distinct_audiences(),
-        common::mcp_config(),
+        common::discovery_config(),
     );
     let response = router
         .oneshot(

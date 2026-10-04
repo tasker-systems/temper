@@ -2,8 +2,8 @@
 //!
 //! Re-uses temper-api's `JwksKeyStore` for token validation. Simpler than
 //! the full `require_auth` middleware — we validate the JWT and inject the
-//! decoded [`RawJwtClaims`] plus the raw [`BearerToken`], which the tool layer's
-//! relay re-issues to the API, where Level 1 + 2 classify, resolve and gate the
+//! decoded [`RawJwtClaims`] plus the raw [`BearerToken`], which the deployed seam
+//! (`crate::seam`) hands the tool layer's relay to re-issue to the API, where Level 1 + 2 classify, resolve and gate the
 //! principal.
 
 use axum::{
@@ -16,7 +16,7 @@ use axum::{
 use jsonwebtoken::decode;
 use std::sync::Arc;
 
-use temper_mcp::BearerToken;
+use crate::seam::BearerToken;
 use temper_services::auth::RawJwtClaims;
 use temper_services::state::KeyLookupError;
 
@@ -96,7 +96,7 @@ pub async fn require_mcp_auth(
 }
 
 fn unauthorized(state: &McpEdgeState) -> Response {
-    let base = &state.mcp_config.mcp_base_url;
+    let base = &state.discovery.mcp_base_url;
     let www_auth = format!(
         r#"Bearer realm="temper", resource_metadata="{base}/.well-known/oauth-protected-resource""#
     );
