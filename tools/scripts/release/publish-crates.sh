@@ -65,6 +65,11 @@ cd "$REPO_ROOT"
 # depends on. (Dev-dependencies impose no order — temperkb-telemetry's are
 # path-only, which resolve locally and survive packing; a versioned dev-dep
 # would resolve from the registry and make the crate unpackageable.)
+#
+# temperkb-mcp (the MCP tool layer, after temperkb-client) is publish-ready but deliberately
+# absent: its name does not exist on crates.io yet, so an OIDC publish of it would fail. It joins
+# this list after its one-time local bootstrap publish and its two trusted-publisher entries.
+# Until then .github/scripts/check-temperkb-mcp-package.sh keeps it packaging on every PR.
 CRATES=(temperkb-principal temperkb-auth temperkb-core temperkb-workflow temperkb-telemetry temperkb-client)
 
 echo "==> Publishing the client closure ${VERSION} to crates.io (dry-run: ${DRY_RUN})"

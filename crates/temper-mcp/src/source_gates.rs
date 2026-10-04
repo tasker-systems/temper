@@ -935,7 +935,7 @@ fn the_tool_layer_has_no_services_dependency_even_for_tests() {
 /// **No utoipa in the published graph.** The MCP server neither exposes nor expresses utoipa, so
 /// the two temper crates that gate it behind `web-api` are depended on without it (as
 /// temperkb-client depends on them), and no runtime table names utoipa directly. Paired with
-/// `cargo tree -p temper-mcp -e normal`, which the PR records showing none.
+/// `cargo tree -p temperkb-mcp -e normal`, which the PR records showing none.
 #[test]
 fn the_tool_layer_pulls_no_web_api_surface() {
     let raw = std::fs::read_to_string(manifest("Cargo.toml")).expect("read Cargo.toml");

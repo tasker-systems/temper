@@ -281,7 +281,7 @@ fn the_edge_manifest_names_no_database_driver() {
     let cargo: toml::Value = toml::from_str(&raw).expect("Cargo.toml parses");
     let deps = runtime_dependency_packages(&cargo);
     assert!(
-        deps.contains("temper-mcp"),
+        deps.contains("temperkb-mcp"),
         "the walk missed the tool layer: {deps:?}"
     );
     let offenders: Vec<&str> = ["sqlx", "temper-api", "temper-substrate"]

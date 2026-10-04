@@ -9,9 +9,10 @@
 //! delegation gate and failing the whole tick.
 //!
 //! Nothing linked the doc to the schemas, so the drift was silent and invisible to review. This
-//! test is that link. It is deliberately in temper-mcp rather than the steward package because the
+//! test is that link. It is deliberately in Rust rather than the steward package because the
 //! schemas are the authority and they are Rust; a copy of them next to the doc would be one more
-//! thing to drift.
+//! thing to drift. It lives in the deployed shell, not the published tool layer, because it reads
+//! the monorepo's steward package, which the tool layer's crate does not ship.
 //!
 //! Two checks, matching the two ways the doc broke:
 //!   1. every `name=` the doc writes is a REAL property of that tool  (catches `type=`, `kind=`,
