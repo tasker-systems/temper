@@ -142,12 +142,15 @@ $$;
 COMMENT ON FUNCTION sensitivity.expire_erased_fingerprints(interval) IS
 'Starts the window for every closed finding on a place an erasure act emptied or reached (sensitivity.erased_place_findings), then, once a finding has been seen so for p_window (default 30 days, ruled 2026-10-03) and is still closed, deletes the memo rows carrying its keyed content_hash, drops its fingerprints and replaces that hash. fingerprint_state reads expired; the finding row stays. Run by every scanning sensitivity_sweep_tick. Returns the number of findings expired.';
 
--- 20261003150000's body, verbatim except for the one PERFORM below.
+-- 20261003230000's body (the sweep's door), verbatim except for the one PERFORM below.
 
 CREATE OR REPLACE FUNCTION sensitivity_sweep_tick(
     p_run uuid, p_job uuid, p_salt bytea, p_lag interval DEFAULT '5 minutes', p_budget_ms int DEFAULT 20000
 ) RETURNS TABLE (rows_examined int, hashes_examined int, cache_hits int, new_findings int,
-                 cursor_advances int, units_oversize int, failed boolean)
+                 cursor_advances int, units_oversize int, failed boolean,
+                 outcome smallint, failure smallint,
+                 new_findings_head int, new_findings_backfill int, head_holdback_seconds int,
+                 sev1 int, sev2 int, sev3 int, sev4 int)
 LANGUAGE plpgsql AS $$
 DECLARE
     v_job      record;
@@ -234,16 +237,37 @@ BEGIN
     ELSE
         PERFORM workflow_job_complete_system(p_job, 'sensitivity', 'sensitivity-sweep');
     END IF;
-    SELECT r.rows_examined, r.hashes_examined, r.cache_hits, r.new_findings, r.cursor_advances, r.units_oversize
-      INTO rows_examined, hashes_examined, cache_hits, new_findings, cursor_advances, units_oversize
+    -- Q45: the outcome and the failure are numbered, so the signature stays free of text (D8).
+    -- Their codes are mirrored in Rust (sensitivity_sweep_service), and a test holds the two equal.
+    failure := CASE v_code WHEN 'salt_missing' THEN 1 WHEN 'statement_timeout' THEN 2
+                           WHEN 'detector_pattern_invalid' THEN 3 WHEN 'store_constraint' THEN 4
+                           WHEN 'scan_failed' THEN 5 END;
+    SELECT r.rows_examined, r.hashes_examined, r.cache_hits, r.new_findings, r.cursor_advances, r.units_oversize,
+           CASE r.outcome WHEN 'scanned' THEN 1 WHEN 'idle' THEN 2 WHEN 'failed' THEN 3 END,
+           r.new_findings_head, r.new_findings_backfill, r.head_holdback_seconds,
+           coalesce((r.by_severity ->> '1')::int, 0), coalesce((r.by_severity ->> '2')::int, 0),
+           coalesce((r.by_severity ->> '3')::int, 0), coalesce((r.by_severity ->> '4')::int, 0)
+      INTO rows_examined, hashes_examined, cache_hits, new_findings, cursor_advances, units_oversize,
+           outcome, new_findings_head, new_findings_backfill, head_holdback_seconds,
+           sev1, sev2, sev3, sev4
       FROM sensitivity.runs r WHERE r.id = p_run;
+    -- Q49: the visit is recorded on the surface, whatever the tick found. A tick that changed
+    -- nothing and saw nothing worth keeping leaves no rows: not its run, not its finished job. A
+    -- held-back head is kept, because a stalled head is a signal, not quiet.
+    UPDATE sensitivity.surfaces SET last_swept_at = clock_timestamp()
+     WHERE surface = v_job.payload ->> 'surface';
+    IF NOT failed AND rows_examined = 0 AND hashes_examined = 0 AND new_findings = 0
+       AND cursor_advances = 0 AND units_oversize = 0 AND head_holdback_seconds = 0 THEN
+        DELETE FROM sensitivity.runs WHERE id = p_run;
+        DELETE FROM kb_workflow_jobs WHERE id = p_job AND persona = 'sensitivity' AND status = 'done';
+    END IF;
     RETURN NEXT;
 END;
 $$;
 
 
 SELECT declare_migration(
-    20261003210000,
+    20261004000010,
     'additive',
-    'Findings on places an erasure act emptied (the resource act, the block history scrub, the principal act) give up their salt-keyed digests after 30 days (sensitivity sweep D11, ruled 2026-10-03). Adds sensitivity.erased_closures, sensitivity.erased_place_findings and sensitivity.expire_erased_fingerprints (which also deletes the memo rows of the hashes it retires), and widens findings_fingerprint_state_check with ''expired''. CREATE OR REPLACEs sensitivity_sweep_tick with the same signature and return shape; its body is 20261003150000''s verbatim plus one PERFORM of the new function. Additive: no deployed binary names the sensitivity schema (the grep gate holds it), the tick''s signature is unchanged, and a widened CHECK admits every row it admitted before.'
+    'Findings on places an erasure act emptied (the resource act, the block history scrub, the principal act) give up their salt-keyed digests after 30 days (sensitivity sweep D11, Q44). Adds sensitivity.erased_closures, sensitivity.erased_place_findings and sensitivity.expire_erased_fingerprints (which also deletes the memo rows of the hashes it retires), and widens findings_fingerprint_state_check with ''expired''. CREATE OR REPLACEs sensitivity_sweep_tick with 20261003230000''s signature and return shape, which the deployed door reads; its body is 20261003230000''s verbatim plus one PERFORM of the new function. Additive: the tick''s signature and return shape are unchanged, no Rust names the sensitivity schema (the grep gate holds it), and a widened CHECK admits every row it admitted before.'
 );
