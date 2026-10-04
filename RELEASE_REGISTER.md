@@ -23,6 +23,18 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **Resource erasure: the record names its derived-vector writes — `kb_cogmap_regions.centroid` and `kb_contexts.telos_centroid` targets**
+  No shape moves. `targets` on the execute and survey responses and on `resource_erased` may now
+  carry two more rows: `kb_cogmap_regions.centroid` ("N live region centroids recomputed from the
+  remaining members; M folded region centroids zeroed") and `kb_contexts.telos_centroid` ("1 context telos
+  snapshot nulled"), each only when the act reaches at least one such row. The act's writes are
+  unchanged; until now the record was silent about them. `ErasureTargetOutcome` is open-textured,
+  so the payload schema does not change. Who observes: system admins reading the erasure record or
+  survey. User-visible: operators only. Release relevance: behavioral, signal-only.
+pr: self
+classes: behavioral
+surfaces: http, internal
+status: signal-only
 - **The sensitivity sweep is off until an operator turns it on: `SENSITIVITY_SWEEP_ENABLED`, detectors off by default, and who provides each**
   A deployment scans only after its operator opts in (sweep Q52, Q53). The API reads a new
   variable, `SENSITIVITY_SWEEP_ENABLED`. Unless it is `true` or `1`, the cron call to
