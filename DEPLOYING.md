@@ -515,8 +515,13 @@ finds nothing new. It stores where a finding is and what kind it is, never the m
 2. **Keep the database from logging bind parameters.** The salt reaches Postgres as a bind
    parameter. With `log_parameter_max_length` left at its default (unlimited), any
    `log_min_duration_statement` that catches a tick, or `log_statement = all`, writes the
-   salt to the server log. Set `log_parameter_max_length = 0` on the database. The door
-   checks these settings on every call and logs an error while the salt could be written.
+   salt to the server log. The door checks these settings on every call and logs an error
+   while the salt could be written.
+   - **On Postgres you administer**, set `log_parameter_max_length = 0` (it needs a superuser).
+   - **On Neon** the owner role is not a superuser: it can neither set that nor turn on the
+     duration or statement logging that would write the salt. Checked on production
+     2026-10-04: `log_min_duration_statement = -1`, `log_statement = none`, sampling off. The
+     exposure exists only if Neon enables that logging, and the door reports it if they do.
 3. **Watch the spans.** Each call emits one `sensitivity_sweep_call` span, with
    `ended` = `idle`, `budget`, `slot_free`, `slot_leased`, `slot_blocked` or `lease_lapsed`,
    and one `sensitivity_sweep` span per tick with its counts. A failed tick, a failed job
