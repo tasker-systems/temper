@@ -23,6 +23,22 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **Resource erasure: vectors derived from the erased resource no longer outlive the act; `ledger_remainder` names a goal's telos copies**
+  No shape moves. The act now recomputes the centroids of live regions holding the resource over
+  their surviving members, sets folded ones to the zero vector, nulls its home context's telos
+  snapshot, and queues a region settling for each affected anchor after commit. The region drain
+  follows a completed job with another while an erased resource is still a live member of the
+  anchor's default-lens regions, and forces a re-form on that tick. `ledger_remainder` on the
+  execute and survey responses and on `resource_erased` may now carry `(event,
+  ["telos_centroid"])` entries for the home context's `region_materialized` /
+  `salience_refreshed` events when the resource was ever a goal; the field's type is unchanged and
+  the payload schema's re-registration changes description text only. Who observes: system admins
+  reading the erasure record or survey. User-visible: operators only. Release relevance:
+  behavioral, signal-only.
+pr: self
+classes: behavioral
+surfaces: http, internal
+status: signal-only
 - **The MCP tool layer is publish-ready as `temperkb-mcp`: shipped declarations, `pub use rmcp`, an opt-out `telemetry` feature**
   The tool layer's package is renamed `temper-mcp` → `temperkb-mcp`, and its library keeps the
   `temper_mcp` name, so no `use temper_mcp::…` moves. It becomes publishable at the lockstep
