@@ -6,8 +6,9 @@
 -- beginning 20, epoch milliseconds and 18-digit ids. Each passed Luhn, which one digit run in ten
 -- does. Over every block, chunk and event payload, v2 makes 1,235 matches and v3 makes none.
 --
--- The pattern and Q42's hex guard stand; only the validator changes. Production disabled v2 after
--- that sweep; v3 is enabled here, so the deploy that ships the fix also turns it on (0.6.0 item 3).
+-- The pattern and Q42's hex guard stand; only the validator changes. The enabled flag is not
+-- touched: production disabled v2 after that sweep, and v3 stays off there until an operator turns
+-- it on.
 -- v2's findings do not wait for 3b's derived `superseded`: those v3 would not find again close now
 -- as false positives (below), and 3b reads a finding's latest disposition before its supersession.
 
@@ -69,7 +70,6 @@ $$;
 UPDATE sensitivity.detectors
    SET version = version + 1,
        validator = 'card_valid',
-       enabled = true,
        note = 'contiguous, or in card groupings with one separator, never inside a hex run; a card issuer at its length, behind Luhn'
  WHERE id = 'payment_card';
 
@@ -143,5 +143,5 @@ SELECT sensitivity.close_cardless_card_findings();
 SELECT declare_migration(
     20261004120000,
     'additive',
-    'payment_card v3 (Q51): a new validator, sensitivity.card_valid, requires a card issuer prefix at a length that issuer uses, then Luhn. The detectors validator CHECK admits card_valid; sensitivity.detector_matches gains its arm, its body otherwise 20261002200000''s; payment_card''s row moves to its next version with validator card_valid, recorded in detector_versions by the existing trigger. It is enabled, which turns payment_card back on wherever an operator disabled v2. A new function, sensitivity.close_cardless_card_findings, runs once: each open payment_card finding of an earlier version whose place still holds its unit, and in whose unit the current version finds nothing, gains one false_positive row in sensitivity.dispositions (append-only). Additive: no deployed binary names the sensitivity schema (the grep gate holds it).'
+    'payment_card v3 (Q51): a new validator, sensitivity.card_valid, requires a card issuer prefix at a length that issuer uses, then Luhn. The detectors validator CHECK admits card_valid; sensitivity.detector_matches gains its arm, its body otherwise 20261002200000''s; payment_card''s row moves to its next version with validator card_valid, recorded in detector_versions by the existing trigger. Its enabled flag is not touched. A new function, sensitivity.close_cardless_card_findings, runs once: each open payment_card finding of an earlier version whose place still holds its unit, and in whose unit the current version finds nothing, gains one false_positive row in sensitivity.dispositions (append-only). Additive: no deployed binary names the sensitivity schema (the grep gate holds it).'
 );
