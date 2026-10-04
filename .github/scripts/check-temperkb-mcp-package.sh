@@ -36,6 +36,11 @@ for p in "${PACKAGES[@]}"; do ARGS+=(-p "$p"); done
 echo "==> cargo publish --dry-run (closure + temperkb-mcp ${VERSION})"
 cargo publish --dry-run --locked "${ARGS[@]}"
 
+# `cargo publish --dry-run` leaves no tarballs behind, so pack them explicitly (already verified
+# above; `--no-verify` skips a second build).
+echo "==> cargo package (the tarballs a consumer downloads)"
+cargo package --no-verify --locked "${ARGS[@]}"
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
