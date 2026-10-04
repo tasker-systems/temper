@@ -33,8 +33,8 @@
 use std::path::{Path, PathBuf};
 
 /// Transport/infra files whose functions are not API methods a CLI command drives:
-/// token storage, HTTP plumbing, config loading, the OAuth login flow helpers, and
-/// the temper-cloud upload helper. Declared as a class with the reason, not discovered
+/// token storage, HTTP plumbing, config loading, and the OAuth login flow helpers.
+/// Declared as a class with the reason, not discovered
 /// by accident.
 const INFRA_FILES: &[&str] = &[
     "auth.rs",       // token cache/refresh plumbing (`get_valid_token` etc.)
@@ -45,8 +45,6 @@ const INFRA_FILES: &[&str] = &[
     "lib.rs",        // the client struct's constructors and sub-client accessors
     "login.rs",      // the OAuth login flow (drives `temper auth login`)
     "login_page.rs", // the login flow's local success/failure pages
-    "upload.rs",     // the typed temper-cloud upload client (`POST /api/upload`) — a real
-                     // wire door no CLI verb drives; exempt as out of the KB surface
 ];
 
 /// (file, method) pairs ruled client-only, each with the reason a future reader can

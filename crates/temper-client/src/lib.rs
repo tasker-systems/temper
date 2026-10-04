@@ -34,7 +34,6 @@ pub mod slack;
 pub mod steward;
 pub mod subscription;
 pub mod teams;
-pub mod upload;
 
 use std::sync::Arc;
 
@@ -258,11 +257,6 @@ impl TemperClient {
     /// Team lifecycle sub-client (create / add-member / list).
     pub fn teams(&self) -> teams::TeamsClient<'_> {
         teams::TeamsClient::new(&self.http)
-    }
-
-    /// Upload sub-client.
-    pub fn upload(&self) -> upload::UploadClient<'_> {
-        upload::UploadClient::new(&self.http)
     }
 
     /// Blob sub-client (commit / read / list / relate / segmented upload).

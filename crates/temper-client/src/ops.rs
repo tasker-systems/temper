@@ -58,7 +58,10 @@ impl Verb {
 pub(crate) enum Visibility {
     /// Documented; carries the spec's `operationId`.
     Published(&'static str),
-    /// Reached by this client but not documented in the spec; carries the reason.
+    /// Reached by this client but not documented in the spec; carries the reason. None today —
+    /// the last one, the retired `/api/upload`, was removed rather than kept — so the variant is
+    /// never constructed; it stays as the documented way to carry such a route.
+    #[allow(dead_code)]
     Unpublished(&'static str),
 }
 
@@ -301,8 +304,6 @@ registry! {
         REASSIGN_TEAM = Post "/api/teams/{id}/reassign" => "reassign_team";
     }
     unpublished {
-        UPLOAD = Post "/api/upload",
-            because "the retired temper-cloud TypeScript upload endpoint; pending removal (plan step 1.0)";
     }
 }
 

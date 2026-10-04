@@ -11,7 +11,7 @@ export async function POST(req: Request): Promise<Response> {
   // entry point is loaded via CommonJS `require()` (no `"type": "module"` at the
   // repo root), but the target lives under temper-cloud, which is `"type":
   // "module"`. A static value import would compile to `require()` of an ESM file
-  // (ERR_REQUIRE_ESM). See api/upload.ts for the same pattern.
+  // (ERR_REQUIRE_ESM).
   const { isTemperAsMode } = await import("../../packages/temper-cloud/src/oauth/env.js");
   if (isTemperAsMode()) {
     const { handleToken } = await import("../../packages/temper-cloud/src/oauth/endpoints.js");

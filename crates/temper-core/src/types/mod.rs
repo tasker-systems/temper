@@ -1,5 +1,5 @@
 //! Domain types for temper-cloud — profiles, teams, access control, auth,
-//! sync protocol, manifest, config, vault, upload, search, reassign,
+//! sync protocol, manifest, config, vault, search, reassign,
 //! conflict resolution, device tracking, and events.
 //!
 //! All struct types derive `Debug, Clone, sqlx::FromRow` (database-backed)
@@ -65,7 +65,6 @@ pub mod standing;
 pub mod steward;
 pub mod subscription;
 pub mod team;
-pub mod upload;
 pub mod vault;
 pub mod vault_config;
 pub mod workflow_job;
@@ -135,6 +134,5 @@ pub use team::{
     AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamDetail, TeamMemberDetail,
     TeamMemberRow, TeamMemberSource, TeamRole, TeamRow,
 };
-pub use upload::{UploadProcessingStatus, UploadResponse};
 pub use vault::{IngestionSource, ResourceFrontmatter, VaultAddResult};
 pub use vault_config::{DeviceOverrides, Subscription, SubscriptionOverride, VaultConfig};
