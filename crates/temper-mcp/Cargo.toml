@@ -1,12 +1,27 @@
+# Published to crates.io as `temperkb-mcp`; the LIBRARY keeps the `temper_mcp` name, so every
+# `use temper_mcp::…` — the deployed shell's, the e2e parity suites', a downstream host's — is
+# untouched by the registry rename (temperkb-core's manifest states the convention).
 [package]
-name = "temper-mcp"
+name = "temperkb-mcp"
 version.workspace = true
 edition.workspace = true
-description = "MCP tool layer for agent access to the temper knowledge base"
-publish = false
+license.workspace = true
+repository.workspace = true
+description = "Temper's MCP tool layer: every temper knowledge-base tool, served by any host over a host-supplied identity"
+readme = "README.md"
+keywords = ["mcp", "temper", "knowledge-base", "agents", "rmcp"]
+categories = ["api-bindings", "development-tools"]
+
+[lib]
+name = "temper_mcp"
 
 [features]
-# Kept so `--features test-db` across the workspace still resolves; temper-mcp itself has no
+default = ["telemetry"]
+# Opt-out, forwarded to temperkb-client (the same opt-out, same reasons — see its manifest): a
+# host that sets `default-features = false` inherits no OTel export stack, and loses only the
+# relay's `traceparent` propagation. The tool layer itself names no telemetry crate.
+telemetry = ["temperkb-client/telemetry"]
+# Kept so `--features test-db` across the workspace still resolves; the tool layer has no
 # database suites (it holds no pool).
 test-db = []
 
@@ -20,7 +35,7 @@ test-db = []
 # including in tests, where the harness binds a real listener serving `create_app` in
 # the TEST process. Keeping the crate out of this dependency graph makes that property
 # structural: a future `temper_api::create_app` call here cannot compile.
-temperkb-client.workspace = true
+temperkb-client.workspace = true # default-features = false at the workspace entry
 # The shared connection pool, and the blob read's byte stream (`Response::bytes_stream`, behind
 # `stream`). Declared here, not borrowed from workspace unification: built alone (as a published
 # crate is), the blob read did not compile without it.
@@ -32,7 +47,7 @@ reqwest = { version = "0.12", default-features = false, features = ["stream"] }
 # beside it keep it absent.
 
 # Without `web-api`: the MCP server neither exposes nor expresses utoipa, and `cargo tree -p
-# temper-mcp -e normal` must show none (temperkb-client depends on both crates the same way).
+# temperkb-mcp -e normal` must show none (temperkb-client depends on both crates the same way).
 temperkb-core = { workspace = true, features = ["mcp"] }
 temperkb-workflow = { workspace = true, features = ["mcp"] }
 
@@ -41,6 +56,8 @@ base64 = "0.22"
 # Collecting the read-through `ByteStream` into a whole tool result.
 futures = "0.3"
 
+# A declared PUBLIC dependency, re-exported as `temper_mcp::rmcp`: a host mounts the service with
+# this rmcp, so an rmcp major bump is a breaking temperkb-mcp release.
 rmcp = { version = "3.4.1", features = [
     "server",
     "transport-streamable-http-server",
@@ -65,3 +82,6 @@ proc-macro2 = "1"
 toml = "0.8"
 # `resources_read_error_test` serves a canned answer from a real listener.
 axum = "0.8"
+# `declarations_test` drives the mounted service through rmcp's real client over an in-memory
+# transport.
+rmcp = { version = "3.4.1", features = ["client"] }

@@ -7,6 +7,7 @@
 //! deployed host is `temper-mcp-server`; any other host serves the same tools the same way.
 
 pub(crate) mod cache_policy;
+pub mod declarations;
 pub mod host;
 pub mod resources;
 pub mod seam;
@@ -19,3 +20,8 @@ mod source_gates;
 pub use host::BlobDoor;
 pub use seam::{IdentitySeam, OutgoingIdentity, RelayConfig};
 pub use service::TemperMcpService;
+
+/// The MCP SDK this crate is built on, re-exported so a host mounts [`TemperMcpService`] with the
+/// matching version. rmcp is public API here: a major rmcp bump is a breaking `temperkb-mcp`
+/// release.
+pub use rmcp;

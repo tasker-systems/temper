@@ -340,3 +340,30 @@ jobs:
         # trybuild-workspace recompile of temper-services + ort); the 300s nextest slow-timeout override
         # in .config/nextest.toml covers it.
         run: cargo nextest run -p temper-services --features trybuild --test compile_fail --locked --no-fail-fast
+
+  package-temperkb-mcp:
+    name: Package temperkb-mcp (publish dry run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # temperkb-mcp is publish-ready but not yet in the release lane (its first publish claims the
+    # name by hand; see publish-crates.sh's header), so nothing else would notice it stop packaging
+    # before that publish. Needs neither Postgres nor the model: it packages, verifies and runs the
+    # tool layer's own tests, none of which touch a database. SQLX_OFFLINE keeps any sqlx macro in
+    # the closure from reaching for one.
+    env:
+      SQLX_OFFLINE: "true"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          # The job builds third-party crates (build scripts included) and needs no git
+          # credentials afterwards.
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-prefix: package-mcp-v1
+
+      - name: Dry-run publish, then test from the tarball
+        run: bash .github/scripts/check-temperkb-mcp-package.sh

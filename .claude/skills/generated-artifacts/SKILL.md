@@ -171,8 +171,9 @@ Gated by `skills-drift` (`check-skills-drift.sh`, in `cargo make check` and the
   hand-written by design — the emit never touches it, so a false statement in it is invisible to
   this gate. A green run means "the generated part matches its source", not "the MCP skill is
   correct". The tool-NAME half of that gap is closed from the other side, by
-  `temper-mcp`'s `every_tool_the_shipped_skill_names_exists_in_the_router` — the router is the
-  authority and temper-cli does not depend on temper-mcp.
+  `temper-mcp-server`'s `every_tool_the_shipped_skill_names_exists_in_the_router`
+  (`tests/shipped_skill_tools_test.rs`), against the tool layer's shipped declarations — the
+  router is the authority and temper-cli does not depend on the tool layer.
 
 **Why the CLI skill is not projected too.** `temper skill install` bakes a per-user context
 list into its router, so its render is one developer's and could never be committed. The MCP
