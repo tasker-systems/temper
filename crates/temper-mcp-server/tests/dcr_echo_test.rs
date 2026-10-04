@@ -13,7 +13,7 @@
 //!
 //! No auth, no database, no port: every probe targets the public registration route.
 //!
-//! `cargo nextest run -p temper-mcp --test dcr_echo_test`
+//! `cargo nextest run -p temper-mcp-server --test dcr_echo_test`
 
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Request, StatusCode};
@@ -21,7 +21,8 @@ use tower::ServiceExt;
 
 mod common;
 
-use temper_mcp::config::{McpConfig, OAuthStaticConfig};
+use temper_mcp_server::discovery_config::OAuthStaticConfig;
+use temper_mcp_server::DiscoveryConfig;
 
 const ALLOWED: &str = "https://temper.invalid/api/auth/mcp-callback";
 const ATTACKER: &str = "https://attacker.example/collect";
@@ -30,11 +31,9 @@ const ATTACKER: &str = "https://attacker.example/collect";
 fn router(allow_localhost: bool) -> axum::Router {
     common::build_router(
         common::state_with_cors_origins(vec![]),
-        McpConfig {
+        DiscoveryConfig {
             mcp_base_url: "https://temper.invalid".to_string(),
             mcp_client_id: Some("temper-mcp".to_string()),
-            api_base_url: None,
-            mcp_service_secret: None,
             oauth: OAuthStaticConfig {
                 redirect_uris: vec![ALLOWED.to_string()],
                 allow_localhost,

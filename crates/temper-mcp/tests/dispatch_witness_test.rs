@@ -1,4 +1,5 @@
-//! Witness that `#[tool_handler]` actually wires `ServerHandler::call_tool` into the router.
+//! Witness that `ServerHandler::call_tool` (the service's own, which crosses the host's seam
+//! and then calls the router `#[tool_router]` builds) actually dispatches into the router.
 //!
 //! The existing tests in `service.rs` assert what the router *contains* — they call
 //! `TemperMcpService::tool_router()` (a pure associated function) and inspect its advertised
@@ -9,54 +10,45 @@
 //! orphaning a field, every router-contents test would still have passed. That is a gate that
 //! cannot fail for the thing it appears to cover.
 //!
-//! This test drives the generated `call_tool` through a real `RequestContext` built off a
+//! This test drives `call_tool` through a real `RequestContext` built off a
 //! served `RunningService`'s `Peer` (the only public way to obtain one — `Peer::new` is
 //! `pub(crate)` in rmcp). It uses `serve_directly`, which skips the client-handshake
 //! initialization that `serve().await` waits for and returns a `RunningService` synchronously.
-//! The witness does NOT exercise any tool body: both assertions fire at the dispatch layer,
-//! before auth or the database are reached.
+//! The witness reaches no network: the service's relay is unavailable, so a tool body that runs
+//! answers the host's own sentence.
 //!
 //! The two halves together prove the full dispatch path is wired:
 //!   - An **unknown tool** is refused by the router with `INVALID_PARAMS` "tool not found" —
-//!     proving `call_tool` reached the router at all. Without `#[tool_handler]`, `call_tool`
-//!     falls back to the trait default which returns `METHOD_NOT_FOUND`.
-//!   - A **known tool** is dispatched to its wrapper, which fails extracting
-//!     `Extension<http::request::Parts>` (absent in this bare context) with `INVALID_PARAMS`
-//!     "missing extension …" — proving the router found the tool and handed off to its wrapper.
-//!     Without `#[tool_handler]`, this too returns `METHOD_NOT_FOUND`.
+//!     proving `call_tool` reached the router at all. Without a `call_tool` (the service's own,
+//!     or `#[tool_handler]`'s generated one), the trait default returns `METHOD_NOT_FOUND`.
+//!   - A **known tool** is dispatched to its wrapper and its body runs, answering the dark
+//!     door's own sentence — proving the router found the tool and handed off to its wrapper.
+//!     Without the dispatch, this too returns `METHOD_NOT_FOUND`.
 //!
-//! Both halves fail (become `METHOD_NOT_FOUND`) if `#[tool_handler]` is removed from the
-//! `impl ServerHandler` block — that is the regression boundary this witness guards.
+//! Both halves fail (become `METHOD_NOT_FOUND`) if `call_tool` stops dispatching into the
+//! router — that is the regression boundary this witness guards.
 
 use rmcp::{
     model::{CallToolRequestParams, ErrorCode, RequestId},
     service::{serve_directly, RequestContext},
     ServerHandler,
 };
-use temper_mcp::config::McpConfig;
 use temper_mcp::service::TemperMcpService;
 use temper_mcp::BlobDoor;
 
-/// Build a `TemperMcpService` with no relay and a closed blob door.
+/// The sentence the witness service's dark door answers — a host's own words, here a test's.
+const UNAVAILABLE: &str = "dispatch witness: this service relays nothing";
+
+/// Build a `TemperMcpService` whose relay is unavailable and whose blob door is closed.
 ///
-/// The dispatch witness never reaches a tool body, and the service holds nothing a tool body
-/// could reach for besides the relay config — no pool, no key store.
+/// The dark door is the honest shape for a dispatch witness: a tool body that runs answers the
+/// host's own sentence instead of reaching for a network, and the seam is never consulted.
 fn service_for_dispatch_witness() -> TemperMcpService {
-    TemperMcpService::new(
+    TemperMcpService::unavailable(
         BlobDoor::Closed {
             refusal: "unused".to_string(),
         },
-        McpConfig {
-            mcp_base_url: "https://temper.invalid".to_string(),
-            mcp_client_id: None,
-            api_base_url: None,
-            mcp_service_secret: None,
-            oauth: temper_mcp::config::OAuthStaticConfig {
-                redirect_uris: vec![],
-                allow_localhost: false,
-            },
-        },
-        temper_mcp::service::shared_relay_pool(),
+        UNAVAILABLE,
     )
 }
 
@@ -80,7 +72,7 @@ async fn dispatch_fails(service: TemperMcpService, name: &'static str) -> rmcp::
 /// The error from dispatching an **unknown** tool through `ServerHandler::call_tool` is
 /// `INVALID_PARAMS` "tool not found" — the router was reached and refused the name.
 ///
-/// Without `#[tool_handler]` this becomes `METHOD_NOT_FOUND` (the trait default), which is the
+/// Without the `call_tool` dispatch this becomes `METHOD_NOT_FOUND` (the trait default), which is the
 /// regression this witness exists to catch.
 #[tokio::test]
 async fn an_unknown_tool_is_refused_by_the_router_not_by_the_default_handler() {
@@ -91,7 +83,7 @@ async fn an_unknown_tool_is_refused_by_the_router_not_by_the_default_handler() {
         err.code,
         ErrorCode::INVALID_PARAMS,
         "unknown-tool dispatch returned {:?} ({:?}); expected INVALID_PARAMS (\"tool not \
-         found\"). METHOD_NOT_FOUND would mean `#[tool_handler]` is not wiring call_tool into the \
+         found\"). METHOD_NOT_FOUND would mean call_tool is not dispatching into the \
          router — the regression this witness guards.",
         err.code,
         err.message,
@@ -106,12 +98,12 @@ async fn an_unknown_tool_is_refused_by_the_router_not_by_the_default_handler() {
     );
 }
 
-/// The error from dispatching a **known** tool through `ServerHandler::call_tool` is
-/// `INVALID_PARAMS` "missing extension http::request::Parts" — the router found the tool and
-/// handed off to its wrapper, which failed extracting the HTTP parts this bare context does not
-/// carry.
+/// The error from dispatching a **known** tool through `ServerHandler::call_tool` is the dark
+/// door's own sentence — the router found the tool, handed off to its wrapper, and the tool body
+/// ran far enough to ask for a relay client. (The bare context carries no HTTP parts; `call_tool`
+/// supplies empty ones, so the wrapper's `Extension<Parts>` extracts on every transport.)
 ///
-/// Without `#[tool_handler]` this becomes `METHOD_NOT_FOUND` (the trait default).
+/// Without the `call_tool` dispatch this becomes `METHOD_NOT_FOUND` (the trait default).
 ///
 /// This is the half that proves the router routes *to a real tool*, not merely that it was
 /// reached. The unknown-tool test alone could pass against a router that refused everything;
@@ -123,20 +115,16 @@ async fn a_known_tool_is_dispatched_to_its_wrapper_not_the_default_handler() {
 
     assert_eq!(
         err.code,
-        ErrorCode::INVALID_PARAMS,
-        "known-tool dispatch returned {:?} ({:?}); expected INVALID_PARAMS (\"missing \
-         extension …\"). METHOD_NOT_FOUND would mean `#[tool_handler]` is not wiring call_tool \
-         into the router — the regression this witness guards.",
+        ErrorCode::INTERNAL_ERROR,
+        "known-tool dispatch returned {:?} ({:?}); expected the dark door's INTERNAL_ERROR. \
+         METHOD_NOT_FOUND would mean `call_tool` is not wired into the router — the regression \
+         this witness guards.",
         err.code,
         err.message,
     );
-    assert!(
-        err.message.contains("missing extension"),
-        "known-tool dispatch message changed: {:?}. The wrapper extracts \
-         `Extension<http::request::Parts>` from the request context and fails when it is absent \
-         (this bare context carries none). If the message moved, update the assertion to the new \
-         wording — do not weaken it to a code-only check, because the message is what distinguishes \
-         \"wrapper reached\" from other INVALID_PARAMS failures.",
-        err.message,
+    assert_eq!(
+        err.message, UNAVAILABLE,
+        "the tool body must have run and answered the host's sentence — any other message means \
+         dispatch stopped before the wrapper (do not weaken this to a code-only check)",
     );
 }

@@ -25,22 +25,12 @@ use rmcp::transport::streamable_http_client::{
     StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
 };
 use serde_json::{json, Value};
-use temper_mcp::config::McpConfig;
 
 /// The MCP router as its own server (the deployment topology), wired for the relay:
 /// the harness API's base URL and the harness service credential, so `run_query`
 /// executes through the network door exactly as deployed.
 async fn spawn_mcp_router(api_base_url: &str) -> std::net::SocketAddr {
-    let mcp_config = McpConfig {
-        mcp_base_url: "http://mcp.test".to_string(),
-        mcp_client_id: None,
-        api_base_url: Some(api_base_url.to_string()),
-        mcp_service_secret: Some(common::TEST_MCP_SERVICE_SECRET.to_string()),
-        oauth: temper_mcp::config::OAuthStaticConfig {
-            redirect_uris: vec![],
-            allow_localhost: true,
-        },
-    };
+    let api_base_url = api_base_url.to_string();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -50,9 +40,12 @@ async fn spawn_mcp_router(api_base_url: &str) -> std::net::SocketAddr {
         axum::serve(
             listener,
             temper_mcp_server::build_router(
-                common::mcp_server_config(temper_mcp_server::config::blob_door(None, false)),
+                common::mcp_server_config_relaying(
+                    temper_mcp_server::config::blob_door(None, false),
+                    &api_base_url,
+                ),
                 common::mcp_test_jwks(),
-                mcp_config,
+                common::mcp_discovery_config("http://mcp.test"),
             ),
         )
         .await

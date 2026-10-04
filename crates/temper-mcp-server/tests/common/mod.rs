@@ -10,20 +10,27 @@
 
 use jsonwebtoken::{Algorithm, DecodingKey};
 use temper_auth::config::{AuthConfig, AuthMode};
-use temper_mcp::config::{McpConfig, OAuthStaticConfig};
 use temper_mcp::BlobDoor;
-use temper_mcp_server::McpServerConfig;
+use temper_mcp_server::config::{deployed_relay, DeployedRelay};
+use temper_mcp_server::discovery_config::OAuthStaticConfig;
+use temper_mcp_server::{DiscoveryConfig, McpServerConfig};
 use temper_services::state::JwksKeyStore;
 
-/// What the router is assembled from besides its `McpConfig`: the boot config and the key store.
+/// What the router is assembled from besides its `DiscoveryConfig`: the boot config and the key
+/// store.
 pub struct Edge {
     pub config: McpServerConfig,
     pub jwks_store: JwksKeyStore,
 }
 
 /// The real `build_router`, from an [`Edge`] fixture.
-pub fn build_router(edge: Edge, mcp_config: McpConfig) -> axum::Router {
-    temper_mcp_server::build_router(edge.config, edge.jwks_store, mcp_config)
+pub fn build_router(edge: Edge, discovery: DiscoveryConfig) -> axum::Router {
+    temper_mcp_server::build_router(edge.config, edge.jwks_store, discovery)
+}
+
+/// No relay: none of these suites reaches a tool body, so the tool door is dark.
+fn unconfigured_relay() -> DeployedRelay {
+    deployed_relay(&|_: &str| None)
 }
 
 /// A blob-less deployment's door: closed, in the unconfigured vocabulary.
@@ -59,6 +66,7 @@ pub fn state_with_cors_origins(cors_origins: Vec<String>) -> Edge {
             },
             cors_origins,
             blob_door: closed_blob_door(),
+            relay: unconfigured_relay(),
         },
         jwks_store: JwksKeyStore::new("https://example.invalid/.well-known/jwks.json".to_string()),
     }
@@ -80,6 +88,7 @@ pub fn state_with_distinct_audiences() -> Edge {
             },
             cors_origins: vec![],
             blob_door: closed_blob_door(),
+            relay: unconfigured_relay(),
         },
         jwks_store: JwksKeyStore::with_static_key(
             DecodingKey::from_secret(b"witness"),
@@ -88,14 +97,12 @@ pub fn state_with_distinct_audiences() -> Edge {
     }
 }
 
-/// An `McpConfig` with **no** `mcp_client_id`, which is what makes `/oauth/register` answer
+/// A `DiscoveryConfig` with **no** `mcp_client_id`, which is what makes `/oauth/register` answer
 /// `503 SERVICE_UNAVAILABLE` from inside the handler rather than failing earlier.
-pub fn mcp_config() -> McpConfig {
-    McpConfig {
+pub fn discovery_config() -> DiscoveryConfig {
+    DiscoveryConfig {
         mcp_base_url: "https://temper.invalid".to_string(),
         mcp_client_id: None,
-        api_base_url: None,
-        mcp_service_secret: None,
         oauth: OAuthStaticConfig {
             redirect_uris: vec![],
             allow_localhost: false,

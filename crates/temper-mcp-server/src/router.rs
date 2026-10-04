@@ -13,11 +13,12 @@ use tower_http::limit::RequestBodyLimitLayer;
 
 use temper_auth::config::AuthConfig;
 use temper_mcp::service::TemperMcpService;
-use temper_mcp::McpConfig;
+use temper_mcp::BlobDoor;
 use temper_services::state::JwksKeyStore;
 
-use crate::config::McpServerConfig;
+use crate::config::{DeployedRelay, McpServerConfig};
 use crate::discovery;
+use crate::discovery_config::DiscoveryConfig;
 use crate::middleware::require_mcp_auth;
 
 /// The largest request body this door will read.
@@ -53,24 +54,37 @@ pub struct McpEdgeState {
     /// audience the protected-resource metadata advertises.
     pub auth: AuthConfig,
     pub jwks_store: Arc<JwksKeyStore>,
-    pub mcp_config: McpConfig,
+    pub discovery: DiscoveryConfig,
+}
+
+/// The deployed door's tool service — the tool layer over this deployment's seam, or dark with
+/// the deployment's own sentence when the relay is not configured. Built ONCE per process (it
+/// owns the relay's connection pool) and cloned per request.
+pub fn tool_service(blob_door: BlobDoor, relay: DeployedRelay) -> TemperMcpService {
+    match relay {
+        DeployedRelay::Ready { config, seam } => {
+            TemperMcpService::new(blob_door, config, Arc::new(seam))
+        }
+        DeployedRelay::Unavailable(refusal) => TemperMcpService::unavailable(blob_door, refusal),
+    }
 }
 
 pub fn build_router(
     server_config: McpServerConfig,
     jwks_store: JwksKeyStore,
-    mcp_config: McpConfig,
+    discovery: DiscoveryConfig,
 ) -> Router {
     let McpServerConfig {
         auth,
         cors_origins,
         blob_door,
+        relay,
     } = server_config;
 
     let shared = Arc::new(McpEdgeState {
         auth,
         jwks_store: Arc::new(jwks_store),
-        mcp_config: mcp_config.clone(),
+        discovery,
     });
 
     // ── Public OAuth discovery endpoints ───────────────────────────────
@@ -105,25 +119,15 @@ pub fn build_router(
         .with_json_response(true)
         .disable_allowed_hosts();
 
-    // The relay's ONE pool: built once per process here, refcount-cloned into every
-    // per-request service (the §D6 carve-out — a pool inside the factory closure would
-    // be per-request, the fresh-TLS-per-call cost it exists to avoid).
-    let shared_relay_pool = temper_mcp::service::shared_relay_pool();
+    // Built once per process here: the service owns the relay's ONE connection pool, and every
+    // per-request clone shares it (the §D6 carve-out — a service built inside the factory
+    // closure would pay a fresh TLS handshake per call).
+    let tool_service = tool_service(blob_door, relay);
 
     let mcp_service = StreamableHttpService::new(
-        // Stateless mode calls this factory once per HTTP request, so every request
-        // gets a fresh service — and a fresh view of the (immutable) relay config.
-        {
-            let mcp_config = mcp_config.clone();
-            let shared_relay_pool = shared_relay_pool.clone();
-            move || {
-                Ok(TemperMcpService::new(
-                    blob_door.clone(),
-                    mcp_config.clone(),
-                    shared_relay_pool.clone(),
-                ))
-            }
-        },
+        // Stateless mode calls this factory once per HTTP request, so every request gets a
+        // fresh service sharing the one pool.
+        move || Ok(tool_service.clone()),
         Arc::new(LocalSessionManager::default()),
         config,
     );

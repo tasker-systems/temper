@@ -23,6 +23,38 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **The MCP tool layer relays on a host-supplied identity: `IdentitySeam`, `RelayConfig`, and a second in-repo host**
+  `temper-mcp` no longer knows whom the deployed door relays as. A host implements
+  `IdentitySeam`: per request it yields an `OutgoingIdentity` (bearer, `Surface`, opaque extra
+  headers, optional `correlation_id`) or nothing. The crate builds every relay client itself,
+  with the shared pool, the attempt count and the no-redirect policy. It takes a plain
+  `RelayConfig { api_base_url, request_timeout }` and reads no environment variable. The
+  deployed shell's seam (`temper_mcp_server::DeployedDoorSeam`) sends what the relay sent
+  before: the edge-verified bearer, `Surface::Mcp`, the service credential and the `mcp` carrier,
+  and no device id. A wire-capture test pins that, and the e2e attribution witnesses are green.
+  `McpConfig` is split: discovery moves to the shell as `DiscoveryConfig`, and the relay
+  variables, the 45 s timeout and the misconfiguration sentences move to `McpServerConfig`.
+  `map_post_edge_refusal`, `map_post_edge_auth` and the terminal sentences become public. The
+  `AuthzError` witness moves to the shell, and `temper-mcp` keeps no temper-services dependency
+  of any kind. `temperkb-core` and `temperkb-workflow` are now depended on without `web-api`, so
+  there is no utoipa in its tree. `reqwest`'s `stream` feature is declared; the blob read only
+  compiled before because of workspace unification.
+  On the MCP wire, the tool declarations fixture is byte-identical. On the deployed door every
+  call carries a verified bearer, so no answer there changes. Where no identity reaches the tool
+  layer, every tool and both resource reads now answer one host-neutral not-connected refusal
+  (`-32600`). Before, relayed tools and the resource reads answered `-32603` "Not
+  authenticated", `describe_schema` answered normally, and a transport without HTTP parts failed
+  extraction with `-32602`. That transport now gets empty parts. A host's extra headers that
+  restate a header the relay sets itself (`authorization`, the surface, the device id, trace
+  context) refuse the call. In the unpublished shell, `McpServerConfig` gains a public `relay`
+  field, and its `Debug` now shows the API base URL where it showed "set". Who observes: Rust
+  code that hosts the tool layer (in-repo only until the publish). User-visible: no. Release
+  relevance: additive.
+pr: self
+classes: additive
+surfaces: mcp, internal
+status: signal-only
+
 - **The sensitivity sweep's cron tick: `/api/sensitivity/sweep`, and the `SENSITIVITY_SWEEP_SALT` variable**
   A new internal route, gated by the shared `EMBED_DISPATCH_SECRET` bearer and kept out of the
   contract. Every five minutes it reaps, then claims and scans surfaces' work orders until about
