@@ -866,7 +866,7 @@ pub fn generate(_config: &Config, include_admin: bool) -> Result<String> {
 /// Deliberately **not** every file in the bundle. `knowledge-base.md` is hand-written and stays
 /// that way — it is the MCP tool reference and has no CLI twin to share with, so emitting over it
 /// would be a rewrite. The gate only ever compares what appears here; the tool-NAME half of that
-/// gap is covered by a test in temper-mcp, which is where the router lives.
+/// gap is covered by a test in temper-mcp-server, against the tool layer's declarations.
 pub fn generate_agent_skill_files() -> Result<HashMap<String, String>> {
     let mut files = HashMap::new();
 

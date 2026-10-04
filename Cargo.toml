@@ -17,10 +17,17 @@ repository = "https://github.com/tasker-systems/temper"
 # specs cannot inherit [workspace.package] fields, so the version is spelled here —
 # bump it TOGETHER with [workspace.package].version; the publish script's
 # version-agreement guard fails the release if the two disagree.
+#
+# temperkb-client is declared WITHOUT its default `telemetry` feature so a published dependent
+# (temperkb-mcp) can carry the opt-out through to its own consumers; a member that wants the
+# client's trace-context propagation names `features = ["telemetry"]` itself. temperkb-mcp is
+# the tool layer, publish-ready but not yet in publish-crates.sh's lane: its name is claimed
+# by a one-time local publish before a trusted publisher can attach (see that script's header).
 [workspace.dependencies]
 temperkb-auth = { path = "crates/temper-auth", version = "0.5.4" }
-temperkb-client = { path = "crates/temper-client", version = "0.5.4" }
+temperkb-client = { path = "crates/temper-client", version = "0.5.4", default-features = false }
 temperkb-core = { path = "crates/temper-core", version = "0.5.4" }
+temperkb-mcp = { path = "crates/temper-mcp", version = "0.5.4" }
 temperkb-principal = { path = "crates/temper-principal", version = "0.5.4" }
 temperkb-telemetry = { path = "crates/temper-telemetry", version = "0.5.4" }
 temperkb-workflow = { path = "crates/temper-workflow", version = "0.5.4" }

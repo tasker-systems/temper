@@ -45,8 +45,8 @@
 # Only the GENERATED files. `knowledge-base.md` — the hand-written MCP tool reference — is
 # intentionally not emitted, so a stale statement in it is invisible here. Do not read a green run
 # as "the MCP skill is correct"; read it as "the generated part of the MCP skill matches its
-# source". The tool-NAME half of that gap is closed separately, by a test in temper-mcp that
-# checks every tool this tree names against the live router.
+# source". The tool-NAME half of that gap is closed separately, by a test in temper-mcp-server
+# that checks every tool this tree names against the tool layer's declarations.
 #
 # Usage: bash .github/scripts/check-skills-drift.sh
 #

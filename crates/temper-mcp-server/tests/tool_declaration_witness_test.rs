@@ -1,20 +1,15 @@
-//! The MCP wire-stability witnesses for the rmcp 1.8 → 3.4.1 SDK upgrade.
+//! The deployed door's wire witnesses: its `tools/list` answer is the tool layer's shipped
+//! declarations (`declarations-are-fixtures`), and `initialize` negotiates the protocol version
+//! it always has.
 //!
-//! **The byte witness is the beat's attribution instrument.** The upgrade beat is scoped to
-//! change NOTHING on the wire, so that the later schema-strategy beat's declaration changes
-//! are attributable to that beat alone. These tests pin the `tools/list` response in
-//! canonical JSON form (every object's keys sorted — build-config independent, see
-//! `canonical_json`) and the negotiated `protocolVersion` of `initialize`; if the upgrade
-//! shifts either, these tests go red at the upgrade commit, not months later.
-//!
-//! The fixture is written-then-failed, never silently green: `UPDATE_MCP_DECLARATIONS=1`
-//! rewrites it and then fails, so a regen always costs a second run that must pass.
+//! First written for the rmcp 1.8 → 3.4.1 upgrade, whose beat was scoped to change nothing on
+//! the wire. The declaration comparison now runs through `temper_mcp::declarations`, the helper
+//! every host calls with its own bytes; the fixture and its regen live in temperkb-mcp.
 
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Request, StatusCode};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
 use tower::ServiceExt;
 
 mod common;
@@ -99,48 +94,14 @@ async fn initialize_with(protocol_version: &str) -> (StatusCode, Value) {
     (status, body)
 }
 
-/// Canonical JSON: every object's keys sorted, recursively; arrays keep their order;
-/// compact separators. Compared instead of the raw bytes because the raw byte order of
-/// JSON OBJECT KEYS is build-config dependent, not semantic: serde_json's `preserve_order`
-/// feature is unified into the build only by some workspace members, so a `-p temper-mcp`
-/// run and a `--workspace` run serialize the same schema with different key order (this
-/// bit CI while the fixture was raw — identical length, reordered keys). RFC 8259 leaves
-/// object order insignificant, so canonicalization loses no contract; array order
-/// (`required`, `enum`) IS contract and survives.
-fn canonical_json(bytes: &[u8]) -> String {
-    fn sort_object(value: &mut Value) {
-        match value {
-            Value::Object(map) => {
-                let sorted: serde_json::Map<String, Value> = map
-                    .iter()
-                    .map(|(k, v)| {
-                        let mut v = v.clone();
-                        sort_object(&mut v);
-                        (k.clone(), v)
-                    })
-                    .collect::<BTreeMap<_, _>>()
-                    .into_iter()
-                    .collect();
-                *map = sorted;
-            }
-            Value::Array(items) => items.iter_mut().for_each(sort_object),
-            _ => {}
-        }
-    }
-    let mut value: Value = serde_json::from_slice(bytes).expect("response parses as JSON");
-    sort_object(&mut value);
-    serde_json::to_string(&value).expect("canonical form serializes")
-}
-
-/// The full tool declaration set a client receives is byte-identical across the SDK upgrade.
+/// The tool declaration set the deployed door's clients receive is the one temperkb-mcp ships.
 ///
-/// Pins the `tools/list` response body in canonical form — envelope included, since the
-/// envelope is SDK-produced too and an rmcp change to it is a wire change like any other.
-/// The fixture state closes the blob door (`blob: None`), so this witnesses the filtered
-/// set exactly as a closed-door client sees it; the full-router floor is separately
-/// witnessed by `both_blob_doors_are_advertised_by_the_router`.
+/// Checks the raw `tools/list` response: the JSON-RPC envelope and, in canonical form, the
+/// result. This router's fixture state closes the blob door (`blob: None`), so the helper holds
+/// it to the shipped set without the blob pair, exactly as a closed-door client sees it; the
+/// full-router floor is separately witnessed by `both_blob_doors_are_advertised_by_the_router`.
 #[tokio::test]
-async fn tool_declarations_are_byte_identical_across_the_sdk_upgrade() {
+async fn the_deployed_door_advertises_the_shipped_declarations() {
     let (_, bytes) = post_mcp(json!({
         "jsonrpc": "2.0",
         "id": 2,
@@ -153,33 +114,12 @@ async fn tool_declarations_are_byte_identical_across_the_sdk_upgrade() {
         "tools/list must answer JSON; got {} bytes",
         bytes.len()
     );
-    let canonical = canonical_json(&bytes);
-
-    // The fixture belongs to the tool layer (temper-mcp declares the tools); this witness reads
-    // it through the deployed router, so the bytes it pins are the ones the wire carries.
-    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../temper-mcp/tests/fixtures/tool_declarations_bytes.json");
-    if std::env::var("UPDATE_MCP_DECLARATIONS").is_ok() {
-        std::fs::create_dir_all(fixture_path.parent().unwrap()).expect("fixture dir");
-        std::fs::write(&fixture_path, canonical.as_bytes()).expect("fixture writes");
-        panic!(
-            "fixture regenerated at {}; run the test again WITHOUT \
-             UPDATE_MCP_DECLARATIONS to assert byte-identity against it",
-            fixture_path.display()
-        );
-    }
-
-    let pinned = std::fs::read(&fixture_path).unwrap_or_else(|_| {
-        panic!(
-            "fixture missing at {}; regenerate with UPDATE_MCP_DECLARATIONS=1",
-            fixture_path.display()
-        )
-    });
-    assert_eq!(
-        canonical,
-        String::from_utf8(pinned).expect("fixture is UTF-8 JSON"),
-        "the tools/list declaration moved — an SDK or declaration change leaked onto the wire"
-    );
+    // The declarations are the tool layer's (temperkb-mcp ships them as a fixture); this host
+    // asserts its own wire answer against them through the crate's public helper, exactly as
+    // any other host does. The fixture is regenerated in the crate (its `declarations_test`).
+    temper_mcp::declarations::assert_tools_list_response(&bytes);
+    let envelope: Value = serde_json::from_slice(&bytes).expect("tools/list answers JSON");
+    assert_eq!(envelope["id"], 2, "the response answers this request's id");
 }
 
 /// The wire rule (strategy spec 2026-09-25): a temper MCP tool declaration is

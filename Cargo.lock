@@ -6212,13 +6212,13 @@ dependencies = [
  "temper-api",
  "temper-cli",
  "temper-ingest",
- "temper-mcp",
  "temper-mcp-server",
  "temper-services",
  "temper-substrate",
  "temperkb-auth",
  "temperkb-client",
  "temperkb-core",
+ "temperkb-mcp",
  "temperkb-telemetry",
  "temperkb-workflow",
  "tempfile",
@@ -6261,31 +6261,6 @@ name = "temper-macros"
 version = "0.5.4"
 
 [[package]]
-name = "temper-mcp"
-version = "0.5.4"
-dependencies = [
- "axum",
- "base64 0.22.1",
- "chrono",
- "futures",
- "http",
- "proc-macro2",
- "reqwest 0.12.28",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "syn 2.0.117",
- "temperkb-client",
- "temperkb-core",
- "temperkb-workflow",
- "tokio",
- "toml 0.8.23",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "temper-mcp-server"
 version = "0.5.4"
 dependencies = [
@@ -6295,14 +6270,15 @@ dependencies = [
  "jsonwebtoken",
  "proc-macro2",
  "rmcp",
+ "schemars",
  "serde",
  "serde_json",
  "syn 2.0.117",
- "temper-mcp",
  "temper-services",
  "temperkb-auth",
  "temperkb-client",
  "temperkb-core",
+ "temperkb-mcp",
  "temperkb-principal",
  "temperkb-telemetry",
  "temperkb-workflow",
@@ -6466,6 +6442,31 @@ dependencies = [
  "utoipa",
  "uuid",
  "validator",
+]
+
+[[package]]
+name = "temperkb-mcp"
+version = "0.5.4"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "futures",
+ "http",
+ "proc-macro2",
+ "reqwest 0.12.28",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "syn 2.0.117",
+ "temperkb-client",
+ "temperkb-core",
+ "temperkb-workflow",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

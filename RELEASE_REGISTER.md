@@ -23,6 +23,29 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **The MCP tool layer is publish-ready as `temperkb-mcp`: shipped declarations, `pub use rmcp`, an opt-out `telemetry` feature**
+  The tool layer's package is renamed `temper-mcp` → `temperkb-mcp`, and its library keeps the
+  `temper_mcp` name, so no `use temper_mcp::…` moves. It becomes publishable at the lockstep
+  version (license, repository, readme, a `[workspace.dependencies]` entry). It is not yet
+  published, and it is not in the crates.io lane: the name is claimed by a one-time local publish
+  first. New public surface: `temper_mcp::rmcp` (the SDK, re-exported; an rmcp major bump is a
+  breaking release of this crate), the `telemetry` feature (default on, forwarded to
+  `temperkb-client`), and `temper_mcp::declarations`. That module ships the `tools/list` answer as
+  a fixture (`TOOLS_LIST`, blob door open) with check and assert helpers a host calls on its own
+  wire answer. A closed blob door is checked against the set without the blob pair, and
+  `resultType: "complete"` reads as absent. The deployed shell's declaration witness now calls
+  that helper. The workspace's `temperkb-client` entry drops its default features so the opt-out
+  can reach a host; the members that used them name `telemetry` explicitly. Two monorepo-reading
+  tests (the shipped-skill tool names, the steward recipe) move from the tool layer to the shell.
+  On the MCP wire nothing changes: the closed-door projection of the new fixture is
+  byte-identical to the old one. Who observes: Rust code that hosts the tool layer, and
+  temper's release lane later. User-visible: no. Release relevance: additive; it enables the
+  crate's first publish.
+pr: self
+classes: additive
+surfaces: clients, internal
+status: signal-only
+
 - **The MCP tool layer relays on a host-supplied identity: `IdentitySeam`, `RelayConfig`, and a second in-repo host**
   `temper-mcp` no longer knows whom the deployed door relays as. A host implements
   `IdentitySeam`: per request it yields an `OutgoingIdentity` (bearer, `Surface`, opaque extra
