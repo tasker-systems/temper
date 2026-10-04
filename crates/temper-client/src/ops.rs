@@ -172,6 +172,7 @@ registry! {
         DISCONNECT_ME = Delete "/api/auth/slack/link/me" => "disconnect_me";
         COMMIT_BLOB = Post "/api/blobs" => "commit_blob";
         LIST_BLOBS = Get "/api/blobs" => "list_blobs";
+        DELETE_BLOB = Delete "/api/blobs/{id}" => "delete_blob";
         GET_BLOB = Get "/api/blobs/{id}" => "get_blob";
         BLOB_RELATIONS = Get "/api/blobs/{id}/relations" => "blob_relations";
         RELATE_BLOB = Post "/api/blobs/{id}/relations" => "relate_blob";
@@ -258,6 +259,7 @@ registry! {
         REWEIGHT = Post "/api/relationships/{edge_handle}/reweight" => "reweight";
         CREATE_RESOURCE = Post "/api/resources" => "create_resource";
         LIST_RESOURCES = Get "/api/resources" => "list_resources";
+        LIST_CITATION_AUDITS = Get "/api/resources/{id}/citation-audits" => "list_citation_audits";
         DELETE_RESOURCE = Delete "/api/resources/{id}" => "delete_resource";
         GET_RESOURCE = Get "/api/resources/{id}" => "get_resource";
         UPDATE_RESOURCE = Patch "/api/resources/{id}" => "update_resource";
@@ -285,6 +287,12 @@ registry! {
         SEARCH = Post "/api/search" => "search";
         GET_SHAPE = Get "/api/shapes/{shape_id}" => "get_shape";
         DELTA = Get "/api/steward/{cogmap}/delta" => "delta";
+        CANDIDATES = Get "/api/steward/candidates" => "candidates";
+        STEWARD_DISPATCH = Post "/api/steward/dispatch" => "steward_dispatch";
+        AUDITOR_DISPATCH = Post "/api/auditor/dispatch" => "auditor_dispatch";
+        COMPLETE_AUDITOR_JOB = Post "/api/auditor/{cogmap}/complete" => "complete_auditor_job";
+        ATLAS_HOME = Get "/api/graph/home" => "atlas_home";
+        COGMAP_NEIGHBORHOOD_SLICE = Post "/api/cogmaps/{id}/graph/slice" => "cogmap_neighborhood_slice";
         ADVANCE = Post "/api/steward/{cogmap}/watermark" => "advance";
         CREATE_SUBSCRIPTION = Post "/api/subscriptions" => "create_subscription";
         LIST_SUBSCRIPTIONS = Get "/api/subscriptions" => "list_subscriptions";

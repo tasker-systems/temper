@@ -9,7 +9,13 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use crate::ops;
-use temper_core::types::steward::{AdvanceWatermarkAck, AdvanceWatermarkRequest, IngestDelta};
+
+/// The header the steward dispatch door reads its per-tick correlation id from.
+const STEWARD_CORRELATION_HEADER: &str = "x-steward-correlation-id";
+use temper_core::types::steward::{
+    AdvanceWatermarkAck, AdvanceWatermarkRequest, DispatchTickRequest, DispatchTickResponse,
+    IngestDelta,
+};
 
 /// Sub-client for steward ingest-trigger operations.
 pub struct StewardClient<'a> {
@@ -56,6 +62,37 @@ impl<'a> StewardClient<'a> {
             boundary_fingerprint,
         };
         let req = self.http.request(op, &path).json(&body);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/steward/candidates — the cognitive maps the caller may steward.
+    pub async fn candidates(&self) -> Result<Vec<Uuid>> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::CANDIDATES;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// POST /api/steward/dispatch — claim the drifted maps for one dispatch tick. `correlation_id`
+    /// rides `x-steward-correlation-id` and is stamped onto every claimed job; the response echoes
+    /// what the server actually stamped (`None` when it was absent).
+    pub async fn dispatch(
+        &self,
+        request: &DispatchTickRequest,
+        correlation_id: Option<Uuid>,
+    ) -> Result<DispatchTickResponse> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::STEWARD_DISPATCH;
+        let path = op.path(&[]);
+        let mut req = self.http.request(op, &path).json(request);
+        if let Some(id) = correlation_id {
+            req = req.header(STEWARD_CORRELATION_HEADER, id.to_string());
+        }
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
             .await

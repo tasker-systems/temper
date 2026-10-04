@@ -12,9 +12,11 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use crate::ops;
+use temper_core::types::authorship::ActInput;
 use temper_core::types::blob::{
-    BlobCommitResponse, BlobRelationAck, BlobRelationAssertRequest, BlobRelationRow, BlobSummary,
-    BlobUploadBeginRequest, BlobUploadBeginResponse, BlobUploadFinalizeRequest, BlobUploadProgress,
+    BlobCommitResponse, BlobDeleteAck, BlobRelationAck, BlobRelationAssertRequest, BlobRelationRow,
+    BlobSummary, BlobUploadBeginRequest, BlobUploadBeginResponse, BlobUploadFinalizeRequest,
+    BlobUploadProgress,
 };
 
 /// Sub-client for blob commit/read/list/relate + segmented upload.
@@ -162,6 +164,19 @@ impl<'a> BlobClient<'a> {
         let op = &ops::RELATE_BLOB;
         let path = op.path(&[&blob_id]);
         let req = self.http.request(op, &path).json(request);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// DELETE /api/blobs/{id} — release the caller's hold on a blob. Per-act authorship rides the
+    /// query string (DELETE carries no body), as on [`ResourceClient::delete`](crate::resources::ResourceClient::delete);
+    /// an empty [`ActInput`] appends nothing. `released` reports whether this call released it.
+    pub async fn delete(&self, blob_id: Uuid, act: &ActInput) -> Result<BlobDeleteAck> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::DELETE_BLOB;
+        let path = op.path(&[&blob_id]);
+        let req = self.http.request(op, &path).query(act);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
             .await

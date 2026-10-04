@@ -14,7 +14,8 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use crate::ops;
-use temper_core::types::graph_atlas::{AtlasEntry, AtlasSubgraph};
+use temper_core::types::graph_atlas::{AtlasEntry, AtlasSubgraph, SliceRequest};
+use temper_core::types::graph_home::AtlasHome;
 
 /// Join ids the way both graph query params expect: comma-separated, one param.
 fn join_ids(ids: &[Uuid]) -> String {
@@ -92,6 +93,34 @@ impl<'a> GraphClient<'a> {
         let op = &ops::TRAVERSE;
         let path = traverse_path(seeds, depth);
         let req = self.http.request(op, &path);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/graph/home — the atlas home: the contexts the caller builds in and the cognitive
+    /// maps it researches in.
+    pub async fn home(&self) -> Result<AtlasHome> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::ATLAS_HOME;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// POST /api/cogmaps/{id}/graph/slice — the neighborhood of `request.seeds` inside one
+    /// cognitive map, walked to `request.depth` over the named edge kinds.
+    pub async fn cogmap_slice(
+        &self,
+        cogmap_id: Uuid,
+        request: &SliceRequest,
+    ) -> Result<AtlasSubgraph> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::COGMAP_NEIGHBORHOOD_SLICE;
+        let path = op.path(&[&cogmap_id]);
+        let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
             .await

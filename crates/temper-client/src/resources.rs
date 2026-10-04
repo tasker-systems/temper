@@ -6,7 +6,9 @@ use uuid::Uuid;
 use crate::error::{ClientError, Result};
 use crate::http::HttpClient;
 use crate::ops;
-use temper_core::types::citation_audit::{BlockCitationAuditRequest, CitationAuditRequest};
+use temper_core::types::citation_audit::{
+    BlockCitationAuditRequest, CitationAuditRequest, CitationAuditRow,
+};
 use temper_core::types::cognitive_maps::{GrantOutcome, RevokeOutcome};
 use temper_core::types::lineage::ResourceLineage;
 use temper_core::types::provenance::{BlockProvenanceRow, BlockRead};
@@ -279,6 +281,18 @@ impl<'a> ResourceClient<'a> {
     pub async fn evidence(&self, resource_id: Uuid) -> Result<StandingShape> {
         let token = self.http.resolve_token()?;
         let op = &ops::RESOURCE_EVIDENCE;
+        let path = op.path(&[&resource_id]);
+        let req = self.http.request(op, &path);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/resources/{id}/citation-audits — the signed audit verdicts recorded against this
+    /// finding's citations, read-gated on the finding.
+    pub async fn list_citation_audits(&self, resource_id: Uuid) -> Result<Vec<CitationAuditRow>> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::LIST_CITATION_AUDITS;
         let path = op.path(&[&resource_id]);
         let req = self.http.request(op, &path);
         self.http

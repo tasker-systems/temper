@@ -6,6 +6,7 @@
 
 pub mod access;
 pub mod admin;
+pub mod auditor;
 pub mod auth;
 pub mod blobs;
 pub mod cognitive_maps;
@@ -282,6 +283,11 @@ impl TemperClient {
     /// Steward ingest-trigger sub-client (delta / advance-watermark).
     pub fn steward(&self) -> steward::StewardClient<'_> {
         steward::StewardClient::new(&self.http)
+    }
+
+    /// Auditor worker sub-client (dispatch / complete).
+    pub fn auditor(&self) -> auditor::AuditorClient<'_> {
+        auditor::AuditorClient::new(&self.http)
     }
 
     /// Slack account-link sub-client (disconnect).
