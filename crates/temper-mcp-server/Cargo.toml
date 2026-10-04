@@ -13,7 +13,7 @@ name = "temper_mcp_server"
 [dependencies]
 # The tool layer this server hosts. Everything a tool needs arrives as a plain value
 # (`temper_mcp::host`), so the server is the only place deployment config is parsed.
-temper-mcp = { path = "../temper-mcp" }
+temperkb-mcp.workspace = true
 # The JWT edge (`JwksKeyStore`, `RawJwtClaims`), the shared transport layers, the CORS
 # policy, and the blob posture's one parser + refusal selector. NOT `AppState` and NOT
 # `ApiConfig`: this process holds no database pool and never reads `DATABASE_URL`
@@ -65,5 +65,8 @@ proc-macro2 = "1"
 # The `AuthzError` witness (`tests/authz_refusal_witness_test.rs`) constructs a typed `Refusal`
 # and the `ClientError` the relay types each API refusal as.
 temperkb-principal.workspace = true
-temperkb-client.workspace = true
+temperkb-client = { workspace = true, features = ["telemetry"] }
 uuid = { version = "1", features = ["v7"] }
+# `steward_skill_recipe_test` reads the tool layer's input schemas the way rmcp derives them. It
+# lives here, not in the published tool layer, because it reads the monorepo's steward package.
+schemars = "1"
