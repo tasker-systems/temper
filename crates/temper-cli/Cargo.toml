@@ -63,6 +63,9 @@ axum = "0.8"
 # access-gate test can hand clap the exact argv the user would have typed.
 shlex = "1"
 temp-env = "0.3"
+# A real socket for the OAuth token endpoint: the refresh grant goes over plain reqwest, not the
+# client's in-process door.
+wiremock = "0.6"
 
 [features]
 default = ["embed", "extract"]

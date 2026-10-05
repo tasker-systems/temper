@@ -319,7 +319,7 @@ impl TemperClient {
 
     /// Remove stored authentication credentials via the bound store.
     pub fn auth_logout(&self) -> Result<()> {
-        self.store.clear()
+        auth::clear_grant(&*self.store)
     }
 
     /// Return a summary of the current authentication state from the bound store.
