@@ -1549,6 +1549,12 @@ pub enum AdminAction {
         #[command(subcommand)]
         action: AdminProfilesAction,
     },
+    /// Erase a resource or a principal, or scrub a resource's block history. Survey first with
+    /// --dry-run
+    Erasure {
+        #[command(subcommand)]
+        action: AdminErasureAction,
+    },
     /// Read the admin ledger: who granted what, to whom, and when
     ///
     /// Exactly one axis. `--subject` asks what was done TO a thing; `--actor` asks what a
@@ -1643,6 +1649,50 @@ pub enum AdminAction {
         /// Resume from the previous receipt's cursor (the candidate id to start after)
         #[arg(long)]
         after_id: Option<uuid::Uuid>,
+    },
+}
+
+/// The erasure family's operator acts (system admin only). Each is surveyed with --dry-run, which
+/// records nothing; without it the act executes once and is never retried. The answer prints in
+/// full — targets, remainder, ledger remainder, refusal reason — and a refused act exits non-zero.
+/// A caller who is not a system admin is answered 404 (never 403), whatever the subject.
+#[derive(Debug, clap::Subcommand)]
+pub enum AdminErasureAction {
+    /// Erase a resource. The survey counts the blocks, revisions, chunks, artifacts and edges the
+    /// act would reach, and names what it would leave as remainder
+    Resource {
+        /// The resource (UUID or decorated ref)
+        resource: String,
+        /// A related blob to strike with the resource; it must be in the survey's remainder.
+        /// Repeatable
+        #[arg(long = "also-strike-blob", conflicts_with = "dry_run")]
+        also_strike_blobs: Vec<uuid::Uuid>,
+        /// Survey what the act would do without doing it
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
+    /// Erase a principal, named by its pseudonym UUID
+    Principal {
+        /// The principal, as its pseudonym UUID
+        subject: uuid::Uuid,
+        /// The operator's opaque request reference (the DSAR record's UUID). Required to erase;
+        /// a survey takes none
+        #[arg(long = "request-reference", required_unless_present = "dry_run")]
+        request_reference: Option<uuid::Uuid>,
+        /// Survey what the act would do without doing it
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
+    /// Scrub the revision history of named blocks of a resource
+    BlockHistory {
+        /// The resource (UUID or decorated ref)
+        resource: String,
+        /// A block of the resource whose history is scrubbed. Repeatable; at least one
+        #[arg(long = "block", required = true)]
+        blocks: Vec<uuid::Uuid>,
+        /// Survey what the act would do without doing it
+        #[arg(long = "dry-run")]
+        dry_run: bool,
     },
 }
 

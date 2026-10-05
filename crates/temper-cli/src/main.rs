@@ -1,10 +1,10 @@
 use clap::Parser;
 use temper_cli::cli::{
-    AdminAction, AdminConnectionAction, AdminMachineAction, AdminProfilesAction,
-    AdminRequestsAction, AdminReviewsAction, AdminSamlAction, AdminSlackAction,
-    AdminSubscriptionAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction, ContextAction,
-    DataArtifactAction, InvocationCmd, MemoryAction, ResourceAction, ResourceMetaAction,
-    SchemaAction, SkillAction, SlackAction, StewardCmd, TeamAction,
+    AdminAction, AdminConnectionAction, AdminErasureAction, AdminMachineAction,
+    AdminProfilesAction, AdminRequestsAction, AdminReviewsAction, AdminSamlAction,
+    AdminSlackAction, AdminSubscriptionAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction,
+    ContextAction, DataArtifactAction, InvocationCmd, MemoryAction, ResourceAction,
+    ResourceMetaAction, SchemaAction, SkillAction, SlackAction, StewardCmd, TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -1161,6 +1161,56 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     .await
                 })
             }),
+            AdminAction::Erasure { action } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        match action {
+                            AdminErasureAction::Resource {
+                                resource,
+                                also_strike_blobs,
+                                dry_run,
+                            } => {
+                                temper_cli::commands::admin_erasure::resource_remote(
+                                    client,
+                                    &resource,
+                                    also_strike_blobs,
+                                    dry_run,
+                                    output_format,
+                                )
+                                .await
+                            }
+                            AdminErasureAction::Principal {
+                                subject,
+                                request_reference,
+                                dry_run,
+                            } => {
+                                temper_cli::commands::admin_erasure::principal_remote(
+                                    client,
+                                    subject,
+                                    request_reference,
+                                    dry_run,
+                                    output_format,
+                                )
+                                .await
+                            }
+                            AdminErasureAction::BlockHistory {
+                                resource,
+                                blocks,
+                                dry_run,
+                            } => {
+                                temper_cli::commands::admin_erasure::block_history_remote(
+                                    client,
+                                    &resource,
+                                    blocks,
+                                    dry_run,
+                                    output_format,
+                                )
+                                .await
+                            }
+                        }
+                    })
+                })
+            }
             AdminAction::Reblock {
                 resource,
                 context,
