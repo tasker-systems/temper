@@ -17,7 +17,7 @@ Commands:
   requests      Review pending join requests
   reviews       Read and close reconsideration requests from revoked principals
   profiles      The operator directory: who exists in this deployment, and their state. Lists denied principals (the default `needs-access` view) and resolves an email to a state card — the bridge into the strict-UUID admin acts
-  erasure       Erase a resource or a principal, or scrub a resource's block history. Survey first with --dry-run
+  erasure       Erase a resource or a principal, or scrub a resource's block history. Surveys by default; --execute acts
   ledger        Read the admin ledger: who granted what, to whom, and when
   saml          SAML provisioning: generate keys + emit the consistent env bundle and SQL (operator tooling)
   machine       Register and rotate machine (client_credentials) principals
@@ -396,7 +396,7 @@ Options:
 ### `temper admin erasure`
 
 ```text
-Erase a resource or a principal, or scrub a resource's block history. Survey first with --dry-run
+Erase a resource or a principal, or scrub a resource's block history. Surveys by default; --execute acts
 
 Usage: temper admin erasure [OPTIONS] <COMMAND>
 
@@ -426,11 +426,11 @@ Arguments:
 
 Options:
       --also-strike-blob <ALSO_STRIKE_BLOBS>
-          A related blob to strike with the resource; it must be in the survey's remainder. Repeatable
+          A related blob to strike with the resource; it must be in the survey's remainder. Repeatable; only with --execute
       --vault <VAULT>
           Path to vault (overrides TEMPER_VAULT and auto-detection)
-      --dry-run
-          Survey what the act would do without doing it
+      --execute
+          Erase the resource. Without it, the command only surveys
       --format <FORMAT>
           Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
       --embed-threads <N>
@@ -453,11 +453,11 @@ Arguments:
 
 Options:
       --request-reference <REQUEST_REFERENCE>
-          The operator's opaque request reference (the DSAR record's UUID). Required to erase; a survey takes none
+          The operator's opaque request reference (the DSAR record's UUID). Required with --execute; a survey takes none
       --vault <VAULT>
           Path to vault (overrides TEMPER_VAULT and auto-detection)
-      --dry-run
-          Survey what the act would do without doing it
+      --execute
+          Erase the principal. Without it, the command only surveys
       --format <FORMAT>
           Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
       --embed-threads <N>
@@ -481,7 +481,7 @@ Arguments:
 Options:
       --block <BLOCKS>     A block of the resource whose history is scrubbed. Repeatable; at least one
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
-      --dry-run            Survey what the act would do without doing it
+      --execute            Scrub the history. Without it, the command only surveys
       --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
       --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto

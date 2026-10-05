@@ -41,6 +41,7 @@ Consequences worth internalizing before you act:
 | `admin slack` | Account links: `disconnect` (idempotent). |
 | `admin connection` | Provision and configure the authed link to a remote system (GitHub, Linear). See below — capability is derived, not flagged. |
 | `admin subscription` | Point a team/context/cogmap at a connection's events: `create`, `list`, `show`, `revoke`. The two-leg authz gate (authoring-team manage-capable **and** a reach grant on the connection) runs server-side. |
+| `admin erasure` | Permanent erasure: `resource`, `principal` (by pseudonym UUID), `block-history` (named blocks' revisions). Each **surveys by default** and acts only with `--execute`. See below. |
 | `admin reembed` / `admin reblock` | Corpus maintenance: re-embed stale vectors; run one bounded re-blocking step. Both are survey-first (`--dry-run`) and idempotent by design. |
 
 ## Resolving a person to an actionable id
@@ -89,6 +90,24 @@ separate grant (`grant-reach` / `revoke-reach`), and it is read-only. `revoke` k
 profile, emitter entity, and home context alive — events already attributed to the emitter must
 keep resolving. Subscriptions are revoked, never deleted: a revoked one stops matching but stays
 resolvable.
+
+## Erasure — the survey is the default
+
+`admin erasure resource|principal|block-history` are the only admin acts that cannot be undone,
+so the command's default is the harmless half: without `--execute` it asks the survey door what
+the act **would** reach and leave, and records nothing. Survey, read it, then run the same command
+with `--execute`.
+
+- `principal --execute` also needs `--request-reference <uuid>` — the operator's DSAR record. A
+  survey takes none. `resource --also-strike-blob <uuid>` (repeatable, `--execute` only) strikes a
+  related blob, which must be in the survey's remainder.
+- The answer prints in full: `targets`, `remainder`, `ledger_remainder`, and a refusal's `reason`
+  and `detail`. A **refused act exits non-zero** after printing its answer — the refusal is
+  recorded, and its `request_reference` is in the answer.
+- An act is sent **once** and never retried by the client. If `--execute` ends in an error rather
+  than an answer, whether the act ran is unknown: re-run **without** `--execute`. A resource
+  already erased surveys as `already_erased`; re-issue only if the survey shows it did not land.
+- A caller without system-admin standing is answered **404**, like the ledger.
 
 ## Maintenance
 

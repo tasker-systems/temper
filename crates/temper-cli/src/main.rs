@@ -69,10 +69,10 @@ fn main() {
         OutputFormat::resolve_with(cli.format.as_deref(), global_cfg.cli.format.as_deref());
 
     // Classify the command before dispatch consumes `cli`: was this a
-    // lost-ack-prone write (`resource create`/`update`)? If it later fails with
-    // a transport error, the write may have committed anyway — see the hint in
-    // the error arm below (issue #581).
-    let was_lost_ack_write = temper_cli::reconcile_hint::is_lost_ack_prone_write(&cli.command);
+    // lost-ack-prone write (`resource create`/`update`, an executed erasure)? If
+    // it later fails with a transport error, the write may have committed anyway
+    // — see the hint in the error arm below (issue #581).
+    let lost_ack_prone = temper_cli::reconcile_hint::lost_ack_prone(&cli.command);
 
     let outcome = run(cli, output_format);
 
@@ -91,7 +91,7 @@ fn main() {
         // that merges streams and parses JSON gets a parseable payload even on
         // failure. In TOON mode, keep the existing stderr prose rendering — a
         // human at a TTY is no worse off than before.
-        let hint = temper_cli::reconcile_hint::reconcile_hint(was_lost_ack_write, e);
+        let hint = temper_cli::reconcile_hint::reconcile_hint(lost_ack_prone, e);
         if output_format == OutputFormat::Json {
             let payload = temper_cli::error::render_error_payload(e, hint);
             println!("{payload}");
@@ -109,9 +109,9 @@ fn main() {
                     temper_cli::output::error(format!("temper: {e}"));
                 }
             }
-            // A network error on a `create`/`update` may be a lost acknowledgment,
-            // not a lost write: reconcile before retrying, or a blind retry mints a
-            // duplicate. Guidance goes to stderr, so it never touches the payload.
+            // A network error on a `create`/`update`, or any unrefused error on an
+            // executed erasure, may hide a write that landed: reconcile before retrying.
+            // Guidance goes to stderr, so it never touches the payload.
             if let Some(hint) = hint {
                 temper_cli::output::hint(hint);
             }
@@ -1183,13 +1183,13 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                             AdminErasureAction::Resource {
                                 resource,
                                 also_strike_blobs,
-                                dry_run,
+                                execute,
                             } => {
                                 temper_cli::commands::admin_erasure::resource_remote(
                                     client,
                                     &resource,
                                     also_strike_blobs,
-                                    dry_run,
+                                    execute,
                                     output_format,
                                 )
                                 .await
@@ -1197,13 +1197,13 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                             AdminErasureAction::Principal {
                                 subject,
                                 request_reference,
-                                dry_run,
+                                execute,
                             } => {
                                 temper_cli::commands::admin_erasure::principal_remote(
                                     client,
                                     subject,
                                     request_reference,
-                                    dry_run,
+                                    execute,
                                     output_format,
                                 )
                                 .await
@@ -1211,13 +1211,13 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                             AdminErasureAction::BlockHistory {
                                 resource,
                                 blocks,
-                                dry_run,
+                                execute,
                             } => {
                                 temper_cli::commands::admin_erasure::block_history_remote(
                                     client,
                                     &resource,
                                     blocks,
-                                    dry_run,
+                                    execute,
                                     output_format,
                                 )
                                 .await

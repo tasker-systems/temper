@@ -1622,8 +1622,8 @@ pub enum AdminAction {
         #[command(subcommand)]
         action: AdminProfilesAction,
     },
-    /// Erase a resource or a principal, or scrub a resource's block history. Survey first with
-    /// --dry-run
+    /// Erase a resource or a principal, or scrub a resource's block history. Surveys by default;
+    /// --execute acts
     Erasure {
         #[command(subcommand)]
         action: AdminErasureAction,
@@ -1725,10 +1725,12 @@ pub enum AdminAction {
     },
 }
 
-/// The erasure family's operator acts (system admin only). Each is surveyed with --dry-run, which
-/// records nothing; without it the act executes once and is never retried. The answer prints in
-/// full — targets, remainder, ledger remainder, refusal reason — and a refused act exits non-zero.
-/// A caller who is not a system admin is answered 404 (never 403), whatever the subject.
+/// The erasure family's operator acts (system admin only). Each act surveys by default: it asks
+/// the survey door what the act would do and records nothing. Only `--execute` acts, and then once:
+/// it is never retried. The default is the survey because forgetting a flag must never be the
+/// thing that erases. The answer prints in full — targets, remainder, ledger remainder, refusal
+/// reason — and a refused act exits non-zero. A caller who is not a system admin is answered 404
+/// (never 403), whatever the subject.
 #[derive(Debug, clap::Subcommand)]
 pub enum AdminErasureAction {
     /// Erase a resource. The survey counts the blocks, revisions, chunks, artifacts and edges the
@@ -1737,24 +1739,24 @@ pub enum AdminErasureAction {
         /// The resource (UUID or decorated ref)
         resource: String,
         /// A related blob to strike with the resource; it must be in the survey's remainder.
-        /// Repeatable
-        #[arg(long = "also-strike-blob", conflicts_with = "dry_run")]
+        /// Repeatable; only with --execute
+        #[arg(long = "also-strike-blob", requires = "execute")]
         also_strike_blobs: Vec<uuid::Uuid>,
-        /// Survey what the act would do without doing it
-        #[arg(long = "dry-run")]
-        dry_run: bool,
+        /// Erase the resource. Without it, the command only surveys
+        #[arg(long)]
+        execute: bool,
     },
     /// Erase a principal, named by its pseudonym UUID
     Principal {
         /// The principal, as its pseudonym UUID
         subject: uuid::Uuid,
-        /// The operator's opaque request reference (the DSAR record's UUID). Required to erase;
-        /// a survey takes none
-        #[arg(long = "request-reference", required_unless_present = "dry_run")]
+        /// The operator's opaque request reference (the DSAR record's UUID). Required with
+        /// --execute; a survey takes none
+        #[arg(long = "request-reference", requires = "execute")]
         request_reference: Option<uuid::Uuid>,
-        /// Survey what the act would do without doing it
-        #[arg(long = "dry-run")]
-        dry_run: bool,
+        /// Erase the principal. Without it, the command only surveys
+        #[arg(long, requires = "request_reference")]
+        execute: bool,
     },
     /// Scrub the revision history of named blocks of a resource
     BlockHistory {
@@ -1763,9 +1765,9 @@ pub enum AdminErasureAction {
         /// A block of the resource whose history is scrubbed. Repeatable; at least one
         #[arg(long = "block", required = true)]
         blocks: Vec<uuid::Uuid>,
-        /// Survey what the act would do without doing it
-        #[arg(long = "dry-run")]
-        dry_run: bool,
+        /// Scrub the history. Without it, the command only surveys
+        #[arg(long)]
+        execute: bool,
     },
 }
 
