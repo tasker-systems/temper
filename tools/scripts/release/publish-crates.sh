@@ -29,11 +29,11 @@
 # Auth: crates.io trusted publishing. In CI, rust-lang/crates-io-auth-action
 # exchanges the job's OIDC identity token (id-token: write) for a short-lived
 # upload token exposed as CARGO_REGISTRY_TOKEN — no API token secret exists or
-# is wanted. The trusted publisher is registered on crates.io against this
-# repository and the workflow whose job performs the push (release.yml — the
-# identity claim names the job's OWN workflow file, the same rule the
-# RubyGems and PyPI registrations encode), and is configured for all six
-# temperkb-* names.
+# is wanted. crates.io matches the token's CALLING workflow, so inside the
+# release-tag.yml → release.yml chain the name it checks is release-tag.yml;
+# the tag-push and dispatch recovery doors present release.yml. Trusted
+# publishers for both are registered on all six temperkb-* names (RELEASING.md,
+# "Publishing-side auth").
 #
 # Bootstrap, for the record: crates.io attaches a trusted publisher only to an
 # EXISTING crate — there is no pending-publisher pre-registration — so the

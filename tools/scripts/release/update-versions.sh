@@ -111,7 +111,9 @@ if [[ "${DRY_RUN:-false}" == "true" ]]; then
         log_info "Would update ${dep} workspace-dependency spec: ${current} -> ${CORE_VERSION}"
     done < <(grep -E '^temperkb-[a-z]+ = \{ path = ' Cargo.toml)
 else
-    sed_i -E 's/^(temperkb-[a-z]+ = \{ path = "[^"]+", version = ")[^"]+(" \})/\1'"${CORE_VERSION}"'\2/' Cargo.toml
+    # Only the version value is rewritten, whatever keys follow it on the line
+    # (`temperkb-client` carries `default-features = false` after its version).
+    sed_i -E 's/^(temperkb-[a-z]+ = \{ path = "[^"]+", version = ")[^"]+(")/\1'"${CORE_VERSION}"'\2/' Cargo.toml
     log_info "Updated temperkb-* workspace-dependency specs -> ${CORE_VERSION}"
 fi
 
