@@ -71,6 +71,23 @@ status: signal-only
   behavioral.
 pr: self
 classes: behavioral
+- **CLI commands refresh an expired access token from the stored refresh token (#1010)**
+  No shape moves. A CLI command run after the stored access token's expiry now presents the
+  stored refresh token first and sends the successor, where it used to send the expired token and
+  print "not authenticated — run `temper auth login`". `auth status` reports `authenticated: true`
+  in that state for the same reason. Refreshes are serialized across processes by a lock file
+  beside `auth.json` (`<auth path>.lock`), and temperkb-client's `TokenStore` gains a
+  `lock_refresh` method with a no-op default, so an existing implementor compiles unchanged.
+  temperkb-client also gains `auth::replace_grant` and `auth::clear_grant`, which login, `auth
+  token` and logout now use: they take the same lock, so `temper auth logout` or `auth login` run
+  during another command's refresh waits for it (at most the refresh's 30s timeout) and is not
+  undone by it. A symlinked `auth.json` is now written through to its target, as before this
+  change. An env-supplied `TEMPER_TOKEN` carries no refresh token and behaves as before. Who
+  observes: CLI users on a machine idle past the token's lifetime, and Rust consumers of
+  temperkb-client. User-visible: commands that failed now succeed. Release relevance: behavioral,
+  plus additive client API.
+pr: self
+classes: additive, behavioral
 surfaces: clients, cli-stdout
 status: signal-only
 - **temper-client and the CLI reach every published operation; every published wire type lives in temperkb-core**

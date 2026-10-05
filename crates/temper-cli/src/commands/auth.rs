@@ -85,8 +85,7 @@ pub fn login(fmt: OutputFormat) -> Result<()> {
 
 /// Clear stored credentials and print confirmation.
 pub fn logout(fmt: OutputFormat) -> Result<()> {
-    DiskTokenStore::default_path()
-        .clear()
+    temper_client::auth::clear_grant(&DiskTokenStore::default_path())
         .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
     let action = AuthAction {
         status: "logged_out",
@@ -154,8 +153,7 @@ fn token_from_stdin(stdin_content: Option<&str>, provider: &str, fmt: OutputForm
         device_id: Some(device_id),
     };
 
-    DiskTokenStore::default_path()
-        .save(&stored)
+    temper_client::auth::replace_grant(&DiskTokenStore::default_path(), &stored)
         .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
 
     let status = temper_client::auth::AuthStatus {
