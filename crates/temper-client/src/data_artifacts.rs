@@ -1,10 +1,10 @@
 //! Typed sub-client for the `/api/resources/{id}/artifacts` endpoints.
 
-use reqwest::Method;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::types::data_artifact::{
     ArtifactCommitRequest, ArtifactCommitResponse, ArtifactListParams, ArtifactView,
 };
@@ -38,20 +38,22 @@ impl<'a> DataArtifactsClient<'a> {
         params: &ArtifactListParams,
     ) -> Result<serde_json::Value> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{resource_id}/artifacts");
-        let req = self.http.get(&path).query(params);
+        let op = &ops::LIST_ARTIFACTS;
+        let path = op.path(&[&resource_id]);
+        let req = self.http.request(op, &path).query(params);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Get a single artifact by ID under its owning resource.
     pub async fn get(&self, resource_id: Uuid, artifact_id: Uuid) -> Result<ArtifactView> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{resource_id}/artifacts/{artifact_id}");
-        let req = self.http.get(&path);
+        let op = &ops::GET_ARTIFACT;
+        let path = op.path(&[&resource_id, &artifact_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -62,10 +64,11 @@ impl<'a> DataArtifactsClient<'a> {
     /// `get_data_artifact` tool's door — the tool carries no `resource_id` field.
     pub async fn get_by_id(&self, artifact_id: Uuid) -> Result<ArtifactView> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/data-artifacts/{artifact_id}");
-        let req = self.http.get(&path);
+        let op = &ops::GET_ARTIFACT_BY_ID;
+        let path = op.path(&[&artifact_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -76,30 +79,33 @@ impl<'a> DataArtifactsClient<'a> {
         request: &ArtifactCommitRequest,
     ) -> Result<ArtifactCommitResponse> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{resource_id}/artifacts");
-        let req = self.http.post(&path).json(request);
+        let op = &ops::COMMIT_ARTIFACT;
+        let path = op.path(&[&resource_id]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// List live shapes declared for a context home.
     pub async fn list_shapes(&self, context_id: Uuid) -> Result<Vec<ShapeView>> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/contexts/{context_id}/shapes");
-        let req = self.http.get(&path);
+        let op = &ops::LIST_SHAPES;
+        let path = op.path(&[&context_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Get a single shape by ID.
     pub async fn get_shape(&self, shape_id: Uuid) -> Result<ShapeView> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/shapes/{shape_id}");
-        let req = self.http.get(&path);
+        let op = &ops::GET_SHAPE;
+        let path = op.path(&[&shape_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -110,10 +116,11 @@ impl<'a> DataArtifactsClient<'a> {
         request: &ShapeDeclareRequest,
     ) -> Result<ShapeView> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/contexts/{context_id}/shapes");
-        let req = self.http.post(&path).json(request);
+        let op = &ops::DECLARE_SHAPE;
+        let path = op.path(&[&context_id]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -121,10 +128,11 @@ impl<'a> DataArtifactsClient<'a> {
     /// [`Self::list_shapes`] (`GET /api/cognitive-maps/{id}/shapes`).
     pub async fn list_cogmap_shapes(&self, cogmap_id: Uuid) -> Result<Vec<ShapeView>> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/cognitive-maps/{cogmap_id}/shapes");
-        let req = self.http.get(&path);
+        let op = &ops::LIST_COGMAP_SHAPES;
+        let path = op.path(&[&cogmap_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -136,10 +144,11 @@ impl<'a> DataArtifactsClient<'a> {
         request: &ShapeDeclareRequest,
     ) -> Result<ShapeView> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/cognitive-maps/{cogmap_id}/shapes");
-        let req = self.http.post(&path).json(request);
+        let op = &ops::DECLARE_COGMAP_SHAPE;
+        let path = op.path(&[&cogmap_id]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 

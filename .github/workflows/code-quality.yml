@@ -128,6 +128,12 @@ jobs:
       - name: Check every route is documented (OpenAPI route allowlist)
         run: bash .github/scripts/check-openapi-routes.sh
 
+      # temper-client's openapi parity test (crates/temper-client/src/ops.rs) runs with the
+      # workspace nextest in test-rust.yml. This is its other half: it refuses a request path
+      # spelled outside the registry, which that test cannot see.
+      - name: Check every temper-client request goes through the endpoint registry
+        run: bash .github/scripts/check-client-op-registry.sh
+
       # `Makefile.toml` declares `env_files = ["./.env"]`, and cargo-make treats a missing env file
       # as a HARD ERROR — there is no `required = false` (measured: the object form still fails).
       # `.env` is gitignored, so EVERY `cargo make` task fails on a fresh checkout. That has been
@@ -338,6 +344,18 @@ jobs:
 
       - name: Guard test — check-openapi-routes
         run: bash .github/scripts/test-check-openapi-routes.sh
+
+      - name: Guard test — check-client-op-registry
+        run: bash .github/scripts/test-check-client-op-registry.sh
+
+      # THE GATE ITSELF as well as its harness: pure bash, so it belongs in this cheap, unscoped job.
+      # Every published wire type (a ToSchema/IntoParams derive) lives in temper-core, the crate a
+      # client builds against (ruling 2026-10-04).
+      - name: Check every published wire type lives in temper-core
+        run: bash .github/scripts/check-wire-types-in-core.sh
+
+      - name: Guard test — check-wire-types-in-core
+        run: bash .github/scripts/test-check-wire-types-in-core.sh
 
       # THE GATE ITSELF, not only its harness. docs/ is synced wholesale to the public
       # documentation site, so the safety property is structural: everything under docs/ is

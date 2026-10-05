@@ -7,14 +7,16 @@
 //! read streams the response body: the CLI writes it to a file or stdout without ever
 //! needing the whole blob in memory unless it wants it.
 
-use reqwest::Method;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
+use temper_core::types::authorship::ActInput;
 use temper_core::types::blob::{
-    BlobCommitResponse, BlobRelationAck, BlobRelationAssertRequest, BlobRelationRow, BlobSummary,
-    BlobUploadBeginRequest, BlobUploadBeginResponse, BlobUploadFinalizeRequest, BlobUploadProgress,
+    BlobCommitResponse, BlobDeleteAck, BlobRelationAck, BlobRelationAssertRequest, BlobRelationRow,
+    BlobSummary, BlobUploadBeginRequest, BlobUploadBeginResponse, BlobUploadFinalizeRequest,
+    BlobUploadProgress,
 };
 
 /// Sub-client for blob commit/read/list/relate + segmented upload.
@@ -60,9 +62,11 @@ impl<'a> BlobClient<'a> {
                         ))
                     })?,
             );
-        let req = self.http.post("/api/blobs").multipart(form);
+        let op = &ops::COMMIT_BLOB;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).multipart(form);
         self.http
-            .send_json(&Method::POST, "/api/blobs", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -71,18 +75,20 @@ impl<'a> BlobClient<'a> {
     /// content type, length, and `Cache-Control: private, immutable` ride the headers.
     pub async fn read_response(&self, blob_id: Uuid) -> Result<reqwest::Response> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/blobs/{blob_id}");
-        let req = self.http.get(&path);
-        self.http.send(&Method::GET, &path, req, Some(&token)).await
+        let op = &ops::GET_BLOB;
+        let path = op.path(&[&blob_id]);
+        let req = self.http.request(op, &path);
+        self.http.send(&op.method(), &path, req, Some(&token)).await
     }
 
     /// POST /api/blobs/uploads — begin a segmented upload (declare home + media type).
     pub async fn begin(&self, request: &BlobUploadBeginRequest) -> Result<BlobUploadBeginResponse> {
         let token = self.http.resolve_token()?;
-        let path = "/api/blobs/uploads";
-        let req = self.http.post(path).json(request);
+        let op = &ops::BEGIN_BLOB_UPLOAD;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::POST, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -97,20 +103,22 @@ impl<'a> BlobClient<'a> {
         bytes: Vec<u8>,
     ) -> Result<BlobUploadProgress> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/blobs/uploads/{upload_id}/segments?seq={seq}");
-        let req = self.http.post(&path).body(bytes);
+        let op = &ops::APPEND_BLOB_SEGMENT;
+        let path = format!("{}?seq={seq}", op.path(&[&upload_id]));
+        let req = self.http.request(op, &path).body(bytes);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// GET /api/blobs/uploads/{id} — the currently-landed segment set (the resume read).
     pub async fn progress(&self, upload_id: Uuid) -> Result<BlobUploadProgress> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/blobs/uploads/{upload_id}");
-        let req = self.http.get(&path);
+        let op = &ops::BLOB_UPLOAD_PROGRESS;
+        let path = op.path(&[&upload_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -123,10 +131,11 @@ impl<'a> BlobClient<'a> {
         request: &BlobUploadFinalizeRequest,
     ) -> Result<BlobCommitResponse> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/blobs/uploads/{upload_id}/finalize");
-        let req = self.http.post(&path).json(request);
+        let op = &ops::FINALIZE_BLOB_UPLOAD;
+        let path = op.path(&[&upload_id]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -134,13 +143,14 @@ impl<'a> BlobClient<'a> {
     /// anchor (`home_table`/`home_id` as a pair).
     pub async fn list(&self, home: Option<(&str, Uuid)>) -> Result<Vec<BlobSummary>> {
         let token = self.http.resolve_token()?;
-        let mut path = "/api/blobs".to_string();
+        let op = &ops::LIST_BLOBS;
+        let mut path = op.path(&[]);
         if let Some((table, id)) = home {
             path.push_str(&format!("?home_table={table}&home_id={id}"));
         }
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -151,20 +161,35 @@ impl<'a> BlobClient<'a> {
         request: &BlobRelationAssertRequest,
     ) -> Result<BlobRelationAck> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/blobs/{blob_id}/relations");
-        let req = self.http.post(&path).json(request);
+        let op = &ops::RELATE_BLOB;
+        let path = op.path(&[&blob_id]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// DELETE /api/blobs/{id} — release the caller's hold on a blob. Per-act authorship rides the
+    /// query string (DELETE carries no body), as on [`ResourceClient::delete`](crate::resources::ResourceClient::delete);
+    /// an empty [`ActInput`] appends nothing. `released` reports whether this call released it.
+    pub async fn delete(&self, blob_id: Uuid, act: &ActInput) -> Result<BlobDeleteAck> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::DELETE_BLOB;
+        let path = op.path(&[&blob_id]);
+        let req = self.http.request(op, &path).query(act);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// GET /api/blobs/{id}/relations — the edges incident to the blob.
     pub async fn relations(&self, blob_id: Uuid) -> Result<Vec<BlobRelationRow>> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/blobs/{blob_id}/relations");
-        let req = self.http.get(&path);
+        let op = &ops::BLOB_RELATIONS;
+        let path = op.path(&[&blob_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }

@@ -22,62 +22,21 @@
 
 use axum::extract::State;
 use axum::Json;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-use temper_core::types::ids::{BlobId, EdgeId, ResourceId};
+use temper_core::types::erasure::{
+    BlobStrikeView, ResourceErasureExecuteRequest, ResourceErasureExecuteResponse,
+    ResourceErasureSurvey, ResourceErasureSurveyRequest,
+};
+use temper_core::types::ids::{BlobId, ResourceId};
 use temper_services::error::{ApiResult, ErrorBody};
 use temper_services::services::resource_erasure_service::{
-    self, ResourceErasureOutcome, ResourceErasureRequest, ResourceErasureSurvey,
+    self, ResourceErasureOutcome, ResourceErasureRequest,
 };
 use temper_services::state::AppState;
-use temper_substrate::payloads::{
-    ErasureTargetOutcome, RedactedEventFields, ResourceErasureRefusalReason,
-};
 
-use crate::handlers::erasure::{require_erasure_operator, BlobStrikeView};
+use crate::handlers::erasure::require_erasure_operator;
 use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
-
-/// The survey door's request: the resource and nothing else (a survey requests nothing).
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct ResourceErasureSurveyRequest {
-    pub resource: Uuid,
-}
-
-/// The execute door's request. `deny_unknown_fields`: the act's request reference is minted by
-/// the service, so a caller that sends one is refused, not ignored.
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ResourceErasureExecuteRequest {
-    pub resource: Uuid,
-    /// Related blobs to strike with the resource (D8); each must be in the survey's remainder.
-    pub also_strike_blobs: Option<Vec<Uuid>>,
-}
-
-/// What the execute door's act did: a completion and a refusal are different answers, so the
-/// response is a tagged enum. A refusal here is an operator-facing one (`charter_resource`,
-/// `already_erased`); a caller who is not a system admin never reaches the act.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum ResourceErasureExecuteResponse {
-    Completed {
-        /// The server-minted reference the operator cites.
-        request_reference: Uuid,
-        event_id: Uuid,
-        folded_edges: Vec<EdgeId>,
-        targets: Vec<ErasureTargetOutcome>,
-        remainder: Vec<ErasureTargetOutcome>,
-        ledger_remainder: Vec<RedactedEventFields>,
-        blob_strikes: Vec<BlobStrikeView>,
-    },
-    Refused {
-        request_reference: Uuid,
-        event_id: Uuid,
-        reason: ResourceErasureRefusalReason,
-        detail: Option<String>,
-    },
-}
 
 /// `POST /api/admin/resources/erasure` — the operator's execute door.
 #[utoipa::path(

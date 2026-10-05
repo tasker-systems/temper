@@ -18,6 +18,7 @@ Commands:
   request-access    Request system access (the invite_only gate). Reviewed by an admin
   withdraw-request  Withdraw your pending system-access request
   request-review    Ask an admin to reconsider a revocation. Does not restore access by itself
+  settings          Show this deployment's public access settings: its access mode and terms of service
   help              Print this message or the help of the given subcommand(s)
 
 Options:
@@ -160,4 +161,30 @@ Options:
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
       --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
   -h, --help               Print help
+```
+
+### `temper auth settings`
+
+```text
+Show this deployment's public access settings: its access mode and terms of service.
+
+Wraps `GET /api/access/settings`.
+
+Usage: temper auth settings [OPTIONS]
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```

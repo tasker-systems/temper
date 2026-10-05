@@ -9,7 +9,6 @@
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
-use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
@@ -20,17 +19,12 @@ use temper_services::services::steward_service;
 use temper_services::state::AppState;
 
 use temper_core::types::ids::{CogmapId, CorrelationId, ProfileId};
+use temper_core::types::query_params::DeltaQuery;
 use temper_core::types::steward::{
     AdvanceWatermarkAck, AdvanceWatermarkRequest, DispatchTickRequest, DispatchTickResponse,
     DriftSweepRow, IngestDelta,
 };
 use temper_workflow::operations::{AdvanceStewardWatermark, Backend, StewardDispatchTick};
-
-/// Query params for the delta read. `threshold` is optional (omit → the service default).
-#[derive(Debug, Deserialize)]
-pub struct DeltaQuery {
-    pub threshold: Option<i64>,
-}
 
 /// Read a map's ingest delta
 #[utoipa::path(

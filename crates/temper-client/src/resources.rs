@@ -1,19 +1,23 @@
 //! Typed sub-client for the `/api/resources` endpoints.
 
-use reqwest::{Method, StatusCode};
+use reqwest::StatusCode;
 use uuid::Uuid;
 
 use crate::error::{ClientError, Result};
 use crate::http::HttpClient;
-use temper_core::types::citation_audit::{BlockCitationAuditRequest, CitationAuditRequest};
+use crate::ops;
+use temper_core::types::citation_audit::{
+    BlockCitationAuditRequest, CitationAuditRequest, CitationAuditRow,
+};
 use temper_core::types::cognitive_maps::{GrantOutcome, RevokeOutcome};
 use temper_core::types::lineage::ResourceLineage;
 use temper_core::types::provenance::{BlockProvenanceRow, BlockRead};
+use temper_core::types::query_params::ConnectionsQuery;
 use temper_core::types::reassign::{ReassignAck, ReassignResourceRequest};
 use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
 use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSet};
 use temper_core::types::standing::StandingShape;
-use temper_workflow::types::graph::GraphEdgeRow;
+use temper_workflow::types::graph::{GraphEdgeRow, ResourceConnections};
 use temper_workflow::types::managed_meta::MetaUpdatePayload;
 use temper_workflow::types::resource::{
     ContentResponse, DeleteResponse, ResourceAnnotateRequest, ResourceCreateRequest,
@@ -39,9 +43,11 @@ impl<'a> ResourceClient<'a> {
     /// List visible resources, optionally filtered by context.
     pub async fn list(&self, params: &ResourceListParams) -> Result<ResourceListResponse> {
         let token = self.http.resolve_token()?;
-        let req = self.http.get("/api/resources").query(params);
+        let op = &ops::LIST_RESOURCES;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).query(params);
         self.http
-            .send_json(&Method::GET, "/api/resources", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -55,9 +61,11 @@ impl<'a> ResourceClient<'a> {
         let mut params = params.clone();
         params.sections = Some(ResourceSection::OpenMeta.to_string());
         let token = self.http.resolve_token()?;
-        let req = self.http.get("/api/resources").query(&params);
+        let op = &ops::LIST_RESOURCES;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).query(&params);
         self.http
-            .send_json(&Method::GET, "/api/resources", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -72,32 +80,37 @@ impl<'a> ResourceClient<'a> {
     /// sections" from becoming an empty `?sections=` parameter.
     pub async fn get(&self, id: Uuid, sections: Option<&SectionSet>) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
+        let op = &ops::GET_RESOURCE;
+        let base = op.path(&[&id]);
         let path = match sections.and_then(SectionSet::to_csv) {
-            Some(csv) => format!("/api/resources/{id}?sections={csv}"),
-            None => format!("/api/resources/{id}"),
+            Some(csv) => format!("{base}?sections={csv}"),
+            None => base,
         };
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Create a new resource.
     pub async fn create(&self, request: &ResourceCreateRequest) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
-        let req = self.http.post("/api/resources").json(request);
+        let op = &ops::CREATE_RESOURCE;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::POST, "/api/resources", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Update an existing resource.
     pub async fn update(&self, id: Uuid, request: &ResourceUpdateRequest) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{id}");
-        let req = self.http.patch(&path).json(request);
+        let op = &ops::UPDATE_RESOURCE;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::PATCH, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -111,10 +124,11 @@ impl<'a> ResourceClient<'a> {
         request: &ResourceAnnotateRequest,
     ) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{id}/provenance");
-        let req = self.http.post(&path).json(request);
+        let op = &ops::ANNOTATE_RESOURCE;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -128,10 +142,11 @@ impl<'a> ResourceClient<'a> {
         act: &temper_core::types::authorship::ActInput,
     ) -> Result<DeleteResponse> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{id}");
-        let req = self.http.delete(&path).query(act);
+        let op = &ops::DELETE_RESOURCE;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path).query(act);
         self.http
-            .send_json(&Method::DELETE, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -140,10 +155,11 @@ impl<'a> ResourceClient<'a> {
     /// existing grant was updated in place.
     pub async fn grant(&self, id: Uuid, body: &ResourceGrantBody) -> Result<GrantOutcome> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{id}/grants");
-        let req = self.http.post(&path).json(body);
+        let op = &ops::GRANT_RESOURCE_ACCESS;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -151,30 +167,33 @@ impl<'a> ResourceClient<'a> {
     /// `revoked: false` ⇒ no matching grant existed.
     pub async fn revoke(&self, id: Uuid, body: &ResourceRevokeBody) -> Result<RevokeOutcome> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{id}/grants");
-        let req = self.http.delete(&path).json(body);
+        let op = &ops::REVOKE_RESOURCE_ACCESS;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::DELETE, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// POST /api/resources/{id}/reassign — reassign a resource's owner/team.
     pub async fn reassign(&self, id: Uuid, body: &ReassignResourceRequest) -> Result<ReassignAck> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{id}/reassign");
-        let req = self.http.post(&path).json(body);
+        let op = &ops::REASSIGN_RESOURCE;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// List edges connected to a resource.
     pub async fn edges(&self, resource_id: Uuid) -> Result<Vec<GraphEdgeRow>> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{resource_id}/edges");
-        let req = self.http.get(&path);
+        let op = &ops::LIST_RESOURCE_EDGES;
+        let path = op.path(&[&resource_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -182,23 +201,26 @@ impl<'a> ResourceClient<'a> {
     /// descendants), access-gated. `depth` bounds the walk when supplied.
     pub async fn lineage(&self, resource_id: Uuid, depth: Option<i32>) -> Result<ResourceLineage> {
         let token = self.http.resolve_token()?;
+        let op = &ops::RESOURCE_LINEAGE;
+        let base = op.path(&[&resource_id]);
         let path = match depth {
-            Some(d) => format!("/api/resources/{resource_id}/lineage?depth={d}"),
-            None => format!("/api/resources/{resource_id}/lineage"),
+            Some(d) => format!("{base}?depth={d}"),
+            None => base,
         };
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Get the itemized per-block provenance for a resource.
     pub async fn provenance(&self, resource_id: Uuid) -> Result<Vec<BlockProvenanceRow>> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{resource_id}/provenance");
-        let req = self.http.get(&path);
+        let op = &ops::PROVENANCE;
+        let path = op.path(&[&resource_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -217,11 +239,12 @@ impl<'a> ResourceClient<'a> {
     /// transport, 5xx) stays an `Err`, exactly as the sibling reads report.
     pub async fn read_block(&self, resource_id: Uuid, block_id: Uuid) -> Result<BlockRead> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{resource_id}/blocks/{block_id}");
-        let req = self.http.get(&path);
+        let op = &ops::READ_BLOCK;
+        let path = op.path(&[&resource_id, &block_id]);
+        let req = self.http.request(op, &path);
         match self
             .http
-            .send_admitting(&Method::GET, &path, req, Some(&token), StatusCode::GONE)
+            .send_admitting(&op.method(), &path, req, Some(&token), StatusCode::GONE)
             .await
         {
             Ok(resp) => {
@@ -258,10 +281,39 @@ impl<'a> ResourceClient<'a> {
     /// access-gated. GET /api/resources/{id}/evidence.
     pub async fn evidence(&self, resource_id: Uuid) -> Result<StandingShape> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{resource_id}/evidence");
-        let req = self.http.get(&path);
+        let op = &ops::RESOURCE_EVIDENCE;
+        let path = op.path(&[&resource_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/resources/{id}/connections — the resource's edges, both directions, one page
+    /// (`query.limit` bounds it; the answer says whether rows were left out).
+    pub async fn list_connections(
+        &self,
+        resource_id: Uuid,
+        query: &ConnectionsQuery,
+    ) -> Result<ResourceConnections> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::LIST_RESOURCE_CONNECTIONS;
+        let path = op.path(&[&resource_id]);
+        let req = self.http.request(op, &path).query(query);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/resources/{id}/citation-audits — the signed audit verdicts recorded against this
+    /// finding's citations, read-gated on the finding.
+    pub async fn list_citation_audits(&self, resource_id: Uuid) -> Result<Vec<CitationAuditRow>> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::LIST_CITATION_AUDITS;
+        let path = op.path(&[&resource_id]);
+        let req = self.http.request(op, &path);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -278,10 +330,11 @@ impl<'a> ResourceClient<'a> {
         request: &CitationAuditRequest,
     ) -> Result<Uuid> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{resource_id}/citation-audits");
-        let req = self.http.post(&path).json(request);
+        let op = &ops::RECORD_CITATION_AUDIT;
+        let path = op.path(&[&resource_id]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -298,20 +351,22 @@ impl<'a> ResourceClient<'a> {
         request: &BlockCitationAuditRequest,
     ) -> Result<Uuid> {
         let token = self.http.resolve_token()?;
-        let path = "/api/citation-audits";
-        let req = self.http.post(path).json(request);
+        let op = &ops::RECORD_CITATION_AUDIT_FOR_BLOCK;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::POST, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Get the reconstituted markdown content for a resource.
     pub async fn content(&self, id: Uuid) -> Result<ContentResponse> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{id}/content");
-        let req = self.http.get(&path);
+        let op = &ops::GET_CONTENT;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -322,10 +377,11 @@ impl<'a> ResourceClient<'a> {
     /// when only the meta side has drifted.
     pub async fn get_meta(&self, id: Uuid) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{id}/meta");
-        let req = self.http.get(&path);
+        let op = &ops::GET_META;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -337,10 +393,11 @@ impl<'a> ResourceClient<'a> {
     /// server-side and do not fail this call.
     pub async fn update_meta(&self, id: Uuid, payload: &MetaUpdatePayload) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{id}/meta");
-        let req = self.http.put(&path).json(payload);
+        let op = &ops::UPDATE_META;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path).json(payload);
         self.http
-            .send_json(&Method::PUT, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }

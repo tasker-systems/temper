@@ -3,11 +3,10 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_core::types::access_gate::{
-    JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings, QueueCount,
+    JoinRequest, JoinRequestWithProfile, PublicSystemSettings, QueueCount,
     ReconcileAutoJoinOutcome, ReviewRequestWithProfile, SystemSettings,
 };
 use temper_core::types::admin::{DemoteAdminRequest, PromoteAdminRequest, UpdateSettingsRequest};
@@ -15,6 +14,9 @@ use temper_core::types::ids::ProfileId;
 use temper_core::types::team::TeamMemberRow;
 
 use crate::middleware::auth::AuthUser;
+use temper_core::types::access_gate::{
+    CloseReviewBody, CreateRequestBody, CreateReviewBody, ReviewRequestBody, RevokePrincipalBody,
+};
 use temper_services::error::{ApiResult, ErrorBody};
 use temper_services::services::access_service;
 use temper_services::state::AppState;
@@ -22,35 +24,6 @@ use temper_services::state::AppState;
 // ---------------------------------------------------------------------------
 // Request body types
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct CreateRequestBody {
-    pub message: Option<String>,
-    pub source: String,
-    pub accepted_terms_version: Option<String>,
-}
-
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct CreateReviewBody {
-    pub message: Option<String>,
-}
-
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct ReviewRequestBody {
-    pub status: JoinRequestStatus,
-    pub decision_note: Option<String>,
-}
-
-/// Body for closing a reconsideration request.
-///
-/// It carries **only** a note, and that is the design rather than an omission. Closing a review
-/// records that an admin handled it; it grants nothing (D15). A `status` field here would invite
-/// exactly the conflation the table's `COMMENT ON TABLE` warns about — the admin's actual answer is
-/// a separate `POST /api/access/admin/principals/{id}/approve`.
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct CloseReviewBody {
-    pub decision_note: Option<String>,
-}
 
 // ---------------------------------------------------------------------------
 // Public endpoints (auth_only router)
@@ -516,13 +489,6 @@ pub async fn demote_admin(
 // identically and a future MCP tool cannot bypass it (the F-3 posture; see
 // `audit-handler-authz-drift`). The handler mints the proof, then dispatches.
 // ---------------------------------------------------------------------------
-
-/// Body for `POST /api/access/admin/principals/{id}/revoke`.
-#[derive(Deserialize, utoipa::ToSchema)]
-pub struct RevokePrincipalBody {
-    /// Required. It rides the log and the ledger, and a later review's reviewer needs it (D15).
-    pub reason: String,
-}
 
 /// POST /api/access/admin/principals/:id/approve — admit a principal directly (admin only).
 #[utoipa::path(

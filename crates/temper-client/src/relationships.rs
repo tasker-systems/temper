@@ -1,10 +1,10 @@
 //! Typed sub-client for the `/api/relationships` write endpoints.
 
-use reqwest::Method;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::types::relationship_requests::{
     AssertRelationshipRequest, FoldRelationshipRequest, RelationshipAck, RetypeRelationshipRequest,
     ReweightRelationshipRequest,
@@ -29,10 +29,11 @@ impl<'a> RelationshipClient<'a> {
     /// POST /api/relationships — assert a new relationship.
     pub async fn assert(&self, request: &AssertRelationshipRequest) -> Result<RelationshipAck> {
         let token = self.http.resolve_token()?;
-        let path = "/api/relationships";
-        let req = self.http.post(path).json(request);
+        let op = &ops::ASSERT;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::POST, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -43,10 +44,11 @@ impl<'a> RelationshipClient<'a> {
         request: &RetypeRelationshipRequest,
     ) -> Result<RelationshipAck> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/relationships/{edge_handle}/retype");
-        let req = self.http.post(&path).json(request);
+        let op = &ops::RETYPE;
+        let path = op.path(&[&edge_handle]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -57,10 +59,11 @@ impl<'a> RelationshipClient<'a> {
         request: &ReweightRelationshipRequest,
     ) -> Result<RelationshipAck> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/relationships/{edge_handle}/reweight");
-        let req = self.http.post(&path).json(request);
+        let op = &ops::REWEIGHT;
+        let path = op.path(&[&edge_handle]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -71,10 +74,11 @@ impl<'a> RelationshipClient<'a> {
         request: &FoldRelationshipRequest,
     ) -> Result<RelationshipAck> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/relationships/{edge_handle}/fold");
-        let req = self.http.post(&path).json(request);
+        let op = &ops::FOLD;
+        let path = op.path(&[&edge_handle]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }

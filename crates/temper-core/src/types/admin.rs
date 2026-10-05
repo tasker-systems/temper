@@ -628,3 +628,16 @@ pub struct AdminProfilesShowInput {
     /// The profile to show, by exact verified email. Ambiguous addresses are refused, not resolved.
     pub email: Option<String>,
 }
+
+/// The list route's two answers. Untagged, so each arm serializes exactly as its inner type does
+/// — the wire is the page or the card, never an envelope around them — and the contract states
+/// both shapes as a `oneOf` rather than leaving a client to discover the second one.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(untagged)]
+pub enum AdminProfilesListAnswer {
+    /// The directory page (no `email` in the query).
+    Page(AdminDirectoryListResponse),
+    /// The single state card `?email=` resolved.
+    Card(Box<AdminProfileCard>),
+}

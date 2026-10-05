@@ -1,10 +1,10 @@
 use clap::Parser;
 use temper_cli::cli::{
-    AdminAction, AdminConnectionAction, AdminMachineAction, AdminProfilesAction,
-    AdminRequestsAction, AdminReviewsAction, AdminSamlAction, AdminSlackAction,
-    AdminSubscriptionAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction, ContextAction,
-    DataArtifactAction, InvocationCmd, MemoryAction, ResourceAction, ResourceMetaAction,
-    SchemaAction, SkillAction, SlackAction, StewardCmd, TeamAction,
+    AdminAction, AdminConnectionAction, AdminErasureAction, AdminMachineAction,
+    AdminProfilesAction, AdminRequestsAction, AdminReviewsAction, AdminSamlAction,
+    AdminSlackAction, AdminSubscriptionAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction,
+    ContextAction, DataArtifactAction, InvocationCmd, MemoryAction, ResourceAction,
+    ResourceMetaAction, SchemaAction, SkillAction, SlackAction, StewardCmd, TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -69,10 +69,10 @@ fn main() {
         OutputFormat::resolve_with(cli.format.as_deref(), global_cfg.cli.format.as_deref());
 
     // Classify the command before dispatch consumes `cli`: was this a
-    // lost-ack-prone write (`resource create`/`update`)? If it later fails with
-    // a transport error, the write may have committed anyway — see the hint in
-    // the error arm below (issue #581).
-    let was_lost_ack_write = temper_cli::reconcile_hint::is_lost_ack_prone_write(&cli.command);
+    // lost-ack-prone write (`resource create`/`update`, an executed erasure)? If
+    // it later fails with a transport error, the write may have committed anyway
+    // — see the hint in the error arm below (issue #581).
+    let lost_ack_prone = temper_cli::reconcile_hint::lost_ack_prone(&cli.command);
 
     let outcome = run(cli, output_format);
 
@@ -91,7 +91,7 @@ fn main() {
         // that merges streams and parses JSON gets a parseable payload even on
         // failure. In TOON mode, keep the existing stderr prose rendering — a
         // human at a TTY is no worse off than before.
-        let hint = temper_cli::reconcile_hint::reconcile_hint(was_lost_ack_write, e);
+        let hint = temper_cli::reconcile_hint::reconcile_hint(lost_ack_prone, e);
         if output_format == OutputFormat::Json {
             let payload = temper_cli::error::render_error_payload(e, hint);
             println!("{payload}");
@@ -109,9 +109,9 @@ fn main() {
                     temper_cli::output::error(format!("temper: {e}"));
                 }
             }
-            // A network error on a `create`/`update` may be a lost acknowledgment,
-            // not a lost write: reconcile before retrying, or a blind retry mints a
-            // duplicate. Guidance goes to stderr, so it never touches the payload.
+            // A network error on a `create`/`update`, or any unrefused error on an
+            // executed erasure, may hide a write that landed: reconcile before retrying.
+            // Guidance goes to stderr, so it never touches the payload.
             if let Some(hint) = hint {
                 temper_cli::output::hint(hint);
             }
@@ -258,8 +258,20 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         fields: &fields,
                     },
                 ),
-                ResourceAction::DescribeOpenMeta => {
-                    temper_cli::commands::resource::describe_open_meta(output_format)
+                ResourceAction::DescribeOpenMeta { local } => {
+                    temper_cli::commands::resource::describe_open_meta(local, output_format)
+                }
+                ResourceAction::DocTypes { local } => {
+                    temper_cli::commands::resource::doc_types(local, output_format)
+                }
+                ResourceAction::DescribeType { name, local } => {
+                    temper_cli::commands::resource::describe_type(&name, local, output_format)
+                }
+                ResourceAction::Connections { r#ref, limit } => {
+                    temper_cli::commands::resource::connections(&r#ref, limit, output_format)
+                }
+                ResourceAction::CitationAudits { r#ref } => {
+                    temper_cli::commands::resource::citation_audits(&r#ref, output_format)
                 }
                 ResourceAction::Show {
                     r#ref,
@@ -652,6 +664,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         .await
                     })
                 })
+            }
+            ContextAction::Show { context } => {
+                temper_cli::commands::context_cmd::show(&context, output_format)
             }
             ContextAction::Restore { context } => {
                 temper_cli::actions::runtime::with_client(|client| {
@@ -1161,6 +1176,56 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     .await
                 })
             }),
+            AdminAction::Erasure { action } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        match action {
+                            AdminErasureAction::Resource {
+                                resource,
+                                also_strike_blobs,
+                                execute,
+                            } => {
+                                temper_cli::commands::admin_erasure::resource_remote(
+                                    client,
+                                    &resource,
+                                    also_strike_blobs,
+                                    execute,
+                                    output_format,
+                                )
+                                .await
+                            }
+                            AdminErasureAction::Principal {
+                                subject,
+                                request_reference,
+                                execute,
+                            } => {
+                                temper_cli::commands::admin_erasure::principal_remote(
+                                    client,
+                                    subject,
+                                    request_reference,
+                                    execute,
+                                    output_format,
+                                )
+                                .await
+                            }
+                            AdminErasureAction::BlockHistory {
+                                resource,
+                                blocks,
+                                execute,
+                            } => {
+                                temper_cli::commands::admin_erasure::block_history_remote(
+                                    client,
+                                    &resource,
+                                    blocks,
+                                    execute,
+                                    output_format,
+                                )
+                                .await
+                            }
+                        }
+                    })
+                })
+            }
             AdminAction::Reblock {
                 resource,
                 context,
@@ -1510,6 +1575,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 temper_cli::commands::auth::request_access(message.as_deref())
             }
             AuthAction::WithdrawRequest => temper_cli::commands::auth::withdraw_request(),
+            AuthAction::Settings => temper_cli::commands::auth::settings(output_format),
             AuthAction::RequestReview { message } => {
                 temper_cli::commands::auth::request_review(message.as_deref())
             }
@@ -1861,7 +1927,17 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 boundary_fingerprint,
                 output_format,
             ),
+            StewardCmd::Sweep { threshold } => commands::steward::sweep(threshold, output_format),
+            StewardCmd::Candidates => commands::steward::candidates(output_format),
+            StewardCmd::Dispatch {
+                threshold,
+                cap,
+                correlation_id,
+            } => commands::steward::dispatch(threshold, cap, correlation_id, output_format),
         },
+        Commands::Auditor { cmd } => commands::auditor::run(cmd, output_format),
+        Commands::Health => commands::health::run(output_format),
+        Commands::Profile { action } => temper_cli::commands::profile::run(action, output_format),
         Commands::Graph { cmd } => commands::graph::run(cmd, output_format),
         Commands::Trail { kind, r#ref } => commands::trail::run(kind, &r#ref, output_format),
         Commands::Version {

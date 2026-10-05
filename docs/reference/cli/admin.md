@@ -17,6 +17,7 @@ Commands:
   requests      Review pending join requests
   reviews       Read and close reconsideration requests from revoked principals
   profiles      The operator directory: who exists in this deployment, and their state. Lists denied principals (the default `needs-access` view) and resolves an email to a state card — the bridge into the strict-UUID admin acts
+  erasure       Erase a resource or a principal, or scrub a resource's block history. Surveys by default; --execute acts
   ledger        Read the admin ledger: who granted what, to whom, and when
   saml          SAML provisioning: generate keys + emit the consistent env bundle and SQL (operator tooling)
   machine       Register and rotate machine (client_credentials) principals
@@ -386,6 +387,101 @@ Arguments:
 Options:
       --email <EMAIL>      Exact verified email — the server resolves it to the single matching card. Zero matches → not found; two or more profiles verified-own the address → not found, with the collision named. The substring filter never resolves
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+### `temper admin erasure`
+
+```text
+Erase a resource or a principal, or scrub a resource's block history. Surveys by default; --execute acts
+
+Usage: temper admin erasure [OPTIONS] <COMMAND>
+
+Commands:
+  resource       Erase a resource. The survey counts the blocks, revisions, chunks, artifacts and edges the act would reach, and names what it would leave as remainder
+  principal      Erase a principal, named by its pseudonym UUID
+  block-history  Scrub the revision history of named blocks of a resource
+  help           Print this message or the help of the given subcommand(s)
+
+Options:
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+#### `temper admin erasure resource`
+
+```text
+Erase a resource. The survey counts the blocks, revisions, chunks, artifacts and edges the act would reach, and names what it would leave as remainder
+
+Usage: temper admin erasure resource [OPTIONS] <RESOURCE>
+
+Arguments:
+  <RESOURCE>  The resource (UUID or decorated ref)
+
+Options:
+      --also-strike-blob <ALSO_STRIKE_BLOBS>
+          A related blob to strike with the resource; it must be in the survey's remainder. Repeatable; only with --execute
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --execute
+          Erase the resource. Without it, the command only surveys
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help
+          Print help
+```
+
+#### `temper admin erasure principal`
+
+```text
+Erase a principal, named by its pseudonym UUID
+
+Usage: temper admin erasure principal [OPTIONS] <SUBJECT>
+
+Arguments:
+  <SUBJECT>  The principal, as its pseudonym UUID
+
+Options:
+      --request-reference <REQUEST_REFERENCE>
+          The operator's opaque request reference (the DSAR record's UUID). Required with --execute; a survey takes none
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --execute
+          Erase the principal. Without it, the command only surveys
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help
+          Print help
+```
+
+#### `temper admin erasure block-history`
+
+```text
+Scrub the revision history of named blocks of a resource
+
+Usage: temper admin erasure block-history [OPTIONS] --block <BLOCKS> <RESOURCE>
+
+Arguments:
+  <RESOURCE>  The resource (UUID or decorated ref)
+
+Options:
+      --block <BLOCKS>     A block of the resource whose history is scrubbed. Repeatable; at least one
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --execute            Scrub the history. Without it, the command only surveys
       --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
       --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto

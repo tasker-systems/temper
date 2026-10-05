@@ -24,7 +24,6 @@
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use serde::Serialize;
 use uuid::Uuid;
 
 use temper_core::types::admin::{
@@ -33,21 +32,10 @@ use temper_core::types::admin::{
 use temper_core::types::ids::ProfileId;
 
 use crate::middleware::auth::AuthUser;
+use temper_core::types::admin::AdminProfilesListAnswer;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::admin_directory_service;
 use temper_services::state::AppState;
-
-/// The list route's two answers. Untagged, so each arm serializes exactly as its inner type does
-/// — the wire is the page or the card, never an envelope around them — and the contract states
-/// both shapes as a `oneOf` rather than leaving a client to discover the second one.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-#[serde(untagged)]
-pub enum AdminProfilesListAnswer {
-    /// The directory page (no `email` in the query).
-    Page(AdminDirectoryListResponse),
-    /// The single state card `?email=` resolved.
-    Card(Box<AdminProfileCard>),
-}
 
 /// GET /api/access/admin/profiles — the directory list, or the state card when `?email=`
 /// resolves exactly one verified address.

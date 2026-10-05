@@ -4,11 +4,11 @@
 //! client-side and PUTs a PRE-EMBEDDED desired-state request. The server diffs it against the map's
 //! current `provenance: kernel` slice and applies additive-only mutations.
 
-use reqwest::Method;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::types::cognitive_maps::{
     AnchorShape, BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapDetail,
     CogmapGrantBody, CogmapRegionMetricsRow, CogmapRevokeBody, CogmapRow, GrantOutcome,
@@ -44,12 +44,13 @@ impl<'a> CognitiveMapClient<'a> {
         act: &temper_core::types::authorship::ActInput,
     ) -> Result<ReconcileOutcome> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/cognitive-maps/{cogmap_id}");
+        let op = &ops::RECONCILE;
+        let path = op.path(&[&cogmap_id]);
         // The manifest body stays pure; authorship rides query params. An empty `ActInput`
         // serializes to nothing and appends no query string.
-        let req = self.http.put(&path).json(payload).query(act);
+        let req = self.http.request(op, &path).json(payload).query(act);
         self.http
-            .send_json(&Method::PUT, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -61,10 +62,11 @@ impl<'a> CognitiveMapClient<'a> {
         payload: &CreateCogmapRequest,
     ) -> Result<CreateCogmapOutcome> {
         let token = self.http.resolve_token()?;
-        let path = "/api/cognitive-maps";
-        let req = self.http.post(path).json(payload);
+        let op = &ops::GENESIS;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(payload);
         self.http
-            .send_json(&Method::POST, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -73,10 +75,11 @@ impl<'a> CognitiveMapClient<'a> {
     /// no maps); never 404.
     pub async fn list(&self) -> Result<Vec<CogmapRow>> {
         let token = self.http.resolve_token()?;
-        let path = "/api/cognitive-maps";
-        let req = self.http.get(path);
+        let op = &ops::LIST_COGNITIVE_MAPS;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -85,10 +88,11 @@ impl<'a> CognitiveMapClient<'a> {
     /// readable by the caller.
     pub async fn show(&self, cogmap_id: Uuid) -> Result<CogmapDetail> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/cognitive-maps/{cogmap_id}");
-        let req = self.http.get(&path);
+        let op = &ops::GET_COGNITIVE_MAP;
+        let path = op.path(&[&cogmap_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -105,10 +109,11 @@ impl<'a> CognitiveMapClient<'a> {
     /// nothing is `lens_narrowed`.
     pub async fn shape(&self, cogmap_id: Uuid, lens_id: Option<Uuid>) -> Result<AnchorShape> {
         let token = self.http.resolve_token()?;
+        let op = &ops::SHAPE;
         let path = shape_path(cogmap_id, lens_id);
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -121,10 +126,11 @@ impl<'a> CognitiveMapClient<'a> {
         threshold: Option<i64>,
     ) -> Result<MaterializeDelta> {
         let token = self.http.resolve_token()?;
+        let op = &ops::MATERIALIZE_DELTA;
         let path = materialize_delta_path(cogmap_id, threshold);
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -136,11 +142,12 @@ impl<'a> CognitiveMapClient<'a> {
         threshold: Option<i64>,
     ) -> Result<MaterializeAck> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/cognitive-maps/{cogmap_id}/materialize");
+        let op = &ops::MATERIALIZE;
+        let path = op.path(&[&cogmap_id]);
         let body = MaterializeRequest { threshold };
-        let req = self.http.post(&path).json(&body);
+        let req = self.http.request(op, &path).json(&body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -152,10 +159,11 @@ impl<'a> CognitiveMapClient<'a> {
         lens_id: Option<Uuid>,
     ) -> Result<Vec<CogmapRegionMetricsRow>> {
         let token = self.http.resolve_token()?;
+        let op = &ops::REGION_METRICS;
         let path = region_metrics_path(cogmap_id, lens_id);
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -163,10 +171,11 @@ impl<'a> CognitiveMapClient<'a> {
     /// regulation). 404 if the map is not found or not readable.
     pub async fn analytics(&self, cogmap_id: Uuid) -> Result<CogmapAnalyticsRow> {
         let token = self.http.resolve_token()?;
+        let op = &ops::ANALYTICS;
         let path = analytics_path(cogmap_id);
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -178,10 +187,11 @@ impl<'a> CognitiveMapClient<'a> {
         body: &BindTeamRequest,
     ) -> Result<BindTeamOutcome> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/cognitive-maps/{cogmap_id}/teams");
-        let req = self.http.post(&path).json(body);
+        let op = &ops::BIND_TEAM;
+        let path = op.path(&[&cogmap_id]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -189,10 +199,11 @@ impl<'a> CognitiveMapClient<'a> {
     /// no-op safe). Returns whether this call deleted a binding (`unbound: false` ⇒ none existed).
     pub async fn unbind_team(&self, cogmap_id: Uuid, team_id: Uuid) -> Result<UnbindTeamOutcome> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/cognitive-maps/{cogmap_id}/teams/{team_id}");
-        let req = self.http.delete(&path);
+        let op = &ops::UNBIND_TEAM;
+        let path = op.path(&[&cogmap_id, &team_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::DELETE, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -200,10 +211,11 @@ impl<'a> CognitiveMapClient<'a> {
     /// (admin or a can_grant holder). `granted: false` ⇒ an existing grant was updated in place.
     pub async fn grant(&self, cogmap_id: Uuid, body: &CogmapGrantBody) -> Result<GrantOutcome> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/cognitive-maps/{cogmap_id}/grants");
-        let req = self.http.post(&path).json(body);
+        let op = &ops::GRANT_COGMAP_ACCESS;
+        let path = op.path(&[&cogmap_id]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -211,17 +223,18 @@ impl<'a> CognitiveMapClient<'a> {
     /// `revoked: false` ⇒ no matching grant existed.
     pub async fn revoke(&self, cogmap_id: Uuid, body: &CogmapRevokeBody) -> Result<RevokeOutcome> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/cognitive-maps/{cogmap_id}/grants");
-        let req = self.http.delete(&path).json(body);
+        let op = &ops::REVOKE_COGMAP_ACCESS;
+        let path = op.path(&[&cogmap_id]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::DELETE, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }
 
 /// `/api/cognitive-maps/{id}/shape` with an optional `?lens=` query — shared by the method and its test.
 fn shape_path(cogmap_id: Uuid, lens: Option<Uuid>) -> String {
-    let base = format!("/api/cognitive-maps/{cogmap_id}/shape");
+    let base = ops::SHAPE.path(&[&cogmap_id]);
     match lens {
         Some(l) => format!("{base}?lens={l}"),
         None => base,
@@ -231,7 +244,7 @@ fn shape_path(cogmap_id: Uuid, lens: Option<Uuid>) -> String {
 /// `/api/cognitive-maps/{id}/materialize-delta` with an optional `?threshold=` query — shared by the
 /// method and its test.
 fn materialize_delta_path(cogmap_id: Uuid, threshold: Option<i64>) -> String {
-    let base = format!("/api/cognitive-maps/{cogmap_id}/materialize-delta");
+    let base = ops::MATERIALIZE_DELTA.path(&[&cogmap_id]);
     match threshold {
         Some(t) => format!("{base}?threshold={t}"),
         None => base,
@@ -240,7 +253,7 @@ fn materialize_delta_path(cogmap_id: Uuid, threshold: Option<i64>) -> String {
 
 /// `/api/cognitive-maps/{id}/region-metrics` with an optional `?lens=` query.
 fn region_metrics_path(cogmap_id: Uuid, lens: Option<Uuid>) -> String {
-    let base = format!("/api/cognitive-maps/{cogmap_id}/region-metrics");
+    let base = ops::REGION_METRICS.path(&[&cogmap_id]);
     match lens {
         Some(l) => format!("{base}?lens={l}"),
         None => base,
@@ -249,7 +262,7 @@ fn region_metrics_path(cogmap_id: Uuid, lens: Option<Uuid>) -> String {
 
 /// `/api/cognitive-maps/{id}/analytics`.
 fn analytics_path(cogmap_id: Uuid) -> String {
-    format!("/api/cognitive-maps/{cogmap_id}/analytics")
+    ops::ANALYTICS.path(&[&cogmap_id])
 }
 
 #[cfg(test)]

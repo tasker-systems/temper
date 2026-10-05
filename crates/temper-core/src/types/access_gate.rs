@@ -298,3 +298,44 @@ pub struct ReconcileAutoJoinOutcome {
     pub added: Vec<AutoJoinReconcileRow>,
     pub saml_mapped_teams: Vec<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct CreateRequestBody {
+    pub message: Option<String>,
+    pub source: String,
+    pub accepted_terms_version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct CreateReviewBody {
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct ReviewRequestBody {
+    pub status: JoinRequestStatus,
+    pub decision_note: Option<String>,
+}
+
+/// Body for closing a reconsideration request.
+///
+/// It carries **only** a note, and that is the design rather than an omission. Closing a review
+/// records that an admin handled it; it grants nothing (D15). A `status` field here would invite
+/// exactly the conflation the table's `COMMENT ON TABLE` warns about — the admin's actual answer is
+/// a separate `POST /api/access/admin/principals/{id}/approve`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct CloseReviewBody {
+    pub decision_note: Option<String>,
+}
+
+/// Body for `POST /api/access/admin/principals/{id}/revoke`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct RevokePrincipalBody {
+    /// Required. It rides the log and the ledger, and a later review's reviewer needs it (D15).
+    pub reason: String,
+}

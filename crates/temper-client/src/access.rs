@@ -1,26 +1,11 @@
 //! Typed sub-client for the `/api/access` endpoints.
 
-use reqwest::Method;
-
 use crate::error::Result;
 use crate::http::HttpClient;
-use temper_core::types::access_gate::{JoinRequest, PublicSystemSettings};
-
-/// Request body for creating a join request.
-#[derive(serde::Serialize)]
-struct CreateRequestBody<'a> {
-    message: Option<&'a str>,
-    source: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    accepted_terms_version: Option<&'a str>,
-}
-
-/// Request body for a review request (D15 — a revoked principal asking for reconsideration).
-#[derive(serde::Serialize)]
-struct CreateReviewBody<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message: Option<&'a str>,
-}
+use crate::ops;
+use temper_core::types::access_gate::{
+    CreateRequestBody, CreateReviewBody, JoinRequest, PublicSystemSettings,
+};
 
 /// Sub-client for system access operations.
 pub struct AccessClient<'a> {
@@ -47,36 +32,37 @@ impl<'a> AccessClient<'a> {
     ) -> Result<JoinRequest> {
         let token = self.http.resolve_token()?;
         let body = CreateRequestBody {
-            message,
-            source,
-            accepted_terms_version,
+            message: message.map(str::to_string),
+            source: source.to_string(),
+            accepted_terms_version: accepted_terms_version.map(str::to_string),
         };
-        let req = self.http.post("/api/access/requests").json(&body);
+        let op = &ops::CREATE_REQUEST;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(&body);
         self.http
-            .send_json(&Method::POST, "/api/access/requests", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Get the caller's most recent join request (if any).
     pub async fn get_own_request(&self) -> Result<Option<JoinRequest>> {
         let token = self.http.resolve_token()?;
-        let req = self.http.get("/api/access/requests/me");
+        let op = &ops::GET_OWN_REQUEST;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, "/api/access/requests/me", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Withdraw a pending join request.
     pub async fn withdraw_request(&self) -> Result<()> {
         let token = self.http.resolve_token()?;
-        let req = self.http.delete("/api/access/requests/me");
+        let op = &ops::WITHDRAW_REQUEST;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
         self.http
-            .send(
-                &Method::DELETE,
-                "/api/access/requests/me",
-                req,
-                Some(&token),
-            )
+            .send(&op.method(), &path, req, Some(&token))
             .await?;
         Ok(())
     }
@@ -84,10 +70,14 @@ impl<'a> AccessClient<'a> {
     /// Ask an admin to reconsider a revocation (D15). Does not restore access by itself.
     pub async fn create_review_request(&self, message: Option<&str>) -> Result<()> {
         let token = self.http.resolve_token()?;
-        let body = CreateReviewBody { message };
-        let req = self.http.post("/api/access/reviews").json(&body);
+        let body = CreateReviewBody {
+            message: message.map(str::to_string),
+        };
+        let op = &ops::CREATE_REVIEW_REQUEST;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(&body);
         self.http
-            .send(&Method::POST, "/api/access/reviews", req, Some(&token))
+            .send(&op.method(), &path, req, Some(&token))
             .await?;
         Ok(())
     }
@@ -95,9 +85,11 @@ impl<'a> AccessClient<'a> {
     /// Get the public system settings (access mode, terms info).
     pub async fn get_settings(&self) -> Result<PublicSystemSettings> {
         let token = self.http.resolve_token()?;
-        let req = self.http.get("/api/access/settings");
+        let op = &ops::GET_SETTINGS;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, "/api/access/settings", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }

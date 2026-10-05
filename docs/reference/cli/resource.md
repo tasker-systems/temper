@@ -13,6 +13,10 @@ Commands:
   create              Create a new resource
   list                List resources, optionally of a given type
   describe-open-meta  Describe the recognized open_meta conventions (the self-describing schema)
+  doc-types           List the document types, with whether each has a schema and its required fields
+  describe-type       Describe one document type: its JSON Schema, required fields, closed vocabularies (a task's stages, a goal's statuses), and an example managed tier
+  connections         List a resource's connections: its edges in both directions, one page
+  citation-audits     List the signed audit verdicts recorded against a finding's citations
   show                Show a resource's content
   evidence            Show a resource's evidential-standing shape — the maturity vector (independence-discounted breadth, adversarial survival, contradiction balance, freshness) plus a lossy read-time `band` chip carried WITH the shape, never in place of it. Calls GET /evidence
   read-block          Read one content block by address — the three-state resolution
@@ -192,7 +196,137 @@ Describe the recognized open_meta conventions (the self-describing schema)
 
 Prints the recognized open (caller-defined) frontmatter keys, their shapes, and — via each key's description — whether it is FTS-indexed (and at what weight) or shape-only, plus the discouraged bare keys. The open tier stays free-form; this is guidance, not a closed vocabulary. Mirrors the MCP `describe_open_meta` tool.
 
+Asks the server (`GET /api/schema/open-meta`): the deployment you write to is the one that validates, and its schema can differ from this binary's when the two versions do. `--local` answers offline from the schema compiled into this binary.
+
 Usage: temper resource describe-open-meta [OPTIONS]
+
+Options:
+      --local
+          Answer from the schema compiled into this binary instead of asking the server
+
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `temper resource doc-types`
+
+```text
+List the document types, with whether each has a schema and its required fields.
+
+Asks the server (`GET /api/schema/doc-types`); `--local` answers offline from this binary.
+
+Usage: temper resource doc-types [OPTIONS]
+
+Options:
+      --local
+          Answer from the schema compiled into this binary instead of asking the server
+
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `temper resource describe-type`
+
+```text
+Describe one document type: its JSON Schema, required fields, closed vocabularies (a task's stages, a goal's statuses), and an example managed tier.
+
+Asks the server (`GET /api/schema/doc-types/{name}`); `--local` answers offline from this binary.
+
+Usage: temper resource describe-type [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          The document type, e.g. `task`
+
+Options:
+      --local
+          Answer from the schema compiled into this binary instead of asking the server
+
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `temper resource connections`
+
+```text
+List a resource's connections: its edges in both directions, one page.
+
+Wraps `GET /api/resources/{id}/connections`; the answer says whether rows were left out.
+
+Usage: temper resource connections [OPTIONS] <REF>
+
+Arguments:
+  <REF>
+          Resource ref: a UUID or the decorated `slug-<uuid>` form
+
+Options:
+      --limit <LIMIT>
+          Max connections (the service defaults to 50 and clamps to 1..=200)
+
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `temper resource citation-audits`
+
+```text
+List the signed audit verdicts recorded against a finding's citations.
+
+Wraps `GET /api/resources/{id}/citation-audits`. Record one with `audit-citation`.
+
+Usage: temper resource citation-audits [OPTIONS] <REF>
+
+Arguments:
+  <REF>
+          The finding's ref: a UUID or the decorated `slug-<uuid>` form
 
 Options:
       --vault <VAULT>

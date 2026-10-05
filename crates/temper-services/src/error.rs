@@ -1,7 +1,5 @@
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
-use serde::Serialize;
-use utoipa::ToSchema;
 
 use temper_core::types::error_details::{ErrorDetails, PlanRefusalDetails};
 use temper_core::types::ids::ResourceId;
@@ -121,47 +119,9 @@ impl ApiError {
     }
 }
 
-#[derive(Serialize, ToSchema)]
-pub struct ErrorBody {
-    error: ErrorDetail,
-}
-
-impl ErrorBody {
-    /// Build a typed error body with no `details` payload — the shape used by both
-    /// `ApiError::into_response` and [`crate::transport::fallback_handler`], so an unmatched route
-    /// is not the one error a client has to special-case.
-    pub fn new(code: &'static str, message: String) -> Self {
-        Self {
-            error: ErrorDetail {
-                code,
-                message,
-                details: None,
-            },
-        }
-    }
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct ErrorDetail {
-    code: &'static str,
-    message: String,
-    /// Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on
-    /// `PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every
-    /// other error.
-    // Held as a `Value` because `IntoResponse` erases the variant before serializing, but declared
-    // to the generators as what it actually is: an untyped `details` described nothing while
-    // costing the SDKs their typed refusal.
-    //
-    // `[widened — 2026-08-13]` This was declared as the bare `SystemAccessDetails` under a note
-    // saying "should a second variant ever carry details, this becomes a `oneOf` — widen it then,
-    // deliberately." B1 is that second variant, and this is that widening. Which ARM a body carries
-    // is told by `error.code`, never by sniffing the payload's shape — the two arms are
-    // distinguishable by required field (see `ErrorDetails`), but a client that leans on that is
-    // one all-optional arm away from silently misparsing.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Option<ErrorDetails>)]
-    details: Option<serde_json::Value>,
-}
+// The error envelope's wire shapes live in temper-core (every wire type does); re-exported here,
+// beside the `ApiError` that renders them, the way `temper_substrate::ids` re-exports the ids.
+pub use temper_core::types::error_details::{ErrorBody, ErrorDetail};
 
 /// What a 5xx body tells the client, in place of the internal detail.
 ///
@@ -343,7 +303,7 @@ impl IntoResponse for ApiError {
 
         let body = ErrorBody {
             error: ErrorDetail {
-                code,
+                code: code.to_string(),
                 message,
                 details: details_json,
             },

@@ -162,6 +162,29 @@ where
     rt.block_on(f(&client))
 }
 
+/// Run one client read and render its answer — the shape of every CLI command that is a thin peer
+/// of one server read: build the client, send, map the client error, render in the chosen format.
+pub fn render_read<T, F>(fmt: crate::format::OutputFormat, read: F) -> Result<()>
+where
+    T: serde::Serialize + 'static,
+    F: 'static
+        + for<'c> FnOnce(
+            &'c temper_client::TemperClient,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = temper_client::error::Result<T>> + 'c>,
+        >,
+{
+    let value = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            read(client)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+    crate::output::plain(crate::format::render(&value, fmt)?);
+    Ok(())
+}
+
 /// Create a tokio runtime and temper client pair.
 ///
 /// Use this when you need the runtime and client as separate values —

@@ -6,10 +6,9 @@
 //! meets at the call site rather than at the definition. `run` also says what this does: a
 //! composition is a plan, and a plan is run.
 
-use reqwest::Method;
-
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::types::query::{Composition, QueryResponse};
 
 /// Sub-client for composed queries.
@@ -35,10 +34,12 @@ impl<'a> QueryClient<'a> {
     /// method neither validates the plan before sending nor ranks anything in the response.
     pub async fn run(&self, composition: &Composition) -> Result<QueryResponse> {
         let token = self.http.resolve_token()?;
-        let req = self.http.post("/api/query").json(composition);
+        let op = &ops::QUERY;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(composition);
         let resp = self
             .http
-            .send(&Method::POST, "/api/query", req, Some(&token))
+            .send(&op.method(), &path, req, Some(&token))
             .await?;
         let bytes = resp.bytes().await?;
         Ok(serde_json::from_slice(&bytes)?)

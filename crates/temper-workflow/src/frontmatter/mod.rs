@@ -20,6 +20,6 @@ pub mod projections;
 pub mod registry;
 pub mod tiers;
 
-pub use document::{DocType, Frontmatter};
+pub use document::{DocType, DocTypeSchema, Frontmatter};
 pub use parse::parse_yaml_block;
 pub use registry::{FieldCategory, KnownOpenField, OpenFieldType, KNOWN_OPEN_FIELDS};
