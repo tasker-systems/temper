@@ -14,6 +14,12 @@ use temper_core::types::admin::{
     AdminProfilesListQuery, DemoteAdminRequest, PromoteAdminRequest, ReembedRequest,
     ReembedSummary, UpdateSettingsRequest,
 };
+use temper_core::types::erasure::{
+    BlockHistoryScrubExecuteResponse, BlockHistoryScrubRequestBody, BlockHistoryScrubSurvey,
+    ErasureExecuteRequest, ErasureExecuteResponse, ErasureSurveyRequest, ErasureSurveyResponse,
+    ResourceErasureExecuteRequest, ResourceErasureExecuteResponse, ResourceErasureSurvey,
+    ResourceErasureSurveyRequest,
+};
 use temper_core::types::reblock::{ReblockReceipt, ReblockRequest};
 use temper_core::types::team::TeamMemberRow;
 
@@ -316,6 +322,81 @@ impl<'a> AdminClient<'a> {
         let op = &ops::ADMIN_RECONCILE_AUTO_JOIN;
         let path = op.path(&[]);
         let req = self.http.request(op, &path).json(&serde_json::json!({}));
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// Survey a principal's erasure (system admin only): what the act would redact and strike.
+    /// Nothing is recorded or changed — a survey is not an erasure request.
+    pub async fn survey_principal_erasure(
+        &self,
+        body: &ErasureSurveyRequest,
+    ) -> Result<ErasureSurveyResponse> {
+        self.erasure_door(&ops::ADMIN_SURVEY_PRINCIPAL_ERASURE, body)
+            .await
+    }
+
+    /// Erase a principal (system admin only). `request_reference` is the operator's opaque DSAR
+    /// reference. A repeat answers `already_erased`, not an error.
+    ///
+    /// Never retried: a write on this client's default send path is not replayed, and an erasure
+    /// is the last thing that should be.
+    pub async fn erase_principal(
+        &self,
+        body: &ErasureExecuteRequest,
+    ) -> Result<ErasureExecuteResponse> {
+        self.erasure_door(&ops::ADMIN_ERASE_PRINCIPAL, body).await
+    }
+
+    /// Survey a resource's erasure (system admin only). `plan` is absent when the resource was
+    /// already erased. Nothing is recorded or changed.
+    pub async fn survey_resource_erasure(
+        &self,
+        body: &ResourceErasureSurveyRequest,
+    ) -> Result<ResourceErasureSurvey> {
+        self.erasure_door(&ops::ADMIN_SURVEY_RESOURCE_ERASURE, body)
+            .await
+    }
+
+    /// Erase a resource (system admin only). A refusal is an answer, not an error: the response's
+    /// `status` says whether the act completed or was refused (and recorded). Never retried.
+    pub async fn erase_resource(
+        &self,
+        body: &ResourceErasureExecuteRequest,
+    ) -> Result<ResourceErasureExecuteResponse> {
+        self.erasure_door(&ops::ADMIN_ERASE_RESOURCE, body).await
+    }
+
+    /// Survey a block-history scrub (system admin only): the `plan`, or the `refusal` the act
+    /// would record. Nothing is recorded or changed.
+    pub async fn survey_block_history_scrub(
+        &self,
+        body: &BlockHistoryScrubRequestBody,
+    ) -> Result<BlockHistoryScrubSurvey> {
+        self.erasure_door(&ops::ADMIN_SURVEY_BLOCK_HISTORY_SCRUB, body)
+            .await
+    }
+
+    /// Scrub the named blocks' revision history (system admin only). A refusal is an answer, not
+    /// an error: the response's `status` says which. Never retried.
+    pub async fn scrub_block_history(
+        &self,
+        body: &BlockHistoryScrubRequestBody,
+    ) -> Result<BlockHistoryScrubExecuteResponse> {
+        self.erasure_door(&ops::ADMIN_SCRUB_BLOCK_HISTORY, body)
+            .await
+    }
+
+    /// Shared POST for the erasure family's six doors: a JSON body in, a JSON answer out.
+    async fn erasure_door<B, T>(&self, op: &ops::Op, body: &B) -> Result<T>
+    where
+        B: serde::Serialize + ?Sized,
+        T: serde::de::DeserializeOwned,
+    {
+        let token = self.http.resolve_token()?;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
             .await

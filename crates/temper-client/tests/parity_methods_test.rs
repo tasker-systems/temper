@@ -225,3 +225,230 @@ async fn auditor_complete_posts_to_the_cogmaps_complete_door() {
     assert_eq!(ack.cogmap_id, cogmap);
     assert_eq!(ack.job_id, None);
 }
+
+mod erasure {
+    use super::*;
+    use temper_core::types::erasure::{
+        BlockHistoryScrubExecuteResponse, BlockHistoryScrubRequestBody, ErasureExecuteRequest,
+        ErasureExecuteResponse, ErasureSurveyRequest, ResourceErasureExecuteRequest,
+        ResourceErasureExecuteResponse, ResourceErasureRefusalReason, ResourceErasureSurveyRequest,
+    };
+
+    #[tokio::test]
+    async fn resource_erasure_completed_carries_targets_remainder_and_ledger_remainder() {
+        let server = MockServer::start().await;
+        let resource = Uuid::now_v7();
+        let event = Uuid::now_v7();
+        Mock::given(method("POST"))
+            .and(path("/api/admin/resources/erasure"))
+            .and(body_json(
+                json!({ "resource": resource, "also_strike_blobs": null }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": "completed",
+                "request_reference": Uuid::now_v7(),
+                "event_id": Uuid::now_v7(),
+                "folded_edges": [],
+                "targets": [{ "target": "blocks", "outcome": "emptied 3" }],
+                "remainder": [{ "target": "blob", "outcome": "independent_obligation" }],
+                "ledger_remainder": [{ "event": event, "paths": ["/title"] }],
+                "blob_strikes": [],
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let body = ResourceErasureExecuteRequest {
+            resource,
+            also_strike_blobs: None,
+        };
+        let answer = test_client(&server.uri())
+            .admin()
+            .erase_resource(&body)
+            .await
+            .expect("erasure answers");
+        match answer {
+            ResourceErasureExecuteResponse::Completed {
+                targets,
+                remainder,
+                ledger_remainder,
+                ..
+            } => {
+                assert_eq!(targets[0].outcome, "emptied 3");
+                assert_eq!(remainder[0].outcome, "independent_obligation");
+                assert_eq!(ledger_remainder[0].paths, vec!["/title".to_string()]);
+            }
+            other => panic!("expected a completion, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resource_erasure_refusal_is_an_answer_not_an_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/admin/resources/erasure"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": "refused",
+                "request_reference": Uuid::now_v7(),
+                "event_id": Uuid::now_v7(),
+                "reason": "charter_resource",
+                "detail": "the resource is a cognitive map's charter",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let body = ResourceErasureExecuteRequest {
+            resource: Uuid::now_v7(),
+            also_strike_blobs: None,
+        };
+        let answer = test_client(&server.uri())
+            .admin()
+            .erase_resource(&body)
+            .await
+            .expect("a refusal still answers 200");
+        assert!(matches!(
+            answer,
+            ResourceErasureExecuteResponse::Refused {
+                reason: ResourceErasureRefusalReason::CharterResource,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn resource_erasure_survey_posts_to_the_survey_door() {
+        let server = MockServer::start().await;
+        let resource = Uuid::now_v7();
+        Mock::given(method("POST"))
+            .and(path("/api/admin/resources/erasure/survey"))
+            .and(body_json(json!({ "resource": resource })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "resource": resource,
+                "already_erased": true,
+                "plan": null,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let survey = test_client(&server.uri())
+            .admin()
+            .survey_resource_erasure(&ResourceErasureSurveyRequest { resource })
+            .await
+            .expect("survey answers");
+        assert!(survey.already_erased && survey.plan.is_none());
+    }
+
+    #[tokio::test]
+    async fn principal_erasure_and_its_survey_post_to_their_doors() {
+        let server = MockServer::start().await;
+        let subject = Uuid::now_v7();
+        let reference = Uuid::now_v7();
+        Mock::given(method("POST"))
+            .and(path("/api/admin/erasure/survey"))
+            .and(body_json(json!({ "subject": subject })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "subject": subject,
+                "already_erased": false,
+                "redacted_hashes": [],
+                "targets": [],
+                "blob_strikes": [],
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/admin/erasure"))
+            .and(body_json(
+                json!({ "subject": subject, "request_reference": reference }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": "completed",
+                "event_id": Uuid::now_v7(),
+                "already_erased": false,
+                "redacted_hashes": ["h1"],
+                "targets": [],
+                "blob_strikes": [],
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = test_client(&server.uri());
+        let survey = client
+            .admin()
+            .survey_principal_erasure(&ErasureSurveyRequest { subject })
+            .await
+            .expect("survey answers");
+        assert!(!survey.already_erased);
+        let ErasureExecuteResponse::Completed {
+            redacted_hashes, ..
+        } = client
+            .admin()
+            .erase_principal(&ErasureExecuteRequest {
+                subject,
+                request_reference: reference,
+            })
+            .await
+            .expect("erasure answers");
+        assert_eq!(redacted_hashes, vec!["h1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn block_history_scrub_and_its_survey_post_to_their_doors() {
+        let server = MockServer::start().await;
+        let resource = Uuid::now_v7();
+        let block = Uuid::now_v7();
+        let body = BlockHistoryScrubRequestBody {
+            resource,
+            blocks: vec![block],
+        };
+        Mock::given(method("POST"))
+            .and(path("/api/admin/resources/block-history-scrub/survey"))
+            .and(body_json(
+                json!({ "resource": resource, "blocks": [block] }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "resource": resource,
+                "refusal": null,
+                "detail": null,
+                "plan": { "cancels_ingest": false, "blocks": [] },
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/admin/resources/block-history-scrub"))
+            .and(body_json(
+                json!({ "resource": resource, "blocks": [block] }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": "completed",
+                "request_reference": Uuid::now_v7(),
+                "event_id": Uuid::now_v7(),
+                "targets": [],
+                "cancelled_ingest": false,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = test_client(&server.uri());
+        let survey = client
+            .admin()
+            .survey_block_history_scrub(&body)
+            .await
+            .expect("survey answers");
+        assert!(survey.plan.is_some());
+        let answer = client
+            .admin()
+            .scrub_block_history(&body)
+            .await
+            .expect("scrub answers");
+        assert!(matches!(
+            answer,
+            BlockHistoryScrubExecuteResponse::Completed { .. }
+        ));
+    }
+}
