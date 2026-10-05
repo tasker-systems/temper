@@ -23,6 +23,20 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **CLI commands refresh an expired access token from the stored refresh token (#1010)**
+  No shape moves. A CLI command run after the stored access token's expiry now presents the
+  stored refresh token first and sends the successor, where it used to send the expired token and
+  print "not authenticated — run `temper auth login`". `auth status` reports `authenticated: true`
+  in that state for the same reason. Refreshes are serialized across processes by a lock file
+  beside `auth.json` (`<auth path>.lock`), and temperkb-client's `TokenStore` gains a
+  `lock_refresh` method with a no-op default, so an existing implementor compiles unchanged.
+  An env-supplied `TEMPER_TOKEN` carries no refresh token and behaves as before. Who observes:
+  CLI users on a machine idle past the token's lifetime. User-visible: commands that failed now
+  succeed. Release relevance: behavioral.
+pr: self
+classes: behavioral
+surfaces: clients, cli-stdout
+status: signal-only
 - **temper-client and the CLI reach every published operation; every published wire type lives in temperkb-core**
   `openapi.json` does not move. temper-client gains a method for each of the 25 operations it
   lacked: principal and resource erasure with their surveys, the block-history scrub and its
