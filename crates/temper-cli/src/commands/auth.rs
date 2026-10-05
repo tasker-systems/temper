@@ -36,6 +36,30 @@ struct AuthAction<'a> {
     profile: Option<String>,
 }
 
+/// How long `login` waits for the server to name the profile. The token is already saved by then,
+/// so the wait buys only the confirmation's `profile`; the client's own retry budget for a GET runs
+/// to minutes, which is far too long to hold a terminal after the browser has said "success".
+const LOGIN_PROFILE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The profile id to print after a login: the server's answer under the new token, or, when the
+/// server does not answer within `deadline`, the id the credential itself carries (present in AS
+/// mode, absent under Auth0). The miss is said on stderr, so a `null` is never unexplained.
+async fn resolve_login_profile(
+    client: &TemperClient,
+    carried: Option<uuid::Uuid>,
+    deadline: std::time::Duration,
+) -> Option<String> {
+    let why = match tokio::time::timeout(deadline, client.profile().get()).await {
+        Ok(Ok(profile)) => return Some(profile.id.to_string()),
+        Ok(Err(e)) => e.to_string(),
+        Err(_) => format!("no answer within {}s", deadline.as_secs_f32()),
+    };
+    output::hint(format!(
+        "Logged in, but the server did not name your profile ({why}). `temper auth status` asks again."
+    ));
+    carried.map(|id| id.to_string())
+}
+
 /// Run the OAuth2 PKCE login flow, persist the token, and print auth status.
 pub fn login(fmt: OutputFormat) -> Result<()> {
     runtime::with_client(move |client| {
@@ -44,16 +68,10 @@ pub fn login(fmt: OutputFormat) -> Result<()> {
                 .auth_login()
                 .await
                 .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
-            // The token is already saved, so this resolves under it. A failure here does not
-            // undo the login: fall back to whatever the credential itself carries.
-            let profile = match client.profile().get().await {
-                Ok(p) => Some(p.id),
-                Err(e) => {
-                    tracing::debug!("login: could not resolve the profile from the server: {e}");
-                    stored.profile_id
-                }
-            }
-            .map(|id| id.to_string());
+            // The token is already saved, so this resolves under it. A miss here does not undo
+            // the login.
+            let profile =
+                resolve_login_profile(client, stored.profile_id, LOGIN_PROFILE_DEADLINE).await;
             let action = AuthAction {
                 status: "logged_in",
                 profile,
@@ -523,6 +541,94 @@ pub fn settings(fmt: crate::format::OutputFormat) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SERVER_PROFILE: &str = "01900000-0000-7000-8000-000000000001";
+
+    /// A client whose every request is answered by `status` + `body` after `delay`, through the
+    /// in-process door.
+    fn client_answering(
+        status: axum::http::StatusCode,
+        body: String,
+        delay: std::time::Duration,
+    ) -> TemperClient {
+        let app = axum::Router::new().fallback(axum::routing::any(move || {
+            let body = body.clone();
+            async move {
+                tokio::time::sleep(delay).await;
+                (status, body)
+            }
+        }));
+        TemperClient::in_process_with_token(
+            app,
+            temper_workflow::operations::Surface::CliCloud,
+            "tok".to_owned(),
+            std::sync::Arc::new(temper_client::auth::MemoryTokenStore::empty()),
+        )
+        .expect("in-process client builds")
+    }
+
+    fn profile_body() -> String {
+        serde_json::json!({
+            "id": SERVER_PROFILE,
+            "display_name": "Test Person",
+            "slug": "test-person",
+            "email": "test@example.com",
+            "avatar_url": null,
+            "preferences": {},
+            "vault_config": {},
+            "created": "2026-01-01T00:00:00Z",
+            "updated": "2026-01-01T00:00:00Z"
+        })
+        .to_string()
+    }
+
+    // FAILS IF: login prints the credential's own id (always absent under Auth0) when the server
+    // can name the profile.
+    #[tokio::test]
+    async fn login_prints_the_profile_the_server_resolves() {
+        let client = client_answering(
+            axum::http::StatusCode::OK,
+            profile_body(),
+            std::time::Duration::ZERO,
+        );
+        let got = resolve_login_profile(&client, None, LOGIN_PROFILE_DEADLINE).await;
+        assert_eq!(got.as_deref(), Some(SERVER_PROFILE));
+    }
+
+    // FAILS IF: a server error after a successful login loses the id the credential carries.
+    #[tokio::test]
+    async fn a_server_error_falls_back_to_the_carried_id() {
+        let client = client_answering(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "{}".to_string(),
+            std::time::Duration::ZERO,
+        );
+        let carried = uuid::Uuid::now_v7();
+        let got = resolve_login_profile(&client, Some(carried), LOGIN_PROFILE_DEADLINE).await;
+        assert_eq!(got, Some(carried.to_string()));
+        assert_eq!(
+            resolve_login_profile(&client, None, LOGIN_PROFILE_DEADLINE).await,
+            None
+        );
+    }
+
+    // FAILS IF: a server that never answers holds the terminal past the deadline.
+    #[tokio::test]
+    async fn a_slow_server_is_abandoned_at_the_deadline() {
+        let client = client_answering(
+            axum::http::StatusCode::OK,
+            profile_body(),
+            std::time::Duration::from_secs(30),
+        );
+        let started = std::time::Instant::now();
+        let got = resolve_login_profile(&client, None, std::time::Duration::from_millis(50)).await;
+        assert_eq!(got, None);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "waited {:?}",
+            started.elapsed()
+        );
+    }
     use temper_client::auth::{AuthStatus, Provider};
 
     fn make_auth_status(authenticated: bool) -> AuthStatus {

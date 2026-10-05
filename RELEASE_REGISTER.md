@@ -25,11 +25,12 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
 ## Since v0.5.4 — unreleased
 - **`temper auth login` reports who logged in: `profile` is the server-resolved id, not `null`**
   The login confirmation's shape is unchanged (`{ "status", "profile" }`). Under Auth0, `profile`
-  was always `null`, because it came from the stored credential's `profile_id`, which an Auth0
-  `sub` never populates. It is now the id `GET /api/profile` resolves for the new token, the same
-  source `auth status` uses for its identity. If that call fails, the login still stands and
-  `profile` falls back to the credential's value. Who observes: scripts and agents reading the
-  login output. User-visible: yes, a `null` becomes a UUID. Release relevance: behavioral.
+  was always `null`, because it came from the stored credential's `profile_id`, which an Auth0 `sub`
+  never populates. It is now the id `GET /api/profile` resolves for the new token, the same source
+  `auth status` uses for its identity. If that call fails or takes more than 5 s, the login still
+  stands, `profile` falls back to the credential's value, and stderr says why. Who observes: scripts
+  and agents reading the login output. User-visible: yes, a `null` becomes a UUID. Release
+  relevance: behavioral.
 pr: self
 classes: behavioral
 surfaces: cli-stdout
@@ -37,30 +38,36 @@ status: signal-only
 - **On Vercel, the eight cron doors answer only on the deployment's own URL; every other host gets a 404**
   `/api/embed/dispatch`, `/api/embed/warm`, `/api/slack/intents/reap`, `/api/as/reap`,
   `/api/internal-calls/health`, `/api/region/dispatch`, `/api/erasure/drain` and
-  `/api/sensitivity/sweep` were reachable on the public production alias, on a custom domain, and
-  through the UI's `/api` proxy, with the shared `EMBED_DISPATCH_SECRET` bearer as the only control.
-  The API now reads `VERCEL_URL`, the deployment's generated host, and those doors answer `404`,
-  before the bearer is read, to a request on any other host. Vercel Cron calls the generated URL,
-  which sits behind Vercel Authentication, so scheduled runs are unchanged. Off Vercel (`VERCEL_URL`
-  unset) the bearer alone gates, as before. A manual or external trigger on Vercel must target the
-  deployment URL (`vercel curl`, or the dashboard's run-cron button) rather than the public domain.
-  Who observes: operators who trigger these doors by hand. User-visible: no. Release relevance:
-  behavioral.
+  `/api/sensitivity/sweep` were reachable on the public `<project>.vercel.app` alias, on a custom
+  domain, and through the UI's `/api` proxy, with the shared `EMBED_DISPATCH_SECRET` bearer as the
+  only control. The API now reads `VERCEL_URL`, the deployment's generated host, and those doors
+  answer `404`, before the bearer is read, to a request on any other host. Vercel Cron calls the
+  generated URL, which sits behind Vercel Authentication, so scheduled runs are unchanged (checked
+  on a preview deploy: `401` on the generated URL, `404` on the branch alias). Off Vercel
+  (`VERCEL_URL` unset) the bearer alone gates, as before; on Vercel without `VERCEL_URL` (system
+  environment variables not exposed) the boot logs a warning and the bearer alone gates. A manual or
+  external trigger on Vercel must target the deployment URL (`vercel curl`, or the dashboard's
+  run-cron button) rather than the public domain. Who observes: operators who trigger these doors by
+  hand. User-visible: no. Release relevance: behavioral.
 pr: self
 classes: behavioral
 surfaces: http
 status: signal-only
 - **temper-client and the CLI no longer honour `TEMPER_ALLOW_INSECURE_HTTP`: plaintext http reaches loopback only**
   The client's endpoint check refuses a non-loopback `http` URL for the API base URL and the OAuth
-  token URL, and nothing turns that off any more. The variable that used to (`TEMPER_ALLOW_INSECURE_HTTP=1`)
-  is no longer read, and the refusal names one fix, `https`. Loopback plaintext (`localhost`,
-  `*.localhost`, `127.0.0.0/8`, `::1`) is accepted as before, so local development and the CLI's
-  loopback login listener are unchanged. The same check runs where temper-client is the MCP
-  relay, which an environment variable can no longer downgrade to cleartext. `temper init
-  --instance-url http://<non-loopback>` was already refused without the variable and is now refused
-  with it. The Python and Ruby SDKs' explicit `allow_insecure_http=` parameter is untouched. Who
-  observes: a CLI or client user who set the variable against a plaintext non-loopback instance.
-  User-visible: yes, for that user only. No deployment we run sets it. Release relevance:
+  token URL, and nothing turns that off any more. The variable that used to
+  (`TEMPER_ALLOW_INSECURE_HTTP=1`) is no longer read, and the refusal names one fix, `https`.
+  Loopback plaintext (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`) is accepted as before, so
+  local development and the CLI's loopback login listener are unchanged. The same check runs where
+  temper-client is the MCP relay, which an environment variable can no longer downgrade to
+  cleartext. `temper init --instance-url http://<non-loopback>` was already refused without the
+  variable and is now refused with it. Rust API changes in the published `temperkb-client`:
+  `endpoint::allow_insecure_http_from_env` is removed, and `endpoint::validate_endpoint` drops its
+  third (`allow_insecure_http`) parameter. The Python, Ruby and TypeScript SDKs' explicit opt-in
+  (`allow_insecure_http=` / `allowInsecureHttp`, a constructor parameter, never read from the
+  environment) is untouched. Who observes: a CLI or client user who set the variable against a
+  plaintext non-loopback instance, and Rust consumers of `temperkb-client` calling either function.
+  User-visible: yes, for those only. No deployment we run sets the variable. Release relevance:
   behavioral.
 pr: self
 classes: behavioral
