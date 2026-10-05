@@ -15,3 +15,5 @@ pub mod redact;
 pub mod refs;
 pub mod types;
 pub mod validation;
+
+pub fn quality_gate_fmt_witness( )->u8{1}
