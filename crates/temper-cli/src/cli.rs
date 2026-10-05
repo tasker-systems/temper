@@ -2442,6 +2442,10 @@ pub enum ProfileAction {
         #[arg(long)]
         preferences: Option<String>,
     },
+    /// List the identities linked to your profile (each login provider and address).
+    ///
+    /// Wraps `GET /api/profile/auth-links`.
+    AuthLinks,
 }
 
 /// `temper auditor` — the citation-audit worker's doors.

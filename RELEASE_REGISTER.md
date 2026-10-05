@@ -30,7 +30,8 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   connections, citation audits, the schema reads and health. The CLI gains commands for each:
   `admin erasure resource|principal|block-history` (survey with `--dry-run`; a refused act prints
   its answer and exits non-zero), six `graph` reads, `resource connections|citation-audits|doc-types|describe-type`,
-  `steward sweep|candidates|dispatch`, `auditor dispatch|complete|sweep`, and `health`. Behavioral
+  `steward sweep|candidates|dispatch`, `auditor dispatch|complete|sweep`, `health`,
+  `blob delete`, `auth settings`, `context show` and `profile show|update|auth-links`. Behavioral
   for a CLI user: `resource describe-open-meta` now answers from the server it is logged in to,
   and `--local` answers from the binary as it did before. Every published wire type now lives in
   temperkb-core, so a client names it without the server crates. The old

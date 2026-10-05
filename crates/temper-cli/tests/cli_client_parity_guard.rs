@@ -66,10 +66,18 @@ const CLIENT_ONLY: &[(&str, &str)] = &[
     ),
     ("data_artifacts.rs", "list_for"),
     (
-        "profile.rs",
-        // UI-intended: the settings page's linked-identities read. The CLI's auth
-        // surface is the login/logout/status flow, not the identity inventory.
-        "auth_links",
+        "ingest.rs",
+        // `PUT /api/ingest/{id}` is a second door for updating a resource's content. The CLI
+        // updates through `PATCH /api/resources/{id}` (`resources.update`, which carries
+        // `chunks_packed`), one way to do the act (ruling 2026-10-05).
+        "update",
+    ),
+    (
+        "resources.rs",
+        // `POST /api/resources` is a second door for creating a resource. The CLI creates through
+        // `POST /api/ingest` (`ingest.create`: chunked and embedded locally), one way to do the act
+        // (ruling 2026-10-05).
+        "create",
     ),
     (
         "resources.rs",

@@ -10,6 +10,9 @@ pub fn run(action: ProfileAction, fmt: OutputFormat) -> Result<()> {
         ProfileAction::Show => crate::actions::runtime::render_read(fmt, move |client| {
             Box::pin(async move { client.profile().get().await })
         }),
+        ProfileAction::AuthLinks => crate::actions::runtime::render_read(fmt, move |client| {
+            Box::pin(async move { client.profile().auth_links().await })
+        }),
         ProfileAction::Update {
             display_name,
             preferences,
