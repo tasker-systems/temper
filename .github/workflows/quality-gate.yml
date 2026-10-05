@@ -1,0 +1,584 @@
+name: Quality Gate
+
+# The cheap gate: every check here compiles no Rust, and every workflow call that DOES compile
+# Rust (code-quality, test-rust) waits on it in ci.yml. A rustfmt slip or a tripwire hit used to
+# report after a ~4 minute clippy, while the rest of the pipeline spent its full compute anyway;
+# here it reports in about a minute and nothing downstream starts.
+#
+# Two rules keep that true. A step that needs a compiled crate does not belong in this file —
+# it belongs in code-quality's rust-quality job. And a tool is installed PREBUILT
+# (taiki-e/install-action), never with `cargo install`, which compiles inside the gate.
+#
+# ci.yml calls this workflow with NO `if:`, and guard-tests below carries none either. That pair
+# is what makes the docs/ and internal/ publish-safety gates reachable on a change that switches
+# every other job off; test-detect-ci-scope.sh pins both halves.
+
+on:
+  workflow_call:
+    inputs:
+      # Gates the Rust half (rust-gate) and nothing else, exactly as it gates rust-quality in
+      # code-quality.yml. Defaults 'true' so a direct dispatch or a second caller that passes
+      # nothing runs the full gate — the conservative direction.
+      run-rust-quality:
+        required: false
+        type: string
+        default: 'true'
+
+# Least privilege — see code-quality.yml for why each reusable workflow states its own floor.
+permissions:
+  contents: read
+
+jobs:
+  rust-gate:
+    name: Rust Gate (fmt + tripwires)
+    # Off for a docs-only or rust-inert change, as rust-quality is: every check below reads Rust
+    # source or Cargo metadata, and such a change touches neither.
+    if: inputs.run-rust-quality == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Rust (rustfmt only — nothing here builds)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      # Pinned prebuilt binaries. cargo-audit was moved to a prebuilt pin by the 2026-07-29
+      # supply-chain review (`cargo install` resolved and compiled it unpinned on every run);
+      # cargo-machete follows for that reason and for this gate's own: `cargo install` compiles.
+      - name: Install cargo-machete and cargo-audit
+        uses: taiki-e/install-action@v2.87.18
+        with:
+          tool: cargo-machete,cargo-audit
+
+      # First, so a formatting slip is the first thing reported. Two of the tripwires below
+      # (audit-as-entry-points, audit-mcp-route-auth) rely on it: their parsers do not read
+      # whitespace before a call paren, and say that class is held by this step.
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check every route is documented (OpenAPI route allowlist)
+        run: bash .github/scripts/check-openapi-routes.sh
+
+      # temper-client's openapi parity test (crates/temper-client/src/ops.rs) runs with the
+      # workspace nextest in test-rust.yml. This is its other half: it refuses a request path
+      # spelled outside the registry, which that test cannot see.
+      - name: Check every temper-client request goes through the endpoint registry
+        run: bash .github/scripts/check-client-op-registry.sh
+
+      # Security tripwires (internal/development/security-audit-playbook.md). Pure static enumerators:
+      # each pins a security-relevant set (grant write-sites, unauthenticated routes, handler-side
+      # authz) against a reviewed baseline and fails when the set grows silently. They prove nothing
+      # on their own — they force a reviewer to answer the attenuation / auth-posture question.
+      - name: Security tripwire — grant write-sites (capability attenuation review)
+        run: bash .github/scripts/audit-grant-sinks.sh
+
+      # Sibling to grant-sinks: grant-sinks freezes the SET of kb_access_grants write-sites; this
+      # pins the one subject×capability shape no production surface may mint — a kb_contexts row
+      # with can_write, the explicit write-grant arm of context_authorable_by_profile. The arm is
+      # a guardrail for a delegation act with no minting design; the first surface that can light
+      # it fails here until that design is written into the guard itself.
+      - name: Security tripwire — context write-grant mints
+        run: bash .github/scripts/audit-context-write-grants.sh
+
+      - name: Security tripwire — route auth posture
+        run: bash .github/scripts/audit-route-auth.sh
+
+      # The two sibling guards extending route-auth's frozen-route-set property to the surfaces
+      # that guard cannot see: temper-mcp-server's router (a second in-code routing shape) and the AS's
+      # api/** + vercel.json pair (a filesystem-convention shape). One parser for all three would
+      # be fragile in exactly the way audit-route-auth.sh's header warns; each surface gets its
+      # own guard, each stating its own field of view.
+      - name: Security tripwire — MCP route auth posture
+        run: bash .github/scripts/audit-mcp-route-auth.sh
+
+      - name: Security tripwire — AS entry-point set vs vercel.json
+        run: bash .github/scripts/audit-as-entry-points.sh
+
+      - name: Security tripwire — handler-side authz drift
+        run: bash .github/scripts/audit-handler-authz-drift.sh
+
+      # Two triggers over one baseline, and the second is the reason it exists: a claim-only
+      # baseline stays GREEN when a gate widens, which is how six of eight measured over-claims got
+      # in. Binding each claim file to the gate it describes is what makes the widening commit the
+      # one that re-reads the prose.
+      - name: Tripwire — elevation claims agree with the gate they describe
+        run: bash .github/scripts/audit-elevation-claims.sh
+
+      # Unlike the three above, this one is not only a baseline tripwire: the pairwise-distinctness
+      # of the gates' secrets is computed from the source, so UPDATE_BASELINE cannot silence it.
+      - name: Security tripwire — internal signature gates use distinct secrets
+        run: bash .github/scripts/audit-signature-secrets.sh
+
+      - name: Security tripwire — credential types deriving Debug
+        run: bash .github/scripts/audit-credential-debug.sh
+
+      # Preventive, and deliberately landed before the surface exists: Vercel Passport, fronting
+      # an origin, injects a Vercel-signed identity JWT that authentically names the edge user —
+      # the most tempting possible shortcut past the auth seam, and on the UI origin only, which
+      # is the seam-drift asymmetry. The rule (observability-only, never identity or standing
+      # input) lives in internal/auth/authorization-seam.md; this is its enforcement half.
+      # Markdown is exempt by design: prose may NAME the header, code may not READ it.
+      - name: Security tripwire — edge-injected identity header
+        run: bash .github/scripts/audit-passport-identity-header.sh
+
+      # The `__temper_ungated_` find cores apply NO visibility gate — they are handed the RBAC
+      # verdict as `p_visible_ids uuid[]` so a composition computes it once instead of once per
+      # stage. For those bodies the invariant "every mechanic acts only on resources visible to the
+      # principal" is held by this script and by the single compiler emitter, and by nothing else.
+      # It is NOT a database permission: the app connects as the owning role, so psql can call one
+      # directly. Accepted residue, stated in the script's own header.
+      - name: Security tripwire — ungated find fragments and who names them
+        run: bash .github/scripts/audit-ungated-fragments.sh
+
+      # Not a security tripwire — a PROVENANCE one. Three planning sessions on the /api/query arc
+      # were spent undoing "firm decisions" that no human took: an agent writes a design paragraph
+      # in the first person, nothing marks it unratified because our prose voice for a decision and
+      # for a proposal are identical, and it hardens — worst of all into a TEST NAME, which every
+      # later agent greps and reads as settled. The discriminator already existed and cost nothing
+      # to omit: every real decision in these files carries `[decided — DATE, WHO]` or an ADJ
+      # number. This makes omitting it cost something. See the script header for the specimen.
+      - name: Provenance tripwire — decision-voiced prose nobody signed
+        run: bash .github/scripts/audit-unattributed-decisions.sh
+
+      # Not a security tripwire — a COVERAGE one, and it sits here because it is the same shape:
+      # a pinned set that makes an exception a declaration rather than a place to put things.
+      #
+      # "Every test must run in CI, or loudly declare why it does not" was enforced on the
+      # ENABLEMENT half only. That half holds: selection is `--workspace`, and every feature gate
+      # maps to a job. The DECLARATION half had nothing, and on 2026-08-05 two of the three
+      # `#[ignore]` reasons that were finally checked turned out to be FALSE — both blaming a
+      # search defect that no longer existed, while the real blocker was a one-line fixture fix.
+      # A stale reason is worse than no reason: it is what stops anyone re-examining.
+      - name: Coverage tripwire — the set of #[ignore]d tests
+        run: bash .github/scripts/audit-ignored-tests.sh
+
+      # Not a security tripwire — a CONTRACT one, and it exists to keep an argument honest.
+      # Not a baseline tripwire either: it reads build-cli-binaries.yml directly. Deleting the
+      # `.manifest.json` line from the attestation's `subject-path` is a silent one-line edit —
+      # the signing job still succeeds, the archive is still attested — that defeats both
+      # `temper version --verify --online` and `temper update`'s manifest attestation, which key
+      # on the MANIFEST's own digest. The first symptom would otherwise be a real release failing
+      # in a user's terminal.
+      - name: Security tripwire — attestation covers archive AND manifest
+        run: bash .github/scripts/audit-attest-subject-path.sh
+
+      # Not a security tripwire — a correctness one, and it protects another safeguard rather than
+      # the product. A runtime `sqlx::query` leaves no `.sqlx` cache entry, so it is invisible to
+      # the schema/binary change detector that reads that cache. This pins the 46 queries that are
+      # legitimately exempt, each against a written reason, so a 47th cannot appear silently. The
+      # prose rule it enforces has existed (unenforced) in code-quality-best-practices.md for
+      # months; when finally measured, 66 of 112 runtime sites had no reason at all.
+      - name: Tripwire — non-macro SQL queries are declared exceptions
+        run: bash .github/scripts/audit-sqlx-macro-exceptions.sh
+
+      - name: Check for unused dependencies
+        run: cargo machete --with-metadata
+
+      # BLOCKING (no continue-on-error): an advisory gate that can never fail is
+      # decorative. It reds the build on any NEW advisory; the ONLY escape hatch
+      # is the short, reviewed ignore list in `.cargo/audit.toml`, where every
+      # grandfathered id carries a reason and a status. rsa (RUSTSEC-2023-0071)
+      # is ignored there and is not even compiled into temper (sqlx-mysql's dep;
+      # we build only the postgres backend), so this gate never blocks on it.
+      # The tool is installed pinned above; the advisory DB is still fetched
+      # fresh here.
+      - name: Security audit
+        run: cargo audit
+
+  # The guards' own tests. Every script above is a bash tripwire whose entire value is that it
+  # FAILS when the thing it protects is broken — and nothing about a passing tripwire distinguishes
+  # "the invariant holds" from "this script can no longer fail". These harnesses feed each guard a
+  # deliberately broken fixture and assert it goes red, which is the only evidence that the green
+  # tick above means anything.
+  #
+  # This job exists because two of these harnesses (test-detect-ci-scope, test-check-openapi-routes)
+  # were committed with a `bash …` usage line and wired into NO job — so they ran nowhere, and the
+  # guards they cover had no standing proof they still bit. Same rot as `streaming_ingest_test` and
+  # the `scenario-schema` feature: a test no job runs is a test that runs nowhere.
+  #
+  # Pure bash, no toolchain, no services — it is deliberately cheap so there is no reason to scope
+  # it away later. Adding a guard means adding its harness HERE, in the same PR.
+  guard-tests:
+    name: CI Guard Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      # depth 2, not 0. The wire diff needs ONE base revision, not 246 commits of history — a full
+      # clone is ~445 MB and this job exists to be cheap enough that nobody is ever tempted to scope
+      # it away. Depth 2 covers a push (HEAD~1); a pull_request gets its base fetched explicitly
+      # below, one commit deep.
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      # Named, visible, and separate so that "we could not get the base" shows up as this step
+      # failing rather than as a check quietly deciding nothing moved. sqlx-wire-diff.sh also
+      # attempts this fetch itself; if BOTH fail it exits 2, and the cross-check turns that into a
+      # failure whenever the change carries a migration. "I could not look" never renders as
+      # "nothing moved".
+      - name: Fetch the base revision (for the wire diff)
+        if: github.event_name == 'pull_request'
+        run: git fetch --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+
+      - name: Guard test — detect-ci-scope
+        run: bash .github/scripts/test-detect-ci-scope.sh
+
+      - name: Guard test — check-openapi-routes
+        run: bash .github/scripts/test-check-openapi-routes.sh
+
+      - name: Guard test — check-client-op-registry
+        run: bash .github/scripts/test-check-client-op-registry.sh
+
+      # THE GATE ITSELF as well as its harness: pure bash, so it belongs in this cheap, unscoped job.
+      # Every published wire type (a ToSchema/IntoParams derive) lives in temper-core, the crate a
+      # client builds against (ruling 2026-10-04).
+      - name: Check every published wire type lives in temper-core
+        run: bash .github/scripts/check-wire-types-in-core.sh
+
+      - name: Guard test — check-wire-types-in-core
+        run: bash .github/scripts/test-check-wire-types-in-core.sh
+
+      # THE GATE ITSELF, not only its harness. docs/ is synced wholesale to the public
+      # documentation site, so the safety property is structural: everything under docs/ is
+      # public, and nothing else lives there. It was got wrong once and published internal
+      # security audits. `cargo make check` runs this too, but no CI job runs cargo-make, so
+      # until this step existed the invariant was enforced only on whichever laptop happened to
+      # run the full local check.
+      #
+      # It lives HERE and not in rust-quality because it is pure bash — no toolchain, no
+      # database, one second — and rust-quality is gated on `inputs.run-rust-quality`. Sitting
+      # there, the only way to reach it for a docs-only PR was to force the WHOLE Rust and
+      # TypeScript pipeline on (measured: `^docs/` in RUST_COUPLED flipped a one-line docs edit
+      # from SKIP_ALL into test-rust + test-typescript + rust-quality). guard-tests carries no
+      # such gate, so detect-ci-scope now only has to invoke this workflow — see the docs/ arm
+      # of the SKIP_ALL branch in detect-ci-scope.sh, which sets RUN_CODE_QUALITY=true while
+      # leaving every heavy job off.
+      - name: Check docs/ holds only public documentation
+        run: bash .github/scripts/check-docs-public-only.sh
+
+      # Pure bash, one second, and it lives in this ungated job for the same reason the
+      # docs/ gate does: the change class it catches — a returning internal/superpowers/
+      # tree — is markdown under a non-product root, which every heavy job skips.
+      # detect-ci-scope.sh puts `^internal/` in DOCS_GATED_ROOTS so this job is invoked
+      # for exactly that change; without it the gate would be unreachable on its own
+      # failure mode.
+      - name: Check no process artifacts are tracked here
+        run: bash .github/scripts/check-no-process-artifacts.sh
+
+      - name: Guard test — check-cli-reference-drift
+        run: bash .github/scripts/test-check-cli-reference-drift.sh
+
+      - name: Guard test — check-config-reference-drift
+        run: bash .github/scripts/test-check-config-reference-drift.sh
+
+      # THE CHECK ITSELF, not only its harness — same reasoning as the docs/ gate below. It is
+      # pure Python over the committed tree, so it belongs in this ungated job rather than in
+      # rust-quality: a docs-only PR that breaks a link must be caught, and rust-quality is
+      # switched off for exactly those.
+      #
+      # `--no-network` is deliberate. The publish half compares against PRODUCTION, which serves
+      # the last publish of `main`, so on a PR branch every added page legitimately reads as
+      # unpublished. It never affects the exit code either way; skipping it just avoids paying
+      # for a round trip whose answer cannot mean anything here.
+      - name: Check docs reach and link integrity
+        run: python3 scripts/docs-coverage.py --strict --no-network
+
+      - name: Guard test — docs-coverage
+        run: bash .github/scripts/test-docs-coverage.sh
+
+      - name: Guard test — check-docs-public-only
+        run: bash .github/scripts/test-check-docs-public-only.sh
+
+      - name: Guard test — check-no-process-artifacts
+        run: bash .github/scripts/test-check-no-process-artifacts.sh
+
+      # THE GATE ITSELF — public-surface drift: fenced `temper …` invocations in
+      # README.md and docs/ must resolve against the committed cli-reference tree
+      # (kept binary-equal by check-cli-reference-drift in rust-quality — prose ==
+      # tree here and tree == binary there compose to prose == binary), stated
+      # route/cron/function counts must equal what vercel.json derives, and NEW
+      # tracked files under internal/ and design-system/ must carry no roadmap
+      # verbs. Pure bash + python3, no toolchain — it lives in this ungated job for
+      # the same reason the docs/ gate does. detect-ci-scope.sh summons this
+      # workflow for README.md, design-system/ and internal/ changes
+      # (DOCS_GATED_ROOTS), so the gate is reachable on exactly its own failure
+      # modes. Reports only: it never writes to the surface it reads, and a green
+      # run never means the SERVED surface matches.
+      - name: Check public-surface drift (cli claims, counts, roadmap sweep)
+        run: bash .github/scripts/check-public-surface-drift.sh
+
+      - name: Guard test — check-public-surface-drift
+        run: bash .github/scripts/test-check-public-surface-drift.sh
+
+      - name: Guard test — check-coverage-floors
+        run: python3 .github/scripts/test-check-coverage-floors.py
+
+      - name: Guard test — audit-route-auth (per-builder layer wiring)
+        run: bash .github/scripts/test-audit-route-auth.sh
+
+      - name: Guard test — audit-mcp-route-auth (router freeze + block-level wiring)
+        run: bash .github/scripts/test-audit-mcp-route-auth.sh
+
+      - name: Guard test — audit-as-entry-points (entry set × vercel.json cross-check)
+        run: bash .github/scripts/test-audit-as-entry-points.sh
+
+      - name: Guard test — audit-signature-secrets (distinct keys)
+        run: bash .github/scripts/test-audit-signature-secrets.sh
+
+      - name: Guard test — audit-credential-debug
+        run: bash .github/scripts/test-audit-credential-debug.sh
+
+      # Five probes, two of them GREEN-direction (markdown may name the header; the ambient
+      # edge token is a different, shorter string whose readers are legitimate) — a tripwire
+      # that reds on either gets re-baselined without being read, which is the same outcome as
+      # no tripwire by a slower route. Red probes assert the output NAMES the flagged file.
+      - name: Guard test — audit-passport-identity-header
+        run: bash .github/scripts/test-audit-passport-identity-header.sh
+
+      - name: Guard test — audit-grant-sinks (SQL half)
+        run: bash .github/scripts/test-audit-grant-sinks.sh
+
+      # Nine probes, both directions: the two red cases name the flagged file, the two canaries
+      # prove an empty scan fails loudly rather than passing, and the three green pins hold the
+      # guard to its stated field of view (non-context write bits, read-only context grants,
+      # tests/ fixtures).
+      - name: Guard test — audit-context-write-grants (both directions)
+        run: bash .github/scripts/test-audit-context-write-grants.sh
+
+      # Six probes. Two of them assert the guard stays GREEN — a comment rewrite above a gate, and a
+      # plain `//` note using elevation vocabulary. A tripwire that reds on prose churn gets
+      # re-baselined without being read, which is the same outcome as no tripwire by a slower route.
+      - name: Guard test — audit-elevation-claims (both triggers, both directions)
+        run: bash .github/scripts/test-audit-elevation-claims.sh
+
+      - name: Guard test — audit-ungated-fragments
+        run: bash .github/scripts/test-audit-ungated-fragments.sh
+
+      # Five probes, and two of them exist because the guard's own first run was green for the wrong
+      # reason: `awk -v` had eaten a backslash out of the attribution pattern, and a `grep -v` on an
+      # empty baseline was exiting 1 under `pipefail` before any comparison ran — so the red probe
+      # was passing on a crash. Claim 1 therefore asserts the OUTPUT names the flagged file, not
+      # merely that the exit code is non-zero.
+      - name: Guard test — audit-unattributed-decisions
+        run: bash .github/scripts/test-audit-unattributed-decisions.sh
+
+      # Spec §1's "silence is a failure" half. The checker itself lives in this job rather than in
+      # rust-quality because it parses migrations/*.sql and needs no toolchain and no database —
+      # which is also what makes it cheap enough that there is never a reason to scope it away.
+      # It runs BEFORE its harness so a real undeclared migration is reported as itself, not as a
+      # failing test case.
+      - name: Every migration declares its class (silence fails)
+        run: bash .github/scripts/audit-migration-declarations.sh
+
+      - name: Guard test — audit-migration-declarations
+        run: bash .github/scripts/test-audit-migration-declarations.sh
+
+      # Spec §3's routing half depends on reading the SAME declaration the checker above reads,
+      # from a SECOND parser in a different language: the awk one runs here over migrations/*.sql,
+      # and a Rust twin runs inside the migration runner over the SQL the binary carries, because a
+      # PENDING migration's class is not in the database yet. The drift has teeth in one direction —
+      # a Rust half reading `additive` where the call says `shape-breaking` auto-applies an
+      # operator-gated migration, which is the 2026-07-30 outage re-entered through its own cure.
+      # Both halves answer to scripts/migration-declaration-corpus.txt; this is the awk side of that
+      # check, and migrate_ledger.rs::declaration_corpus_matches_the_shell is the Rust side.
+      - name: Guard test — migration-declaration parity (awk half of the shared corpus)
+        run: bash .github/scripts/test-migration-declaration-parity.sh
+
+      # Spec §2. The cross-check runs the wire diff itself and prints its output, so there is one
+      # step rather than two — but both harnesses run below, so a broken differ cannot hide behind
+      # a cross-check that never reaches it.
+      #
+      # Deliberately asymmetric: a wire move with nothing declaring shape-breaking FAILS, while a
+      # shape-breaking declaration with an empty wire diff PASSES (noted). The caches only see what
+      # a compile-checked query touches, so a real break can be invisible to them, and failing an
+      # honest over-declaration would train under-declaration — the behaviour that produced the
+      # 2026-07-30 outage.
+      - name: A migration's classification survives the compiler's record (cross-check)
+        env:
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash .github/scripts/sqlx-schema-crosscheck.sh
+
+      # The wire half of the declared-class gate (shared-semver-policy spec §4, D-S4): every PR
+      # touching a wire surface (temper-api/temper-mcp/temper-mcp-server/temper-client, openapi.json, clients/,
+      # packages/) lands its compat-class row in RELEASE_REGISTER.md, and this cross-check
+      # verifies the mechanical half — row presence, register well-formedness, and that the
+      # declared shape class survives the actual openapi diff (anything beyond .info.version).
+      # It sits below the SQL cross-check deliberately: same predicate, same asymmetry, second
+      # wire. And it is MORE barred than that one — behavior is not in any diff, so a green
+      # run here can never certify the behavioral class; the script's output says so on every
+      # pass. jq is preinstalled on the runner; no toolchain, so it lives in this job.
+      - name: Wire-touching PRs declare their compat class (register cross-check)
+        env:
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash .github/scripts/wire-class-crosscheck.sh
+
+      # The pinned-contract gate (2026-09-16): the committed openapi.json stays inside
+      # the current pinned minor (schemas/versions/<M.m>/) — additive-only within the
+      # era, so a client built at the pin interoperates with every later release of the
+      # era. Where the cross-check above makes a break SIGNALED, this makes it
+      # AVOIDABLE: a moved verdict is a shape break, which converts to the deprecation
+      # path or waits for the retirement release train — the PR that moves M cuts the
+      # next pin. Needs only jq (preinstalled on the runner), so it
+      # lives in this job; its harness runs below.
+      - name: The committed contract stays inside its pinned minor (additive-only within a pin)
+        run: bash .github/scripts/check-openapi-pin.sh
+
+      - name: Guard test — sqlx-wire-diff
+        run: bash .github/scripts/test-sqlx-wire-diff.sh
+
+      - name: Guard test — sqlx-schema-crosscheck
+        run: bash .github/scripts/test-sqlx-schema-crosscheck.sh
+
+      - name: Guard test — wire-class-crosscheck
+        run: bash .github/scripts/test-wire-class-crosscheck.sh
+
+      - name: Guard test — check-openapi-pin
+        run: bash .github/scripts/test-check-openapi-pin.sh
+
+      # The release calculator's Gate 1 — the retirement-train trigger (D-C1/D-C2):
+      # a routed row refuses a patch next and takes the era bump under --minor;
+      # bare shape-breaking and converted rows compute a patch. Pure bash: the
+      # harness sandboxes a fresh copy of the release tree, feeds fixture
+      # registers through the real window parser, and stubs only detect-changes
+      # (the git-diff seam) so the class booleans are fixed input.
+      - name: Guard test — calculate-versions (retirement-train trigger)
+        run: bash .github/scripts/test-calculate-versions.sh
+
+      # The release's version writer, run against the repository's own Cargo.toml: every
+      # temperkb-* [workspace.dependencies] spec must move with the anchor whatever keys follow
+      # its version. `release-check`'s dry run never exercises the rewrite, so a manifest shape the
+      # pattern misses otherwise surfaces only when the real bump dies at its read-back.
+      - name: Guard test — update-versions (core bump on the real manifest)
+        run: bash .github/scripts/test-update-versions.sh
+
+      # The Ignored Build Step's polarity is inverted (exit 0 skips, exit 1 builds), so a
+      # sign error there stops production deploying while every check stays green. This
+      # harness asserts both directions, and that a path merely CONTAINING "migrations"
+      # does not trigger a build.
+      - name: Guard test — vercel-ignore-build (polarity + migration scoping)
+        run: bash .github/scripts/test-vercel-ignore-build.sh
+
+      # Its sibling: ignore-build decides WHETHER to build, vercel-build decides what the build does
+      # to the schema. Three things live only in that script and would otherwise be exercised for
+      # the first time in a production deploy — which connection it migrates over (pooled would fail
+      # only under concurrency), what a missing DATABASE_URL means (skip, loudly), and that a halted
+      # run FAILS the deploy rather than shipping a binary ahead of its schema.
+      - name: Guard test — vercel-build (connection choice, skip, and the halt)
+        run: bash .github/scripts/test-vercel-build.sh
+
+      # The operator-run half of the same seam. vercel-build applies the additive class
+      # automatically; a shape-breaking cutover is run by hand from a local checkout, and the
+      # migrator applies the FILES ON DISK — sqlx then records their SHA-384 permanently.
+      # `[observed — 2026-08-24, 12e6df95]` a cutover ran from a commit that was never pushed
+      # and production's ledger ended up holding a checksum reachable from no commit. The
+      # guard has two conjuncts and only the second one bites there, so the harness asserts
+      # the runner is NOT invoked in each refusal case rather than trusting the exit code.
+      - name: Guard test — migrate-cutover (clean tree, pushed HEAD, exit pass-through)
+        run: bash .github/scripts/test-migrate-cutover.sh
+
+      # The gate itself needs cargo, so it runs in rust-quality; this harness stubs the generator
+      # and therefore stays pure bash, which is what lets it live in this job at all.
+      - name: Guard test — check-ts-rs-drift
+        run: bash .github/scripts/test-check-ts-rs-drift.sh
+
+      # Same seam, same reason: the gate needs cargo to emit, this harness stubs the emit and so
+      # stays pure bash. Two of its cases are the ones that matter — an emit that succeeds while
+      # writing nothing, and one whose report the gate can no longer read. Both would otherwise
+      # leave the gate green having compared nothing.
+      - name: Guard test — check-skills-drift
+        run: bash .github/scripts/test-check-skills-drift.sh
+
+      # The skill BUNDLE packager. Its output is consumed by two things that fail late and
+      # unhelpfully — Claude's Skills uploader (exact archive layout) and create-github-release.sh
+      # (whose manifest guard keys on the FILE NAME) — so the cheap checks live here rather than
+      # being discovered in a release job or by a user's failed upload.
+      - name: Guard test — package-skill
+        run: bash .github/scripts/test-package-skill.sh
+
+      # Release-integrity harnesses. emit-manifest produces the per-file manifest the CLI parses;
+      # test-install drives install.sh with a locally-built archive. Both are pure bash and belong
+      # here for the same reason as the rest: a manifest generator that silently emitted constant
+      # hashes, or an installer that stopped verifying, would leave every other check green.
+      #
+      # The CROSS-LANGUAGE half of the manifest contract is deliberately NOT a step here. The step
+      # below and the golden fixture each prove the wire format from one side only — a rename applied
+      # consistently across both bash sides passes both while the Rust deserializer silently stops
+      # parsing. Closing that needs real producer bytes in the real deserializer, which needs cargo:
+      # `manifest.rs::producer_bytes_deserialize_and_verify_through_this_module` shells out to
+      # emit-manifest.sh, and `a_renamed_producer_field_breaks_the_round_trip` is its bite. It rides
+      # the `--workspace` selection in test-rust.yml's unit job rather than getting a named step —
+      # naming individual tests in CI is the hand-written-list antipattern that job's header forbids.
+      - name: Guard test — emit-manifest
+        run: bash .github/scripts/test-emit-manifest.sh
+
+      - name: Guard test — install.sh
+        run: bash scripts/install/test-install.sh
+
+      # The producer half of the manifest contract. install.sh deliberately
+      # installs when no manifest is published (`unverifiable`, not `mismatch` —
+      # pre-v0.2.7 releases have none and must stay installable), which means a
+      # release that silently loses its manifest looks identical to one that
+      # never had it. This is the only place that can refuse.
+      - name: Guard test — create-github-release (manifest presence)
+        run: bash .github/scripts/test-create-github-release.sh
+
+      # The npm publish lane (GitHub Packages, @tasker-systems/*). Publishing runs
+      # for real only at a tagged release, so the duplicate probe's loud-skip path,
+      # the version-agreement guard, and the scope guard are bitten here instead:
+      # a probe that stopped deciding before publish, or a refusal that went
+      # silent, would otherwise be witnessed by an actual registry push.
+      - name: Guard test — publish-npm (duplicate probe + guards)
+        run: bash .github/scripts/test-publish-npm.sh
+
+      # The crates.io publish lane (temperkb-* client closure). Publishing runs
+      # for real only at a tagged release, so the per-crate duplicate probe's
+      # loud-skip path, the partial-resume behavior, BOTH version-agreement
+      # guards ([workspace.package] and the six [workspace.dependencies] specs),
+      # the dependency-order publish, and the dry-run surface are bitten here —
+      # a probe that stopped deciding before its crate's publish, or a closure
+      # that published out of order, would otherwise be witnessed by an actual
+      # registry push.
+      - name: Guard test — publish-crates (ordered lanes + probes + guards)
+        run: bash .github/scripts/test-publish-crates.sh
+
+      # The Ruby publish lane (GitHub Packages). That host has no versions API,
+      # so the push REFUSAL is the duplicate detector; this harness bites the
+      # classifier both ways — a duplicate refusal skips loudly exactly once,
+      # any other failure surfaces its text and exits non-zero — plus the
+      # version-agreement guard and the pinned --key/--host that keeps a push
+      # off rubygems.org.
+      - name: Guard test — publish-ruby-github (push-refusal classifier)
+        run: bash .github/scripts/test-publish-ruby.sh
+
+      # The SHELL half of the containment-parity check. The Rust half rides the
+      # `--workspace` selection in test-rust.yml's unit job
+      # (`manifest.rs::containment_corpus_matches_the_shell`) — both read
+      # `scripts/install/containment-corpus.txt`, so agreement with the corpus is
+      # agreement between the two languages. One-sided edits to either predicate
+      # now fail on the side that was edited; they used to drift in silence.
+      - name: Guard test — containment parity (sh vs Rust)
+        run: bash .github/scripts/test-containment-parity.sh
+
+      - name: Guard test — audit-attest-subject-path
+        run: bash .github/scripts/test-audit-attest-subject-path.sh
+
+      # Most of what this exercises is the ENUMERATOR the tripwire shells out to, because the
+      # tripwire's coverage is exactly that enumerator's coverage. Its turbofish case is a real
+      # regression: `(?:::<[^>]*>)?` cannot cross `Option<String>`, which hid 10 production sites
+      # and left the old script reporting exactly the allow-list's own size.
+      - name: Guard test — audit-sqlx-macro-exceptions
+        run: bash .github/scripts/test-audit-sqlx-macro-exceptions.sh
+
+      # Every arm is a mutation: break one thing the tripwire claims to catch and require it to go
+      # red for THAT reason. The bare-`#[ignore]` arm matters most — a bare ignore also changes the
+      # counts, so a weaker script would fail with the set-changed message and the author would
+      # UPDATE_BASELINE it instead of writing down why.
+      - name: Guard test — audit-ignored-tests
+        run: bash .github/scripts/test-audit-ignored-tests.sh

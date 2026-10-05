@@ -57,21 +57,21 @@ echo "Running detect-ci-scope.sh tests..."
 echo ""
 
 # --- docs-only: skip everything ---
-# `internal/` is gate-owned since check-no-process-artifacts.sh landed, so a change
-# touching it invokes code-quality for guard-tests. Every heavy job stays off —
-# that is the whole point of the DOCS_GATED class. The fixture names a SURVIVING
-# internal path deliberately: the old one pointed into internal/superpowers/, which
-# moved to temper-artifacts.
-run_test "docs-only: heavy jobs skipped, guard-tests still reached" \
+# `internal/` and README.md are gate-owned, but by bash gates in quality-gate.yml's
+# guard-tests job, which runs on every change without consulting this script (the
+# structural pins at the end of this file). So nothing here turns on. The fixture
+# names a SURVIVING internal path deliberately: the old one pointed into
+# internal/superpowers/, which moved to temper-artifacts.
+run_test "docs-only: everything this script decides is off" \
     "README.md
 internal/agents/architecture.md
 CLAUDE.md" \
     "DOCS_ONLY=true" \
-    "RUN_CODE_QUALITY=true" \
+    "RUN_CODE_QUALITY=false" \
     "RUN_TEST_RUST=false" \
     "RUN_TEST_TYPESCRIPT=false" \
     "RUN_TEST_RUBY=false" \
-    "SCOPE_SUMMARY=docs-only: skipping test-rust, test-typescript, test-ruby, test-python, test-agents-ts and the rust-quality job; running code-quality for its pure-bash guard-tests (the docs/ and internal/ gates)"
+    "SCOPE_SUMMARY=docs-only: skipping code-quality, test-rust, test-typescript, test-ruby, test-python, test-agents-ts and quality-gate's rust-gate; guard-tests still runs (the docs/ and internal/ gates)"
 
 # --- per-crate doc files are still docs-only ---
 run_test "crate-dir docs only: docs-only scope" \
@@ -353,9 +353,9 @@ run_test "editing a guard's own test harness runs code-quality too" \
 # ---------------------------------------------------------------------------
 # RUST-INERT skip. A change whose every non-doc file lives in a Rust-inert tree
 # (the TS packages, the SDK clients) skips the Rust corpus — test-rust AND the
-# rust-quality job inside code-quality (RUN_RUST_QUALITY=false) — while
-# code-quality is still INVOKED (RUN_CODE_QUALITY=true) so its TypeScript and
-# guard-test jobs run, and TypeScript tests run too.
+# Rust jobs inside code-quality and quality-gate (RUN_RUST_QUALITY=false) —
+# while code-quality is still INVOKED (RUN_CODE_QUALITY=true) so its TypeScript
+# job runs, and TypeScript tests run too.
 #
 # The skip is ONE-DIRECTIONAL: a Rust change never skips TypeScript (ts-rs
 # generates TS from Rust), and any edit to a Rust-COUPLED committed artifact
@@ -472,14 +472,15 @@ run_test "an ordinary guide is untouched by the reference coupling" \
     "docs/guides/install.md" \
     "DOCS_ONLY=true" \
     "SKIP_ALL=true" \
-    "RUN_CODE_QUALITY=true" \
+    "RUN_CODE_QUALITY=false" \
     "RUN_RUST_QUALITY=false"
 
-# The REST of docs/ is owned by check-docs-public-only.sh, which lives in code-quality's
+# The REST of docs/ is owned by check-docs-public-only.sh, which lives in quality-gate's
 # guard-tests job. The regression that gate exists to catch is a returning internal
-# tree, which is pure markdown — so the extension test would classify it docs-only
-# and skip the very job that would fail. What a docs/ change therefore owes is
-# REACHABILITY: code-quality must be invoked so guard-tests runs.
+# tree, which is pure markdown — so the extension test classifies it docs-only. What
+# a docs/ change owes is REACHABILITY, and it gets it structurally: neither
+# guard-tests nor ci.yml's call to quality-gate carries an `if:` (pinned below), so
+# no verdict from this script can switch the gate off.
 #
 # What it does NOT owe is the Rust corpus. `^docs/` used to sit in RUST_COUPLED,
 # which bought reachability by conscripting the whole pipeline — a one-line docs
@@ -488,33 +489,32 @@ run_test "an ordinary guide is untouched by the reference coupling" \
 # DOCS_ONLY/SKIP_ALL forced false); they now pin the narrower contract. The
 # RUN_*=false lines are the load-bearing half — without them the widening could
 # come back unnoticed.
-run_test "docs/ page (*.md): stays a skip EXCEPT that code-quality is invoked for the docs gate" \
+run_test "docs/ page (*.md): a full skip — the docs gate is reached structurally" \
     "docs/superpowers/plans/2026-08-19-something.md" \
     "DOCS_ONLY=true" \
     "SKIP_ALL=true" \
     "RUST_INERT=false" \
-    "RUN_CODE_QUALITY=true" \
+    "RUN_CODE_QUALITY=false" \
     "RUN_RUST_QUALITY=false" \
     "RUN_TEST_RUST=false" \
     "RUN_TEST_TYPESCRIPT=false" \
     "RUN_TEST_RUBY=false" \
     "RUN_TEST_AGENTS_TS=false"
 
-# Mixed with a non-product tree: still nothing load-bearing, so the docs/ arm of the
-# SKIP_ALL branch is the one that must fire — reachability survives the mix.
-run_test "docs/ page + non-product spike tree: code-quality still invoked, nothing else" \
+# Mixed with a non-product tree: still nothing load-bearing, so SKIP_ALL holds.
+run_test "docs/ page + non-product spike tree: still a full skip" \
     "docs/guides/install.md
 scripts/wayfind-spike/queries.sql" \
     "SKIP_ALL=true" \
     "NON_PRODUCT=true" \
-    "RUN_CODE_QUALITY=true" \
+    "RUN_CODE_QUALITY=false" \
     "RUN_RUST_QUALITY=false" \
     "RUN_TEST_RUST=false"
 
 # Mixed with an inert TS file there IS something load-bearing, so the rust-inert arm
-# takes over: code-quality is invoked (reaching the docs gate for free) and TS runs,
+# takes over: code-quality is invoked for its TypeScript job and TS tests run,
 # but the Rust corpus stays off — a docs/ page must not drag it back on.
-run_test "docs/ page + inert TS: rust-inert, docs gate's job still runs" \
+run_test "docs/ page + inert TS: rust-inert, the Rust corpus stays off" \
     "docs/guides/install.md
 packages/temper-cloud/src/logger.ts" \
     "DOCS_ONLY=false" \
@@ -524,10 +524,9 @@ packages/temper-cloud/src/logger.ts" \
     "RUN_TEST_RUST=false" \
     "RUN_TEST_TYPESCRIPT=true"
 
-# The narrowing must NOT leak: markdown outside docs/ carries no gate, so it keeps
-# the full skip including code-quality. (The first case in this file pins the same
-# thing; restated here beside the docs/ arm so the boundary is visible at a glance.)
-run_test "markdown outside docs/: no gate, so code-quality stays OFF" \
+# Markdown outside docs/ is the same full skip — no arm of this script tells doc
+# trees apart any more; which bash gate reads which tree is guard-tests' business.
+run_test "markdown outside docs/: a full skip as well" \
     "crates/temper-core/README.md" \
     "DOCS_ONLY=true" \
     "SKIP_ALL=true" \
@@ -576,15 +575,13 @@ packages/temper-cloud/src/x.ts" \
     "RUN_TEST_RUST=true"
 
 # docs-only leaves the new axes off (RUST_INERT is a non-docs concept). README.md
-# is the one docs-only change class that still summons code-quality: the
-# public-surface drift gate reads it, so a README edit — the gate's own failure
-# mode — must invoke the workflow (DOCS_GATED_ROOTS). A gate that runs nowhere
-# passes everywhere; this expectation was `false` until that gate existed.
-run_test "README.md: docs-only, heavy jobs off, code-quality on for the drift gate" \
+# is read by the public-surface drift gate, which runs in guard-tests and so is
+# reached on this change without this script turning anything on.
+run_test "README.md: docs-only, everything this script decides is off" \
     "README.md" \
     "DOCS_ONLY=true" \
     "RUST_INERT=false" \
-    "RUN_CODE_QUALITY=true" \
+    "RUN_CODE_QUALITY=false" \
     "RUN_RUST_QUALITY=false" \
     "RUN_TEST_RUST=false"
 
@@ -654,20 +651,19 @@ run_test "a register reprojection alone: whole pipeline skipped (cc280f98)" \
     "SKIP_ALL=true" \
     "DOCS_ONLY=false" \
     "NON_PRODUCT=true" \
-    "RUN_CODE_QUALITY=true" \
+    "RUN_CODE_QUALITY=false" \
     "RUN_TEST_RUST=false" \
     "RUN_TEST_TYPESCRIPT=false"
 
 # THE GATE'S OWN FAILURE MODE. A session re-creating internal/superpowers/ from a
 # stale instruction produces exactly this change: one markdown file under a
-# non-product root. Before internal/ joined DOCS_GATED this scoped to
-# RUN_CODE_QUALITY=false, so check-no-process-artifacts.sh would have been present
-# and unreachable on the one change class it exists for.
-run_test "an internal spec alone: heavy jobs skipped, but the process-artifact gate is reached" \
+# non-product root. It is a full skip here; check-no-process-artifacts.sh reaches
+# it from guard-tests, which no scope verdict can switch off.
+run_test "an internal spec alone: a full skip — the process-artifact gate is reached structurally" \
     "internal/superpowers/specs/2026-07-30-schema-binary-pairing-design.md" \
     "SKIP_ALL=true" \
     "DOCS_ONLY=true" \
-    "RUN_CODE_QUALITY=true" \
+    "RUN_CODE_QUALITY=false" \
     "RUN_TEST_RUST=false"
 
 # The load-bearing direction, asserted for this root as for every other: the
@@ -679,15 +675,14 @@ crates/temper-api/src/lib.rs" \
     "RUN_CODE_QUALITY=true" \
     "RUN_TEST_RUST=true"
 
-# internal/ must not shadow the docs/ gate. A change that moves a page out of
-# internal/ and into docs/ carries both paths, and docs/ is DOCS_GATED — so
-# code-quality is still invoked to reach check-docs-public-only.sh, which is
-# the gate that exists because internal security audits were once published.
-run_test "internal/ + docs/: still reaches the docs publish-safety gate" \
+# A change that moves a page out of internal/ and into docs/ carries both paths.
+# Still a full skip: check-docs-public-only.sh — the gate that exists because
+# internal security audits were once published — runs from guard-tests regardless.
+run_test "internal/ + docs/: a full skip" \
     "internal/code-reviews/2026-07-18-audit.md
 docs/guides/getting-started.md" \
     "SKIP_ALL=true" \
-    "RUN_CODE_QUALITY=true" \
+    "RUN_CODE_QUALITY=false" \
     "RUN_TEST_RUST=false" \
     "RUN_TEST_TYPESCRIPT=false"
 
@@ -807,140 +802,136 @@ EOF
 assert_every_compiled_in_doc_is_vetoed
 
 # ---------------------------------------------------------------------------
-# A docs-only change must not run `bun install`.
+# THE QUALITY GATE IS UNCONDITIONAL, AND NOTHING THAT COMPILES RUST STARTS
+# WITHOUT IT.
 #
-# code-quality.yml is INVOKED for a docs-only change, deliberately and
-# permanently: the docs/ publish-safety gate lives in its guard-tests job, and
-# invoking the workflow is the cheapest way to reach one second of bash. But
-# "invoked" used to mean the TypeScript Quality job ran too — a
-# `bun install --frozen-lockfile`, a typecheck and a biome pass — which is the
-# same bill-sized-to-the-wrong-gate mistake that putting `^docs/` in
-# RUST_COUPLED made one tier up, just quieter.
+# Two properties, both structural, both spanning ci.yml and quality-gate.yml, so
+# each is asserted at every link rather than at the ends.
 #
-# The property is end-to-end and spans three files, so it is asserted at each
-# link rather than at the ends: the detector must SAY the TypeScript corpus is
-# untouched, ci.yml must CARRY that verdict into the reusable workflow, and the
-# job must READ it. A break in any one link silently restores the bill.
+# REACHABILITY. Every assertion above that leaves code-quality OFF for a docs/,
+# internal/ or README.md change is safe only because the bash gates that own
+# those trees run in quality-gate.yml's guard-tests job, and that job is reached
+# on EVERY change: ci.yml calls the workflow with no `if:`, and guard-tests
+# carries none of its own. Either `if:` appearing makes those skips unsafe — the
+# gate would be present and unreachable on its own failure mode.
+#
+# ORDERING. A red gate must stop the Rust-compiling calls (code-quality,
+# test-rust) from starting, and must never read green. ci-success runs
+# `always()`, so it sees the gate only if quality-gate is in its `needs:` AND is
+# passed to check_job as always-in-scope: without that, a red gate on a skip-all
+# change leaves every downstream job `skipped` with should_run=false, and
+# check_job prints "correctly skipped". The downstream `if:` must not accept a
+# `skipped` gate (the gate is never legitimately skipped, so that only opens a
+# way to run ungated) and must not use `always()`.
 # ---------------------------------------------------------------------------
-assert_typescript_quality_is_scoped() {
-    local repo_root cq ci
+
+# Line range of a top-level job block: prints "<start> <end>" (end exclusive),
+# or nothing when the job is absent.
+job_block() {
+    local file="$1" job="$2" start next
+    start="$(grep -n "^  ${job}:\$" "$file" | head -1 | cut -d: -f1 || true)"
+    [ -n "$start" ] || return 0
+    next="$(awk -v s="$start" 'NR > s && /^  [a-z][a-z0-9-]*:$/ { print NR; exit }' "$file")"
+    # `tr -d`: BSD `wc -l` pads its output, and the range is compared numerically.
+    [ -n "$next" ] || next="$(( $(wc -l < "$file" | tr -d '[:space:]') + 1 ))"
+    echo "$start $next"
+}
+
+# Prints the job-level `if:` line inside the block, if any.
+job_if() {
+    local file="$1" range="$2"
+    awk -v a="${range% *}" -v b="${range#* }" 'NR > a && NR < b && /^    if:/ { print; exit }' "$file"
+}
+
+pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
+fail() { echo "  FAIL: $1"; shift; for l in "$@"; do echo "        $l"; done; FAIL=$((FAIL + 1)); }
+
+assert_quality_gate_is_unconditional_and_first() {
+    local repo_root ci qg cq range
     repo_root="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-    cq="${repo_root}/.github/workflows/code-quality.yml"
     ci="${repo_root}/.github/workflows/ci.yml"
+    qg="${repo_root}/.github/workflows/quality-gate.yml"
+    cq="${repo_root}/.github/workflows/code-quality.yml"
 
-    # --- link 1: the detector's verdict, taken BEHAVIOURALLY ---
-    #
-    # `--stdin` is mandatory, not stylistic. Without it the detector falls back to
-    # `git diff` against the base ref — the real branch, which is never docs-only —
-    # so the assertion would pass no matter what the detector contained. That exact
-    # vacuous pass shipped once in this suite's sibling and was found by mutation,
-    # not by reading.
-    local verdict
-    verdict="$(printf '%s\n' 'docs/guides/install.md' \
-        | bash "$DETECT_SCRIPT" --stdin 2>/dev/null || true)"
-    if echo "$verdict" | grep -q '^RUN_CODE_QUALITY=true' \
-       && echo "$verdict" | grep -q '^RUN_TEST_TYPESCRIPT=false'; then
-        echo "  PASS: a docs-only change invokes code-quality with the TS axis off"
-        PASS=$((PASS + 1))
+    # --- reachability, link 1: ci.yml calls quality-gate.yml with no `if:` ---
+    range="$(job_block "$ci" quality-gate)"
+    if [ -z "$range" ]; then
+        fail "no quality-gate job in ci.yml — the docs/ gate has no caller"
+    elif ! awk -v a="${range% *}" -v b="${range#* }" 'NR > a && NR < b' "$ci" \
+            | grep -qE '^    uses: \./\.github/workflows/quality-gate\.yml$'; then
+        fail "ci.yml's quality-gate job does not call ./.github/workflows/quality-gate.yml"
+    elif [ -n "$(job_if "$ci" "$range")" ]; then
+        fail "ci.yml's quality-gate call grew an \`if:\` — the docs/ gate can now be" \
+             "switched off, and every docs skip above is unsafe: $(job_if "$ci" "$range")"
     else
-        echo "  FAIL: a docs-only change does not produce (code-quality on, TS off)"
-        echo "        detector said: $(echo "$verdict" \
-            | grep -E '^(SKIP_ALL|RUN_CODE_QUALITY|RUN_TEST_TYPESCRIPT)=' | tr '\n' ' ')"
-        FAIL=$((FAIL + 1))
+        pass "ci.yml calls quality-gate.yml unconditionally"
     fi
 
-    # --- link 2: ci.yml must carry that verdict into the reusable workflow ---
-    #
-    # The OUTPUT NAME is pinned, not just the input name. An input wired to a
-    # constant, to the wrong output, or to a typo'd one would satisfy a check that
-    # only looked for `run-typescript-quality:` — and would be a job that never
-    # switches off (or, worse, never switches on).
-    if grep -qE '^[[:space:]]*run-typescript-quality:[[:space:]]*\$\{\{[[:space:]]*needs\.detect-scope\.outputs\.run-test-typescript[[:space:]]*\}\}[[:space:]]*$' "$ci"; then
-        echo "  PASS: ci.yml feeds run-typescript-quality from run-test-typescript"
-        PASS=$((PASS + 1))
+    # --- reachability, link 2: guard-tests carries no `if:` of its own ---
+    range="$(job_block "$qg" guard-tests)"
+    if [ -z "$range" ]; then
+        fail "no guard-tests job in quality-gate.yml — the docs/ gate has no home"
+    elif [ -n "$(job_if "$qg" "$range")" ]; then
+        fail "guard-tests grew a job-level \`if:\` — the docs/ gate can now be switched" \
+             "off, and every docs skip above is unsafe: $(job_if "$qg" "$range")"
     else
-        echo "  FAIL: ci.yml does not pass run-typescript-quality from the detector's"
-        echo "        run-test-typescript output — the job cannot be switched off"
-        FAIL=$((FAIL + 1))
+        pass "guard-tests carries no gate, so every change reaches docs/"
     fi
 
-    # --- link 3: the job must read it, and read it in ITS OWN block ---
-    #
-    # Structural rather than textual, for the reason the docs-gate suite learned:
-    # a matching line somewhere in the file proves nothing about which job owns it.
-    # `if:` under rust-quality would grep identically and gate the wrong thing.
-    local ts_line next_line if_line bun_line
-    ts_line="$(grep -n '^  typescript-quality:' "$cq" | head -1 | cut -d: -f1 || true)"
-    if [ -z "$ts_line" ]; then
-        echo "  FAIL: no typescript-quality job in code-quality.yml — this check is blind"
-        FAIL=$((FAIL + 1))
-        return 0
-    fi
-    # The next job header after it, or EOF if it is the last job.
-    next_line="$(awk -v start="$ts_line" 'NR > start && /^  [a-z][a-z0-9-]*:$/ { print NR; exit }' "$cq")"
-    # `tr -d` is not cosmetic: BSD `wc -l` pads its output ("     498"), and the
-    # numeric comparisons below then compare against a string with spaces in it.
-    [ -n "$next_line" ] || next_line="$(wc -l < "$cq" | tr -d '[:space:]')"
-
-    if_line="$(awk -v a="$ts_line" -v b="$next_line" \
-        "NR > a && NR < b && /^[[:space:]]*if:[[:space:]]*inputs\\.run-typescript-quality == 'true'[[:space:]]*\$/ { print NR; exit }" "$cq")"
-    if [ -n "$if_line" ]; then
-        echo "  PASS: the typescript-quality job is gated on run-typescript-quality"
-        PASS=$((PASS + 1))
+    # --- ordering, link 1: ci-success needs the gate and reads it as always in scope ---
+    # Read inside ci-success's own block: code-quality and test-rust also list
+    # quality-gate in their `needs:`, so a file-wide grep passes with it gone from here.
+    range="$(job_block "$ci" ci-success)"
+    if [ -n "$range" ] && awk -v a="${range% *}" -v b="${range#* }" 'NR > a && NR < b' "$ci" \
+        | grep -qE '^    needs: \[.*\bquality-gate\b.*\]$'; then
+        pass "ci-success needs quality-gate"
     else
-        echo "  FAIL: typescript-quality (line ${ts_line}) carries no"
-        echo "        \`if: inputs.run-typescript-quality == 'true'\` of its own"
-        FAIL=$((FAIL + 1))
+        fail "ci-success does not list quality-gate in needs — its result is empty"
+    fi
+    # check_job's three arguments span three lines; the third must be the literal
+    # "true". Scope-derived should_run here is exactly the green-on-red hole.
+    if grep -A3 -E '^[[:space:]]*check_job "quality-gate" \\$' "$ci" \
+        | grep -qE '^[[:space:]]*"true"[[:space:]]*$'; then
+        pass "ci-success validates quality-gate as always in scope"
+    else
+        fail "ci-success does not call \`check_job \"quality-gate\" <result> \"true\"\` —" \
+             "a red gate on an out-of-scope change would read green"
     fi
 
-    # And the spend this exists to avoid must actually live inside that block. If
-    # `bun install` migrates to another job, gating this one saves nothing while
-    # still reading green — coverage inferred from the gate's existence rather than
-    # from what it covers.
-    # Comment lines excluded deliberately: the input's own declaration explains
-    # itself by naming `bun install`, and matching that would have this check
-    # measure the prose instead of the step. It did, on first run.
-    bun_line="$(grep -nE '^[[:space:]]*(run|-[[:space:]]+run):.*bun install' "$cq" \
-        | head -1 | cut -d: -f1 || true)"
-    if [ -n "$bun_line" ] && [ "$bun_line" -gt "$ts_line" ] && [ "$bun_line" -lt "$next_line" ]; then
-        echo "  PASS: the bun install this gate exists to skip is inside that job"
-        PASS=$((PASS + 1))
-    else
-        echo "  FAIL: \`bun install\` is at line '${bun_line}', outside the"
-        echo "        typescript-quality block (${ts_line}..${next_line}) — gating"
-        echo "        that job no longer skips it"
-        FAIL=$((FAIL + 1))
-    fi
+    # --- ordering, link 2: every Rust-compiling call waits on a SUCCESSFUL gate ---
+    local job iff
+    for job in code-quality test-rust; do
+        range="$(job_block "$ci" "$job")"
+        if [ -z "$range" ]; then
+            fail "no ${job} job in ci.yml — this check is blind"
+            continue
+        fi
+        if awk -v a="${range% *}" -v b="${range#* }" 'NR > a && NR < b' "$ci" \
+            | grep -qE '^    needs: \[.*\bquality-gate\b.*\]$'; then
+            pass "${job} needs quality-gate"
+        else
+            fail "${job} does not need quality-gate — it starts before the gate answers"
+        fi
+        iff="$(job_if "$ci" "$range")"
+        if echo "$iff" | grep -qF "needs.quality-gate.result == 'success'" \
+           && ! echo "$iff" | grep -qE "skipped|always\(\)"; then
+            pass "${job} runs only on a successful gate"
+        else
+            fail "${job}'s \`if:\` does not require needs.quality-gate.result == 'success'," \
+                 "or admits a skipped gate / always(): ${iff}"
+        fi
+    done
 
-    # --- link 4: guard-tests must stay ungated ---
-    #
-    # The other half of the same coupling. Every saving above is only legitimate
-    # because a docs-only change still REACHES the docs/ gate, and it reaches it
-    # solely by virtue of guard-tests carrying no `if:` at all. The moment that job
-    # grows one, "code-quality was invoked" stops implying "the gate ran", and this
-    # whole section becomes a cheaper way to run nothing.
-    local guard_line guard_next guard_if
-    guard_line="$(grep -n '^  guard-tests:' "$cq" | head -1 | cut -d: -f1 || true)"
-    if [ -z "$guard_line" ]; then
-        echo "  FAIL: no guard-tests job in code-quality.yml — the docs/ gate has no home"
-        FAIL=$((FAIL + 1))
-        return 0
-    fi
-    guard_next="$(awk -v start="$guard_line" 'NR > start && /^  [a-z][a-z0-9-]*:$/ { print NR; exit }' "$cq")"
-    [ -n "$guard_next" ] || guard_next="$(wc -l < "$cq" | tr -d '[:space:]')"
-    guard_if="$(awk -v a="$guard_line" -v b="$guard_next" \
-        'NR > a && NR < b && /^    if:/ { print NR; exit }' "$cq")"
-    if [ -z "$guard_if" ]; then
-        echo "  PASS: guard-tests carries no gate, so an invocation still reaches docs/"
-        PASS=$((PASS + 1))
+    # A guard-tests job left behind in code-quality.yml would be a second copy
+    # whose gates run only when code-quality is invoked — the stale half of a move.
+    if grep -qE '^  guard-tests:$' "$cq"; then
+        fail "code-quality.yml still carries a guard-tests job — it moved to quality-gate.yml"
     else
-        echo "  FAIL: guard-tests grew a job-level \`if:\` at line ${guard_if} — the docs/"
-        echo "        gate can now be switched off, and every skip above is unsafe"
-        FAIL=$((FAIL + 1))
+        pass "guard-tests lives only in quality-gate.yml"
     fi
 }
 
-assert_typescript_quality_is_scoped
+assert_quality_gate_is_unconditional_and_first
 
 # ---------------------------------------------------------------------------
 # EVERY PATH-SCOPED JOB MUST BE GATED *AND* VALIDATED.
