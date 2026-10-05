@@ -2272,12 +2272,67 @@ fn parse_open_meta_flag(flag: &str, raw: &str) -> Result<serde_json::Value> {
 
 /// Print the self-describing open_meta convention (recognized keys, shapes, FTS-indexing, and
 /// discouraged keys). Mirrors the MCP `describe_open_meta` tool — both render the shared
-/// [`temper_workflow::schema::OpenMetaConvention`]. Respects `--format`.
-pub fn describe_open_meta(format: crate::format::OutputFormat) -> Result<()> {
-    let convention = temper_workflow::schema::describe_open_meta()?;
-    let rendered = crate::format::render(&convention, format)?;
-    crate::output::plain(rendered);
+/// [`temper_core::types::schema::OpenMetaConvention`]. Respects `--format`.
+///
+/// The server's answer by default: the deployment that validates a write is the authority on its
+/// schema, and it can differ from this binary's when the versions do. `local` answers from the
+/// schema compiled into this binary — the same function the server calls, so the shape is one.
+pub fn describe_open_meta(local: bool, format: crate::format::OutputFormat) -> Result<()> {
+    if local {
+        return render_local(&temper_workflow::schema::describe_open_meta()?, format);
+    }
+    crate::actions::runtime::render_read(format, move |client| {
+        Box::pin(async move { client.schema().describe_open_meta().await })
+    })
+}
+
+/// `temper resource doc-types [--local]` — the document types; the server's answer by default
+/// (see [`describe_open_meta`]).
+pub fn doc_types(local: bool, format: crate::format::OutputFormat) -> Result<()> {
+    if local {
+        return render_local(&temper_workflow::schema::list_doc_types(), format);
+    }
+    crate::actions::runtime::render_read(format, move |client| {
+        Box::pin(async move { client.schema().list_doc_types().await })
+    })
+}
+
+/// `temper resource describe-type <name> [--local]` — one document type's schema; the server's
+/// answer by default (see [`describe_open_meta`]).
+pub fn describe_type(name: &str, local: bool, format: crate::format::OutputFormat) -> Result<()> {
+    if local {
+        return render_local(&temper_workflow::schema::describe_doc_type(name)?, format);
+    }
+    let name = name.to_string();
+    crate::actions::runtime::render_read(format, move |client| {
+        Box::pin(async move { client.schema().describe_doc_type(&name).await })
+    })
+}
+
+fn render_local<T: serde::Serialize>(value: &T, format: crate::format::OutputFormat) -> Result<()> {
+    crate::output::plain(crate::format::render(value, format)?);
     Ok(())
+}
+
+/// `temper resource connections <ref> [--limit N]` — the resource's edges, one page.
+pub fn connections(
+    r#ref: &str,
+    limit: Option<i32>,
+    format: crate::format::OutputFormat,
+) -> Result<()> {
+    let id = temper_workflow::operations::parse_ref(r#ref)?.0;
+    let query = temper_core::types::query_params::ConnectionsQuery { limit };
+    crate::actions::runtime::render_read(format, move |client| {
+        Box::pin(async move { client.resources().list_connections(id, &query).await })
+    })
+}
+
+/// `temper resource citation-audits <ref>` — the signed audit verdicts on a finding's citations.
+pub fn citation_audits(r#ref: &str, format: crate::format::OutputFormat) -> Result<()> {
+    let id = temper_workflow::operations::parse_ref(r#ref)?.0;
+    crate::actions::runtime::render_read(format, move |client| {
+        Box::pin(async move { client.resources().list_citation_audits(id).await })
+    })
 }
 
 /// Send-side gate for the open (caller-defined) frontmatter tier (create + update), the twin of the

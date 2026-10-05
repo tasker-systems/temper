@@ -107,9 +107,9 @@ mod tests {
 
     #[test]
     fn read_command_is_not_lost_ack_prone() {
-        // `DescribeOpenMeta` is a unit read variant — no lost-ack hazard.
+        // `DescribeOpenMeta` is a read — no lost-ack hazard.
         assert!(!is_lost_ack_prone_write(&Commands::Resource {
-            action: ResourceAction::DescribeOpenMeta
+            action: ResourceAction::DescribeOpenMeta { local: false }
         }));
     }
 

@@ -258,8 +258,20 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         fields: &fields,
                     },
                 ),
-                ResourceAction::DescribeOpenMeta => {
-                    temper_cli::commands::resource::describe_open_meta(output_format)
+                ResourceAction::DescribeOpenMeta { local } => {
+                    temper_cli::commands::resource::describe_open_meta(local, output_format)
+                }
+                ResourceAction::DocTypes { local } => {
+                    temper_cli::commands::resource::doc_types(local, output_format)
+                }
+                ResourceAction::DescribeType { name, local } => {
+                    temper_cli::commands::resource::describe_type(&name, local, output_format)
+                }
+                ResourceAction::Connections { r#ref, limit } => {
+                    temper_cli::commands::resource::connections(&r#ref, limit, output_format)
+                }
+                ResourceAction::CitationAudits { r#ref } => {
+                    temper_cli::commands::resource::citation_audits(&r#ref, output_format)
                 }
                 ResourceAction::Show {
                     r#ref,
@@ -1911,7 +1923,16 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 boundary_fingerprint,
                 output_format,
             ),
+            StewardCmd::Sweep { threshold } => commands::steward::sweep(threshold, output_format),
+            StewardCmd::Candidates => commands::steward::candidates(output_format),
+            StewardCmd::Dispatch {
+                threshold,
+                cap,
+                correlation_id,
+            } => commands::steward::dispatch(threshold, cap, correlation_id, output_format),
         },
+        Commands::Auditor { cmd } => commands::auditor::run(cmd, output_format),
+        Commands::Health => commands::health::run(output_format),
         Commands::Graph { cmd } => commands::graph::run(cmd, output_format),
         Commands::Trail { kind, r#ref } => commands::trail::run(kind, &r#ref, output_format),
         Commands::Version {

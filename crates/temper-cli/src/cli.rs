@@ -367,6 +367,17 @@ pub enum Commands {
         cmd: StewardCmd,
     },
 
+    /// Auditor worker doors: claim citation-audit jobs, complete them, survey coverage
+    Auditor {
+        #[command(subcommand)]
+        cmd: AuditorCmd,
+    },
+
+    /// Ask the service whether it is up: its status, version, and build commit. Needs no login.
+    ///
+    /// Wraps `GET /api/health`.
+    Health,
+
     /// Walk the knowledge graph — orient with no question, or move from where you are.
     ///
     /// The CLI peer of the web graph surface's two reads. Both are access-gated: you see
@@ -626,7 +637,52 @@ pub enum ResourceAction {
     /// key's description — whether it is FTS-indexed (and at what weight) or shape-only, plus the
     /// discouraged bare keys. The open tier stays free-form; this is guidance, not a closed
     /// vocabulary. Mirrors the MCP `describe_open_meta` tool.
-    DescribeOpenMeta,
+    ///
+    /// Asks the server (`GET /api/schema/open-meta`): the deployment you write to is the one that
+    /// validates, and its schema can differ from this binary's when the two versions do. `--local`
+    /// answers offline from the schema compiled into this binary.
+    DescribeOpenMeta {
+        /// Answer from the schema compiled into this binary instead of asking the server
+        #[arg(long)]
+        local: bool,
+    },
+    /// List the document types, with whether each has a schema and its required fields.
+    ///
+    /// Asks the server (`GET /api/schema/doc-types`); `--local` answers offline from this binary.
+    DocTypes {
+        /// Answer from the schema compiled into this binary instead of asking the server
+        #[arg(long)]
+        local: bool,
+    },
+    /// Describe one document type: its JSON Schema, required fields, closed vocabularies (a
+    /// task's stages, a goal's statuses), and an example managed tier.
+    ///
+    /// Asks the server (`GET /api/schema/doc-types/{name}`); `--local` answers offline from this
+    /// binary.
+    DescribeType {
+        /// The document type, e.g. `task`
+        name: String,
+        /// Answer from the schema compiled into this binary instead of asking the server
+        #[arg(long)]
+        local: bool,
+    },
+    /// List a resource's connections: its edges in both directions, one page.
+    ///
+    /// Wraps `GET /api/resources/{id}/connections`; the answer says whether rows were left out.
+    Connections {
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
+        /// Max connections (the service defaults to 50 and clamps to 1..=200)
+        #[arg(long)]
+        limit: Option<i32>,
+    },
+    /// List the signed audit verdicts recorded against a finding's citations.
+    ///
+    /// Wraps `GET /api/resources/{id}/citation-audits`. Record one with `audit-citation`.
+    CitationAudits {
+        /// The finding's ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
+    },
     /// Show a resource's content
     Show {
         /// Resource ref: a UUID or the decorated `slug-<uuid>` form
@@ -2351,6 +2407,39 @@ pub enum InvocationCmd {
     },
 }
 
+/// `temper auditor` — the citation-audit worker's doors.
+#[derive(Debug, clap::Subcommand)]
+pub enum AuditorCmd {
+    /// Claim a batch of auditor jobs for one tick.
+    ///
+    /// Wraps `POST /api/auditor/dispatch`. Claims are real: a claimed job is yours until you
+    /// complete it or it times out.
+    Dispatch {
+        /// Max jobs to claim (the server clamps; omit for its default)
+        #[arg(long)]
+        cap: Option<i64>,
+        /// A per-tick correlation id, stamped onto every claimed job and echoed back
+        #[arg(long = "correlation-id")]
+        correlation_id: Option<uuid::Uuid>,
+    },
+    /// Complete your in-flight audit job on a cognitive map. Carries no outcome: the verdicts
+    /// live in the audit trail the session wrote.
+    ///
+    /// Wraps `POST /api/auditor/{cogmap}/complete`.
+    Complete {
+        /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form
+        cogmap: String,
+    },
+    /// Survey audit coverage across the findings you can read.
+    ///
+    /// Wraps `GET /api/auditor/sweep`.
+    Sweep {
+        /// Max findings to report (the server clamps; omit for its default)
+        #[arg(long)]
+        cap: Option<i64>,
+    },
+}
+
 #[derive(Subcommand)]
 pub enum StewardCmd {
     /// Read a team-self-cognition cogmap's ingest delta since its watermark, and whether it clears
@@ -2378,6 +2467,33 @@ pub enum StewardCmd {
         /// settle but silently absorbs any boundary change during the run.
         #[arg(long)]
         boundary_fingerprint: Option<String>,
+    },
+    /// Survey steward drift across the maps you can steward.
+    ///
+    /// Wraps `GET /api/steward/sweep`.
+    Sweep {
+        /// Ingest threshold a map's drift is measured against (the server default when unset)
+        #[arg(long)]
+        threshold: Option<i64>,
+    },
+    /// List the cognitive maps you may steward.
+    ///
+    /// Wraps `GET /api/steward/candidates`.
+    Candidates,
+    /// Claim the drifted maps for one dispatch tick — one job per map, for a worker to tend.
+    ///
+    /// Wraps `POST /api/steward/dispatch`. Claims are real: a claimed map is not claimed again
+    /// until its job completes or times out.
+    Dispatch {
+        /// Ingest threshold gating which maps count as drifted (the server default when unset)
+        #[arg(long)]
+        threshold: Option<i64>,
+        /// Max maps to claim this tick (the server default when unset)
+        #[arg(long)]
+        cap: Option<i64>,
+        /// A per-tick correlation id, stamped onto every claimed job and echoed back
+        #[arg(long = "correlation-id")]
+        correlation_id: Option<uuid::Uuid>,
     },
 }
 
@@ -2841,6 +2957,86 @@ pub enum GraphCmd {
         /// asked for.
         #[arg(long)]
         depth: Option<i32>,
+    },
+    /// The atlas home: the contexts you build in and the cognitive maps you research in.
+    ///
+    /// Wraps `GET /api/graph/home`.
+    Home,
+    /// A context's panorama: its containers and their composition, with the residual grouped.
+    ///
+    /// Wraps `GET /api/graph/contexts/panorama`.
+    ContextPanorama {
+        /// Context ref: `@me/<slug>`, `@<handle>/<slug>`, `+<team-slug>/<slug>`, or a UUID
+        context: String,
+        /// Property key the residual tray groups by (the service defaults to `doc_type`)
+        #[arg(long = "group-by")]
+        group_by: Option<String>,
+        /// Doc-type treated as a container, repeatable (the service defaults to `goal`)
+        #[arg(long = "container-type")]
+        container_types: Vec<String>,
+        /// Container-walk depth (the service defaults to 2 and clamps to 3)
+        #[arg(long)]
+        depth: Option<i32>,
+    },
+    /// Drill into a context: the subgraph composing one container, or one residual bucket.
+    ///
+    /// Wraps `GET /api/graph/contexts/composition`.
+    ContextComposition {
+        /// Context ref: `@me/<slug>`, `@<handle>/<slug>`, `+<team-slug>/<slug>`, or a UUID
+        context: String,
+        /// The container resource to drill (a resource ref)
+        #[arg(long, conflicts_with = "group")]
+        container: Option<String>,
+        /// The residual bucket to drill, as `<group_key>:<group_value>`
+        #[arg(long)]
+        group: Option<String>,
+        /// Doc-type treated as a container, repeatable (the service defaults to `goal`)
+        #[arg(long = "container-type")]
+        container_types: Vec<String>,
+        /// Drill depth (the service defaults to 1 and clamps to 3)
+        #[arg(long)]
+        depth: Option<i32>,
+        /// Container-walk depth for a `--group` drill; must match the panorama's `--depth`
+        /// (the service defaults to 2)
+        #[arg(long = "container-depth")]
+        container_depth: Option<i32>,
+    },
+    /// The subgraph composing one or more regions.
+    ///
+    /// Wraps `GET /api/graph/regions/composition`.
+    RegionComposition {
+        /// A region id, repeatable
+        #[arg(long = "region", required = true)]
+        regions: Vec<uuid::Uuid>,
+        /// Composition depth (the service defaults to 1 and clamps to 3)
+        #[arg(long)]
+        depth: Option<i32>,
+    },
+    /// A cognitive map's territory overview: territories, orphan nodes, and bridges.
+    ///
+    /// Wraps `GET /api/graph/cogmaps/{id}/panorama`.
+    CogmapPanorama {
+        /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form
+        cogmap: String,
+        /// Lens override (defaults to the map's primary lens)
+        #[arg(long)]
+        lens: Option<uuid::Uuid>,
+    },
+    /// The neighborhood of focus resources inside one cognitive map.
+    ///
+    /// Wraps `POST /api/cogmaps/{id}/graph/slice`.
+    CogmapSlice {
+        /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form
+        cogmap: String,
+        /// Focus resource, repeatable; at least one
+        #[arg(long = "seed", required = true)]
+        seeds: Vec<String>,
+        /// Walk depth from the seeds (the service clamps to 10)
+        #[arg(long, default_value_t = 1)]
+        depth: u32,
+        /// Edge kind to walk, repeatable (snake_case, e.g. `leads_to`); none walks every kind
+        #[arg(long = "edge-kind")]
+        edge_kinds: Vec<String>,
     },
 }
 
