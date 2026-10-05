@@ -33,6 +33,23 @@ pub trait TokenStore: Send + Sync {
     fn load(&self) -> Result<Option<StoredAuth>>;
     fn save(&self, auth: &StoredAuth) -> Result<()>;
     fn clear(&self) -> Result<()>;
+
+    /// Take the lock that serializes refreshes of this store's grant, blocking until it is free.
+    /// The refresh is released when the returned guard drops.
+    ///
+    /// The authorization server rotates refresh tokens and ends the whole chain when a spent one
+    /// is presented again (#787), so two refreshers that load the same grant must not both present
+    /// it — the second must wait, re-load, and find the first one's successor. `None` means this
+    /// store's state cannot be shared beyond one process, so there is no one to wait for.
+    fn lock_refresh(&self) -> Result<Option<RefreshLock>> {
+        Ok(None)
+    }
+}
+
+/// An exclusive hold on a store's refresh lock; dropping it releases the lock.
+#[derive(Debug)]
+pub struct RefreshLock {
+    _file: fs::File,
 }
 
 /// Disk-backed token store — the local CLI default. Wraps the existing
@@ -79,6 +96,26 @@ impl TokenStore for DiskTokenStore {
 
     fn clear(&self) -> Result<()> {
         clear_auth_at(&self.path)
+    }
+
+    /// An OS file lock on `<auth path>.lock` — every process sharing this `auth.json` contends for
+    /// the same file. The lock lives on a sibling rather than on `auth.json` itself because
+    /// [`save_auth_to`] replaces that file by rename, and a lock held on a replaced inode guards
+    /// nothing.
+    fn lock_refresh(&self) -> Result<Option<RefreshLock>> {
+        let mut lock_path = self.path.clone().into_os_string();
+        lock_path.push(".lock");
+        let lock_path = PathBuf::from(lock_path);
+        if let Some(parent) = lock_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)?;
+        file.lock()?;
+        Ok(Some(RefreshLock { _file: file }))
     }
 }
 
@@ -440,12 +477,41 @@ pub fn load_auth_from(path: &Path) -> Result<Option<StoredAuth>> {
 }
 
 /// Save auth to an explicit path, creating parent dirs and setting mode 0o600 on Unix.
+///
+/// Written to a sibling temp file and renamed into place, so a concurrent reader sees the old grant
+/// or the new one, never a truncated file — a refresh in one process now lands while other
+/// commands are loading. On unix the temp file is created `0600`, so the token is never readable
+/// beyond its owner, even for the moment before the rename.
 pub fn save_auth_to(auth: &StoredAuth, path: &Path) -> Result<()> {
+    use std::io::Write;
+
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(auth)?;
-    fs::write(path, &json)?;
+
+    // Unique per write, not per process: two threads saving at once must not share a temp file.
+    static SAVE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SAVE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut tmp_path = path.to_path_buf().into_os_string();
+    tmp_path.push(format!(".{}.{seq}.tmp", std::process::id()));
+    let tmp_path = PathBuf::from(tmp_path);
+
+    let mut options = fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let written = options.open(&tmp_path).and_then(|mut f| {
+        f.write_all(json.as_bytes())?;
+        f.sync_all()
+    });
+    if let Err(e) = written.and_then(|()| fs::rename(&tmp_path, path)) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e.into());
+    }
 
     #[cfg(unix)]
     {
@@ -705,6 +771,9 @@ pub fn time_until_expiry(stored: &StoredAuth, now: DateTime<Utc>) -> Duration {
     stored.expires_at - now
 }
 
+/// The longest a refresh-token grant may take before it is abandoned.
+const REFRESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// OAuth2 token response shape — only the fields we care about.
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
@@ -743,7 +812,11 @@ pub async fn refresh_token(
         .as_ref()
         .ok_or(ClientError::TokenExpired)?;
 
-    let client = reqwest::Client::new();
+    // Bounded: a refresher holds the store's refresh lock across this request, and every other
+    // command sharing the grant waits on that lock.
+    let client = reqwest::Client::builder()
+        .timeout(REFRESH_TIMEOUT)
+        .build()?;
     let resp = client
         .post(token_url)
         .form(&[
@@ -791,7 +864,17 @@ pub async fn get_valid_token(
 ) -> Result<String> {
     use secrecy::ExposeSecret;
 
-    let auth = store.load()?.ok_or(ClientError::NotAuthenticated)?;
+    let mut auth = store.load()?.ok_or(ClientError::NotAuthenticated)?;
+
+    // Held until return, so the refresh below happens under it. Taking it blocks the calling
+    // thread for at most one other refresher's grant, which `REFRESH_TIMEOUT` bounds.
+    let _refresh_lock;
+    if needs_refresh(&auth) {
+        _refresh_lock = store.lock_refresh()?;
+        // Whoever held the lock may have refreshed already; its successor is what must be
+        // presented, never the token this process loaded before it waited.
+        auth = store.load()?.ok_or(ClientError::NotAuthenticated)?;
+    }
 
     if needs_refresh(&auth) {
         let refreshed = refresh_token(store, &auth, token_url, client_id).await?;
@@ -803,6 +886,28 @@ pub async fn get_valid_token(
     }
 
     Ok(auth.access_token.expose_secret().to_string())
+}
+
+/// [`get_valid_token`] for a synchronous caller, inside a tokio runtime or not.
+///
+/// The grant runs on its own thread with its own runtime and this thread waits for it, so a caller
+/// already on a runtime — where `block_on` would panic — gets the same answer as one that is not.
+pub fn get_valid_token_blocking(
+    store: &dyn TokenStore,
+    token_url: &str,
+    client_id: &str,
+) -> Result<String> {
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?
+                    .block_on(get_valid_token(store, token_url, client_id))
+            })
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -824,6 +929,81 @@ mod tests {
             profile_id: None,
             device_id: Some("test-device-id".to_owned()),
         }
+    }
+
+    // --- refresh serialization: a rotated refresh token is presented once (#787) ---
+
+    /// Two commands that find the same expired grant must not both present its refresh token: the
+    /// authorization server rotates it on first use and ends the whole chain on a second. The token
+    /// endpoint answers slowly here, so without the lock both refreshers load the grant before
+    /// either has saved the successor, and the spent token goes out twice.
+    #[test]
+    fn concurrent_refreshers_present_the_grant_once() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let server = rt.block_on(async {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/oauth/token"))
+                .and(body_string_contains("refresh_token=rtok_test"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_delay(std::time::Duration::from_millis(300))
+                        .set_body_json(serde_json::json!({
+                            "access_token": "tok_new",
+                            "refresh_token": "rtok_new",
+                            "expires_in": 86400,
+                        })),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            server
+        });
+        let token_url = format!("{}/oauth/token", server.uri());
+
+        let dir = TempDir::new().unwrap();
+        let store = DiskTokenStore::at(dir.path().join("auth.json"));
+        store
+            .save(&make_auth(Utc::now() - Duration::minutes(1)))
+            .unwrap();
+
+        let tokens = temp_env::with_var(TEMPER_TOKEN_ENV, None::<&str>, || {
+            std::thread::scope(|scope| {
+                let refreshers: Vec<_> = (0..2)
+                    .map(|_| {
+                        scope.spawn(|| get_valid_token_blocking(&store, &token_url, "test-client"))
+                    })
+                    .collect();
+                refreshers
+                    .into_iter()
+                    .map(|r| r.join().unwrap().expect("both refreshers get a token"))
+                    .collect::<Vec<_>>()
+            })
+        });
+
+        assert_eq!(tokens, ["tok_new", "tok_new"]);
+        let saved = load_auth_from(&dir.path().join("auth.json"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.refresh_token.unwrap().expose_secret(), "rtok_new");
+        rt.block_on(server.verify());
+    }
+
+    /// The CLI bootstrap reaches this from async fns as well as sync ones; a `block_on` on the
+    /// caller's thread would panic inside a runtime.
+    #[test]
+    fn get_valid_token_blocking_answers_from_inside_a_runtime() {
+        let store = MemoryTokenStore::with_auth(make_auth(Utc::now() + Duration::hours(1)));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime");
+        let token = rt.block_on(async {
+            get_valid_token_blocking(&store, "https://unused.example.com/token", "test-client")
+        });
+        assert_eq!(token.unwrap(), "tok_test");
     }
 
     // --- needs_refresh ---

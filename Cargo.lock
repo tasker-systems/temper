@@ -6168,6 +6168,7 @@ dependencies = [
  "url",
  "uuid",
  "validator",
+ "wiremock",
 ]
 
 [[package]]
