@@ -41,8 +41,9 @@ pub struct ApiConfig {
     /// The one host the self-gated cron doors answer on: this deployment's own generated URL,
     /// which Vercel exposes as `VERCEL_URL` and which Vercel Cron invokes. Every other host —
     /// the public production alias, a custom domain, the UI's `/api` proxy — gets a 404 before
-    /// the bearer is examined, so on a Vercel deployment the secret is never the only control
-    /// between the internet and a door that drains erasure deletes.
+    /// the bearer is examined, so on a Vercel deployment exposing its system environment
+    /// variables the secret is not the only control between the internet and a door that drains
+    /// erasure deletes.
     ///
     /// The generated URL sits behind Vercel Authentication, which Vercel Cron bypasses, so the
     /// host this pins to is not publicly reachable. `None` off Vercel, where the bearer is the
@@ -365,12 +366,28 @@ fn parse_sensitivity_sweep_enabled(lookup: impl Fn(&str) -> Option<String>) -> b
 }
 
 /// Read the host the cron doors are pinned to (see [`ApiConfig::cron_host`]). Vercel sets
-/// `VERCEL_URL` to the deployment's generated host, without a scheme. Unset or blank is off
-/// Vercel, and the pin does not apply.
+/// `VERCEL_URL` to the deployment's generated host, without a scheme. Any port is dropped, as it
+/// is on the request side. Unset or blank is off Vercel, and the pin does not apply.
+///
+/// On Vercel, a missing `VERCEL_URL` means the project stopped exposing system environment
+/// variables, and the pin silently falls away. That leaves the bearer as the only gate, which is
+/// where the doors stood before the pin, so the boot does not refuse. It does say so, once.
 fn parse_cron_host(lookup: impl Fn(&str) -> Option<String>) -> Option<String> {
-    lookup("VERCEL_URL")
+    let host = lookup("VERCEL_URL")
         .map(|v| v.trim().to_ascii_lowercase())
         .filter(|v| !v.is_empty())
+        .map(|v| match v.split_once(':') {
+            Some((name, _port)) => name.to_string(),
+            None => v,
+        });
+    if host.is_none() && lookup("VERCEL_ENV").is_some_and(|v| !v.trim().is_empty()) {
+        tracing::warn!(
+            "VERCEL_ENV is set but VERCEL_URL is not: the cron doors are not pinned to this \
+             deployment's host, and their bearer secret is their only gate. Enable \"Automatically \
+             expose System Environment Variables\" on the Vercel project."
+        );
+    }
+    host
 }
 
 /// Build the blob config from env — `Some` only when a credential is resolvable (spec:
@@ -947,22 +964,43 @@ mod tests {
         );
     }
 
-    // FAILS IF: the salt can equal the cron bearer (Q44). Named, rather than left to the exhaustive
-    // pair test, because that test iterates SHARED_SECRET_VARS and stays green when the salt is
-    // removed from it.
+    // FAILS IF: the pin's host is read with surrounding whitespace, in mixed case, or with a port
+    // the request side strips, or a blank value counts as configured.
     #[test]
     fn the_cron_host_is_the_deployment_url_vercel_exposes() {
         assert_eq!(
             parse_cron_host(env(&[(
                 "VERCEL_URL",
-                " Temper-Cloud-8wsgcpji1-team.vercel.app "
+                " Temper-Cloud-a1b2c3d4e-team.vercel.app "
             )])),
-            Some("temper-cloud-8wsgcpji1-team.vercel.app".to_string())
+            Some("temper-cloud-a1b2c3d4e-team.vercel.app".to_string())
+        );
+        assert_eq!(
+            parse_cron_host(env(&[("VERCEL_URL", "localhost:3000")])),
+            Some("localhost".to_string())
         );
         assert_eq!(parse_cron_host(env(&[("VERCEL_URL", "  ")])), None);
         assert_eq!(parse_cron_host(env(&[])), None);
     }
 
+    // FAILS IF: from_lookup stops reading VERCEL_URL into the pin. The parser has its own test;
+    // this one is the wiring, without which every door test stays green and no deployment is pinned.
+    #[test]
+    fn the_boot_config_carries_the_cron_host() {
+        let pairs = with_secrets(&[(
+            "VERCEL_URL",
+            "temper-cloud-a1b2c3d4e-team.vercel.app".to_string(),
+        )]);
+        let config = ApiConfig::from_lookup(lookup_of(&pairs)).expect("boots");
+        assert_eq!(
+            config.cron_host.as_deref(),
+            Some("temper-cloud-a1b2c3d4e-team.vercel.app")
+        );
+    }
+
+    // FAILS IF: the salt can equal the cron bearer (Q44). Named, rather than left to the exhaustive
+    // pair test, because that test iterates SHARED_SECRET_VARS and stays green when the salt is
+    // removed from it.
     #[test]
     fn a_salt_equal_to_the_dispatch_secret_refuses_to_boot() {
         let shared = "Zb4qY0m8Vt1kP6sR2wX9nL3cH7jD5fGa".to_string();

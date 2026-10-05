@@ -24,7 +24,7 @@ const CRON_DOORS: [&str; 8] = [
     "/api/sensitivity/sweep",
 ];
 
-const PINNED: &str = "temper-cloud-8wsgcpji1-team.vercel.app";
+const PINNED: &str = "temper-cloud-a1b2c3d4e-team.vercel.app";
 const SECRET: &str = "cron-host-pin-test-secret-0123456789";
 
 async fn status(app: &common::TestApp, path: &str, host: &str, bearer: Option<&str>) -> StatusCode {

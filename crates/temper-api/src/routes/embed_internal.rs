@@ -1,7 +1,8 @@
-//! Internal cron-invoked embed (and Slack intents reaper) endpoints — self-gated by
-//! EMBED_DISPATCH_SECRET (bearer), NOT `require_auth`. Called by Vercel crons on a schedule; each
-//! handler checks the secret itself (fail-closed when unset), so no auth-middleware layer is
-//! applied. Excluded from the OpenAPI contract entirely.
+//! Internal cron-invoked endpoints — self-gated, NOT `require_auth`. Called by Vercel crons on a
+//! schedule; each handler calls `embed::require_dispatch_secret` itself, so no auth-middleware
+//! layer is applied. That gate first pins the request to the deployment's own host on Vercel
+//! (`ApiConfig::cron_host`, a 404 on any other host), then checks the EMBED_DISPATCH_SECRET bearer
+//! (fail-closed when unset). Excluded from the OpenAPI contract entirely.
 //!
 //! - `/api/embed/dispatch` — the async-embed drain (issue #299).
 //! - `/api/embed/warm` — cold-start warmup for server-side query embedding (issue #427).

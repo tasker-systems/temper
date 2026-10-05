@@ -76,9 +76,10 @@ fn arrived_on_cron_host(cron_host: Option<&str>, headers: &HeaderMap) -> bool {
 /// 1. **Host pin.** On Vercel, the request must arrive on the deployment's own generated URL
 ///    ([`ApiConfig::cron_host`](temper_services::config::ApiConfig::cron_host)), which is what
 ///    Vercel Cron calls and what sits behind Vercel Authentication. Any other host (the public
-///    production alias, a custom domain, the UI's `/api` proxy) gets a 404 that names nothing,
-///    before the bearer is read. A holder of the secret on the public internet therefore reaches
-///    no door.
+///    `<project>.vercel.app` alias, a custom domain, the UI's `/api` proxy) gets a 404 before the
+///    bearer is read. A holder of the secret on the public internet therefore runs no door. The
+///    404 hides nothing about whether the door exists (its path is in `vercel.json`); it refuses
+///    to act.
 /// 2. **Bearer.** No secret configured ⇒ the endpoint is *disabled* (401), never open: these run
 ///    server-side work (a drain pass, an ONNX warmup, a retention sweep, erasure's byte deletes)
 ///    fed by trust, not user auth, so an unconfigured deploy must refuse rather than expose them.
@@ -95,7 +96,20 @@ pub(crate) fn require_dispatch_secret(
     label: &str,
 ) -> ApiResult<()> {
     if !arrived_on_cron_host(state.config.cron_host.as_deref(), headers) {
-        tracing::warn!("{label}: rejected (request did not arrive on the deployment's cron host)");
+        // Both hosts are logged so a misfiring pin is diagnosable from the log alone. Neither is a
+        // secret. The received one is caller-supplied, so it is Debug-quoted and truncated.
+        let received: String = headers
+            .get(axum::http::header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .chars()
+            .take(255)
+            .collect();
+        tracing::warn!(
+            host = ?received,
+            expected = ?state.config.cron_host,
+            "{label}: rejected (request did not arrive on the deployment's cron host)"
+        );
         return Err(ApiError::NotFound("not found".to_string()));
     }
     let expected = match state.config.embed_dispatch_secret.as_deref() {
@@ -336,19 +350,19 @@ mod tests {
     /// must a request with no `Host` at all, and a lookalike that merely contains the pinned host.
     #[test]
     fn the_cron_host_pin_admits_only_the_deployment_url() {
-        let pinned = Some("temper-cloud-8wsgcpji1-team.vercel.app");
+        let pinned = Some("temper-cloud-a1b2c3d4e-team.vercel.app");
 
         assert!(arrived_on_cron_host(
             pinned,
-            &host("temper-cloud-8wsgcpji1-team.vercel.app")
+            &host("temper-cloud-a1b2c3d4e-team.vercel.app")
         ));
         assert!(arrived_on_cron_host(
             pinned,
-            &host("Temper-Cloud-8wsgcpji1-Team.vercel.app:443")
+            &host("Temper-Cloud-a1b2c3d4e-Team.vercel.app:443")
         ));
         assert!(arrived_on_cron_host(
             pinned,
-            &host("temper-cloud-8wsgcpji1-team.vercel.app.")
+            &host("temper-cloud-a1b2c3d4e-team.vercel.app.")
         ));
 
         assert!(!arrived_on_cron_host(
@@ -358,7 +372,7 @@ mod tests {
         assert!(!arrived_on_cron_host(pinned, &host("temperkb.io")));
         assert!(!arrived_on_cron_host(
             pinned,
-            &host("temper-cloud-8wsgcpji1-team.vercel.app.evil.example")
+            &host("temper-cloud-a1b2c3d4e-team.vercel.app.evil.example")
         ));
         assert!(!arrived_on_cron_host(pinned, &HeaderMap::new()));
     }
