@@ -258,7 +258,7 @@ impl HttpClient {
     ///
     /// Returns [`ClientError::NotConfigured`] when `base_url` is an endpoint
     /// [`endpoint::validate_endpoint`] refuses — plaintext `http` off the
-    /// loopback interface, unless `TEMPER_ALLOW_INSECURE_HTTP` says otherwise.
+    /// loopback interface.
     /// Every request this client sends puts the bearer token on that URL, so
     /// the scheme is checked here, once, rather than per request.
     pub fn new(
@@ -278,11 +278,7 @@ impl HttpClient {
                     .to_string(),
             ));
         }
-        endpoint::validate_endpoint(
-            base_url,
-            "base_url",
-            endpoint::allow_insecure_http_from_env(),
-        )?;
+        endpoint::validate_endpoint(base_url, "base_url")?;
         let inner = Client::builder()
             .timeout(Duration::from_secs(HTTP_REQUEST_TIMEOUT_SECS))
             .build()

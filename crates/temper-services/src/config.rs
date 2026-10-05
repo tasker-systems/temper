@@ -38,6 +38,18 @@ pub struct ApiConfig {
     /// Shared secret gating the internal embed-dispatch drain endpoint (issue #299), called by the
     /// Vercel cron. `None` disables the endpoint (a deployment with no drain configured).
     pub embed_dispatch_secret: Option<String>,
+    /// The one host the self-gated cron doors answer on: this deployment's own generated URL,
+    /// which Vercel exposes as `VERCEL_URL` and which Vercel Cron invokes. Every other host —
+    /// the public production alias, a custom domain, the UI's `/api` proxy — gets a 404 before
+    /// the bearer is examined, so on a Vercel deployment exposing its system environment
+    /// variables the secret is not the only control between the internet and a door that drains
+    /// erasure deletes.
+    ///
+    /// The generated URL sits behind Vercel Authentication, which Vercel Cron bypasses, so the
+    /// host this pins to is not publicly reachable. `None` off Vercel, where the bearer is the
+    /// gate on its own, as it always was. Read from the platform rather than configured, so the
+    /// pin cannot drift from the deployment it describes.
+    pub cron_host: Option<String>,
     /// Shared secret validating the MCP relay's forwarded calls (the network door's
     /// service-to-service credential — design §D2, ruling 6). `None` is a quiet degrade at the
     /// API: the attribution carrier is never trusted and direct callers are unaffected. Never
@@ -239,6 +251,7 @@ impl std::fmt::Debug for ApiConfig {
                 "embed_dispatch_secret",
                 &self.embed_dispatch_secret.as_ref().map(|_| "redacted"),
             )
+            .field("cron_host", &self.cron_host)
             .field(
                 "mcp_service_secret",
                 &self.mcp_service_secret.as_ref().map(|_| "redacted"),
@@ -316,6 +329,7 @@ impl ApiConfig {
             enable_swagger,
             internal_reconcile_secret: shared_secret(&lookup, "INTERNAL_RECONCILE_SECRET"),
             embed_dispatch_secret: shared_secret(&lookup, "EMBED_DISPATCH_SECRET"),
+            cron_host: parse_cron_host(&lookup),
             mcp_service_secret: shared_secret(&lookup, "TEMPER_MCP_SERVICE_SECRET"),
             sensitivity_sweep_salt: shared_secret(&lookup, "SENSITIVITY_SWEEP_SALT"),
             sensitivity_sweep_enabled: parse_sensitivity_sweep_enabled(&lookup),
@@ -349,6 +363,31 @@ fn parse_sensitivity_sweep_enabled(lookup: impl Fn(&str) -> Option<String>) -> b
             false
         }
     }
+}
+
+/// Read the host the cron doors are pinned to (see [`ApiConfig::cron_host`]). Vercel sets
+/// `VERCEL_URL` to the deployment's generated host, without a scheme. Any port is dropped, as it
+/// is on the request side. Unset or blank is off Vercel, and the pin does not apply.
+///
+/// On Vercel, a missing `VERCEL_URL` means the project stopped exposing system environment
+/// variables, and the pin silently falls away. That leaves the bearer as the only gate, which is
+/// where the doors stood before the pin, so the boot does not refuse. It does say so, once.
+fn parse_cron_host(lookup: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let host = lookup("VERCEL_URL")
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+        .map(|v| match v.split_once(':') {
+            Some((name, _port)) => name.to_string(),
+            None => v,
+        });
+    if host.is_none() && lookup("VERCEL_ENV").is_some_and(|v| !v.trim().is_empty()) {
+        tracing::warn!(
+            "VERCEL_ENV is set but VERCEL_URL is not: the cron doors are not pinned to this \
+             deployment's host, and their bearer secret is their only gate. Enable \"Automatically \
+             expose System Environment Variables\" on the Vercel project."
+        );
+    }
+    host
 }
 
 /// Build the blob config from env — `Some` only when a credential is resolvable (spec:
@@ -922,6 +961,40 @@ mod tests {
         assert!(
             dump.contains(r#"sensitivity_sweep_salt: Some("redacted")"#),
             "the config dump does not report the salt as present and redacted"
+        );
+    }
+
+    // FAILS IF: the pin's host is read with surrounding whitespace, in mixed case, or with a port
+    // the request side strips, or a blank value counts as configured.
+    #[test]
+    fn the_cron_host_is_the_deployment_url_vercel_exposes() {
+        assert_eq!(
+            parse_cron_host(env(&[(
+                "VERCEL_URL",
+                " Temper-Cloud-a1b2c3d4e-team.vercel.app "
+            )])),
+            Some("temper-cloud-a1b2c3d4e-team.vercel.app".to_string())
+        );
+        assert_eq!(
+            parse_cron_host(env(&[("VERCEL_URL", "localhost:3000")])),
+            Some("localhost".to_string())
+        );
+        assert_eq!(parse_cron_host(env(&[("VERCEL_URL", "  ")])), None);
+        assert_eq!(parse_cron_host(env(&[])), None);
+    }
+
+    // FAILS IF: from_lookup stops reading VERCEL_URL into the pin. The parser has its own test;
+    // this one is the wiring, without which every door test stays green and no deployment is pinned.
+    #[test]
+    fn the_boot_config_carries_the_cron_host() {
+        let pairs = with_secrets(&[(
+            "VERCEL_URL",
+            "temper-cloud-a1b2c3d4e-team.vercel.app".to_string(),
+        )]);
+        let config = ApiConfig::from_lookup(lookup_of(&pairs)).expect("boots");
+        assert_eq!(
+            config.cron_host.as_deref(),
+            Some("temper-cloud-a1b2c3d4e-team.vercel.app")
         );
     }
 

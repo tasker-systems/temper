@@ -171,15 +171,11 @@ fn prompt_err(e: dialoguer::Error) -> TemperError {
 ///
 /// `temper init` is where the value is chosen; without this check, init happily
 /// writes a config that `build_client_from` then rejects on every cloud
-/// command. The same rule and the same opt-in the client applies, so the
-/// choice and its consequence meet at the seam where both are visible.
+/// command. It applies the same rule the client does, so the choice and its consequence meet at
+/// the seam where both are visible.
 fn validate_instance_url(url: &str) -> std::result::Result<(), TemperError> {
-    temper_client::endpoint::validate_endpoint(
-        url,
-        "instance_url",
-        temper_client::endpoint::allow_insecure_http_from_env(),
-    )
-    .map_err(|e| TemperError::Config(e.to_string()))
+    temper_client::endpoint::validate_endpoint(url, "instance_url")
+        .map_err(|e| TemperError::Config(e.to_string()))
 }
 
 /// `--idp okta` is missing `--auth-server-id`, or `--idp` is unrecognized.

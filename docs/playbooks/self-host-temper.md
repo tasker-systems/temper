@@ -83,6 +83,12 @@ crons are configured**. `vercel.json` declares eleven:
 | every minute | `/api/erasure/drain` | Erasure: deletion work is never processed off the request path. |
 | every 5 minutes | `/api/sensitivity/sweep` | Sensitivity sweep: personal data that lands in the corpus by accident is never found, and the digests of erased places are never expired. Scans nothing until you opt in with `SENSITIVITY_SWEEP_ENABLED` and enable detectors. |
 
+On Vercel these doors answer only on the deployment's own generated URL, which is the host
+Vercel Cron calls (`VERCEL_URL`). Your public domain answers them `404`, so a cron pointed at the
+public domain from outside Vercel never runs. Keep **Automatically expose System Environment
+Variables** on in the project settings: without `VERCEL_URL` the pin falls away and the bearer
+secret is the only gate.
+
 A deployment that skips them accepts writes and looks healthy while search
 results and cogmap regions silently stop advancing. `api/internal.rs` is given
 `maxDuration: 300` for this reason — the drains are long-running relative to a
