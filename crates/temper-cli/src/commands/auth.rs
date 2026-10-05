@@ -499,6 +499,13 @@ pub fn request_review(message: Option<&str>) -> Result<()> {
     })
 }
 
+/// `temper auth settings` — the deployment's public access settings (access mode, terms).
+pub fn settings(fmt: crate::format::OutputFormat) -> Result<()> {
+    crate::actions::runtime::render_read(fmt, move |client| {
+        Box::pin(async move { client.access().get_settings().await })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

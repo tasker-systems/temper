@@ -665,6 +665,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     })
                 })
             }
+            ContextAction::Show { context } => {
+                temper_cli::commands::context_cmd::show(&context, output_format)
+            }
             ContextAction::Restore { context } => {
                 temper_cli::actions::runtime::with_client(|client| {
                     Box::pin(async move {
@@ -1572,6 +1575,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 temper_cli::commands::auth::request_access(message.as_deref())
             }
             AuthAction::WithdrawRequest => temper_cli::commands::auth::withdraw_request(),
+            AuthAction::Settings => temper_cli::commands::auth::settings(output_format),
             AuthAction::RequestReview { message } => {
                 temper_cli::commands::auth::request_review(message.as_deref())
             }
@@ -1933,6 +1937,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
         },
         Commands::Auditor { cmd } => commands::auditor::run(cmd, output_format),
         Commands::Health => commands::health::run(output_format),
+        Commands::Profile { action } => temper_cli::commands::profile::run(action, output_format),
         Commands::Graph { cmd } => commands::graph::run(cmd, output_format),
         Commands::Trail { kind, r#ref } => commands::trail::run(kind, &r#ref, output_format),
         Commands::Version {

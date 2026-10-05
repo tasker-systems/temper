@@ -25,6 +25,7 @@ Commands:
   analytics          Context-level staleness: when the shape was last materialized, the latest touch you can see to its regions and edges, and whether the read is stale
   materialize        Re-form a context's regions when enough has changed since the last materialize. Below the threshold this is a safe no-op (`materialized: false`). Requires write access to the context
   materialize-delta  Read a context's formation drift since its last materialize — the read peer of `context materialize`: how many formation events are pending, and whether the threshold clears. Deny is 404 (absent and unreadable collapsed — no existence oracle)
+  show               Show one context by ref
   help               Print this message or the help of the given subcommand(s)
 
 Options:
@@ -378,4 +379,34 @@ Options:
       --embed-threads <N>      ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
       --color <COLOR>          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
   -h, --help                   Print help
+```
+
+### `temper context show`
+
+```text
+Show one context by ref.
+
+Wraps `GET /api/contexts/{id}` (a decorated ref is resolved first).
+
+Usage: temper context show [OPTIONS] <CONTEXT>
+
+Arguments:
+  <CONTEXT>
+          Context ref: `@me/<slug>`, `@<handle>/<slug>`, `+<team-slug>/<slug>`, or a UUID
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```

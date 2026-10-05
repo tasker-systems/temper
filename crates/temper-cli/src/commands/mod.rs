@@ -21,6 +21,7 @@ pub mod init;
 pub mod invitations;
 pub mod invocation;
 pub mod memory;
+pub mod profile;
 pub mod pull;
 pub mod query_cmd;
 pub mod resource;

@@ -373,6 +373,12 @@ pub enum Commands {
         cmd: AuditorCmd,
     },
 
+    /// Your profile: show it, or update its display name and preferences
+    Profile {
+        #[command(subcommand)]
+        action: ProfileAction,
+    },
+
     /// Ask the service whether it is up: its status, version, and build commit. Needs no login.
     ///
     /// Wraps `GET /api/health`.
@@ -1377,6 +1383,13 @@ pub enum ContextAction {
         #[arg(long)]
         threshold: Option<i64>,
     },
+    /// Show one context by ref.
+    ///
+    /// Wraps `GET /api/contexts/{id}` (a decorated ref is resolved first).
+    Show {
+        /// Context ref: `@me/<slug>`, `@<handle>/<slug>`, `+<team-slug>/<slug>`, or a UUID
+        context: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1417,6 +1430,10 @@ pub enum AuthAction {
         #[arg(long)]
         message: Option<String>,
     },
+    /// Show this deployment's public access settings: its access mode and terms of service.
+    ///
+    /// Wraps `GET /api/access/settings`.
+    Settings,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -2407,6 +2424,26 @@ pub enum InvocationCmd {
     },
 }
 
+/// `temper profile` — the caller's own profile.
+#[derive(Debug, clap::Subcommand)]
+pub enum ProfileAction {
+    /// Show your profile, with its access entitlements.
+    ///
+    /// Wraps `GET /api/profile`.
+    Show,
+    /// Update your display name and/or preferences.
+    ///
+    /// Wraps `PATCH /api/profile`. Only the fields you pass change.
+    Update {
+        /// The display name others see
+        #[arg(long = "display-name")]
+        display_name: Option<String>,
+        /// Your preferences, as a JSON object (replaces the stored preferences)
+        #[arg(long)]
+        preferences: Option<String>,
+    },
+}
+
 /// `temper auditor` — the citation-audit worker's doors.
 #[derive(Debug, clap::Subcommand)]
 pub enum AuditorCmd {
@@ -2738,6 +2775,13 @@ pub enum BlobAction {
         /// Per-act authorship + invocation-correlation flags.
         #[command(flatten)]
         act: ActArgs,
+    },
+    /// Delete a blob you hold: release your hold on its bytes.
+    ///
+    /// Wraps `DELETE /api/blobs/{id}`. The answer's `released` says whether this call released it.
+    Delete {
+        /// The blob's id (from `blob list` / a prior put).
+        blob: uuid::Uuid,
     },
 }
 
