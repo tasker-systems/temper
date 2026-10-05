@@ -101,11 +101,7 @@ pub fn build_client_from(
     // `TemperClient::new` re-validates as `base_url` for direct constructors;
     // a URL that passes here passes there.
     if !url.is_empty() {
-        crate::endpoint::validate_endpoint(
-            &url,
-            "api_url",
-            crate::endpoint::allow_insecure_http_from_env(),
-        )?;
+        crate::endpoint::validate_endpoint(&url, "api_url")?;
     }
     let auth = store.load()?;
     let device_id = auth.as_ref().and_then(|a| a.device_id.clone());
@@ -442,40 +438,35 @@ scopes        = ["openid", "profile"]
     #[test]
     fn build_client_from_refuses_a_plaintext_non_loopback_api_url() {
         // The refusal must surface here — at the builder, before any network
-        // attempt — naming the variable and both outs (https, or the env
-        // opt-in). `api_url()` reads the environment, so pin it unset.
+        // attempt — naming the variable and the one fix (https). `api_url()`
+        // reads the environment, so pin it unset.
         temp_env::with_var("TEMPER_API_URL", None::<&str>, || {
-            temp_env::with_var("TEMPER_ALLOW_INSECURE_HTTP", None::<&str>, || {
-                let config = TemperConfig {
-                    cloud: CloudSection {
-                        api_url: "http://temper.example.com".to_string(),
-                    },
-                    ..TemperConfig::default()
-                };
-                let store: std::sync::Arc<dyn crate::auth::TokenStore> =
-                    std::sync::Arc::new(crate::auth::MemoryTokenStore::empty());
-                let err = build_client_from(
-                    &config,
-                    store,
-                    temper_workflow::operations::Surface::CliCloud,
-                )
-                .expect_err("plaintext non-loopback must be refused");
-                assert!(
-                    matches!(err, crate::error::ClientError::NotConfigured(_)),
-                    "expected NotConfigured, got {err:?}"
-                );
-                let msg = err.to_string();
-                assert!(msg.contains("api_url"), "names the variable: {msg}");
-                assert!(
-                    msg.contains("TEMPER_ALLOW_INSECURE_HTTP"),
-                    "names the opt-in: {msg}"
-                );
-            })
+            let config = TemperConfig {
+                cloud: CloudSection {
+                    api_url: "http://temper.example.com".to_string(),
+                },
+                ..TemperConfig::default()
+            };
+            let store: std::sync::Arc<dyn crate::auth::TokenStore> =
+                std::sync::Arc::new(crate::auth::MemoryTokenStore::empty());
+            let err = build_client_from(
+                &config,
+                store,
+                temper_workflow::operations::Surface::CliCloud,
+            )
+            .expect_err("plaintext non-loopback must be refused");
+            assert!(
+                matches!(err, crate::error::ClientError::NotConfigured(_)),
+                "expected NotConfigured, got {err:?}"
+            );
+            let msg = err.to_string();
+            assert!(msg.contains("api_url"), "names the variable: {msg}");
+            assert!(msg.contains("use https"), "names the fix: {msg}");
         });
     }
 
     #[test]
-    fn build_client_from_allows_loopback_plaintext_and_the_env_opt_out() {
+    fn build_client_from_allows_loopback_plaintext() {
         temp_env::with_var("TEMPER_API_URL", None::<&str>, || {
             let store: std::sync::Arc<dyn crate::auth::TokenStore> =
                 std::sync::Arc::new(crate::auth::MemoryTokenStore::empty());
@@ -492,23 +483,7 @@ scopes        = ["openid", "profile"]
                 store.clone(),
                 temper_workflow::operations::Surface::CliCloud,
             )
-            .expect("loopback plaintext is allowed by default");
-
-            // The opt-in is a variable the operator has to set.
-            temp_env::with_var("TEMPER_ALLOW_INSECURE_HTTP", Some("1"), || {
-                let insecure = TemperConfig {
-                    cloud: CloudSection {
-                        api_url: "http://temper.example.com".to_string(),
-                    },
-                    ..TemperConfig::default()
-                };
-                build_client_from(
-                    &insecure,
-                    store.clone(),
-                    temper_workflow::operations::Surface::CliCloud,
-                )
-                .expect("the explicit opt-in accepts plaintext");
-            });
+            .expect("loopback plaintext is allowed");
         });
     }
 

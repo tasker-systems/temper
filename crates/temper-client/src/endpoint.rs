@@ -12,10 +12,12 @@
 //! from the configuration that caused it — the same discipline the Python
 //! client states in `temper/_validate.py`.
 //!
-//! The deliberate escape hatch is [`allow_insecure_http_from_env`], for the case
-//! this check cannot see: a private network where TLS terminates elsewhere. It is
-//! a variable an operator has to set, which is the point — it must not be a typo
-//! away.
+//! There is no opt-out. Plaintext is accepted to the loopback interface only,
+//! which is the whole of the local-development case; a deployment that
+//! terminates TLS elsewhere on a private network points this client at the
+//! TLS side. A switch that lets a process put a bearer token on the wire in the
+//! clear is the kind of thing an environment variable can flip without anyone
+//! seeing it, and this client also runs server-side, as the MCP relay.
 //!
 //! **Sibling parity, stated so nobody hunts for exactness that was never the
 //! design.** The four clients' validators are not byte-identical on exotic
@@ -42,8 +44,8 @@ const LOOPBACK_NAMES: [&str; 1] = ["localhost"];
 ///   error message that names the URL
 /// * no query or fragment — the client joins the base URL with request paths,
 ///   which would bury them mid-URL
-/// * `http` only to the loopback interface, unless `allow_insecure_http`
-pub fn validate_endpoint(value: &str, name: &str, allow_insecure_http: bool) -> Result<()> {
+/// * `http` only to the loopback interface
+pub fn validate_endpoint(value: &str, name: &str) -> Result<()> {
     fn not_configured(name: &str, what: &str) -> ClientError {
         ClientError::NotConfigured(format!("{name} {what}"))
     }
@@ -94,11 +96,10 @@ pub fn validate_endpoint(value: &str, name: &str, allow_insecure_http: bool) -> 
         ));
     }
 
-    if scheme == "http" && !(allow_insecure_http || is_loopback(host)) {
+    if scheme == "http" && !is_loopback(host) {
         return Err(ClientError::NotConfigured(format!(
             "{name} is plaintext http to a non-loopback host, which would put the \
-             bearer token and client_secret on the wire in the clear; use https, \
-             or set TEMPER_ALLOW_INSECURE_HTTP=1 to accept that deliberately"
+             bearer token and client_secret on the wire in the clear; use https"
         )));
     }
 
@@ -124,30 +125,16 @@ pub fn is_loopback(host: &str) -> bool {
     LOOPBACK_NAMES.contains(&host.as_str()) || host.ends_with(".localhost")
 }
 
-/// The operator's deliberate opt-out for plaintext off the loopback.
-///
-/// `TEMPER_ALLOW_INSECURE_HTTP=1` (or `=true`) accepts a non-loopback `http`
-/// endpoint for the case the scheme check cannot see: a private network where
-/// TLS terminates elsewhere. An environment variable, sibling of
-/// `TEMPER_API_URL`, the established override surface for endpoint-shaped
-/// config. Read at the seam, never per request.
-pub fn allow_insecure_http_from_env() -> bool {
-    std::env::var("TEMPER_ALLOW_INSECURE_HTTP")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn ok(url: &str) {
-        validate_endpoint(url, "base_url", false)
-            .unwrap_or_else(|e| panic!("should validate {url}: {e}"));
+        validate_endpoint(url, "base_url").unwrap_or_else(|e| panic!("should validate {url}: {e}"));
     }
 
     fn refused(url: &str) {
-        let err = validate_endpoint(url, "base_url", false)
+        let err = validate_endpoint(url, "base_url")
             .err()
             .unwrap_or_else(|| panic!("should refuse {url}"));
         assert!(
@@ -216,12 +203,6 @@ mod tests {
     }
 
     #[test]
-    fn the_opt_out_is_a_variable_the_operator_has_to_set() {
-        validate_endpoint("http://temperkb.io", "base_url", true)
-            .expect("explicit opt-in accepts plaintext");
-    }
-
-    #[test]
     fn names_this_machine_by_literal_address_or_reserved_name() {
         assert!(is_loopback("localhost"));
         assert!(is_loopback("LOCALHOST")); // host_str is already lowercased; direct calls are not
@@ -236,24 +217,5 @@ mod tests {
         assert!(!is_loopback("10.0.0.1"));
         assert!(!is_loopback("localhost.example.com")); // .localhost as a SUFFIX of a longer name
         assert!(!is_loopback("127.0.0.2.example.com"));
-    }
-
-    #[test]
-    fn the_env_opt_out_reads_one_and_true() {
-        temp_env::with_var("TEMPER_ALLOW_INSECURE_HTTP", Some("1"), || {
-            assert!(allow_insecure_http_from_env());
-        });
-        temp_env::with_var("TEMPER_ALLOW_INSECURE_HTTP", Some("true"), || {
-            assert!(allow_insecure_http_from_env());
-        });
-        temp_env::with_var("TEMPER_ALLOW_INSECURE_HTTP", Some("TRUE"), || {
-            assert!(allow_insecure_http_from_env());
-        });
-        temp_env::with_var("TEMPER_ALLOW_INSECURE_HTTP", Some("0"), || {
-            assert!(!allow_insecure_http_from_env());
-        });
-        temp_env::with_var("TEMPER_ALLOW_INSECURE_HTTP", None::<&str>, || {
-            assert!(!allow_insecure_http_from_env());
-        });
     }
 }

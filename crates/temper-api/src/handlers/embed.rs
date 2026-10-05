@@ -1,7 +1,8 @@
 //! Internal embed-dispatch drain endpoint (issue #299). A Vercel cron POSTs here on a schedule; the
 //! handler runs one [`embed_service::dispatch_tick`] pass (reap → claim → embed → complete) and
-//! returns a summary. Bearer-secret gated (`EMBED_DISPATCH_SECRET`), fail-closed when unset — a
-//! deployment with no drain configured serves 401. No user auth: embedding is a system backfill fed
+//! returns a summary. Pinned to the deployment's own host on Vercel, then bearer-secret gated
+//! (`EMBED_DISPATCH_SECRET`), fail-closed when unset — a deployment with no drain configured
+//! serves 401. No user auth: embedding is a system backfill fed
 //! only by the trusted server-side write path.
 
 use axum::extract::{Query, State};
@@ -48,21 +49,69 @@ fn secret_matches(presented: &str, expected: &str) -> bool {
     diff == 0
 }
 
-/// Shared fail-closed bearer-secret gate for cron/ops endpoints (`/api/embed/dispatch`,
-/// `/api/embed/warm`, `/api/slack/intents/reap`). No secret configured ⇒ the endpoint is *disabled*
-/// (401), never open: these run server-side work (a drain pass, an ONNX warmup, a retention sweep) fed
-/// by trust, not user auth, so an unconfigured deploy must refuse rather than expose them. `label` names
-/// the endpoint in the rejection log and the error so a misconfigured cron is diagnosable.
+/// Whether this request arrived on the one host the cron doors answer on.
 ///
-/// `pub(crate)`, not private: the Slack link-intents reaper (`handlers::slack_disconnect::reap_intents`)
-/// reuses this exact gate rather than introducing a second `EMBED_DISPATCH_SECRET`-shaped env var — a
-/// new fail-closed variable would become a deploy-time prerequisite, the same hazard that took the T3
-/// deploy dark.
+/// `None` (off Vercel) pins nothing. Otherwise the request's `Host`, without a port and any
+/// trailing dot, must equal the deployment's own generated host. The comparison is not
+/// constant-time because the host is not a secret: it is the deployment URL Vercel prints in
+/// every build log, and it is reachable only through Vercel Authentication.
+fn arrived_on_cron_host(cron_host: Option<&str>, headers: &HeaderMap) -> bool {
+    let Some(expected) = cron_host else {
+        return true;
+    };
+    let Some(host) = headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return false;
+    };
+    let host = host.split(':').next().unwrap_or(host);
+    let host = host.strip_suffix('.').unwrap_or(host);
+    host.eq_ignore_ascii_case(expected)
+}
+
+/// Shared fail-closed gate for the self-gated cron doors: the eight routes in
+/// `routes::embed_internal`, all invoked by Vercel Cron. Two checks, in order:
+///
+/// 1. **Host pin.** On Vercel, the request must arrive on the deployment's own generated URL
+///    ([`ApiConfig::cron_host`](temper_services::config::ApiConfig::cron_host)), which is what
+///    Vercel Cron calls and what sits behind Vercel Authentication. Any other host (the public
+///    `<project>.vercel.app` alias, a custom domain, the UI's `/api` proxy) gets a 404 before the
+///    bearer is read. A holder of the secret on the public internet therefore runs no door. The
+///    404 hides nothing about whether the door exists (its path is in `vercel.json`); it refuses
+///    to act.
+/// 2. **Bearer.** No secret configured ⇒ the endpoint is *disabled* (401), never open: these run
+///    server-side work (a drain pass, an ONNX warmup, a retention sweep, erasure's byte deletes)
+///    fed by trust, not user auth, so an unconfigured deploy must refuse rather than expose them.
+///
+/// `label` names the endpoint in the rejection log and the error so a misconfigured cron is
+/// diagnosable.
+///
+/// Every door shares this one gate and `EMBED_DISPATCH_SECRET` rather than introducing a second
+/// secret-shaped env var: a new fail-closed variable would become a deploy-time prerequisite, the
+/// same hazard that took the T3 deploy dark.
 pub(crate) fn require_dispatch_secret(
     state: &AppState,
     headers: &HeaderMap,
     label: &str,
 ) -> ApiResult<()> {
+    if !arrived_on_cron_host(state.config.cron_host.as_deref(), headers) {
+        // Both hosts are logged so a misfiring pin is diagnosable from the log alone. Neither is a
+        // secret. The received one is caller-supplied, so it is Debug-quoted and truncated.
+        let received: String = headers
+            .get(axum::http::header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .chars()
+            .take(255)
+            .collect();
+        tracing::warn!(
+            host = ?received,
+            expected = ?state.config.cron_host,
+            "{label}: rejected (request did not arrive on the deployment's cron host)"
+        );
+        return Err(ApiError::NotFound("not found".to_string()));
+    }
     let expected = match state.config.embed_dispatch_secret.as_deref() {
         Some(s) if !s.is_empty() => s,
         _ => {
@@ -285,6 +334,54 @@ mod tests {
         // before ever calling this (the `!s.is_empty()` guard in `require_dispatch_secret`), so an
         // unconfigured deploy still fails closed.
         assert!(secret_matches("", ""));
+    }
+
+    fn host(value: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::HOST,
+            value.parse().expect("valid header value"),
+        );
+        headers
+    }
+
+    /// The cron doors answer only on the deployment's own generated host. The public alias and a
+    /// custom domain are the two ways the internet reaches the same function; both must miss, as
+    /// must a request with no `Host` at all, and a lookalike that merely contains the pinned host.
+    #[test]
+    fn the_cron_host_pin_admits_only_the_deployment_url() {
+        let pinned = Some("temper-cloud-a1b2c3d4e-team.vercel.app");
+
+        assert!(arrived_on_cron_host(
+            pinned,
+            &host("temper-cloud-a1b2c3d4e-team.vercel.app")
+        ));
+        assert!(arrived_on_cron_host(
+            pinned,
+            &host("Temper-Cloud-a1b2c3d4e-Team.vercel.app:443")
+        ));
+        assert!(arrived_on_cron_host(
+            pinned,
+            &host("temper-cloud-a1b2c3d4e-team.vercel.app.")
+        ));
+
+        assert!(!arrived_on_cron_host(
+            pinned,
+            &host("temper-cloud.vercel.app")
+        ));
+        assert!(!arrived_on_cron_host(pinned, &host("temperkb.io")));
+        assert!(!arrived_on_cron_host(
+            pinned,
+            &host("temper-cloud-a1b2c3d4e-team.vercel.app.evil.example")
+        ));
+        assert!(!arrived_on_cron_host(pinned, &HeaderMap::new()));
+    }
+
+    /// Off Vercel there is no deployment URL to pin to, and the bearer alone gates, as before.
+    #[test]
+    fn no_cron_host_pins_nothing() {
+        assert!(arrived_on_cron_host(None, &host("anything.example")));
+        assert!(arrived_on_cron_host(None, &HeaderMap::new()));
     }
 
     /// The warm summary is the cron/operator-facing JSON; pin its field names so a rename that would
