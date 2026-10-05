@@ -278,10 +278,7 @@ impl HttpClient {
                     .to_string(),
             ));
         }
-        endpoint::validate_endpoint(
-            base_url,
-            "base_url",
-        )?;
+        endpoint::validate_endpoint(base_url, "base_url")?;
         let inner = Client::builder()
             .timeout(Duration::from_secs(HTTP_REQUEST_TIMEOUT_SECS))
             .build()

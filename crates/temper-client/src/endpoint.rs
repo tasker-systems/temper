@@ -125,14 +125,12 @@ pub fn is_loopback(host: &str) -> bool {
     LOOPBACK_NAMES.contains(&host.as_str()) || host.ends_with(".localhost")
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn ok(url: &str) {
-        validate_endpoint(url, "base_url")
-            .unwrap_or_else(|e| panic!("should validate {url}: {e}"));
+        validate_endpoint(url, "base_url").unwrap_or_else(|e| panic!("should validate {url}: {e}"));
     }
 
     fn refused(url: &str) {
@@ -204,7 +202,6 @@ mod tests {
         refused("http://192.168.1.10");
     }
 
-
     #[test]
     fn names_this_machine_by_literal_address_or_reserved_name() {
         assert!(is_loopback("localhost"));
@@ -221,5 +218,4 @@ mod tests {
         assert!(!is_loopback("localhost.example.com")); // .localhost as a SUFFIX of a longer name
         assert!(!is_loopback("127.0.0.2.example.com"));
     }
-
 }

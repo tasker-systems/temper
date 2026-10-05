@@ -101,10 +101,7 @@ pub fn build_client_from(
     // `TemperClient::new` re-validates as `base_url` for direct constructors;
     // a URL that passes here passes there.
     if !url.is_empty() {
-        crate::endpoint::validate_endpoint(
-            &url,
-            "api_url",
-        )?;
+        crate::endpoint::validate_endpoint(&url, "api_url")?;
     }
     let auth = store.load()?;
     let device_id = auth.as_ref().and_then(|a| a.device_id.clone());

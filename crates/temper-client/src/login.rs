@@ -49,10 +49,7 @@ async fn exchange_code(
     // The authorization code and verifier go on the wire to this URL, so the
     // scheme is checked before any network attempt — the same rule
     // `HttpClient::new` applies to the base URL.
-    crate::endpoint::validate_endpoint(
-        &config.token_url,
-        "token_url",
-    )?;
+    crate::endpoint::validate_endpoint(&config.token_url, "token_url")?;
 
     let client = reqwest::Client::new();
     let resp = client

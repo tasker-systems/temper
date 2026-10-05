@@ -732,10 +732,7 @@ pub async fn refresh_token(
     // The refresh token goes on the wire to this URL, so the scheme is checked
     // before any network attempt — the same rule `HttpClient::new` applies to
     // the base URL, at the one place a secret meets this endpoint.
-    crate::endpoint::validate_endpoint(
-        token_url,
-        "token_url",
-    )?;
+    crate::endpoint::validate_endpoint(token_url, "token_url")?;
 
     let refresh = auth
         .refresh_token
