@@ -23,6 +23,22 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **On Vercel, the eight cron doors answer only on the deployment's own URL; every other host gets a 404**
+  `/api/embed/dispatch`, `/api/embed/warm`, `/api/slack/intents/reap`, `/api/as/reap`,
+  `/api/internal-calls/health`, `/api/region/dispatch`, `/api/erasure/drain` and
+  `/api/sensitivity/sweep` were reachable on the public production alias, on a custom domain, and
+  through the UI's `/api` proxy, with the shared `EMBED_DISPATCH_SECRET` bearer as the only control.
+  The API now reads `VERCEL_URL`, the deployment's generated host, and those doors answer `404`,
+  before the bearer is read, to a request on any other host. Vercel Cron calls the generated URL,
+  which sits behind Vercel Authentication, so scheduled runs are unchanged. Off Vercel (`VERCEL_URL`
+  unset) the bearer alone gates, as before. A manual or external trigger on Vercel must target the
+  deployment URL (`vercel curl`, or the dashboard's run-cron button) rather than the public domain.
+  Who observes: operators who trigger these doors by hand. User-visible: no. Release relevance:
+  behavioral.
+pr: self
+classes: behavioral
+surfaces: http
+status: signal-only
 - **temper-client and the CLI no longer honour `TEMPER_ALLOW_INSECURE_HTTP`: plaintext http reaches loopback only**
   The client's endpoint check refuses a non-loopback `http` URL for the API base URL and the OAuth
   token URL, and nothing turns that off any more. The variable that used to (`TEMPER_ALLOW_INSECURE_HTTP=1`)
