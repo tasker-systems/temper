@@ -13,7 +13,6 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
-use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
@@ -27,14 +26,8 @@ use temper_core::types::invocation::{InvocationSummary, InvocationView};
 use temper_core::types::invocation_requests::{
     CloseInvocationRequest, InvocationAck, OpenInvocationRequest,
 };
+use temper_core::types::query_params::InvocationListQuery as ListQuery;
 use temper_workflow::operations::{Backend, CloseInvocation, OpenInvocation};
-
-/// Query params for the list read. Both filters are optional (omit → unfiltered).
-#[derive(Debug, Deserialize)]
-pub struct ListQuery {
-    pub cogmap: Option<Uuid>,
-    pub status: Option<String>,
-}
 
 /// Open an invocation
 #[utoipa::path(

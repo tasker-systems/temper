@@ -6341,7 +6341,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "trybuild",
- "utoipa",
  "uuid",
  "wiremock",
 ]
@@ -6369,7 +6368,6 @@ dependencies = [
  "temperkb-core",
  "tokio",
  "tracing",
- "utoipa",
  "uuid",
 ]
 
@@ -6394,6 +6392,7 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "open",
+ "percent-encoding",
  "reqwest 0.12.28",
  "secrecy",
  "serde",
@@ -6508,17 +6507,13 @@ dependencies = [
  "async-trait",
  "chrono",
  "jsonschema",
- "schemars",
  "serde",
  "serde_json",
  "serde_yaml",
- "sqlx",
  "temperkb-core",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
- "ts-rs",
- "utoipa",
  "uuid",
 ]
 

@@ -20,6 +20,10 @@ pub struct DiscouragedOpenMetaKey {
 /// CLI `resource describe-open-meta` command, the MCP `describe_open_meta` tool, and
 /// `GET /api/schema/open-meta`. All three surfaces share this type so the guidance can never drift
 /// between them.
+// The doc comment names an item in the server crate it moved from, and rustdoc cannot resolve it
+// from here. Kept byte for byte: utoipa publishes it into openapi.json (and ts-rs into the TS
+// types), so rewording it moves the published contract.
+#[allow(rustdoc::broken_intra_doc_links)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "schema.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -60,6 +64,8 @@ pub struct DocTypeDescription {
     /// The doc-type's own JSON Schema. Deliberately **not** merged with the base schema —
     /// [`schema_value`] says why, and [`base_schema_value`] is the other half for a caller
     /// that wants the whole field surface.
+    // The doc names temper-workflow fns rustdoc cannot resolve from here; the text is published.
+    #[allow(rustdoc::broken_intra_doc_links)]
     pub schema: serde_json::Value,
     /// Doc-type-level required fields only (the base schema's are merged via `allOf` at
     /// validation time).

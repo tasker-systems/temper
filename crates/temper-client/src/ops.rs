@@ -14,7 +14,7 @@
 //! - **The parity test** (`tests` below) reads the repo-root `openapi.json` and fails when an
 //!   operation has no constant, when a constant's verb or template disagrees with the spec, or when
 //!   a published constant names an operation the spec no longer has.
-//! - **Dead code.** The constants are `pub(crate)` and [`ALL`] exists only under `cfg(test)`, so in
+//! - **Dead code.** The constants are `pub(crate)` and `ALL` exists only under `cfg(test)`, so in
 //!   the library build a constant no method uses is an unused item, and CI's clippy runs with
 //!   `-D warnings`. A constant therefore cannot claim coverage that no method provides.
 //! - **The raw-literal guard** (`.github/scripts/check-client-op-registry.sh`) refuses a `"/api/`
@@ -75,14 +75,23 @@ pub(crate) struct Op {
     pub(crate) visibility: Visibility,
 }
 
+/// What [`Op::path`] escapes in a substituted value: all but the unreserved alphanumerics and
+/// `-_~`. `.` is escaped too, so a value of `..` is a literal segment, not a parent directory.
+const PATH_SEGMENT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'~');
+
 impl Op {
     pub(crate) fn method(&self) -> Method {
         self.verb.method()
     }
 
     /// Render the template, substituting each `{param}` placeholder in order with the next of
-    /// `args`. Values are inserted verbatim: a caller whose segment can carry reserved characters
-    /// encodes it first, exactly as it did when it spelled the path with `format!`.
+    /// `args`. Each value is percent-encoded as one path segment: everything but ASCII
+    /// alphanumerics and `-_~` is escaped, `.` included, so no value — a doc-type name off the
+    /// command line, say — can add a segment (`/`), climb one (`..`), or start a query (`?`) and
+    /// reach a different operation with the caller's token. UUIDs encode to themselves.
     ///
     /// A query string, when a method needs one, is appended to the rendered path by the caller;
     /// templates never carry one.
@@ -104,7 +113,10 @@ impl Op {
             let arg = args
                 .next()
                 .unwrap_or_else(|| panic!("too few path arguments for {}", self.template));
-            out.push_str(&arg.to_string());
+            out.extend(percent_encoding::utf8_percent_encode(
+                &arg.to_string(),
+                PATH_SEGMENT,
+            ));
             rest = &rest[close + 1..];
         }
         out.push_str(rest);
@@ -346,6 +358,33 @@ mod tests {
             visibility: Visibility::Published("x"),
         };
         assert_eq!(op.path(&[&1, &"two"]), "/api/x/1/y/two");
+    }
+
+    /// FAILS IF a substituted value can reshape the path: a traversal, an extra segment or a
+    /// query string stays inside its one segment, and a UUID is untouched.
+    #[test]
+    fn path_encodes_each_value_as_one_segment() {
+        let op = Op {
+            verb: Verb::Get,
+            template: "/api/schema/doc-types/{name}",
+            visibility: Visibility::Published("x"),
+        };
+        assert_eq!(
+            op.path(&[&"../../admin/ledger"]),
+            "/api/schema/doc-types/%2E%2E%2F%2E%2E%2Fadmin%2Fledger"
+        );
+        assert_eq!(op.path(&[&".."]), "/api/schema/doc-types/%2E%2E");
+        assert_eq!(
+            op.path(&[&"task?x=1#f"]),
+            "/api/schema/doc-types/task%3Fx%3D1%23f"
+        );
+        assert_eq!(op.path(&[&"%2e%2e"]), "/api/schema/doc-types/%252e%252e");
+        assert_eq!(
+            op.path(&[&"data_artifact"]),
+            "/api/schema/doc-types/data_artifact"
+        );
+        let id = uuid::Uuid::now_v7();
+        assert_eq!(op.path(&[&id]), format!("/api/schema/doc-types/{id}"));
     }
 
     #[test]

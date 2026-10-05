@@ -465,9 +465,11 @@ impl HttpClient {
     }
 
     /// Build a request for a registry operation, on a path rendered from its template
-    /// ([`Op::path`](crate::ops::Op::path)) — the verb comes from the operation, so a method
-    /// cannot send one operation's path under another's verb. Every client method enters here;
-    /// see [`crate::ops`].
+    /// ([`Op::path`](crate::ops::Op::path)). The verb comes from the operation; the path is the
+    /// caller's to render, and nothing here checks it came from the same operation.
+    /// `check-client-op-registry.sh` holds every path to the registry (no literals outside
+    /// `ops.rs`); each method's wiremock test, asserting verb and path together, is what holds
+    /// the pairing. Every client method enters here; see [`crate::ops`].
     pub(crate) fn request(&self, op: &crate::ops::Op, path: &str) -> RequestBuilder {
         self.apply_identity_headers(self.inner.request(op.method(), self.url(path)))
     }

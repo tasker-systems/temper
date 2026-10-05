@@ -652,6 +652,24 @@ mod reads {
         assert_eq!(convention.discouraged_keys[0].use_instead, "temper-status");
     }
 
+    /// FAILS IF a doc-type name can steer the request off its door: a traversal stays one
+    /// encoded segment under `/api/schema/doc-types/`, and nothing reaches the admin ledger.
+    #[tokio::test]
+    async fn a_doc_type_name_cannot_traverse_to_another_door() {
+        let server = MockServer::start().await;
+        let client = test_client(&server.uri());
+        let _ = client
+            .schema()
+            .describe_doc_type("../../admin/ledger")
+            .await;
+        let requests = server.received_requests().await.expect("recording is on");
+        let paths: Vec<_> = requests.iter().map(|r| r.url.path().to_owned()).collect();
+        assert_eq!(
+            paths,
+            vec!["/api/schema/doc-types/%2E%2E%2F%2E%2E%2Fadmin%2Fledger".to_owned()]
+        );
+    }
+
     /// The health door is unauthenticated: the probe must not send a token, so a logged-out
     /// caller can still ask whether the service is up.
     #[tokio::test]

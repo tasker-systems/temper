@@ -270,6 +270,8 @@ pub struct ResourceListParams {
     /// not encode sequences. Parsed by `SectionSet::parse_csv_accepting` against
     /// `ResourceSection::LIST`, which refuses an unknown name naming this door's valid set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    // The doc's link names a type rustdoc cannot resolve as written; the text is published.
+    #[allow(rustdoc::broken_intra_doc_links)]
     pub sections: Option<String>,
 }
 

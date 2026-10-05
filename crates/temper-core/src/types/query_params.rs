@@ -103,6 +103,10 @@ pub struct ListContextsQuery {
 }
 
 /// Query params for [`resolve`].
+// The doc comment names an item in the server crate it moved from, and rustdoc cannot resolve it
+// from here. Kept byte for byte: utoipa publishes it into openapi.json (and ts-rs into the TS
+// types), so rewording it moves the published contract.
+#[allow(rustdoc::broken_intra_doc_links)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
 pub struct ResolveContextQuery {
@@ -161,6 +165,18 @@ pub struct MachineClientListQuery {
     pub include_revoked: bool,
 }
 
+/// Query parameters for `GET /api/invocations`. Both filters are optional (omit → unfiltered).
+///
+/// No `IntoParams` derive: the route documents these inline in its `params(...)`, and deriving
+/// would change `openapi.json`. It lives here because it is the route's wire shape all the same.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InvocationListQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cogmap: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
 /// Query flags for `GET /api/subscriptions`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
@@ -173,6 +189,10 @@ pub struct SubscriptionListQuery {
 }
 
 /// Query parameters for [`count_mine`].
+// The doc comment names an item in the server crate it moved from, and rustdoc cannot resolve it
+// from here. Kept byte for byte: utoipa publishes it into openapi.json (and ts-rs into the TS
+// types), so rewording it moves the published contract.
+#[allow(rustdoc::broken_intra_doc_links)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
 pub struct CountMineQuery {

@@ -14,6 +14,7 @@ use temper_core::types::invocation::{InvocationSummary, InvocationView};
 use temper_core::types::invocation_requests::{
     CloseInvocationRequest, InvocationAck, OpenInvocationRequest,
 };
+use temper_core::types::query_params::InvocationListQuery;
 
 /// Sub-client for invocation-envelope operations.
 pub struct InvocationsClient<'a> {
@@ -75,64 +76,13 @@ impl<'a> InvocationsClient<'a> {
     ) -> Result<Vec<InvocationSummary>> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_INVOCATIONS;
-        let path = list_path(cogmap, status.as_deref());
-        let req = self.http.request(op, &path);
+        let path = op.path(&[]);
+        let req = self
+            .http
+            .request(op, &path)
+            .query(&InvocationListQuery { cogmap, status });
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
             .await
-    }
-}
-
-/// `/api/invocations` with optional `cogmap`/`status` query params — absent ones
-/// are omitted. Shared by the method and its test.
-fn list_path(cogmap: Option<Uuid>, status: Option<&str>) -> String {
-    let mut params: Vec<String> = Vec::new();
-    if let Some(c) = cogmap {
-        params.push(format!("cogmap={c}"));
-    }
-    if let Some(s) = status {
-        params.push(format!("status={s}"));
-    }
-    let base = ops::LIST_INVOCATIONS.path(&[]);
-    if params.is_empty() {
-        base
-    } else {
-        format!("{base}?{}", params.join("&"))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn list_path_omits_all_when_none() {
-        assert_eq!(list_path(None, None), "/api/invocations");
-    }
-
-    #[test]
-    fn list_path_includes_cogmap_only() {
-        let id = Uuid::from_u128(7);
-        assert_eq!(
-            list_path(Some(id), None),
-            format!("/api/invocations?cogmap={id}")
-        );
-    }
-
-    #[test]
-    fn list_path_includes_status_only() {
-        assert_eq!(
-            list_path(None, Some("open")),
-            "/api/invocations?status=open"
-        );
-    }
-
-    #[test]
-    fn list_path_includes_both() {
-        let id = Uuid::from_u128(7);
-        assert_eq!(
-            list_path(Some(id), Some("completed")),
-            format!("/api/invocations?cogmap={id}&status=completed")
-        );
     }
 }

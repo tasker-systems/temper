@@ -36,6 +36,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 thiserror = "2"
 tracing = "0.1"
 url = "2"
+percent-encoding = "2"
 open = "5"
 sha2 = "0.10"
 base64 = "0.22"
