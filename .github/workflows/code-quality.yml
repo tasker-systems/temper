@@ -564,6 +564,13 @@ jobs:
       - name: Guard test — calculate-versions (retirement-train trigger)
         run: bash .github/scripts/test-calculate-versions.sh
 
+      # The release's version writer, run against the repository's own Cargo.toml: every
+      # temperkb-* [workspace.dependencies] spec must move with the anchor whatever keys follow
+      # its version. `release-check`'s dry run never exercises the rewrite, so a manifest shape the
+      # pattern misses otherwise surfaces only when the real bump dies at its read-back.
+      - name: Guard test — update-versions (core bump on the real manifest)
+        run: bash .github/scripts/test-update-versions.sh
+
       # The Ignored Build Step's polarity is inverted (exit 0 skips, exit 1 builds), so a
       # sign error there stops production deploying while every check stays green. This
       # harness asserts both directions, and that a path merely CONTAINING "migrations"

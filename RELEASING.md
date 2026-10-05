@@ -57,12 +57,16 @@ documented path — and no new versions land there.)
 OIDC trusted publishing — RubyGems through
 `rubygems/configure-rubygems-credentials`, npm through `npm publish
 --provenance`, and PyPI through `uv publish --trusted-publishing automatic` —
-with the trusted publisher on each host registered against **`release.yml`**
-(the workflow whose job performs the push — the identity claim names the job's
-own workflow file, even when that workflow was called from the `release-tag.yml`
-chain; a publisher registered against the entry workflow is silently
-unauthorized at push: "You are not allowed to push this gem"). No registry API
-key exists as a repo secret. The first publish of a NEW package name on npm cannot
+with the trusted publisher on every host registered against **both**
+`release-tag.yml` and `release.yml`. Hosts disagree about which workflow a
+called workflow's token names. Inside the `release-tag.yml` chain, crates.io and
+npm match the **calling** workflow (`release-tag.yml`), while RubyGems and PyPI
+match the workflow whose job performs the push (`release.yml`). A host missing
+the name it checks refuses at the token exchange: crates.io answers "does not
+match the workflow filename … in the JWT", RubyGems "You are not allowed to push
+this gem". `release.yml` alone also covers the tag-push and `workflow_dispatch`
+recovery doors, where it is the top-level workflow. A new package name needs
+both entries. No registry API key exists as a repo secret. The first publish of a NEW package name on npm cannot
 be OIDC — npmjs.com only attaches trusted publishers to existing packages — so
 a new name is claimed once locally (`npm login`, then `npm publish --access
 public` in the package directory) and the trusted publisher is attached
