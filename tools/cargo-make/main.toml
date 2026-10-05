@@ -15,8 +15,9 @@ extend = [
 
 [tasks.check]
 description = "Run all quality checks (Rust + TypeScript)"
-# Mirrors the `code-quality / Rust Quality` CI job. The OpenAPI gates belong here for the same
-# reason the rest do: openapi.json is a committed *product of the router*, so a new route — or merely
+# Mirrors CI's Rust checks — quality-gate.yml (fmt, tripwires, machete, audit) and
+# code-quality.yml's Rust Quality job (clippy, the generated-artifact drift gates, doc). The
+# OpenAPI gates belong here for the same reason the rest do: openapi.json is a committed *product of the router*, so a new route — or merely
 # a new field on a response DTO — leaves the committed artifact stale, and nothing else notices.
 # Omitting them meant a green local `check` followed by a red CI job; that is what bit PR #348.
 # `openapi-rb-drift` extends that same reasoning to the temper-rb generated gem (a product of
@@ -144,8 +145,8 @@ script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-config-ref
 [tasks.docs-coverage]
 description = "Fail if any link in docs/ dangles; report reach, escaping links and publish coverage"
 # Pure Python over the committed tree — no cargo, no database. It is here so a local `check`
-# catches a broken link, and it ALSO runs in code-quality's ungated guard-tests job, because
-# rust-quality is switched off for a docs-only change and that is exactly when a link breaks.
+# catches a broken link, and it ALSO runs in quality-gate.yml's guard-tests job, which runs on every
+# change — a docs-only one included, which is exactly when a link breaks.
 #
 # `--no-network`: the publish half compares against PRODUCTION (the last publish of `main`), so
 # on a branch it is noise. It never affects the exit code in either direction — reachability of
@@ -231,7 +232,7 @@ cd "${CARGO_MAKE_WORKING_DIRECTORY}"
 # and `audit-ungated-fragments.sh`'s `MIGRATIONS_DIR` — a guard nobody can make FAIL on purpose is
 # a guard nobody has checked.
 scripts_dir="${TRIPWIRE_SCRIPTS_DIR:-.github/scripts}"
-workflow="${TRIPWIRE_WORKFLOW:-.github/workflows/code-quality.yml}"
+workflow="${TRIPWIRE_WORKFLOW:-.github/workflows/quality-gate.yml}"
 found=0
 fail=0
 missing_in_ci=""

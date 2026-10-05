@@ -1,6 +1,6 @@
 # cargo-audit configuration — https://github.com/rustsec/rustsec/tree/main/cargo-audit
 #
-# The `cargo audit` step in .github/workflows/code-quality.yml is BLOCKING (no
+# The `cargo audit` step in .github/workflows/quality-gate.yml is BLOCKING (no
 # continue-on-error). An advisory gate that can never fail is decorative — a PR
 # tripling the crypto surface would pass an audit that cannot report it. So the
 # gate fails the build on any NEW advisory, and this file is the ONLY escape
