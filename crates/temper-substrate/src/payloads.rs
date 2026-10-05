@@ -20,6 +20,11 @@ use crate::ids::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+// The erasure family's wire shapes live in temper-core (every wire type does); the ledger payloads
+// below embed four of them, re-exported here so `payloads::` stays a complete vocabulary.
+pub use temper_core::types::erasure::{
+    ErasureAct, ErasureTargetOutcome, RedactedEventFields, ResourceErasureRefusalReason,
+};
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::property_owner::PropertyOwner;
 use temper_core::types::slack::IdpRevocation;
@@ -1518,21 +1523,6 @@ pub struct PrincipalGovernanceChanged {
 
 // ── the erasure act (spec 2026-08-31, D1/D6) ─────────────────────────────────
 
-/// One target of a completed erasure and what happened to it (erasure spec, "per-target
-/// outcomes"). The target names itself the way the personal-data manifest does — `table` or
-/// `table.column`; the outcome is the act's own record of what redaction applied. Deliberately
-/// open-textured in v1: ceilings are DATA, not types (D1), and the per-target vocabulary is the
-/// execution build's to pin. `unhonourable_scope` outcomes land here, never silent.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-pub struct ErasureTargetOutcome {
-    /// Manifest identity of the target (`kb_profiles.display_name`, `kb_teams.slug`, …).
-    pub target: String,
-    /// What the act did to it (erased / sentinel-scrubbed / accepted-in-part / …).
-    pub outcome: String,
-}
-
 /// `principal_erased` — the ONE admin event of a completed erasure (erasure spec D1).
 ///
 /// ONE TYPE for identity erasure and content erasure: the distinction rides the per-target
@@ -1606,20 +1596,6 @@ pub struct PrincipalErasureRefused {
 
 // ── resource erasure (spec 2026-09-28, D1/D5/D11/D12) ─────────────────────────
 
-/// The ledger paths of one event: redacted (`redacted_fields`) or named-and-unreached
-/// (`ledger_remainder`). ONE shape for both, so the cut-2 completion pass derives what it redacts
-/// from what cut 1 recorded without translating (resource erasure spec D12). The event is keyed
-/// `event`, never `event_id` — no trail join-key shape rides an admin payload (D1). Paths only,
-/// never values: the record of a redaction must not carry what was redacted.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-pub struct RedactedEventFields {
-    pub event: EventId,
-    /// JSON paths within that event's `payload` (or `metadata`), e.g. `title`, `origin_uri`.
-    pub paths: Vec<String>,
-}
-
 /// `resource_erased` — the ONE admin event of a completed resource erasure (resource erasure
 /// spec D1).
 ///
@@ -1664,40 +1640,6 @@ pub struct ResourceErased {
     /// trusting this list blindly.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ledger_remainder: Vec<RedactedEventFields>,
-}
-
-/// The closed refusal vocabulary for `resource_erasure_refused` (resource erasure spec D5, D11).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum ResourceErasureRefusalReason {
-    /// Retired: no path raises it. A non-admin is refused at the wire with no event. The value
-    /// stays registered because removing one from a closed vocabulary is not additive.
-    Unauthorized,
-    /// A cogmap's telos/charter resource: map-grain erasure is its own act, named in `detail`.
-    CharterResource,
-    /// Retired: no path raises it. Ingest state does not refuse an erasure; an in-flight ingest
-    /// ends with it (spec D5). The value stays registered because removing one from a closed
-    /// vocabulary is not additive.
-    IngestInFlight,
-    /// The resource is already erased. Recorded by the erasure act on a repeat request and by
-    /// the block history scrub, which has nothing to scrub on an erased resource. Nothing in the
-    /// projection changes and no second `resource_erased` is minted.
-    AlreadyErased,
-}
-
-/// Which act a `resource_erasure_refused` event refuses. Absent on the payload reads as
-/// [`ErasureAct::Erasure`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum ErasureAct {
-    /// The resource erasure act.
-    Erasure,
-    /// The block history scrub.
-    BlockHistoryScrub,
 }
 
 /// `resource_erasure_refused` — the negative face of resource erasure and of the block history

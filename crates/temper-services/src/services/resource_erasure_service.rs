@@ -43,6 +43,10 @@ use std::time::Duration;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use temper_core::types::erasure::{
+    BlobCoLinks, OtherAuthorEdge, OtherAuthorEdgeProperty, ResourceErasurePlan,
+    ResourceErasureSurvey,
+};
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{BlobId, EdgeId, EntityId, ProfileId, PropertyId, ResourceId};
 use temper_core::types::workflow_job::{AnchorJobPayload, DispatchType, Persona};
@@ -157,70 +161,6 @@ pub struct ResourceErasureRefusal {
 pub enum ResourceErasureOutcome {
     Completed(ResourceErasureCompletion),
     Refused(ResourceErasureRefusal),
-}
-
-/// An edge touching the resource whose asserting principal is not the resource's owner.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
-pub struct OtherAuthorEdge {
-    pub edge_id: EdgeId,
-    /// The profile behind the entity that emitted the edge's asserting event.
-    pub author: ProfileId,
-    /// Already folded at survey time: the act appends no fold for it, but still nulls its label
-    /// and sentinels its properties (steps 9c and 9d reach live and folded edges).
-    pub folded: bool,
-}
-
-/// A property row owned by an edge touching the resource, asserted by another principal.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
-pub struct OtherAuthorEdgeProperty {
-    pub property_id: PropertyId,
-    pub edge_id: EdgeId,
-    pub author: ProfileId,
-    /// Already folded at survey time (the row's own fold): the act still sentinels its key and
-    /// value (step 9d reaches live and folded rows).
-    pub folded: bool,
-}
-
-/// A related blob and the other resources that hold a live edge to it.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
-pub struct BlobCoLinks {
-    pub blob_id: BlobId,
-    /// Empty when no other resource links the blob.
-    pub holders: Vec<ResourceId>,
-}
-
-/// The plan `resource_erasure_survey` renders, plus the display-only annotations. The act never
-/// consumes the annotations (D10's fingerprint posture): they are read after the plan, in Rust.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, utoipa::ToSchema)]
-pub struct ResourceErasurePlan {
-    pub n_blocks: i64,
-    pub n_revisions: i64,
-    pub n_chunks: i64,
-    pub n_artifacts: i64,
-    pub n_edges: i64,
-    /// The live edges the act would fold.
-    pub edges: Vec<EdgeId>,
-    pub targets: Vec<ErasureTargetOutcome>,
-    /// Set when the resource is a cogmap's charter: the act would refuse.
-    pub charter_of: Option<Uuid>,
-    pub ingest_state: String,
-    pub fingerprint_available: bool,
-    /// Derivers, related blobs, cross-resource ledger text and shared remote sources (D8).
-    pub remainder: Vec<ErasureTargetOutcome>,
-    pub ledger_remainder: Vec<RedactedEventFields>,
-    pub other_author_edges: Vec<OtherAuthorEdge>,
-    pub other_author_edge_properties: Vec<OtherAuthorEdgeProperty>,
-    pub blob_co_links: Vec<BlobCoLinks>,
-}
-
-/// The read-only survey. `plan` is `None` exactly when the resource was already erased when the
-/// survey began (the short-circuit); `already_erased` also reads true when an act lands between
-/// that read and the plan, and then the plan is present.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, utoipa::ToSchema)]
-pub struct ResourceErasureSurvey {
-    pub resource: ResourceId,
-    pub already_erased: bool,
-    pub plan: Option<ResourceErasurePlan>,
 }
 
 /// The jsonb `resource_erasure_execute` returns.

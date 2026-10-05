@@ -25,16 +25,18 @@
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::Json;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use serde::Serialize;
 
+use temper_core::types::erasure::{
+    BlobStrikeView, ErasureExecuteRequest, ErasureExecuteResponse, ErasureSurveyRequest,
+    ErasureSurveyResponse,
+};
 use temper_core::types::ids::ProfileId;
 use temper_services::auth::SystemAdmin;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::erasure_fence_service::{self, DrainSummary};
 use temper_services::services::erasure_service;
 use temper_services::state::AppState;
-use temper_substrate::payloads::ErasureTargetOutcome;
 
 use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
@@ -64,53 +66,6 @@ pub(crate) async fn require_erasure_operator(
         }
         gate => gate,
     }
-}
-
-/// The survey door's request: the subject as the pseudonym UUID, and nothing else. No
-/// request_reference — nothing is requested (ruled 2026-09-12: a survey attempt is not an
-/// erasure request, so no reference is minted and no refusal would be recorded).
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct ErasureSurveyRequest {
-    pub subject: Uuid,
-}
-
-/// The execute door's request: the subject as the pseudonym UUID, plus the opaque request
-/// reference (UUID — the `RefRel::Request` apparatus Beat 2 pinned). No name, no email, no case
-/// description: the request-to-person mapping lives in the operator's DSAR records, outside the
-/// ledger.
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct ErasureExecuteRequest {
-    pub subject: Uuid,
-    pub request_reference: Uuid,
-}
-
-/// One blob strike of a completed erasure, as the door reports it.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct BlobStrikeView {
-    pub blob_id: Uuid,
-    pub released: bool,
-}
-
-/// What the door's act did: the completion, in full or as the no-op completion on an
-/// already-erased subject. It is the door's only answer, since no door raises a principal refusal
-/// (a caller who is not a system admin is answered 404 before dispatch). It stays a tagged enum
-/// of one variant so the wire keeps `"status": "completed"`: removing the tag would change the
-/// body's shape for no behavioural reason.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum ErasureExecuteResponse {
-    Completed {
-        event_id: Uuid,
-        already_erased: bool,
-        /// The redacted set (D2): content hashes only.
-        redacted_hashes: Vec<String>,
-        /// Per-target outcomes and the named remainder (D6's accepted-in-part arm): the
-        /// operator sees the `independent_obligation` remainder AT THE DOOR, not only in the
-        /// ledger — the completion's own payload is the audit, but the door's caller is the
-        /// actor and deserves the same facts.
-        targets: Vec<ErasureTargetOutcome>,
-        blob_strikes: Vec<BlobStrikeView>,
-    },
 }
 
 /// `POST /api/admin/erasure` — the operator's execute door.
@@ -170,21 +125,6 @@ pub async fn execute(
             })
             .collect(),
     }))
-}
-
-/// What the survey predicts the act would do — the execute response minus `event_id`: the
-/// survey fires no event, so there is no event id to report. The targets are the prose the
-/// act would write; the blob strikes are PREDICTIONS honest about the moment the survey ran
-/// (the act's strike-time verdict is authoritative).
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct ErasureSurveyResponse {
-    pub subject: Uuid,
-    pub already_erased: bool,
-    /// The redacted set (D2) the act would admit.
-    pub redacted_hashes: Vec<String>,
-    /// Per-target outcomes and the named remainder, exactly as the record would carry them.
-    pub targets: Vec<ErasureTargetOutcome>,
-    pub blob_strikes: Vec<BlobStrikeView>,
 }
 
 /// `POST /api/admin/erasure/survey` — the read-only survey beside the execute door (task

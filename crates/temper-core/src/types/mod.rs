@@ -27,6 +27,7 @@ pub mod delivery;
 pub mod device;
 pub mod diagnostics;
 pub mod element_trail;
+pub mod erasure;
 pub mod error_details;
 pub mod event;
 pub mod facet_requests;

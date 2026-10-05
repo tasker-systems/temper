@@ -18,58 +18,20 @@
 
 use axum::extract::State;
 use axum::Json;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
+use temper_core::types::erasure::{
+    BlockHistoryScrubExecuteResponse, BlockHistoryScrubRequestBody, BlockHistoryScrubSurvey,
+};
 use temper_core::types::ids::ResourceId;
 use temper_services::error::{ApiResult, ErrorBody};
 use temper_services::services::block_history_scrub_service::{
-    self, BlockHistoryScrubOutcome, BlockHistoryScrubRequest, BlockHistoryScrubSurvey,
+    self, BlockHistoryScrubOutcome, BlockHistoryScrubRequest,
 };
 use temper_services::state::AppState;
-use temper_substrate::payloads::{ErasureTargetOutcome, ResourceErasureRefusalReason};
 
 use crate::handlers::erasure::require_erasure_operator;
 use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
-
-/// The request both doors take: the resource and the blocks whose history is scrubbed. Each
-/// block must be a block of the resource, named once. `deny_unknown_fields`: the act's request
-/// reference is minted by the service, so a caller that sends one is refused, not ignored.
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct BlockHistoryScrubRequestBody {
-    pub resource: Uuid,
-    pub blocks: Vec<Uuid>,
-}
-
-/// What the execute door's act did: a completion and a refusal are different answers, so the
-/// response is a tagged enum. A refusal here is an operator-facing one (`charter_resource`,
-/// `already_erased`); a caller who is not a system admin never reaches the act.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum BlockHistoryScrubExecuteResponse {
-    Completed {
-        /// The server-minted reference the operator cites.
-        request_reference: Uuid,
-        event_id: Uuid,
-        /// One line per named block, in the operator's order, then the ingest line when the
-        /// scrub cancelled an in-flight ingest.
-        targets: Vec<ErasureTargetOutcome>,
-        /// True when the scrub cancelled an in-flight ingest.
-        cancelled_ingest: bool,
-    },
-    Refused {
-        request_reference: Uuid,
-        event_id: Uuid,
-        reason: ResourceErasureRefusalReason,
-        detail: Option<String>,
-        /// The blocks the refused act named, in the operator's order — the recorded refusal's
-        /// `blocks`. Each is a block of the resource: the list is checked before a refusal is
-        /// recorded.
-        blocks: Vec<Uuid>,
-    },
-}
 
 /// `POST /api/admin/resources/block-history-scrub` — the operator's execute door.
 #[utoipa::path(
