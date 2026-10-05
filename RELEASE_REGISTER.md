@@ -23,6 +23,28 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **temper-client and the CLI reach every published operation; every published wire type lives in temperkb-core**
+  `openapi.json` does not move. temper-client gains a method for each of the 25 operations it
+  lacked: principal and resource erasure with their surveys, the block-history scrub and its
+  survey, the auditor and steward worker doors, the graph panorama and composition reads,
+  connections, citation audits, the schema reads and health. The CLI gains commands for each:
+  `admin erasure resource|principal|block-history` (survey with `--dry-run`; a refused act prints
+  its answer and exits non-zero), six `graph` reads, `resource connections|citation-audits|doc-types|describe-type`,
+  `steward sweep|candidates|dispatch`, `auditor dispatch|complete|sweep`, and `health`. Behavioral
+  for a CLI user: `resource describe-open-meta` now answers from the server it is logged in to,
+  and `--local` answers from the binary as it did before. Every published wire type now lives in
+  temperkb-core, so a client names it without the server crates. The old
+  `temper_workflow`/`temper_substrate`/`temper_services` paths re-export it, so no import site
+  moves. Two Rust API changes in published crates: `HealthResponse`'s fields are `String` where
+  they were `&'static str` (so it deserializes), and temperkb-client's `UploadClient` and
+  temperkb-core's `UploadResponse`/`UploadProcessingStatus` are removed. They served
+  `/api/upload`, which no longer exists, so any call already failed. Who observes: operators and
+  agents using the CLI, and Rust consumers of temperkb-client/temperkb-core. User-visible: CLI
+  commands. Release relevance: additive, plus the behavioral change to `describe-open-meta`.
+pr: self
+classes: additive, behavioral
+surfaces: clients, cli-stdout
+status: signal-only
 - **Resource erasure: the record names its derived-vector writes — `kb_cogmap_regions.centroid` and `kb_contexts.telos_centroid` targets**
   No shape moves. `targets` on the execute and survey responses and on `resource_erased` may now
   carry two more rows: `kb_cogmap_regions.centroid` ("N live region centroids recomputed from the
