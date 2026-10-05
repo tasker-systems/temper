@@ -9,8 +9,9 @@ use crate::error::Result;
 use crate::http::HttpClient;
 use crate::ops;
 use temper_core::types::auditor::{
-    AuditorDispatchTickRequest, AuditorDispatchTickResponse, AuditorJobCompleteAck,
+    AuditSweepRow, AuditorDispatchTickRequest, AuditorDispatchTickResponse, AuditorJobCompleteAck,
 };
+use temper_core::types::query_params::SweepQuery;
 
 /// The header the auditor dispatch door reads its per-tick correlation id from — its own name, not
 /// the steward's.
@@ -47,6 +48,18 @@ impl<'a> AuditorClient<'a> {
         if let Some(id) = correlation_id {
             req = req.header(AUDITOR_CORRELATION_HEADER, id.to_string());
         }
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/auditor/sweep — audit coverage across the findings the caller can read, up to
+    /// `query.cap` of them.
+    pub async fn sweep(&self, query: &SweepQuery) -> Result<Vec<AuditSweepRow>> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::AUDITOR_SWEEP;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).query(query);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
             .await

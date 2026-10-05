@@ -15,7 +15,12 @@ use crate::error::Result;
 use crate::http::HttpClient;
 use crate::ops;
 use temper_core::types::graph_atlas::{AtlasEntry, AtlasSubgraph, SliceRequest};
+use temper_core::types::graph_context::ContextPanorama;
 use temper_core::types::graph_home::AtlasHome;
+use temper_core::types::graph_territory::TerritoryOverview;
+use temper_core::types::query_params::{
+    CogmapPanoramaQuery, ContextCompositionQuery, ContextPanoramaQuery, RegionCompositionQuery,
+};
 
 /// Join ids the way both graph query params expect: comma-separated, one param.
 fn join_ids(ids: &[Uuid]) -> String {
@@ -110,6 +115,39 @@ impl<'a> GraphClient<'a> {
             .await
     }
 
+    /// GET /api/graph/contexts/panorama — a context's panorama: its containers and their
+    /// composition, grouped as `query.group_by` asks.
+    pub async fn context_panorama(&self, query: &ContextPanoramaQuery) -> Result<ContextPanorama> {
+        self.read(&ops::CONTEXT_PANORAMA, &[], query).await
+    }
+
+    /// GET /api/graph/contexts/composition — the subgraph composing one context (or one container
+    /// in it).
+    pub async fn context_composition(
+        &self,
+        query: &ContextCompositionQuery,
+    ) -> Result<AtlasSubgraph> {
+        self.read(&ops::CONTEXT_COMPOSITION, &[], query).await
+    }
+
+    /// GET /api/graph/regions/composition — the subgraph composing the named regions.
+    pub async fn region_composition(
+        &self,
+        query: &RegionCompositionQuery,
+    ) -> Result<AtlasSubgraph> {
+        self.read(&ops::REGION_COMPOSITION, &[], query).await
+    }
+
+    /// GET /api/graph/cogmaps/{id}/panorama — a cognitive map's territory overview, optionally
+    /// through one lens.
+    pub async fn cogmap_panorama(
+        &self,
+        cogmap_id: Uuid,
+        query: &CogmapPanoramaQuery,
+    ) -> Result<TerritoryOverview> {
+        self.read(&ops::COGMAP_PANORAMA, &[&cogmap_id], query).await
+    }
+
     /// POST /api/cogmaps/{id}/graph/slice — the neighborhood of `request.seeds` inside one
     /// cognitive map, walked to `request.depth` over the named edge kinds.
     pub async fn cogmap_slice(
@@ -121,6 +159,25 @@ impl<'a> GraphClient<'a> {
         let op = &ops::COGMAP_NEIGHBORHOOD_SLICE;
         let path = op.path(&[&cogmap_id]);
         let req = self.http.request(op, &path).json(request);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// A GET whose parameters ride the query string — the panorama and composition reads.
+    async fn read<Q, T>(
+        &self,
+        op: &ops::Op,
+        args: &[&dyn std::fmt::Display],
+        query: &Q,
+    ) -> Result<T>
+    where
+        Q: serde::Serialize + ?Sized,
+        T: serde::de::DeserializeOwned,
+    {
+        let token = self.http.resolve_token()?;
+        let path = op.path(args);
+        let req = self.http.request(op, &path).query(query);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
             .await

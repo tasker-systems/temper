@@ -12,11 +12,12 @@ use temper_core::types::citation_audit::{
 use temper_core::types::cognitive_maps::{GrantOutcome, RevokeOutcome};
 use temper_core::types::lineage::ResourceLineage;
 use temper_core::types::provenance::{BlockProvenanceRow, BlockRead};
+use temper_core::types::query_params::ConnectionsQuery;
 use temper_core::types::reassign::{ReassignAck, ReassignResourceRequest};
 use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
 use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSet};
 use temper_core::types::standing::StandingShape;
-use temper_workflow::types::graph::GraphEdgeRow;
+use temper_workflow::types::graph::{GraphEdgeRow, ResourceConnections};
 use temper_workflow::types::managed_meta::MetaUpdatePayload;
 use temper_workflow::types::resource::{
     ContentResponse, DeleteResponse, ResourceAnnotateRequest, ResourceCreateRequest,
@@ -283,6 +284,22 @@ impl<'a> ResourceClient<'a> {
         let op = &ops::RESOURCE_EVIDENCE;
         let path = op.path(&[&resource_id]);
         let req = self.http.request(op, &path);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/resources/{id}/connections — the resource's edges, both directions, one page
+    /// (`query.limit` bounds it; the answer says whether rows were left out).
+    pub async fn list_connections(
+        &self,
+        resource_id: Uuid,
+        query: &ConnectionsQuery,
+    ) -> Result<ResourceConnections> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::LIST_RESOURCE_CONNECTIONS;
+        let path = op.path(&[&resource_id]);
+        let req = self.http.request(op, &path).query(query);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
             .await

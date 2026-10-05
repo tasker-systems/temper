@@ -452,3 +452,231 @@ mod erasure {
         ));
     }
 }
+
+mod reads {
+    use super::*;
+    use temper_core::types::query_params::{
+        CogmapPanoramaQuery, ConnectionsQuery, ContextCompositionQuery, ContextPanoramaQuery,
+        DeltaQuery, RegionCompositionQuery, SweepQuery,
+    };
+
+    #[tokio::test]
+    async fn context_panorama_carries_its_query() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/graph/contexts/panorama"))
+            .and(query_param("context_ref", "+team/core"))
+            .and(query_param("depth", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "containers": [],
+                "residual": { "group_key": "doc_type", "buckets": [] },
+                "group_keys": [],
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let query = ContextPanoramaQuery {
+            context_ref: "+team/core".to_string(),
+            group_by: None,
+            container_types: None,
+            depth: Some(2),
+        };
+        let panorama = test_client(&server.uri())
+            .graph()
+            .context_panorama(&query)
+            .await
+            .expect("panorama answers");
+        assert!(panorama.containers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn context_and_region_composition_carry_their_queries() {
+        let server = MockServer::start().await;
+        let subgraph = json!({ "nodes": [], "edges": [] });
+        Mock::given(method("GET"))
+            .and(path("/api/graph/contexts/composition"))
+            .and(query_param("context_ref", "@me/temper"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(subgraph.clone()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/graph/regions/composition"))
+            .and(query_param("ids", "a,b"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(subgraph))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = test_client(&server.uri());
+        client
+            .graph()
+            .context_composition(&ContextCompositionQuery {
+                context_ref: "@me/temper".to_string(),
+                container: None,
+                group: None,
+                container_types: None,
+                depth: None,
+                container_depth: None,
+            })
+            .await
+            .expect("context composition answers");
+        client
+            .graph()
+            .region_composition(&RegionCompositionQuery {
+                ids: "a,b".to_string(),
+                depth: None,
+            })
+            .await
+            .expect("region composition answers");
+    }
+
+    #[tokio::test]
+    async fn cogmap_panorama_names_the_map_in_the_path() {
+        let server = MockServer::start().await;
+        let cogmap = Uuid::now_v7();
+        Mock::given(method("GET"))
+            .and(path(format!("/api/graph/cogmaps/{cogmap}/panorama")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "territories": [],
+                "orphan_nodes": [],
+                "bridges": [],
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let overview = test_client(&server.uri())
+            .graph()
+            .cogmap_panorama(cogmap, &CogmapPanoramaQuery { lens_id: None })
+            .await
+            .expect("panorama answers");
+        assert!(overview.territories.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_connections_carries_the_limit() {
+        let server = MockServer::start().await;
+        let resource = Uuid::now_v7();
+        Mock::given(method("GET"))
+            .and(path(format!("/api/resources/{resource}/connections")))
+            .and(query_param("limit", "10"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "rows": [], "total": 0, "limit": 10, "returned": 0, "truncated": false,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let page = test_client(&server.uri())
+            .resources()
+            .list_connections(resource, &ConnectionsQuery { limit: Some(10) })
+            .await
+            .expect("connections answer");
+        assert!(!page.truncated);
+    }
+
+    #[tokio::test]
+    async fn the_sweeps_carry_their_bounds() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/auditor/sweep"))
+            .and(query_param("cap", "5"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/steward/sweep"))
+            .and(query_param("threshold", "3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = test_client(&server.uri());
+        assert!(client
+            .auditor()
+            .sweep(&SweepQuery { cap: Some(5) })
+            .await
+            .expect("auditor sweep answers")
+            .is_empty());
+        assert!(client
+            .steward()
+            .sweep(&DeltaQuery { threshold: Some(3) })
+            .await
+            .expect("steward sweep answers")
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_schema_reads_reach_their_doors() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/schema/doc-types"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                { "name": "task", "has_schema": true, "required_fields": ["title"] }
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/schema/doc-types/task"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "name": "task",
+                "schema": {},
+                "required_fields": [],
+                "enum_fields": { "temper-stage": ["backlog", "done"] },
+                "example_managed_meta": {},
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/schema/open-meta"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "schema": {},
+                "discouraged_keys": [{ "key": "status", "use_instead": "temper-status" }],
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = test_client(&server.uri());
+        let schema = client.schema();
+        assert_eq!(schema.list_doc_types().await.expect("list")[0].name, "task");
+        let task = schema.describe_doc_type("task").await.expect("describe");
+        assert_eq!(task.enum_fields["temper-stage"], vec!["backlog", "done"]);
+        let convention = schema.describe_open_meta().await.expect("open meta");
+        assert_eq!(convention.discouraged_keys[0].use_instead, "temper-status");
+    }
+
+    /// The health door is unauthenticated: the probe must not send a token, so a logged-out
+    /// caller can still ask whether the service is up.
+    #[tokio::test]
+    async fn health_reads_without_a_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/health"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": "ok", "version": "0.6.0", "commit": null,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let health = test_client(&server.uri())
+            .health()
+            .get_health()
+            .await
+            .expect("health answers");
+        assert_eq!(health.status, "ok");
+        assert_eq!(health.commit, None);
+        let requests = server.received_requests().await.expect("recorded");
+        assert!(
+            requests[0].headers.get("authorization").is_none(),
+            "the health probe carries no bearer token"
+        );
+    }
+}

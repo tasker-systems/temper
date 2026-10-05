@@ -12,9 +12,10 @@ use crate::ops;
 
 /// The header the steward dispatch door reads its per-tick correlation id from.
 const STEWARD_CORRELATION_HEADER: &str = "x-steward-correlation-id";
+use temper_core::types::query_params::DeltaQuery;
 use temper_core::types::steward::{
     AdvanceWatermarkAck, AdvanceWatermarkRequest, DispatchTickRequest, DispatchTickResponse,
-    IngestDelta,
+    DriftSweepRow, IngestDelta,
 };
 
 /// Sub-client for steward ingest-trigger operations.
@@ -62,6 +63,18 @@ impl<'a> StewardClient<'a> {
             boundary_fingerprint,
         };
         let req = self.http.request(op, &path).json(&body);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/steward/sweep — steward drift across the maps the caller can steward, measured
+    /// against `query.threshold` (the server default when absent).
+    pub async fn sweep(&self, query: &DeltaQuery) -> Result<Vec<DriftSweepRow>> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::STEWARD_SWEEP;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).query(query);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
             .await

@@ -19,6 +19,7 @@ pub mod error;
 pub mod events;
 pub mod facets;
 pub mod graph;
+pub mod health;
 pub mod http;
 pub mod ingest;
 pub mod invocations;
@@ -30,6 +31,7 @@ pub mod profile;
 pub mod query;
 pub mod relationships;
 pub mod resources;
+pub mod schema;
 pub mod search;
 pub mod slack;
 pub mod steward;
@@ -283,6 +285,16 @@ impl TemperClient {
     /// Steward ingest-trigger sub-client (delta / advance-watermark).
     pub fn steward(&self) -> steward::StewardClient<'_> {
         steward::StewardClient::new(&self.http)
+    }
+
+    /// Schema sub-client (doc-type schemas, the open-meta convention).
+    pub fn schema(&self) -> schema::SchemaClient<'_> {
+        schema::SchemaClient::new(&self.http)
+    }
+
+    /// Service health sub-client (unauthenticated).
+    pub fn health(&self) -> health::HealthClient<'_> {
+        health::HealthClient::new(&self.http)
     }
 
     /// Auditor worker sub-client (dispatch / complete).

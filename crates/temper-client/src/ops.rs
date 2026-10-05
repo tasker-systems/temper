@@ -298,6 +298,17 @@ registry! {
         AUDITOR_DISPATCH = Post "/api/auditor/dispatch" => "auditor_dispatch";
         COMPLETE_AUDITOR_JOB = Post "/api/auditor/{cogmap}/complete" => "complete_auditor_job";
         ATLAS_HOME = Get "/api/graph/home" => "atlas_home";
+        CONTEXT_PANORAMA = Get "/api/graph/contexts/panorama" => "context_panorama";
+        CONTEXT_COMPOSITION = Get "/api/graph/contexts/composition" => "context_composition";
+        REGION_COMPOSITION = Get "/api/graph/regions/composition" => "region_composition";
+        COGMAP_PANORAMA = Get "/api/graph/cogmaps/{id}/panorama" => "cogmap_panorama";
+        LIST_RESOURCE_CONNECTIONS = Get "/api/resources/{id}/connections" => "list_resource_connections";
+        AUDITOR_SWEEP = Get "/api/auditor/sweep" => "auditor_sweep";
+        STEWARD_SWEEP = Get "/api/steward/sweep" => "steward_sweep";
+        HEALTH_CHECK = Get "/api/health" => "health_check";
+        LIST_DOC_TYPES = Get "/api/schema/doc-types" => "list_doc_types";
+        DESCRIBE_DOC_TYPE = Get "/api/schema/doc-types/{name}" => "describe_doc_type";
+        DESCRIBE_OPEN_META = Get "/api/schema/open-meta" => "describe_open_meta";
         COGMAP_NEIGHBORHOOD_SLICE = Post "/api/cogmaps/{id}/graph/slice" => "cogmap_neighborhood_slice";
         ADVANCE = Post "/api/steward/{cogmap}/watermark" => "advance";
         CREATE_SUBSCRIPTION = Post "/api/subscriptions" => "create_subscription";
