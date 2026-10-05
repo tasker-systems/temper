@@ -25,6 +25,11 @@ use crate::output;
 ///
 /// Wire shape: `{ "status": "logged_in" | "logged_out", "profile": <uuid> | null }`.
 /// Replaces the ad-hoc JSON literals previously produced by each handler.
+///
+/// After a login, `profile` is the id the server resolves for the new token, the same source
+/// `auth status` uses for its identity. The stored credential cannot supply it: under Auth0 its
+/// `profile_id` is always absent, because an Auth0 `sub` is never a UUID. `null` after a login
+/// means the server could not be asked, not that the login failed.
 #[derive(Debug, serde::Serialize)]
 struct AuthAction<'a> {
     status: &'a str,
@@ -39,7 +44,16 @@ pub fn login(fmt: OutputFormat) -> Result<()> {
                 .auth_login()
                 .await
                 .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
-            let profile = stored.profile_id.map(|id| id.to_string());
+            // The token is already saved, so this resolves under it. A failure here does not
+            // undo the login: fall back to whatever the credential itself carries.
+            let profile = match client.profile().get().await {
+                Ok(p) => Some(p.id),
+                Err(e) => {
+                    tracing::debug!("login: could not resolve the profile from the server: {e}");
+                    stored.profile_id
+                }
+            }
+            .map(|id| id.to_string());
             let action = AuthAction {
                 status: "logged_in",
                 profile,

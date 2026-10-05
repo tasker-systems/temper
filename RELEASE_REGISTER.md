@@ -23,6 +23,17 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **`temper auth login` reports who logged in: `profile` is the server-resolved id, not `null`**
+  The login confirmation's shape is unchanged (`{ "status", "profile" }`). Under Auth0, `profile`
+  was always `null`, because it came from the stored credential's `profile_id`, which an Auth0
+  `sub` never populates. It is now the id `GET /api/profile` resolves for the new token, the same
+  source `auth status` uses for its identity. If that call fails, the login still stands and
+  `profile` falls back to the credential's value. Who observes: scripts and agents reading the
+  login output. User-visible: yes, a `null` becomes a UUID. Release relevance: behavioral.
+pr: self
+classes: behavioral
+surfaces: cli-stdout
+status: signal-only
 - **On Vercel, the eight cron doors answer only on the deployment's own URL; every other host gets a 404**
   `/api/embed/dispatch`, `/api/embed/warm`, `/api/slack/intents/reap`, `/api/as/reap`,
   `/api/internal-calls/health`, `/api/region/dispatch`, `/api/erasure/drain` and
