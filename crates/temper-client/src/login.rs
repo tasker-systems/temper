@@ -52,7 +52,6 @@ async fn exchange_code(
     crate::endpoint::validate_endpoint(
         &config.token_url,
         "token_url",
-        crate::endpoint::allow_insecure_http_from_env(),
     )?;
 
     let client = reqwest::Client::new();

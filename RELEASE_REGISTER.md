@@ -23,6 +23,22 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **temper-client and the CLI no longer honour `TEMPER_ALLOW_INSECURE_HTTP`: plaintext http reaches loopback only**
+  The client's endpoint check refuses a non-loopback `http` URL for the API base URL and the OAuth
+  token URL, and nothing turns that off any more. The variable that used to (`TEMPER_ALLOW_INSECURE_HTTP=1`)
+  is no longer read, and the refusal names one fix, `https`. Loopback plaintext (`localhost`,
+  `*.localhost`, `127.0.0.0/8`, `::1`) is accepted as before, so local development and the CLI's
+  loopback login listener are unchanged. The same check runs where temper-client is the MCP
+  relay, which an environment variable can no longer downgrade to cleartext. `temper init
+  --instance-url http://<non-loopback>` was already refused without the variable and is now refused
+  with it. The Python and Ruby SDKs' explicit `allow_insecure_http=` parameter is untouched. Who
+  observes: a CLI or client user who set the variable against a plaintext non-loopback instance.
+  User-visible: yes, for that user only. No deployment we run sets it. Release relevance:
+  behavioral.
+pr: self
+classes: behavioral
+surfaces: clients, cli-stdout
+status: signal-only
 - **temper-client and the CLI reach every published operation; every published wire type lives in temperkb-core**
   `openapi.json` does not move. temper-client gains a method for each of the 25 operations it
   lacked: principal and resource erasure with their surveys, the block-history scrub and its
