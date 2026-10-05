@@ -499,6 +499,42 @@ async fn planted(pool: &PgPool) -> Planted {
     }
 }
 
+/// A cogmap chartered by the survivor S, with one live region whose sole member is R. Returns the
+/// cogmap's id.
+async fn seed_live_cogmap_region_holding_r(pool: &PgPool, p: &Planted) -> Uuid {
+    let cogmap: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ('m', $1) RETURNING id",
+    )
+    .bind(p.s.uuid())
+    .fetch_one(pool)
+    .await
+    .expect("seed a cogmap chartered by a survivor");
+    let lens = lens_of(pool, p.ctx).await;
+    let region: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_cogmap_regions \
+           (cogmap_id, home_anchor_table, home_anchor_id, lens_id, centroid, salience, member_count, \
+            asserted_by_event_id, last_event_id, is_folded) \
+         VALUES ($1, 'kb_cogmaps', $1, $2, $3::vector, 1.0, 1, $4, $4, false) RETURNING id",
+    )
+    .bind(cogmap)
+    .bind(lens)
+    .bind(vec_text(&axis(0)))
+    .bind(p.r_genesis)
+    .fetch_one(pool)
+    .await
+    .expect("seed a live cogmap region");
+    sqlx::query(
+        "INSERT INTO kb_cogmap_region_members (region_id, member_table, member_id, affinity) \
+         VALUES ($1, 'kb_resources', $2, 1.0)",
+    )
+    .bind(region)
+    .bind(p.r.uuid())
+    .execute(pool)
+    .await
+    .expect("R is a member of the cogmap region");
+    cogmap
+}
+
 /// The norm of every folded region on `ctx` that lists `member`.
 async fn folded_norms_holding(pool: &PgPool, ctx: ContextId, member: ResourceId) -> Vec<f64> {
     sqlx::query_scalar(
@@ -856,36 +892,7 @@ async fn the_plan_rederived_after_the_act_still_names_the_telos_copies(pool: PgP
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_act_queues_a_region_settle_for_a_cogmap_holding_the_resource(pool: PgPool) {
     let p = planted(&pool).await;
-    let cogmap: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ('m', $1) RETURNING id",
-    )
-    .bind(p.s.uuid())
-    .fetch_one(&pool)
-    .await
-    .expect("seed a cogmap chartered by a survivor");
-    let lens = lens_of(&pool, p.ctx).await;
-    let region: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_cogmap_regions \
-           (cogmap_id, home_anchor_table, home_anchor_id, lens_id, centroid, salience, member_count, \
-            asserted_by_event_id, last_event_id, is_folded) \
-         VALUES ($1, 'kb_cogmaps', $1, $2, $3::vector, 1.0, 1, $4, $4, false) RETURNING id",
-    )
-    .bind(cogmap)
-    .bind(lens)
-    .bind(vec_text(&axis(0)))
-    .bind(p.r_genesis)
-    .fetch_one(&pool)
-    .await
-    .expect("seed a live cogmap region");
-    sqlx::query(
-        "INSERT INTO kb_cogmap_region_members (region_id, member_table, member_id, affinity) \
-         VALUES ($1, 'kb_resources', $2, 1.0)",
-    )
-    .bind(region)
-    .bind(p.r.uuid())
-    .execute(&pool)
-    .await
-    .expect("R is a member of the cogmap region");
+    let cogmap = seed_live_cogmap_region_holding_r(&pool, &p).await;
 
     erase(&pool, p.r).await;
 
@@ -1242,4 +1249,191 @@ async fn an_erased_member_under_another_lens_does_not_spin_the_drain(pool: PgPoo
         !region_is_folded(&pool, region).await,
         "precondition of the hazard: the default-lens materialize never folds the other lens's region"
     );
+}
+
+// ── the record names the derived-vector writes (0.6.0 line item 7a; task
+//    01a1092c-a11f-7ab0-a256-aa1bd9ffa2ee) ─────────────────────────────────────────────────────
+
+/// Live and folded regions holding `r`, on every anchor and every lens: the row sets the act's
+/// recompute (7c) and zero (7d) statements reach.
+async fn regions_holding(pool: &PgPool, r: ResourceId) -> (i64, i64) {
+    sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE NOT g.is_folded), count(*) FILTER (WHERE g.is_folded) \
+           FROM kb_cogmap_regions g \
+          WHERE EXISTS (SELECT 1 FROM kb_cogmap_region_members m \
+                         WHERE m.region_id = g.id \
+                           AND m.member_table = 'kb_resources' AND m.member_id = $1)",
+    )
+    .bind(r.uuid())
+    .fetch_one(pool)
+    .await
+    .expect("count regions holding R")
+}
+
+/// The survey's plan for `r`, read before the act: its `targets`.
+async fn surveyed_targets(pool: &PgPool, r: ResourceId) -> Vec<(String, String)> {
+    sqlx::query_as(
+        "SELECT t->>'target', t->>'outcome' \
+           FROM jsonb_array_elements(resource_erasure_survey_plan($1)->'targets') t",
+    )
+    .bind(r.uuid())
+    .fetch_all(pool)
+    .await
+    .expect("survey targets")
+}
+
+fn outcome_of<'a>(targets: &'a [(String, String)], target: &str) -> Option<&'a str> {
+    targets
+        .iter()
+        .find(|(t, _)| t == target)
+        .map(|(_, o)| o.as_str())
+}
+
+fn recorded(c: &ResourceErasureCompletion) -> Vec<(String, String)> {
+    c.targets
+        .iter()
+        .map(|t| (t.target.clone(), t.outcome.clone()))
+        .collect()
+}
+
+/// (7a-1) On a goal's home context, the survey and the act's record name both derived-vector
+/// writes with the counts the act's statements reach, and agree with each other.
+///
+/// FAILS ON 20261004130000 BECAUSE the plan has no `kb_cogmap_regions.centroid` or
+/// `kb_contexts.telos_centroid` row: the record is silent about the vectors the act changes.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_record_names_the_region_centroids_and_the_telos_snapshot_it_changed(pool: PgPool) {
+    let p = planted(&pool).await;
+    let (live, folded) = regions_holding(&pool, p.r).await;
+    assert!(
+        live >= 1 && folded >= 3,
+        "precondition: R is in a live region and at least three folded ones, got {live} / {folded}"
+    );
+    let regions_row =
+        format!("{live} live region centroids recomputed from the remaining members; {folded} folded region centroids zeroed");
+    let telos_row = "1 context telos snapshot nulled";
+
+    let surveyed = surveyed_targets(&pool, p.r).await;
+    assert_eq!(
+        outcome_of(&surveyed, "kb_cogmap_regions.centroid"),
+        Some(regions_row.as_str()),
+        "the survey names the region centroids the act will change; got {surveyed:?}"
+    );
+    assert_eq!(
+        outcome_of(&surveyed, "kb_contexts.telos_centroid"),
+        Some(telos_row),
+        "the survey names the telos snapshot the act will null; got {surveyed:?}"
+    );
+
+    let record = recorded(&erase(&pool, p.r).await);
+    assert_eq!(
+        outcome_of(&record, "kb_cogmap_regions.centroid"),
+        Some(regions_row.as_str()),
+        "the record names the region centroids the act changed; got {record:?}"
+    );
+    assert_eq!(
+        outcome_of(&record, "kb_contexts.telos_centroid"),
+        Some(telos_row),
+        "the record names the telos snapshot the act nulled; got {record:?}"
+    );
+
+    // An oracle on the act's EFFECT, not its predicate: the folded count the record claims is the
+    // number of folded regions holding R that now carry the zero vector.
+    let zeroed = folded_norms_holding(&pool, p.ctx, p.r)
+        .await
+        .iter()
+        .filter(|n| **n == 0.0)
+        .count() as i64;
+    assert_eq!(
+        zeroed, folded,
+        "the record's folded count is the number of folded centroids the act zeroed"
+    );
+    assert_eq!(
+        stored_telos(&pool, p.ctx).await,
+        None,
+        "the telos row names a snapshot the act did null"
+    );
+}
+
+/// (7a-1′) The telos row does not depend on R being a goal: the act nulls the home context's
+/// snapshot whatever R's doc type, so the record names it for a research member too.
+///
+/// FAILS IF the count gains a goal-only filter (the plan computes `v_is_goal` for its
+/// `ledger_remainder` arm), which would leave the record silent while the act nulls the snapshot.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_record_names_the_telos_snapshot_for_a_non_goal_member(pool: PgPool) {
+    let p = planted(&pool).await;
+    assert!(
+        stored_telos(&pool, p.ctx).await.is_some(),
+        "precondition: S's home context carries a telos snapshot"
+    );
+
+    let record = recorded(&erase(&pool, p.s).await);
+    assert_eq!(
+        outcome_of(&record, "kb_contexts.telos_centroid"),
+        Some("1 context telos snapshot nulled"),
+        "erasing research member S names the snapshot the act nulled; got {record:?}"
+    );
+    assert_eq!(
+        stored_telos(&pool, p.ctx).await,
+        None,
+        "and the act did null it"
+    );
+}
+
+/// (7a-2) A live cogmap region holding R is counted with the context's: the recompute reaches every
+/// anchor, so the record does too.
+///
+/// FAILS ON 20261004130000 BECAUSE no row names the region centroids at all.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_record_counts_a_live_cogmap_region_holding_the_resource(pool: PgPool) {
+    let p = planted(&pool).await;
+    let (context_live, _) = regions_holding(&pool, p.r).await;
+    seed_live_cogmap_region_holding_r(&pool, &p).await;
+    let (live, folded) = regions_holding(&pool, p.r).await;
+    assert_eq!(
+        live,
+        context_live + 1,
+        "precondition: the cogmap region adds one live region holding R"
+    );
+
+    let record = recorded(&erase(&pool, p.r).await);
+    assert_eq!(
+        outcome_of(&record, "kb_cogmap_regions.centroid"),
+        Some(
+            format!("{live} live region centroids recomputed from the remaining members; {folded} folded region centroids zeroed")
+                .as_str()
+        ),
+        "the record counts the cogmap region among the live centroids recomputed; got {record:?}"
+    );
+}
+
+/// (7a-3) A resource in no region, on a context with no telos snapshot, claims neither row: a write
+/// the act did not make is not recorded.
+///
+/// FAILS IF a row is claimed with a zero count, or claimed regardless of what the act reached.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_erasure_that_reaches_no_derived_vector_claims_none(pool: PgPool) {
+    let who = principal(&pool).await;
+    let ctx = context(&pool, who.0, "unmaterialized").await;
+    let r = create(&pool, who, ctx, "lone", "research", &[], &axis(0)).await;
+    assert_eq!(
+        regions_holding(&pool, r).await,
+        (0, 0),
+        "precondition: R is in no region"
+    );
+    assert_eq!(
+        stored_telos(&pool, ctx).await,
+        None,
+        "precondition: the context has no telos snapshot"
+    );
+
+    let record = recorded(&erase(&pool, r).await);
+    for target in ["kb_cogmap_regions.centroid", "kb_contexts.telos_centroid"] {
+        assert_eq!(
+            outcome_of(&record, target),
+            None,
+            "the record claims no {target} write the act did not make; got {record:?}"
+        );
+    }
 }
