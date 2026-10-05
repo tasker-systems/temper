@@ -26,6 +26,7 @@ pub mod data_artifact_shape;
 pub mod delivery;
 pub mod device;
 pub mod diagnostics;
+pub mod doc_type;
 pub mod element_trail;
 pub mod erasure;
 pub mod error_details;

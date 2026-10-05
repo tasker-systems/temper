@@ -4,6 +4,7 @@
 //! against them, and finds unknown temper-* fields.
 
 use crate::frontmatter::fields::{KNOWN_TEMPER_FIELDS, SYSTEM_MANAGED_FIELDS};
+use crate::frontmatter::DocTypeSchema;
 use jsonschema::{Resource, Validator};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
