@@ -569,6 +569,15 @@ jobs:
       - name: Guard test — audit-attest-subject-path
         run: bash .github/scripts/test-audit-attest-subject-path.sh
 
+      # THE GATE ITSELF as well as its harness, both here: it reads only workflow YAML, so it needs
+      # no toolchain and no Rust scope. A job holding id-token/attestations write is a signing
+      # oracle, and a tag- or branch-pinned action in it can be repointed upstream.
+      - name: Security tripwire — privileged jobs pin every action by SHA
+        run: bash .github/scripts/audit-privileged-action-pins.sh
+
+      - name: Guard test — audit-privileged-action-pins
+        run: bash .github/scripts/test-audit-privileged-action-pins.sh
+
       # Most of what this exercises is the ENUMERATOR the tripwire shells out to, because the
       # tripwire's coverage is exactly that enumerator's coverage. Its turbofish case is a real
       # regression: `(?:::<[^>]*>)?` cannot cross `Option<String>`, which hid 10 production sites

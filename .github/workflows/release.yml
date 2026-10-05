@@ -79,6 +79,14 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Releasing temper v${VERSION}"
 
+  # EVERY JOB BELOW THAT HOLDS `id-token: write` OR `attestations: write` PINS ITS ACTIONS BY FULL
+  # COMMIT SHA, with the tag it was taken from as a trailer (Dependabot's github-actions lane bumps
+  # both). Each registry's trusted publishing exchanges that OIDC token for a publish credential,
+  # and `attestations: write` mints a genuine Sigstore signature — so a repointed tag or branch on
+  # an action in one of these jobs runs attacker code holding a signing oracle. The same posture
+  # build-cli-binaries.yml already takes; `dtolnay/rust-toolchain@stable` is replaced rather than
+  # pinned for the reason given there (a branch has no release cadence to bump a pin against).
+  # Their checkouts also drop the persisted git credential: none of them pushes.
   build-cli-binaries:
     name: Build CLI Binaries
     needs: determine-version
@@ -111,10 +119,16 @@ jobs:
       attestations: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
+      # rustup directly, not `dtolnay/rust-toolchain@stable` — see the note above build-cli-binaries.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc --version --verbose
 
       # Re-emit rather than trusting the committed tree. The drift gate already proves the two
       # agree on every PR, so this is belt-and-braces — but a release is the wrong place to
@@ -172,10 +186,12 @@ jobs:
       id-token: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
@@ -202,16 +218,18 @@ jobs:
       id-token: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
+        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
           # .ruby-version / mise.toml is 3.4.10.
           ruby-version: "3.4"
 
       - name: Configure RubyGems credentials (trusted publishing)
-        uses: rubygems/configure-rubygems-credentials@v2.1.0
+        uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
 
       - name: Publish the gem
         env:
@@ -246,7 +264,9 @@ jobs:
       id-token: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # uv via pipx, which is preinstalled on ubuntu-latest, rather than a
       # setup-python: the build must run against the interpreter pinned in
@@ -288,10 +308,16 @@ jobs:
       id-token: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      # rustup directly, not `dtolnay/rust-toolchain@stable` — see the note above build-cli-binaries.
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc --version --verbose
 
       - name: Authenticate with crates.io (trusted publishing)
         id: auth

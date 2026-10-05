@@ -41,14 +41,21 @@ jobs:
         id: read
         run: ./tools/scripts/release/read-version.sh >> "$GITHUB_OUTPUT"
 
+      # Both values reach the scripts as environment variables, never as an expression inside
+      # `run:` — GitHub expands an expression into the script's TEXT before bash parses it, so a
+      # crafted value would execute in a job holding `contents: write`. Same fix as release.yml's
+      # determine-version. read-version.sh also refuses a VERSION that is not semver.
       - name: Derive tag name
         id: derive
-        run: echo "tag=v${{ steps.read.outputs.VERSION }}" >> "$GITHUB_OUTPUT"
+        env:
+          VERSION: ${{ steps.read.outputs.VERSION }}
+        run: echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
         id: create
+        env:
+          TAG: ${{ steps.derive.outputs.tag }}
         run: |
-          TAG="${{ steps.derive.outputs.tag }}"
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "Tag $TAG already exists, skipping." >&2
             echo "created=false" >> "$GITHUB_OUTPUT"
