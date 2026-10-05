@@ -12,17 +12,25 @@ mod common;
 use reqwest::StatusCode;
 use sqlx::PgPool;
 
-/// Every route `routes::embed_internal` mounts. A door added there and not here is unwitnessed.
-const CRON_DOORS: [&str; 8] = [
-    "/api/embed/dispatch",
-    "/api/embed/warm",
-    "/api/slack/intents/reap",
-    "/api/as/reap",
-    "/api/internal-calls/health",
-    "/api/region/dispatch",
-    "/api/erasure/drain",
-    "/api/sensitivity/sweep",
-];
+/// Every route `routes::embed_internal` mounts, read from that file's source above its test module
+/// rather than listed here, so a door added there is witnessed here without anyone remembering to.
+/// That file's own unit test holds the same set equal to `vercel.json`'s crons.
+fn cron_doors() -> Vec<&'static str> {
+    let source = include_str!("../src/routes/embed_internal.rs");
+    let routes = source
+        .split("#[cfg(test)]")
+        .next()
+        .expect("source precedes tests");
+    let doors: Vec<&'static str> = routes
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with("//"))
+        .flat_map(|line| line.split('"').skip(1).step_by(2))
+        .filter(|literal| literal.starts_with("/api/"))
+        .collect();
+    assert!(!doors.is_empty(), "no routes parsed from embed_internal.rs");
+    doors
+}
 
 const PINNED: &str = "temper-cloud-a1b2c3d4e-team.vercel.app";
 const SECRET: &str = "cron-host-pin-test-secret-0123456789";
@@ -46,7 +54,7 @@ async fn every_cron_door_is_a_404_off_the_pinned_host(pool: PgPool) {
     })
     .await;
 
-    for door in CRON_DOORS {
+    for door in cron_doors() {
         for public in ["temper-cloud.vercel.app", "temperkb.io"] {
             assert_eq!(
                 status(&app, door, public, Some(SECRET)).await,
@@ -75,7 +83,7 @@ async fn without_a_cron_host_the_bearer_alone_gates(pool: PgPool) {
     })
     .await;
 
-    for door in CRON_DOORS {
+    for door in cron_doors() {
         assert_eq!(
             status(&app, door, "temper.selfhosted.example", None).await,
             StatusCode::UNAUTHORIZED,

@@ -92,3 +92,54 @@ pub(super) fn embed_internal_routes() -> Router<AppState> {
             get(handlers::sensitivity_sweep::sweep).post(handlers::sensitivity_sweep::sweep),
         )
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    /// The paths this file mounts, read from its own source above the test module. Comment lines
+    /// are skipped, so the module doc's path list is not mistaken for a route.
+    fn mounted_paths() -> BTreeSet<String> {
+        let source = include_str!("embed_internal.rs");
+        let routes = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("source precedes tests");
+        routes
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with("//"))
+            .flat_map(|line| line.split('"').skip(1).step_by(2))
+            .filter(|literal| literal.starts_with("/api/"))
+            .map(str::to_string)
+            .collect()
+    }
+
+    // FAILS IF: a cron door is mounted here with no Vercel cron calling it, or `vercel.json` gains a
+    // cron whose door is not in this group. Every door here is pinned to the deployment host by
+    // `require_dispatch_secret`, and `tests/cron_host_pin_test.rs` derives its door list from this
+    // same file, so this pair is what keeps "the crons" and "the pinned doors" one set.
+    #[test]
+    fn every_mounted_door_is_a_vercel_cron_and_every_cron_is_mounted_here() {
+        let vercel: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../vercel.json")).expect("vercel.json");
+        let crons: BTreeSet<String> = vercel["crons"]
+            .as_array()
+            .expect("vercel.json declares crons")
+            .iter()
+            .map(|c| {
+                let path = c["path"].as_str().expect("cron path");
+                path.split('?').next().unwrap_or(path).to_string()
+            })
+            .collect();
+        let mounted = mounted_paths();
+        assert!(
+            !mounted.is_empty(),
+            "no routes parsed from embed_internal.rs"
+        );
+        assert_eq!(
+            mounted, crons,
+            "embed_internal.rs routes vs vercel.json crons"
+        );
+    }
+}
