@@ -157,7 +157,7 @@ pub async fn login(config: &OAuthConfig, store: &dyn auth::TokenStore) -> Result
         device_id: Some(device_id),
     };
 
-    store.save(&stored)?;
+    auth::replace_grant(store, &stored)?;
     info!("Authentication successful — token saved");
 
     Ok(stored)

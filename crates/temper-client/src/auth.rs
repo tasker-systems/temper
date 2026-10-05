@@ -52,6 +52,24 @@ pub struct RefreshLock {
     _file: fs::File,
 }
 
+/// Store a grant that replaces the current one outright — a login, not a refresh.
+///
+/// Taken under the store's refresh lock, so a refresh already in flight lands before this write and
+/// never after it: otherwise the successor of the old grant would overwrite the new login.
+pub fn replace_grant(store: &dyn TokenStore, auth: &StoredAuth) -> Result<()> {
+    let _refresh_lock = store.lock_refresh()?;
+    store.save(auth)
+}
+
+/// Remove the stored grant — a logout.
+///
+/// Taken under the store's refresh lock, so a refresh already in flight cannot write a live grant
+/// back after the logout; one that starts later re-loads under the lock and finds nothing.
+pub fn clear_grant(store: &dyn TokenStore) -> Result<()> {
+    let _refresh_lock = store.lock_refresh()?;
+    store.clear()
+}
+
 /// Disk-backed token store — the local CLI default. Wraps the existing
 /// `load_auth_from` / `save_auth_to` / `clear_auth_at` helpers with a
 /// configurable path (default: `auth_json_path()`).
@@ -489,6 +507,7 @@ pub fn save_auth_to(auth: &StoredAuth, path: &Path) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(auth)?;
+    let path = &write_target(path);
 
     // Unique per write, not per process: two threads saving at once must not share a temp file.
     static SAVE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -521,6 +540,22 @@ pub fn save_auth_to(auth: &StoredAuth, path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// The file a save should replace: `path` itself, or — when `path` is a symlink — the file it points
+/// at. A rename onto the link would replace the link, silently detaching it from wherever the user
+/// pointed it; writing to the target keeps the link, as `fs::write` always did.
+fn write_target(path: &Path) -> PathBuf {
+    let is_link = fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+    if !is_link {
+        return path.to_path_buf();
+    }
+    fs::canonicalize(path).unwrap_or_else(|_| {
+        // A dangling link: its target does not exist yet, so the save creates it.
+        let target = fs::read_link(path).unwrap_or_else(|_| path.to_path_buf());
+        path.parent()
+            .map_or(target.clone(), |dir| dir.join(&target))
+    })
 }
 
 /// Remove auth file at an explicit path (no-op if absent).
@@ -990,6 +1025,101 @@ mod tests {
             .unwrap();
         assert_eq!(saved.refresh_token.unwrap().expose_secret(), "rtok_new");
         rt.block_on(server.verify());
+    }
+
+    /// Run a refresh against a token endpoint that answers in 300ms, and `during` 100ms into it —
+    /// while the refresher holds the lock and has not yet saved the successor. Returns the
+    /// directory holding `auth.json` once both are done.
+    fn while_a_refresh_is_in_flight(during: impl FnOnce(&DiskTokenStore) + Send) -> TempDir {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let server = rt.block_on(async {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/oauth/token"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_delay(std::time::Duration::from_millis(300))
+                        .set_body_json(serde_json::json!({
+                            "access_token": "tok_refreshed",
+                            "refresh_token": "rtok_refreshed",
+                            "expires_in": 86400,
+                        })),
+                )
+                .mount(&server)
+                .await;
+            server
+        });
+        let token_url = format!("{}/oauth/token", server.uri());
+
+        let dir = TempDir::new().unwrap();
+        let store = DiskTokenStore::at(dir.path().join("auth.json"));
+        store
+            .save(&make_auth(Utc::now() - Duration::minutes(1)))
+            .unwrap();
+
+        temp_env::with_var(TEMPER_TOKEN_ENV, None::<&str>, || {
+            std::thread::scope(|scope| {
+                let refresher =
+                    scope.spawn(|| get_valid_token_blocking(&store, &token_url, "test-client"));
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                during(&store);
+                let _ = refresher.join().unwrap();
+            });
+        });
+        dir
+    }
+
+    /// A logout during a refresh must stay a logout: the refresh's successor may not be written
+    /// back after the grant is cleared.
+    #[test]
+    fn a_logout_during_a_refresh_stays_logged_out() {
+        let dir = while_a_refresh_is_in_flight(|store| clear_grant(store).unwrap());
+        assert!(
+            load_auth_from(&dir.path().join("auth.json"))
+                .unwrap()
+                .is_none(),
+            "the refresh wrote a grant back after the logout"
+        );
+    }
+
+    /// A login during a refresh must not be overwritten by the successor of the grant it replaced.
+    #[test]
+    fn a_login_during_a_refresh_is_not_overwritten() {
+        let dir = while_a_refresh_is_in_flight(|store| {
+            let mut login = make_auth(Utc::now() + Duration::hours(24));
+            login.access_token = "tok_login".to_owned().into();
+            replace_grant(store, &login).unwrap();
+        });
+        let saved = load_auth_from(&dir.path().join("auth.json"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.access_token.expose_secret(), "tok_login");
+    }
+
+    /// A user who points `auth.json` at a file elsewhere keeps the link: the save writes the
+    /// target, where a rename onto the path would replace the link with a regular file.
+    #[cfg(unix)]
+    #[test]
+    fn save_writes_through_a_symlinked_auth_path() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("dotfiles-auth.json");
+        let link = dir.path().join("auth.json");
+        save_auth_to(&make_auth(Utc::now()), &target).unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let mut updated = make_auth(Utc::now() + Duration::hours(1));
+        updated.access_token = "tok_updated".to_owned().into();
+        save_auth_to(&updated, &link).unwrap();
+
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let through_target = load_auth_from(&target).unwrap().unwrap();
+        assert_eq!(through_target.access_token.expose_secret(), "tok_updated");
     }
 
     /// The CLI bootstrap reaches this from async fns as well as sync ones; a `block_on` on the
