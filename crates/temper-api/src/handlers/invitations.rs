@@ -22,6 +22,7 @@ use temper_core::types::invitation::{
     AcceptInvitationResponse, CreateInvitationRequest, InvitationTokenRequest, InviteeInvitation,
     PendingInvitationCounts, TeamInvitation,
 };
+use temper_core::types::query_params::CountMineQuery;
 use temper_services::error::ApiResult;
 use temper_services::services::invitation_service;
 use temper_services::state::AppState;
@@ -135,13 +136,6 @@ pub async fn list_mine(
     invitation_service::list_for_profile(&state.pool, ProfileId::from(auth.0.profile().id))
         .await
         .map(Json)
-}
-
-/// Query parameters for [`count_mine`].
-#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
-pub struct CountMineQuery {
-    /// Restrict the `matching` half of the answer to invitations to this team.
-    pub team_slug: Option<String>,
 }
 
 /// Count the invitations addressed to you

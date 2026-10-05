@@ -3,23 +3,9 @@
 use crate::error::Result;
 use crate::http::HttpClient;
 use crate::ops;
-use temper_core::types::access_gate::{JoinRequest, PublicSystemSettings};
-
-/// Request body for creating a join request.
-#[derive(serde::Serialize)]
-struct CreateRequestBody<'a> {
-    message: Option<&'a str>,
-    source: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    accepted_terms_version: Option<&'a str>,
-}
-
-/// Request body for a review request (D15 — a revoked principal asking for reconsideration).
-#[derive(serde::Serialize)]
-struct CreateReviewBody<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message: Option<&'a str>,
-}
+use temper_core::types::access_gate::{
+    CreateRequestBody, CreateReviewBody, JoinRequest, PublicSystemSettings,
+};
 
 /// Sub-client for system access operations.
 pub struct AccessClient<'a> {
@@ -46,9 +32,9 @@ impl<'a> AccessClient<'a> {
     ) -> Result<JoinRequest> {
         let token = self.http.resolve_token()?;
         let body = CreateRequestBody {
-            message,
-            source,
-            accepted_terms_version,
+            message: message.map(str::to_string),
+            source: source.to_string(),
+            accepted_terms_version: accepted_terms_version.map(str::to_string),
         };
         let op = &ops::CREATE_REQUEST;
         let path = op.path(&[]);
@@ -84,7 +70,9 @@ impl<'a> AccessClient<'a> {
     /// Ask an admin to reconsider a revocation (D15). Does not restore access by itself.
     pub async fn create_review_request(&self, message: Option<&str>) -> Result<()> {
         let token = self.http.resolve_token()?;
-        let body = CreateReviewBody { message };
+        let body = CreateReviewBody {
+            message: message.map(str::to_string),
+        };
         let op = &ops::CREATE_REVIEW_REQUEST;
         let path = op.path(&[]);
         let req = self.http.request(op, &path).json(&body);

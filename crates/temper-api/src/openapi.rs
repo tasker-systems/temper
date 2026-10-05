@@ -164,7 +164,7 @@ const API_VERSION: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../
         temper_core::types::access_gate::JoinRequest,
         temper_core::types::access_gate::JoinRequestStatus,
         temper_core::types::access_gate::PublicSystemSettings,
-        crate::handlers::access::CreateRequestBody,
+        temper_core::types::access_gate::CreateRequestBody,
         temper_core::types::slack::SlackDisconnectRequest,
         temper_core::types::slack::SlackDisconnectResponse,
         // Registered explicitly: `.routes()` collects schemas from request/response BODIES, and

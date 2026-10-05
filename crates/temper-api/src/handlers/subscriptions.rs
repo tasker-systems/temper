@@ -11,7 +11,6 @@
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use serde::Deserialize;
 use uuid::Uuid;
 
 // `Subscription` publishes as `ConnectionSubscription` (`schema(as = …)` on the type): the
@@ -22,16 +21,7 @@ use temper_services::services::subscription_service;
 use temper_services::state::AppState;
 
 use crate::middleware::auth::AuthUser;
-
-/// Query flags for `GET /api/subscriptions`.
-#[derive(Debug, Deserialize, utoipa::IntoParams)]
-pub struct ListQuery {
-    /// Include revoked subscriptions. Default `false`.
-    #[serde(default)]
-    pub include_revoked: bool,
-    /// Optional filter: only subscriptions against this connection.
-    pub connection_id: Option<Uuid>,
-}
+use temper_core::types::query_params::SubscriptionListQuery as ListQuery;
 
 #[utoipa::path(
     post,

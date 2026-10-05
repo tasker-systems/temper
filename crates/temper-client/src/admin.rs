@@ -6,8 +6,9 @@ use crate::error::Result;
 use crate::http::HttpClient;
 use crate::ops;
 use temper_core::types::access_gate::{
-    JoinRequest, JoinRequestStatus, JoinRequestWithProfile, QueueCount, ReconcileAutoJoinOutcome,
-    ReviewRequestWithProfile, SystemSettings,
+    CloseReviewBody, JoinRequest, JoinRequestStatus, JoinRequestWithProfile, QueueCount,
+    ReconcileAutoJoinOutcome, ReviewRequestBody, ReviewRequestWithProfile, RevokePrincipalBody,
+    SystemSettings,
 };
 use temper_core::types::admin::{
     AdminDirectoryListResponse, AdminLedgerQuery, AdminLedgerResponse, AdminProfileCard,
@@ -276,7 +277,7 @@ impl<'a> AdminClient<'a> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_REVIEW_JOIN_REQUEST;
         let path = op.path(&[&request_id]);
-        let body = ReviewBody {
+        let body = ReviewRequestBody {
             status: decision,
             decision_note,
         };
@@ -297,7 +298,9 @@ impl<'a> AdminClient<'a> {
         self.standing_act(
             &ops::ADMIN_REVOKE_PRINCIPAL,
             profile_id,
-            Some(RevokeBody { reason }),
+            Some(RevokePrincipalBody {
+                reason: reason.to_string(),
+            }),
         )
         .await
     }
@@ -407,7 +410,7 @@ impl<'a> AdminClient<'a> {
         &self,
         op: &ops::Op,
         profile_id: Uuid,
-        body: Option<RevokeBody<'_>>,
+        body: Option<RevokePrincipalBody>,
     ) -> Result<()> {
         let token = self.http.resolve_token()?;
         let path = op.path(&[&profile_id]);
@@ -420,24 +423,4 @@ impl<'a> AdminClient<'a> {
             .await?;
         Ok(())
     }
-}
-
-/// Mirrors `handlers::access::RevokePrincipalBody`.
-#[derive(serde::Serialize)]
-struct RevokeBody<'a> {
-    reason: &'a str,
-}
-
-/// Mirrors `handlers::access::ReviewRequestBody` (the handler's private body type).
-#[derive(serde::Serialize)]
-struct ReviewBody {
-    status: JoinRequestStatus,
-    decision_note: Option<String>,
-}
-
-/// Mirrors `handlers::access::CloseReviewBody`. A note and nothing else — closing a
-/// reconsideration records that it was handled and moves no standing (D15).
-#[derive(serde::Serialize)]
-struct CloseReviewBody {
-    decision_note: Option<String>,
 }

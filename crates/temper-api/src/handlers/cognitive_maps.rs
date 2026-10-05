@@ -11,7 +11,6 @@
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
@@ -29,18 +28,13 @@ use temper_core::types::cognitive_maps::{
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::materialize::{MaterializeAck, MaterializeDelta, MaterializeRequest};
+use temper_core::types::query_params::{MaterializeDeltaQuery, ShapeQuery};
 use temper_core::types::reconcile::{
     CreateCogmapOutcome, CreateCogmapRequest, ReconcileCogmapRequest, ReconcileOutcome,
 };
 use temper_workflow::operations::{
     Backend, CreateCognitiveMap, MaterializeOnThreshold, ReconcileCognitiveMap,
 };
-
-/// Query params for the shape read. `lens` is optional (omit → all lenses).
-#[derive(Debug, Deserialize)]
-pub struct ShapeQuery {
-    pub lens: Option<Uuid>,
-}
 
 /// Reconcile a cognitive map's contents
 #[utoipa::path(
@@ -200,12 +194,6 @@ pub async fn shape(
     )
     .await
     .map(Json)
-}
-
-/// Query params for the materialize-delta read. `threshold` is optional (omit → the service default).
-#[derive(Debug, Deserialize)]
-pub struct MaterializeDeltaQuery {
-    pub threshold: Option<i64>,
 }
 
 /// Read formation drift since last materialize

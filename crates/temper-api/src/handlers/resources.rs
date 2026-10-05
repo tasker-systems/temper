@@ -21,6 +21,7 @@ use temper_core::types::cognitive_maps::{
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::provenance::{BlockProvenanceRow, BlockRead};
+use temper_core::types::query_params::ResourceShowQuery;
 use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
 use temper_core::types::resource_view::ResourceView;
 use temper_workflow::operations::{Backend, CreateResource, DeleteResource};
@@ -63,16 +64,6 @@ pub async fn list(
     )
     .await?;
     Ok(Json(response))
-}
-
-/// Query params for `GET /api/resources/{id}` — additive over the incumbent shape.
-#[derive(Debug, serde::Deserialize)]
-pub struct ResourceShowQuery {
-    /// Comma-separated extra sections to fill on the view (`ResourceSection` names,
-    /// kebab-case). `open-meta` is the door's baseline and is always filled;
-    /// `embedding-status` is the additive one (B1). Unknown names are a `400` naming this
-    /// door's vocabulary.
-    pub sections: Option<String>,
 }
 
 /// Get one resource
