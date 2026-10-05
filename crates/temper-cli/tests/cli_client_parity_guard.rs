@@ -81,9 +81,11 @@ const CLIENT_ONLY: &[(&str, &str)] = &[
     ),
     (
         "resources.rs",
-        // The finding-addressed audit arm — a routing address whose only job is to
-        // refuse a path/body mismatch. The CLI surfaces the block-addressed door
-        // (`resource audit-citation`), which cannot name a finding to mismatch.
+        // `POST /api/resources/{id}/citation-audits` is a second door for recording a citation
+        // audit. Its path id is a routing address whose only job is to refuse a path/body
+        // mismatch, and its body carries no act envelope. The CLI records through the
+        // block-addressed door (`resource audit-citation`), which cannot name a finding to
+        // mismatch and keeps the act's authorship and correlation (ruling 2026-10-05).
         "record_citation_audit",
     ),
     (
@@ -172,10 +174,7 @@ fn every_client_api_method_has_a_cli_caller_or_a_recorded_reason() {
             });
         for method in api_method_names(&src) {
             all_methods.push((file_name.to_string(), method.clone()));
-            if !receivers
-                .iter()
-                .any(|r| cli_blob.contains(&format!("{r}.{method}(")))
-            {
+            if !receivers.iter().any(|r| calls(&cli_blob, r, &method)) {
                 uncalled.push((file_name.to_string(), method));
             }
         }
@@ -323,6 +322,16 @@ fn receivers_of(cli: &str, a: &Accessor) -> Vec<String> {
     receivers
 }
 
+/// Whether `cli` calls `method` on `receiver`. A bound receiver (`admin`) must stand alone: the
+/// character before it cannot continue an identifier, or `removed_admin.is_empty(` would count as a
+/// call on `admin`. An accessor receiver (`.blobs()`) starts with `.` and needs no boundary.
+fn calls(cli: &str, receiver: &str, method: &str) -> bool {
+    let needle = format!("{receiver}.{method}(");
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    cli.match_indices(&needle)
+        .any(|(idx, _)| !receiver.starts_with(is_ident) || !cli[..idx].ends_with(is_ident))
+}
+
 /// Extract the `pub async fn <name>(` method names from one client source file, via
 /// string scanning (no regex dependency). Multi-line signatures are fine — only the
 /// name is read.
@@ -370,7 +379,7 @@ fn is_called(cli: &str, method: &str) -> bool {
     let cli = collapse_chains(cli);
     receivers_of(&cli, &blobs_accessor())
         .iter()
-        .any(|r| cli.contains(&format!("{r}.{method}(")))
+        .any(|r| calls(&cli, r, method))
 }
 
 #[test]
@@ -385,6 +394,19 @@ fn the_accessor_map_reads_lib_rs() {
 fn a_homonym_on_another_receiver_does_not_count() {
     assert!(!is_called("client.contexts().delete(id).await", "delete"));
     assert!(!is_called("map.delete(&key);", "delete"));
+}
+
+/// FAILS IF a bound receiver matches inside a longer identifier: `old_blobs.delete(` is not a
+/// call on `blobs`.
+#[test]
+fn a_bound_receiver_does_not_match_inside_a_longer_name() {
+    let binding = "let blobs = client.blobs();\n";
+    assert!(!is_called(
+        &format!("{binding}old_blobs.delete(id);"),
+        "delete"
+    ));
+    assert!(is_called(&format!("{binding}blobs.delete(id);"), "delete"));
+    assert!(is_called(&format!("{binding}(blobs.delete(id))"), "delete"));
 }
 
 #[test]

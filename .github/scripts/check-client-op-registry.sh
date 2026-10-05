@@ -7,7 +7,9 @@
 # path is spelled. Its parity test holds the registry to openapi.json, and dead-code analysis holds
 # every registry constant to a method that uses it. Neither can see a method that skips the registry
 # and spells its own path; that method's operation would be reachable without being counted. This
-# script closes that hole: it fails on any "/api/ string literal in the crate's src outside ops.rs.
+# script closes that hole: it fails on any "/api/ or "api/ string literal in the crate's src outside
+# ops.rs. The slashless form counts because HttpClient::url trims a leading slash, so "api/x" reaches
+# the same route as "/api/x".
 #
 # What it does not scan, and why:
 #   - ops.rs itself: the registry is where paths belong.
@@ -16,7 +18,7 @@
 #     independent check of the rendering, which is worth more than a test spelled through the
 #     registry it is testing. The block is skipped by brace depth from its `mod … {` line.
 #
-# Only the "/api/ prefix is checked. Every temper API route sits under /api/; the client's other
+# Only the api/ prefix is checked. Every temper API route sits under /api/; the client's other
 # URLs (the OAuth token endpoint, the login callback) come from configuration, not literals.
 #
 # Usage:
@@ -58,7 +60,7 @@ OFFENDERS="$(find "$SRC_DIR" -name '*.rs' ! -name 'ops.rs' | sort | while IFS= r
         }
         { armed = 0 }
         /^[[:space:]]*\/\// { next }
-        /"\/api\// { printf "  %s:%d: %s\n", file, FNR, $0 }
+        /"\/?api\// { printf "  %s:%d: %s\n", file, FNR, $0 }
     ' "$file"
 done)"
 

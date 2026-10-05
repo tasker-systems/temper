@@ -72,6 +72,34 @@ EOF
 )"
 run_test "cfg_attr-gated ToSchema in temper-workflow: fails" "$GATED" 1
 
+# --- rustfmt's multi-line derive list: the derive and the trait are on different lines ---
+MULTILINE="$(fixture multiline temper-api <<'EOF'
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    utoipa::ToSchema,
+)]
+pub struct Body { pub x: u8 }
+EOF
+)"
+run_test "multi-line derive with ToSchema in temper-api: fails" "$MULTILINE" 1
+
+# --- the same, gated behind cfg_attr ---
+MULTILINE_GATED="$(fixture multiline_gated temper-services <<'EOF'
+#[cfg_attr(
+    feature = "web-api",
+    derive(
+        utoipa::IntoParams
+    )
+)]
+pub struct Q { pub limit: Option<i64> }
+EOF
+)"
+run_test "multi-line cfg_attr-gated IntoParams in temper-services: fails" "$MULTILINE_GATED" 1
+
 # --- query parameters are the contract too ---
 PARAMS="$(fixture params temper-api <<'EOF'
 #[derive(Debug, Deserialize, IntoParams)]

@@ -68,6 +68,18 @@ EOF
 )"
 run_test "raw \"/api/ literal in a method: fails" "$RAW" 1
 
+# --- a slashless path fails: HttpClient::url trims the leading slash, so it reaches the route ---
+SLASHLESS="$(fixture slashless <<'EOF'
+impl Client {
+    pub async fn get(&self) -> Result<()> {
+        let req = self.http.request(&ops::LIST_RESOURCES, "api/secret");
+        Ok(())
+    }
+}
+EOF
+)"
+run_test "slashless \"api/ literal in a method: fails" "$SLASHLESS" 1
+
 # --- a format! path fails too: the literal prefix is what is matched ---
 FORMATTED="$(fixture formatted <<'EOF'
 fn path(id: Uuid) -> String {

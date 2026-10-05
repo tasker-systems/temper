@@ -38,8 +38,10 @@ if [ ! -d "$CRATES_DIR" ]; then
 fi
 
 # A derive naming either trait (bare or utoipa::-qualified, directly or inside cfg_attr), or a
-# hand-written impl of either.
-PATTERN='derive\([^)]*\b(ToSchema|IntoParams)\b|impl[[:space:]]+(<[^>]*>[[:space:]]*)?(utoipa::)?(ToSchema|IntoParams)\b'
+# hand-written impl of either. Matched over the whole file, not line by line: rustfmt breaks a
+# derive list that outgrows the line width into one trait per line, and a per-line match never
+# sees `derive(` and `ToSchema` together. Each hit is reported at the line its match starts on.
+PATTERN='derive\s*\([^)]*\b(?:ToSchema|IntoParams)\b|impl\s+(?:<[^>]*>\s*)?(?:utoipa::)?(?:ToSchema|IntoParams)\b'
 
 OFFENDERS="$(find "$CRATES_DIR" -name '*.rs' \
     -not -path "${CRATES_DIR}/temper-core/*" \
@@ -47,7 +49,12 @@ OFFENDERS="$(find "$CRATES_DIR" -name '*.rs' \
     -not -path '*/target/*' |
     sort |
     while IFS= read -r file; do
-        grep -nE "$PATTERN" "$file" | sed "s|^|  ${file#"${REPO_ROOT}/"}:|" || true
+        PATTERN="$PATTERN" perl -0777 -ne '
+            while (/$ENV{PATTERN}/g) {
+                my $line = (substr($_, 0, $-[0]) =~ tr/\n//) + 1;
+                (my $hit = $&) =~ s/\s+/ /g;
+                print "$line:$hit\n";
+            }' "$file" | sed "s|^|  ${file#"${REPO_ROOT}/"}:|"
     done)"
 
 if [ -n "$OFFENDERS" ]; then
