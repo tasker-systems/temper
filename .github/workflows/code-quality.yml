@@ -63,6 +63,9 @@ jobs:
       DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
       # Verify query macros against the committed .sqlx caches (see the note above the service block).
       SQLX_OFFLINE: "true"
+      # The same CI debuginfo level `.github/actions/setup-rust` sets for every test job (see its
+      # header). Job-scoped, never `[profile.dev]`.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
     steps:
       - name: Checkout code
