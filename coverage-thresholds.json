@@ -10,6 +10,7 @@
     "temper-ingest": 90,
     "temper-macros": 65,
     "temper-mcp": 50,
+    "temper-mcp-server": 90,
     "temper-migrate": 75,
     "temper-principal": 90,
     "temper-services": 90,
