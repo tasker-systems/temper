@@ -338,9 +338,16 @@ is the control that prevents authorization-code exfiltration):
 ```json
 {
   "temper-cli": ["https://<instance>/api/auth/cli-callback"],
-  "temper-ui":  ["https://<app-url>/auth/callback"]
+  "temper-ui":  ["https://<app-url>/auth/callback"],
+  "temper-desktop": ["https://<instance>/api/auth/cli-callback"]
 }
 ```
+
+`temper-desktop` is the desktop app's own public client — the registration a deployment
+publishes to the app through `desktop_client_id` in the `[auth]` provider entry (see the
+[config reference](../reference/config/README.md)). Its redirect is the same relay the CLI
+uses; the app's sign-in opens the system browser and receives the code on a local loopback
+port carried through that relay.
 
 ### `temper-api`
 
