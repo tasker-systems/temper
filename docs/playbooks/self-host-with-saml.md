@@ -30,7 +30,7 @@ bridge through Okta, see [Self-host with Okta](./self-host-with-okta.md).
   Auth0/OIDC auth provisioning with the Temper AS; everything else (Neon, Vercel, routing,
   verification mechanics) is shared.
 - **The auth-identity contract.** A Temper instance validates tokens from exactly one issuer
-  against one audience. In SAML mode the Temper AS *is* that issuer, and the agreement rules
+  against one audience set, shared by its HTTP and MCP doors. In SAML mode the Temper AS *is* that issuer, and the agreement rules
   differ from an external-IdP install. Read [Auth identity](../concepts/auth-identity.md) for
   the contract and the rules the server enforces at boot.
 
@@ -81,6 +81,12 @@ remain the authoritative reference and the manual fallback.
    `INTERNAL_RECONCILE_SECRET`, then emits the full env bundle and the `kb_saml_idp` INSERT to
    stdout. `--env-out .env.saml` writes the env (mode 0600 — it holds the private key); `--apply`
    runs the SQL against `$DATABASE_URL`. Paste the env into **both** Vercel functions and deploy.
+
+   The bundle carries no MCP settings: `MCP_AUDIENCE`, `MCP_CLIENT_ID`, and the MCP client's
+   `AS_CLIENTS` entry are added by hand — see
+   [Connect MCP clients](#connect-mcp-clients-claude-desktop--claude-code). Pass the MCP client
+   as one more `--client <mcp-client-id>=<callback>` (repeatable) to have it in the emitted
+   `AS_CLIENTS` from the start.
 
 2. **Map IdP groups to teams** — after the teams exist (see the org-bootstrap playbook):
 
@@ -358,6 +364,7 @@ Point `temper-api` at the AS as its single issuer:
 | `JWKS_URL` | `https://<instance>/oauth/jwks` |
 | `AUTH_ISSUER` | the same value as `AS_ISSUER` |
 | `AUTH_AUDIENCE` | the same value as `AS_AUDIENCE` |
+| `MCP_AUDIENCE` | `https://<instance>/mcp` — the MCP resource indicator. Set it on the **same** project/processes as everything above; see [Connect MCP clients](#connect-mcp-clients-claude-desktop--claude-code) |
 | `AUTH_PROVIDER_NAME` | `saml:<idp-key>` (e.g. `saml:acme-okta`) — namespaces the JIT auth link. Max 32 chars. |
 
 ### MCP relay credential (optional, recommended)
@@ -471,59 +478,148 @@ the UI fails fast at startup rather than silently running with no client secret.
 ## Connect MCP clients (Claude Desktop / Claude Code)
 
 The remote MCP server (`/mcp`) is served from the same deployment and authenticates against
-the Temper AS via OAuth. MCP clients discover the AS through RFC 8414 metadata and **require
-dynamic client registration (DCR)** — current Claude Code/Desktop ignore a client-side
-`client_id` and fall back to DCR regardless. The AS metadata advertises a
-`registration_endpoint` (`/oauth/register`), a thin proxy that echoes a pre-registered static
-`client_id`; it never persists client-supplied redirect URIs, so the `/oauth/authorize`
-open-redirect protection is unweakened. To enable it on a SAML instance:
+the Temper AS via OAuth. MCP clients find the AS through the MCP server's RFC 9728
+protected-resource metadata, read the AS's RFC 8414 metadata, and **register themselves
+dynamically (DCR)** — current Claude Code/Desktop ignore a client-side `client_id` and fall back
+to DCR regardless. On a SAML instance the AS metadata's `registration_endpoint` is
+`https://<instance>/oauth/clients`. For a public MCP client it mints nothing and stores nothing:
+it answers with the one pre-registered MCP `client_id` and echoes back **only** the requested
+redirect URIs that client is already allowed. The allowlist is never widened by a registration,
+so the `/oauth/authorize` open-redirect protection is unweakened. To enable it:
 
-1. **Set `MCP_CLIENT_ID`** on the deployment to a client id that is **also a key in
-   `AS_CLIENTS`** (e.g. `temper-mcp`). Without `MCP_CLIENT_ID`, `/oauth/register` returns `503
-   temporarily_unavailable`.
+1. **Set the MCP resource indicator.**
 
-2. **Add that client to `AS_CLIENTS`** with the redirect URIs its clients use:
+   ```text
+   MCP_AUDIENCE=https://<instance>/mcp
+   ```
+
+   - `AS_ISSUER` stays the authorization-server issuer (`https://<instance>`) — an issuer is not
+     a resource.
+   - `AS_AUDIENCE` and `AUTH_AUDIENCE` stay the API/default audience (`https://<instance>/api`).
+   - `MCP_AUDIENCE` names the MCP resource. It is independent of `AS_AUDIENCE` — they need not
+     be equal, and on this shape they are not. It must be a URI.
+   - **Every participating function or process receives the same value**: whatever serves
+     `/oauth/*` (the authorization server, which serves the resource), whatever serves `/mcp`
+     (which advertises it) and whatever serves `/api` (which accepts it — the MCP server relays
+     every tool call to the API with the caller's own token). With project-level env that is one
+     variable; with per-function env (see [MCP relay credential](#mcp-relay-credential-optional-recommended))
+     declare it on all three. Redeploy afterwards — a function's environment is bound to its
+     deployment.
+   - Omitting it keeps the single-audience fallback: the MCP server advertises the API audience
+     as its resource. Strict MCP clients require the advertised resource to equal the MCP server
+     URL or its origin, so with `AUTH_AUDIENCE=https://<instance>/api` they refuse to sign in.
+
+   Both doors accept a token for either audience — see
+   [The Trust Boundary](../concepts/trust-boundary.md). The split is for resource discovery, not
+   a privilege boundary between HTTP and MCP.
+
+2. **Set `MCP_CLIENT_ID`** to a client id of your choosing, `<mcp-client-id>` (conventionally
+   `temper-mcp`), wherever `/oauth/*` is served. It must also be a key in `AS_CLIENTS`. Without
+   it, registration answers `503 temporarily_unavailable`.
+
+3. **Register each remote client's callback under that client in `AS_CLIENTS`.** Start from the
+   value the deployment currently has — read it where you set it (on Vercel, the project's
+   environment variables page, or `vercel env pull`). Do not regenerate it with
+   `temper admin saml provision`: that also mints a new signing key and reconcile secret. Add one
+   key, or append to it if it exists, and **preserve every entry already there**. For an instance
+   configured as in this playbook the result looks like:
 
    ```json
    {
-     "temper-cli": ["https://<instance>/api/auth/cli-callback"],
-     "temper-ui":  ["https://<app-url>/auth/callback"],
-     "temper-mcp": [
-       "https://claude.ai/api/mcp/auth_callback",
-       "https://claude.com/api/mcp/auth_callback",
-       "http://127.0.0.1/callback"
+     "temper-cli":     ["https://<instance>/api/auth/cli-callback"],
+     "temper-ui":      ["https://<app-url>/auth/callback"],
+     "temper-desktop": ["https://<instance>/api/auth/cli-callback"],
+     "<mcp-client-id>": [
+       "<existing-callbacks>",
+       "<remote-client-callback>"
      ]
    }
    ```
 
-   The two HTTPS callbacks serve the Claude Desktop / web connector (fixed callbacks, exact
-   match). The **loopback entry serves Claude Code**: it runs a local callback server on an
-   *ephemeral* port, so the allowlist matches loopback redirect URIs by scheme + path with the
-   port ignored — a port-less `http://127.0.0.1/callback` entry matches
-   `http://127.0.0.1:<random>/callback`. Loopback matching is confined to the local machine and
-   normalizes across loopback hosts (`127.0.0.1`, `localhost`, `[::1]`), so one loopback entry
-   covers whichever the client sends. Non-loopback (HTTPS) redirect URIs are always
-   exact-match.
+   plus any other client your instance already lists (for example the Slack-link client).
 
-3. **Audience/issuer alignment is enforced at boot** — you do not have to remember it. The AS
-   mints `iss = AS_ISSUER`, `aud = AS_AUDIENCE`; **both** surfaces validate against the
-   instance's one `AUTH_AUDIENCE`. If these disagree, the process **refuses to start** and
-   names the offending variable:
+   - **Edit, never replace.** `AS_CLIENTS` is the whole allowlist for every client on the
+     instance. Pasting an example over it silently removes whichever callbacks the example lacks,
+     and those sign-ins fail.
+   - **Remote (HTTPS) callbacks match exactly** — scheme, host, path, trailing slash. Take the
+     value from the remote client's own public documentation; for the Claude Desktop / web
+     connector those are `https://claude.ai/api/mcp/auth_callback` and
+     `https://claude.com/api/mcp/auth_callback`.
+   - **Loopback callbacks are matched by path**, port and loopback host ignored (RFC 8252 §7.3),
+     because native clients such as Claude Code listen on an ephemeral port. A port-less entry
+     with the client's callback path — `http://127.0.0.1/callback` for Claude Code — matches
+     `http://127.0.0.1:<random>/callback` and its `localhost` / `[::1]` spellings. Loopback
+     matching never applies to an HTTPS callback. A loopback entry with the wrong *path* is the
+     loopback equivalent of an inexact HTTPS callback.
+   - A callback that is not registered is not an error at registration time — it is **filtered
+     out** of the registration response, and the client then fails at sign-in. The check below
+     catches that first.
+
+4. **Audience/issuer alignment is enforced at boot** — you do not have to remember it. The AS
+   mints `iss = AS_ISSUER` and, by default, `aud = AS_AUDIENCE`; both doors validate the one
+   issuer and the instance's accepted-audience set. If these disagree, the process **refuses to
+   start** and names the offending variable:
 
    | AS mints | The instance validates | Enforced requirement |
    | --- | --- | --- |
-   | `AS_ISSUER` | `AUTH_ISSUER` | `AS_ISSUER == AUTH_ISSUER` |
+   | `AS_ISSUER` | `AUTH_ISSUER` | `AS_ISSUER == AUTH_ISSUER`, byte for byte |
    | `AS_AUDIENCE` | `AUTH_AUDIENCE` | `AS_AUDIENCE == AUTH_AUDIENCE` |
+   | `MCP_AUDIENCE`, for a flow that requests it | `MCP_AUDIENCE` | must be a URI; no equality rule |
    | (its JWKS) | `JWKS_URL` | `JWKS_URL == $AS_ISSUER/oauth/jwks` |
 
-   `MCP_AUDIENCE` is **optional** and independent: it is the MCP surface's own OAuth `resource`
-   (conventionally `https://<instance>/mcp`), which the AS mints into tokens for MCP
-   authorization flows that request it. Unset, it defaults to `AUTH_AUDIENCE`. The MCP gate also
-   accepts `AUTH_AUDIENCE` tokens, so machine credentials keep working against MCP either way.
+   An authorization request may name its resource; the AS accepts only a member of its served
+   set (`AS_AUDIENCE`, plus `MCP_AUDIENCE` when set), mints it into the token, and keeps it
+   across every refresh of that session.
 
-   These already hold on any correctly-configured SAML instance — a divergent audience means
-   no AS-minted token ever verifies. Temper names the rule and fails fast rather than leaving
-   you to discover it as a 401.
+### Check discovery and registration
+
+Four deployment-neutral checks, run before anyone tries to sign in. Each uses only public,
+unauthenticated endpoints.
+
+```bash
+# 1. The protected-resource metadata advertises the MCP resource.
+curl -sS https://<instance>/.well-known/oauth-protected-resource | jq .
+
+# 2. An unauthenticated MCP call points at that document.
+curl -sS -D - -o /dev/null -X POST https://<instance>/mcp
+
+# 3. Registration echoes the callback you registered.
+curl -sS -X POST https://<instance>/oauth/clients \
+  -H 'content-type: application/json' \
+  --data '{"client_name":"verification","redirect_uris":["<remote-client-callback>"],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none"}' \
+  | jq .
+
+# 4. The authorization server serves the MCP resource for that client and callback.
+curl -sS -o /dev/null -w '%{http_code}\n' -G https://<instance>/oauth/authorize \
+  --data-urlencode response_type=code \
+  --data-urlencode client_id=<mcp-client-id> \
+  --data-urlencode redirect_uri=<remote-client-callback> \
+  --data-urlencode code_challenge=verificationverificationverificationverific \
+  --data-urlencode code_challenge_method=S256 \
+  --data-urlencode state=verification \
+  --data-urlencode resource=https://<instance>/mcp
+```
+
+Expect:
+
+1. `"resource": "https://<instance>/mcp"` — not `https://<instance>/api`. The API audience here
+   means `MCP_AUDIENCE` is unset or has not reached the MCP function.
+2. `401` with a `WWW-Authenticate: Bearer … resource_metadata="https://<instance>/.well-known/oauth-protected-resource"`
+   header.
+3. `"client_id": "<mcp-client-id>"` and `"redirect_uris": ["<remote-client-callback>"]` — the
+   requested URI, echoed as sent (a loopback callback comes back with its port). An empty
+   `redirect_uris` means that callback is not allowed under `<mcp-client-id>` in `AS_CLIENTS`:
+   not an exact match for an HTTPS callback, or no loopback entry with that path. This call
+   creates nothing; it is safe to repeat.
+4. `302` — a redirect to the instance's `/oauth/saml/login`, the hand-off to your IdP. A `400` means the authorization server
+   refuses the request: `requested resource is not served by this authorization server` when
+   `MCP_AUDIENCE` has not reached the functions serving `/oauth/*`, `unregistered client_id or
+   redirect_uri` when check 3's callback is wrong there. This call records a short-lived pending
+   sign-in that expires unused.
+
+These establish discovery, registration, and that the authorization server will mint the MCP
+resource. They do not prove the API accepts it: a complete check signs in from the client —
+through your SAML IdP — and runs one read-only tool call, which is relayed to the API.
 
 Then add the server to Claude Code and authenticate:
 

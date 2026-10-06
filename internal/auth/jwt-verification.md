@@ -1,8 +1,8 @@
 # JWT verification
 
 Both surfaces verify a Bearer JWT before anything reaches the authorization
-seam. Verification stays **per-surface** — and it is now the *only*
-thing that does, because the audience differs legitimately. The shared machinery is the
+seam. Verification stays **per-surface** in placement only — each door runs its own decode — but
+both consume the one issuer and the one accepted-audience set, so the outcome is identical. The shared machinery is the
 `JwksKeyStore`; everything downstream of the decode (classification, the email ladder, claim
 construction, the gates) is the seam's.
 
@@ -114,7 +114,7 @@ lookup — see the [machine-token contract](./machine-token-contract.md).
 ## Instance-mode invariants
 
 These are no longer advice. They are **enforced at boot** by `parse_auth_config`
-(`temper-services/src/auth_config.rs`) — an instance that violates any of them refuses to start,
+(`temper_auth::config`, re-exported from `temper-services/src/auth_config.rs`) — an instance that violates any of them refuses to start,
 naming the variable and the relation it must satisfy. They used to be operator discipline, which is
 how they came to be violated silently.
 
@@ -125,19 +125,31 @@ how they came to be violated silently.
   `validate_aud = false` and **disabled audience validation outright**; there is no longer an
   `Option` to carry that state.
 - **AS↔API shared values must agree.** `AS_AUDIENCE == AUTH_AUDIENCE`, `AS_ISSUER == AUTH_ISSUER`,
-  and `JWKS_URL == $AS_ISSUER/oauth/jwks` (trailing slashes normalized before comparison).
+  and `JWKS_URL == $AS_ISSUER/oauth/jwks` — **byte-exact** after whitespace trimming. Trailing
+  slashes are deliberately *not* normalized: the AS mints `iss` from the raw `AS_ISSUER` and the
+  verifier matches the raw `AUTH_ISSUER` as an exact string, so a one-sided slash would boot green
+  and reject every token (`a_trailing_slash_on_as_issuer_alone_is_refused`).
   `temper admin saml provision` keeps them consistent by construction. Details in
   [../../docs/playbooks/self-host-with-saml.md](../../docs/playbooks/self-host-with-saml.md).
-- **The MCP surface validates an audience SET.** `MCP_AUDIENCE` is the MCP surface's own RFC 8707
+- **Both surfaces validate one audience SET.** `MCP_AUDIENCE` is the MCP surface's own RFC 8707
   resource indicator — the value its protected-resource metadata advertises — and defaults to
-  `AUTH_AUDIENCE` when unset. The MCP gate accepts the MCP audience *and* `AUTH_AUDIENCE`
-  (machine tokens and pre-split sessions carry the latter); the HTTP gate accepts only
-  `AUTH_AUDIENCE`. Both values must be URIs (they are served in RFC 9728 documents), and an
-  empty `MCP_AUDIENCE` counts as absent — historically, two parsers for one concept answered an
-  empty value in opposite ways (temper-api fell open, temper-mcp fell shut), which is why the
-  parse now happens once, in `auth_config`.
+  `AUTH_AUDIENCE` when unset. Both gates accept the MCP audience *and* `AUTH_AUDIENCE`
+  (`AuthConfig::accepted_audiences`): machine tokens and pre-split sessions carry the latter, and
+  the MCP server relays every act through the API with the caller's own bearer, so the API must
+  accept an MCP-audience token too. Door choice is never an authorization input; the split serves
+  MCP clients' PRM resource check, not least privilege. Witnesses:
+  `an_mcp_audience_token_authenticates_at_the_api_door`,
+  `an_api_audience_token_still_authenticates_when_mcp_audience_is_distinct` (temper-api),
+  `the_mcp_gate_accepts_a_token_for_either_surface_audience`,
+  `the_mcp_gate_refuses_a_token_for_an_unknown_audience` (temper-mcp-server). Both values must be
+  URIs (they are served in RFC 9728 documents), and an empty `MCP_AUDIENCE` counts as absent —
+  historically, two parsers for one concept answered an empty value in opposite ways (temper-api
+  fell open, temper-mcp fell shut), which is why the parse now happens once.
 
-  This matters most on an AS instance: the Temper AS mints **every** token — human and machine —
-  with the server-side `AS_AUDIENCE`, ignoring any request-supplied `audience` (`mint.ts`). There is
-  no way to ask it for a differently-audienced token, so a divergent `MCP_AUDIENCE` would make
-  AS-minted tokens unverifiable at `/mcp`. That is now unreachable rather than merely discouraged.
+  On an AS instance the Temper AS serves the same set (`servedAudiences()`, `env.ts`):
+  `/oauth/authorize` accepts a requested `resource` (or `audience`) only if it is a member,
+  stores it on the flow, mints it into `aud`, and stamps it on the refresh chain so every
+  rotation re-mints the same audience (`storeRefreshToken` refuses an out-of-set value). A flow
+  that names no resource, and every `client_credentials` mint, carries `AS_AUDIENCE`. So
+  `MCP_AUDIENCE` need not equal `AS_AUDIENCE`; it must reach every process that verifies or
+  mints — API, MCP and AS — with the same value.
