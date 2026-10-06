@@ -117,15 +117,18 @@ first release claims it — no local bootstrap upload.
    Ruby, Python, and crates.io publish lanes report in the run's summary
    table. That's the whole release.
 
-   The crates.io lane publishes the `temperkb-*` client closure (see
-   `tools/scripts/release/publish-crates.sh`): trusted publishers are
-   configured on crates.io for all six names against this workflow, and the
-   per-crate versions-API probe makes re-runs and re-cuts idempotent — a
-   version already published skips loudly. Bumping the workspace anchor moves
-   the closure's `[workspace.dependencies]` specs with it, so every release
-   publishes the closure at the new version; the bootstrap 0.5.3 versions were
-   the one token-publishing exception (crates.io attaches publishers only to
-   existing crates), already spent.
+   The crates.io lane publishes the seven `temperkb-*` crates, the client
+   closure and then the MCP tool layer `temperkb-mcp` (see
+   `tools/scripts/release/publish-crates.sh`). Trusted publishers for both
+   release workflows are configured on every name, and the per-crate
+   versions-API probe makes re-runs and re-cuts idempotent: a version already
+   published skips loudly. Bumping the workspace anchor moves every
+   `[workspace.dependencies]` spec with it, so every release publishes all
+   seven at the new version. crates.io attaches publishers only to existing
+   crates, so each name's first version was published once with an API token:
+   the closure at 0.5.3, `temperkb-mcp` at 0.6.0. A new crate joins the same
+   way: publish it once locally, register both workflows, then add it to
+   `CRATES`.
 
 A release can also be (re-)run manually via **Actions → Release → Run workflow** with
 an explicit `tag` input — useful to re-cut binaries for an existing tag.

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # tools/scripts/release/publish-crates.sh
 #
-# Publish the six temperkb-* client-closure crates to crates.io, in dependency
-# order.
+# Publish the seven temperkb-* crates to crates.io (the client closure, then
+# the MCP tool layer), in dependency order.
 #
 # Usage:
 #   ./tools/scripts/release/publish-crates.sh VERSION [--dry-run]
 #
 # The closure, at the workspace lockstep version:
 #   temperkb-principal -> temperkb-auth -> temperkb-core -> temperkb-workflow
-#   -> temperkb-telemetry -> temperkb-client
+#   -> temperkb-telemetry -> temperkb-client -> temperkb-mcp
 #
 # Ordered, and not as style: a published crate's manifest must resolve its
 # dependencies from the REGISTRY (cargo strips the path and keeps the version
@@ -32,14 +32,15 @@
 # is wanted. crates.io matches the token's CALLING workflow, so inside the
 # release-tag.yml → release.yml chain the name it checks is release-tag.yml;
 # the tag-push and dispatch recovery doors present release.yml. Trusted
-# publishers for both are registered on all six temperkb-* names (RELEASING.md,
+# publishers for both are registered on every temperkb-* name (RELEASING.md,
 # "Publishing-side auth").
 #
 # Bootstrap, for the record: crates.io attaches a trusted publisher only to an
 # EXISTING crate — there is no pending-publisher pre-registration — so the
 # 0.5.3 initial versions were published once with an API token via this same
 # script locally (auth falls back to the stored credential), and the token was
-# revoked when the publishers were configured. Every version after 0.5.3
+# revoked when the publishers were configured. temperkb-mcp was bootstrapped
+# the same way at 0.6.0, its first version. Every later version of each crate
 # rides the OIDC exchange only.
 #
 # Duplicate handling: crates.io's API answers unauthenticated (it requires a
@@ -65,20 +66,15 @@ cd "$REPO_ROOT"
 # depends on. (Dev-dependencies impose no order — temperkb-telemetry's are
 # path-only, which resolve locally and survive packing; a versioned dev-dep
 # would resolve from the registry and make the crate unpackageable.)
-#
-# temperkb-mcp (the MCP tool layer, after temperkb-client) is publish-ready but deliberately
-# absent: its name does not exist on crates.io yet, so an OIDC publish of it would fail. It joins
-# this list after its one-time local bootstrap publish and its two trusted-publisher entries.
-# Until then .github/scripts/check-temperkb-mcp-package.sh keeps it packaging on every PR.
-CRATES=(temperkb-principal temperkb-auth temperkb-core temperkb-workflow temperkb-telemetry temperkb-client)
+CRATES=(temperkb-principal temperkb-auth temperkb-core temperkb-workflow temperkb-telemetry temperkb-client temperkb-mcp)
 
-echo "==> Publishing the client closure ${VERSION} to crates.io (dry-run: ${DRY_RUN})"
+echo "==> Publishing the temperkb-* crates ${VERSION} to crates.io (dry-run: ${DRY_RUN})"
 
 # Version-agreement guard, twice over, BEFORE any registry or cargo call.
 WS_VERSION="$(awk -F'"' '/^\[workspace\.package\]/{p=1; next} /^\[/{p=0} p && /^version = /{print $2; exit}' Cargo.toml)"
 if [[ "$WS_VERSION" != "$VERSION" ]]; then
     echo "ERROR: [workspace.package] version is ${WS_VERSION}, but ${VERSION} was requested." >&2
-    echo "       Bump [workspace.package].version and the six [workspace.dependencies] versions together." >&2
+    echo "       Bump [workspace.package].version and every temperkb-* [workspace.dependencies] version together." >&2
     exit 1
 fi
 
@@ -86,7 +82,7 @@ for crate in "${CRATES[@]}"; do
     DEP_VERSION="$(sed -n -E "s/^${crate} = \\{.*version = \"([^\"]+)\".*/\\1/p" Cargo.toml)"
     if [[ "$DEP_VERSION" != "$VERSION" ]]; then
         echo "ERROR: ${crate}'s [workspace.dependencies] version is ${DEP_VERSION:-absent}, but ${VERSION} was requested." >&2
-        echo "       Bump [workspace.package].version and the six [workspace.dependencies] versions together." >&2
+        echo "       Bump [workspace.package].version and every temperkb-* [workspace.dependencies] version together." >&2
         exit 1
     fi
 done
@@ -128,5 +124,5 @@ for crate in "${CRATES[@]}"; do
 done
 
 if [[ "$PUBLISHED" -eq "${#CRATES[@]}" && "$DRY_RUN" != "true" ]]; then
-    echo "==> Client closure ${VERSION} fully present on crates.io."
+    echo "==> All temperkb-* crates ${VERSION} present on crates.io."
 fi

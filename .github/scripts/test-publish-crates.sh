@@ -23,7 +23,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 VERSION="9.9.9"
 # Must match publish-crates.sh's CRATES array — this IS the expected publish
 # sequence case 1 asserts against. (Dev-deps impose no order; see the script.)
-CRATES=(temperkb-principal temperkb-auth temperkb-core temperkb-workflow temperkb-telemetry temperkb-client)
+CRATES=(temperkb-principal temperkb-auth temperkb-core temperkb-workflow temperkb-telemetry temperkb-client temperkb-mcp)
 
 # Stub `cargo`: log every invocation, always succeed. `publish` calls carry
 # `-p <crate>`; the log line is the observable.
@@ -121,15 +121,15 @@ FIRST_CORE_PROBE=$(line_of "crates/temperkb-core/versions" "$CALLS_FRESH")
 echo "PASS: a fresh closure probes each crate, then publishes in dependency order"
 
 # --- 2. Fully-published closure: loud skip, no publish runs -------------------
-# The bite: a re-cut release must skip all six loudly and exit 0 (idempotent,
+# The bite: a re-cut release must skip every crate loudly and exit 0 (idempotent,
 # like create-github-release.sh's "already exists").
 CALLS_SKIP="$TMP/calls-skip"
 STUB_PUBLISHED="$(IFS=,; echo "${CRATES[*]}")" run_target "$CALLS_SKIP" "$VERSION" > "$TMP/skip.log" 2>&1 \
     || fail "a fully-published re-run exited non-zero (idempotent skip must exit 0): $(cat "$TMP/skip.log")"
 grep -q "cargo publish -p" "$CALLS_SKIP" \
     && fail "a fully-published closure still published: $(cat "$CALLS_SKIP")"
-grep -c "already published — skipping" "$TMP/skip.log" | grep -q "^6$" \
-    || fail "all six crates did not skip loudly: $(cat "$TMP/skip.log")"
+grep -c "already published — skipping" "$TMP/skip.log" | grep -q "^${#CRATES[@]}$" \
+    || fail "not all ${#CRATES[@]} crates skipped loudly: $(cat "$TMP/skip.log")"
 
 echo "PASS: a fully-published closure skips loudly, exits 0, and never publishes"
 
@@ -161,7 +161,7 @@ grep -q "workspace.package. version is 0.0.0" "$TMP/ws.log" \
 echo "PASS: a [workspace.package] version that disagrees with the tag is refused before any call"
 
 # --- 5. One dependency-spec version disagrees: refuse -------------------------
-# The six [workspace.dependencies] versions are spelled out because dependency
+# The temperkb-* [workspace.dependencies] versions are spelled out because dependency
 # specs cannot inherit [workspace.package]; this guard is what keeps them
 # bumpable-together. One drifted line must stop the release, naming the crate.
 write_manifest "$VERSION" "0.0.0"
@@ -181,11 +181,11 @@ write_manifest "$VERSION" "$VERSION"
 CALLS_DRY="$TMP/calls-dry"
 run_target "$CALLS_DRY" "$VERSION" --dry-run > "$TMP/dry.log" 2>&1 \
     || fail "a dry-run failed: $(cat "$TMP/dry.log")"
-grep -c "cargo publish --dry-run" "$CALLS_DRY" | grep -q "^6$" \
-    || fail "the dry-run did not validate all six crates: $(cat "$CALLS_DRY")"
+grep -c "cargo publish --dry-run" "$CALLS_DRY" | grep -q "^${#CRATES[@]}$" \
+    || fail "the dry-run did not validate all ${#CRATES[@]} crates: $(cat "$CALLS_DRY")"
 grep -E "^cargo publish -p " "$CALLS_DRY" \
     && fail "the dry-run performed a real publish: $(cat "$CALLS_DRY")"
 
-echo "PASS: a dry-run validates all six crates and never publishes"
+echo "PASS: a dry-run validates every crate and never publishes"
 
 echo "ALL PASS"
