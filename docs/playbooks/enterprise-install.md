@@ -78,10 +78,10 @@ Sources: [Self-hosting Temper](./self-host-temper.md),
 | **Auth (issuer / audience / provider)** | | | | |
 | `AUTH_ISSUER` | Yes | — | — | Auth0 tenant, or `AS_ISSUER` value in the SAML path |
 | `JWKS_URL` | Yes | — | — | Auth0 JWKS, or `https://<instance>/oauth/jwks` in the SAML path |
-| `AUTH_AUDIENCE` | Yes | — | — | The HTTP audience; must equal `AS_AUDIENCE` / UI `OIDC_AUDIENCE` |
+| `AUTH_AUDIENCE` | Yes | — | — | The API/default audience, accepted at both doors; must equal `AS_AUDIENCE` / UI `OIDC_AUDIENCE` |
 | `AUTH_PROVIDER_NAME` | Yes | — | — | `auth0`, or `saml:<idp-key>` in the SAML path (max 32 chars) |
-| `MCP_AUDIENCE` | No | — | — | **Optional.** The MCP surface's own OAuth `resource` (e.g. `https://<instance>/mcp`); defaults to `AUTH_AUDIENCE`. Setting it lets MCP clients pass their resource-vs-URL/origin check while the CLI and machine clients keep the API audience |
-| `MCP_CLIENT_ID` | Yes | — | — | Auth0 MCP native app client_id; n/a in the SAML path (client allowlisting is `AS_CLIENTS` instead) |
+| `MCP_AUDIENCE` | Yes, to serve MCP clients | — | — | The MCP resource indicator, `https://<instance>/mcp`. Independent of `AS_AUDIENCE` — no equality rule. Unset, it defaults to `AUTH_AUDIENCE`, and strict MCP clients refuse an `/api` resource. Same value on the AS, MCP **and** API functions: the MCP server relays each call to the API with the caller's token. See [Self-hosting with SAML](./self-host-with-saml.md#connect-mcp-clients-claude-desktop--claude-code) |
+| `MCP_CLIENT_ID` | Yes | — | — | External IdP: the MCP native app's client_id. SAML path: `<mcp-client-id>`, a key you choose that must also appear in `AS_CLIENTS`; dynamic registration answers `503` without it |
 | `MCP_BASE_URL` | Yes | — | — | `https://<instance>` — used in OAuth discovery responses |
 | `TEMPER_API_BASE_URL` | Yes | — | — | The relay's target for every tool act; pin to this deployment's own API URL in the MCP function's environment and never point it elsewhere — the relay presents the bearer plus `TEMPER_MCP_SERVICE_SECRET` to that origin |
 | `TEMPER_MCP_SERVICE_SECRET` | Yes | — | — | One generated secret on both api and mcp functions (`openssl rand -base64 32`); the API trusts the relay's attribution carrier only beside it, refuses to boot on overlap with any other shared secret or on a value under 16 characters. Unset on the API, every relayed act attributes `@web` — the MCP surface still works, the door is simply unarmed |
@@ -91,7 +91,7 @@ Sources: [Self-hosting Temper](./self-host-temper.md),
 | `AS_AUDIENCE` | Yes (SAML path) | — | — | Must equal `AUTH_AUDIENCE` |
 | `AS_SIGNING_KEY_PKCS8` | Yes (SAML path) | — | — | Ed25519 signing key, PKCS#8 PEM — secret |
 | `AS_SIGNING_KID` | Yes (SAML path) | — | — | Key id published in the JWKS |
-| `AS_CLIENTS` | Yes (SAML path) | — | — | JSON `client_id → [redirect_uris]` allowlist; unset = fail-closed |
+| `AS_CLIENTS` | Yes (SAML path) | — | — | JSON `client_id → [redirect_uris]` allowlist; unset = fail-closed. The **whole** registry — edit it, never replace it from an example. Remote callbacks match exactly |
 | `AS_ACCESS_TTL_SECONDS` | Optional (default `900`) | — | — | Access-token lifetime |
 | `AS_REFRESH_TTL_SECONDS` | Optional (default `2592000`, 30d) | — | — | Refresh-token lifetime (slides on rotation) |
 | `AS_REFRESH_CHAIN_MAX_SECONDS` | Optional (default `7776000`, 90d) | — | — | **Absolute** refresh-chain lifetime from the last full login — the real bound on IdP-removed reach |
@@ -161,7 +161,7 @@ scheme is a different URL.
 
 | Join | Values that must be equal |
 |------|---------------------------|
-| Audience | `AS_AUDIENCE` = `AUTH_AUDIENCE` = `MCP_AUDIENCE` (if set) = UI `OIDC_AUDIENCE` |
+| Audience | `AS_AUDIENCE` = `AUTH_AUDIENCE` = UI `OIDC_AUDIENCE`. `MCP_AUDIENCE` is **not** in this join — it is a second, independent member of the accepted set, required only to be a URI |
 | Issuer | `AS_ISSUER` = `AUTH_ISSUER`; UI `OIDC_ISSUER` resolves the same issuer |
 | Provider label | `AUTH_PROVIDER_NAME` = `saml:<idp-key>` |
 | Reconcile secret | `INTERNAL_RECONCILE_SECRET` identical on the AS and API env (same Vercel project) |
@@ -198,6 +198,7 @@ impossible, not just out of order.
 | 13 | Telos-charter: `temper cogmap create` → `temper cogmap reconcile` → bind `+everyone` | `system-bootstrap.sh` | [Bootstrap an Org](./bootstrap-an-org.md) |
 | 14 | (optional) UI deploy: confidential OIDC client, `API_BASE_URL`, `SESSION_SECRET` | manual | [Self-hosting Temper](./self-host-temper.md) |
 | 15 | Verify: health, `temper auth login`, resource round-trip | manual | [Self-hosting Temper](./self-host-temper.md) |
+| 16 | **MCP readiness checkpoint** (below) — before inviting MCP clients | manual | [Self-hosting with SAML](./self-host-with-saml.md#check-discovery-and-registration) |
 | — | → team-self-cognition + Eve steward: **DEFERRED** | — | deferred |
 
 **The expected path.** The happy path is: run `saml-setup.sh` (step 3, default emit — writes the
@@ -210,6 +211,25 @@ does, or falls back to when running by hand. The two scripts are kept separate s
 `system-bootstrap.sh` (steps 8–10, 13) works unchanged for Auth0/Okta-OAuth installs, which swap
 steps 2–3, 6, and 11–12 for the Auth0 app registration documented in
 [Self-hosting Temper](./self-host-temper.md) instead.
+
+### MCP readiness checkpoint
+
+Do not declare MCP ready on a clean CLI login — the CLI uses the API audience and its own
+callback, so it passes while every MCP client fails. Confirm, in order:
+
+1. **The MCP resource indicator is configured.** `MCP_AUDIENCE=https://<instance>/mcp` on every
+   function that mints, advertises or accepts it, and redeployed.
+2. **Remote-client callbacks are registered exactly** under `<mcp-client-id>` in `AS_CLIENTS`,
+   with every existing callback preserved.
+3. **Protected-resource metadata and the unauthenticated challenge agree**: the metadata's
+   `resource` is the MCP URL, and a bare `POST /mcp` answers `401` pointing at that document.
+4. **Dynamic registration echoes the intended callback** rather than an empty list.
+5. **Login and one read-only tool call succeed** from the MCP client itself, by a user with
+   approved system access (step 8).
+
+Checks 3 and 4 are the three commands in
+[Self-hosting with SAML](./self-host-with-saml.md#check-discovery-and-registration); 1 and 2 are
+the configuration they verify.
 
 ### Okta SAML app
 
@@ -268,7 +288,7 @@ from the happy path (SAML variant swaps, a failed step to re-run by hand, etc.).
 | --- | --- | --- |
 | 8–10, 13 | `system-bootstrap.sh --run-root` | Exists today |
 | 3, 6, 11, 12 | `saml-setup.sh` (`--apply-db` for 6, 11, 12) | Exists today |
-| 1–2, 4–5, 7, 14–15 | — (manual) | Platform-console and human-in-the-loop steps: provisioning Neon and the Okta app, setting Vercel env, deploying, the first SAML login, and the optional UI deploy/verify — none of these are things a script can safely do on an operator's behalf |
+| 1–2, 4–5, 7, 14–16 | — (manual) | Platform-console and human-in-the-loop steps: provisioning Neon and the Okta app, setting Vercel env, deploying, the first SAML login, and the optional UI deploy/verify — none of these are things a script can safely do on an operator's behalf |
 
 ## Further reading
 

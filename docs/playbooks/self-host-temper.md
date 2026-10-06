@@ -261,7 +261,7 @@ deployment.
 | `JWKS_URL` | api, mcp | Yes | `https://<tenant>.auth0.com/.well-known/jwks.json` |
 | `AUTH_AUDIENCE` | api, mcp | Yes | The API audience the REST surface validates (e.g. `https://<instance>/api`). Boot fails if unset or empty |
 | `AUTH_PROVIDER_NAME` | api, mcp | Yes | Set to `auth0` |
-| `MCP_AUDIENCE` | mcp | No | The MCP surface's own OAuth `resource` (e.g. `https://<instance>/mcp`). Unset, it defaults to `AUTH_AUDIENCE` |
+| `MCP_AUDIENCE` | api, mcp | No | The MCP surface's own OAuth `resource` (e.g. `https://<instance>/mcp`). Unset, it defaults to `AUTH_AUDIENCE`. Set it on both: the MCP server relays each call to the API with the caller's token, so the API must accept it too |
 | `MCP_CLIENT_ID` | mcp | Yes | MCP native application client_id |
 | `MCP_BASE_URL` | mcp | Yes | `https://<instance>` — used in OAuth discovery responses |
 | `TEMPER_API_BASE_URL` | mcp | Yes | `https://<instance>` — the relay's target for every tool act. Pin it to this deployment's own API URL in the MCP function's environment (never anywhere else): the relay presents the caller's bearer AND the service credential to that origin. Treated as credential-adjacent, not a tuning knob — the pool refuses redirects, but the origin it points at is trusted by construction |
@@ -421,9 +421,9 @@ For manual configuration (e.g. Claude Desktop's `claude_desktop_config.json`):
 }
 ```
 
-The MCP server validates JWTs against `JWKS_URL` and checks the instance's one
-audience — `AUTH_AUDIENCE`, the same value the REST API validates (see
-[auth identity](../concepts/auth-identity.md)). Ensure `MCP_CLIENT_ID` matches
+The MCP server validates JWTs against `JWKS_URL` and checks the instance's
+accepted audience set — `AUTH_AUDIENCE` and, when set, `MCP_AUDIENCE` — the same
+set the REST API accepts (see [auth identity](../concepts/auth-identity.md)). Ensure `MCP_CLIENT_ID` matches
 the Auth0 native application registered for your MCP clients and that the
 client's callback URLs are allowlisted in that Auth0 application.
 
