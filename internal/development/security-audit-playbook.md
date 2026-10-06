@@ -128,7 +128,7 @@ verdict on the grant surface against `audit-grant-sinks.sh` and the two-axis rul
 | `.github/scripts/audit-route-auth.sh` | shipped | every route in an unauthenticated / self-gated / signature sub-router vs a reviewed baseline, plus a presence check on the `require_auth` / `require_system_access` / signature layer wiring — a new ungated route or a deleted auth layer fails CI (auth-covered routes grow freely) |
 | `.github/scripts/audit-handler-authz-drift.sh` | shipped | authz predicates (`is_system_admin`, `grant_authority`, …) invoked from `handlers/` or mcp tools rather than a shared service — the F-3 `promote_admin` drift shape |
 
-All three run as steps in the **Code Quality** CI job (`.github/workflows/code-quality.yml`). They
+All three run as steps in the **Rust Gate** CI job (`.github/workflows/quality-gate.yml`). They
 are deliberately *enumerators and tripwires*, not provers: they make the reviewable set explicit
 and fail when it grows silently. The judgment stays human/agent; the script guarantees the
 judgment is asked. Each is mutation-tested by hand (inject a sink / route / handler-authz call → it

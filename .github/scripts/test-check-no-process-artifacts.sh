@@ -15,12 +15,12 @@
 #     no longer covers.
 #   * the gate is WIRED, on an uncommented line. Commenting the CI step out would
 #     otherwise leave every assertion green while restoring the whole hole.
-#   * the gate is REACHABLE, checked behaviourally against the real detector. This is
-#     the one that actually bit: `internal/` is a NON_PRODUCT root, so before it
-#     joined DOCS_GATED_ROOTS an internal-only change scoped to
-#     RUN_CODE_QUALITY=false — and a session re-creating internal/superpowers/ from a
-#     stale instruction produces exactly that change. The gate would have been
-#     present and unreachable on its own failure mode. Wiring alone cannot see this.
+#   * the gate is REACHABLE. This is the one that actually bit: `internal/` is a
+#     NON_PRODUCT root, so an internal-only change is a full skip — and a session
+#     re-creating internal/superpowers/ from a stale instruction produces exactly that
+#     change. The gate once sat present and unreachable on its own failure mode. It is
+#     reached now because it lives inside guard-tests, which runs on every change;
+#     this file pins the placement, test-detect-ci-scope.sh the missing `if:`s.
 #
 #   bash .github/scripts/test-check-no-process-artifacts.sh
 
@@ -128,34 +128,45 @@ assert_uncommented() {
     fi
 }
 
-assert_uncommented "the gate runs in code-quality.yml, on a live (uncommented) line" \
-    ".github/workflows/code-quality.yml" \
+assert_uncommented "the gate runs in quality-gate.yml, on a live (uncommented) line" \
+    ".github/workflows/quality-gate.yml" \
     "bash .github/scripts/check-no-process-artifacts.sh"
 
 assert_uncommented "the gate runs in cargo make check, on a live (uncommented) line" \
     "tools/cargo-make/main.toml" \
     "check-no-process-artifacts.sh"
 
-# --- REACHABILITY: asserted by running the real detector ---
+# --- REACHABILITY ---
 #
-# The regression is a markdown file under internal/, which is a NON_PRODUCT root.
-# A textual grep for `^internal/` in DOCS_GATED_ROOTS would pass even if the variable
-# were dead, so this runs the detector and reads its verdict. Input MUST go through
-# --stdin: without it the detector diffs against the base ref, i.e. the real branch,
-# which is never internal-only, and the assertion would pass regardless.
-verdict="$(echo 'internal/superpowers/specs/2026-08-27-x.md' \
-    | bash "${REPO_ROOT}/.github/scripts/detect-ci-scope.sh" --stdin 2>/dev/null || true)"
-if echo "$verdict" | grep -qE '^RUN_CODE_QUALITY=true'; then
-    echo "  PASS: an internal/ change invokes code-quality, so guard-tests reaches this gate"
+# The regression is a markdown file under internal/, a NON_PRODUCT root, which
+# detect-ci-scope.sh scopes as a full skip.
+# Reachability is STRUCTURAL now. The gate runs in quality-gate.yml's guard-tests job; neither
+# that job nor ci.yml's call to quality-gate.yml carries an `if:` (test-detect-ci-scope.sh pins
+# both), so no scope verdict can switch it off. What this file owes is that the gate stays INSIDE
+# guard-tests — under quality-gate's rust-gate job, `run-rust-quality` could switch it off on
+# exactly the markdown-only change it exists for. Checked structurally: the invocation must sit
+# between the `guard-tests:` header and the next job header.
+wf="${REPO_ROOT}/.github/workflows/quality-gate.yml"
+guard_line="$(grep -n '^  guard-tests:$' "$wf" | head -1 | cut -d: -f1 || true)"
+guard_next=""
+[ -z "$guard_line" ] || guard_next="$(awk -v s="$guard_line" 'NR > s && /^  [a-z][a-z0-9-]*:$/ { print NR; exit }' "$wf")"
+[ -n "$guard_next" ] || guard_next=999999
+gate_line="$(grep -n 'bash .github/scripts/check-no-process-artifacts.sh' "$wf" \
+    | grep -vE ':[[:space:]]*#' | head -1 | cut -d: -f1 || true)"
+if [ -n "$guard_line" ] && [ -n "$gate_line" ] && [ "$gate_line" -gt "$guard_line" ] \
+   && [ "$gate_line" -lt "$guard_next" ]; then
+    echo "  PASS: the gate runs inside guard-tests, the job nothing can switch off"
     PASS=$((PASS + 1))
 else
-    echo "  FAIL: an internal/ change does not invoke code-quality — the gate is unreachable"
-    echo "        on precisely the change class it exists for."
-    echo "        detector said: $(echo "$verdict" | grep -E '^(DOCS_ONLY|SKIP_ALL|RUN_CODE_QUALITY)=' | tr '\n' ' ')"
+    echo "  FAIL: the gate is not inside guard-tests (guard-tests at line '${guard_line}',"
+    echo "        gate at line '${gate_line}') — reaching it may now require run-rust-quality"
     FAIL=$((FAIL + 1))
 fi
 
-# And that reaching it stays cheap — the point of DOCS_GATED over RUST_COUPLED.
+# And that the change stays cheap — a full skip, with the Rust pipeline off. Input MUST go
+# through --stdin: without it the detector diffs against the base ref, i.e. the real branch.
+verdict="$(echo 'internal/superpowers/specs/2026-08-27-x.md' \
+    | bash "${REPO_ROOT}/.github/scripts/detect-ci-scope.sh" --stdin 2>/dev/null || true)"
 if echo "$verdict" | grep -qE '^RUN_TEST_RUST=false'; then
     echo "  PASS: reaching it does not conscript the Rust pipeline"
     PASS=$((PASS + 1))

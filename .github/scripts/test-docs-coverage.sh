@@ -173,21 +173,21 @@ else
 fi
 
 # --- WIRING ---
-if grep -F "bash .github/scripts/test-docs-coverage.sh" "${REPO_ROOT}/.github/workflows/code-quality.yml" \
+if grep -F "bash .github/scripts/test-docs-coverage.sh" "${REPO_ROOT}/.github/workflows/quality-gate.yml" \
     | grep -qvE '^[[:space:]]*#'; then
-    echo "  ok: this harness runs in code-quality.yml, on a live line"
+    echo "  ok: this harness runs in quality-gate.yml, on a live line"
     PASS=$((PASS + 1))
 else
-    echo "  FAIL: test-docs-coverage.sh is not invoked in code-quality.yml"
+    echo "  FAIL: test-docs-coverage.sh is not invoked in quality-gate.yml"
     FAIL=$((FAIL + 1))
 fi
 
 if grep -F "python3 scripts/docs-coverage.py --strict --no-network" \
-    "${REPO_ROOT}/.github/workflows/code-quality.yml" | grep -qvE '^[[:space:]]*#'; then
+    "${REPO_ROOT}/.github/workflows/quality-gate.yml" | grep -qvE '^[[:space:]]*#'; then
     echo "  ok: the check itself runs in CI, with --strict and without the network"
     PASS=$((PASS + 1))
 else
-    echo "  FAIL: docs-coverage.py --strict --no-network does not run in code-quality.yml"
+    echo "  FAIL: docs-coverage.py --strict --no-network does not run in quality-gate.yml"
     echo "        (--no-network is deliberate: the publish half compares against PRODUCTION,"
     echo "         which is meaningless on a PR branch and never affects the exit code)"
     FAIL=$((FAIL + 1))

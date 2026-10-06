@@ -4,9 +4,8 @@
 # Test harness for check-public-surface-drift.sh, in the same shape as every sibling
 # guard test: the gate runs against a SYNTHETIC repo root in a temp dir (nothing here
 # touches the working tree), every check class gets a manufactured instance of its own
-# drift that must turn the gate red, and the wiring is asserted behaviourally — an
-# uncommented CI invocation, placement inside the ungated guard-tests job, and
-# reachability through the real detector. A gate that runs nowhere passes everywhere;
+# drift that must turn the gate red, and the wiring is asserted — an uncommented CI
+# invocation, and placement inside the guard-tests job, which runs on every change. A gate that runs nowhere passes everywhere;
 # a gate that checks nothing must refuse rather than report clean.
 #
 # Two things are derived from the gate under test, never restated here:
@@ -348,20 +347,30 @@ assert_uncommented() {
     fi
 }
 
-assert_uncommented "the gate runs in code-quality.yml, on a live (uncommented) line" \
-    ".github/workflows/code-quality.yml" \
+assert_uncommented "the gate runs in quality-gate.yml, on a live (uncommented) line" \
+    ".github/workflows/quality-gate.yml" \
     "bash .github/scripts/check-public-surface-drift.sh"
 
-assert_uncommented "the guard test runs in code-quality.yml too" \
-    ".github/workflows/code-quality.yml" \
+assert_uncommented "the guard test runs in quality-gate.yml too" \
+    ".github/workflows/quality-gate.yml" \
     "bash .github/scripts/test-check-public-surface-drift.sh"
 
-wf="${REPO_ROOT}/.github/workflows/code-quality.yml"
-guard_line="$(grep -n '^  guard-tests:' "$wf" | head -1 | cut -d: -f1 || true)"
+# Reachability is STRUCTURAL now. The gate runs in quality-gate.yml's guard-tests job; neither
+# that job nor ci.yml's call to quality-gate.yml carries an `if:` (test-detect-ci-scope.sh pins
+# both), so no scope verdict can switch it off. What this file owes is that the gate stays INSIDE
+# guard-tests — under quality-gate's rust-gate job, `run-rust-quality` could switch it off on
+# exactly the markdown-only change it exists for. Checked structurally: the invocation must sit
+# between the `guard-tests:` header and the next job header.
+wf="${REPO_ROOT}/.github/workflows/quality-gate.yml"
+guard_line="$(grep -n '^  guard-tests:$' "$wf" | head -1 | cut -d: -f1 || true)"
+guard_next=""
+[ -z "$guard_line" ] || guard_next="$(awk -v s="$guard_line" 'NR > s && /^  [a-z][a-z0-9-]*:$/ { print NR; exit }' "$wf")"
+[ -n "$guard_next" ] || guard_next=999999
 gate_line="$(grep -n 'bash .github/scripts/check-public-surface-drift.sh' "$wf" \
     | grep -vE ':[[:space:]]*#' | head -1 | cut -d: -f1 || true)"
-if [ -n "$guard_line" ] && [ -n "$gate_line" ] && [ "$gate_line" -gt "$guard_line" ]; then
-    echo "  PASS: the gate runs inside guard-tests, the job no input can switch off"
+if [ -n "$guard_line" ] && [ -n "$gate_line" ] && [ "$gate_line" -gt "$guard_line" ] \
+   && [ "$gate_line" -lt "$guard_next" ]; then
+    echo "  PASS: the gate runs inside guard-tests, the job nothing can switch off"
     PASS=$((PASS + 1))
 else
     echo "  FAIL: the gate is not inside guard-tests (guard-tests at line '${guard_line}',"
@@ -369,19 +378,10 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# Reachability through the REAL detector. The gate's own failure modes are a
-# README edit (cli-claims), a design-system/ new file (the sweep), and an
-# internal/ new file (the sweep) — every one must summon code-quality. A README
-# change must stay DOCS_ONLY: the gate is reachable precisely so a docs-only PR
-# need not conscript the heavy pipeline.
+# Its failure modes are a README edit (cli-claims) and a design-system/ or internal/
+# new file (the sweep). A README change must stay DOCS_ONLY: the gate is reachable
+# without the scope script, so a docs-only PR need not conscript the heavy pipeline.
 verdict="$(echo 'README.md' | bash "${REPO_ROOT}/.github/scripts/detect-ci-scope.sh" --stdin 2>/dev/null || true)"
-if echo "$verdict" | grep -qE '^RUN_CODE_QUALITY=true'; then
-    echo "  PASS: a README.md change invokes code-quality (the cli-claims check is reachable)"
-    PASS=$((PASS + 1))
-else
-    echo "  FAIL: a README.md change does not invoke code-quality — unreachable on its own failure mode"
-    FAIL=$((FAIL + 1))
-fi
 if echo "$verdict" | grep -qE '^DOCS_ONLY=true'; then
     echo "  PASS: a README.md change stays docs-only — the heavy pipeline stays off"
     PASS=$((PASS + 1))
@@ -389,17 +389,6 @@ else
     echo "  FAIL: a README.md change no longer scopes as docs-only — the gate now costs the heavy pipeline"
     FAIL=$((FAIL + 1))
 fi
-
-for probe in 'design-system/docs/new.md' 'internal/development/new.md' 'docs/guides/x.md'; do
-    verdict="$(echo "$probe" | bash "${REPO_ROOT}/.github/scripts/detect-ci-scope.sh" --stdin 2>/dev/null || true)"
-    if echo "$verdict" | grep -qE '^RUN_CODE_QUALITY=true'; then
-        echo "  PASS: ${probe} invokes code-quality (guard-tests reachable)"
-        PASS=$((PASS + 1))
-    else
-        echo "  FAIL: ${probe} does not invoke code-quality — a gate class is unreachable"
-        FAIL=$((FAIL + 1))
-    fi
-done
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
