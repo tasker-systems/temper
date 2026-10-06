@@ -23,6 +23,14 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **This release — the 0.6.0 fleet alignment: VERSION 0.5.4 → 0.6.0 across crates, packages, and clients**
+  The release train's own wire delta is none: version fields and the generated
+  cores re-stale with the bump (the D-S3 baseline — no shape movement); the
+  P floor rides the additive rows already in this window.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
 - **`temper auth login` reports who logged in: `profile` is the server-resolved id, not `null`**
   The login confirmation's shape is unchanged (`{ "status", "profile" }`). Under Auth0, `profile`
   was always `null`, because it came from the stored credential's `profile_id`, which an Auth0 `sub`
