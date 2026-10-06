@@ -24,6 +24,7 @@ author: "Tasker Systems"
 # cleanly and linked nothing. In CI run 37464831854 (rustc 1.99.0), the binaries' `.comment` reads
 # `Linker: LLD 23.1.1`.
 # Forcing mold would mean opting out of rust-lld with rustflags, to trade one fast linker for another.
+#
 # The debuginfo export happens BEFORE the cache step, because rust-cache keys on CARGO_* env: a
 # change of level is a new cache, never a stale one.
 

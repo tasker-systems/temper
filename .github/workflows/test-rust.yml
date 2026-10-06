@@ -235,8 +235,9 @@ jobs:
       # No "Free disk space" step. It cost 73–168s per shard and reclaimed ~25 GB for a build its own
       # comment sized against "~14 GB free". Measured on a CI runner (research Finding 9): the runner
       # starts with ~92 GB free, and this selection's target/ is 55.3 GB at the `line-tables-only`
-      # debuginfo `setup-rust` now sets, leaving ~26 GB. The `df` step at the end of this job records
-      # the real headroom on every run. If it ever shrinks toward zero, restore the step rather than
+      # debuginfo `setup-rust` now sets. Measured without the step: 33 GB free after build and tests
+      # on all 9 shards of runs 37464831854 and 37468731248 (both attempts). The `df` step at the end
+      # of this job records the real headroom on every run. If it ever shrinks toward zero, restore the step rather than
       # reaching for `debug = 0` (which loses backtrace file:line).
       - name: Checkout code
         uses: actions/checkout@v7
