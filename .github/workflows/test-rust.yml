@@ -35,6 +35,12 @@ name: Rust Tests
 #    no CI edit at all. If you ever find yourself adding `-E 'binary(...)'` here to get CI green, you
 #    are hiding a test, not fixing one.
 #
+# **Every nextest invocation runs `--profile ci`, followed by the `collect-junit` action.** The profile
+# retries a failed test once (`.config/nextest.toml`), so a flake no longer turns the run red. The
+# action is what keeps it from reading as a clean pass: it names every flaky test in a `::warning`
+# and in the job summary, and uploads the JUnit the test-accounting job will read. A new nextest step
+# needs both, or its tests are retried silently and missing from the accounting.
+#
 # Coverage is NOT here. It lives in `coverage.yml` on a nightly schedule, so an instrumented-build OOM
 # can never block a merge — and so the workspace is not tested twice on every single push.
 #
@@ -154,7 +160,13 @@ jobs:
       - name: Run unit tests
         # `test-embed` here too — temper-ingest's and temper-cli's embedding tests need no database, so
         # this is their home. They used to be two more hand-written invocations in the old embed job.
-        run: cargo nextest run --workspace --features test-embed --locked --no-fail-fast
+        run: cargo nextest run --workspace --features test-embed --profile ci --locked --no-fail-fast
+
+      - name: Collect JUnit
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/collect-junit
+        with:
+          name: unit
 
       - name: Run payload JSON-Schema snapshot gate
         # Its own step, PACKAGE-SCOPED, and that is not a filter — it is the only shape that means
@@ -173,7 +185,13 @@ jobs:
         # streaming_ingest_test rot, via a feature flag instead of an `-E` filter. Not cosmetic:
         # `segmented`, `telos_centroid` and `TelosConstants` all shipped with no schema, and prod's
         # registry has been describing an older payload than the code writes.
-        run: cargo nextest run -p temper-substrate --features scenario-schema --locked --no-fail-fast
+        run: cargo nextest run -p temper-substrate --features scenario-schema --profile ci --locked --no-fail-fast
+
+      - name: Collect JUnit
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/collect-junit
+        with:
+          name: unit-scenario-schema
 
   integration-tests:
     name: Integration & E2E Tests (${{ matrix.partition }}/3)
@@ -254,7 +272,13 @@ jobs:
             --workspace --exclude temper-cloud \
             --features test-db,test-embed \
             --partition count:${{ matrix.partition }}/3 \
-            --locked --no-fail-fast
+            --profile ci --locked --no-fail-fast
+
+      - name: Collect JUnit
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/collect-junit
+        with:
+          name: integration-${{ matrix.partition }}
 
   artifact-tests:
     name: Substrate Artifact Tests
@@ -309,7 +333,13 @@ jobs:
         run: cargo sqlx migrate run --source migrations
 
       - name: Run substrate artifact tests
-        run: cargo nextest run -p temper-substrate --features artifact-tests --locked --no-fail-fast
+        run: cargo nextest run -p temper-substrate --features artifact-tests --profile ci --locked --no-fail-fast
+
+      - name: Collect JUnit
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/collect-junit
+        with:
+          name: artifact-tests
 
   seal-proof:
     name: Seal Proof (trybuild)
@@ -339,7 +369,13 @@ jobs:
         # Gated behind `trybuild`, so this is the ONLY job that compiles it. ~157s cold (the isolated
         # trybuild-workspace recompile of temper-services + ort); the 300s nextest slow-timeout override
         # in .config/nextest.toml covers it.
-        run: cargo nextest run -p temper-services --features trybuild --test compile_fail --locked --no-fail-fast
+        run: cargo nextest run -p temper-services --features trybuild --test compile_fail --profile ci --locked --no-fail-fast
+
+      - name: Collect JUnit
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/collect-junit
+        with:
+          name: seal-proof
 
   package-temperkb-mcp:
     name: Package temperkb-mcp (publish dry run)

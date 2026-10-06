@@ -319,6 +319,9 @@ jobs:
       - name: Guard test — check-coverage-floors
         run: python3 .github/scripts/test-check-coverage-floors.py
 
+      - name: Guard test — junit-summary (a flaky test is named, an empty report is never a pass)
+        run: python3 .github/scripts/test-junit-summary.py
+
       - name: Guard test — audit-route-auth (per-builder layer wiring)
         run: bash .github/scripts/test-audit-route-auth.sh
 
