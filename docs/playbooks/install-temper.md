@@ -36,6 +36,7 @@ A versioned formula ships in the [`tasker-systems` tap](https://github.com/taske
 fleet on a minor the same way a client pins a contract:
 
 ```sh
+brew trust tasker-systems/tap                # once — Homebrew loads a third-party tap only once trusted
 brew install tasker-systems/tap/temper@0.5   # pinned to the 0.5 wire contract
 brew install tasker-systems/tap/temper       # alias — always the current minor
 ```
