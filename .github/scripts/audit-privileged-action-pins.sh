@@ -3,19 +3,25 @@
 #
 # WHY THIS EXISTS
 # ---------------
-# A job holding `id-token: write` or `attestations: write` holds a signing oracle. crates.io, npm,
-# RubyGems and PyPI trusted publishing each exchange that job's OIDC token for a publish
-# credential, and `attestations: write` mints a genuine Sigstore signature. An action referenced by
-# tag or branch can be repointed upstream (the `tj-actions/changed-files` class, March 2025) and
-# then runs inside the job with the token requestable. A full commit SHA cannot be repointed.
+# An action referenced by tag or branch can be repointed upstream (the `tj-actions/changed-files`
+# class, March 2025) and then runs inside the job with everything the job holds. A full commit SHA
+# cannot be repointed. "Privileged" here means a job whose token can do damage that outlives it:
+#   * `id-token: write` — crates.io, npm, RubyGems and PyPI trusted publishing each exchange the
+#     job's OIDC token for a publish credential;
+#   * `attestations: write` — mints a genuine Sigstore signature;
+#   * `contents: write` — creates tags and Releases. release-summary uploads the archives AND the
+#     `.sha256` files install.sh verifies them against, so a matched swap there passes install.sh;
+#   * `actions: write` — dispatches workflows, the scope that completes the tag-then-release chain
+#     ci.yml's header describes;
+#   * `packages: write` — publishes to GitHub Packages.
 #
 # build-cli-binaries.yml took this posture first; release.yml's publish lanes did not, and nothing
 # noticed. This makes the posture a property of the tree rather than of whoever last edited a job.
 #
 # WHAT IS CHECKED
 # ---------------
-# For every job in .github/workflows/*.yml whose EFFECTIVE permissions grant `id-token: write` or
-# `attestations: write` (or `write-all`):
+# For every job in .github/workflows/*.yml whose EFFECTIVE permissions grant one of those five
+# scopes (or `write-all`):
 #   * every `uses:` is a local path (`./…`), a `docker://…@sha256:` image, or
 #     `owner/repo[/path]@<40-hex SHA>` carrying a `# <tag>` trailer, which Dependabot rewrites with
 #     the SHA so a reader can tell which release is pinned;
@@ -31,9 +37,14 @@
 # A scan that finds NO privileged job fails rather than passing: today there are several, so zero
 # means the parser stopped seeing them.
 #
-# NOT CHECKED, stated so a green tick is not read as covering it: what the job's own `run:` steps
-# execute (build scripts, `npm ci`, `uv build` all run with the token requestable), and workflows
-# outside .github/workflows.
+# NOT CHECKED, stated so a green tick is not read as covering it:
+#   * what the job's own `run:` steps execute (build scripts, `npm ci`, `uv build` all run with the
+#     token requestable);
+#   * a job whose credential arrives as a SECRET rather than a token scope — release.yml's
+#     update-homebrew-tap pushes with a deploy key while declaring `contents: read`. Its checkout
+#     is pinned by hand; nothing here would notice it unpinned;
+#   * `security-events: write` (CodeQL's upload grant) and the other write scopes not listed above;
+#   * workflows outside .github/workflows.
 #
 # Usage: bash .github/scripts/audit-privileged-action-pins.sh
 # The two directory variables exist for test-audit-privileged-action-pins.sh's fixtures; nothing
@@ -49,7 +60,7 @@ exec python3 - "$WORKFLOWS_DIR" "$ACTIONS_ROOT" <<'PY'
 import os, re, sys, glob
 
 workflows_dir, actions_root = sys.argv[1], sys.argv[2]
-PRIV = re.compile(r'^\s*(id-token|attestations):\s*write\s*$')
+PRIV = re.compile(r'^\s*(id-token|attestations|contents|actions|packages):\s*write\s*$')
 USES = re.compile(r'^(\s*)(?:-\s+)?uses:\s*([^\s#]+)\s*(#\s*\S.*)?$')
 SHA_REF = re.compile(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}$')
 
@@ -166,13 +177,13 @@ for name, (f, wf_perm, jobs) in parsed.items():
                         failures.append(f'{os.path.relpath(cf, os.getcwd())}:{cn}  (run by privileged job `{jname}` in {rel})  {cref}  — {why}')
 
 if privileged == 0:
-    print(f'FAIL: no job in {workflows_dir} holds id-token or attestations write.', file=sys.stderr)
+    print(f'FAIL: no job in {workflows_dir} holds a privileged write scope.', file=sys.stderr)
     print('  Several do today, so this means the parser stopped seeing them — a scan that finds', file=sys.stderr)
     print('  nothing must fail, not pass.', file=sys.stderr)
     sys.exit(1)
 
 if failures:
-    print('FAIL: a job holding id-token/attestations write runs an action that can be repointed:', file=sys.stderr)
+    print('FAIL: a privileged job (id-token/attestations/contents/actions/packages write) runs an action that can be repointed:', file=sys.stderr)
     for x in failures:
         print('  ' + x, file=sys.stderr)
     print('', file=sys.stderr)

@@ -121,6 +121,28 @@ check "a job that narrows away the grant may use a tag (passes)" pass ""
 fixture
 cat > "${FIX}/.github/workflows/a.yml" <<EOF
 jobs:
+  release:
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+EOF
+check "a tag ref in a job holding contents: write FAILS (it uploads release assets)" fail "actions/download-artifact@v8"
+
+fixture
+cat > "${FIX}/.github/workflows/a.yml" <<EOF
+jobs:
+  dispatcher:
+    permissions:
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+EOF
+check "a tag ref in a job holding actions: write FAILS" fail "job \`dispatcher\`"
+
+fixture
+cat > "${FIX}/.github/workflows/a.yml" <<EOF
+jobs:
   everything:
     permissions: write-all
     steps:
