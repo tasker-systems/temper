@@ -2,7 +2,7 @@ import { connect } from "@vercel/connect/eve";
 import { defineMcpClientConnection } from "eve/connections";
 import { never } from "eve/tools/approval";
 
-import { mintM2mToken, requireEnv } from "../lib/temper-auth.js";
+import { mintM2mToken, requireEndpointEnv, requireEnv } from "../lib/temper-auth.js";
 import { makeTraceparent, otlpExportConfigured } from "../lib/trace.js";
 import { STEWARD_TOOLS } from "../lib/tool-allowlists.js";
 
@@ -36,7 +36,7 @@ import { STEWARD_TOOLS } from "../lib/tool-allowlists.js";
  * connection and the schedules can never drift on how they authenticate.
  */
 export default defineMcpClientConnection({
-  url: requireEnv("TEMPER_MCP_URL"),
+  url: requireEndpointEnv("TEMPER_MCP_URL"),
   description:
     "Temper knowledge base: the team's own resources (the steward's ingest source) and the team cognitive map it tends. Authored-4 writes, the invocation envelope, and the steward ingest-delta live here.",
   auth: process.env.TEMPER_M2M_CLIENT_ID

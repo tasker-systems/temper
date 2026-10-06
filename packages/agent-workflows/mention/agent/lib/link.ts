@@ -1,5 +1,7 @@
 import { createHmac } from "node:crypto";
 
+import { isLoopback, requireEndpoint } from "@tasker-systems/temper-ts";
+
 /**
  * The account-link state call: agent -> temper-api.
  *
@@ -70,7 +72,7 @@ export async function requestLinkState(principalId: string): Promise<LinkState> 
   // it rather than the most privileged one.
   assertSlackSecretsDistinct();
 
-  const baseUrl = requireEnv("TEMPER_API_URL");
+  const baseUrl = requireEndpointEnv("TEMPER_API_URL");
   const secret = requireEnv("SLACK_LINK_SECRET");
 
   const body = JSON.stringify({ slack_principal_id: principalId });
@@ -78,6 +80,10 @@ export async function requestLinkState(principalId: string): Promise<LinkState> 
 
   const res = await fetch(`${baseUrl.replace(/\/$/, "")}/internal/slack/link-state`, {
     method: "POST",
+    // Never follow a redirect. fetch strips `Authorization` on a cross-origin hop but resends
+    // these signature headers and the body, and the signature does not cover the host — so a 307 to
+    // `http://…` would undo `requireEndpointEnv` and return the response in the clear.
+    redirect: "error",
     headers: {
       "content-type": "application/json",
       "X-Temper-Timestamp": timestamp,
@@ -114,6 +120,51 @@ export function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Missing required environment variable: ${name}`);
   return value;
+}
+
+/**
+ * [`requireEnv`] for a URL this agent will put a credential on: `TEMPER_API_URL` (the HMAC-signed
+ * link-state and mint calls — the mint's response IS a human's access token) and `TEMPER_MCP_URL`
+ * (the connection, which carries that token). Both are env-chosen, so nothing else stops an
+ * operator's `http://` from moving them in the clear.
+ *
+ * Plaintext http is refused off loopback, naming the variable; loopback http (local dev) passes —
+ * see `refusePlaintextOffLoopback`. The structural checks (parseable, no userinfo, no query) are
+ * temper-ts's `requireEndpoint`, the one the steward and every temper-ts client use. Its
+ * `allowInsecureHttp` opt-out is deliberately not exposed — an env var that downgrades a
+ * server-side credential path is the class `TEMPER_ALLOW_INSECURE_HTTP` was deleted for. Returns
+ * the value as written. `tests/endpoint-env.test.ts` holds every read of these variables to it.
+ */
+export function requireEndpointEnv(name: string): string {
+  const value = requireEnv(name);
+  refusePlaintextOffLoopback(value, name);
+  requireEndpoint(value, name);
+  return value;
+}
+
+/**
+ * The plaintext half of the check, owned here rather than left to `requireEndpoint` for two
+ * reasons. Its refusal names the remedy this agent actually has (temper-ts's names an
+ * `allowInsecureHttp` opt-out that is not exposed, and a `client_secret`). And it is stricter:
+ * `*.localhost` and the fully-qualified `localhost.` are refused, because this runs on a server
+ * runtime whose resolver may send either to DNS rather than pinning it to loopback — only
+ * `localhost`, 127.0.0.0/8 and `[::1]` are known to stay on the machine. An unparseable value falls through to
+ * `requireEndpoint`, which reports it.
+ */
+function refusePlaintextOffLoopback(value: string, name: string): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return;
+  }
+  const host = url.hostname.toLowerCase();
+  if (url.protocol === "http:" && (!isLoopback(host) || host.endsWith(".localhost") || host.endsWith("."))) {
+    throw new TypeError(
+      `${name} is plaintext http to a non-loopback host, which would put this agent's credentials ` +
+        "on the wire in the clear; use https (http is accepted only for localhost, 127.0.0.0/8 and [::1])",
+    );
+  }
 }
 
 /**

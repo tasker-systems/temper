@@ -1,5 +1,12 @@
 import { getToken } from "@vercel/connect";
-import { BearerToken, ClientCredentials, type Credentials, type TokenResult } from "@tasker-systems/temper-ts";
+import {
+  BearerToken,
+  ClientCredentials,
+  isLoopback,
+  requireEndpoint,
+  type Credentials,
+  type TokenResult,
+} from "@tasker-systems/temper-ts";
 
 import { fetchWithRetry, type RetryOptions } from "./fetch-retry.js";
 
@@ -241,4 +248,49 @@ export function requireEnv(name: string): string {
     throw new Error(`${name} is required — this agent's targets/credentials are never hardcoded`);
   }
   return value;
+}
+
+/**
+ * [`requireEnv`] for a URL this agent will put a credential on — `TEMPER_MCP_URL` (the connection's
+ * M2M bearer) and `TEMPER_API_URL` (every `temperFetch`/`auditorFetch`). The value is env-chosen, so
+ * nothing else stops an operator's `http://` from sending the bearer in the clear.
+ *
+ * Plaintext http is refused off loopback, naming the variable; loopback http (local dev) passes —
+ * see `refusePlaintextOffLoopback`. The structural checks (parseable, no userinfo, no query) are
+ * temper-ts's `requireEndpoint`, the same one `ClientCredentials` applies to the token URL. Its
+ * `allowInsecureHttp` opt-out is deliberately not exposed — an env var that downgrades a server-side
+ * credential path is the class `TEMPER_ALLOW_INSECURE_HTTP` was deleted for.
+ * Returns the value as written, so callers' trailing-slash handling is unchanged.
+ * `tests/endpoint-env.test.ts` holds every read of these variables to this function.
+ */
+export function requireEndpointEnv(name: string): string {
+  const value = requireEnv(name);
+  refusePlaintextOffLoopback(value, name);
+  requireEndpoint(value, name);
+  return value;
+}
+
+/**
+ * The plaintext half of the check, owned here rather than left to `requireEndpoint` for two
+ * reasons. Its refusal names the remedy this agent actually has (temper-ts's names an
+ * `allowInsecureHttp` opt-out that is not exposed, and a `client_secret`). And it is stricter:
+ * `*.localhost` and the fully-qualified `localhost.` are refused, because this runs on a server
+ * runtime whose resolver may send either to DNS rather than pinning it to loopback — only
+ * `localhost`, 127.0.0.0/8 and `[::1]` are known to stay on the machine. An unparseable value falls through to
+ * `requireEndpoint`, which reports it.
+ */
+function refusePlaintextOffLoopback(value: string, name: string): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return;
+  }
+  const host = url.hostname.toLowerCase();
+  if (url.protocol === "http:" && (!isLoopback(host) || host.endsWith(".localhost") || host.endsWith("."))) {
+    throw new TypeError(
+      `${name} is plaintext http to a non-loopback host, which would put this agent's credentials ` +
+        "on the wire in the clear; use https (http is accepted only for localhost, 127.0.0.0/8 and [::1])",
+    );
+  }
 }

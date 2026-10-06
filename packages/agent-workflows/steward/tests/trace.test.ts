@@ -49,13 +49,20 @@ describe("otlpExportConfigured", () => {
     // injects — so if the connections ALSO dropped their static header here, outbound
     // MCP calls would carry no traceparent at all and the cross-service join key
     // would die exactly when an operator turns telemetry off.
-    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "http://collector";
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "https://collector";
     process.env.OTEL_SDK_DISABLED = "true";
     expect(otlpExportConfigured()).toBe(false);
   });
 
   it("mirrors the provider bootstrap: a signal-specific endpoint counts as configured", () => {
-    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = "http://collector";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = "https://collector";
     expect(otlpExportConfigured()).toBe(true);
+  });
+
+  // A refused (plaintext off-loopback) collector registers no provider, so undici injects nothing;
+  // the connections must then keep their static traceparent, exactly as under the kill switch.
+  it("treats a refused plaintext collector as not configured", () => {
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "http://collector";
+    expect(otlpExportConfigured()).toBe(false);
   });
 });

@@ -155,10 +155,11 @@ jobs:
         with:
           node-version: "24"
 
-      # Unlike the steward, this agent has no temper-ts `file:` dependency — nothing to build
-      # first, so the install is a plain one. Still run from INSIDE this directory: it is
-      # deliberately not a root workspace member, and a root install fails on the root's bun
-      # overrides.
+      # Like the steward, this agent takes temper-ts (and temper-telemetry-ts) as `file:`
+      # dependencies, which its `pretypecheck`/`pretest`/`prebuild` hooks build (temper-ts's dist/ is
+      # not committed, so even the type-check needs it built). Run from INSIDE this directory:
+      # it is deliberately not a root workspace member, and a root install fails on the root's
+      # bun overrides.
       - name: Install dependencies
         run: npm install
 

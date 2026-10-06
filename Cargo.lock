@@ -6490,6 +6490,7 @@ dependencies = [
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
  "prost",
+ "reqwest 0.13.2",
  "serde_json",
  "temp-env",
  "temperkb-core",
@@ -6499,6 +6500,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-import { auditorFetch, requireEnv } from "../../../lib/temper-auth.js";
+import { auditorFetch, requireEndpointEnv } from "../../../lib/temper-auth.js";
 
 /**
  * The ledger read for ONE graph element — the auditor's only route to a citing act's own record.
@@ -38,7 +38,7 @@ export default defineTool({
     id: z.uuid().describe("The resource id (kind='node') or edge id (kind='edge')"),
   }),
   async execute({ kind, id }) {
-    const apiUrl = requireEnv("TEMPER_API_URL").replace(/\/+$/, "");
+    const apiUrl = requireEndpointEnv("TEMPER_API_URL").replace(/\/+$/, "");
     const res = await auditorFetch(
       `${apiUrl}/api/graph/elements/${kind}/${id}/trail`,
       { headers: { accept: "application/json" } },

@@ -188,6 +188,9 @@ export class ClientCredentials implements Credentials {
       // with `req.formData()` and a JSON mint never reaches its grant branch.
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: this.#requestBody(),
+      // Never follow a redirect: a 307/308 resends this body, client_secret included, to wherever it
+      // points, and `requireEndpoint` vetted only the token URL. temper-py's mint refuses them too.
+      redirect: "error",
     });
 
     if (!res.ok) {

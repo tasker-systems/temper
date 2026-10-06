@@ -1,7 +1,7 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-import { auditorFetch, requireEnv } from "../../../lib/temper-auth.js";
+import { auditorFetch, requireEndpointEnv } from "../../../lib/temper-auth.js";
 
 /**
  * Close out this run's dispatch job — the auditor's twin of the steward's watermark advance.
@@ -25,7 +25,7 @@ export default defineTool({
     cogmap_id: z.uuid().describe("The cognitive map this run audited within"),
   }),
   async execute({ cogmap_id }) {
-    const apiUrl = requireEnv("TEMPER_API_URL").replace(/\/+$/, "");
+    const apiUrl = requireEndpointEnv("TEMPER_API_URL").replace(/\/+$/, "");
     const res = await auditorFetch(
       `${apiUrl}/api/auditor/${cogmap_id}/complete`,
       { method: "POST", headers: { accept: "application/json" } },
