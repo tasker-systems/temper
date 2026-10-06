@@ -125,7 +125,7 @@ PROJECT="${1:-${VERCEL_IGNORE_PROJECT:-}}"
 #     edges below were read out of the package manifests, not remembered:
 #       packages/temper-ui            -> temper-telemetry-ts
 #       packages/agent-workflows/steward -> temper-telemetry-ts, temper-ts
-#       packages/agent-workflows/mention -> temper-telemetry-ts
+#       packages/agent-workflows/mention -> temper-telemetry-ts, temper-ts
 #     A change to a linked client therefore rebuilds its dependants, and each dependant's
 #     own tree covers its `vercel.json` and its ts-rs GENERATED types, which land inside
 #     that tree (packages/temper-ui/src/lib/types/generated/,
@@ -152,7 +152,7 @@ case "${PROJECT}" in
     TRIGGERS='^packages/agent-workflows/steward/|^clients/temper-ts/|^clients/temper-telemetry-ts/|^scripts/vercel-[a-z0-9-]*\.sh$'
     ;;
   temper-mention)
-    TRIGGERS='^packages/agent-workflows/mention/|^clients/temper-telemetry-ts/|^scripts/vercel-[a-z0-9-]*\.sh$'
+    TRIGGERS='^packages/agent-workflows/mention/|^clients/temper-ts/|^clients/temper-telemetry-ts/|^scripts/vercel-[a-z0-9-]*\.sh$'
     ;;
   *)
     # An unnamed or unrecognised project is a MISCONFIGURATION, and the safe response to

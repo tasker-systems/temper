@@ -1,5 +1,7 @@
 import { createHmac } from "node:crypto";
 
+import { requireEndpoint } from "@tasker-systems/temper-ts";
+
 /**
  * The account-link state call: agent -> temper-api.
  *
@@ -70,7 +72,7 @@ export async function requestLinkState(principalId: string): Promise<LinkState> 
   // it rather than the most privileged one.
   assertSlackSecretsDistinct();
 
-  const baseUrl = requireEnv("TEMPER_API_URL");
+  const baseUrl = requireEndpointEnv("TEMPER_API_URL");
   const secret = requireEnv("SLACK_LINK_SECRET");
 
   const body = JSON.stringify({ slack_principal_id: principalId });
@@ -113,6 +115,24 @@ export async function requestLinkState(principalId: string): Promise<LinkState> 
 export function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Missing required environment variable: ${name}`);
+  return value;
+}
+
+/**
+ * [`requireEnv`] for a URL this agent will put a credential on: `TEMPER_API_URL` (the HMAC-signed
+ * link-state and mint calls — the mint's response IS a human's access token) and `TEMPER_MCP_URL`
+ * (the connection, which carries that token). Both are env-chosen, so nothing else stops an
+ * operator's `http://` from moving them in the clear.
+ *
+ * The check is temper-ts's `requireEndpoint`, the one the steward and every temper-ts client use:
+ * plaintext http is refused off loopback, naming the variable; loopback http (local dev) passes.
+ * Its `allowInsecureHttp` opt-out is deliberately not exposed — an env var that downgrades a
+ * server-side credential path is the class `TEMPER_ALLOW_INSECURE_HTTP` was deleted for. Returns
+ * the value as written. `tests/endpoint-env.test.ts` holds every read of these variables to it.
+ */
+export function requireEndpointEnv(name: string): string {
+  const value = requireEnv(name);
+  requireEndpoint(value, name);
   return value;
 }
 

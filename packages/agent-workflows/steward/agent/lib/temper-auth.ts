@@ -1,5 +1,11 @@
 import { getToken } from "@vercel/connect";
-import { BearerToken, ClientCredentials, type Credentials, type TokenResult } from "@tasker-systems/temper-ts";
+import {
+  BearerToken,
+  ClientCredentials,
+  requireEndpoint,
+  type Credentials,
+  type TokenResult,
+} from "@tasker-systems/temper-ts";
 
 import { fetchWithRetry, type RetryOptions } from "./fetch-retry.js";
 
@@ -240,5 +246,23 @@ export function requireEnv(name: string): string {
   if (!value) {
     throw new Error(`${name} is required — this agent's targets/credentials are never hardcoded`);
   }
+  return value;
+}
+
+/**
+ * [`requireEnv`] for a URL this agent will put a credential on — `TEMPER_MCP_URL` (the connection's
+ * M2M bearer) and `TEMPER_API_URL` (every `temperFetch`/`auditorFetch`). The value is env-chosen, so
+ * nothing else stops an operator's `http://` from sending the bearer in the clear.
+ *
+ * The check is temper-ts's `requireEndpoint`, the same one `ClientCredentials` already applies to
+ * the token URL: plaintext http is refused off loopback, naming the variable; loopback http (local
+ * dev) passes. Its `allowInsecureHttp` opt-out is deliberately not exposed — an env var that
+ * downgrades a server-side credential path is the class `TEMPER_ALLOW_INSECURE_HTTP` was deleted for.
+ * Returns the value as written, so callers' trailing-slash handling is unchanged.
+ * `tests/endpoint-env.test.ts` holds every read of these variables to this function.
+ */
+export function requireEndpointEnv(name: string): string {
+  const value = requireEnv(name);
+  requireEndpoint(value, name);
   return value;
 }
