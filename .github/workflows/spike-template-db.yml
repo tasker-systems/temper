@@ -1,0 +1,87 @@
+name: "SPIKE: sqlx::test template DB"
+
+# SPIKE ONLY — never merged. Task 01a10ec4-c7bb-70f0-9d32-78e13976bd17.
+# Each leg builds the Integration selection once, then runs shard 2/3 twice on the same runner:
+# once with a pristine template1, once with a migrated one. Two legs reverse the order, so a
+# warm-cache or ordering effect shows up as an asymmetry instead of hiding inside the delta.
+
+on:
+  push:
+    branches: [spike/sqlx-test-template-db]
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: Measure (${{ matrix.order }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        order: [fresh-first, template-first]
+
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.2-pg18-trixie
+        env:
+          POSTGRES_DB: temper_development
+          POSTGRES_USER: temper
+          POSTGRES_PASSWORD: temper
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5437:5432
+        options: >-
+          --health-cmd "pg_isready -U temper -d temper_development"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
+      TEMPER_ONNX_INTRA_THREADS: 0
+      TEMPER_ONNX_MODEL_PATH: ${{ github.workspace }}/crates/temper-ingest/models/bge-base-en-v1.5/model_quantized.onnx
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          lfs: true
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-prefix: integration-v4
+          tools: nextest,sqlx-cli
+
+      - uses: ./.github/actions/install-onnx
+
+      - uses: ./.github/actions/tune-test-postgres
+        with:
+          container: ${{ job.services.postgres.id }}
+
+      - name: Run migrations
+        run: cargo sqlx migrate run --source migrations
+
+      - name: Build the Integration selection
+        run: |
+          cargo nextest run --workspace --exclude temper-cloud --features test-db,test-embed \
+            --locked --no-run
+
+      - name: Micro-benchmarks
+        run: .github/spike/tpl.sh micro
+
+      - name: First arm
+        run: .github/spike/tpl.sh ${{ matrix.order == 'fresh-first' && 'fresh' || 'template' }}
+
+      - name: Second arm
+        if: ${{ !cancelled() }}
+        run: .github/spike/tpl.sh ${{ matrix.order == 'fresh-first' && 'template' || 'fresh' }}
+
+      - name: Upload reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: spike-${{ matrix.order }}
+          path: |
+            junit-*.xml
+            nextest-*.log
