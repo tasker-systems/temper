@@ -43,6 +43,9 @@ status: signal-only
   127.0.0.0/8 or `[::1]`, or that does not parse, now turns export off with a warning naming the
   variable; the process keeps serving, as it does for any exporter misconfiguration. The "span export
   on" line reports `host[:port] (VARIABLE)` instead of the raw value, which can carry userinfo.
+  The vetted traces URL is passed to the exporter explicitly, so neither SDK resolves an endpoint of
+  its own; their env resolution falls back to the general variable when the signal-specific one fails
+  to parse, which would have skipped the check.
   `temper-telemetry-ts` also resolves `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` ahead of the general
   variable in `initTelemetry`, as `shouldExportSpans`, the exporter and the Rust side already did.
   Who observes: operators with an `http://` collector on another host (export stops until it is
