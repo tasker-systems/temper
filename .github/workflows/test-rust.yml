@@ -278,11 +278,6 @@ jobs:
         with:
           name: integration-${{ matrix.partition }}
 
-      - name: Confirm the test binaries were linked by mold
-        # `setup-rust` installs mold as the job's linker. If that silently stopped applying, the only
-        # symptom would be a slower build, so check the linker's own stamp on a binary we just built.
-        run: readelf -p .comment target/debug/temper | tee /dev/stderr | grep -q 'mold'
-
       - name: Disk headroom after the build
         if: ${{ !cancelled() }}
         run: df -h /

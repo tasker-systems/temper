@@ -76,11 +76,6 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      # mold for this job only, as in `.github/actions/setup-rust` (whose header says why it must
-      # never move into .cargo/config.toml).
-      - name: Link with mold
-        uses: rui314/setup-mold@v1
-
       - name: Setup Rust build cache
         uses: Swatinem/rust-cache@v2
         with:
