@@ -14,13 +14,13 @@ permissions:
 
 jobs:
   measure:
-    name: Measure (${{ matrix.order }})
+    name: Template-only (${{ matrix.selection }})
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        order: [fresh-first, template-first]
+        selection: [p1, p2, p3, artifacts]
 
     services:
       postgres:
@@ -50,7 +50,7 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
         with:
-          cache-prefix: integration-v4
+          cache-prefix: ${{ matrix.selection == 'artifacts' && 'artifacts-v3' || 'integration-v4' }}
           tools: nextest,sqlx-cli
 
       - uses: ./.github/actions/install-onnx
@@ -62,26 +62,18 @@ jobs:
       - name: Run migrations
         run: cargo sqlx migrate run --source migrations
 
-      - name: Build the Integration selection
-        run: |
-          cargo nextest run --workspace --exclude temper-cloud --features test-db,test-embed \
-            --locked --no-run
-
-      - name: Micro-benchmarks
-        run: .github/spike/tpl.sh micro
-
-      - name: First arm
-        run: .github/spike/tpl.sh ${{ matrix.order == 'fresh-first' && 'fresh' || 'template' }}
-
-      - name: Second arm
-        if: ${{ !cancelled() }}
-        run: .github/spike/tpl.sh ${{ matrix.order == 'fresh-first' && 'template' || 'fresh' }}
+      # Second pass: correctness across every DB-backed selection with a migrated template1.
+      # Timing baselines for shards 1 and 3 come from main's own recent runs.
+      - name: Template arm
+        env:
+          SPIKE_SELECTION: ${{ matrix.selection }}
+        run: .github/spike/tpl.sh template
 
       - name: Upload reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: spike-${{ matrix.order }}
+          name: spike2-${{ matrix.selection }}
           path: |
             junit-*.xml
             nextest-*.log

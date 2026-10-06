@@ -81,11 +81,13 @@ run_arm() {
   if [ "$arm" = template ]; then migrate_template1; fi
   echo "== ARM $arm: template1 has $(psql "$PGURL_BASE/template1" -Atqc "SELECT count(*) FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema')") tables"
   local t0 rc=0; t0=$(now_ms)
-  cargo nextest run \
-    --workspace --exclude temper-cloud \
-    --features test-db,test-embed \
-    --partition count:2/3 \
-    --profile ci --locked --no-fail-fast 2>&1 | tee "nextest-$arm.log" | grep -E '^\s*(Summary|FAIL|FLAKY|TIMEOUT)' || rc=$?
+  local sel=${SPIKE_SELECTION:-p2}
+  local -a cmd
+  case "$sel" in
+    p[123]) cmd=(--workspace --exclude temper-cloud --features test-db,test-embed --partition "count:${sel#p}/3") ;;
+    artifacts) cmd=(-p temper-substrate --features artifact-tests) ;;
+  esac
+  cargo nextest run "${cmd[@]}" --profile ci --locked --no-fail-fast 2>&1 | tee "nextest-$arm.log" | grep -E '^\s*(Summary|FAIL|FLAKY|TIMEOUT)' || rc=$?
   echo "ARM $arm wall: $(( $(now_ms) - t0 )) ms"
   mv target/nextest/ci/junit.xml "junit-$arm.xml"
 }
