@@ -593,3 +593,13 @@ mod tests {
         );
     }
 }
+
+/// WITNESS ONLY (branch `jct/witness-flaky-visible`, never merged): fails on its first attempt and
+/// passes on nextest's retry, so the run shows whether a flake is named or reads as a clean pass.
+#[cfg(test)]
+mod witness_flaky_visible {
+    #[test]
+    fn fails_first_attempt_then_passes() {
+        assert_ne!(std::env::var("NEXTEST_ATTEMPT").as_deref(), Ok("1"), "deliberate first-attempt failure");
+    }
+}
