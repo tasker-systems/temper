@@ -76,8 +76,10 @@ fn the_resolution_is_logged_after_the_subscriber_exists() {
         "the export resolution never reached the log — an operator starting this process gets no \
          confirmation that export is on, and no diagnosis when it is not. Output was: {out:?}"
     );
+    // Named by host and variable, not by the raw value, which can carry userinfo.
+    let host = endpoint.trim_start_matches("http://");
     assert!(
-        out.contains(&endpoint),
+        out.contains(&format!("{host} (OTEL_EXPORTER_OTLP_ENDPOINT)")),
         "the resolution line must name the endpoint it resolved, so 'why are there no spans' is \
          answerable without a redeploy. Output was: {out:?}"
     );

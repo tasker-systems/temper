@@ -5,7 +5,9 @@
 //!
 //! | Concern | Owner | Evidence |
 //! |---|---|---|
-//! | protocol, endpoint, headers, timeout | **the SDK** | `SpanExporter::builder().build()` resolves `OTEL_EXPORTER_OTLP_(TRACES_)*`, signal-specific first (`opentelemetry-otlp-0.32.0/src/span.rs:78-93`, `exporter/http/mod.rs:287,738`) |
+//! | redirects | **us** | `exporter_http_client` builds the client with redirects off; the SDK's default client follows them |
+//! | protocol, headers, timeout | **the SDK** | `SpanExporter::builder().build()` resolves `OTEL_EXPORTER_OTLP_(TRACES_)*`, signal-specific first (`opentelemetry-otlp-0.32.0/src/span.rs:78-93`, `exporter/http/mod.rs:287,738`) |
+//! | endpoint | **us**, from the same variables | resolved and vetted by `traces_url` / `vet_endpoint`, then passed to `with_endpoint` — the SDK's own env resolution falls back to the general variable when the signal-specific one fails to parse, which would route the credential to a URL nobody vetted |
 //! | `service.name`, resource attributes | **the SDK** | `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` (`opentelemetry_sdk-0.32.1/src/resource/env.rs:80`) |
 //! | sampler | **the SDK** | `OTEL_TRACES_SAMPLER{,_ARG}` (`opentelemetry_sdk-0.32.1/src/trace/config.rs:60-61`) |
 //! | whether to export at all | **us** | see below |
@@ -50,6 +52,7 @@ use std::time::Duration;
 
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::KeyValue;
+use opentelemetry_otlp::{WithExportConfig as _, WithHttpConfig as _};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::Resource;
 use opentelemetry_semantic_conventions::attribute::{
@@ -109,6 +112,9 @@ pub(crate) enum ExportResolution {
     Disabled,
     /// No endpoint configured — the ordinary local/CI case.
     NoEndpoint,
+    /// An endpoint was configured but is not one the collector credential may ride — see
+    /// [`vet_endpoint`]. The reason names the variable, never its value.
+    Refused { reason: String },
     /// An endpoint was configured but the exporter could not be built. **This is the one an operator
     /// most needs to see**, and it was the one most reliably lost.
     BuildFailed { endpoint: String, error: String },
@@ -132,6 +138,10 @@ impl ExportResolution {
             Self::NoEndpoint => tracing::debug!(
                 "span export off; no OTEL_EXPORTER_OTLP_(TRACES_)ENDPOINT configured. \
                  Not defaulting to localhost:4318 — see temper_telemetry::export docs"
+            ),
+            Self::Refused { reason } => tracing::warn!(
+                %reason,
+                "OTLP endpoint refused; continuing without span export"
             ),
             Self::BuildFailed { endpoint, error } => tracing::warn!(
                 %error,
@@ -248,13 +258,114 @@ fn cli_export_opted_in() -> bool {
         .unwrap_or(false)
 }
 
-/// The configured OTLP endpoint, if any. Signal-specific wins, matching the SDK's own precedence.
-fn configured_endpoint() -> Option<String> {
-    OTLP_ENDPOINT_VARS
-        .iter()
-        .find_map(|var| std::env::var(var).ok())
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+/// The configured OTLP endpoint and the variable that named it, if any. Signal-specific wins,
+/// matching the SDK's own precedence.
+fn configured_endpoint() -> Option<(&'static str, String)> {
+    OTLP_ENDPOINT_VARS.iter().find_map(|&var| {
+        let value = std::env::var(var).ok()?.trim().to_string();
+        (!value.is_empty()).then_some((var, value))
+    })
+}
+
+/// The URL traces are POSTed to, built from the variable [`configured_endpoint`] chose exactly as the
+/// SDK builds it (`resolve_http_endpoint`): the signal-specific value verbatim, or the general base
+/// with `/v1/traces` appended. This string — not the SDK's own reading of the environment — is what
+/// [`build_provider`] hands the exporter.
+fn traces_url(var: &str, value: &str) -> String {
+    if var == "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT" {
+        value.to_string()
+    } else if value.ends_with('/') {
+        format!("{value}v1/traces")
+    } else {
+        format!("{value}/v1/traces")
+    }
+}
+
+/// The endpoint's `host[:port]` when the collector credential may ride it, or why not.
+///
+/// The exporter sends `OTEL_EXPORTER_OTLP_HEADERS` — the collector's credential — and every span on
+/// this URL, so plaintext http is refused unless it names this machine. Refused, not fatal: export
+/// is off and the process serves as usual (see [`build_provider`]). Neither result carries the
+/// value itself, which can hold userinfo. The TypeScript hops refuse identically
+/// (`clients/temper-telemetry-ts/src/otel.ts`, `resolveExport`).
+///
+/// Two parsers must agree, because two read this URL downstream: the exporter parses it as an
+/// `http::Uri`, and reqwest re-parses it as a WHATWG `url::Url` to connect. A value they read
+/// differently (`https://a.example\@b.example/` is host `a.example` to one and invalid to the
+/// other) is refused rather than vetted under one reading and sent under the other.
+fn vet_endpoint(var: &str, value: &str) -> Result<String, String> {
+    let (Ok(url), Ok(uri)) = (url::Url::parse(value), value.parse::<http::Uri>()) else {
+        return Err(format!("{var} is not a parseable URL"));
+    };
+    let host = url.host_str().unwrap_or_default();
+    let agree = uri.scheme_str() == Some(url.scheme())
+        && uri.host().is_some_and(|h| h.eq_ignore_ascii_case(host));
+    // This check also keeps the value out of `BuildFailed`'s log line: a URL `http::Uri` rejects
+    // would otherwise fail in `with_endpoint` as `InvalidUri(<the value>)`, userinfo and all.
+    if !agree {
+        return Err(format!(
+            "{var} is read differently by the URL parsers on the export path"
+        ));
+    }
+    let carries_safely = match url.scheme() {
+        "https" => !host.is_empty(),
+        "http" => is_loopback_host(host),
+        _ => false,
+    };
+    if !carries_safely {
+        return Err(format!(
+            "{var} is not https (plaintext http is accepted only for localhost, 127.0.0.0/8 and \
+             [::1]), so OTEL_EXPORTER_OTLP_HEADERS and every span would cross in the clear"
+        ));
+    }
+    Ok(match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    })
+}
+
+/// The exporter's HTTP client: the one the SDK would build (`reqwest-blocking-client`, its timeout),
+/// except that it follows **no redirect**. The vetted URL is only worth vetting if it is where the
+/// request ends: reqwest's default follows up to 10 redirects, downgrades included, and strips only
+/// the headers it knows are sensitive — not a vendor's custom auth header from
+/// `OTEL_EXPORTER_OTLP_HEADERS`. A collector answering 3xx is now an export error, like any non-2xx.
+///
+/// Built on its own thread, as the SDK builds it: a blocking client cannot be built or dropped
+/// inside a Tokio runtime, and the server seams call this from one.
+fn exporter_http_client() -> Result<reqwest::blocking::Client, String> {
+    let timeout = traces_timeout();
+    std::thread::spawn(move || {
+        reqwest::blocking::Client::builder()
+            .timeout(timeout)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| e.to_string())
+    })
+    .join()
+    .map_err(|_| "the thread building the OTLP HTTP client panicked".to_string())?
+}
+
+/// The client timeout the SDK would have used (`resolve_timeout`, `opentelemetry-otlp-0.32.0`
+/// `exporter/mod.rs`): `OTEL_EXPORTER_OTLP_TRACES_TIMEOUT`, then `OTEL_EXPORTER_OTLP_TIMEOUT`, in
+/// milliseconds, else 10 s. Mirrored because supplying our own client means supplying its timeout.
+fn traces_timeout() -> Duration {
+    [
+        "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+        "OTEL_EXPORTER_OTLP_TIMEOUT",
+    ]
+    .iter()
+    .find_map(|var| std::env::var(var).ok()?.parse::<u64>().ok())
+    .map_or(Duration::from_millis(10_000), Duration::from_millis)
+}
+
+/// Whether `host` (as `Url::host_str` renders it) is known to stay on this machine. Deliberately
+/// not `*.localhost`, nor the fully-qualified `localhost.`: a resolver may send either to DNS.
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host == "[::1]"
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Resource attributes describing *which deployment* emitted a span, plus the process's own
@@ -301,15 +412,35 @@ fn build_provider() -> Option<SdkTracerProvider> {
         return None;
     }
 
-    let Some(endpoint) = configured_endpoint() else {
+    let Some((var, value)) = configured_endpoint() else {
         record_resolution(ExportResolution::NoEndpoint);
         return None;
     };
+    let url = traces_url(var, &value);
+    let endpoint = match vet_endpoint(var, &url) {
+        Ok(host) => format!("{host} ({var})"),
+        Err(reason) => {
+            record_resolution(ExportResolution::Refused { reason });
+            return None;
+        }
+    };
 
-    // Protocol, endpoint, headers and timeout all come from the spec env vars; `with_http` only
-    // pins the transport family so the HTTP/protobuf path is used rather than gRPC.
+    let client = match exporter_http_client() {
+        Ok(client) => client,
+        Err(error) => {
+            record_resolution(ExportResolution::BuildFailed { endpoint, error });
+            return None;
+        }
+    };
+
+    // Protocol, headers and timeout come from the spec env vars; `with_http` pins the transport
+    // family so the HTTP/protobuf path is used rather than gRPC. The endpoint is the vetted URL,
+    // passed explicitly so the SDK never resolves one of its own (see `traces_url`), and the client
+    // is ours so that it follows no redirect (see `exporter_http_client`).
     let exporter = match opentelemetry_otlp::SpanExporter::builder()
         .with_http()
+        .with_endpoint(url)
+        .with_http_client(client)
         .build()
     {
         Ok(exporter) => exporter,
@@ -640,7 +771,117 @@ mod tests {
                     Some("http://traces:4318"),
                 ),
             ],
-            || assert_eq!(configured_endpoint().as_deref(), Some("http://traces:4318")),
+            || {
+                assert_eq!(
+                    configured_endpoint(),
+                    Some((
+                        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                        "http://traces:4318".to_string()
+                    ))
+                )
+            },
+        );
+    }
+
+    /// The collector credential (`OTEL_EXPORTER_OTLP_HEADERS`) rides the endpoint, so only https, or
+    /// plaintext to this machine, may carry it — and a refusal never repeats the value.
+    #[test]
+    fn plaintext_off_loopback_is_refused_without_echoing_the_value() {
+        for bad in [
+            "http://collector.example.com:4318",
+            "http://user:tok3n@collector.example.com",
+            "http://foo.localhost:4318",
+            "http://localhost.:4318",
+            "htps://user:tok3n@collector.example.com",
+            "not a url tok3n",
+        ] {
+            let reason = vet_endpoint("OTEL_EXPORTER_OTLP_ENDPOINT", bad)
+                .expect_err(&format!("should refuse {bad}"));
+            assert!(
+                reason.starts_with("OTEL_EXPORTER_OTLP_ENDPOINT "),
+                "{reason}"
+            );
+            assert!(!reason.contains("tok3n"), "{bad} leaked into: {reason}");
+        }
+    }
+
+    #[test]
+    fn https_and_loopback_http_are_accepted() {
+        for (ok, host) in [
+            ("https://otlp.example.com/otlp", "otlp.example.com"),
+            ("http://localhost:4318", "localhost:4318"),
+            ("http://127.0.0.1:4318", "127.0.0.1:4318"),
+            ("http://[::1]:4318", "[::1]:4318"),
+        ] {
+            assert_eq!(vet_endpoint("V", ok).as_deref(), Ok(host), "{ok}");
+        }
+    }
+
+    /// The general base gets `/v1/traces`, exactly as the SDK would append it; the signal-specific
+    /// value is used verbatim.
+    #[test]
+    fn traces_url_matches_the_sdks_construction() {
+        let general = "OTEL_EXPORTER_OTLP_ENDPOINT";
+        let traces = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT";
+        assert_eq!(
+            traces_url(general, "https://o.example/otlp"),
+            "https://o.example/otlp/v1/traces"
+        );
+        assert_eq!(
+            traces_url(general, "https://o.example/"),
+            "https://o.example/v1/traces"
+        );
+        assert_eq!(
+            traces_url(traces, "https://o.example/x"),
+            "https://o.example/x"
+        );
+    }
+
+    /// A value the two downstream parsers read differently is refused, not vetted under one reading.
+    #[test]
+    fn a_parser_differential_is_refused() {
+        let reason = vet_endpoint("V", "https://good.example.com\\@evil.example.com/")
+            .expect_err("backslash: WHATWG host good.example.com, http::Uri invalid");
+        assert!(reason.starts_with("V "), "{reason}");
+    }
+
+    /// The SDK's own env resolution falls back to the GENERAL variable when the signal-specific one
+    /// does not parse as an `http::Uri`. Vetting the signal-specific value and then letting the SDK
+    /// resolve would send the credential to the unvetted general endpoint.
+    #[test]
+    fn an_unparseable_traces_endpoint_never_falls_back_to_the_general_one() {
+        temp_env::with_vars(
+            [
+                (
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                    Some("https://good.example.com\\@x/v1/traces"),
+                ),
+                (
+                    "OTEL_EXPORTER_OTLP_ENDPOINT",
+                    Some("http://evil.example.com:4318"),
+                ),
+                (OTEL_SDK_DISABLED, None),
+            ],
+            || assert!(build_provider().is_none()),
+        );
+    }
+
+    /// The wiring: a refused endpoint builds no provider, and records why.
+    #[test]
+    fn a_refused_endpoint_builds_no_provider() {
+        temp_env::with_vars(
+            [
+                (
+                    "OTEL_EXPORTER_OTLP_ENDPOINT",
+                    Some("https://collector:4318"),
+                ),
+                (
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                    Some("http://collector:4318"),
+                ),
+                (OTEL_SDK_DISABLED, None),
+            ],
+            || assert!(build_provider().is_none()),
         );
     }
 
@@ -649,7 +890,10 @@ mod tests {
     fn the_kill_switch_beats_a_configured_endpoint() {
         temp_env::with_vars(
             [
-                ("OTEL_EXPORTER_OTLP_ENDPOINT", Some("http://collector:4318")),
+                (
+                    "OTEL_EXPORTER_OTLP_ENDPOINT",
+                    Some("https://collector:4318"),
+                ),
                 (OTEL_SDK_DISABLED, Some("true")),
             ],
             || assert!(build_provider().is_none()),

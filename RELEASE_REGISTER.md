@@ -23,6 +23,45 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.6.0 — unreleased
+- **The SDKs' endpoint refusals no longer repeat the URL they refused, and their token requests follow no redirect**
+  `require_endpoint` / `requireEndpoint` / `validate_endpoint` in temper-py, temper-rb, temper-ts
+  and `temperkb-client` still refuse the same values with the same error types. The "not a parseable
+  URL", "must be an absolute http(s) URL", "invalid port" and query/fragment messages used to append
+  the raw value, and those checks run before the userinfo check, so a mistyped
+  `htps://id:secret@host` (or a secret in a query) was copied into the exception and on into logs.
+  Each message now names the parameter and the reason only, and chains no exception that quotes
+  it: temper-rb raises with `cause: nil` (Ruby attached URI's own error, whose message is the whole
+  value), and temper-py raises outside the `except` (the port error quoted a prefix of a password
+  containing `/`). Separately, temper-ts's `ClientCredentials` mint and `temperkb-client`'s
+  refresh-token grant and login code exchange no longer follow redirects: a 307/308 resent the form
+  (client secret, refresh token, or code and verifier) to a URL nothing had vetted, and a 3xx is now
+  a failed request. temper-py and temper-rb already did not follow them. Who observes: callers that
+  display or match on these messages; a token endpoint that relies on redirecting. User-visible:
+  yes. Release relevance: behavioral.
+pr: self
+classes: behavioral
+surfaces: clients
+status: signal-only
+- **OTLP span export refuses a plaintext collector off loopback, and its log line names host and variable, not the URL**
+  The OTLP exporter sends `OTEL_EXPORTER_OTLP_HEADERS` (the vendor credential) and every span to the
+  configured endpoint. In the Rust servers and CLI (`temperkb-telemetry`) and the Node hops
+  (`temper-telemetry-ts`), an endpoint that is plaintext `http` to anything but `localhost`,
+  127.0.0.0/8 or `[::1]`, or that does not parse, now turns export off with a warning naming the
+  variable; the process keeps serving, as it does for any exporter misconfiguration. The "span export
+  on" line reports `host[:port] (VARIABLE)` instead of the raw value, which can carry userinfo.
+  The vetted traces URL is passed to the exporter explicitly, so neither SDK resolves an endpoint of
+  its own; their env resolution falls back to the general variable when the signal-specific one fails
+  to parse, which would have skipped the check. The Rust exporter's HTTP client now follows no
+  redirect (reqwest's default followed up to 10, forwarding custom auth headers such as an API key);
+  a collector answering 3xx is an export error. `localhost.` no longer counts as loopback.
+  `temper-telemetry-ts` also resolves `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` ahead of the general
+  variable in `initTelemetry`, as `shouldExportSpans`, the exporter and the Rust side already did.
+  Who observes: operators with an `http://` collector on another host (export stops until it is
+  https). User-visible: operator-facing only. Release relevance: behavioral.
+pr: self
+classes: behavioral
+surfaces: clients, internal
+status: signal-only
 
 ## Shipped in v0.6.0
 - **This release — the 0.6.0 fleet alignment: VERSION 0.5.4 → 0.6.0 across crates, packages, and clients**

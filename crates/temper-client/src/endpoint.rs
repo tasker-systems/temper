@@ -62,17 +62,17 @@ pub fn validate_endpoint(value: &str, name: &str) -> Result<()> {
         ));
     }
 
-    let parsed = Url::parse(value)
-        .map_err(|_| not_configured(name, &format!("is not a parseable URL: {value:?}")))?;
+    // No message below echoes `value`. Every check before the userinfo one can
+    // fail on a URL that still carries a credential (`htps://id:secret@host`),
+    // and a query can carry one too; the error names the variable, which is what
+    // the caller has to fix.
+    let parsed = Url::parse(value).map_err(|_| not_configured(name, "is not a parseable URL"))?;
     // An out-of-range or non-numeric port fails `Url::parse` itself, so an
     // explicit port check here would have nothing left to catch.
     let scheme = parsed.scheme();
     let host = parsed.host_str();
     if !matches!(scheme, "http" | "https") || host.is_none() {
-        return Err(not_configured(
-            name,
-            &format!("must be an absolute http(s) URL, got {value:?}"),
-        ));
+        return Err(not_configured(name, "must be an absolute http(s) URL"));
     }
     let host = host.expect("host checked above");
 
@@ -165,6 +165,20 @@ mod tests {
     fn rejects_userinfo_because_it_would_ride_in_every_error_message() {
         refused("https://id:secret@temperkb.io");
         refused("http://user@127.0.0.1");
+    }
+
+    /// Each fails a check that runs BEFORE the userinfo one, so the credential is
+    /// still in the string when the message is built.
+    #[test]
+    fn never_echoes_a_credential_in_the_refusal() {
+        for bad in ["htps://id:tok3n@temperkb.io", "https://id:tok3n@[::1"] {
+            let err = validate_endpoint(bad, "base_url")
+                .err()
+                .unwrap_or_else(|| panic!("should refuse {bad}"));
+            let message = err.to_string();
+            assert!(message.contains("base_url"), "{message}");
+            assert!(!message.contains("tok3n"), "{bad} leaked into: {message}");
+        }
     }
 
     #[test]

@@ -45,6 +45,34 @@ class TestRequireOpaque:
 
 
 class TestRequireEndpoint:
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "htps://id:tok3n@temperkb.io",
+            "https://id:tok3n@[::1",
+            "https://temperkb.io:99999/?token=tok3n",
+            "https://temperkb.io/?token=tok3n",
+        ],
+    )
+    def test_never_echoes_a_credential_in_the_refusal(self, bad):
+        # Each fails a check that runs BEFORE the userinfo one (or carries the secret in
+        # the query), so the credential is still in the string when the message is built.
+        with pytest.raises(ValueError, match=r"^base_url ") as exc:
+            require_endpoint(bad, name="base_url")
+        assert "tok3n" not in str(exc.value)
+
+    @pytest.mark.parametrize(
+        "bad", ["https://client:s3cr/etX@temperkb.io", "https://id:tok3n@[::1"]
+    )
+    def test_never_chains_the_parsers_exception(self, bad):
+        # The parser's own exception can quote the value — for the port, the text before
+        # the first `/`, which is a prefix of a password containing one — and a traceback
+        # or error tracker prints whatever is chained, explicitly or implicitly.
+        with pytest.raises(ValueError) as exc:
+            require_endpoint(bad, name="base_url")
+        assert exc.value.__cause__ is None
+        assert exc.value.__context__ is None
+
     def test_accepts_an_https_origin_with_a_path_prefix(self):
         # The generated core joins host + `/api/...`, so an instance mounted under a
         # prefix is addressed by keeping the prefix on the host.

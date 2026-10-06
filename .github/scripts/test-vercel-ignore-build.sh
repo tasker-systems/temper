@@ -98,7 +98,7 @@ expect "steward SKIPS the mention tree"    0 steward-agent  VERCEL_ENV=preview C
 # The `file:` dependency edges, read out of the package manifests rather than remembered:
 #   temper-ui -> temper-telemetry-ts
 #   steward   -> temper-telemetry-ts, temper-ts
-#   mention   -> temper-telemetry-ts
+#   mention   -> temper-telemetry-ts, temper-ts
 # A linked client must rebuild its dependants and only its dependants.
 # ---------------------------------------------------------------------------------------
 echo "-- linked client dependencies"
@@ -108,9 +108,7 @@ expect "telemetry-ts rebuilds mention"  1 temper-mention VERCEL_ENV=preview CHAN
 expect "telemetry-ts does NOT rebuild cloud" 0 temper-cloud VERCEL_ENV=preview CHANGED_PATHS="clients/temper-telemetry-ts/src/otel.ts"
 
 expect "temper-ts rebuilds steward"     1 steward-agent  VERCEL_ENV=preview CHANGED_PATHS="clients/temper-ts/src/client.ts"
-# mention does NOT declare temper-ts — asserted so the day it gains the dependency, this
-# line fails and the trigger set is updated with it, rather than drifting silently.
-expect "temper-ts does NOT rebuild mention" 0 temper-mention VERCEL_ENV=preview CHANGED_PATHS="clients/temper-ts/src/client.ts"
+expect "temper-ts rebuilds mention"     1 temper-mention VERCEL_ENV=preview CHANGED_PATHS="clients/temper-ts/src/client.ts"
 expect "temper-ts does NOT rebuild ui"      0 temper-ui      VERCEL_ENV=preview CHANGED_PATHS="clients/temper-ts/src/client.ts"
 
 # ---------------------------------------------------------------------------------------
