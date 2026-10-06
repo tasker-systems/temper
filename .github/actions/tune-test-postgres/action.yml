@@ -1,0 +1,56 @@
+name: "Tune test Postgres"
+description: "Turn off durability (fsync, synchronous_commit, full_page_writes) on a CI Postgres service container, then verify all three read `off`."
+author: "Tasker Systems"
+
+# Why: a CI Postgres is disposable, so durability buys nothing, while every #[sqlx::test] (~2,600 of
+# them) creates, migrates and drops its own database, and each of those commits pays for an fsync.
+# All three settings are reloadable (`pg_reload_conf()`), so no restart is needed. A service container
+# takes no command-line flags in GitHub Actions, which is why this is an ALTER SYSTEM rather than
+# `-c fsync=off`.
+#
+# NEVER for anything but a throwaway CI container: with these off, a crash can corrupt the cluster.
+#
+# The verify step is what makes this fail loud. Without it, a silently ignored ALTER (wrong
+# container, wrong user) would read as "the lever did nothing".
+#
+# Usage: `with: { container: ${{ job.services.postgres.id }} }`
+
+inputs:
+  container:
+    description: "The service container id: `job.services.postgres.id`."
+    required: true
+  user:
+    description: "A superuser in that container."
+    required: false
+    default: "temper"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Turn off durability, then verify it
+      shell: bash
+      env:
+        CONTAINER: ${{ inputs.container }}
+        PGUSER_NAME: ${{ inputs.user }}
+      run: |
+        set -euo pipefail
+        psql() { docker exec "$CONTAINER" psql -U "$PGUSER_NAME" -d postgres -v ON_ERROR_STOP=1 -Atc "$1"; }
+        for setting in fsync synchronous_commit full_page_writes; do
+          psql "ALTER SYSTEM SET ${setting} = off"
+        done
+        psql "SELECT pg_reload_conf()" >/dev/null
+        # pg_reload_conf() only signals the postmaster; a session opened a moment later can still read
+        # the old value. Retry briefly rather than race it.
+        for setting in fsync synchronous_commit full_page_writes; do
+          value=""
+          for _ in 1 2 3 4 5; do
+            value=$(psql "SHOW ${setting}")
+            [ "$value" = "off" ] && break
+            sleep 1
+          done
+          echo "${setting} = ${value}"
+          if [ "$value" != "off" ]; then
+            echo "::error title=Test Postgres not tuned::${setting} is '${value}' after ALTER SYSTEM + reload"
+            exit 1
+          fi
+        done
