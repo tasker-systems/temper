@@ -22,7 +22,9 @@ gate on a main-bound PR. Deprecation rows (the D-C3 records) carry the retiremen
 era release the record names. Historical and pre-policy rows read as history: only new rows carry
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
-## Since v0.5.4 — unreleased
+## Since v0.6.0 — unreleased
+
+## Shipped in v0.6.0
 - **This release — the 0.6.0 fleet alignment: VERSION 0.5.4 → 0.6.0 across crates, packages, and clients**
   The release train's own wire delta is none: version fields and the generated
   cores re-stale with the bump (the D-S3 baseline — no shape movement); the

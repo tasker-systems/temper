@@ -291,11 +291,12 @@ jobs:
   # Auth is crates.io trusted publishing: rust-lang/crates-io-auth-action
   # exchanges the job's OIDC identity token (id-token: write) for a
   # short-lived upload token, auto-revoked when the job ends — no registry
-  # secret exists. The trusted publisher registered on crates.io names THIS
-  # workflow (release.yml — the identity claim names the job's own file, not
-  # the chain's entry, the same rule the RubyGems and PyPI publishers
-  # encode). Trusted publishers are configured for all six temperkb-* names;
-  # their 0.5.3 initial versions were bootstrapped once with an API token
+  # secret exists. crates.io matches the token's CALLING workflow, so inside
+  # the release-tag.yml chain it checks release-tag.yml, and on the tag-push
+  # and dispatch doors release.yml; trusted publishers for both are
+  # configured on every temperkb-* name (RELEASING.md, "Publishing-side
+  # auth"). The closure's 0.5.3 initial versions, and temperkb-mcp's 0.6.0,
+  # were bootstrapped once with an API token
   # (crates.io attaches publishers only to existing crates — no pending-
   # publisher pre-registration), and every version after that rides this
   # job's OIDC exchange.
