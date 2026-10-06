@@ -1,4 +1,9 @@
-import { assertSlackSecretsDistinct, requireEnv, signIntentRequest } from "./link.js";
+import {
+  assertSlackSecretsDistinct,
+  requireEndpointEnv,
+  requireEnv,
+  signIntentRequest,
+} from "./link.js";
 
 /**
  * The act-as-the-human mint call: agent -> temper-api.
@@ -114,7 +119,7 @@ export async function requestMintedToken(principalId: string): Promise<MintOutco
   // link-state at all, so the mint path is genuinely reachable without the earlier check.
   assertSlackSecretsDistinct();
 
-  const baseUrl = requireEnv("TEMPER_API_URL");
+  const baseUrl = requireEndpointEnv("TEMPER_API_URL");
   const secret = requireEnv("SLACK_MINT_SECRET");
 
   const body = JSON.stringify({ slack_principal_id: principalId });
@@ -122,6 +127,10 @@ export async function requestMintedToken(principalId: string): Promise<MintOutco
 
   const res = await fetch(`${baseUrl.replace(/\/$/, "")}/internal/slack/mint`, {
     method: "POST",
+    // Never follow a redirect. fetch strips `Authorization` on a cross-origin hop but resends
+    // these signature headers and the body, and the signature does not cover the host — so a 307 to
+    // `http://…` would undo `requireEndpointEnv` and return the response in the clear.
+    redirect: "error",
     headers: {
       "content-type": "application/json",
       "X-Temper-Timestamp": timestamp,

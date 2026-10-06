@@ -10,6 +10,23 @@ author: "Tasker Systems"
 #
 # `tools` is an explicit input rather than "install everything", because installing llvm-cov in a job
 # that never measures coverage is pure wall-clock.
+#
+# `debuginfo` is ON by default: every job that compiles through here builds `line-tables-only`. It is
+# scoped to the JOB and may never move into `[profile.dev]`, which developers share.
+#
+# Measured (task 01a10ec4-bc50-7400-b5d3-ccd1563ff1f0; research Finding 9):
+#   * `line-tables-only` keeps backtrace frames with file:line (7 frames in place, the same as
+#     debug = 2), and cuts the Integration selection's target/ from 70.1 to 55.3 GB.
+#   * `debug = 0` would cut more, and loses every frame's file:line. Do not "optimize" to it.
+#
+# NO MOLD, and the reason is not cost: rustc on x86_64-unknown-linux-gnu links through its own bundled
+# `rust-lld`, not the system `ld`. `rui314/setup-mold` replaces the system `ld`, so it installed
+# cleanly and linked nothing. In CI run 37464831854 (rustc 1.99.0), the binaries' `.comment` reads
+# `Linker: LLD 23.1.1`.
+# Forcing mold would mean opting out of rust-lld with rustflags, to trade one fast linker for another.
+#
+# The debuginfo export happens BEFORE the cache step, because rust-cache keys on CARGO_* env: a
+# change of level is a new cache, never a stale one.
 
 inputs:
   cache-prefix:
@@ -20,12 +37,23 @@ inputs:
     description: "Comma-separated cargo tools for taiki-e/install-action (e.g. `nextest`, `nextest,sqlx-cli`, `nextest,sqlx-cli,cargo-llvm-cov`)."
     required: false
     default: "nextest"
+  debuginfo:
+    description: "Exported as CARGO_PROFILE_DEV_DEBUG for this job. Empty keeps the committed [profile.dev] (debug = 2)."
+    required: false
+    default: "line-tables-only"
 
 runs:
   using: "composite"
   steps:
     - name: Setup Rust toolchain
       uses: dtolnay/rust-toolchain@stable
+
+    - name: Set CI debuginfo
+      if: inputs.debuginfo != ''
+      shell: bash
+      env:
+        LEVEL: ${{ inputs.debuginfo }}
+      run: echo "CARGO_PROFILE_DEV_DEBUG=${LEVEL}" >> "$GITHUB_ENV"
 
     - name: Setup Rust build cache
       uses: Swatinem/rust-cache@v2

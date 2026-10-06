@@ -20,6 +20,27 @@ RSpec.describe Temper::Validate do
         .to raise_error(ArgumentError, /userinfo/)
     end
 
+    # Each fails a check that runs BEFORE the userinfo one, so the credential is
+    # still in the string when the message is built.
+    it 'never echoes a credential in the refusal' do
+      ['htps://id:tok3n@temperkb.io', 'https://id:tok3n@temperkb.io:99999'].each do |bad|
+        expect { described_class.require_endpoint(bad, name: 'base_url') }
+          .to raise_error(ArgumentError, /\Abase_url (?!.*tok3n)/), bad
+      end
+    end
+
+    # The message is not the only carrier: an exception raised inside `rescue`
+    # gets the rescued one as its `cause`, and URI's message is the whole value.
+    it 'never carries the credential through the exception cause' do
+      ['https://id:tok3n@[::1', 'https://id:tok3n@exa|mple.com'].each do |bad|
+        expect { described_class.require_endpoint(bad, name: 'base_url') }
+          .to raise_error(ArgumentError) { |e|
+            expect(e.cause).to be_nil, bad
+            expect(e.full_message(highlight: false)).not_to include('tok3n')
+          }
+      end
+    end
+
     it 'rejects a query or fragment that the path join would bury' do
       expect { described_class.require_endpoint('https://temperkb.io?audience=x', name: 'base_url') }
         .to raise_error(ArgumentError, /query or fragment/)

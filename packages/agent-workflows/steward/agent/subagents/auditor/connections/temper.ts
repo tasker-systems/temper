@@ -1,7 +1,12 @@
 import { defineMcpClientConnection } from "eve/connections";
 import { never } from "eve/tools/approval";
 
-import { AUDITOR_CREDENTIALS, mintAuditorM2mToken, requireEnv } from "../../../lib/temper-auth.js";
+import {
+  AUDITOR_CREDENTIALS,
+  mintAuditorM2mToken,
+  requireEndpointEnv,
+  requireEnv,
+} from "../../../lib/temper-auth.js";
 import { makeTraceparent, otlpExportConfigured } from "../../../lib/trace.js";
 import { AUDITOR_TOOLS } from "../../../lib/tool-allowlists.js";
 
@@ -39,7 +44,7 @@ import { AUDITOR_TOOLS } from "../../../lib/tool-allowlists.js";
  * as the steward is.
  */
 export default defineMcpClientConnection({
-  url: requireEnv("TEMPER_MCP_URL"),
+  url: requireEndpointEnv("TEMPER_MCP_URL"),
   description:
     "Temper knowledge base: a finding's citations (get_block_provenance), the cited sources themselves, and the append-only citation-audit trail this agent writes its verdicts to.",
   auth: process.env[AUDITOR_CREDENTIALS.clientId]

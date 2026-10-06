@@ -8,7 +8,7 @@ import {
   AUDITOR_CREDENTIALS,
   auditorFetch,
   credentialConfigured,
-  requireEnv,
+  requireEndpointEnv,
 } from "../lib/temper-auth.js";
 
 /**
@@ -240,7 +240,7 @@ export default defineSchedule({
         // nothing was claimed while N cogmap jobs sit leased.
         let workClaimed = false;
         try {
-          const apiUrl = requireEnv("TEMPER_API_URL").replace(/\/+$/, "");
+          const apiUrl = requireEndpointEnv("TEMPER_API_URL").replace(/\/+$/, "");
 
           const res = await auditorFetch(
             `${apiUrl}/api/auditor/dispatch`,

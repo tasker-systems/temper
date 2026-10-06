@@ -339,7 +339,7 @@ which is why parsing is never necessary.
 | ---------------------- | ----------------------------------------------------------- |
 | `SLACK_BOT_TOKEN`      | Outbound Slack Web API calls. eve's fallback when `credentials.botToken` is omitted. |
 | `SLACK_SIGNING_SECRET` | HMAC-verifies inbound webhooks. eve's fallback when neither `signingSecret` nor `webhookVerifier` is supplied. |
-| `TEMPER_API_URL`       | Base URL of the temper API this agent asks for each mentioning user's link state and access token, e.g. `https://temperkb.io`. |
+| `TEMPER_API_URL`       | Base URL of the temper API this agent asks for each mentioning user's link state and access token, e.g. `https://temperkb.io`. Must be `https` unless it is loopback: `requireEndpointEnv` refuses plaintext http to any other host, naming the variable. |
 | `SLACK_LINK_SECRET`    | Shared HMAC secret gating `POST /internal/slack/link-state`. **Must equal temper-api's `SLACK_LINK_SECRET`** — a mismatch is a 401 on every mention, not a warning. |
 | `SLACK_MINT_SECRET`    | Shared HMAC secret gating `POST /internal/slack/mint`. **Must equal temper-api's**, and **must DIFFER from `SLACK_LINK_SECRET`** — link-state answers a question, mint hands back a human's entire reach, so sharing one value makes the cheap capability yield the expensive one. `tests/mint.test.ts` asserts the agent never signs a mint with the link key. |
 
@@ -360,7 +360,7 @@ which is why parsing is never necessary.
 > reason `lib/mcp-auth.ts` exists: a module-load throw makes a plain `import` fail in a test
 > process. A colliding deployment is therefore caught on its first mention, not at deploy, which is
 > acceptable only because a correctly-paired temper-api will not have booted.
-| `TEMPER_MCP_URL`       | temper-mcp endpoint the connection's tools call, e.g. `https://temperkb.io/api/mcp`. |
+| `TEMPER_MCP_URL`       | temper-mcp endpoint the connection's tools call, e.g. `https://temperkb.io/api/mcp`. Same `https`-off-loopback rule as `TEMPER_API_URL`; a plaintext value fails the module load. |
 
 The first five are read at request time (`agent/lib/link.ts`'s `requireEnv`), so an unset one
 throws on the first mention rather than at deploy. `TEMPER_MCP_URL` is the exception: it is read at

@@ -232,18 +232,13 @@ jobs:
       TEMPER_ONNX_MODEL_PATH: ${{ github.workspace }}/crates/temper-ingest/models/bge-base-en-v1.5/model_quantized.onnx
 
     steps:
-      - name: Free disk space
-        # This job builds the ENTIRE DB-backed workspace + every e2e/integration test binary in one
-        # `cargo nextest` command, with `-C debuginfo=2 -C split-debuginfo=unpacked`. The resulting
-        # target/ can exceed the ubuntu runner's ~14 GB free disk and fail at link time with
-        # "No space left on device" (an `ld` Bus error). Reclaim ~25 GB of preinstalled toolchains this
-        # job never touches (Android SDK, .NET, GHC/Haskell, CodeQL) plus the preloaded Docker images
-        # before the build. Dependency-free on purpose — no third-party action to pin.
-        run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force || true
-          df -h /
-
+      # No "Free disk space" step. It cost 73–168s per shard and reclaimed ~25 GB for a build its own
+      # comment sized against "~14 GB free". Measured on a CI runner (research Finding 9): the runner
+      # starts with ~92 GB free, and this selection's target/ is 55.3 GB at the `line-tables-only`
+      # debuginfo `setup-rust` now sets. Measured without the step: 33 GB free after build and tests
+      # on all 9 shards of runs 37464831854 and 37468731248 (both attempts). The `df` step at the end
+      # of this job records the real headroom on every run. If it ever shrinks toward zero, restore the step rather than
+      # reaching for `debug = 0` (which loses backtrace file:line).
       - name: Checkout code
         uses: actions/checkout@v7
         with:
@@ -258,6 +253,10 @@ jobs:
           tools: nextest,sqlx-cli
 
       - uses: ./.github/actions/install-onnx
+
+      - uses: ./.github/actions/tune-test-postgres
+        with:
+          container: ${{ job.services.postgres.id }}
 
       - name: Run migrations
         run: cargo sqlx migrate run --source migrations
@@ -279,6 +278,10 @@ jobs:
         uses: ./.github/actions/collect-junit
         with:
           name: integration-${{ matrix.partition }}
+
+      - name: Disk headroom after the build
+        if: ${{ !cancelled() }}
+        run: df -h /
 
   artifact-tests:
     name: Substrate Artifact Tests
@@ -321,6 +324,10 @@ jobs:
           tools: nextest,sqlx-cli
 
       - uses: ./.github/actions/install-onnx
+
+      - uses: ./.github/actions/tune-test-postgres
+        with:
+          container: ${{ job.services.postgres.id }}
 
       - name: Run migrations
         # NOT optional, and not only for the tests themselves: `DATABASE_URL` is set in this job, so

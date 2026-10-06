@@ -1,6 +1,6 @@
 import { defineSchedule } from "eve/schedules";
 
-import { requireEnv, temperFetch } from "../lib/temper-auth.js";
+import { requireEndpointEnv, temperFetch } from "../lib/temper-auth.js";
 
 /**
  * Region materialization on its OWN threshold cadence (T6 acceptance #3).
@@ -42,7 +42,7 @@ export default defineSchedule({
 });
 
 async function materializeTick(): Promise<void> {
-  const apiUrl = requireEnv("TEMPER_API_URL").replace(/\/+$/, "");
+  const apiUrl = requireEndpointEnv("TEMPER_API_URL").replace(/\/+$/, "");
 
   const list = await temperFetch(`${apiUrl}/api/steward/candidates`, {}, { label: "candidates" });
   if (!list.ok) {

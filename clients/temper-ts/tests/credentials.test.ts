@@ -232,6 +232,48 @@ describe("ClientCredentials against an issuer that answers 200 with a body it sh
   });
 });
 
+describe("ClientCredentials against an issuer that redirects", () => {
+  const servers: Server[] = [];
+
+  afterEach(async () => {
+    await Promise.all(servers.splice(0).map((s) => new Promise((resolve) => s.close(resolve))));
+  });
+
+  async function listen(handler: Parameters<typeof createServer>[1]): Promise<string> {
+    const server = createServer(handler);
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  }
+
+  // FAILS IF: the mint follows a redirect. A 307 resends the form body — client_secret included —
+  // to the Location, which `requireEndpoint` never vetted.
+  it("never resends the client secret to where a redirect points", async () => {
+    const elsewhere: string[] = [];
+    const target = await listen((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        elsewhere.push(body);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ access_token: "tok", token_type: "Bearer", expires_in: 900 }));
+      });
+    });
+    const origin = await listen((_req, res) => {
+      res.writeHead(307, { location: `${target}/oauth/token` });
+      res.end();
+    });
+    const creds = new ClientCredentials({
+      tokenUrl: `${origin}/oauth/token`,
+      clientId: "tmpr_a",
+      clientSecret: "s3cr3t",
+    });
+
+    await expect(creds.token()).rejects.toThrow();
+    expect(elsewhere).toEqual([]);
+  });
+});
+
 describe("ClientCredentials against an Auth0-provisioned credential", () => {
   it("sends the audience when configured — Auth0 requires it", async () => {
     issuer = await startMockIssuer({
