@@ -38,7 +38,7 @@ describe("requireEndpointEnv", () => {
 
   // FAILS IF: `*.localhost` is treated as loopback. On a server runtime the resolver may send it to
   // DNS, so it is not known to stay on the machine.
-  it.each(["http://foo.localhost:3000", "http://temper.localhost./api"])("refuses %s", (value) => {
+  it.each(["http://foo.localhost:3000", "http://temper.localhost./api", "http://localhost.:3000"])("refuses %s", (value) => {
     vi.stubEnv("TEMPER_API_URL", value);
     expect(() => requireEndpointEnv("TEMPER_API_URL")).toThrow(/^TEMPER_API_URL is plaintext http/);
   });
@@ -170,15 +170,16 @@ function agentSources(): Array<[string, string]> {
 }
 
 /**
- * Every occurrence of either variable name in CODE under `agent/` (block comments and `//` lines
- * stripped), as `{ file, line, gated }`. Token-level on purpose: a call-shape regex misses
+ * Every occurrence of either variable name in CODE under `agent/` (line-leading block comments and
+ * `//` lines stripped), as `{ file, line, gated }`. Only block comments that START a line are
+ * stripped, so a `/*` inside a string (a glob, say) cannot swallow the code after it. Token-level on purpose: a call-shape regex misses
  * `` process.env[`TEMPER_API_URL`] `` and `const { TEMPER_API_URL } = process.env`, and a new read
  * in either shape would then pass. Still blind to a name computed at runtime (`env[name]`).
  */
 function urlVarOccurrences(): Array<{ file: string; line: string; gated: boolean }> {
   const out: Array<{ file: string; line: string; gated: boolean }> = [];
   for (const [file, src] of agentSources()) {
-    const code = src.replace(/\/\*[\s\S]*?\*\//g, "");
+    const code = src.replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, "");
     for (const raw of code.split("\n")) {
       const line = raw.trim();
       if (line.startsWith("//")) continue;

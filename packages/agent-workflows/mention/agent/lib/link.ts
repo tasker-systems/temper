@@ -146,9 +146,9 @@ export function requireEndpointEnv(name: string): string {
  * The plaintext half of the check, owned here rather than left to `requireEndpoint` for two
  * reasons. Its refusal names the remedy this agent actually has (temper-ts's names an
  * `allowInsecureHttp` opt-out that is not exposed, and a `client_secret`). And it is stricter:
- * `*.localhost` is refused, because this runs on a server runtime where glibc's resolver sends
- * `foo.localhost` to DNS rather than pinning it to loopback — only `localhost`, 127.0.0.0/8 and
- * `[::1]` are known to stay on the machine. An unparseable value falls through to
+ * `*.localhost` and the fully-qualified `localhost.` are refused, because this runs on a server
+ * runtime whose resolver may send either to DNS rather than pinning it to loopback — only
+ * `localhost`, 127.0.0.0/8 and `[::1]` are known to stay on the machine. An unparseable value falls through to
  * `requireEndpoint`, which reports it.
  */
 function refusePlaintextOffLoopback(value: string, name: string): void {
@@ -158,8 +158,8 @@ function refusePlaintextOffLoopback(value: string, name: string): void {
   } catch {
     return;
   }
-  const host = url.hostname.replace(/\.$/, "").toLowerCase();
-  if (url.protocol === "http:" && (!isLoopback(host) || host.endsWith(".localhost"))) {
+  const host = url.hostname.toLowerCase();
+  if (url.protocol === "http:" && (!isLoopback(host) || host.endsWith(".localhost") || host.endsWith("."))) {
     throw new TypeError(
       `${name} is plaintext http to a non-loopback host, which would put this agent's credentials ` +
         "on the wire in the clear; use https (http is accepted only for localhost, 127.0.0.0/8 and [::1])",

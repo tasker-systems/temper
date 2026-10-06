@@ -76,7 +76,9 @@ module Temper
     # No message here or below echoes `value`. Every check before the userinfo
     # one can fail on a URL that still carries a credential
     # (`htps://id:secret@host`), and a query can carry one too; the error names
-    # the parameter, which is what the caller has to fix.
+    # the parameter, which is what the caller has to fix. `cause: nil` because
+    # Ruby would otherwise attach URI's own exception, whose message is the
+    # whole value — and `full_message` and error trackers print the cause.
     def parse(value, name)
       uri = URI.parse(value)
       # Ruby's URI accepts a port outside 0..65535 without complaint; such an
@@ -86,7 +88,7 @@ module Temper
 
       uri
     rescue URI::InvalidURIError, URI::InvalidComponentError, URI::BadURIError
-      raise ArgumentError, "#{name} is not a parseable URL"
+      raise ArgumentError, "#{name} is not a parseable URL", cause: nil
     end
 
     # URI.parse hands back URI::FTP, URI::MailTo and friends just as happily;

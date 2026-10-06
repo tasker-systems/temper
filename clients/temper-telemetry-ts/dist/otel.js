@@ -99,13 +99,14 @@ function resolveExport(env) {
 const OTLP_ENDPOINT_VARS = ['OTEL_EXPORTER_OTLP_TRACES_ENDPOINT', 'OTEL_EXPORTER_OTLP_ENDPOINT'];
 /**
  * Whether `hostname` (as `URL` hands it over: lowercased, IPv6 bracketed) is known to stay on
- * this machine: `localhost`, 127.0.0.0/8, `[::1]`. Deliberately NOT `*.localhost` — on a server
- * runtime glibc's resolver sends `foo.localhost` to DNS. A local copy rather than temper-ts's
+ * this machine: `localhost`, 127.0.0.0/8, `[::1]`. Deliberately NOT `*.localhost`, nor the
+ * fully-qualified `localhost.` — a server runtime's resolver may send either to DNS. A local copy rather than temper-ts's
  * `isLoopback`, which this package does not depend on and which accepts `*.localhost`.
  */
 function isLoopbackHost(hostname) {
-    const host = hostname.replace(/\.$/, '');
-    return host === 'localhost' || host === '[::1]' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+    return (hostname === 'localhost' ||
+        hostname === '[::1]' ||
+        /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname));
 }
 function isSdkDisabledFrom(env) {
     return env.OTEL_SDK_DISABLED?.trim().toLowerCase() === 'true';

@@ -844,9 +844,11 @@ pub async fn refresh_token(
         .ok_or(ClientError::TokenExpired)?;
 
     // Bounded: a refresher holds the store's refresh lock across this request, and every other
-    // command sharing the grant waits on that lock.
+    // command sharing the grant waits on that lock. No redirects: a 307/308 would resend this form,
+    // refresh token and all, to wherever it points — `validate_endpoint` vetted only `token_url`.
     let client = reqwest::Client::builder()
         .timeout(REFRESH_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()?;
     let resp = client
         .post(token_url)
@@ -1021,6 +1023,46 @@ mod tests {
             .unwrap();
         assert_eq!(saved.refresh_token.unwrap().expose_secret(), "rtok_new");
         rt.block_on(server.verify());
+    }
+
+    /// A token endpoint answering 307 must not move the refresh grant: following it would resend
+    /// the refresh token to a host `validate_endpoint` never saw.
+    #[test]
+    fn refresh_follows_no_redirect() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let (redirector, elsewhere) = rt.block_on(async {
+            let elsewhere = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(0)
+                .mount(&elsewhere)
+                .await;
+            let redirector = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(
+                    ResponseTemplate::new(307)
+                        .insert_header("location", format!("{}/oauth/token", elsewhere.uri())),
+                )
+                .mount(&redirector)
+                .await;
+            (redirector, elsewhere)
+        });
+        let token_url = format!("{}/oauth/token", redirector.uri());
+        let dir = TempDir::new().unwrap();
+        let store = DiskTokenStore::at(dir.path().join("auth.json"));
+
+        let result = rt.block_on(refresh_token(
+            &store,
+            &make_auth(Utc::now() - Duration::minutes(1)),
+            &token_url,
+            "test-client",
+        ));
+
+        assert!(result.is_err(), "a 307 is not a successful refresh");
+        rt.block_on(elsewhere.verify());
     }
 
     /// Run a refresh against a token endpoint that answers in 300ms, and `during` 100ms into it —

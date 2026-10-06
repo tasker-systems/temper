@@ -5,6 +5,7 @@
 //!
 //! | Concern | Owner | Evidence |
 //! |---|---|---|
+//! | redirects | **us** | `exporter_http_client` builds the client with redirects off; the SDK's default client follows them |
 //! | protocol, headers, timeout | **the SDK** | `SpanExporter::builder().build()` resolves `OTEL_EXPORTER_OTLP_(TRACES_)*`, signal-specific first (`opentelemetry-otlp-0.32.0/src/span.rs:78-93`, `exporter/http/mod.rs:287,738`) |
 //! | endpoint | **us**, from the same variables | resolved and vetted by `traces_url` / `vet_endpoint`, then passed to `with_endpoint` — the SDK's own env resolution falls back to the general variable when the signal-specific one fails to parse, which would route the credential to a URL nobody vetted |
 //! | `service.name`, resource attributes | **the SDK** | `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` (`opentelemetry_sdk-0.32.1/src/resource/env.rs:80`) |
@@ -51,7 +52,7 @@ use std::time::Duration;
 
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::KeyValue;
-use opentelemetry_otlp::WithExportConfig as _;
+use opentelemetry_otlp::{WithExportConfig as _, WithHttpConfig as _};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::Resource;
 use opentelemetry_semantic_conventions::attribute::{
@@ -299,6 +300,8 @@ fn vet_endpoint(var: &str, value: &str) -> Result<String, String> {
     let host = url.host_str().unwrap_or_default();
     let agree = uri.scheme_str() == Some(url.scheme())
         && uri.host().is_some_and(|h| h.eq_ignore_ascii_case(host));
+    // This check also keeps the value out of `BuildFailed`'s log line: a URL `http::Uri` rejects
+    // would otherwise fail in `with_endpoint` as `InvalidUri(<the value>)`, userinfo and all.
     if !agree {
         return Err(format!(
             "{var} is read differently by the URL parsers on the export path"
@@ -321,10 +324,43 @@ fn vet_endpoint(var: &str, value: &str) -> Result<String, String> {
     })
 }
 
+/// The exporter's HTTP client: the one the SDK would build (`reqwest-blocking-client`, its timeout),
+/// except that it follows **no redirect**. The vetted URL is only worth vetting if it is where the
+/// request ends: reqwest's default follows up to 10 redirects, downgrades included, and strips only
+/// the headers it knows are sensitive — not a vendor's custom auth header from
+/// `OTEL_EXPORTER_OTLP_HEADERS`. A collector answering 3xx is now an export error, like any non-2xx.
+///
+/// Built on its own thread, as the SDK builds it: a blocking client cannot be built or dropped
+/// inside a Tokio runtime, and the server seams call this from one.
+fn exporter_http_client() -> Result<reqwest::blocking::Client, String> {
+    let timeout = traces_timeout();
+    std::thread::spawn(move || {
+        reqwest::blocking::Client::builder()
+            .timeout(timeout)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| e.to_string())
+    })
+    .join()
+    .map_err(|_| "the thread building the OTLP HTTP client panicked".to_string())?
+}
+
+/// The client timeout the SDK would have used (`resolve_timeout`, `opentelemetry-otlp-0.32.0`
+/// `exporter/mod.rs`): `OTEL_EXPORTER_OTLP_TRACES_TIMEOUT`, then `OTEL_EXPORTER_OTLP_TIMEOUT`, in
+/// milliseconds, else 10 s. Mirrored because supplying our own client means supplying its timeout.
+fn traces_timeout() -> Duration {
+    [
+        "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+        "OTEL_EXPORTER_OTLP_TIMEOUT",
+    ]
+    .iter()
+    .find_map(|var| std::env::var(var).ok()?.parse::<u64>().ok())
+    .map_or(Duration::from_millis(10_000), Duration::from_millis)
+}
+
 /// Whether `host` (as `Url::host_str` renders it) is known to stay on this machine. Deliberately
-/// not `*.localhost`: glibc's resolver sends `foo.localhost` to DNS.
+/// not `*.localhost`, nor the fully-qualified `localhost.`: a resolver may send either to DNS.
 fn is_loopback_host(host: &str) -> bool {
-    let host = host.trim_end_matches('.');
     host.eq_ignore_ascii_case("localhost")
         || host == "[::1]"
         || host
@@ -389,12 +425,22 @@ fn build_provider() -> Option<SdkTracerProvider> {
         }
     };
 
+    let client = match exporter_http_client() {
+        Ok(client) => client,
+        Err(error) => {
+            record_resolution(ExportResolution::BuildFailed { endpoint, error });
+            return None;
+        }
+    };
+
     // Protocol, headers and timeout come from the spec env vars; `with_http` pins the transport
     // family so the HTTP/protobuf path is used rather than gRPC. The endpoint is the vetted URL,
-    // passed explicitly so the SDK never resolves one of its own (see `traces_url`).
+    // passed explicitly so the SDK never resolves one of its own (see `traces_url`), and the client
+    // is ours so that it follows no redirect (see `exporter_http_client`).
     let exporter = match opentelemetry_otlp::SpanExporter::builder()
         .with_http()
         .with_endpoint(url)
+        .with_http_client(client)
         .build()
     {
         Ok(exporter) => exporter,
@@ -745,6 +791,7 @@ mod tests {
             "http://collector.example.com:4318",
             "http://user:tok3n@collector.example.com",
             "http://foo.localhost:4318",
+            "http://localhost.:4318",
             "htps://user:tok3n@collector.example.com",
             "not a url tok3n",
         ] {

@@ -93,11 +93,13 @@ def require_endpoint(
 
     # No message below echoes `text`. Every check before the userinfo one can fail on a
     # URL that still carries a credential (`htps://id:secret@host`), and a query can carry
-    # one too; the error names the parameter, which is what the caller has to fix.
-    try:
-        parts = urlsplit(text)
-    except ValueError as exc:  # a malformed IPv6 literal, principally
-        raise ValueError(f"{name} is not a parseable URL") from exc
+    # one too; the error names the parameter, which is what the caller has to fix. Each
+    # refusal is raised OUTSIDE its `except`, so it chains nothing: the parser's own
+    # exception can quote the value (the port one quotes the text before the first `/`,
+    # which can be a prefix of a password), and tracebacks and error trackers print it.
+    parts = _split_or_none(text)
+    if parts is None:  # a malformed IPv6 literal, principally
+        raise ValueError(f"{name} is not a parseable URL")
 
     if parts.scheme not in ("http", "https") or not parts.netloc:
         raise ValueError(f"{name} must be an absolute http(s) URL")
@@ -112,11 +114,8 @@ def require_endpoint(
             f"pass credentials to ClientCredentials or BearerToken instead"
         )
 
-    try:
-        # Accessing it is the check: `port` raises for one out of range or not a number.
-        _ = parts.port
-    except ValueError as exc:
-        raise ValueError(f"{name} has an invalid port") from exc
+    if not _port_is_valid(parts):
+        raise ValueError(f"{name} has an invalid port")
 
     if parts.query or parts.fragment:
         raise ValueError(
@@ -132,6 +131,22 @@ def require_endpoint(
         )
 
     return parts
+
+
+def _split_or_none(text: str) -> SplitResult | None:
+    try:
+        return urlsplit(text)
+    except ValueError:
+        return None
+
+
+def _port_is_valid(parts: SplitResult) -> bool:
+    try:
+        # Accessing it is the check: `port` raises for one out of range or not a number.
+        _ = parts.port
+    except ValueError:
+        return False
+    return True
 
 
 def is_loopback(hostname: str | None) -> bool:

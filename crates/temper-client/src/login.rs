@@ -51,7 +51,11 @@ async fn exchange_code(
     // `HttpClient::new` applies to the base URL.
     crate::endpoint::validate_endpoint(&config.token_url, "token_url")?;
 
-    let client = reqwest::Client::new();
+    // No redirects: a 307/308 would resend this form, code and verifier included, to wherever it
+    // points — `validate_endpoint` vetted only `token_url`.
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
     let resp = client
         .post(&config.token_url)
         .form(&[
@@ -296,6 +300,45 @@ async fn write_html_response(stream: &mut TcpStream, html: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A token endpoint answering 307 must not move the code exchange: following it would resend
+    /// the authorization code and PKCE verifier to a host `validate_endpoint` never saw.
+    #[test]
+    fn code_exchange_follows_no_redirect() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        rt.block_on(async {
+            let elsewhere = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(0)
+                .mount(&elsewhere)
+                .await;
+            let redirector = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(
+                    ResponseTemplate::new(307)
+                        .insert_header("location", format!("{}/oauth/token", elsewhere.uri())),
+                )
+                .mount(&redirector)
+                .await;
+            let config = OAuthConfig {
+                authorize_url: format!("{}/authorize", redirector.uri()),
+                token_url: format!("{}/oauth/token", redirector.uri()),
+                client_id: "test-client".into(),
+                audience: None,
+                callback_url: "http://127.0.0.1:1/callback".into(),
+                scopes: vec![],
+            };
+
+            let result = exchange_code(&config, "code", "verifier", "http://127.0.0.1:1/cb").await;
+
+            assert!(result.is_err(), "a 307 is not a successful exchange");
+            elsewhere.verify().await;
+        });
+    }
 
     #[test]
     fn pkce_challenge_is_valid_s256() {

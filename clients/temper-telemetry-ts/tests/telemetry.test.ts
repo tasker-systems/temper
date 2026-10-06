@@ -255,6 +255,7 @@ describe('shouldExportSpans', () => {
 			'the endpoint judged is the one the exporter uses — the signal-specific one'
 		],
 		[{ OTEL_EXPORTER_OTLP_ENDPOINT: 'http://foo.localhost:4318' }, false, '*.localhost may go to DNS'],
+		[{ OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost.:4318' }, false, 'localhost. may go to DNS'],
 		[{ OTEL_EXPORTER_OTLP_ENDPOINT: 'not a url' }, false, 'unparseable'],
 		[{ OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318' }, true, 'loopback http: local collector'],
 		[{ OTEL_EXPORTER_OTLP_ENDPOINT: 'http://127.0.0.1:4318' }, true, 'loopback http: local collector']
