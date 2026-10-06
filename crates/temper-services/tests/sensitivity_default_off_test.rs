@@ -84,12 +84,37 @@ async fn titled(pool: &PgPool, title: &str) -> Uuid {
     .unwrap()
 }
 
+/// A database no migration has touched, beside the test's own, and its name.
+///
+/// The test's own database cannot be that. CI copies every `#[sqlx::test]` database from a
+/// `template1` that already holds the whole chain (`.github/scripts/sqlx-test-template.sh`), and
+/// `migrations = false` stops sqlx from migrating, not Postgres from copying. `template0` is never
+/// migrated. The name derives from the test's database, so a copy that a failed run leaked is dropped
+/// by the next run.
+async fn unmigrated(pool: &PgPool) -> (PgPool, String) {
+    // Hashed, not suffixed: sqlx's test database names already fill Postgres's 63-byte identifier
+    // limit, so `<name>_unmigrated` truncates back to the test's own database.
+    let name: String = sqlx::query_scalar("SELECT 'unmigrated_' || md5(current_database())")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    for ddl in [
+        format!(r#"DROP DATABASE IF EXISTS "{name}""#),
+        format!(r#"CREATE DATABASE "{name}" TEMPLATE template0"#),
+    ] {
+        sqlx::query(&ddl).execute(pool).await.unwrap();
+    }
+    let options = pool.connect_options().as_ref().clone().database(&name);
+    (PgPool::connect_with(options).await.unwrap(), name)
+}
+
 // ── Detectors: off by default, and who provides each ──────────────────────────────────────────
 
 /// A migration never enables a detector, and changes only the rows temper provides. Run on a
 /// database as it stood before default-off, holding a row an organization added and left enabled.
 #[sqlx::test(migrations = false)]
-async fn default_off_turns_temper_detectors_off_and_leaves_an_organizations_alone(pool: PgPool) {
+async fn default_off_turns_temper_detectors_off_and_leaves_an_organizations_alone(own: PgPool) {
+    let (pool, name) = unmigrated(&own).await;
     let all = &temper_services::MIGRATOR;
     let before = Migrator {
         migrations: Cow::Owned(
@@ -126,6 +151,12 @@ async fn default_off_turns_temper_detectors_off_and_leaves_an_organizations_alon
     expect.push(("acme_badge".into(), "organization".into(), true));
     expect.sort();
     assert_eq!(rows, expect);
+
+    pool.close().await;
+    sqlx::query(&format!(r#"DROP DATABASE "{name}""#))
+        .execute(&own)
+        .await
+        .unwrap();
 }
 
 /// A detector an operator inserts without naming either column is the organization's, and off.

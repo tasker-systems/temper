@@ -93,6 +93,7 @@ echo "Run 'cargo make --list-all-steps' for all tasks"
 
 [tasks.test-artifacts]
 description = "Run temper-substrate write-path artifact tests on ephemeral per-test databases (public schema). Needs Docker Postgres + ONNX."
+dependencies = ["test-template-auto"]
 env = { SQLX_OFFLINE = "true", DATABASE_URL = "postgresql://temper:temper@localhost:5437/temper_development" }
 script = '''
 cargo nextest run -p temper-substrate --features artifact-tests
