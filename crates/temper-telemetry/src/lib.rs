@@ -600,6 +600,10 @@ mod tests {
 mod witness_flaky_visible {
     #[test]
     fn fails_first_attempt_then_passes() {
-        assert_ne!(std::env::var("NEXTEST_ATTEMPT").as_deref(), Ok("1"), "deliberate first-attempt failure");
+        assert_ne!(
+            std::env::var("NEXTEST_ATTEMPT").as_deref(),
+            Ok("1"),
+            "deliberate first-attempt failure"
+        );
     }
 }
