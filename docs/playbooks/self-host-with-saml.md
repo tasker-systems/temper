@@ -498,11 +498,13 @@ so the `/oauth/authorize` open-redirect protection is unweakened. To enable it:
    - `AS_AUDIENCE` and `AUTH_AUDIENCE` stay the API/default audience (`https://<instance>/api`).
    - `MCP_AUDIENCE` names the MCP resource. It is independent of `AS_AUDIENCE` — they need not
      be equal, and on this shape they are not. It must be a URI.
-   - **Every participating function or process receives the same value**: the authorization
-     server (which serves the resource), the MCP server (which advertises it) and the API (which
-     accepts it — the MCP server relays every tool call to the API with the caller's own token).
-     On a single Vercel project that is one project-level variable; if you run the processes
-     separately, set it on each, and redeploy so each picks it up.
+   - **Every participating function or process receives the same value**: whatever serves
+     `/oauth/*` (the authorization server, which serves the resource), whatever serves `/mcp`
+     (which advertises it) and whatever serves `/api` (which accepts it — the MCP server relays
+     every tool call to the API with the caller's own token). With project-level env that is one
+     variable; with per-function env (see [MCP relay credential](#mcp-relay-credential-optional-recommended))
+     declare it on all three. Redeploy afterwards — a function's environment is bound to its
+     deployment.
    - Omitting it keeps the single-audience fallback: the MCP server advertises the API audience
      as its resource. Strict MCP clients require the advertised resource to equal the MCP server
      URL or its origin, so with `AUTH_AUDIENCE=https://<instance>/api` they refuse to sign in.
@@ -512,16 +514,21 @@ so the `/oauth/authorize` open-redirect protection is unweakened. To enable it:
    a privilege boundary between HTTP and MCP.
 
 2. **Set `MCP_CLIENT_ID`** to a client id of your choosing, `<mcp-client-id>` (conventionally
-   `temper-mcp`). It must also be a key in `AS_CLIENTS`. Without it, registration answers `503
-   temporarily_unavailable`.
+   `temper-mcp`), wherever `/oauth/*` is served. It must also be a key in `AS_CLIENTS`. Without
+   it, registration answers `503 temporarily_unavailable`.
 
-3. **Register each remote client's callback under that client in `AS_CLIENTS`.** Add entries to
-   the existing value — **preserve every callback already there**:
+3. **Register each remote client's callback under that client in `AS_CLIENTS`.** Start from the
+   value the deployment currently has — read it where you set it (on Vercel, the project's
+   environment variables page, or `vercel env pull`). Do not regenerate it with
+   `temper admin saml provision`: that also mints a new signing key and reconcile secret. Add one
+   key, or append to it if it exists, and **preserve every entry already there**. For an instance
+   configured as in this playbook the result looks like:
 
    ```json
    {
-     "temper-cli": ["https://<instance>/api/auth/cli-callback"],
-     "temper-ui":  ["https://<app-url>/auth/callback"],
+     "temper-cli":     ["https://<instance>/api/auth/cli-callback"],
+     "temper-ui":      ["https://<app-url>/auth/callback"],
+     "temper-desktop": ["https://<instance>/api/auth/cli-callback"],
      "<mcp-client-id>": [
        "<existing-callbacks>",
        "<remote-client-callback>"
@@ -529,17 +536,21 @@ so the `/oauth/authorize` open-redirect protection is unweakened. To enable it:
    }
    ```
 
+   plus any other client your instance already lists (for example the Slack-link client).
+
    - **Edit, never replace.** `AS_CLIENTS` is the whole allowlist for every client on the
-     instance. Pasting an example over it silently removes the CLI, UI, desktop and Slack-link
-     callbacks, and those sign-ins fail.
+     instance. Pasting an example over it silently removes whichever callbacks the example lacks,
+     and those sign-ins fail.
    - **Remote (HTTPS) callbacks match exactly** — scheme, host, path, trailing slash. Take the
      value from the remote client's own public documentation; for the Claude Desktop / web
      connector those are `https://claude.ai/api/mcp/auth_callback` and
      `https://claude.com/api/mcp/auth_callback`.
    - **Loopback callbacks are matched by path**, port and loopback host ignored (RFC 8252 §7.3),
-     because native clients such as Claude Code listen on an ephemeral port. One port-less entry
-     such as `http://127.0.0.1/callback` matches `http://127.0.0.1:<random>/callback` and its
-     `localhost` / `[::1]` spellings. Loopback matching never applies to an HTTPS callback.
+     because native clients such as Claude Code listen on an ephemeral port. A port-less entry
+     with the client's callback path — `http://127.0.0.1/callback` for Claude Code — matches
+     `http://127.0.0.1:<random>/callback` and its `localhost` / `[::1]` spellings. Loopback
+     matching never applies to an HTTPS callback. A loopback entry with the wrong *path* is the
+     loopback equivalent of an inexact HTTPS callback.
    - A callback that is not registered is not an error at registration time — it is **filtered
      out** of the registration response, and the client then fails at sign-in. The check below
      catches that first.
@@ -562,7 +573,7 @@ so the `/oauth/authorize` open-redirect protection is unweakened. To enable it:
 
 ### Check discovery and registration
 
-Three deployment-neutral checks, run before anyone tries to sign in. Each uses only public,
+Four deployment-neutral checks, run before anyone tries to sign in. Each uses only public,
 unauthenticated endpoints.
 
 ```bash
@@ -577,6 +588,16 @@ curl -sS -X POST https://<instance>/oauth/clients \
   -H 'content-type: application/json' \
   --data '{"client_name":"verification","redirect_uris":["<remote-client-callback>"],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none"}' \
   | jq .
+
+# 4. The authorization server serves the MCP resource for that client and callback.
+curl -sS -o /dev/null -w '%{http_code}\n' -G https://<instance>/oauth/authorize \
+  --data-urlencode response_type=code \
+  --data-urlencode client_id=<mcp-client-id> \
+  --data-urlencode redirect_uri=<remote-client-callback> \
+  --data-urlencode code_challenge=verificationverificationverificationverific \
+  --data-urlencode code_challenge_method=S256 \
+  --data-urlencode state=verification \
+  --data-urlencode resource=https://<instance>/mcp
 ```
 
 Expect:
@@ -585,12 +606,20 @@ Expect:
    means `MCP_AUDIENCE` is unset or has not reached the MCP function.
 2. `401` with a `WWW-Authenticate: Bearer … resource_metadata="https://<instance>/.well-known/oauth-protected-resource"`
    header.
-3. `"client_id": "<mcp-client-id>"` and `"redirect_uris": ["<remote-client-callback>"]`. An
-   empty `redirect_uris` means that callback is not registered exactly under
-   `<mcp-client-id>` in `AS_CLIENTS`. The third call creates nothing; it is safe to repeat.
+3. `"client_id": "<mcp-client-id>"` and `"redirect_uris": ["<remote-client-callback>"]` — the
+   requested URI, echoed as sent (a loopback callback comes back with its port). An empty
+   `redirect_uris` means that callback is not allowed under `<mcp-client-id>` in `AS_CLIENTS`:
+   not an exact match for an HTTPS callback, or no loopback entry with that path. This call
+   creates nothing; it is safe to repeat.
+4. `302` — a redirect to the instance's `/oauth/saml/login`, the hand-off to your IdP. A `400` means the authorization server
+   refuses the request: `requested resource is not served by this authorization server` when
+   `MCP_AUDIENCE` has not reached the functions serving `/oauth/*`, `unregistered client_id or
+   redirect_uri` when check 3's callback is wrong there. This call records a short-lived pending
+   sign-in that expires unused.
 
-These establish discovery and registration only. A complete check signs in from the client —
-through your SAML IdP — and runs one read-only tool call.
+These establish discovery, registration, and that the authorization server will mint the MCP
+resource. They do not prove the API accepts it: a complete check signs in from the client —
+through your SAML IdP — and runs one read-only tool call, which is relayed to the API.
 
 Then add the server to Claude Code and authenticate:
 

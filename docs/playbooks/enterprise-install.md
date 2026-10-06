@@ -161,7 +161,7 @@ scheme is a different URL.
 
 | Join | Values that must be equal |
 |------|---------------------------|
-| Audience | `AS_AUDIENCE` = `AUTH_AUDIENCE` = UI `OIDC_AUDIENCE`. `MCP_AUDIENCE` is **not** in this join — it is a second, independent member of the accepted set, required only to be a URI |
+| Audience | `AS_AUDIENCE` = `AUTH_AUDIENCE` = UI `OIDC_AUDIENCE` (where set). `MCP_AUDIENCE` is **not** in this join — it is a second, independent member of the accepted set, required only to be a URI |
 | Issuer | `AS_ISSUER` = `AUTH_ISSUER`; UI `OIDC_ISSUER` resolves the same issuer |
 | Provider label | `AUTH_PROVIDER_NAME` = `saml:<idp-key>` |
 | Reconcile secret | `INTERNAL_RECONCILE_SECRET` identical on the AS and API env (same Vercel project) |
@@ -217,17 +217,18 @@ steps 2–3, 6, and 11–12 for the Auth0 app registration documented in
 Do not declare MCP ready on a clean CLI login — the CLI uses the API audience and its own
 callback, so it passes while every MCP client fails. Confirm, in order:
 
-1. **The MCP resource indicator is configured.** `MCP_AUDIENCE=https://<instance>/mcp` on every
-   function that mints, advertises or accepts it, and redeployed.
-2. **Remote-client callbacks are registered exactly** under `<mcp-client-id>` in `AS_CLIENTS`,
-   with every existing callback preserved.
+1. **The MCP resource indicator is configured.** `MCP_AUDIENCE=https://<instance>/mcp` wherever
+   `/oauth/*`, `/mcp` and `/api` are served, and redeployed.
+2. **Remote-client callbacks are registered** under `<mcp-client-id>` in `AS_CLIENTS` — exactly
+   for an HTTPS callback, by path for a loopback one — with every existing entry preserved.
 3. **Protected-resource metadata and the unauthenticated challenge agree**: the metadata's
    `resource` is the MCP URL, and a bare `POST /mcp` answers `401` pointing at that document.
-4. **Dynamic registration echoes the intended callback** rather than an empty list.
+4. **Dynamic registration echoes the intended callback** rather than an empty list, and the
+   authorization server accepts a sign-in request for the MCP resource.
 5. **Login and one read-only tool call succeed** from the MCP client itself, by a user with
    approved system access (step 8).
 
-Checks 3 and 4 are the three commands in
+Checks 3 and 4 are the four commands in
 [Self-hosting with SAML](./self-host-with-saml.md#check-discovery-and-registration); 1 and 2 are
 the configuration they verify.
 
