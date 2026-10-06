@@ -88,9 +88,10 @@ export declare function telemetrySampler(): Sampler;
  *
  * Mirrors the Rust "no endpoint ⇒ no export" rule: when no OTLP endpoint is configured
  * the provider is never built, span creation stays a no-op, and we never
- * default to `localhost:4318`. The exporter reads the endpoint and headers from
- * the standard env itself, so the only thing this function decides is *whether* to register
- * (and whether to add HTTP instrumentation).
+ * default to `localhost:4318`. An endpoint that is not https off loopback is refused the same
+ * way (see `resolveExport`). The exporter reads the endpoint and headers from the standard env
+ * itself, so the only thing this function decides is *whether* to register (and whether to add
+ * HTTP instrumentation).
  */
 export declare function initTelemetry({ serviceName, instrumentHttp, mcpEndpoint }: InitTelemetryOptions): void;
 /** Whether span export is registered (endpoint was configured). */

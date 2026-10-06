@@ -27,7 +27,7 @@ Temper-specific variable, and no vendor name, appears in the code.
 
 | Variable | Purpose |
 |---|---|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Where spans go — **the base**, to which the SDK appends `/v1/traces`. Use this one. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Where spans go — **the base**, to which the SDK appends `/v1/traces`. Use this one. Must be `https`: plaintext `http` is accepted only for `localhost`, `127.0.0.0/8` and `[::1]`, because the headers below carry your vendor credential. Any other `http` endpoint, or one that does not parse, turns export off with a warning naming the variable; the process keeps serving. |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | The trace endpoint **verbatim** — nothing is appended. Copying a vendor's base URL into this variable POSTs to `/` and 404s. Avoid unless you need the verbatim form. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | `key=value,key=value`. **This is where vendor auth lives** — which is what makes the setup vendor-agnostic. |
 | `OTEL_SERVICE_NAME` | Which deployable this is — for the **Node** hops. Rust functions name themselves in code (`temper-api` / `temper-mcp` / `temper-internal`), which the SDK ranks above this variable. On a project that also runs Node lambdas, set this to name the Node half. On a Rust-only project, leave it unset. |
@@ -116,6 +116,9 @@ If nothing arrives:
 - **Confirm the endpoint is the base, not the verbatim traces URL.**
   `OTEL_EXPORTER_OTLP_ENDPOINT` gets `/v1/traces` appended; `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
   does not. A 404 in the vendor's ingest logs usually means the wrong variable was set.
+- **Look for an *"OTLP endpoint refused"* warning.** The endpoint is plaintext `http` to a
+  host other than this machine (or does not parse), so export was turned off rather than send
+  the vendor credential in the clear. Switch it to `https`.
 - **Confirm `OTEL_SDK_DISABLED` is not `true`.** It is off by default; `1` and `yes` do not
   disable export.
 - **Check deployment logs for the flush-budget warning.** A `warn` reading *"span flush

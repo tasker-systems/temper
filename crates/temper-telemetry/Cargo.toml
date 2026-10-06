@@ -42,6 +42,9 @@ tokio = { version = "1", features = ["rt", "time"] }
 tracing = "0.1"
 tracing-opentelemetry = { version = "0.33", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# Parses the OTLP endpoint so `export::vet_endpoint` can refuse plaintext off loopback before the
+# exporter puts `OTEL_EXPORTER_OTLP_HEADERS` on it. Already in the graph through reqwest.
+url = "2"
 
 [features]
 # Test-only surface for installing an in-memory span exporter, so a caller's integration test can

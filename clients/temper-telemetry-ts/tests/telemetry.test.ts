@@ -2,7 +2,7 @@ import { context, propagation, TraceFlags, trace } from '@opentelemetry/api';
 import { AsyncHooksContextManager } from '@opentelemetry/context-async-hooks';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import { SamplingDecision } from '@opentelemetry/sdk-trace-base';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { activeTraceparent, extractContext } from '../src/context.js';
 import {
 	initTelemetry,
@@ -105,6 +105,40 @@ describe('initTelemetry', () => {
 	});
 });
 
+describe('initTelemetry refuses a plaintext collector', () => {
+	const VARIABLES = ['OTEL_EXPORTER_OTLP_ENDPOINT', 'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT'] as const;
+	let saved: Record<string, string | undefined>;
+
+	beforeEach(() => {
+		saved = {};
+		for (const name of VARIABLES) saved[name] = process.env[name];
+		for (const name of VARIABLES) delete process.env[name];
+	});
+
+	afterEach(() => {
+		for (const name of VARIABLES) restore(saved[name], name);
+		vi.restoreAllMocks();
+	});
+
+	// FAILS IF: initTelemetry builds an exporter for a plaintext non-loopback endpoint (the
+	// collector credential in OTEL_EXPORTER_OTLP_HEADERS would ride it), throws instead of
+	// degrading, or names the endpoint's value — which can carry userinfo — in the refusal.
+	it.each([
+		['OTEL_EXPORTER_OTLP_ENDPOINT', 'http://user:tok3n@collector.example.com:4318'],
+		['OTEL_EXPORTER_OTLP_TRACES_ENDPOINT', 'http://collector.example.com/v1/traces']
+	])('%s=%s: export stays off, the refusal names the variable', (name, value) => {
+		process.env[name] = value;
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		expect(() => initTelemetry({ serviceName: 'test-service' })).not.toThrow();
+		expect(isTelemetryEnabled()).toBe(false);
+		expect(error).toHaveBeenCalledTimes(1);
+		const message = String(error.mock.calls[0]?.[0]);
+		expect(message).toContain(name);
+		expect(message).not.toContain('tok3n');
+	});
+});
+
 describe('isSdkDisabled', () => {
 	const VARIABLES = ['OTEL_SDK_DISABLED', 'OTEL_EXPORTER_OTLP_ENDPOINT'] as const;
 	let saved: Record<string, string | undefined>;
@@ -173,29 +207,29 @@ describe('shouldExportSpans', () => {
 			false,
 			'no endpoint configured — export must stay off, never default to localhost'
 		],
-		[{ OTEL_EXPORTER_OTLP_ENDPOINT: 'http://collector' }, true, undefined],
+		[{ OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector' }, true, undefined],
 		[
-			{ OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'http://collector' },
+			{ OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'https://collector' },
 			true,
 			'signal-specific endpoint alone is enough'
 		],
 		[
 			{
-				OTEL_EXPORTER_OTLP_ENDPOINT: 'http://metrics-only',
-				OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'http://collector'
+				OTEL_EXPORTER_OTLP_ENDPOINT: 'https://metrics-only',
+				OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'https://collector'
 			},
 			true,
 			undefined
 		],
 		// The kill switch outranks every endpoint — that is what kill switch means.
 		[
-			{ OTEL_EXPORTER_OTLP_ENDPOINT: 'http://collector', OTEL_SDK_DISABLED: 'true' },
+			{ OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector', OTEL_SDK_DISABLED: 'true' },
 			false,
 			undefined
 		],
 		[
 			{
-				OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'http://collector',
+				OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'https://collector',
 				OTEL_SDK_DISABLED: 'TRUE'
 			},
 			false,
@@ -203,12 +237,27 @@ describe('shouldExportSpans', () => {
 		],
 		[
 			{
-				OTEL_EXPORTER_OTLP_ENDPOINT: 'http://collector',
+				OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector',
 				OTEL_SDK_DISABLED: '1'
 			},
 			true,
 			"'1' is deliberately not a true value"
-		]
+		],
+		// Plaintext off loopback is refused: the exporter sends OTEL_EXPORTER_OTLP_HEADERS
+		// (the collector's credential) and every span on it.
+		[{ OTEL_EXPORTER_OTLP_ENDPOINT: 'http://collector' }, false, 'plaintext off loopback'],
+		[
+			{
+				OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector',
+				OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'http://collector'
+			},
+			false,
+			'the endpoint judged is the one the exporter uses — the signal-specific one'
+		],
+		[{ OTEL_EXPORTER_OTLP_ENDPOINT: 'http://foo.localhost:4318' }, false, '*.localhost may go to DNS'],
+		[{ OTEL_EXPORTER_OTLP_ENDPOINT: 'not a url' }, false, 'unparseable'],
+		[{ OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318' }, true, 'loopback http: local collector'],
+		[{ OTEL_EXPORTER_OTLP_ENDPOINT: 'http://127.0.0.1:4318' }, true, 'loopback http: local collector']
 	])('env %j → %j', (env, expected, why) => {
 		Object.assign(process.env, env);
 		const result = shouldExportSpans();

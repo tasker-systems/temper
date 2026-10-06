@@ -23,6 +23,34 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.6.0 — unreleased
+- **The SDKs' endpoint refusals no longer repeat the URL they refused**
+  `require_endpoint` / `requireEndpoint` / `validate_endpoint` in temper-py, temper-rb, temper-ts
+  and `temperkb-client` still refuse the same values with the same error types. The "not a parseable
+  URL", "must be an absolute http(s) URL", "invalid port" and query/fragment messages used to append
+  the raw value, and those checks run before the userinfo check, so a mistyped
+  `htps://id:secret@host` (or a secret in a query) was copied into the exception and on into logs.
+  Each message now names the parameter and the reason only. Who observes: callers that display or
+  match on these messages. User-visible: yes, the value is gone from the text. Release relevance:
+  behavioral.
+pr: self
+classes: behavioral
+surfaces: clients
+status: signal-only
+- **OTLP span export refuses a plaintext collector off loopback, and its log line names host and variable, not the URL**
+  The OTLP exporter sends `OTEL_EXPORTER_OTLP_HEADERS` (the vendor credential) and every span to the
+  configured endpoint. In the Rust servers and CLI (`temperkb-telemetry`) and the Node hops
+  (`temper-telemetry-ts`), an endpoint that is plaintext `http` to anything but `localhost`,
+  127.0.0.0/8 or `[::1]`, or that does not parse, now turns export off with a warning naming the
+  variable; the process keeps serving, as it does for any exporter misconfiguration. The "span export
+  on" line reports `host[:port] (VARIABLE)` instead of the raw value, which can carry userinfo.
+  `temper-telemetry-ts` also resolves `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` ahead of the general
+  variable in `initTelemetry`, as `shouldExportSpans`, the exporter and the Rust side already did.
+  Who observes: operators with an `http://` collector on another host (export stops until it is
+  https). User-visible: operator-facing only. Release relevance: behavioral.
+pr: self
+classes: behavioral
+surfaces: clients, internal
+status: signal-only
 
 ## Shipped in v0.6.0
 - **This release — the 0.6.0 fleet alignment: VERSION 0.5.4 → 0.6.0 across crates, packages, and clients**

@@ -54,10 +54,50 @@ export function isSdkDisabled() {
  * none.
  */
 export function shouldExportSpans(env = process.env) {
+    return resolveExport(env).kind === 'export';
+}
+/**
+ * Resolve span export from the environment. Signal-specific endpoint first, as the exporter
+ * reads it. A configured endpoint is **refused** — export off, never a startup failure — when
+ * it is plaintext http to anything but this machine, or does not parse: the exporter sends
+ * `OTEL_EXPORTER_OTLP_HEADERS` (the collector's credential) and every span on it. Mirrors the
+ * Rust exporter's refusal (`temper-telemetry/src/export.rs`, `endpoint_refusal`).
+ */
+function resolveExport(env) {
     if (isSdkDisabledFrom(env))
-        return false;
-    const endpoint = env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT?.trim() || env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
-    return Boolean(endpoint);
+        return { kind: 'disabled' };
+    const variable = OTLP_ENDPOINT_VARS.find((name) => env[name]?.trim());
+    if (!variable)
+        return { kind: 'unset' };
+    let url;
+    try {
+        url = new URL(env[variable].trim());
+    }
+    catch {
+        // The value is not echoed: it can carry userinfo.
+        return { kind: 'refused', reason: `${variable} is not a parseable URL; span export disabled` };
+    }
+    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopbackHost(url.hostname))) {
+        return {
+            kind: 'refused',
+            reason: `${variable} is not https (plaintext http is accepted only for localhost, 127.0.0.0/8 ` +
+                'and [::1]), so OTEL_EXPORTER_OTLP_HEADERS and every span would cross in the clear; ' +
+                'span export disabled'
+        };
+    }
+    return { kind: 'export', variable, host: url.host };
+}
+/** Signal-specific first, the precedence the OTLP exporter itself applies. */
+const OTLP_ENDPOINT_VARS = ['OTEL_EXPORTER_OTLP_TRACES_ENDPOINT', 'OTEL_EXPORTER_OTLP_ENDPOINT'];
+/**
+ * Whether `hostname` (as `URL` hands it over: lowercased, IPv6 bracketed) is known to stay on
+ * this machine: `localhost`, 127.0.0.0/8, `[::1]`. Deliberately NOT `*.localhost` — on a server
+ * runtime glibc's resolver sends `foo.localhost` to DNS. A local copy rather than temper-ts's
+ * `isLoopback`, which this package does not depend on and which accepts `*.localhost`.
+ */
+function isLoopbackHost(hostname) {
+    const host = hostname.replace(/\.$/, '');
+    return host === 'localhost' || host === '[::1]' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 }
 function isSdkDisabledFrom(env) {
     return env.OTEL_SDK_DISABLED?.trim().toLowerCase() === 'true';
@@ -79,21 +119,25 @@ export function telemetrySampler() {
  *
  * Mirrors the Rust "no endpoint ⇒ no export" rule: when no OTLP endpoint is configured
  * the provider is never built, span creation stays a no-op, and we never
- * default to `localhost:4318`. The exporter reads the endpoint and headers from
- * the standard env itself, so the only thing this function decides is *whether* to register
- * (and whether to add HTTP instrumentation).
+ * default to `localhost:4318`. An endpoint that is not https off loopback is refused the same
+ * way (see `resolveExport`). The exporter reads the endpoint and headers from the standard env
+ * itself, so the only thing this function decides is *whether* to register (and whether to add
+ * HTTP instrumentation).
  */
 export function initTelemetry({ serviceName, instrumentHttp = false, mcpEndpoint }) {
     if (provider)
         return;
-    if (isSdkDisabled()) {
-        console.info('[telemetry] OTEL_SDK_DISABLED=true; span export disabled');
-        return;
-    }
-    const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
-    if (!endpoint) {
-        console.info('[telemetry] OTEL_EXPORTER_OTLP_ENDPOINT unset; span export disabled');
-        return;
+    const resolution = resolveExport(process.env);
+    switch (resolution.kind) {
+        case 'disabled':
+            console.info('[telemetry] OTEL_SDK_DISABLED=true; span export disabled');
+            return;
+        case 'unset':
+            console.info('[telemetry] no OTLP endpoint configured; span export disabled');
+            return;
+        case 'refused':
+            console.error(`[telemetry] ${resolution.reason}`);
+            return;
     }
     // An `OTEL_SERVICE_NAME` env value (project-scoped on Vercel) wins over the passed
     // name; otherwise the consumer's name is authoritative.
@@ -138,7 +182,7 @@ export function initTelemetry({ serviceName, instrumentHttp = false, mcpEndpoint
         // startup that is well before the first request.
         void enableHttpInstrumentation();
     }
-    console.info(`[telemetry] span export enabled: service.name=${resolvedServiceName} → ${endpoint}` +
+    console.info(`[telemetry] span export enabled: service.name=${resolvedServiceName} → ${resolution.host} (${resolution.variable})` +
         (instrumentHttp ? ' (+http instrumentation)' : '') +
         (spanProcessors.length > 1 ? ` (+mcp negotiation status reset for ${mcpEndpoint})` : ''));
 }

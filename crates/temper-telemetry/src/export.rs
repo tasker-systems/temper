@@ -109,6 +109,9 @@ pub(crate) enum ExportResolution {
     Disabled,
     /// No endpoint configured — the ordinary local/CI case.
     NoEndpoint,
+    /// An endpoint was configured but is not one the collector credential may ride — see
+    /// [`vet_endpoint`]. The reason names the variable, never its value.
+    Refused { reason: String },
     /// An endpoint was configured but the exporter could not be built. **This is the one an operator
     /// most needs to see**, and it was the one most reliably lost.
     BuildFailed { endpoint: String, error: String },
@@ -132,6 +135,10 @@ impl ExportResolution {
             Self::NoEndpoint => tracing::debug!(
                 "span export off; no OTEL_EXPORTER_OTLP_(TRACES_)ENDPOINT configured. \
                  Not defaulting to localhost:4318 — see temper_telemetry::export docs"
+            ),
+            Self::Refused { reason } => tracing::warn!(
+                %reason,
+                "OTLP endpoint refused; continuing without span export"
             ),
             Self::BuildFailed { endpoint, error } => tracing::warn!(
                 %error,
@@ -248,13 +255,53 @@ fn cli_export_opted_in() -> bool {
         .unwrap_or(false)
 }
 
-/// The configured OTLP endpoint, if any. Signal-specific wins, matching the SDK's own precedence.
-fn configured_endpoint() -> Option<String> {
-    OTLP_ENDPOINT_VARS
-        .iter()
-        .find_map(|var| std::env::var(var).ok())
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+/// The configured OTLP endpoint and the variable that named it, if any. Signal-specific wins,
+/// matching the SDK's own precedence.
+fn configured_endpoint() -> Option<(&'static str, String)> {
+    OTLP_ENDPOINT_VARS.iter().find_map(|&var| {
+        let value = std::env::var(var).ok()?.trim().to_string();
+        (!value.is_empty()).then_some((var, value))
+    })
+}
+
+/// The endpoint's `host[:port]` when the collector credential may ride it, or why not.
+///
+/// The exporter sends `OTEL_EXPORTER_OTLP_HEADERS` — the collector's credential — and every span on
+/// this URL, so plaintext http is refused unless it names this machine. Refused, not fatal: export
+/// is off and the process serves as usual (see [`build_provider`]). Neither result carries the
+/// value itself, which can hold userinfo. The TypeScript hops refuse identically
+/// (`clients/temper-telemetry-ts/src/otel.ts`, `resolveExport`).
+fn vet_endpoint(var: &str, value: &str) -> Result<String, String> {
+    let Ok(url) = url::Url::parse(value) else {
+        return Err(format!("{var} is not a parseable URL"));
+    };
+    let host = url.host_str().unwrap_or_default();
+    let carries_safely = match url.scheme() {
+        "https" => !host.is_empty(),
+        "http" => is_loopback_host(host),
+        _ => false,
+    };
+    if !carries_safely {
+        return Err(format!(
+            "{var} is not https (plaintext http is accepted only for localhost, 127.0.0.0/8 and \
+             [::1]), so OTEL_EXPORTER_OTLP_HEADERS and every span would cross in the clear"
+        ));
+    }
+    Ok(match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    })
+}
+
+/// Whether `host` (as `Url::host_str` renders it) is known to stay on this machine. Deliberately
+/// not `*.localhost`: glibc's resolver sends `foo.localhost` to DNS.
+fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.');
+    host.eq_ignore_ascii_case("localhost")
+        || host == "[::1]"
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Resource attributes describing *which deployment* emitted a span, plus the process's own
@@ -301,9 +348,16 @@ fn build_provider() -> Option<SdkTracerProvider> {
         return None;
     }
 
-    let Some(endpoint) = configured_endpoint() else {
+    let Some((var, value)) = configured_endpoint() else {
         record_resolution(ExportResolution::NoEndpoint);
         return None;
+    };
+    let endpoint = match vet_endpoint(var, &value) {
+        Ok(host) => format!("{host} ({var})"),
+        Err(reason) => {
+            record_resolution(ExportResolution::Refused { reason });
+            return None;
+        }
     };
 
     // Protocol, endpoint, headers and timeout all come from the spec env vars; `with_http` only
@@ -640,7 +694,67 @@ mod tests {
                     Some("http://traces:4318"),
                 ),
             ],
-            || assert_eq!(configured_endpoint().as_deref(), Some("http://traces:4318")),
+            || {
+                assert_eq!(
+                    configured_endpoint(),
+                    Some((
+                        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                        "http://traces:4318".to_string()
+                    ))
+                )
+            },
+        );
+    }
+
+    /// The collector credential (`OTEL_EXPORTER_OTLP_HEADERS`) rides the endpoint, so only https, or
+    /// plaintext to this machine, may carry it — and a refusal never repeats the value.
+    #[test]
+    fn plaintext_off_loopback_is_refused_without_echoing_the_value() {
+        for bad in [
+            "http://collector.example.com:4318",
+            "http://user:tok3n@collector.example.com",
+            "http://foo.localhost:4318",
+            "htps://user:tok3n@collector.example.com",
+            "not a url tok3n",
+        ] {
+            let reason = vet_endpoint("OTEL_EXPORTER_OTLP_ENDPOINT", bad)
+                .expect_err(&format!("should refuse {bad}"));
+            assert!(
+                reason.starts_with("OTEL_EXPORTER_OTLP_ENDPOINT "),
+                "{reason}"
+            );
+            assert!(!reason.contains("tok3n"), "{bad} leaked into: {reason}");
+        }
+    }
+
+    #[test]
+    fn https_and_loopback_http_are_accepted() {
+        for (ok, host) in [
+            ("https://otlp.example.com/otlp", "otlp.example.com"),
+            ("http://localhost:4318", "localhost:4318"),
+            ("http://127.0.0.1:4318", "127.0.0.1:4318"),
+            ("http://[::1]:4318", "[::1]:4318"),
+        ] {
+            assert_eq!(vet_endpoint("V", ok).as_deref(), Ok(host), "{ok}");
+        }
+    }
+
+    /// The wiring: a refused endpoint builds no provider, and records why.
+    #[test]
+    fn a_refused_endpoint_builds_no_provider() {
+        temp_env::with_vars(
+            [
+                (
+                    "OTEL_EXPORTER_OTLP_ENDPOINT",
+                    Some("https://collector:4318"),
+                ),
+                (
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                    Some("http://collector:4318"),
+                ),
+                (OTEL_SDK_DISABLED, None),
+            ],
+            || assert!(build_provider().is_none()),
         );
     }
 
@@ -649,7 +763,10 @@ mod tests {
     fn the_kill_switch_beats_a_configured_endpoint() {
         temp_env::with_vars(
             [
-                ("OTEL_EXPORTER_OTLP_ENDPOINT", Some("http://collector:4318")),
+                (
+                    "OTEL_EXPORTER_OTLP_ENDPOINT",
+                    Some("https://collector:4318"),
+                ),
                 (OTEL_SDK_DISABLED, Some("true")),
             ],
             || assert!(build_provider().is_none()),

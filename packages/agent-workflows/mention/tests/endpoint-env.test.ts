@@ -36,6 +36,30 @@ describe("requireEndpointEnv", () => {
     expect(() => requireEndpointEnv(name)).toThrow(new RegExp(`^${name} is plaintext http`));
   });
 
+  // FAILS IF: `*.localhost` is treated as loopback. On a server runtime the resolver may send it to
+  // DNS, so it is not known to stay on the machine.
+  it.each(["http://foo.localhost:3000", "http://temper.localhost./api"])("refuses %s", (value) => {
+    vi.stubEnv("TEMPER_API_URL", value);
+    expect(() => requireEndpointEnv("TEMPER_API_URL")).toThrow(/^TEMPER_API_URL is plaintext http/);
+  });
+
+  // FAILS IF: the refusal names a remedy this agent does not have (an opt-out it does not expose, a
+  // client_secret it does not hold), or echoes a credential written into the URL.
+  it.each(["http://temper.example.com", "http://user:tok3n@temper.example.com", "htps://user:tok3n@x.com"])(
+    "refuses %s without a false remedy or the credential in the message",
+    (value) => {
+      vi.stubEnv("TEMPER_API_URL", value);
+      let message = "";
+      try {
+        requireEndpointEnv("TEMPER_API_URL");
+      } catch (err) {
+        message = (err as Error).message;
+      }
+      expect(message).toMatch(/^TEMPER_API_URL /);
+      expect(message).not.toMatch(/allowInsecureHttp|client_secret|tok3n/);
+    },
+  );
+
   // FAILS IF: the gate over-reaches and breaks the local-development case, or https.
   it.each(["http://127.0.0.1:8080", "http://localhost:3000/", "https://temperkb.io/api/mcp"])(
     "passes %s through unchanged",

@@ -22,6 +22,16 @@ describe("requireEndpoint", () => {
     expect(() => requireEndpoint("https://id:secret@temperkb.io", "baseUrl")).toThrow(/userinfo/);
   });
 
+  // FAILS IF: a refusal echoes the value. These fail a check that runs BEFORE the userinfo one, so
+  // the credential is still in the string when the message is built.
+  it.each(["htps://id:tok3n@temperkb.io", "https://id:tok3n@[::1", "https://temperkb.io/?token=tok3n"])(
+    "never echoes a credential in the refusal: %s",
+    (bad) => {
+      expect(() => requireEndpoint(bad, "baseUrl")).toThrow(/^baseUrl /);
+      expect(() => requireEndpoint(bad, "baseUrl")).not.toThrow(/tok3n/);
+    },
+  );
+
   it("rejects a query or fragment that the path join would bury", () => {
     expect(() => requireEndpoint("https://temperkb.io?audience=x", "baseUrl")).toThrow(/query/);
     expect(() => requireEndpoint("https://temperkb.io#section", "baseUrl")).toThrow(/fragment/);

@@ -36,7 +36,7 @@ module Temper
       ensure_non_empty_string(value, name)
       refuse_control_characters(value, name)
       uri = parse(value, name)
-      ensure_http_scheme(uri, value, name)
+      ensure_http_scheme(uri, name)
       refuse_userinfo(uri, name)
       refuse_query_or_fragment(uri, name)
       refuse_plaintext(uri, name, allow_insecure_http)
@@ -73,25 +73,29 @@ module Temper
       raise ArgumentError, "#{name} must not contain whitespace or control characters"
     end
 
+    # No message here or below echoes `value`. Every check before the userinfo
+    # one can fail on a URL that still carries a credential
+    # (`htps://id:secret@host`), and a query can carry one too; the error names
+    # the parameter, which is what the caller has to fix.
     def parse(value, name)
       uri = URI.parse(value)
       # Ruby's URI accepts a port outside 0..65535 without complaint; such an
       # address is not usable, so it meets the same message as a parse failure.
       port_usable = uri.port.to_i.between?(0, 65_535)
-      raise ArgumentError, "#{name} is not a parseable URL: #{value.inspect}" unless port_usable
+      raise ArgumentError, "#{name} is not a parseable URL" unless port_usable
 
       uri
     rescue URI::InvalidURIError, URI::InvalidComponentError, URI::BadURIError
-      raise ArgumentError, "#{name} is not a parseable URL: #{value.inspect}"
+      raise ArgumentError, "#{name} is not a parseable URL"
     end
 
     # URI.parse hands back URI::FTP, URI::MailTo and friends just as happily;
     # only the two schemes that can protect a credential are accepted, and
     # only with a host.
-    def ensure_http_scheme(uri, value, name)
+    def ensure_http_scheme(uri, name)
       return if (uri.is_a?(URI::HTTP) || uri.is_a?(URI::HTTPS)) && !uri.host.to_s.empty?
 
-      raise ArgumentError, "#{name} must be an absolute http(s) URL, got #{value.inspect}"
+      raise ArgumentError, "#{name} must be an absolute http(s) URL"
     end
 
     # `uri.user` is nil for `host:port`, so this catches only a real userinfo

@@ -91,13 +91,16 @@ def require_endpoint(
     if not text.isprintable():
         raise ValueError(f"{name} must not contain whitespace or control characters")
 
+    # No message below echoes `text`. Every check before the userinfo one can fail on a
+    # URL that still carries a credential (`htps://id:secret@host`), and a query can carry
+    # one too; the error names the parameter, which is what the caller has to fix.
     try:
         parts = urlsplit(text)
     except ValueError as exc:  # a malformed IPv6 literal, principally
-        raise ValueError(f"{name} is not a parseable URL: {text!r}") from exc
+        raise ValueError(f"{name} is not a parseable URL") from exc
 
     if parts.scheme not in ("http", "https") or not parts.netloc:
-        raise ValueError(f"{name} must be an absolute http(s) URL, got {text!r}")
+        raise ValueError(f"{name} must be an absolute http(s) URL")
 
     # `parts.username` is None for `host:port`, so this catches ONLY a real userinfo
     # section. Refused rather than dropped: a caller who wrote credentials into the
@@ -113,12 +116,12 @@ def require_endpoint(
         # Accessing it is the check: `port` raises for one out of range or not a number.
         _ = parts.port
     except ValueError as exc:
-        raise ValueError(f"{name} has an invalid port: {text!r}") from exc
+        raise ValueError(f"{name} has an invalid port") from exc
 
     if parts.query or parts.fragment:
         raise ValueError(
             f"{name} must be an origin (optionally with a path prefix), "
-            f"not a URL with a query or fragment: {text!r}"
+            f"not a URL with a query or fragment"
         )
 
     if parts.scheme == "http" and not (allow_insecure_http or is_loopback(parts.hostname)):
