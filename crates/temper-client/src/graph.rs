@@ -9,12 +9,18 @@
 //! so a repeated-param encoding hands the service a single unparseable uuid and 400s.
 //! The path builders below are pure and unit-tested for exactly that reason.
 
-use reqwest::Method;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
-use temper_core::types::graph_atlas::{AtlasEntry, AtlasSubgraph};
+use crate::ops;
+use temper_core::types::graph_atlas::{AtlasEntry, AtlasSubgraph, SliceRequest};
+use temper_core::types::graph_context::ContextPanorama;
+use temper_core::types::graph_home::AtlasHome;
+use temper_core::types::graph_territory::TerritoryOverview;
+use temper_core::types::query_params::{
+    CogmapPanoramaQuery, ContextCompositionQuery, ContextPanoramaQuery, RegionCompositionQuery,
+};
 
 /// Join ids the way both graph query params expect: comma-separated, one param.
 fn join_ids(ids: &[Uuid]) -> String {
@@ -34,17 +40,18 @@ pub(crate) fn entry_path(anchors: &[Uuid], k: Option<i32>) -> String {
     if let Some(k) = k {
         params.push(format!("k={k}"));
     }
+    let base = ops::ENTRY.path(&[]);
     if params.is_empty() {
-        "/api/graph/entry".to_string()
+        base
     } else {
-        format!("/api/graph/entry?{}", params.join("&"))
+        format!("{base}?{}", params.join("&"))
     }
 }
 
 /// `GET /api/graph/traverse` — `from` is required, `depth` is omitted when the caller
 /// names none so the default stays in one place (the handler's `unwrap_or(1)`).
 pub(crate) fn traverse_path(seeds: &[Uuid], depth: Option<i32>) -> String {
-    let mut path = format!("/api/graph/traverse?from={}", join_ids(seeds));
+    let mut path = format!("{}?from={}", ops::TRAVERSE.path(&[]), join_ids(seeds));
     if let Some(depth) = depth {
         path.push_str(&format!("&depth={depth}"));
     }
@@ -74,10 +81,11 @@ impl<'a> GraphClient<'a> {
     /// ranks across the whole visible corpus.
     pub async fn entry(&self, anchors: &[Uuid], k: Option<i32>) -> Result<AtlasEntry> {
         let token = self.http.resolve_token()?;
+        let op = &ops::ENTRY;
         let path = entry_path(anchors, k);
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -87,10 +95,91 @@ impl<'a> GraphClient<'a> {
     /// reader's whole visible corpus from these seeds.
     pub async fn traverse(&self, seeds: &[Uuid], depth: Option<i32>) -> Result<AtlasSubgraph> {
         let token = self.http.resolve_token()?;
+        let op = &ops::TRAVERSE;
         let path = traverse_path(seeds, depth);
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/graph/home — the atlas home: the contexts the caller builds in and the cognitive
+    /// maps it researches in.
+    pub async fn home(&self) -> Result<AtlasHome> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::ATLAS_HOME;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/graph/contexts/panorama — a context's panorama: its containers and their
+    /// composition, grouped as `query.group_by` asks.
+    pub async fn context_panorama(&self, query: &ContextPanoramaQuery) -> Result<ContextPanorama> {
+        self.read(&ops::CONTEXT_PANORAMA, &[], query).await
+    }
+
+    /// GET /api/graph/contexts/composition — the subgraph composing one context (or one container
+    /// in it).
+    pub async fn context_composition(
+        &self,
+        query: &ContextCompositionQuery,
+    ) -> Result<AtlasSubgraph> {
+        self.read(&ops::CONTEXT_COMPOSITION, &[], query).await
+    }
+
+    /// GET /api/graph/regions/composition — the subgraph composing the named regions.
+    pub async fn region_composition(
+        &self,
+        query: &RegionCompositionQuery,
+    ) -> Result<AtlasSubgraph> {
+        self.read(&ops::REGION_COMPOSITION, &[], query).await
+    }
+
+    /// GET /api/graph/cogmaps/{id}/panorama — a cognitive map's territory overview, optionally
+    /// through one lens.
+    pub async fn cogmap_panorama(
+        &self,
+        cogmap_id: Uuid,
+        query: &CogmapPanoramaQuery,
+    ) -> Result<TerritoryOverview> {
+        self.read(&ops::COGMAP_PANORAMA, &[&cogmap_id], query).await
+    }
+
+    /// POST /api/cogmaps/{id}/graph/slice — the neighborhood of `request.seeds` inside one
+    /// cognitive map, walked to `request.depth` over the named edge kinds.
+    pub async fn cogmap_slice(
+        &self,
+        cogmap_id: Uuid,
+        request: &SliceRequest,
+    ) -> Result<AtlasSubgraph> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::COGMAP_NEIGHBORHOOD_SLICE;
+        let path = op.path(&[&cogmap_id]);
+        let req = self.http.request(op, &path).json(request);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// A GET whose parameters ride the query string — the panorama and composition reads.
+    async fn read<Q, T>(
+        &self,
+        op: &ops::Op,
+        args: &[&dyn std::fmt::Display],
+        query: &Q,
+    ) -> Result<T>
+    where
+        Q: serde::Serialize + ?Sized,
+        T: serde::de::DeserializeOwned,
+    {
+        let token = self.http.resolve_token()?;
+        let path = op.path(args);
+        let req = self.http.request(op, &path).query(query);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }

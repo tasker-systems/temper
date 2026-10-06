@@ -47,7 +47,6 @@
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
-use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
@@ -61,13 +60,8 @@ use temper_core::types::auditor::{
     AuditSweepRow, AuditorDispatchTickRequest, AuditorDispatchTickResponse, AuditorJobCompleteAck,
 };
 use temper_core::types::ids::{CogmapId, CorrelationId, ProfileId};
+use temper_core::types::query_params::SweepQuery;
 use temper_workflow::operations::{AuditorDispatchTick, Backend, CompleteAuditorJob};
-
-/// Query params for the sweep read. `cap` is optional (omit → the service default).
-#[derive(Debug, Deserialize)]
-pub struct SweepQuery {
-    pub cap: Option<i64>,
-}
 
 /// Refuse a non-positive `cap` as the caller fault it is.
 ///

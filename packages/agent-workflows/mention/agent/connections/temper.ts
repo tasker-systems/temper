@@ -1,7 +1,7 @@
 import { defineMcpClientConnection } from "eve/connections";
 import { never } from "eve/tools/approval";
 
-import { requireEnv } from "../lib/link.js";
+import { requireEndpointEnv } from "../lib/link.js";
 import { TEMPER_READ_TOOLS, getTemperToken } from "../lib/mcp-auth.js";
 
 /**
@@ -32,7 +32,7 @@ import { TEMPER_READ_TOOLS, getTemperToken } from "../lib/mcp-auth.js";
  *   rationale and the list of tools left out for uncertainty.
  */
 export default defineMcpClientConnection({
-  url: requireEnv("TEMPER_MCP_URL"),
+  url: requireEndpointEnv("TEMPER_MCP_URL"),
   description:
     "Temper knowledge base, read as the Slack user who mentioned this agent: their resources, contexts, doc types and search, under their own access and no one else's.",
   auth: { principalType: "user", getToken: getTemperToken },

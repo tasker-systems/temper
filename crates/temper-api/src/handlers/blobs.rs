@@ -19,7 +19,6 @@ use axum::extract::{Multipart, Path, Query, State};
 use axum::http::header;
 use axum::response::Response;
 use axum::Json;
-use serde::Deserialize;
 use temper_core::types::blob::{
     BlobCommitResponse, BlobDeleteAck, BlobRelationAck, BlobRelationAssertRequest, BlobSummary,
     BlobUploadBeginRequest, BlobUploadBeginResponse, BlobUploadFinalizeRequest, BlobUploadProgress,
@@ -32,6 +31,7 @@ use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
+use temper_core::types::query_params::{BlobListQuery, SegmentQuery};
 
 /// Commit bytes as a blob — one multipart request at or under the D7 threshold
 ///
@@ -310,11 +310,6 @@ pub async fn begin_upload(
     Ok(Json(BlobUploadBeginResponse { upload_id }))
 }
 
-#[derive(Debug, Deserialize)]
-pub struct SegmentQuery {
-    pub seq: u32,
-}
-
 /// Append one segment to a staged upload — raw bytes as the request body
 ///
 /// The segment's identity is the SERVER's own sha256 of the exact bytes received — the
@@ -467,15 +462,6 @@ pub async fn finalize_upload(
 // Same thin shape as every handler in this file: AuthUser → service → ApiError. The
 // gates live in the service (the NAMED predicates) — these handlers parse wire strings
 // and route, never restate visibility.
-
-#[derive(Debug, Deserialize)]
-pub struct BlobListQuery {
-    /// Optional home scope: `kb_contexts` or `kb_cogmaps`. With `home_id`, scopes the
-    /// list to blobs homed in that anchor; absent, the list is every blob the caller
-    /// can read — which is the caller's own view, never a discovery oracle.
-    pub home_table: Option<String>,
-    pub home_id: Option<Uuid>,
-}
 
 /// List the blobs the caller can read (optionally scoped to one home)
 ///

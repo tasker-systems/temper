@@ -22,7 +22,164 @@ gate on a main-bound PR. Deprecation rows (the D-C3 records) carry the retiremen
 era release the record names. Historical and pre-policy rows read as history: only new rows carry
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
-## Since v0.5.4 — unreleased
+## Since v0.6.0 — unreleased
+- **The SDKs' endpoint refusals no longer repeat the URL they refused, and their token requests follow no redirect**
+  `require_endpoint` / `requireEndpoint` / `validate_endpoint` in temper-py, temper-rb, temper-ts
+  and `temperkb-client` still refuse the same values with the same error types. The "not a parseable
+  URL", "must be an absolute http(s) URL", "invalid port" and query/fragment messages used to append
+  the raw value, and those checks run before the userinfo check, so a mistyped
+  `htps://id:secret@host` (or a secret in a query) was copied into the exception and on into logs.
+  Each message now names the parameter and the reason only, and chains no exception that quotes
+  it: temper-rb raises with `cause: nil` (Ruby attached URI's own error, whose message is the whole
+  value), and temper-py raises outside the `except` (the port error quoted a prefix of a password
+  containing `/`). Separately, temper-ts's `ClientCredentials` mint and `temperkb-client`'s
+  refresh-token grant and login code exchange no longer follow redirects: a 307/308 resent the form
+  (client secret, refresh token, or code and verifier) to a URL nothing had vetted, and a 3xx is now
+  a failed request. temper-py and temper-rb already did not follow them. Who observes: callers that
+  display or match on these messages; a token endpoint that relies on redirecting. User-visible:
+  yes. Release relevance: behavioral.
+pr: self
+classes: behavioral
+surfaces: clients
+status: signal-only
+- **OTLP span export refuses a plaintext collector off loopback, and its log line names host and variable, not the URL**
+  The OTLP exporter sends `OTEL_EXPORTER_OTLP_HEADERS` (the vendor credential) and every span to the
+  configured endpoint. In the Rust servers and CLI (`temperkb-telemetry`) and the Node hops
+  (`temper-telemetry-ts`), an endpoint that is plaintext `http` to anything but `localhost`,
+  127.0.0.0/8 or `[::1]`, or that does not parse, now turns export off with a warning naming the
+  variable; the process keeps serving, as it does for any exporter misconfiguration. The "span export
+  on" line reports `host[:port] (VARIABLE)` instead of the raw value, which can carry userinfo.
+  The vetted traces URL is passed to the exporter explicitly, so neither SDK resolves an endpoint of
+  its own; their env resolution falls back to the general variable when the signal-specific one fails
+  to parse, which would have skipped the check. The Rust exporter's HTTP client now follows no
+  redirect (reqwest's default followed up to 10, forwarding custom auth headers such as an API key);
+  a collector answering 3xx is an export error. `localhost.` no longer counts as loopback.
+  `temper-telemetry-ts` also resolves `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` ahead of the general
+  variable in `initTelemetry`, as `shouldExportSpans`, the exporter and the Rust side already did.
+  Who observes: operators with an `http://` collector on another host (export stops until it is
+  https). User-visible: operator-facing only. Release relevance: behavioral.
+pr: self
+classes: behavioral
+surfaces: clients, internal
+status: signal-only
+
+## Shipped in v0.6.0
+- **This release — the 0.6.0 fleet alignment: VERSION 0.5.4 → 0.6.0 across crates, packages, and clients**
+  The release train's own wire delta is none: version fields and the generated
+  cores re-stale with the bump (the D-S3 baseline — no shape movement); the
+  P floor rides the additive rows already in this window.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
+- **`temper auth login` reports who logged in: `profile` is the server-resolved id, not `null`**
+  The login confirmation's shape is unchanged (`{ "status", "profile" }`). Under Auth0, `profile`
+  was always `null`, because it came from the stored credential's `profile_id`, which an Auth0 `sub`
+  never populates. It is now the id `GET /api/profile` resolves for the new token, the same source
+  `auth status` uses for its identity. If that call fails or takes more than 5 s, the login still
+  stands, `profile` falls back to the credential's value, and stderr says why. Who observes: scripts
+  and agents reading the login output. User-visible: yes, a `null` becomes a UUID. Release
+  relevance: behavioral.
+pr: self
+classes: behavioral
+surfaces: cli-stdout
+status: signal-only
+- **On Vercel, the eight cron doors answer only on the deployment's own URL; every other host gets a 404**
+  `/api/embed/dispatch`, `/api/embed/warm`, `/api/slack/intents/reap`, `/api/as/reap`,
+  `/api/internal-calls/health`, `/api/region/dispatch`, `/api/erasure/drain` and
+  `/api/sensitivity/sweep` were reachable on the public `<project>.vercel.app` alias, on a custom
+  domain, and through the UI's `/api` proxy, with the shared `EMBED_DISPATCH_SECRET` bearer as the
+  only control. The API now reads `VERCEL_URL`, the deployment's generated host, and those doors
+  answer `404`, before the bearer is read, to a request on any other host. Vercel Cron calls the
+  generated URL, which sits behind Vercel Authentication, so scheduled runs are unchanged (checked
+  on a preview deploy: `401` on the generated URL, `404` on the branch alias). Off Vercel
+  (`VERCEL_URL` unset) the bearer alone gates, as before; on Vercel without `VERCEL_URL` (system
+  environment variables not exposed) the boot logs a warning and the bearer alone gates. A manual or
+  external trigger on Vercel must target the deployment URL (`vercel curl`, or the dashboard's
+  run-cron button) rather than the public domain. Who observes: operators who trigger these doors by
+  hand. User-visible: no. Release relevance: behavioral.
+pr: self
+classes: behavioral
+surfaces: http
+status: signal-only
+- **temper-client and the CLI no longer honour `TEMPER_ALLOW_INSECURE_HTTP`: plaintext http reaches loopback only**
+  The client's endpoint check refuses a non-loopback `http` URL for the API base URL and the OAuth
+  token URL, and nothing turns that off any more. The variable that used to
+  (`TEMPER_ALLOW_INSECURE_HTTP=1`) is no longer read, and the refusal names one fix, `https`.
+  Loopback plaintext (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`) is accepted as before, so
+  local development and the CLI's loopback login listener are unchanged. The same check runs where
+  temper-client is the MCP relay, which an environment variable can no longer downgrade to
+  cleartext. `temper init --instance-url http://<non-loopback>` was already refused without the
+  variable and is now refused with it. Rust API changes in the published `temperkb-client`:
+  `endpoint::allow_insecure_http_from_env` is removed, and `endpoint::validate_endpoint` drops its
+  third (`allow_insecure_http`) parameter. The Python, Ruby and TypeScript SDKs' explicit opt-in
+  (`allow_insecure_http=` / `allowInsecureHttp`, a constructor parameter, never read from the
+  environment) is untouched. Who observes: a CLI or client user who set the variable against a
+  plaintext non-loopback instance, and Rust consumers of `temperkb-client` calling either function.
+  User-visible: yes, for those only. No deployment we run sets the variable. Release relevance:
+  behavioral.
+pr: self
+classes: behavioral
+- **CLI commands refresh an expired access token from the stored refresh token (#1010)**
+  No shape moves. A CLI command run after the stored access token's expiry now presents the
+  stored refresh token first and sends the successor, where it used to send the expired token and
+  print "not authenticated — run `temper auth login`". `auth status` reports `authenticated: true`
+  in that state for the same reason. Refreshes are serialized across processes by a lock file
+  beside `auth.json` (`<auth path>.lock`), and temperkb-client's `TokenStore` gains a
+  `lock_refresh` method with a no-op default, so an existing implementor compiles unchanged.
+  temperkb-client also gains `auth::replace_grant` and `auth::clear_grant`, which login, `auth
+  token` and logout now use: they take the same lock, so `temper auth logout` or `auth login` run
+  during another command's refresh waits for it (at most the refresh's 30s timeout) and is not
+  undone by it. A symlinked `auth.json` is now written through to its target, as before this
+  change. An env-supplied `TEMPER_TOKEN` carries no refresh token and behaves as before. Who
+  observes: CLI users on a machine idle past the token's lifetime, and Rust consumers of
+  temperkb-client. User-visible: commands that failed now succeed. Release relevance: behavioral,
+  plus additive client API.
+pr: self
+classes: additive, behavioral
+surfaces: clients, cli-stdout
+status: signal-only
+- **temper-client and the CLI reach every published operation; every published wire type lives in temperkb-core**
+  `openapi.json` does not move. temper-client gains a method for each of the 25 operations it
+  lacked: principal and resource erasure with their surveys, the block-history scrub and its
+  survey, the auditor and steward worker doors, the graph panorama and composition reads,
+  connections, citation audits, the schema reads and health. The CLI gains commands for each:
+  `admin erasure resource|principal|block-history` (each surveys by default and acts only with
+  `--execute`; a refused act prints its answer and exits non-zero, and an execute that errors
+  points at the survey before any retry), six `graph` reads, `resource connections|citation-audits|doc-types|describe-type`,
+  `steward sweep|candidates|dispatch`, `auditor dispatch|complete|sweep`, `health`,
+  `blob delete`, `auth settings`, `context show` and `profile show|update|auth-links`. Behavioral
+  for a CLI user: `resource describe-open-meta` now answers from the server it is logged in to,
+  and `--local` answers from the binary as it did before. Every published wire type now lives in
+  temperkb-core, so a client names it without the server crates. The old
+  `temper_workflow`/`temper_substrate`/`temper_services` paths re-export it, so no import site
+  moves. Three Rust API changes in published crates: `HealthResponse`'s fields are `String` where
+  they were `&'static str` (so it deserializes); temperkb-client's `UploadClient` and
+  temperkb-core's `UploadResponse`/`UploadProcessingStatus` are removed (they served
+  `/api/upload`, which no longer exists, so any call already failed); and `DocType::schema_json`
+  is no longer an inherent method but temperkb-workflow's `DocTypeSchema` trait, because
+  `DocType` now lives in core while the schema files it embeds stay in workflow — a caller of
+  `doc_type.schema_json()` adds `use temper_workflow::frontmatter::DocTypeSchema`. temperkb-client
+  now percent-encodes every value it substitutes into a path, so a doc-type name cannot reach a
+  different route, and serializes the invocation list's filters rather than concatenating them. Who observes: operators and
+  agents using the CLI, and Rust consumers of temperkb-client/temperkb-core. User-visible: CLI
+  commands. Release relevance: additive, plus the behavioral change to `describe-open-meta`.
+pr: self
+classes: additive, behavioral
+surfaces: clients, cli-stdout
+status: signal-only
+- **Resource erasure: the record names its derived-vector writes — `kb_cogmap_regions.centroid` and `kb_contexts.telos_centroid` targets**
+  No shape moves. `targets` on the execute and survey responses and on `resource_erased` may now
+  carry two more rows: `kb_cogmap_regions.centroid` ("N live region centroids recomputed from the
+  remaining members; M folded region centroids zeroed") and `kb_contexts.telos_centroid` ("1 context telos
+  snapshot nulled"), each only when the act reaches at least one such row. The act's writes are
+  unchanged; until now the record was silent about them. `ErasureTargetOutcome` is open-textured,
+  so the payload schema does not change. Who observes: system admins reading the erasure record or
+  survey. User-visible: operators only. Release relevance: behavioral, signal-only.
+pr: self
+classes: behavioral
+surfaces: http, internal
+status: signal-only
 - **The sensitivity sweep is off until an operator turns it on: `SENSITIVITY_SWEEP_ENABLED`, detectors off by default, and who provides each**
   A deployment scans only after its operator opts in (sweep Q52, Q53). The API reads a new
   variable, `SENSITIVITY_SWEEP_ENABLED`. Unless it is `true` or `1`, the cron call to

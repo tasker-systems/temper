@@ -16,6 +16,7 @@ Commands:
   progress   Read a staged upload's currently-landed segments — the resume read. A resumed segmented upload can see where it stopped: which seqs landed, total staged bytes. 404 means the session is absent or not the caller's (indistinguishable by design)
   relations  Read a blob's live relation edges back — the read peer of `blob relate`
   relate     Relate a blob to a resource (blob-relation peers narrow to resources)
+  delete     Delete a blob you hold: release your hold on its bytes
   help       Print this message or the help of the given subcommand(s)
 
 Options:
@@ -226,6 +227,36 @@ Options:
 
       --model <MODEL>
           Model that authored the act (authorship; requires --confidence)
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `temper blob delete`
+
+```text
+Delete a blob you hold: release your hold on its bytes.
+
+Wraps `DELETE /api/blobs/{id}`. The answer's `released` says whether this call released it.
+
+Usage: temper blob delete [OPTIONS] <BLOB>
+
+Arguments:
+  <BLOB>
+          The blob's id (from `blob list` / a prior put)
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
 
   -h, --help
           Print help (see a summary with '-h')

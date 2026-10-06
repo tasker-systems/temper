@@ -1,0 +1,45 @@
+name: "Collect nextest JUnit"
+description: "Move the JUnit a `--profile ci` nextest run just wrote to junit/<name>.xml, list its flaky tests in the job summary, and upload it. Use once after EVERY nextest invocation in CI."
+author: "Tasker Systems"
+
+# Why this exists as a composite action:
+#
+# `[profile.ci.junit]` (`.config/nextest.toml`) writes to ONE fixed path, target/nextest/ci/junit.xml.
+# A job with two nextest invocations (Unit) would have its first report overwritten by its second,
+# so each invocation's report is moved to its own name immediately after the run.
+#
+# Every nextest job uploads its JUnit (with `if-no-files-found: error`) because the test-accounting
+# job (Phase 2b, goal 01a10cc4-134e-72f2-9acf-2c4cfda46f4d) reads them, and a missing one must be loud.
+#
+# Call it with `if: ${{ !cancelled() }}`: a red test run is exactly when its report matters most.
+
+inputs:
+  name:
+    description: "Unique per invocation within the run (e.g. `unit`, `integration-2`). Names the file, the summary section and the artifact."
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Move the report and summarize it
+      shell: bash
+      env:
+        NAME: ${{ inputs.name }}
+      run: |
+        set -euo pipefail
+        src=target/nextest/ci/junit.xml
+        if [ ! -f "$src" ]; then
+          echo "::error title=No JUnit (${NAME})::$src is missing — nextest did not complete a run under --profile ci"
+          exit 1
+        fi
+        mkdir -p junit
+        mv "$src" "junit/${NAME}.xml"
+        python3 .github/scripts/junit-summary.py --junit "junit/${NAME}.xml" --name "$NAME"
+
+    - name: Upload the report
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: junit-${{ inputs.name }}
+        path: junit/${{ inputs.name }}.xml
+        if-no-files-found: error
+        retention-days: 7

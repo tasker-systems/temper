@@ -1,9 +1,8 @@
 //! Typed sub-client for the `/api/facets` write endpoint.
 
-use reqwest::Method;
-
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::types::facet_requests::{
     EdgeFacetSetRequest, EdgeFacetsResponse, FacetAck, FacetRetractAck, FacetSetRequest,
     ResourceFacetsResponse,
@@ -29,10 +28,11 @@ impl<'a> FacetClient<'a> {
     /// POST /api/facets — set a facet value on a resource.
     pub async fn set(&self, request: &FacetSetRequest) -> Result<FacetAck> {
         let token = self.http.resolve_token()?;
-        let path = "/api/facets";
-        let req = self.http.post(path).json(request);
+        let op = &ops::SET_FACET;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::POST, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -47,20 +47,22 @@ impl<'a> FacetClient<'a> {
         request: &EdgeFacetSetRequest,
     ) -> Result<FacetAck> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/relationships/{edge_handle}/facets");
-        let req = self.http.post(&path).json(request);
+        let op = &ops::SET_EDGE_FACET;
+        let path = op.path(&[&edge_handle]);
+        let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// GET /api/relationships/{edge_handle}/facets — the edge's live facets.
     pub async fn list_for_edge(&self, edge_handle: Uuid) -> Result<EdgeFacetsResponse> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/relationships/{edge_handle}/facets");
-        let req = self.http.get(&path);
+        let op = &ops::LIST_EDGE_FACETS;
+        let path = op.path(&[&edge_handle]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -76,10 +78,11 @@ impl<'a> FacetClient<'a> {
         act: &temper_core::types::authorship::ActInput,
     ) -> Result<FacetRetractAck> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/relationships/{edge_handle}/facets/{property_id}");
-        let req = self.http.delete(&path).query(act);
+        let op = &ops::RETRACT_EDGE_FACET;
+        let path = op.path(&[&edge_handle, &property_id]);
+        let req = self.http.request(op, &path).query(act);
         self.http
-            .send_json(&Method::DELETE, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -89,10 +92,11 @@ impl<'a> FacetClient<'a> {
     /// `open_meta` — including each row's weight, which that collapse discards.
     pub async fn list_for_resource(&self, resource: Uuid) -> Result<ResourceFacetsResponse> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/resources/{resource}/facets");
-        let req = self.http.get(&path);
+        let op = &ops::LIST_RESOURCE_FACETS;
+        let path = op.path(&[&resource]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }

@@ -23,10 +23,18 @@
 //! unambiguous and no reconcile is needed.
 //!
 //! [issue #581]: https://github.com/tasker-systems/temper/issues/581
+//!
+//! The erasure acts (`admin erasure … --execute`) share the hazard with a different recovery and a
+//! wider trigger. A retry does not duplicate (the server answers a second erasure as
+//! `already_erased`, or as a no-op), but an operator who sees an error does not know whether the
+//! act ran — and for an erasure a server-returned error is ambiguous too: a gateway can answer
+//! `504` while the act completes behind it. So the erasure hint fires on any error except the two
+//! whose outcome is known — a refusal (its recorded answer was printed) and a ref refused before
+//! anything was sent — and points at the survey, which answers the question.
 
 use temper_core::error::TemperError;
 
-use crate::cli::{Commands, ResourceAction};
+use crate::cli::{AdminAction, AdminErasureAction, Commands, ResourceAction};
 
 /// The multi-line guidance printed after a lost-ack write failure. Written to
 /// **stderr** by the caller (via [`crate::output::hint`]) so it never corrupts
@@ -39,35 +47,62 @@ First reconcile, then re-issue only if the write genuinely did not land:
   • create — `temper resource list --title-contains <title>` to see whether the resource is present
   • update — `temper resource show <ref>` (add `--edges` for a `--goal`/link change) to see whether the mutation applied";
 
-/// True when `command` is a write whose retry-after-lost-ack is unsafe: `resource
-/// create` (mints a duplicate) and `resource update` (re-applies, and a
-/// `--goal`/link change re-asserts an edge). Computed from `&cli.command`
-/// **before** dispatch consumes it, then paired with the resulting error by
-/// [`reconcile_hint`].
+/// The guidance printed after an erasure act fails with a network error.
+pub const ERASURE_RECONCILE_HINT: &str = "\
+note: the erasure may have run even though no answer came back — a network error cannot say.
+Re-run the same command without --execute: the survey shows the current state (a resource already
+erased reads `already_erased`). Re-issue with --execute only if the survey shows the act did not land.";
+
+/// A write whose outcome a lost acknowledgment can hide, and so which errors call for reconciling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LostAckProne {
+    /// `resource create` / `update`: only a transport error is ambiguous.
+    ResourceWrite,
+    /// An erasure act run with `--execute`: any error but a refusal or a local parse failure is.
+    ErasureAct,
+}
+
+/// Which kind of lost-ack-prone write `command` is, else `None`: `resource create` (a retry mints a duplicate), `resource update`
+/// (re-applies, and a `--goal`/link change re-asserts an edge), and an erasure act run with
+/// `--execute`. Computed from `&cli.command` **before** dispatch consumes it, then paired with
+/// the resulting error by [`reconcile_hint`].
 ///
 /// Idempotent mutations — `resource delete`, `edge assert`, grant / revoke — are
 /// deliberately excluded: re-issuing them converges, so they need no reconcile
-/// warning.
-pub fn is_lost_ack_prone_write(command: &Commands) -> bool {
-    matches!(
-        command,
+/// warning. An erasure survey is a read.
+pub fn lost_ack_prone(command: &Commands) -> Option<LostAckProne> {
+    match command {
         Commands::Resource {
-            action: ResourceAction::Create { .. } | ResourceAction::Update { .. }
-        }
-    )
+            action: ResourceAction::Create { .. } | ResourceAction::Update { .. },
+        } => Some(LostAckProne::ResourceWrite),
+        Commands::Admin {
+            action: AdminAction::Erasure { action },
+        } => match action {
+            AdminErasureAction::Resource { execute, .. }
+            | AdminErasureAction::Principal { execute, .. }
+            | AdminErasureAction::BlockHistory { execute, .. } => {
+                execute.then_some(LostAckProne::ErasureAct)
+            }
+        },
+        _ => None,
+    }
 }
 
-/// The guidance to print, or `None`. Fires only when the invoked command was a
-/// lost-ack-prone write (`was_lost_ack_write`, from [`is_lost_ack_prone_write`])
-/// **and** the failure is a transport-level network error — the one failure
-/// shape where the write may nonetheless have committed. A `4xx`/`5xx` the
-/// server actually returned is unambiguous (nothing committed, or the server
-/// said exactly what went wrong), so it yields `None`.
-pub fn reconcile_hint(was_lost_ack_write: bool, err: &TemperError) -> Option<&'static str> {
-    if was_lost_ack_write && matches!(err, TemperError::Network(_)) {
-        Some(RECONCILE_HINT)
-    } else {
-        None
+/// The guidance to print, or `None`. For a resource write it fires only on a
+/// transport-level network error — the one failure shape where the write may
+/// nonetheless have committed; a `4xx`/`5xx` the server returned is unambiguous.
+/// For an erasure act it fires on every error but a refusal (`Conflict`, whose
+/// recorded answer was already printed) and a ref refused locally (`BadRequest`),
+/// since a gateway's `5xx` can front an act that completed.
+pub fn reconcile_hint(prone: Option<LostAckProne>, err: &TemperError) -> Option<&'static str> {
+    match prone? {
+        LostAckProne::ResourceWrite => {
+            matches!(err, TemperError::Network(_)).then_some(RECONCILE_HINT)
+        }
+        LostAckProne::ErasureAct => {
+            (!matches!(err, TemperError::Conflict(_) | TemperError::BadRequest(_)))
+                .then_some(ERASURE_RECONCILE_HINT)
+        }
     }
 }
 
@@ -100,40 +135,97 @@ mod tests {
 
     #[test]
     fn create_is_lost_ack_prone() {
-        assert!(is_lost_ack_prone_write(&Commands::Resource {
-            action: create_action()
-        }));
+        assert_eq!(
+            lost_ack_prone(&Commands::Resource {
+                action: create_action()
+            }),
+            Some(LostAckProne::ResourceWrite)
+        );
+    }
+
+    fn erasure(execute: bool) -> Commands {
+        Commands::Admin {
+            action: AdminAction::Erasure {
+                action: AdminErasureAction::Resource {
+                    resource: "r".into(),
+                    also_strike_blobs: vec![],
+                    execute,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn an_erasure_survey_is_a_read() {
+        assert_eq!(lost_ack_prone(&erasure(false)), None);
+    }
+
+    /// FAILS IF a server-returned error on an executed erasure goes unhinted: a gateway `5xx`
+    /// can front an act that completed, so it is as ambiguous as a dropped connection.
+    #[test]
+    fn an_executed_erasure_points_at_the_survey_on_network_and_server_errors() {
+        let prone = lost_ack_prone(&erasure(true));
+        for err in [
+            TemperError::Network("connection reset".into()),
+            TemperError::Api("504 Gateway Timeout".into()),
+        ] {
+            assert_eq!(
+                reconcile_hint(prone, &err),
+                Some(ERASURE_RECONCILE_HINT),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refused_or_unsent_erasure_needs_no_reconcile() {
+        let prone = lost_ack_prone(&erasure(true));
+        for err in [
+            TemperError::Conflict("resource erasure refused (charter_resource)".into()),
+            TemperError::BadRequest("invalid resource ref".into()),
+        ] {
+            assert_eq!(reconcile_hint(prone, &err), None, "{err}");
+        }
     }
 
     #[test]
     fn read_command_is_not_lost_ack_prone() {
-        // `DescribeOpenMeta` is a unit read variant — no lost-ack hazard.
-        assert!(!is_lost_ack_prone_write(&Commands::Resource {
-            action: ResourceAction::DescribeOpenMeta
-        }));
+        // `DescribeOpenMeta` is a read — no lost-ack hazard.
+        assert_eq!(
+            lost_ack_prone(&Commands::Resource {
+                action: ResourceAction::DescribeOpenMeta { local: false }
+            }),
+            None
+        );
     }
 
     #[test]
     fn non_resource_command_is_not_lost_ack_prone() {
-        assert!(!is_lost_ack_prone_write(&Commands::Invitations));
+        assert_eq!(lost_ack_prone(&Commands::Invitations), None);
     }
 
     #[test]
     fn fires_on_write_network_error() {
         let err = TemperError::Network("error sending request".into());
-        assert_eq!(reconcile_hint(true, &err), Some(RECONCILE_HINT));
+        assert_eq!(
+            reconcile_hint(Some(LostAckProne::ResourceWrite), &err),
+            Some(RECONCILE_HINT)
+        );
     }
 
     #[test]
     fn silent_on_write_non_network_error() {
         // A server-returned 409/422/5xx is unambiguous — nothing to reconcile.
         let err = TemperError::Conflict("already exists".into());
-        assert_eq!(reconcile_hint(true, &err), None);
+        assert_eq!(
+            reconcile_hint(Some(LostAckProne::ResourceWrite), &err),
+            None
+        );
     }
 
     #[test]
     fn silent_on_read_network_error() {
         let err = TemperError::Network("down".into());
-        assert_eq!(reconcile_hint(false, &err), None);
+        assert_eq!(reconcile_hint(None, &err), None);
     }
 }

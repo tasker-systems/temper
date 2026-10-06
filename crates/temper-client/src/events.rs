@@ -1,9 +1,8 @@
 //! Typed sub-client for the `/api/events` endpoint.
 
-use reqwest::Method;
-
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::types::api::EventCursorResponse;
 use temper_core::types::element_trail::{ElementKind, EventTrail};
 use uuid::Uuid;
@@ -28,11 +27,12 @@ impl<'a> EventClient<'a> {
     /// a context.
     pub async fn latest_for_context(&self, kb_context_id: Uuid) -> Result<Option<Uuid>> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/events/{kb_context_id}/cursor");
-        let req = self.http.get(&path);
+        let op = &ops::CURSOR;
+        let path = op.path(&[&kb_context_id]);
+        let req = self.http.request(op, &path);
         let resp: EventCursorResponse = self
             .http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await?;
         Ok(resp.latest_event_id)
     }
@@ -49,10 +49,11 @@ impl<'a> EventClient<'a> {
             ElementKind::Node => "node",
             ElementKind::Edge => "edge",
         };
-        let path = format!("/api/graph/elements/{kind_seg}/{element_id}/trail");
-        let req = self.http.get(&path);
+        let op = &ops::ELEMENT_TRAIL;
+        let path = op.path(&[&kind_seg, &element_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }

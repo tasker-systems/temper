@@ -769,9 +769,9 @@ dependencies = [
 
 [[package]]
 name = "chacha20"
-version = "0.10.0"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f8d983286843e49675a4b7a2d174efe136dc93a18d69130dd18198a6c167601"
+checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
@@ -4420,7 +4420,7 @@ version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc266eb313df6c5c09c1c7b1fbe2510961e5bcd3add930c1e31f7ed9da0feff8"
 dependencies = [
- "chacha20 0.10.0",
+ "chacha20 0.10.2",
  "getrandom 0.4.2",
  "rand_core 0.10.0",
 ]
@@ -5649,9 +5649,9 @@ dependencies = [
 
 [[package]]
 name = "spin"
-version = "0.9.8"
+version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 dependencies = [
  "lock_api",
 ]
@@ -6077,7 +6077,7 @@ dependencies = [
 
 [[package]]
 name = "temper-agents"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -6087,7 +6087,7 @@ dependencies = [
 
 [[package]]
 name = "temper-api"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6124,7 +6124,7 @@ dependencies = [
 
 [[package]]
 name = "temper-cli"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "anstream 0.6.21",
  "anstyle",
@@ -6168,11 +6168,12 @@ dependencies = [
  "url",
  "uuid",
  "validator",
+ "wiremock",
 ]
 
 [[package]]
 name = "temper-cloud"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "sqlx",
  "temper-api",
@@ -6232,7 +6233,7 @@ dependencies = [
 
 [[package]]
 name = "temper-ingest"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -6258,11 +6259,11 @@ dependencies = [
 
 [[package]]
 name = "temper-macros"
-version = "0.5.4"
+version = "0.6.0"
 
 [[package]]
 name = "temper-mcp-server"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "axum",
  "flate2",
@@ -6293,7 +6294,7 @@ dependencies = [
 
 [[package]]
 name = "temper-migrate"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -6304,7 +6305,7 @@ dependencies = [
 
 [[package]]
 name = "temper-services"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6341,14 +6342,13 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "trybuild",
- "utoipa",
  "uuid",
  "wiremock",
 ]
 
 [[package]]
 name = "temper-substrate"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6369,13 +6369,12 @@ dependencies = [
  "temperkb-core",
  "tokio",
  "tracing",
- "utoipa",
  "uuid",
 ]
 
 [[package]]
 name = "temperkb-auth"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "rand 0.8.5",
@@ -6387,13 +6386,14 @@ dependencies = [
 
 [[package]]
 name = "temperkb-client"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
  "dirs 5.0.1",
  "open",
+ "percent-encoding",
  "reqwest 0.12.28",
  "secrecy",
  "serde",
@@ -6417,7 +6417,7 @@ dependencies = [
 
 [[package]]
 name = "temperkb-core"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6446,7 +6446,7 @@ dependencies = [
 
 [[package]]
 name = "temperkb-mcp"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -6471,7 +6471,7 @@ dependencies = [
 
 [[package]]
 name = "temperkb-principal"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "serde",
  "ts-rs",
@@ -6480,7 +6480,7 @@ dependencies = [
 
 [[package]]
 name = "temperkb-telemetry"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "axum",
  "http",
@@ -6490,6 +6490,7 @@ dependencies = [
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
  "prost",
+ "reqwest 0.13.2",
  "serde_json",
  "temp-env",
  "temperkb-core",
@@ -6499,26 +6500,23 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
 name = "temperkb-workflow"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "chrono",
  "jsonschema",
- "schemars",
  "serde",
  "serde_json",
  "serde_yaml",
- "sqlx",
  "temperkb-core",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
- "ts-rs",
- "utoipa",
  "uuid",
 ]
 

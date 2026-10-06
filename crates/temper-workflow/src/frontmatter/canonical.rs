@@ -5,7 +5,7 @@
 //! two algorithms are independent, and a later test locks that
 //! independence in.
 
-use crate::frontmatter::document::DocType;
+use crate::frontmatter::document::{DocType, DocTypeSchema};
 use crate::frontmatter::fields::{IDENTITY_FIELDS, TIER1_SYSTEM_FIELDS};
 use crate::frontmatter::registry::KNOWN_OPEN_FIELDS;
 use std::collections::HashSet;

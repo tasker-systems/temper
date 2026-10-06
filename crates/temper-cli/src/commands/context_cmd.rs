@@ -604,6 +604,23 @@ pub async fn materialize_delta_remote(
     Ok(())
 }
 
+/// `temper context show <ref>` — one context, by any ref form.
+pub fn show(context: &str, fmt: crate::format::OutputFormat) -> Result<()> {
+    let context = context.to_string();
+    let row = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            let id = resolve_context_id_for_read(client, &context).await?;
+            client
+                .contexts()
+                .get(id)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+    crate::output::plain(crate::format::render(&row, fmt)?);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -18,7 +18,7 @@ vi.mock("../agent/lib/optional-agent.js", () => ({
   tokenIssuanceUnavailable: () => false,
 }));
 vi.mock("../agent/lib/temper-auth.js", () => ({
-  requireEnv: (name: string) => {
+  requireEndpointEnv: (name: string) => {
     if (name === "TEMPER_API_URL") return "https://temper.test";
     throw new Error(`Missing required environment variable: ${name}`);
   },

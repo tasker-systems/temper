@@ -6,6 +6,7 @@ use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
 use temper_core::types::ids::EdgeId;
 use temper_core::types::lineage::ResourceLineage;
+use temper_core::types::query_params::{ConnectionsQuery, LineageQuery};
 use temper_core::types::relationship_requests::{
     AssertRelationshipRequest, FoldRelationshipRequest, RelationshipAck, RetypeRelationshipRequest,
     ReweightRelationshipRequest,
@@ -45,13 +46,6 @@ pub async fn list(
         .map(Json)
 }
 
-/// Query params for the lineage read — an optional depth bound on the walk.
-#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
-pub struct LineageQuery {
-    /// Max hop distance to walk from the seed (default 16, clamped to 1..=64).
-    pub depth: Option<i32>,
-}
-
 /// Trace a resource's derivation lineage
 #[utoipa::path(
     get,
@@ -76,13 +70,6 @@ pub async fn lineage(
     lineage_service::resource_lineage(&state.pool, auth.0.profile().id, resource_id, depth)
         .await
         .map(Json)
-}
-
-/// Query params for the bounded connections read — an optional limit on the page.
-#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
-pub struct ConnectionsQuery {
-    /// Max connections to return (default 50, clamped to 1..=200).
-    pub limit: Option<i32>,
 }
 
 /// List a resource's relationships, bounded, with the filtered total stated

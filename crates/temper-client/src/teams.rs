@@ -1,10 +1,10 @@
 //! Typed sub-client for the `/api/teams` endpoints.
 
-use reqwest::Method;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::types::invitation::{
     AcceptInvitationResponse, CreateInvitationRequest, InvitationTokenRequest, InviteeInvitation,
     PendingInvitationCounts, TeamInvitation,
@@ -37,18 +37,22 @@ impl<'a> TeamsClient<'a> {
     /// List the teams the caller is a member of.
     pub async fn list(&self) -> Result<Vec<TeamRow>> {
         let token = self.http.resolve_token()?;
-        let req = self.http.get("/api/teams");
+        let op = &ops::LIST_TEAMS;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, "/api/teams", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Create a team (the caller becomes its `owner`).
     pub async fn create(&self, body: &TeamCreateRequest) -> Result<TeamRow> {
         let token = self.http.resolve_token()?;
-        let req = self.http.post("/api/teams").json(body);
+        let op = &ops::CREATE_TEAM;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, "/api/teams", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -59,30 +63,33 @@ impl<'a> TeamsClient<'a> {
         body: &AddMemberRequest,
     ) -> Result<TeamMemberRow> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/teams/{team_id}/members");
-        let req = self.http.post(&path).json(body);
+        let op = &ops::ADD_MEMBER;
+        let path = op.path(&[&team_id]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// GET /api/teams/{id} — team detail + member roster.
     pub async fn get(&self, team_id: Uuid) -> Result<TeamDetail> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/teams/{team_id}");
-        let req = self.http.get(&path);
+        let op = &ops::DETAIL;
+        let path = op.path(&[&team_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// PATCH /api/teams/{id} — update team metadata (name/description).
     pub async fn update(&self, team_id: Uuid, body: &TeamUpdateRequest) -> Result<TeamRow> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/teams/{team_id}");
-        let req = self.http.patch(&path).json(body);
+        let op = &ops::UPDATE_TEAM;
+        let path = op.path(&[&team_id]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::PATCH, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -92,10 +99,11 @@ impl<'a> TeamsClient<'a> {
     /// callers surface the guard failures without decoding a body.
     pub async fn delete(&self, team_id: Uuid) -> Result<()> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/teams/{team_id}");
-        let req = self.http.delete(&path);
+        let op = &ops::DELETE_TEAM;
+        let path = op.path(&[&team_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send(&Method::DELETE, &path, req, Some(&token))
+            .send(&op.method(), &path, req, Some(&token))
             .await?;
         Ok(())
     }
@@ -108,10 +116,11 @@ impl<'a> TeamsClient<'a> {
         body: &ChangeRoleRequest,
     ) -> Result<TeamMemberRow> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/teams/{team_id}/members/{profile_id}");
-        let req = self.http.patch(&path).json(body);
+        let op = &ops::CHANGE_ROLE;
+        let path = op.path(&[&team_id, &profile_id]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::PATCH, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -132,11 +141,12 @@ impl<'a> TeamsClient<'a> {
         profile_id: Uuid,
     ) -> Result<RemoveMemberOutcome> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/teams/{team_id}/members/{profile_id}");
-        let req = self.http.delete(&path);
+        let op = &ops::REMOVE_MEMBER;
+        let path = op.path(&[&team_id, &profile_id]);
+        let req = self.http.request(op, &path);
         let resp = self
             .http
-            .send(&Method::DELETE, &path, req, Some(&token))
+            .send(&op.method(), &path, req, Some(&token))
             .await?;
         let bytes = resp.bytes().await?;
         if bytes.is_empty() {
@@ -157,10 +167,11 @@ impl<'a> TeamsClient<'a> {
         body: &CreateInvitationRequest,
     ) -> Result<TeamInvitation> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/teams/{team_id}/invite");
-        let req = self.http.post(&path).json(body);
+        let op = &ops::CREATE_TEAM_INVITATION;
+        let path = op.path(&[&team_id]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -171,20 +182,22 @@ impl<'a> TeamsClient<'a> {
         body: &BulkReassignRequest,
     ) -> Result<BulkReassignAck> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/teams/{team_id}/reassign");
-        let req = self.http.post(&path).json(body);
+        let op = &ops::REASSIGN_TEAM;
+        let path = op.path(&[&team_id]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// GET /api/teams/{id}/invitations — list pending invitations.
     pub async fn list_invitations(&self, team_id: Uuid) -> Result<Vec<TeamInvitation>> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/teams/{team_id}/invitations");
-        let req = self.http.get(&path);
+        let op = &ops::LIST_TEAM_INVITATIONS;
+        let path = op.path(&[&team_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -192,10 +205,11 @@ impl<'a> TeamsClient<'a> {
     /// (owner/maintainer). The invitation id is the one returned by `list_invitations`.
     pub async fn revoke_invitation(&self, team_id: Uuid, invitation_id: Uuid) -> Result<()> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/teams/{team_id}/invitations/{invitation_id}");
-        let req = self.http.delete(&path);
+        let op = &ops::REVOKE_TEAM_INVITATION;
+        let path = op.path(&[&team_id, &invitation_id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send(&Method::DELETE, &path, req, Some(&token))
+            .send(&op.method(), &path, req, Some(&token))
             .await?;
         Ok(())
     }
@@ -203,10 +217,11 @@ impl<'a> TeamsClient<'a> {
     /// GET /api/invitations/mine — the caller's own pending invitations.
     pub async fn list_my_invitations(&self) -> Result<Vec<InviteeInvitation>> {
         let token = self.http.resolve_token()?;
-        let path = "/api/invitations/mine";
-        let req = self.http.get(path);
+        let op = &ops::LIST_MINE;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -223,13 +238,14 @@ impl<'a> TeamsClient<'a> {
         team_slug: Option<&str>,
     ) -> Result<PendingInvitationCounts> {
         let token = self.http.resolve_token()?;
-        let path = "/api/invitations/mine/count";
-        let mut req = self.http.get(path);
+        let op = &ops::COUNT_MINE;
+        let path = op.path(&[]);
+        let mut req = self.http.request(op, &path);
         if let Some(slug) = team_slug {
             req = req.query(&[("team_slug", slug)]);
         }
         self.http
-            .send_json(&Method::GET, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -240,13 +256,14 @@ impl<'a> TeamsClient<'a> {
     /// attribute that is exported. See `InvitationTokenRequest`.
     pub async fn accept_invitation(&self, invite_token: &str) -> Result<AcceptInvitationResponse> {
         let token = self.http.resolve_token()?;
-        let path = "/api/invitations/accept";
+        let op = &ops::ACCEPT;
+        let path = op.path(&[]);
         let body = InvitationTokenRequest {
             token: invite_token.to_string(),
         };
-        let req = self.http.post(path).json(&body);
+        let req = self.http.request(op, &path).json(&body);
         self.http
-            .send_json(&Method::POST, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -256,13 +273,14 @@ impl<'a> TeamsClient<'a> {
     /// Returns `()` on a 204; `send` errors on any non-2xx.
     pub async fn decline_invitation(&self, invite_token: &str) -> Result<()> {
         let token = self.http.resolve_token()?;
-        let path = "/api/invitations/decline";
+        let op = &ops::DECLINE;
+        let path = op.path(&[]);
         let body = InvitationTokenRequest {
             token: invite_token.to_string(),
         };
-        let req = self.http.post(path).json(&body);
+        let req = self.http.request(op, &path).json(&body);
         self.http
-            .send(&Method::POST, path, req, Some(&token))
+            .send(&op.method(), &path, req, Some(&token))
             .await?;
         Ok(())
     }

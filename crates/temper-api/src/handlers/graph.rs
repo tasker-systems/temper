@@ -3,7 +3,6 @@
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
@@ -13,6 +12,10 @@ use temper_core::types::graph_context::ContextPanorama;
 use temper_core::types::graph_home::AtlasHome;
 use temper_core::types::graph_territory::TerritoryOverview;
 use temper_core::types::ids::ProfileId;
+use temper_core::types::query_params::{
+    CogmapPanoramaQuery, ContextCompositionQuery, ContextPanoramaQuery, EntryQuery,
+    RegionCompositionQuery, TraverseQuery,
+};
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::context_graph_service::{self, ResidualMemberQuery};
 use temper_services::services::context_service::resolve_context_ref;
@@ -49,13 +52,6 @@ pub async fn cogmap_neighborhood_slice(
     .map(Json)
 }
 
-/// Query parameters for `GET /api/graph/cogmaps/{id}/panorama`.
-#[derive(Debug, Deserialize, utoipa::IntoParams)]
-pub struct CogmapPanoramaQuery {
-    /// Optional lens override; defaults to the cogmap's primary lens.
-    pub lens_id: Option<Uuid>,
-}
-
 /// Read a cognitive map's interior
 #[utoipa::path(
     get,
@@ -82,15 +78,6 @@ pub async fn cogmap_panorama(
     )
     .await
     .map(Json)
-}
-
-/// Query parameters for `GET /api/graph/regions/composition`.
-#[derive(Debug, Deserialize, utoipa::IntoParams)]
-pub struct RegionCompositionQuery {
-    /// Comma-separated region ids — one region, or a shift-selected union.
-    pub ids: String,
-    /// Composition depth; defaults to 1, clamped to 3 by the service.
-    pub depth: Option<i32>,
 }
 
 /// Read the resources composing a region
@@ -126,20 +113,6 @@ pub async fn region_composition(
     )
     .await
     .map(Json)
-}
-
-/// Query parameters for `GET /api/graph/entry`.
-#[derive(Debug, Deserialize, utoipa::IntoParams)]
-pub struct EntryQuery {
-    /// How many marks to draw. Defaults to the ruled K and is clamped by the service.
-    pub k: Option<i32>,
-    /// Comma-separated anchor ids (contexts or cogmaps) to confine the ranking to.
-    ///
-    /// Omitted means the reader's whole visible corpus. Present, it answers *"a place, and no
-    /// question at all"* — ranking within the place rather than across everything, which is what
-    /// lets a named place with no question be served by this read instead of by the recency page.
-    #[serde(rename = "in")]
-    pub places: Option<String>,
 }
 
 /// Read what your work is built around
@@ -182,19 +155,6 @@ pub async fn entry(
     )
     .await
     .map(Json)
-}
-
-/// Query parameters for `GET /api/graph/traverse`.
-#[derive(Debug, Deserialize, utoipa::IntoParams)]
-pub struct TraverseQuery {
-    /// Comma-separated node ids to hop from.
-    ///
-    /// Named `from` to match the page grammar the split ruled (spec §10.2):
-    /// `/graph/@me?q=<grounding question>&from=<node-ids>&depth=<n>`, so the address says exactly
-    /// what read produced the screen.
-    pub from: String,
-    /// Hops to walk. Defaults to 1, clamped to 3 by the service.
-    pub depth: Option<i32>,
 }
 
 /// Traverse from where you are
@@ -321,21 +281,6 @@ fn parse_composition_target(
     }
 }
 
-/// Query parameters for `GET /api/graph/contexts/panorama`.
-#[derive(Debug, Deserialize, utoipa::IntoParams)]
-pub struct ContextPanoramaQuery {
-    /// Context ref in decorated form (`@me/<slug>`, `@<handle>/<slug>`, `+<team-slug>/<slug>`)
-    /// or a bare UUID.
-    pub context_ref: String,
-    /// Property key the residual tray groups by. Defaults to `doc_type` (spec D2 — a
-    /// parameter, not a constant).
-    pub group_by: Option<String>,
-    /// Comma-separated doc-types treated as containers. Defaults to `goal` (spec D4).
-    pub container_types: Option<String>,
-    /// Container-walk depth; defaults to 2, clamped to 3 by the SQL.
-    pub depth: Option<i32>,
-}
-
 /// Read goal-container territories and residuals
 #[utoipa::path(
     get,
@@ -377,26 +322,6 @@ pub async fn context_panorama(
     )
     .await
     .map(Json)
-}
-
-/// Query parameters for `GET /api/graph/contexts/composition`. Exactly one of `container` /
-/// `group` is required.
-#[derive(Debug, Deserialize, utoipa::IntoParams)]
-pub struct ContextCompositionQuery {
-    /// Context ref (decorated or bare UUID) — the drill's home context.
-    pub context_ref: String,
-    /// Container resource id to drill.
-    pub container: Option<Uuid>,
-    /// Residual bucket to drill, as `<group_key>:<group_value>`.
-    pub group: Option<String>,
-    /// Comma-separated doc-types treated as containers. Defaults to `goal` (spec D4).
-    pub container_types: Option<String>,
-    /// Composition (drill) depth; defaults to 1, clamped to 3 by the service.
-    pub depth: Option<i32>,
-    /// Container-walk depth used to resolve a `group` bucket's members. Must match the `depth`
-    /// the panorama was called with, or the drill yields a different set than the tray showed.
-    /// Ignored for a `container` drill. Defaults to 2.
-    pub container_depth: Option<i32>,
 }
 
 /// Read a container's composition

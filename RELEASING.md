@@ -57,12 +57,16 @@ documented path — and no new versions land there.)
 OIDC trusted publishing — RubyGems through
 `rubygems/configure-rubygems-credentials`, npm through `npm publish
 --provenance`, and PyPI through `uv publish --trusted-publishing automatic` —
-with the trusted publisher on each host registered against **`release.yml`**
-(the workflow whose job performs the push — the identity claim names the job's
-own workflow file, even when that workflow was called from the `release-tag.yml`
-chain; a publisher registered against the entry workflow is silently
-unauthorized at push: "You are not allowed to push this gem"). No registry API
-key exists as a repo secret. The first publish of a NEW package name on npm cannot
+with the trusted publisher on every host registered against **both**
+`release-tag.yml` and `release.yml`. Hosts disagree about which workflow a
+called workflow's token names. Inside the `release-tag.yml` chain, crates.io and
+npm match the **calling** workflow (`release-tag.yml`), while RubyGems and PyPI
+match the workflow whose job performs the push (`release.yml`). A host missing
+the name it checks refuses at the token exchange: crates.io answers "does not
+match the workflow filename … in the JWT", RubyGems "You are not allowed to push
+this gem". `release.yml` alone also covers the tag-push and `workflow_dispatch`
+recovery doors, where it is the top-level workflow. A new package name needs
+both entries. No registry API key exists as a repo secret. The first publish of a NEW package name on npm cannot
 be OIDC — npmjs.com only attaches trusted publishers to existing packages — so
 a new name is claimed once locally (`npm login`, then `npm publish --access
 public` in the package directory) and the trusted publisher is attached
@@ -113,15 +117,18 @@ first release claims it — no local bootstrap upload.
    Ruby, Python, and crates.io publish lanes report in the run's summary
    table. That's the whole release.
 
-   The crates.io lane publishes the `temperkb-*` client closure (see
-   `tools/scripts/release/publish-crates.sh`): trusted publishers are
-   configured on crates.io for all six names against this workflow, and the
-   per-crate versions-API probe makes re-runs and re-cuts idempotent — a
-   version already published skips loudly. Bumping the workspace anchor moves
-   the closure's `[workspace.dependencies]` specs with it, so every release
-   publishes the closure at the new version; the bootstrap 0.5.3 versions were
-   the one token-publishing exception (crates.io attaches publishers only to
-   existing crates), already spent.
+   The crates.io lane publishes the seven `temperkb-*` crates, the client
+   closure and then the MCP tool layer `temperkb-mcp` (see
+   `tools/scripts/release/publish-crates.sh`). Trusted publishers for both
+   release workflows are configured on every name, and the per-crate
+   versions-API probe makes re-runs and re-cuts idempotent: a version already
+   published skips loudly. Bumping the workspace anchor moves every
+   `[workspace.dependencies]` spec with it, so every release publishes all
+   seven at the new version. crates.io attaches publishers only to existing
+   crates, so each name's first version was published once with an API token:
+   the closure at 0.5.3, `temperkb-mcp` at 0.6.0. A new crate joins the same
+   way: publish it once locally, register both workflows, then add it to
+   `CRATES`.
 
 A release can also be (re-)run manually via **Actions → Release → Run workflow** with
 an explicit `tag` input — useful to re-cut binaries for an existing tag.

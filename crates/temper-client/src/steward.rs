@@ -4,12 +4,19 @@
 //! moves the cursor forward. The cogmap is a substrate UUID (the CLI resolves any decorated ref to
 //! its trailing UUID before calling).
 
-use reqwest::Method;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
-use temper_core::types::steward::{AdvanceWatermarkAck, AdvanceWatermarkRequest, IngestDelta};
+use crate::ops;
+
+/// The header the steward dispatch door reads its per-tick correlation id from.
+const STEWARD_CORRELATION_HEADER: &str = "x-steward-correlation-id";
+use temper_core::types::query_params::DeltaQuery;
+use temper_core::types::steward::{
+    AdvanceWatermarkAck, AdvanceWatermarkRequest, DispatchTickRequest, DispatchTickResponse,
+    DriftSweepRow, IngestDelta,
+};
 
 /// Sub-client for steward ingest-trigger operations.
 pub struct StewardClient<'a> {
@@ -30,10 +37,11 @@ impl<'a> StewardClient<'a> {
     /// GET /api/steward/{cogmap}/delta[?threshold=] — read the ingest delta.
     pub async fn delta(&self, cogmap: Uuid, threshold: Option<i64>) -> Result<IngestDelta> {
         let token = self.http.resolve_token()?;
+        let op = &ops::DELTA;
         let path = delta_path(cogmap, threshold);
-        let req = self.http.get(&path);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -48,14 +56,58 @@ impl<'a> StewardClient<'a> {
         boundary_fingerprint: Option<String>,
     ) -> Result<AdvanceWatermarkAck> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/steward/{cogmap}/watermark");
+        let op = &ops::ADVANCE;
+        let path = op.path(&[&cogmap]);
         let body = AdvanceWatermarkRequest {
             event_id,
             boundary_fingerprint,
         };
-        let req = self.http.post(&path).json(&body);
+        let req = self.http.request(op, &path).json(&body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/steward/sweep — steward drift across the maps the caller can steward, measured
+    /// against `query.threshold` (the server default when absent).
+    pub async fn sweep(&self, query: &DeltaQuery) -> Result<Vec<DriftSweepRow>> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::STEWARD_SWEEP;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).query(query);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/steward/candidates — the cognitive maps the caller may steward.
+    pub async fn candidates(&self) -> Result<Vec<Uuid>> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::CANDIDATES;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// POST /api/steward/dispatch — claim the drifted maps for one dispatch tick. `correlation_id`
+    /// rides `x-steward-correlation-id` and is stamped onto every claimed job; the response echoes
+    /// what the server actually stamped (`None` when it was absent).
+    pub async fn dispatch(
+        &self,
+        request: &DispatchTickRequest,
+        correlation_id: Option<Uuid>,
+    ) -> Result<DispatchTickResponse> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::STEWARD_DISPATCH;
+        let path = op.path(&[]);
+        let mut req = self.http.request(op, &path).json(request);
+        if let Some(id) = correlation_id {
+            req = req.header(STEWARD_CORRELATION_HEADER, id.to_string());
+        }
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }
@@ -63,9 +115,10 @@ impl<'a> StewardClient<'a> {
 /// `/api/steward/{cogmap}/delta` with an optional `threshold` query param — omitted when absent.
 /// Shared by the method and its test.
 fn delta_path(cogmap: Uuid, threshold: Option<i64>) -> String {
+    let base = ops::DELTA.path(&[&cogmap]);
     match threshold {
-        Some(t) => format!("/api/steward/{cogmap}/delta?threshold={t}"),
-        None => format!("/api/steward/{cogmap}/delta"),
+        Some(t) => format!("{base}?threshold={t}"),
+        None => base,
     }
 }
 

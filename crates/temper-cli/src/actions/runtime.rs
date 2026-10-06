@@ -14,7 +14,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use temper_client::auth::{DiskTokenStore, MemoryTokenStore, TokenStore};
-use temper_client::config::{auth_path, build_client_from, load_cloud_config};
+use temper_client::config::{auth_path, build_client_from, load_cloud_config, oauth_config};
 use temper_client::error::ClientError;
 use temper_core::types::config::TemperConfig;
 
@@ -126,6 +126,30 @@ fn resolve_token_store(config: &TemperConfig) -> Result<Arc<dyn TokenStore>> {
     }
 }
 
+/// Refresh the stored grant when its access token is due, before the client captures that token
+/// for the rest of the command.
+///
+/// Only a grant that carries a refresh token is touched — an env-supplied `TEMPER_TOKEN` has none
+/// by design. A refresh that fails is not this function's to report: the command goes on with the
+/// token it has, and if that token is expired the server's refusal says to run `temper auth login`,
+/// which is the remedy a failed refresh leaves.
+fn refresh_if_due(config: &TemperConfig, store: &dyn TokenStore) {
+    let Ok(Some(auth)) = store.load() else {
+        return;
+    };
+    if auth.refresh_token.is_none() || !temper_client::auth::needs_refresh(&auth) {
+        return;
+    }
+    let Ok(oauth) = oauth_config(config) else {
+        return;
+    };
+    if let Err(e) =
+        temper_client::auth::get_valid_token_blocking(store, &oauth.token_url, &oauth.client_id)
+    {
+        tracing::debug!("token refresh before the command failed: {e}");
+    }
+}
+
 /// Load config + resolve store + build client, sharing the loaded config so
 /// `TEMPER_API_URL` / `TEMPER_AUTH_PATH` resolution and provider selection all
 /// see the same `TemperConfig` snapshot.
@@ -139,6 +163,7 @@ pub(crate) fn build_config_store_and_client() -> Result<(
 )> {
     let config = load_cloud_config().map_err(|e| TemperError::Api(e.to_string()))?;
     let store = resolve_token_store(&config)?;
+    refresh_if_due(&config, &*store);
     let client = build_client_from(
         &config,
         store.clone(),
@@ -160,6 +185,29 @@ where
         .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
     let (_config, _store, client) = build_config_store_and_client()?;
     rt.block_on(f(&client))
+}
+
+/// Run one client read and render its answer — the shape of every CLI command that is a thin peer
+/// of one server read: build the client, send, map the client error, render in the chosen format.
+pub fn render_read<T, F>(fmt: crate::format::OutputFormat, read: F) -> Result<()>
+where
+    T: serde::Serialize + 'static,
+    F: 'static
+        + for<'c> FnOnce(
+            &'c temper_client::TemperClient,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = temper_client::error::Result<T>> + 'c>,
+        >,
+{
+    let value = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            read(client)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+    crate::output::plain(crate::format::render(&value, fmt)?);
+    Ok(())
 }
 
 /// Create a tokio runtime and temper client pair.
@@ -306,5 +354,93 @@ mod expiry_warning_tests {
             .expect("expected error-shaped warning for expired token");
         assert!(msg.starts_with("error:"), "got: {msg}");
         assert!(msg.contains("expired"), "got: {msg}");
+    }
+
+    /// #1010: a command run after the access token's expiry refreshes the stored grant first and
+    /// sends the successor — not the expired token, which the server refuses as "not
+    /// authenticated". FAILS IF the bootstrap stops refreshing: the API mock only answers the
+    /// refreshed bearer, and the token endpoint must see exactly one grant.
+    #[test]
+    fn a_command_after_expiry_sends_the_refreshed_token() {
+        use temper_client::auth::{Provider, StoredAuth};
+        use wiremock::matchers::{body_string_contains, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let server = rt.block_on(async {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/oauth/token"))
+                .and(body_string_contains("refresh_token=rtok_old"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "access_token": "tok_new",
+                    "refresh_token": "rtok_new",
+                    "expires_in": 86400,
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(header("authorization", "Bearer tok_new"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+                .expect(1)
+                .mount(&server)
+                .await;
+            server
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            format!(
+                r#"
+[vault]
+path = "{vault}"
+
+[cloud]
+api_url = "{api}"
+
+[auth]
+provider = "test"
+
+[[auth.providers]]
+name          = "test"
+authorize_url = "{api}/authorize"
+token_url     = "{api}/oauth/token"
+client_id     = "test-client"
+audience      = "https://api.example.com"
+"#,
+                vault = dir.path().join("vault").display(),
+                api = server.uri(),
+            ),
+        )
+        .unwrap();
+        let auth_path = dir.path().join("auth.json");
+        DiskTokenStore::at(auth_path.clone())
+            .save(&StoredAuth {
+                provider: Provider::auth0("test.auth0.com"),
+                access_token: "tok_expired".to_string().into(),
+                refresh_token: Some("rtok_old".to_string().into()),
+                expires_at: chrono::Utc::now() - chrono::Duration::hours(1),
+                profile_id: None,
+                device_id: Some("test-device".to_string()),
+            })
+            .unwrap();
+
+        temp_env::with_vars(
+            [
+                ("TEMPER_TOKEN", None::<&str>),
+                ("TEMPER_API_URL", None),
+                ("TEMPER_AUTH_PATH", Some(auth_path.to_str().unwrap())),
+                ("TEMPER_GLOBAL_CONFIG", Some(config_path.to_str().unwrap())),
+            ],
+            || {
+                let (_config, _store, client) = build_config_store_and_client().unwrap();
+                rt.block_on(client.contexts().list())
+                    .expect("the refreshed bearer is accepted");
+            },
+        );
+        rt.block_on(server.verify());
     }
 }

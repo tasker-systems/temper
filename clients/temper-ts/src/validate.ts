@@ -68,15 +68,18 @@ export function requireEndpoint(
     throw new TypeError(`${name} must not contain whitespace or control characters`);
   }
 
+  // No message below echoes `value`. Every check before the userinfo one can fail on a URL that
+  // still carries a credential (`htps://id:secret@host`), and a query can carry one too; the error
+  // names the variable, which is what the caller has to go and fix.
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    throw new TypeError(`${name} is not a parseable URL: ${JSON.stringify(value)}`);
+    throw new TypeError(`${name} is not a parseable URL`);
   }
 
   if ((url.protocol !== "http:" && url.protocol !== "https:") || url.hostname === "") {
-    throw new TypeError(`${name} must be an absolute http(s) URL, got ${JSON.stringify(value)}`);
+    throw new TypeError(`${name} must be an absolute http(s) URL`);
   }
 
   // Refused rather than dropped: a caller who wrote credentials into the URL

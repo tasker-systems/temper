@@ -258,7 +258,7 @@ impl HttpClient {
     ///
     /// Returns [`ClientError::NotConfigured`] when `base_url` is an endpoint
     /// [`endpoint::validate_endpoint`] refuses — plaintext `http` off the
-    /// loopback interface, unless `TEMPER_ALLOW_INSECURE_HTTP` says otherwise.
+    /// loopback interface.
     /// Every request this client sends puts the bearer token on that URL, so
     /// the scheme is checked here, once, rather than per request.
     pub fn new(
@@ -278,11 +278,7 @@ impl HttpClient {
                     .to_string(),
             ));
         }
-        endpoint::validate_endpoint(
-            base_url,
-            "base_url",
-            endpoint::allow_insecure_http_from_env(),
-        )?;
+        endpoint::validate_endpoint(base_url, "base_url")?;
         let inner = Client::builder()
             .timeout(Duration::from_secs(HTTP_REQUEST_TIMEOUT_SECS))
             .build()
@@ -462,6 +458,16 @@ impl HttpClient {
             req = req.header(name, value);
         }
         req
+    }
+
+    /// Build a request for a registry operation, on a path rendered from its template
+    /// ([`Op::path`](crate::ops::Op::path)). The verb comes from the operation; the path is the
+    /// caller's to render, and nothing here checks it came from the same operation.
+    /// `check-client-op-registry.sh` holds every path to the registry (no literals outside
+    /// `ops.rs`); each method's wiremock test, asserting verb and path together, is what holds
+    /// the pairing. Every client method enters here; see [`crate::ops`].
+    pub(crate) fn request(&self, op: &crate::ops::Op, path: &str) -> RequestBuilder {
+        self.apply_identity_headers(self.inner.request(op.method(), self.url(path)))
     }
 
     pub fn get(&self, path: &str) -> RequestBuilder {

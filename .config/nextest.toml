@@ -3,9 +3,26 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 status-level = "skip"
 final-status-level = "flaky"
 
+# Every nextest invocation in CI runs under this profile (`--profile ci`, `.github/workflows/test-rust.yml`).
+#
+# `retries = 1` means a test that fails once and then passes reads FLAKY, not red. That is only safe
+# while a flake stays visible, so each CI invocation's JUnit is passed to
+# `.github/scripts/junit-summary.py` (via the `collect-junit` action), which names every flaky test
+# as a `::warning` and in the job summary. Do not drop the retry without that, nor that without
+# the retry.
+#
+# Inheritance (verified on nextest 0.9.132 with a scratch crate): this profile inherits
+# `[profile.default]`'s settings AND its `[[profile.default.overrides]]`. So `final-status-level`
+# and the two slow-timeout overrides below apply here without being repeated. They used to be
+# duplicated as `[[profile.ci.overrides]]`, while this profile ran nowhere.
 [profile.ci]
 retries = 1
 fail-fast = false
+
+# Written to target/nextest/ci/junit.xml. A FIXED path per profile, so a job with two invocations
+# must move the report away between them: the `collect-junit` action does that.
+[profile.ci.junit]
+path = "junit.xml"
 
 # ---------------------------------------------------------------------------
 # Per-test timeout overrides.
@@ -40,10 +57,6 @@ fail-fast = false
 filter = 'test(=segmented_create_roundtrips_large_body)'
 slow-timeout = { period = "60s", terminate-after = 5 }
 
-[[profile.ci.overrides]]
-filter = 'test(=segmented_create_roundtrips_large_body)'
-slow-timeout = { period = "60s", terminate-after = 5 }
-
 # The `compile_fail` binary is the trybuild proof of the auth-ladder enclosure (the sealed
 # `AuthenticatedProfile` / `SystemAdmin` — spec 2026-07-22). **It is NOT hanging — it passes.** The
 # cost is a COLD COMPILE, not runtime: trybuild builds each compile-fail fixture in an *isolated*
@@ -70,9 +83,5 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 # inside it changes nothing, and a newly added compile-fail proof inherits the right bound instead of
 # silently getting the default. (`test(X)` matches a test name; `binary(X)` matches the whole file.)
 [[profile.default.overrides]]
-filter = 'binary(=compile_fail)'
-slow-timeout = { period = "60s", terminate-after = 5 }
-
-[[profile.ci.overrides]]
 filter = 'binary(=compile_fail)'
 slow-timeout = { period = "60s", terminate-after = 5 }

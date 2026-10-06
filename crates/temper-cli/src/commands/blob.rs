@@ -113,6 +113,14 @@ pub fn run(action: BlobAction, fmt: OutputFormat) -> Result<()> {
                 Ok(())
             })
         }),
+        BlobAction::Delete { blob } => crate::actions::runtime::render_read(fmt, move |client| {
+            Box::pin(async move {
+                client
+                    .blobs()
+                    .delete(blob, &temper_core::types::authorship::ActInput::default())
+                    .await
+            })
+        }),
         BlobAction::Relations { blob } => crate::actions::runtime::with_client(|client| {
             Box::pin(async move {
                 let rows = client

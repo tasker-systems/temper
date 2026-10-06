@@ -1,10 +1,10 @@
 //! Typed sub-client for the operator-only `/api/connections` endpoints.
 
-use reqwest::Method;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::types::connection::{
     AttachCredentialResponse, Connection, ConnectionCredential, GrantConnectionReachRequest,
     ProvisionConnectionRequest, SetToolManifestRequest, SetWebhookEventsRequest,
@@ -29,29 +29,33 @@ impl<'a> ConnectionsClient<'a> {
     /// Provision a connection. It is born `needs_credential`.
     pub async fn provision(&self, body: &ProvisionConnectionRequest) -> Result<Connection> {
         let token = self.http.resolve_token()?;
-        let req = self.http.post("/api/connections").json(body);
+        let op = &ops::PROVISION_CONNECTION;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, "/api/connections", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Enumerate connections.
     pub async fn list(&self, include_revoked: bool) -> Result<Vec<Connection>> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/connections?include_revoked={include_revoked}");
-        let req = self.http.get(&path);
+        let op = &ops::LIST_CONNECTIONS;
+        let path = format!("{}?include_revoked={include_revoked}", op.path(&[]));
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Load one connection.
     pub async fn get(&self, id: Uuid) -> Result<Connection> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/connections/{id}");
-        let req = self.http.get(&path);
+        let op = &ops::GET_CONNECTION;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -59,10 +63,11 @@ impl<'a> ConnectionsClient<'a> {
     /// already attributed to the emitter must keep resolving.
     pub async fn revoke(&self, id: Uuid) -> Result<Connection> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/connections/{id}");
-        let req = self.http.delete(&path);
+        let op = &ops::REVOKE_CONNECTION;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::DELETE, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -73,36 +78,39 @@ impl<'a> ConnectionsClient<'a> {
         body: &ConnectionCredential,
     ) -> Result<AttachCredentialResponse> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/connections/{id}/credential");
-        let req = self.http.post(&path).json(body);
+        let op = &ops::ATTACH_CONNECTION_CREDENTIAL;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Register the remote event types. Non-empty ⇒ ledger-capable.
     pub async fn set_webhook_events(&self, id: Uuid, events: Vec<String>) -> Result<Connection> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/connections/{id}/webhook-events");
+        let op = &ops::SET_CONNECTION_WEBHOOK_EVENTS;
+        let path = op.path(&[&id]);
         let req = self
             .http
-            .post(&path)
+            .request(op, &path)
             .json(&SetWebhookEventsRequest { events });
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Declare the read-only remote tools. Non-empty ⇒ reach-capable.
     pub async fn set_tool_manifest(&self, id: Uuid, tools: Vec<String>) -> Result<Connection> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/connections/{id}/tool-manifest");
+        let op = &ops::SET_CONNECTION_TOOL_MANIFEST;
+        let path = op.path(&[&id]);
         let req = self
             .http
-            .post(&path)
+            .request(op, &path)
             .json(&SetToolManifestRequest { tools });
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -119,26 +127,31 @@ impl<'a> ConnectionsClient<'a> {
         affirm_reach: Option<String>,
     ) -> Result<Connection> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/connections/{id}/reach");
+        let op = &ops::GRANT_CONNECTION_REACH;
+        let path = op.path(&[&id]);
         let req = self
             .http
-            .post(&path)
+            .request(op, &path)
             .json(&GrantConnectionReachRequest { team, affirm_reach });
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Revoke a team's read-reach on this connection. Idempotent — an absent grant is a no-op.
     pub async fn revoke_reach(&self, id: Uuid, team: Uuid) -> Result<Connection> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/connections/{id}/reach");
-        let req = self.http.delete(&path).json(&GrantConnectionReachRequest {
-            team,
-            affirm_reach: None,
-        });
+        let op = &ops::REVOKE_CONNECTION_REACH;
+        let path = op.path(&[&id]);
+        let req = self
+            .http
+            .request(op, &path)
+            .json(&GrantConnectionReachRequest {
+                team,
+                affirm_reach: None,
+            });
         self.http
-            .send_json(&Method::DELETE, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }

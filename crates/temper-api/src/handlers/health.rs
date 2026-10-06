@@ -15,14 +15,14 @@ use temper_services::error::ApiResult;
 )]
 pub async fn health_check() -> ApiResult<Json<HealthResponse>> {
     Ok(Json(HealthResponse {
-        status: "ok",
+        status: "ok".to_string(),
         // Sourced from Cargo at compile time. NOTE: this is the temper-api crate's own
         // version (0.1.0, unchanged since the crate was created), not a deploy identity —
         // `commit` below is the field that answers "what is running here".
-        version: env!("CARGO_PKG_VERSION"),
+        version: env!("CARGO_PKG_VERSION").to_string(),
         // `option_env!` resolves at compile time to the value build.rs emitted, or `None`
         // when the build did not know its commit.
-        commit: option_env!("TEMPER_BUILD_COMMIT"),
+        commit: option_env!("TEMPER_BUILD_COMMIT").map(str::to_string),
     }))
 }
 
@@ -64,8 +64,8 @@ mod tests {
     #[test]
     fn an_unrecorded_commit_serializes_as_null_rather_than_vanishing_from_the_body() {
         let wire = serde_json::to_value(HealthResponse {
-            status: "ok",
-            version: "0.0.0-test",
+            status: "ok".to_string(),
+            version: "0.0.0-test".to_string(),
             commit: None,
         })
         .expect("HealthResponse serializes");

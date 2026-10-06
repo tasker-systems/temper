@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::authorship::ActInput;
+use crate::types::resource_view::ResourceView;
 
 /// Wire payload for POST /api/ingest — resource + pre-processed chunks.
 ///
@@ -307,6 +308,20 @@ pub enum PackError {
     Deserialize(rmp_serde::decode::Error),
     #[error("Base64 decode failed: {0}")]
     Base64(base64::DecodeError),
+}
+
+/// `POST /api/ingest` returns one of two shapes depending on `IngestPayload.segmented`:
+/// the one-shot `ResourceView` (unchanged small-body path), or a [`SegmentedBeginResponse`]
+/// when the caller began a segmented (multi-block) ingest. `#[serde(untagged)]` — the client
+/// discriminates by which fields are present (`SegmentedBeginResponse` always carries
+/// `correlation_id`/`blocks`, which `ResourceView` never does).
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(untagged)]
+pub enum IngestCreateResponse {
+    // Boxed: ResourceView is much larger than SegmentedBeginResponse (clippy large_enum_variant).
+    OneShot(Box<ResourceView>),
+    Segmented(SegmentedBeginResponse),
 }
 
 #[cfg(test)]

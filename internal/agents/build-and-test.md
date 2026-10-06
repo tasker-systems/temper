@@ -48,12 +48,24 @@ cargo make openapi
 
 ## Running a single Rust test
 ```bash
-cargo nextest run --workspace test_name
-cargo nextest run --workspace -E 'test(test_name)'        # exact filter
-cargo nextest run -p temper-api --features test-db test_name  # specific crate with features
+cargo nextest run -p temper-api --features test-db test_name          # the crate the test lives in
+cargo nextest run -p temper-api --features test-db --test <target>    # its neighbours in one target
+cargo nextest run -p temper-api -E 'test(test_name)'                  # exact filter
 ```
 
-> **Gotcha:** a bare `cargo nextest run -p temper-api` (no test filter) **hangs** at test-list enumeration — nextest lists the `temper-api` **bin** target, whose `main()` ignores `--list` and blocks (the slow-timeout doesn't cover the list step). Always scope to the integration test target(s): `cargo nextest run -p temper-api --features test-db --test relationship_handler_test`. Also export `DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development` for `#[sqlx::test]` under bare `cargo` (the `cargo make` tasks set it for you).
+Scope to the crate (`-p`), and to the test target where you know it. `cargo nextest run --workspace
+test_name` also works, but it compiles every crate's test binaries to run one test, so it is the slow
+way to ask a narrow question. CI runs `--workspace` because it wants everything; a local check
+rarely does.
+
+> An earlier note here said a bare `cargo nextest run -p temper-api` **hangs** listing the
+> `temper-api` bin target. It does not: a bin target is built with the test harness for testing, so
+> its `main()` never runs during listing. `cargo nextest list -p temper-api` enumerates both bins
+> (`temper-api`, `emit-openapi`, 0 tests each) and finishes `[observed — 2026-10-05]`. A run that
+> sits at 0% CPU after compiling is far more likely the macOS Gatekeeper first-exec assessment.
+
+Export `DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development` for
+`#[sqlx::test]` under bare `cargo` (the `cargo make` tasks set it for you).
 
 ## Embed-gated e2e tests
 `cargo make test-e2e` only enables `--features test-db`, so it **silently compiles out every `test-embed`-gated test**. CI does not: **every CI test job enables `test-embed`**, and ONNX is installed in all of them. When touching push-body, ingest-pipeline, or YAML fixture loading code, run with both features locally to match CI:

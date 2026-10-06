@@ -16,7 +16,6 @@
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_core::types::machine::{
@@ -28,14 +27,7 @@ use temper_services::services::{machine_client_service, machine_registration_ser
 use temper_services::state::AppState;
 
 use crate::middleware::auth::AuthUser;
-
-/// Query flags for `GET /api/machine-clients`.
-#[derive(Debug, Deserialize, utoipa::IntoParams)]
-pub struct ListQuery {
-    /// Include revoked machine clients. Default `false`.
-    #[serde(default)]
-    pub include_revoked: bool,
-}
+use temper_core::types::query_params::MachineClientListQuery as ListQuery;
 
 #[utoipa::path(
     post,

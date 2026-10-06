@@ -74,8 +74,9 @@ Two things that will bite you:
 
 - **`cargo make test-e2e` compiles out every `test-embed`-gated test.** CI does not. If you touch
   push-body, ingest-pipeline, or YAML fixture loading, run `cargo make test-e2e-embed` to match CI.
-- **A bare `cargo nextest run -p temper-api` hangs** at test-list enumeration. Scope to the test
-  target: `cargo nextest run -p temper-api --features test-db --test <target>`.
+- **On macOS, a test run that sits at 0% CPU after compiling is Gatekeeper**, assessing each freshly
+  linked test binary on its first run, not a hang. Scoping to the test target
+  (`cargo nextest run -p temper-api --features test-db --test <target>`) links fewer binaries.
 
 ### Generated artifacts
 

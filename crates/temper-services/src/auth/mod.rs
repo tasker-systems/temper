@@ -448,6 +448,7 @@ mod tests {
             enable_swagger: false,
             internal_reconcile_secret: None,
             embed_dispatch_secret: None,
+            cron_host: None,
             sensitivity_sweep_salt: None,
             sensitivity_sweep_enabled: false,
             mcp_service_secret: None,

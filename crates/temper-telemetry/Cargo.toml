@@ -42,6 +42,16 @@ tokio = { version = "1", features = ["rt", "time"] }
 tracing = "0.1"
 tracing-opentelemetry = { version = "0.33", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# Parses the OTLP endpoint so `export::vet_endpoint` can refuse plaintext off loopback before the
+# exporter puts `OTEL_EXPORTER_OTLP_HEADERS` on it. Already in the graph through reqwest.
+url = "2"
+# The exporter's HTTP client, built here only to turn redirects OFF (`export::exporter_http_client`):
+# reqwest follows up to 10 by default, downgrades included, and does not strip custom header names, so
+# an https collector answering 3xx to `http://` would get `OTEL_EXPORTER_OTLP_HEADERS` in the clear.
+# 0.13 because that is the version `opentelemetry-http` implements `HttpClient` for; `blocking` for the
+# reason `reqwest-blocking-client` is chosen above. TLS comes from the `reqwest-rustls` feature
+# opentelemetry-otlp already enables on this same reqwest.
+reqwest = { version = "0.13", default-features = false, features = ["blocking"] }
 
 [features]
 # Test-only surface for installing an in-memory span exporter, so a caller's integration test can

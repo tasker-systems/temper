@@ -33,6 +33,41 @@ pub trait TokenStore: Send + Sync {
     fn load(&self) -> Result<Option<StoredAuth>>;
     fn save(&self, auth: &StoredAuth) -> Result<()>;
     fn clear(&self) -> Result<()>;
+
+    /// Take the lock that serializes refreshes of this store's grant, blocking until it is free.
+    /// The refresh is released when the returned guard drops.
+    ///
+    /// The authorization server rotates refresh tokens and ends the whole chain when a spent one
+    /// is presented again (#787), so two refreshers that load the same grant must not both present
+    /// it — the second must wait, re-load, and find the first one's successor. `None` means this
+    /// store's state cannot be shared beyond one process, so there is no one to wait for.
+    fn lock_refresh(&self) -> Result<Option<RefreshLock>> {
+        Ok(None)
+    }
+}
+
+/// An exclusive hold on a store's refresh lock; dropping it releases the lock.
+#[derive(Debug)]
+pub struct RefreshLock {
+    _file: fs::File,
+}
+
+/// Store a grant that replaces the current one outright — a login, not a refresh.
+///
+/// Taken under the store's refresh lock, so a refresh already in flight lands before this write and
+/// never after it: otherwise the successor of the old grant would overwrite the new login.
+pub fn replace_grant(store: &dyn TokenStore, auth: &StoredAuth) -> Result<()> {
+    let _refresh_lock = store.lock_refresh()?;
+    store.save(auth)
+}
+
+/// Remove the stored grant — a logout.
+///
+/// Taken under the store's refresh lock, so a refresh already in flight cannot write a live grant
+/// back after the logout; one that starts later re-loads under the lock and finds nothing.
+pub fn clear_grant(store: &dyn TokenStore) -> Result<()> {
+    let _refresh_lock = store.lock_refresh()?;
+    store.clear()
 }
 
 /// Disk-backed token store — the local CLI default. Wraps the existing
@@ -79,6 +114,26 @@ impl TokenStore for DiskTokenStore {
 
     fn clear(&self) -> Result<()> {
         clear_auth_at(&self.path)
+    }
+
+    /// An OS file lock on `<auth path>.lock` — every process sharing this `auth.json` contends for
+    /// the same file. The lock lives on a sibling rather than on `auth.json` itself because
+    /// [`save_auth_to`] replaces that file by rename, and a lock held on a replaced inode guards
+    /// nothing.
+    fn lock_refresh(&self) -> Result<Option<RefreshLock>> {
+        let mut lock_path = self.path.clone().into_os_string();
+        lock_path.push(".lock");
+        let lock_path = PathBuf::from(lock_path);
+        if let Some(parent) = lock_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)?;
+        file.lock()?;
+        Ok(Some(RefreshLock { _file: file }))
     }
 }
 
@@ -440,12 +495,42 @@ pub fn load_auth_from(path: &Path) -> Result<Option<StoredAuth>> {
 }
 
 /// Save auth to an explicit path, creating parent dirs and setting mode 0o600 on Unix.
+///
+/// Written to a sibling temp file and renamed into place, so a concurrent reader sees the old grant
+/// or the new one, never a truncated file — a refresh in one process now lands while other
+/// commands are loading. On unix the temp file is created `0600`, so the token is never readable
+/// beyond its owner, even for the moment before the rename.
 pub fn save_auth_to(auth: &StoredAuth, path: &Path) -> Result<()> {
+    use std::io::Write;
+
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(auth)?;
-    fs::write(path, &json)?;
+    let path = &write_target(path);
+
+    // Unique per write, not per process: two threads saving at once must not share a temp file.
+    static SAVE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SAVE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut tmp_path = path.to_path_buf().into_os_string();
+    tmp_path.push(format!(".{}.{seq}.tmp", std::process::id()));
+    let tmp_path = PathBuf::from(tmp_path);
+
+    let mut options = fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let written = options.open(&tmp_path).and_then(|mut f| {
+        f.write_all(json.as_bytes())?;
+        f.sync_all()
+    });
+    if let Err(e) = written.and_then(|()| fs::rename(&tmp_path, path)) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e.into());
+    }
 
     #[cfg(unix)]
     {
@@ -455,6 +540,22 @@ pub fn save_auth_to(auth: &StoredAuth, path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// The file a save should replace: `path` itself, or — when `path` is a symlink — the file it points
+/// at. A rename onto the link would replace the link, silently detaching it from wherever the user
+/// pointed it; writing to the target keeps the link, as `fs::write` always did.
+fn write_target(path: &Path) -> PathBuf {
+    let is_link = fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+    if !is_link {
+        return path.to_path_buf();
+    }
+    fs::canonicalize(path).unwrap_or_else(|_| {
+        // A dangling link: its target does not exist yet, so the save creates it.
+        let target = fs::read_link(path).unwrap_or_else(|_| path.to_path_buf());
+        path.parent()
+            .map_or(target.clone(), |dir| dir.join(&target))
+    })
 }
 
 /// Remove auth file at an explicit path (no-op if absent).
@@ -705,6 +806,9 @@ pub fn time_until_expiry(stored: &StoredAuth, now: DateTime<Utc>) -> Duration {
     stored.expires_at - now
 }
 
+/// The longest a refresh-token grant may take before it is abandoned.
+const REFRESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// OAuth2 token response shape — only the fields we care about.
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
@@ -732,18 +836,20 @@ pub async fn refresh_token(
     // The refresh token goes on the wire to this URL, so the scheme is checked
     // before any network attempt — the same rule `HttpClient::new` applies to
     // the base URL, at the one place a secret meets this endpoint.
-    crate::endpoint::validate_endpoint(
-        token_url,
-        "token_url",
-        crate::endpoint::allow_insecure_http_from_env(),
-    )?;
+    crate::endpoint::validate_endpoint(token_url, "token_url")?;
 
     let refresh = auth
         .refresh_token
         .as_ref()
         .ok_or(ClientError::TokenExpired)?;
 
-    let client = reqwest::Client::new();
+    // Bounded: a refresher holds the store's refresh lock across this request, and every other
+    // command sharing the grant waits on that lock. No redirects: a 307/308 would resend this form,
+    // refresh token and all, to wherever it points — `validate_endpoint` vetted only `token_url`.
+    let client = reqwest::Client::builder()
+        .timeout(REFRESH_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
     let resp = client
         .post(token_url)
         .form(&[
@@ -791,7 +897,17 @@ pub async fn get_valid_token(
 ) -> Result<String> {
     use secrecy::ExposeSecret;
 
-    let auth = store.load()?.ok_or(ClientError::NotAuthenticated)?;
+    let mut auth = store.load()?.ok_or(ClientError::NotAuthenticated)?;
+
+    // Held until return, so the refresh below happens under it. Taking it blocks the calling
+    // thread for at most one other refresher's grant, which `REFRESH_TIMEOUT` bounds.
+    let _refresh_lock;
+    if needs_refresh(&auth) {
+        _refresh_lock = store.lock_refresh()?;
+        // Whoever held the lock may have refreshed already; its successor is what must be
+        // presented, never the token this process loaded before it waited.
+        auth = store.load()?.ok_or(ClientError::NotAuthenticated)?;
+    }
 
     if needs_refresh(&auth) {
         let refreshed = refresh_token(store, &auth, token_url, client_id).await?;
@@ -803,6 +919,28 @@ pub async fn get_valid_token(
     }
 
     Ok(auth.access_token.expose_secret().to_string())
+}
+
+/// [`get_valid_token`] for a synchronous caller, inside a tokio runtime or not.
+///
+/// The grant runs on its own thread with its own runtime and this thread waits for it, so a caller
+/// already on a runtime — where `block_on` would panic — gets the same answer as one that is not.
+pub fn get_valid_token_blocking(
+    store: &dyn TokenStore,
+    token_url: &str,
+    client_id: &str,
+) -> Result<String> {
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?
+                    .block_on(get_valid_token(store, token_url, client_id))
+            })
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -826,6 +964,216 @@ mod tests {
         }
     }
 
+    // --- refresh serialization: a rotated refresh token is presented once (#787) ---
+
+    /// Two commands that find the same expired grant must not both present its refresh token: the
+    /// authorization server rotates it on first use and ends the whole chain on a second. The token
+    /// endpoint answers slowly here, so without the lock both refreshers load the grant before
+    /// either has saved the successor, and the spent token goes out twice.
+    #[test]
+    fn concurrent_refreshers_present_the_grant_once() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let server = rt.block_on(async {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/oauth/token"))
+                .and(body_string_contains("refresh_token=rtok_test"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_delay(std::time::Duration::from_millis(300))
+                        .set_body_json(serde_json::json!({
+                            "access_token": "tok_new",
+                            "refresh_token": "rtok_new",
+                            "expires_in": 86400,
+                        })),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            server
+        });
+        let token_url = format!("{}/oauth/token", server.uri());
+
+        let dir = TempDir::new().unwrap();
+        let store = DiskTokenStore::at(dir.path().join("auth.json"));
+        store
+            .save(&make_auth(Utc::now() - Duration::minutes(1)))
+            .unwrap();
+
+        let tokens = temp_env::with_var(TEMPER_TOKEN_ENV, None::<&str>, || {
+            std::thread::scope(|scope| {
+                let refreshers: Vec<_> = (0..2)
+                    .map(|_| {
+                        scope.spawn(|| get_valid_token_blocking(&store, &token_url, "test-client"))
+                    })
+                    .collect();
+                refreshers
+                    .into_iter()
+                    .map(|r| r.join().unwrap().expect("both refreshers get a token"))
+                    .collect::<Vec<_>>()
+            })
+        });
+
+        assert_eq!(tokens, ["tok_new", "tok_new"]);
+        let saved = load_auth_from(&dir.path().join("auth.json"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.refresh_token.unwrap().expose_secret(), "rtok_new");
+        rt.block_on(server.verify());
+    }
+
+    /// A token endpoint answering 307 must not move the refresh grant: following it would resend
+    /// the refresh token to a host `validate_endpoint` never saw.
+    #[test]
+    fn refresh_follows_no_redirect() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let (redirector, elsewhere) = rt.block_on(async {
+            let elsewhere = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(0)
+                .mount(&elsewhere)
+                .await;
+            let redirector = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(
+                    ResponseTemplate::new(307)
+                        .insert_header("location", format!("{}/oauth/token", elsewhere.uri())),
+                )
+                .mount(&redirector)
+                .await;
+            (redirector, elsewhere)
+        });
+        let token_url = format!("{}/oauth/token", redirector.uri());
+        let dir = TempDir::new().unwrap();
+        let store = DiskTokenStore::at(dir.path().join("auth.json"));
+
+        let result = rt.block_on(refresh_token(
+            &store,
+            &make_auth(Utc::now() - Duration::minutes(1)),
+            &token_url,
+            "test-client",
+        ));
+
+        assert!(result.is_err(), "a 307 is not a successful refresh");
+        rt.block_on(elsewhere.verify());
+    }
+
+    /// Run a refresh against a token endpoint that answers in 300ms, and `during` 100ms into it —
+    /// while the refresher holds the lock and has not yet saved the successor. Returns the
+    /// directory holding `auth.json` once both are done.
+    fn while_a_refresh_is_in_flight(during: impl FnOnce(&DiskTokenStore) + Send) -> TempDir {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let server = rt.block_on(async {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/oauth/token"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_delay(std::time::Duration::from_millis(300))
+                        .set_body_json(serde_json::json!({
+                            "access_token": "tok_refreshed",
+                            "refresh_token": "rtok_refreshed",
+                            "expires_in": 86400,
+                        })),
+                )
+                .mount(&server)
+                .await;
+            server
+        });
+        let token_url = format!("{}/oauth/token", server.uri());
+
+        let dir = TempDir::new().unwrap();
+        let store = DiskTokenStore::at(dir.path().join("auth.json"));
+        store
+            .save(&make_auth(Utc::now() - Duration::minutes(1)))
+            .unwrap();
+
+        temp_env::with_var(TEMPER_TOKEN_ENV, None::<&str>, || {
+            std::thread::scope(|scope| {
+                let refresher =
+                    scope.spawn(|| get_valid_token_blocking(&store, &token_url, "test-client"));
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                during(&store);
+                let _ = refresher.join().unwrap();
+            });
+        });
+        dir
+    }
+
+    /// A logout during a refresh must stay a logout: the refresh's successor may not be written
+    /// back after the grant is cleared.
+    #[test]
+    fn a_logout_during_a_refresh_stays_logged_out() {
+        let dir = while_a_refresh_is_in_flight(|store| clear_grant(store).unwrap());
+        assert!(
+            load_auth_from(&dir.path().join("auth.json"))
+                .unwrap()
+                .is_none(),
+            "the refresh wrote a grant back after the logout"
+        );
+    }
+
+    /// A login during a refresh must not be overwritten by the successor of the grant it replaced.
+    #[test]
+    fn a_login_during_a_refresh_is_not_overwritten() {
+        let dir = while_a_refresh_is_in_flight(|store| {
+            let mut login = make_auth(Utc::now() + Duration::hours(24));
+            login.access_token = "tok_login".to_owned().into();
+            replace_grant(store, &login).unwrap();
+        });
+        let saved = load_auth_from(&dir.path().join("auth.json"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.access_token.expose_secret(), "tok_login");
+    }
+
+    /// A user who points `auth.json` at a file elsewhere keeps the link: the save writes the
+    /// target, where a rename onto the path would replace the link with a regular file.
+    #[cfg(unix)]
+    #[test]
+    fn save_writes_through_a_symlinked_auth_path() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("dotfiles-auth.json");
+        let link = dir.path().join("auth.json");
+        save_auth_to(&make_auth(Utc::now()), &target).unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let mut updated = make_auth(Utc::now() + Duration::hours(1));
+        updated.access_token = "tok_updated".to_owned().into();
+        save_auth_to(&updated, &link).unwrap();
+
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let through_target = load_auth_from(&target).unwrap().unwrap();
+        assert_eq!(through_target.access_token.expose_secret(), "tok_updated");
+    }
+
+    /// The CLI bootstrap reaches this from async fns as well as sync ones; a `block_on` on the
+    /// caller's thread would panic inside a runtime.
+    #[test]
+    fn get_valid_token_blocking_answers_from_inside_a_runtime() {
+        let store = MemoryTokenStore::with_auth(make_auth(Utc::now() + Duration::hours(1)));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime");
+        let token = rt.block_on(async {
+            get_valid_token_blocking(&store, "https://unused.example.com/token", "test-client")
+        });
+        assert_eq!(token.unwrap(), "tok_test");
+    }
+
     // --- needs_refresh ---
 
     #[test]
@@ -838,31 +1186,29 @@ mod tests {
 
     #[test]
     fn refresh_token_refuses_a_plaintext_non_loopback_token_url() {
-        temp_env::with_var("TEMPER_ALLOW_INSECURE_HTTP", None::<&str>, || {
-            let auth = make_auth(Utc::now() - Duration::minutes(1));
-            let store = crate::auth::MemoryTokenStore::empty();
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .build()
-                .expect("test runtime");
-            // No server is started: the refusal must happen before any network
-            // attempt, so a would-be listener port is never reached.
-            let err = rt
-                .block_on(refresh_token(
-                    &store,
-                    &auth,
-                    "http://idp.example.com/oauth/token",
-                    "test-client",
-                ))
-                .expect_err("plaintext non-loopback token_url must be refused");
-            assert!(
-                matches!(err, ClientError::NotConfigured(_)),
-                "expected NotConfigured, got {err:?}"
-            );
-            assert!(
-                err.to_string().contains("token_url"),
-                "names the variable: {err}"
-            );
-        });
+        let auth = make_auth(Utc::now() - Duration::minutes(1));
+        let store = crate::auth::MemoryTokenStore::empty();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime");
+        // No server is started: the refusal must happen before any network
+        // attempt, so a would-be listener port is never reached.
+        let err = rt
+            .block_on(refresh_token(
+                &store,
+                &auth,
+                "http://idp.example.com/oauth/token",
+                "test-client",
+            ))
+            .expect_err("plaintext non-loopback token_url must be refused");
+        assert!(
+            matches!(err, ClientError::NotConfigured(_)),
+            "expected NotConfigured, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("token_url"),
+            "names the variable: {err}"
+        );
     }
 
     #[test]

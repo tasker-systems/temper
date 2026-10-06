@@ -1,10 +1,10 @@
 //! Slack account-link client surface.
 
-use reqwest::Method;
 use temper_core::types::slack::{SlackDisconnectRequest, SlackDisconnectResponse};
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 
 pub struct SlackClient<'a> {
     http: &'a HttpClient,
@@ -24,10 +24,11 @@ impl<'a> SlackClient<'a> {
     /// Disconnect the caller's own Slack link. Idempotent.
     pub async fn disconnect_me(&self) -> Result<SlackDisconnectResponse> {
         let token = self.http.resolve_token()?;
-        let path = "/api/auth/slack/link/me";
-        let req = self.http.delete(path);
+        let op = &ops::DISCONNECT_ME;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::DELETE, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -37,13 +38,14 @@ impl<'a> SlackClient<'a> {
         slack_principal_id: &str,
     ) -> Result<SlackDisconnectResponse> {
         let token = self.http.resolve_token()?;
-        let path = "/api/admin/slack/links/disconnect";
+        let op = &ops::ADMIN_DISCONNECT;
+        let path = op.path(&[]);
         let body = SlackDisconnectRequest {
             slack_principal_id: slack_principal_id.to_string(),
         };
-        let req = self.http.post(path).json(&body);
+        let req = self.http.request(op, &path).json(&body);
         self.http
-            .send_json(&Method::POST, path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }

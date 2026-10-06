@@ -79,6 +79,15 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Releasing temper v${VERSION}"
 
+  # EVERY JOB IN THIS FILE PINS ITS ACTIONS BY FULL COMMIT SHA, with the tag it was taken from as a
+  # trailer (Dependabot's github-actions lane bumps both). Each holds something a repointed tag
+  # could abuse: an OIDC token a registry exchanges for a publish credential, a Sigstore signing
+  # grant, `contents: write` over the Release and its `.sha256` files, or the homebrew tap's deploy
+  # key. audit-privileged-action-pins.sh enforces the scope-holding jobs; the deploy-key job is
+  # outside what it can see. The same posture
+  # build-cli-binaries.yml already takes; `dtolnay/rust-toolchain@stable` is replaced rather than
+  # pinned for the reason given there (a branch has no release cadence to bump a pin against).
+  # Their checkouts also drop the persisted git credential: none of them pushes.
   build-cli-binaries:
     name: Build CLI Binaries
     needs: determine-version
@@ -111,10 +120,16 @@ jobs:
       attestations: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
+      # rustup directly, not `dtolnay/rust-toolchain@stable` — see the note above build-cli-binaries.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc --version --verbose
 
       # Re-emit rather than trusting the committed tree. The drift gate already proves the two
       # agree on every PR, so this is belt-and-braces — but a release is the wrong place to
@@ -172,10 +187,12 @@ jobs:
       id-token: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
@@ -202,16 +219,18 @@ jobs:
       id-token: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
+        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
           # .ruby-version / mise.toml is 3.4.10.
           ruby-version: "3.4"
 
       - name: Configure RubyGems credentials (trusted publishing)
-        uses: rubygems/configure-rubygems-credentials@v2.1.0
+        uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
 
       - name: Publish the gem
         env:
@@ -246,7 +265,9 @@ jobs:
       id-token: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # uv via pipx, which is preinstalled on ubuntu-latest, rather than a
       # setup-python: the build must run against the interpreter pinned in
@@ -270,11 +291,12 @@ jobs:
   # Auth is crates.io trusted publishing: rust-lang/crates-io-auth-action
   # exchanges the job's OIDC identity token (id-token: write) for a
   # short-lived upload token, auto-revoked when the job ends — no registry
-  # secret exists. The trusted publisher registered on crates.io names THIS
-  # workflow (release.yml — the identity claim names the job's own file, not
-  # the chain's entry, the same rule the RubyGems and PyPI publishers
-  # encode). Trusted publishers are configured for all six temperkb-* names;
-  # their 0.5.3 initial versions were bootstrapped once with an API token
+  # secret exists. crates.io matches the token's CALLING workflow, so inside
+  # the release-tag.yml chain it checks release-tag.yml, and on the tag-push
+  # and dispatch doors release.yml; trusted publishers for both are
+  # configured on every temperkb-* name (RELEASING.md, "Publishing-side
+  # auth"). The closure's 0.5.3 initial versions, and temperkb-mcp's 0.6.0,
+  # were bootstrapped once with an API token
   # (crates.io attaches publishers only to existing crates — no pending-
   # publisher pre-registration), and every version after that rides this
   # job's OIDC exchange.
@@ -288,10 +310,16 @@ jobs:
       id-token: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      # rustup directly, not `dtolnay/rust-toolchain@stable` — see the note above build-cli-binaries.
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc --version --verbose
 
       - name: Authenticate with crates.io (trusted publishing)
         id: auth
@@ -329,7 +357,7 @@ jobs:
           fi
 
       - name: Checkout the tap (deploy-key-scoped, for the push)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: tasker-systems/homebrew-tap
           ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
@@ -366,13 +394,13 @@ jobs:
       contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # One download, both producers: the skill bundle uploads under the same
       # `cli-v<version>-*` artifact-name prefix, so this pattern collects it too.
       - name: Download release artifacts
         if: needs.build-cli-binaries.result == 'success' && needs.build-skill-bundle.result == 'success'
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: cli-v${{ needs.determine-version.outputs.version }}-*
           path: cli-artifacts/

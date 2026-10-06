@@ -1,4 +1,4 @@
-//! `temper steward delta|advance-watermark` — surface commands for the team-self-cognition steward's
+//! `temper steward` — surface commands for the team-self-cognition steward's
 //! ingest trigger (T4a). Each resolves the cogmap ref → substrate UUID, dispatches one API call, and
 //! renders the typed result.
 
@@ -52,4 +52,33 @@ pub fn advance_watermark(
     let rendered = crate::format::render(&ack, fmt)?;
     crate::output::plain(rendered);
     Ok(())
+}
+
+/// `temper steward sweep [--threshold N]` — steward drift across the maps you can steward.
+pub fn sweep(threshold: Option<i64>, fmt: OutputFormat) -> Result<()> {
+    let query = temper_core::types::query_params::DeltaQuery { threshold };
+    crate::actions::runtime::render_read(fmt, move |client| {
+        Box::pin(async move { client.steward().sweep(&query).await })
+    })
+}
+
+/// `temper steward candidates` — the maps you may steward.
+pub fn candidates(fmt: OutputFormat) -> Result<()> {
+    crate::actions::runtime::render_read(fmt, move |client| {
+        Box::pin(async move { client.steward().candidates().await })
+    })
+}
+
+/// `temper steward dispatch [--threshold N] [--cap N] [--correlation-id ID]` — claim one tick's
+/// drifted maps.
+pub fn dispatch(
+    threshold: Option<i64>,
+    cap: Option<i64>,
+    correlation_id: Option<uuid::Uuid>,
+    fmt: OutputFormat,
+) -> Result<()> {
+    let request = temper_core::types::steward::DispatchTickRequest { threshold, cap };
+    crate::actions::runtime::render_read(fmt, move |client| {
+        Box::pin(async move { client.steward().dispatch(&request, correlation_id).await })
+    })
 }

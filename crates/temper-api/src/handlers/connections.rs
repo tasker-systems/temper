@@ -14,7 +14,6 @@
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_core::types::connection::{
@@ -26,14 +25,7 @@ use temper_services::services::connection_service;
 use temper_services::state::AppState;
 
 use crate::middleware::auth::AuthUser;
-
-/// Query flags for `GET /api/connections`.
-#[derive(Debug, Deserialize, utoipa::IntoParams)]
-pub struct ListQuery {
-    /// Include revoked connections. Default `false`.
-    #[serde(default)]
-    pub include_revoked: bool,
-}
+use temper_core::types::query_params::ConnectionListQuery as ListQuery;
 
 #[utoipa::path(
     post,

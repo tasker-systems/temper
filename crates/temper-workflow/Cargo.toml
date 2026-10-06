@@ -19,18 +19,15 @@ jsonschema = "0.45"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
-sqlx = { version = "0.8", features = ["chrono", "json", "macros", "postgres", "runtime-tokio-rustls", "uuid"] }
 thiserror = "2"
 tracing = "0.1"
 uuid = { version = "1", features = ["serde", "v7"] }
-schemars = { version = "1", features = ["chrono04", "uuid1"], optional = true }
-ts-rs = { version = "10", features = ["chrono-impl", "serde-json-impl", "uuid-impl"], optional = true }
-utoipa = { version = "5", features = ["uuid"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"
 
 [features]
-mcp = ["schemars", "temperkb-core/mcp"]
-typescript = ["ts-rs", "temperkb-core/typescript"]
-web-api = ["utoipa", "utoipa/chrono", "temperkb-core/web-api"]
+# Each forwards to temper-core, where the wire types and their derives now live.
+mcp = ["temperkb-core/mcp"]
+typescript = ["temperkb-core/typescript"]
+web-api = ["temperkb-core/web-api"]

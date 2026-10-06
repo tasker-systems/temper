@@ -1,5 +1,4 @@
 use axum::extract::{Path, State};
-use axum::response::IntoResponse;
 use axum::Json;
 use uuid::Uuid;
 
@@ -12,32 +11,11 @@ use temper_services::state::AppState;
 use temper_core::context_ref::parse_context_ref;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ProfileId, ResourceId};
-use temper_core::types::ingest::{IngestPayload, SegmentedBeginResponse};
+use temper_core::types::ingest::IngestCreateResponse;
+use temper_core::types::ingest::IngestPayload;
 use temper_core::types::resource_view::ResourceView;
 use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, UpdateResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
-
-/// `POST /api/ingest` returns one of two shapes depending on `IngestPayload.segmented`:
-/// the one-shot `ResourceView` (unchanged small-body path), or a [`SegmentedBeginResponse`]
-/// when the caller began a segmented (multi-block) ingest. `#[serde(untagged)]` — the client
-/// discriminates by which fields are present (`SegmentedBeginResponse` always carries
-/// `correlation_id`/`blocks`, which `ResourceView` never does).
-#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
-#[serde(untagged)]
-pub enum IngestCreateResponse {
-    // Boxed: ResourceView is much larger than SegmentedBeginResponse (clippy large_enum_variant).
-    OneShot(Box<ResourceView>),
-    Segmented(SegmentedBeginResponse),
-}
-
-impl IntoResponse for IngestCreateResponse {
-    fn into_response(self) -> axum::response::Response {
-        match self {
-            Self::OneShot(r) => Json(r).into_response(),
-            Self::Segmented(r) => Json(r).into_response(),
-        }
-    }
-}
 
 /// Begin a segmented ingest
 #[utoipa::path(
@@ -60,7 +38,7 @@ pub async fn create(
     auth: AuthUser,
     RequestSurface(surface): RequestSurface,
     Json(payload): Json<IngestPayload>,
-) -> ApiResult<IngestCreateResponse> {
+) -> ApiResult<Json<IngestCreateResponse>> {
     let profile_id = ProfileId::from(auth.0.profile().id);
     // Segmented-begin metadata is consumed AFTER create lands block 0 (below); take it now so the
     // rest of the function can move `payload` field-by-field into the CreateResource command.
@@ -150,7 +128,7 @@ pub async fn create(
         // Unchanged one-shot path — no new round-trips, no regression (design §5/§13).
         let out = backend.create_resource(cmd).await.map_err(ApiError::from)?;
         // The trait's `ResourceView` IS this endpoint's response — no narrowing.
-        return Ok(IngestCreateResponse::OneShot(Box::new(out.value)));
+        return Ok(Json(IngestCreateResponse::OneShot(Box::new(out.value))));
     };
 
     // Segmented begin is ONE command: create block 0, record the source row, read the landed set.
@@ -159,7 +137,7 @@ pub async fn create(
         .begin_segmented_ingest(cmd, seg)
         .await
         .map_err(ApiError::from)?;
-    Ok(IngestCreateResponse::Segmented(out.value))
+    Ok(Json(IngestCreateResponse::Segmented(out.value)))
 }
 
 /// Update an in-progress ingest

@@ -35,6 +35,9 @@ Commands:
   cogmap         Operate on cognitive maps (create, read, reconcile, materialize, bind, grant)
   invocation     Operate on agent-invocation envelopes (open / close / show / list)
   steward        Team-self-cognition steward ingest trigger (delta / advance-watermark)
+  auditor        Auditor worker doors: claim citation-audit jobs, complete them, survey coverage
+  profile        Your profile: show it, or update its display name and preferences
+  health         Ask the service whether it is up: its status, version, and build commit. Needs no login
   graph          Walk the knowledge graph — orient with no question, or move from where you are
   trail          Read the event trail (append-only history) of a graph element — a resource node or a relationship edge
   version        Print the CLI version, optionally with the running binary's SHA-256 or an offline (or online) manifest verdict
@@ -77,6 +80,9 @@ Options:
 | [`temper cogmap`](./cogmap.md) | Operate on cognitive maps (create, read, reconcile, materialize, bind, grant) |
 | [`temper invocation`](./invocation.md) | Operate on agent-invocation envelopes (open / close / show / list) |
 | [`temper steward`](./steward.md) | Team-self-cognition steward ingest trigger (delta / advance-watermark) |
+| [`temper auditor`](./auditor.md) | Auditor worker doors: claim citation-audit jobs, complete them, survey coverage |
+| [`temper profile`](./profile.md) | Your profile: show it, or update its display name and preferences |
+| [`temper health`](./health.md) | Ask the service whether it is up: its status, version, and build commit. Needs no login. |
 | [`temper graph`](./graph.md) | Walk the knowledge graph — orient with no question, or move from where you are. |
 | [`temper trail`](./trail.md) | Read the event trail (append-only history) of a graph element — a resource node or a relationship edge. |
 | [`temper version`](./version.md) | Print the CLI version, optionally with the running binary's SHA-256 or an offline (or online) manifest verdict. |

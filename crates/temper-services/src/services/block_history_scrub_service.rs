@@ -25,6 +25,9 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use temper_core::types::erasure::{
+    BlockHistoryScrubPlan, BlockHistoryScrubSurvey, BlockScrubCount,
+};
 use temper_core::types::ids::ResourceId;
 use temper_substrate::payloads::{ErasureAct, ErasureTargetOutcome, ResourceErasureRefusalReason};
 use temper_substrate::writes::resolve_emitter;
@@ -70,38 +73,6 @@ pub struct BlockHistoryScrubCompletion {
 pub enum BlockHistoryScrubOutcome {
     Completed(BlockHistoryScrubCompletion),
     Refused(ResourceErasureRefusal),
-}
-
-/// One named block in the plan: what the scrub would empty.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-pub struct BlockScrubCount {
-    pub block: Uuid,
-    /// A folded block empties entirely; a live block keeps its current revision and chunks.
-    pub folded: bool,
-    pub revisions_to_empty: i64,
-    pub chunks_to_empty: i64,
-}
-
-/// The plan `block_history_scrub_survey` renders (D10: the act consumes the same computation).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
-pub struct BlockHistoryScrubPlan {
-    /// True when the scrub would cancel an in-flight ingest.
-    pub cancels_ingest: bool,
-    /// Per named block, in the operator's order.
-    pub blocks: Vec<BlockScrubCount>,
-}
-
-/// The read-only survey. Exactly one of `refusal` and `plan` is present: `refusal` when the act
-/// would refuse (a charter, or an already-erased resource), with `detail` for a charter;
-/// otherwise the per-block `plan`. Nothing is recorded either way.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
-pub struct BlockHistoryScrubSurvey {
-    pub resource: ResourceId,
-    /// The refusal the act would record now.
-    pub refusal: Option<ResourceErasureRefusalReason>,
-    /// The refusal's fixed evidence (a charter's map-grain task).
-    pub detail: Option<String>,
-    pub plan: Option<BlockHistoryScrubPlan>,
 }
 
 /// The jsonb `block_history_scrub_execute` returns.

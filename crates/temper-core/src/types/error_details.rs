@@ -47,6 +47,53 @@ pub enum ErrorDetails {
     PlanRefusals(PlanRefusalDetails),
 }
 
+// The error envelope every door answers a failure with: `{"error": {...}}`. A `//` comment, not a
+// doc comment: utoipa would publish a doc comment as the schema's description, and moving the type
+// here must not change openapi.json.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct ErrorBody {
+    pub error: ErrorDetail,
+}
+
+impl ErrorBody {
+    /// Build a typed error body with no `details` payload — the shape used by both
+    /// `ApiError::into_response` and temper-services' `transport::fallback_handler`, so an
+    /// unmatched route is not the one error a client has to special-case.
+    pub fn new(code: &str, message: String) -> Self {
+        Self {
+            error: ErrorDetail {
+                code: code.to_string(),
+                message,
+                details: None,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct ErrorDetail {
+    pub code: String,
+    pub message: String,
+    /// Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on
+    /// `PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every
+    /// other error.
+    // Held as a `Value` because `IntoResponse` erases the variant before serializing, but declared
+    // to the generators as what it actually is: an untyped `details` described nothing while
+    // costing the SDKs their typed refusal.
+    //
+    // `[widened — 2026-08-13]` This was declared as the bare `SystemAccessDetails` under a note
+    // saying "should a second variant ever carry details, this becomes a `oneOf` — widen it then,
+    // deliberately." B1 is that second variant, and this is that widening. Which ARM a body carries
+    // is told by `error.code`, never by sniffing the payload's shape — the two arms are
+    // distinguishable by required field (see `ErrorDetails`), but a client that leans on that is
+    // one all-optional arm away from silently misparsing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "web-api", schema(value_type = Option<ErrorDetails>))]
+    pub details: Option<serde_json::Value>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

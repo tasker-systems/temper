@@ -1,7 +1,6 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
-use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
@@ -12,6 +11,9 @@ use temper_core::types::context::ContextResolution;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_core::types::materialize::{MaterializeAck, MaterializeDelta, MaterializeRequest};
+use temper_core::types::query_params::{
+    ContextMaterializeDeltaQuery, ContextShapeQuery, ListContextsQuery, ResolveContextQuery,
+};
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::context_service::{
@@ -22,15 +24,6 @@ use temper_services::services::context_service::{
 use temper_services::services::materialize_service;
 use temper_services::state::AppState;
 use temper_workflow::operations::{Backend, MaterializeOnThreshold};
-
-/// Query params for the context list. `retired = true` switches the read from the visibility
-/// axis to the ADMIN axis: a retired context is invisible to `contexts_readable_by_teams` by
-/// construction, so it can only be listed by someone who could have retired it.
-#[derive(Debug, Deserialize, utoipa::IntoParams)]
-pub struct ListContextsQuery {
-    /// List retired contexts you administer instead of the contexts you can read.
-    pub retired: Option<bool>,
-}
 
 /// List contexts you can see
 #[utoipa::path(
@@ -85,15 +78,6 @@ pub async fn create(
     let row =
         context_service::create(&state.pool, caller, &owner_table, owner_id, &body.name).await?;
     Ok((StatusCode::CREATED, Json(row)))
-}
-
-/// Query params for [`resolve`].
-#[derive(Debug, Deserialize, utoipa::IntoParams)]
-pub struct ResolveContextQuery {
-    /// The context ref to resolve: `@me/<slug>`, `@<handle>/<slug>`, `+<team>/<slug>`, or a bare
-    /// UUID. One grammar — `temper_core::context_ref::parse_context_ref`, the parser the CLI and
-    /// the MCP tools use.
-    pub context_ref: String,
 }
 
 /// Resolve a context ref to its id
@@ -324,13 +308,6 @@ pub async fn rename(
 // arm that collapses "denied" and "does not exist" and discloses neither the population nor the
 // clock, so it is still no existence oracle.
 
-/// Query params for the context shape / region-metrics reads.
-#[derive(Debug, Deserialize)]
-pub struct ContextShapeQuery {
-    /// Optional lens filter; omit for all lenses.
-    pub lens: Option<Uuid>,
-}
-
 /// Read a context's shape
 #[utoipa::path(
     get,
@@ -393,14 +370,6 @@ pub async fn region_metrics(
     )
     .await
     .map(Json)
-}
-
-/// Query params for the context materialize-delta read. `threshold` is optional (omit → the
-/// service default).
-#[derive(Debug, Deserialize)]
-pub struct ContextMaterializeDeltaQuery {
-    /// Materialize threshold to gate on; the service default applies when omitted.
-    pub threshold: Option<i64>,
 }
 
 /// Read formation drift since a context's last materialize

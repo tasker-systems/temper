@@ -377,7 +377,14 @@ To enable it on a target:
 2. **The cron is already declared** in the repo's `vercel.json` (`/api/embed/dispatch`,
    every minute) — target-agnostic, so no per-target cron setup is needed. On Vercel it
    activates on the next production deploy of a project that has cron enabled (Pro plan;
-   Hobby only allows daily crons — raise the schedule there or run the drain externally).
+   Hobby only allows daily crons — raise the schedule there).
+   On Vercel, this door and every other cron door answer only on the deployment's own
+   generated URL (`VERCEL_URL`, which Vercel Cron calls and which sits behind Vercel
+   Authentication). The public domain answers them `404`. A manual or external trigger
+   targets the deployment URL instead: `vercel curl /api/embed/dispatch --deployment <url>`
+   with the bearer, or the dashboard's cron run button. An external scheduler would need a
+   Protection Bypass for Automation token and the current deployment URL, which changes on
+   every deploy, so on Vercel the drain runs from Vercel Cron.
 3. **Schema**: the drain reuses the existing `kb_workflow_jobs` queue (migration
    `20260707000001_workflow_jobs_resource_scope.sql`). Apply `migrations/` as usual
    before enabling — no separate step.

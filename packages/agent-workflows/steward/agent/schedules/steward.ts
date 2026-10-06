@@ -3,7 +3,7 @@ import { TEMPER_TS_VERSION } from "@tasker-systems/temper-ts";
 
 import worker from "../channels/worker.js";
 import { isStewardDispatchResponse } from "../lib/dispatch-response.js";
-import { requireEnv, temperFetch } from "../lib/temper-auth.js";
+import { requireEndpointEnv, temperFetch } from "../lib/temper-auth.js";
 
 /**
  * Steward fan-out dispatcher (goal 019f3220). This is DELIBERATELY a code `run` handler, not a
@@ -53,7 +53,7 @@ export default defineSchedule({
         const correlationId = crypto.randomUUID();
         console.log(`[steward-dispatch] tick ${correlationId} starting (temper-ts ${TEMPER_TS_VERSION})`);
         try {
-          const apiUrl = requireEnv("TEMPER_API_URL").replace(/\/+$/, "");
+          const apiUrl = requireEndpointEnv("TEMPER_API_URL").replace(/\/+$/, "");
 
           // Retry on 5xx: this hourly call always hits a cold serverless function, which can 500 on
           // a Neon pool-acquire timeout at startup; a retry warms it and succeeds. And re-mint on

@@ -1,10 +1,10 @@
 //! Typed sub-client for the operator-only `/api/machine-clients` endpoints.
 
-use reqwest::Method;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use crate::ops;
 use temper_core::types::machine::{
     IssueMachineRequest, IssuedMachineCredential, MachineClient, ProvisionMachineRequest,
     RebindMachineRequest, RotateSecretRequest,
@@ -30,63 +30,66 @@ impl<'a> MachineClientsClient<'a> {
     /// Register a new machine principal, creating its agent profile.
     pub async fn provision(&self, body: &ProvisionMachineRequest) -> Result<MachineClient> {
         let token = self.http.resolve_token()?;
-        let req = self.http.post("/api/machine-clients").json(body);
+        let op = &ops::PROVISION_MACHINE_CLIENT;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, "/api/machine-clients", req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Point a fresh client id at an existing agent profile.
     pub async fn rebind(&self, id: Uuid, body: &RebindMachineRequest) -> Result<MachineClient> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/machine-clients/{id}/rebind");
-        let req = self.http.post(&path).json(body);
+        let op = &ops::ADMIN_REBIND_MACHINE_CLIENT;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Enumerate registered clients.
     pub async fn list(&self, include_revoked: bool) -> Result<Vec<MachineClient>> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/machine-clients?include_revoked={include_revoked}");
-        let req = self.http.get(&path);
+        let op = &ops::LIST_MACHINE_CLIENTS;
+        let path = format!("{}?include_revoked={include_revoked}", op.path(&[]));
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Load one registered client.
     pub async fn get(&self, id: Uuid) -> Result<MachineClient> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/machine-clients/{id}");
-        let req = self.http.get(&path);
+        let op = &ops::GET_MACHINE_CLIENT;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::GET, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Revoke a client. Denies authentication; grants and memberships survive (D11).
     pub async fn revoke(&self, id: Uuid) -> Result<MachineClient> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/machine-clients/{id}");
-        let req = self.http.delete(&path);
+        let op = &ops::REVOKE_MACHINE_CLIENT;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path);
         self.http
-            .send_json(&Method::DELETE, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
     /// Issue a temper-minted machine credential. Returns the one-time plaintext secret.
     pub async fn issue(&self, body: &IssueMachineRequest) -> Result<IssuedMachineCredential> {
         let token = self.http.resolve_token()?;
-        let req = self.http.post("/api/machine-clients/issue").json(body);
+        let op = &ops::ISSUE_MACHINE_CREDENTIAL;
+        let path = op.path(&[]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(
-                &Method::POST,
-                "/api/machine-clients/issue",
-                req,
-                Some(&token),
-            )
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 
@@ -97,10 +100,11 @@ impl<'a> MachineClientsClient<'a> {
         body: &RotateSecretRequest,
     ) -> Result<IssuedMachineCredential> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/machine-clients/{id}/rotate-secret");
-        let req = self.http.post(&path).json(body);
+        let op = &ops::ROTATE_MACHINE_CLIENT_SECRET;
+        let path = op.path(&[&id]);
+        let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&Method::POST, &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 }
