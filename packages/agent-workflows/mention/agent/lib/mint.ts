@@ -127,6 +127,10 @@ export async function requestMintedToken(principalId: string): Promise<MintOutco
 
   const res = await fetch(`${baseUrl.replace(/\/$/, "")}/internal/slack/mint`, {
     method: "POST",
+    // Never follow a redirect. fetch strips `Authorization` on a cross-origin hop but resends
+    // these signature headers and the body, and the signature does not cover the host — so a 307 to
+    // `http://…` would undo `requireEndpointEnv` and return the response in the clear.
+    redirect: "error",
     headers: {
       "content-type": "application/json",
       "X-Temper-Timestamp": timestamp,

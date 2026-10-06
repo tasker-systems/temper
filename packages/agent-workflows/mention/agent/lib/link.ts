@@ -80,6 +80,10 @@ export async function requestLinkState(principalId: string): Promise<LinkState> 
 
   const res = await fetch(`${baseUrl.replace(/\/$/, "")}/internal/slack/link-state`, {
     method: "POST",
+    // Never follow a redirect. fetch strips `Authorization` on a cross-origin hop but resends
+    // these signature headers and the body, and the signature does not cover the host — so a 307 to
+    // `http://…` would undo `requireEndpointEnv` and return the response in the clear.
+    redirect: "error",
     headers: {
       "content-type": "application/json",
       "X-Temper-Timestamp": timestamp,

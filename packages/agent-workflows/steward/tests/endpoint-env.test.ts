@@ -114,42 +114,63 @@ function agentSources(): Array<[string, string]> {
   return out;
 }
 
-describe("no read of TEMPER_API_URL / TEMPER_MCP_URL bypasses the gate", () => {
-  /**
-   * The one reader allowed to go straight to `process.env`: it hands the MCP URL to telemetry as a
-   * span-matching hint and never puts a credential on it (see its header).
-   */
-  const TELEMETRY_ONLY = new Set(["instrumentation.ts"]);
-
-  const sources = agentSources();
-  const gated: string[] = [];
-  const bypasses: string[] = [];
-  for (const [file, src] of sources) {
-    for (const m of src.matchAll(/(\w+)\(\s*["'](TEMPER_(?:API|MCP)_URL)["']/g)) {
-      (m[1] === "requireEndpointEnv" ? gated : bypasses).push(`${file}: ${m[1]}("${m[2]}")`);
-    }
-    for (const m of src.matchAll(/process\.env(?:\.|\[\s*["'])(TEMPER_(?:API|MCP)_URL)/g)) {
-      if (!TELEMETRY_ONLY.has(file)) bypasses.push(`${file}: process.env.${m[1]}`);
+/**
+ * Every occurrence of either variable name in CODE under `agent/` (block comments and `//` lines
+ * stripped), as `{ file, line, gated }`. Token-level on purpose: a call-shape regex misses
+ * `` process.env[`TEMPER_API_URL`] `` and `const { TEMPER_API_URL } = process.env`, and a new read
+ * in either shape would then pass. Still blind to a name computed at runtime (`env[name]`).
+ */
+function urlVarOccurrences(): Array<{ file: string; line: string; gated: boolean }> {
+  const out: Array<{ file: string; line: string; gated: boolean }> = [];
+  for (const [file, src] of agentSources()) {
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "");
+    for (const raw of code.split("\n")) {
+      const line = raw.trim();
+      if (line.startsWith("//")) continue;
+      for (const m of line.matchAll(/\bTEMPER_(?:API|MCP)_URL\b/g)) {
+        const gated = /requireEndpointEnv\(\s*["']$/.test(line.slice(0, m.index));
+        out.push({ file, line, gated });
+      }
     }
   }
+  return out;
+}
 
-  // FAILS IF: any call site reads either variable through anything but the gate — including a new
-  // schedule or tool added later, which the behavioural tests above cannot know about.
+describe("no read of TEMPER_API_URL / TEMPER_MCP_URL bypasses the gate", () => {
+  /**
+   * The exact line allowed to read straight from `process.env`: telemetry takes the MCP URL as a
+   * span-matching hint and never puts a credential on it. An exact line, not the whole file, so a
+   * credential use added there is still caught.
+   */
+  const NO_CREDENTIAL = new Set(["instrumentation.ts: mcpEndpoint: process.env.TEMPER_MCP_URL,"]);
+  const GATED_FILES = [
+    "connections/temper.ts",
+    "schedules/auditor.ts",
+    "schedules/materialize.ts",
+    "schedules/steward.ts",
+    "subagents/auditor/connections/temper.ts",
+    "subagents/auditor/tools/complete_audit_job.ts",
+    "subagents/auditor/tools/element_trail.ts",
+  ];
+
+  const occurrences = urlVarOccurrences();
+  const bypasses = occurrences
+    .filter((o) => !o.gated && !NO_CREDENTIAL.has(`${o.file}: ${o.line}`))
+    .map((o) => `${o.file}: ${o.line}`);
+
+  // FAILS IF: any occurrence of either name in code is not a requireEndpointEnv argument, outside
+  // the exact exempt lines — including a read added later, which the behavioural tests above
+  // cannot know about.
   it("every read goes through requireEndpointEnv", () => {
     expect(bypasses).toEqual([]);
   });
 
-  // Guards the scan itself: if the pattern stops matching the real call shape, the assertion above
-  // passes on an empty list. Seven credential-carrying reads exist today.
-  it("the scan sees every known credential-carrying read", () => {
-    expect(gated.map((g) => g.split(":")[0]).sort()).toEqual([
-      "connections/temper.ts",
-      "schedules/auditor.ts",
-      "schedules/materialize.ts",
-      "schedules/steward.ts",
-      "subagents/auditor/connections/temper.ts",
-      "subagents/auditor/tools/complete_audit_job.ts",
-      "subagents/auditor/tools/element_trail.ts",
-    ]);
+  // Guards the scan itself: if it stops seeing the real call shape, the assertion above passes on
+  // an empty list. Also pins that each exemption still matches a real line, so a stale one cannot
+  // linger as a blanket allowance.
+  it("the scan sees every known read", () => {
+    expect(occurrences.filter((o) => o.gated).map((o) => o.file).sort()).toEqual(GATED_FILES);
+    const exempt = occurrences.filter((o) => NO_CREDENTIAL.has(`${o.file}: ${o.line}`));
+    expect(exempt.map((o) => `${o.file}: ${o.line}`).sort()).toEqual([...NO_CREDENTIAL].sort());
   });
 });

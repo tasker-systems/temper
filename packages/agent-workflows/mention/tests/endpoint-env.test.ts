@@ -1,4 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -72,6 +74,44 @@ describe("the signed calls refuse a plaintext TEMPER_API_URL before sending", ()
   });
 });
 
+describe("the signed calls never follow a redirect", () => {
+  const servers: Server[] = [];
+
+  /** Start a loopback server; resolves to its origin. */
+  async function serve(handler: Parameters<typeof createServer>[1]): Promise<string> {
+    const server = createServer(handler);
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  }
+
+  afterEach(async () => {
+    await Promise.all(servers.splice(0).map((s) => new Promise((r) => s.close(r))));
+  });
+
+  const CALLS = { "link-state": requestLinkState, mint: requestMintedToken } as const;
+
+  // FAILS IF: either call follows a redirect. `requireEndpointEnv` only vets the configured URL;
+  // a followed 307 resends the signature headers and body to wherever it points (fetch strips only
+  // `Authorization` cross-origin), and hands back that host's response — the mint's is a token.
+  it.each(Object.entries(CALLS))("%s", async (_label, call) => {
+    const elsewhere: string[] = [];
+    const target = await serve((req, res) => {
+      elsewhere.push(String(req.headers["x-temper-signature"]));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ status: "linked", handle: "h" }));
+    });
+    const origin = await serve((req, res) => {
+      res.writeHead(307, { location: `${target}${req.url}` });
+      res.end();
+    });
+    vi.stubEnv("TEMPER_API_URL", origin);
+
+    await expect(call(PRINCIPAL)).rejects.toThrow();
+    expect(elsewhere).toEqual([]);
+  });
+});
+
 describe("the temper connection refuses a plaintext TEMPER_MCP_URL at load", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -105,38 +145,59 @@ function agentSources(): Array<[string, string]> {
   return out;
 }
 
-describe("no read of TEMPER_API_URL / TEMPER_MCP_URL bypasses the gate", () => {
-  /**
-   * Readers allowed to go straight to `process.env`, because neither puts a credential on the URL:
-   * telemetry takes the MCP URL as a span-matching hint, and the citations instruction uses the API
-   * URL only to build links the model shows the user.
-   */
-  const NO_CREDENTIAL = new Set(["instrumentation.ts", "instructions/citations.ts"]);
-
-  const gated: string[] = [];
-  const bypasses: string[] = [];
+/**
+ * Every occurrence of either variable name in CODE under `agent/` (block comments and `//` lines
+ * stripped), as `{ file, line, gated }`. Token-level on purpose: a call-shape regex misses
+ * `` process.env[`TEMPER_API_URL`] `` and `const { TEMPER_API_URL } = process.env`, and a new read
+ * in either shape would then pass. Still blind to a name computed at runtime (`env[name]`).
+ */
+function urlVarOccurrences(): Array<{ file: string; line: string; gated: boolean }> {
+  const out: Array<{ file: string; line: string; gated: boolean }> = [];
   for (const [file, src] of agentSources()) {
-    for (const m of src.matchAll(/(\w+)\(\s*["'](TEMPER_(?:API|MCP)_URL)["']/g)) {
-      (m[1] === "requireEndpointEnv" ? gated : bypasses).push(`${file}: ${m[1]}("${m[2]}")`);
-    }
-    for (const m of src.matchAll(/process\.env(?:\.|\[\s*["'])(TEMPER_(?:API|MCP)_URL)/g)) {
-      if (!NO_CREDENTIAL.has(file)) bypasses.push(`${file}: process.env.${m[1]}`);
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "");
+    for (const raw of code.split("\n")) {
+      const line = raw.trim();
+      if (line.startsWith("//")) continue;
+      for (const m of line.matchAll(/\bTEMPER_(?:API|MCP)_URL\b/g)) {
+        const gated = /requireEndpointEnv\(\s*["']$/.test(line.slice(0, m.index));
+        out.push({ file, line, gated });
+      }
     }
   }
+  return out;
+}
 
-  // FAILS IF: any call site reads either variable through anything but the gate — including one
-  // added later, which the behavioural tests above cannot know about.
+describe("no read of TEMPER_API_URL / TEMPER_MCP_URL bypasses the gate", () => {
+  /**
+   * Exact lines allowed to read straight from `process.env`, because neither puts a credential on
+   * the URL: telemetry takes the MCP URL as a span-matching hint, and the citations instruction uses
+   * the API URL only to build links the model shows the user. Exact lines, not whole files, so a
+   * credential use added to either file is still caught.
+   */
+  const NO_CREDENTIAL = new Set([
+    "instrumentation.ts: mcpEndpoint: process.env.TEMPER_MCP_URL,",
+    "instructions/citations.ts: markdown: citationLinkInstruction(process.env.TEMPER_API_URL),",
+  ]);
+  const GATED_FILES = ["connections/temper.ts", "lib/link.ts", "lib/mint.ts"];
+
+  const occurrences = urlVarOccurrences();
+  const bypasses = occurrences
+    .filter((o) => !o.gated && !NO_CREDENTIAL.has(`${o.file}: ${o.line}`))
+    .map((o) => `${o.file}: ${o.line}`);
+
+  // FAILS IF: any occurrence of either name in code is not a requireEndpointEnv argument, outside
+  // the exact exempt lines — including a read added later, which the behavioural tests above
+  // cannot know about.
   it("every read goes through requireEndpointEnv", () => {
     expect(bypasses).toEqual([]);
   });
 
-  // Guards the scan itself: if the pattern stops matching the real call shape, the assertion above
-  // passes on an empty list.
-  it("the scan sees every known credential-carrying read", () => {
-    expect(gated.map((g) => g.split(":")[0]).sort()).toEqual([
-      "connections/temper.ts",
-      "lib/link.ts",
-      "lib/mint.ts",
-    ]);
+  // Guards the scan itself: if it stops seeing the real call shape, the assertion above passes on
+  // an empty list. Also pins that each exemption still matches a real line, so a stale one cannot
+  // linger as a blanket allowance.
+  it("the scan sees every known read", () => {
+    expect(occurrences.filter((o) => o.gated).map((o) => o.file).sort()).toEqual(GATED_FILES);
+    const exempt = occurrences.filter((o) => NO_CREDENTIAL.has(`${o.file}: ${o.line}`));
+    expect(exempt.map((o) => `${o.file}: ${o.line}`).sort()).toEqual([...NO_CREDENTIAL].sort());
   });
 });
