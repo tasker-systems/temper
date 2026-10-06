@@ -235,6 +235,9 @@ jobs:
       - name: Guard test — check-client-op-registry
         run: bash .github/scripts/test-check-client-op-registry.sh
 
+      - name: Guard test — sqlx-test-template
+        run: bash .github/scripts/test-sqlx-test-template.sh
+
       # THE GATE ITSELF as well as its harness: pure bash, so it belongs in this cheap, unscoped job.
       # Every published wire type (a ToSchema/IntoParams derive) lives in temper-core, the crate a
       # client builds against (ruling 2026-10-04).

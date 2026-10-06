@@ -67,6 +67,25 @@ rarely does.
 Export `DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development` for
 `#[sqlx::test]` under bare `cargo` (the `cargo make` tasks set it for you).
 
+## Faster DB tests: the migrated test template (CI always, local opt-in)
+
+Every `#[sqlx::test]` database is a copy of the server's `template1`. CI migrates `template1` once
+per job (`.github/scripts/sqlx-test-template.sh`), so each test's migrator applies nothing. That
+takes setup from ~0.5s to ~0.05s per test, and roughly halves a DB shard's test phase. No test
+attribute changes.
+
+Locally it is **opt-in**: set `TEMPER_TEST_TEMPLATE=true` in `.env`. `test-db`, `test-e2e`,
+`test-e2e-embed`, `test-artifacts` and `coverage` then refresh the template first. A refresh rebuilds
+it whenever any file in `migrations/` is added, edited, renamed or removed, and is a no-op otherwise.
+
+| | |
+|---|---|
+| `cargo make test-template` | refresh now, opted in or not |
+| `cargo make test-template-reset` | put `template1` back to pristine: **this is how to opt out** (unsetting the variable alone leaves the last template in place) |
+
+- **Bare `cargo nextest` does not refresh the template.** After *adding* a migration that is harmless, because each test applies the remainder itself, only more slowly. After *editing* one that is already in the template, every test fails with sqlx's "previously applied but has been modified" error. Run `cargo make test-template` to rebuild.
+- **A test that needs an unmigrated database cannot rely on `migrations = false`,** because that stops sqlx from migrating but not Postgres from copying. Create a database `TEMPLATE template0` instead; `sensitivity_default_off_test.rs` shows how.
+
 ## Embed-gated e2e tests
 `cargo make test-e2e` only enables `--features test-db`, so it **silently compiles out every `test-embed`-gated test**. CI does not: **every CI test job enables `test-embed`**, and ONNX is installed in all of them. When touching push-body, ingest-pipeline, or YAML fixture loading code, run with both features locally to match CI:
 ```bash
