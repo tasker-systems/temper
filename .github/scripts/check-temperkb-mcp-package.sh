@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # .github/scripts/check-temperkb-mcp-package.sh
 #
-# temperkb-mcp is publish-ready: prove it on every PR, so it cannot rot before its first publish.
+# temperkb-mcp packages: prove it on every PR, so a packaging break surfaces on the PR that
+# causes it rather than in the release's publish lane.
 #
 #   1. `cargo publish --dry-run` over the client closure AND temperkb-mcp together. Packaging
 #      several workspace crates in one invocation verifies each against its packaged siblings (a
@@ -14,9 +15,8 @@
 #      rewrites the tarball's lockfile, so this step cannot run `--locked`). A test that
 #      reads a file the package does not ship fails here, not after the publish.
 #
-# temperkb-mcp is deliberately NOT in publish-crates.sh's CRATES yet: crates.io attaches a trusted
-# publisher only to a crate that exists, so its name is claimed by a one-time local publish first
-# (see that script's "Bootstrap, for the record").
+# temperkb-mcp is in publish-crates.sh's CRATES since its 0.6.0 bootstrap (see that script's
+# "Bootstrap, for the record"). The release lane publishes it; this gate keeps the PR-time proof.
 #
 # Usage: bash .github/scripts/check-temperkb-mcp-package.sh
 set -euo pipefail
