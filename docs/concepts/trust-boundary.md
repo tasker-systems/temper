@@ -65,9 +65,12 @@ validates. For the hosted instance:
   "resource": "https://temperkb.io/api" }
 ```
 
-On a self-hosted SAML instance (Temper AS), the response has **no `resource` field** —
-correctly, because that AS ignores a request-supplied audience. The caller omits `audience`
-and the server does too.
+On a self-hosted SAML instance (Temper AS), the response has **no `resource` field**. That
+authorization server serves a fixed set of resources — the instance's API audience and, when the
+operator configured one, its MCP resource — and a caller may name one of them with the RFC 8707
+`resource` parameter (or Auth0's `audience` spelling) at `/oauth/authorize`. A requested resource
+outside that set is refused; a request that names none gets the API audience. HTTP callers can
+simply omit it.
 
 **MCP clients** read the RFC 9728 protected-resource metadata instead:
 
@@ -77,14 +80,31 @@ GET <origin>/.well-known/oauth-protected-resource
 
 Its `resource` is the MCP surface's own audience — `MCP_AUDIENCE` when the operator set it
 (conventionally the MCP server URL itself, which is what lets conformant MCP clients pass their
-`resource`-matches-the-server-URL-or-origin check), `AUTH_AUDIENCE` otherwise.
+`resource`-matches-the-server-URL-or-origin check), `AUTH_AUDIENCE` otherwise. A conformant MCP
+client requests that resource, and the token it receives names it.
 
-> **Each discovery door answers for its surface.** The authorization-server metadata and the
-> protected-resource metadata used to be required to state one identical audience; they now
-> state the audience of the surface that discovers through them. They agree whenever
-> `MCP_AUDIENCE` is unset. The MCP gate additionally accepts HTTP-audience tokens (machine
-> tokens, pre-split sessions), so an MCP client that somehow holds an API-audience token still
-> authenticates — the reverse is not true, and no client should rely on it.
+> **Each discovery door answers for its surface; both doors accept the same tokens.** The HTTP
+> and MCP doors accept the same instance audience set. When `MCP_AUDIENCE` differs from
+> `AUTH_AUDIENCE`, a token naming either resource authenticates at either door. This is
+> deliberate: the MCP service relays the caller through the API, and the two transports are one
+> authorization domain. The audience split satisfies resource discovery and token targeting; it
+> is not a least-privilege boundary between the transports. A token naming any other audience is
+> refused at both.
+
+### Who signs what in Temper-AS mode
+
+On a SAML instance two different signatures are in play, and they are not interchangeable:
+
+- **The external SAML identity provider** authenticates the user and signs the SAML
+  *assertion* it posts back to Temper. Temper's authorization server verifies that signature
+  against the IdP certificate the operator configured.
+- **Temper's authorization server** signs the OAuth *access token* (EdDSA). That token is the
+  only thing either door ever sees, and it is verified against the authorization server's own
+  published keys — the instance's one issuer.
+
+So the issuer a caller's token names is always the Temper instance, never the SAML IdP. The
+`resource` the flow requested is carried through the authorization code and every refresh of
+the session, so a refreshed token keeps the audience its login was granted.
 
 ## The error contract
 
@@ -147,8 +167,8 @@ CLI. There is no separate "agent identity" — the agent is the human, through t
 ## MCP is a second surface, not a second API
 
 The MCP server runs on a different base path (`/mcp`, no `/api` prefix) with a JSON-RPC
-transport, but the authentication is identical — same issuer, the MCP surface's own audience
-(`MCP_AUDIENCE`, plus the HTTP audience for machine and pre-split tokens), same two
+transport, but the authentication is identical — same issuer, the same accepted audience set
+(the API audience and, when configured, the MCP surface's own `MCP_AUDIENCE`), same two
 gates. The difference is transport and tool surface (40 registered MCP tools against 105 REST
 paths — the REST count from the router's generated `openapi.json`, the tool count from the
 MCP server's registered tool list). An integrator writing a service targets HTTP; MCP is an

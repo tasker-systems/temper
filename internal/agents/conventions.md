@@ -66,6 +66,11 @@ applies to the description itself, plus: no production identifiers, no tenant da
 state of a running deployment. This is not obscurity as a control; it is declining to publish a map
 of where to push. Reference a task by id when a reviewer needs the context.
 
+Public enterprise documentation follows the same rule, governed by
+[`internal/site-ia.md`](../site-ia.md) (*Enterprise installation claims describe contracts, not
+deployments*): describe the install contract with placeholders and independently grounded
+behavior, never the deployment that exposed the need.
+
 **Scope statements are the exception, and they are welcome.** "Cost only; behavior unchanged", "the
 read path is untouched", "this leaves X alone deliberately" — reviewers infer coverage from silence,
 so one line naming what a change does *not* do is worth a paragraph of caveats. That is a statement

@@ -447,6 +447,40 @@ audiences existed. The pages were not wrong; they were addressed to someone else
   projection, seam, register — every one of these is ours, and `temperkb.io` owns the long
   answer.
 
+## Enterprise installation claims describe contracts, not deployments
+
+An enterprise deployment may reveal a product defect or a missing instruction, but the
+deployment is evidence for the work, not content for the public page. Before publication,
+rewrite the finding as one of:
+
+- a product invariant grounded in code or a public protocol;
+- an operator choice expressed with placeholders;
+- a verification procedure that works against any conforming installation.
+
+Public pages may name configuration keys, relationships, URL shapes and required registration
+steps. They do not name a tenant, copy its values, report its operational state, or narrate how
+the gap was found.
+
+| Publish | Keep private |
+|---|---|
+| `MCP_AUDIENCE=https://<instance>/mcp` | a deployed value |
+| register `<remote-client-callback>` exactly | a tenant's callback inventory or enabled integration list |
+| one issuer and the instance's served-audience set | tenant names, domains, project or client identifiers, environment dumps |
+| a generic `curl` verification procedure | captured responses, logs, traces or incidents from a private deployment |
+
+Use the neutral placeholders the playbooks already use — `https://<instance>`,
+`https://<instance>/api`, `https://<instance>/mcp`, `<remote-client-callback>`,
+`<mcp-client-id>` — rather than inventing a plausible-looking domain, which reads as a real one.
+
+**Canonical public URLs are not tenant data.** Temper's own hosted endpoints
+(`https://temperkb.io/...`) and a third-party client's publicly documented requirements — a
+remote MCP client's published OAuth callback, an RFC — may be named, linked to their public
+source. The rule protects deployment-specific identifiers, not every concrete URL.
+
+**There is no denylist, deliberately.** A list of private names or domains checked into this
+repository publishes exactly what it exists to protect, and is incomplete the day it lands. The
+control is the rewrite above, applied by the author and checked in review.
+
 ## Generated content is fixed at its source
 
 `reference/cli` and `reference/config` are committed projections. Each carries a drift gate

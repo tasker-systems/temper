@@ -5,16 +5,26 @@ provider it trusts. Also relevant to **integrators**, who need to know what toke
 
 ## The contract
 
-A Temper instance validates tokens from **exactly one issuer**. It checks an **audience** on
-each surface: the HTTP surface validates `AUTH_AUDIENCE`, and the MCP surface validates
-`MCP_AUDIENCE` — which defaults to `AUTH_AUDIENCE` when unset — plus, deliberately, `AUTH_AUDIENCE`
-itself, because machine tokens and sessions minted before the split carry it. Both audiences name
-the same instance; the split exists because conformant MCP clients refuse a `resource` that is
-neither the MCP server URL nor its origin, and the only honest way to satisfy that check is for
-the MCP surface to have its own resource indicator. The issuer, the audiences, and the JWKS
-endpoint the server fetches keys from are the variables that carry whose tokens this instance
-trusts and which tokens it accepts. They must agree, and the server refuses to start if they do
-not.
+A Temper instance validates tokens from **exactly one issuer**, and both of its doors — the HTTP
+API and the MCP server — accept **one audience set**:
+
+- `AUTH_AUDIENCE` is the API audience, and the default resource a token is minted for.
+- `MCP_AUDIENCE`, when set, is the MCP surface's own resource indicator — what its
+  protected-resource metadata advertises and what conformant MCP clients request. Unset, it
+  defaults to `AUTH_AUDIENCE` and the set collapses to one value.
+- **Both doors accept both values.** A token naming either audience authenticates at either
+  door; a token naming anything else is refused at both. Which door a call arrives through is
+  never an authorization input.
+
+The split exists because conformant MCP clients refuse a `resource` that is neither the MCP
+server URL nor its origin, and the only honest way to satisfy that check is for the MCP surface
+to have its own resource indicator. **It does not create separate authorization domains**: the
+MCP server relays every tool call through the API on the caller's behalf, so the two transports
+are one trust domain by construction.
+
+The issuer, the audiences, and the JWKS endpoint the server fetches keys from are the variables
+that carry whose tokens this instance trusts and which tokens it accepts. They must agree, and
+the server refuses to start if they do not.
 
 ## The two modes
 
@@ -31,15 +41,17 @@ The mode is decided by a single signal: whether the Temper Authorization Server 
 |---|---|---|
 | Auth issuer | The IdP's issuer URL | **Must equal** the AS issuer |
 | JWKS URL | The IdP's JWKS endpoint | **Must be** the AS issuer + `/oauth/jwks` |
-| Auth audience | The IdP's API identifier — validated by the HTTP surface | **Must equal** the AS audience |
-| MCP audience | Optional; the MCP surface's own `resource`. Defaults to the auth audience; must be a URI | Same rule |
+| Auth audience | The IdP's API identifier — accepted by both doors | **Must equal** the AS audience |
+| MCP audience | Optional; the MCP surface's own `resource`, accepted by both doors. Defaults to the auth audience; must be a URI | Same rule — independent of the AS audience, which it need not equal |
 | AS issuer | Unset — setting it flips the instance into AS mode | Required — the instance origin |
 | AS audience | Unset — never read | Required — **must equal** the auth audience |
 
-In AS mode, the AS audience and the auth audience are **one value spelled two ways** — the AS
-mints API-flow tokens with the server-side AS audience and the HTTP surface validates exactly
-that. The MCP audience is independent: when set, an MCP authorization flow asks the AS for that
-resource and the AS mints its token with it. `MCP_AUDIENCE` unset collapses everything back to a
+In AS mode, the AS audience and the auth audience are **one value spelled two ways** —
+`AS_AUDIENCE == AUTH_AUDIENCE` is the boot coherence rule. The MCP audience is independent and is
+**not** required to equal `AS_AUDIENCE`; it is only required to be a URI. When set, the AS serves
+it alongside the API audience: an MCP authorization flow asks for that resource, the AS accepts
+it because it is in the served set, and mints the token with it. A requested resource outside the
+served set is refused. `MCP_AUDIENCE` unset collapses everything back to a
 single audience, which is the shape instances ran before the split.
 
 Under an external IdP, there is no AS, so the AS-specific variables are unset entirely. That is
@@ -76,11 +88,20 @@ issuer trusts the wrong party, and a misdirected JWKS URL checks no signature ag
 that actually signed the token. The boot check names rules that were already true. It can only
 refuse to start an instance that was already broken and had not noticed.
 
-## Trailing slashes are normalized
+## Values are compared exactly
 
-Auth0 issuers conventionally end in `/`; the Temper AS strips them. The comparison normalizes
-before checking, so `https://temper.acme.com` and `https://temper.acme.com/` are the same
-issuer.
+Surrounding whitespace is trimmed from every variable, and an empty value counts as unset.
+Nothing else is normalized. The issuer and audiences are compared **byte for byte**, because a
+token's `iss` and `aud` are matched as exact strings:
+
+- In AS mode `AUTH_ISSUER` must equal `AS_ISSUER` exactly. `https://<instance>` and
+  `https://<instance>/` are **different issuers** — a trailing slash on one side only refuses to
+  start, because no token the AS mints would ever verify. Choose one spelling (without a
+  trailing slash is conventional for the Temper AS) and use it for both.
+- `JWKS_URL` must be exactly `$AS_ISSUER/oauth/jwks`, with no doubled slash if the issuer carries
+  one.
+- Under an external IdP, `AUTH_ISSUER` must be spelled exactly as the IdP mints `iss` — Auth0
+  issuers end in `/`.
 
 ## What this means for integrators
 
