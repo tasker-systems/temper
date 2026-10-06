@@ -27,6 +27,9 @@ runs:
     - name: Setup Rust toolchain
       uses: dtolnay/rust-toolchain@stable
 
+    - name: Link with mold (ATTRIBUTION ONLY — never merges)
+      uses: rui314/setup-mold@v1
+
     - name: Setup Rust build cache
       uses: Swatinem/rust-cache@v2
       with:
