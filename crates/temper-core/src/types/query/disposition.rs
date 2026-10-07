@@ -376,7 +376,7 @@ pub enum RefusalReason {
     /// The refusal names the predicate's position and the limit, never the value: echoing a value
     /// refused for its size would return the oversized payload in the error body.
     PropertyValueTooLarge,
-    /// The property-predicate values across the whole composition sum past 1048576 bytes.
+    /// The property-predicate values across the whole composition sum past 524288 bytes.
     ///
     /// Composition-level, like `too_many_stages`. It is what keeps the largest
     /// legal composition inside the query door's body limit once each value may be 16 KiB.
@@ -396,7 +396,7 @@ pub enum RefusalReason {
     /// over-long list would otherwise answer with a refusal list many times its own size.
     ListTooLong,
     /// The composition's caller text — narrowing strings, facet and predicate values, questions —
-    /// exceeds 8388608 bytes counted as the most expansive encoder that escapes per character would
+    /// exceeds 786432 bytes counted as the most expansive encoder that escapes per character would
     /// send it.
     ///
     /// What makes a legal plan fit the body limit under any encoder that escapes per character.

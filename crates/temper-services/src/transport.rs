@@ -92,6 +92,17 @@ where
     ))
 }
 
+/// The hosting platform's hard request-body cap on Vercel, where both community deployments run:
+/// a body past it is refused by the platform with a bare `413` before any door here reads it, so no
+/// door limit above it is reachable there. Self-hosted proxies may admit more.
+///
+/// Two things are held under it. `BLOB_SINGLE_REQUEST_MAX_BYTES` is warned against when it exceeds
+/// this (WARN, not refuse; B-C5, final-pass review). And the largest legal composition, at the most
+/// expansive encoder, is measured against it by
+/// `the_largest_legal_composition_fits_inside_the_declared_body_limit` in temper-api, because a
+/// plan the contract calls legal must not meet that bare `413` on the deployment we run.
+pub const VERCEL_REQUEST_BODY_CAP_BYTES: usize = 4_500_000;
+
 /// The default request-body ceiling, in **decompressed** bytes, for a door that declares none.
 ///
 /// **This number is ratified, not derived, and that is the point of it being here.** Before this
@@ -131,7 +142,7 @@ where
 ///
 /// **It is emphatically not ample for every payload the contract admits, and that is the reason the
 /// table above exists rather than a reason to raise this.** A composition `/api/query` calls legal
-/// encodes to up to **11,742,820 bytes** `[measured — 2026-10-07]`, 5.6x this number. Had that
+/// encodes to up to **4,270,310 bytes** `[measured — 2026-10-07]`, 2.0x this number. Had that
 /// door inherited this ceiling it would have answered a legal plan with a bare 413. The doors
 /// carrying large payloads by design — a composition, and the MCP tool surface with `ingest`'s
 /// inline content and `data_artifacts`' JSON — each declare their own, which is the shape this

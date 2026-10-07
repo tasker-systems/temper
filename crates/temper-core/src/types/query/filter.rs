@@ -70,7 +70,7 @@ pub struct FacetPredicate {
     #[cfg_attr(feature = "web-api", schema(max_length = 256))]
     #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub key: String,
-    /// At most 16384 bytes, and counted toward the composition's 1048576-byte total of
+    /// At most 16384 bytes, and counted toward the composition's 524288-byte total of
     /// property-predicate values.
     #[cfg_attr(feature = "web-api", schema(max_length = 16384))]
     #[cfg_attr(feature = "mcp", schemars(length(max = 16384)))]
@@ -201,7 +201,7 @@ pub enum PropertyOp {
     ///
     /// **Size.** Each value is at most 16384 bytes of compact JSON and at most 256 nested array
     /// elements or object members, and every predicate value in one composition totals at most
-    /// 1048576 bytes (`property_value_too_large`, `property_value_budget_exceeded`).
+    /// 524288 bytes (`property_value_too_large`, `property_value_budget_exceeded`).
     Contains { values: Vec<serde_json::Value> },
     /// `property_value <direction> $value` over jsonb's native ordering, type-guarded.
     ///
@@ -229,7 +229,7 @@ pub enum PropertyOp {
     /// and adding it saves one probe at the cost of a second value slot and a second SQL branch.
     ///
     /// **Size.** The bound is at most 16384 bytes of compact JSON and at most 256 nested array
-    /// elements or object members, and counts toward the same 1048576-byte composition total as
+    /// elements or object members, and counts toward the same 524288-byte composition total as
     /// `contains` values.
     Compare {
         direction: OrdOp,
@@ -419,13 +419,18 @@ pub fn property_value_nodes(value: &serde_json::Value) -> usize {
 /// [`super::disposition::RefusalReason::PropertyValueBudgetExceeded`].
 ///
 /// The per-value cap alone does not keep the contract coherent. The count caps admit up to
-/// 16,384 values across `MAX_STAGES` stages, and 16,384 values at 16 KiB is ~268 MB, past the
-/// query door's 25 MB body limit. A plan the contract called legal would then meet a bare 413
-/// rather than a refusal list. This budget keeps the largest legal composition well inside that
-/// limit (`the_largest_legal_composition_fits_inside_the_declared_body_limit` holds it). It is
-/// also the ceiling on predicate bytes one request can make Postgres compare: 1 MiB, against the
-/// ~25 MB the body limit alone would admit.
-pub const MAX_COMPOSITION_PROPERTY_VALUE_BYTES: usize = 1024 * 1024;
+/// 16,384 values across `MAX_STAGES` stages, and 16,384 values at 16 KiB is ~268 MB, past any body
+/// limit. A plan the contract called legal would then meet a bare 413 rather than a refusal list.
+/// This budget, inside [`MAX_COMPOSITION_TEXT_BYTES`], keeps the largest legal composition under
+/// the hosting platform's request cap (`the_largest_legal_composition_fits_inside_the_declared_body_limit`
+/// holds it). It is also the ceiling on predicate bytes one request can make Postgres compare.
+///
+/// # 512 KiB
+///
+/// Sized down from 1 MiB so the whole plan fits Vercel's 4.5 MB request cap, where it must fit
+/// inside the text budget that also counts it. It still holds about sixty values at the largest
+/// either install stores (8,460 bytes, enterprise, 2026-10-06), where a real plan carries a few.
+pub const MAX_COMPOSITION_PROPERTY_VALUE_BYTES: usize = 512 * 1024;
 
 /// The size of one property-predicate value, as [`MAX_PROPERTY_VALUE_BYTES`] measures it: compact
 /// serialized JSON bytes. Counted through a sink, so measuring a large value allocates nothing.
@@ -449,12 +454,15 @@ pub fn property_value_bytes(value: &serde_json::Value) -> usize {
 /// this budget fits the body limit under any encoder that escapes per character; the coherence test
 /// measures that worst case.
 ///
-/// # 8 MiB
+/// # 768 KiB
 ///
-/// Far above any plan a person or agent writes (the longest live title on either install is 2,316
-/// bytes), and with the non-text parts of the largest legal plan at their caps, still over 2x
-/// under the 25 MB body limit.
-pub const MAX_COMPOSITION_TEXT_BYTES: usize = 8 * 1024 * 1024;
+/// Sized from the platform, not from callers. On Vercel, a body past 4.5 MB is refused by the
+/// platform with a bare 413 before the door reads it, and the non-text parts of the largest legal
+/// plan (its id sets, supplied embeddings and structure) already take about 3.5 MB at their caps.
+/// What is left is the room for caller text. It is still far above any plan a person or agent
+/// writes: the longest live title on either install is 2,316 bytes, and every per-string and
+/// per-value cap is unchanged, so no single item either install stores is refused.
+pub const MAX_COMPOSITION_TEXT_BYTES: usize = 768 * 1024;
 
 /// A string's bytes inside its quotes under the most expansive JSON encoder that escapes per
 /// character: an ASCII letter, digit or space is one byte, because no encoder escapes those; every
@@ -480,9 +488,14 @@ pub fn worst_case_string_bytes(s: &str) -> usize {
 /// float may come back with a longer exponent or more digits than serde writes. So an `f64` that is
 /// integral and beyond 2^63 counts as `MAX_F64_DIGITS` (310) bytes, and any other `f64` as at least
 /// `MAX_F64_REPR_BYTES` (24). Integers within 64 bits print the same digits everywhere.
+///
+/// **Separators at their widest default too.** Python's `json.dumps` writes `", "` and `": "` unless
+/// told otherwise, a byte more per separator than a compact encoder, and our own SDK is a Python
+/// client. So a comma counts two bytes and a member's colon two. Indentation is a caller's choice,
+/// not an encoder default, and stays padding.
 pub fn worst_case_value_bytes(value: &serde_json::Value) -> usize {
     use serde_json::Value;
-    let separators = |n: usize| n.saturating_sub(1);
+    let separators = |n: usize| 2 * n.saturating_sub(1);
     match value {
         Value::String(s) => worst_case_string_bytes(s) + 2,
         Value::Array(xs) => {
@@ -491,7 +504,7 @@ pub fn worst_case_value_bytes(value: &serde_json::Value) -> usize {
         Value::Object(m) => {
             2 + separators(m.len())
                 + m.iter()
-                    .map(|(k, v)| worst_case_string_bytes(k) + 3 + worst_case_value_bytes(v))
+                    .map(|(k, v)| worst_case_string_bytes(k) + 4 + worst_case_value_bytes(v))
                     .sum::<usize>()
         }
         Value::Number(n) if n.is_f64() => {

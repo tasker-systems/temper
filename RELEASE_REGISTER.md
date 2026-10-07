@@ -65,11 +65,11 @@ status: signal-only
 - **The query and search doors bound the size of every value and string a request carries, so every legal plan fits the body limit**
   `/api/query`'s shape pass now refuses: a `contains` value, `compare` bound or facet value larger
   than 16384 bytes or carrying more than 256 nested array elements or object members
-  (`property_value_too_large`); predicate values summing past 1048576 bytes per composition
+  (`property_value_too_large`); predicate values summing past 524288 bytes per composition
   (`property_value_budget_exceeded`); and a label, tag, `doc_type`, facet or property key,
   `stage`, `status` or `owner` longer than 256 bytes, or a `title_contains` longer than 4096
   (`filter_string_too_long`). Strings and facet values are measured as JSON-escaped bytes. All
-  caller text in one composition is also budgeted at 8 MiB counted at the most expansive
+  caller text in one composition is also budgeted at 768 KiB counted at the most expansive
   per-character escaping encoder (`text_budget_exceeded`), so a legal plan fits the body limit under any per-character escaping encoder its
   client uses; `returns` and a combine stage's `inputs` past 64, or an act's `inputs` past 2, are
   refused once up front (`list_too_long`). All five are new members of the open `RefusalReason` vocabulary,
@@ -91,8 +91,10 @@ status: signal-only
   `embedding` 768 components, `bound_ids` or `cogmap_ids` 256 ids, or `doc_type`, `context_ref` or
   `search_config` 256 bytes. Caps are published as `maxLength`/`maxItems` where the schema can carry
   them (the generated Ruby and Python models now reject an over-long scalar before sending) and in
-  descriptions where it cannot. The largest legal composition measures 11,742,820 bytes at the most
-  expansive per-character encoding, with compact separators. temper-py now sends request bodies as UTF-8 rather than ASCII-escaped
+  descriptions where it cannot. The largest legal composition measures 4,270,310 bytes at the most
+  expansive per-character encoding, separators at Python's default width: the composition budgets
+  are sized so it fits the 4.5 MB request cap Vercel enforces ahead of the door, not only the
+  door's 25 MB. temper-py now sends request bodies as UTF-8 rather than ASCII-escaped
   (`ensure_ascii=False`), and the UI's search palette declines a query over 4096 bytes itself.
   Every cap clears both installs' live maxima (community / enterprise, 2026-10-06): property value
   1,528 / 8,460 bytes and 20 / 144 nodes, facet value 778 / 1,304, title 279 / 2,316, tag 94 / 74,

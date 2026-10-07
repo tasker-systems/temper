@@ -28,11 +28,18 @@ pub(super) fn query_routes() -> OpenApiRouter<AppState> {
 /// The gated router this door mounts in inherits 25 MiB (`GATED_MAX_BODY_BYTES`), the same number,
 /// but that is a transport ruling which may move on its own; a door outside it gets axum's 2 MiB
 /// (`MAX_REQUEST_BODY_BYTES`). Either way the inherited number is chosen without this door in
-/// mind, and a composition the contract calls legal encodes to up to **11,742,820 bytes** (below).
+/// mind, and a composition the contract calls legal encodes to up to **4,270,310 bytes** (below).
 /// Below that, the door would answer a plan its own contract admits with a bare 413 — no refusal
 /// list, no vocabulary, in the door whose whole promise is that every refusal arrives at once and
 /// in the caller's own terms. `the_largest_legal_composition_fits_inside_the_declared_body_limit`
 /// holds the plan against this number.
+///
+/// # The platform's cap binds first, and the contract is sized under it
+///
+/// On Vercel, where both community deployments run, the platform refuses a request body past
+/// `VERCEL_REQUEST_BODY_CAP_BYTES` (4.5 MB) with its own bare 413 before this door reads a byte.
+/// This number cannot lift that. So the composition budgets are sized to fit the platform's cap,
+/// not this one, and the coherence test holds the plan against whichever is smaller.
 ///
 /// # Why 25 MB, and what it backstops
 ///
@@ -45,14 +52,15 @@ pub(super) fn query_routes() -> OpenApiRouter<AppState> {
 /// bounded.** The narrowing lists are capped by `MAX_FILTER_VALUES`, the closed vocabularies by
 /// `DuplicateSetMember`, each narrowing string by `MAX_FILTER_STRING_BYTES` (256) or
 /// `MAX_TITLE_CONTAINS_BYTES` (4096), property-predicate values by `MAX_PROPERTY_VALUE_BYTES`
-/// (16 KiB and 256 nodes each) and `MAX_COMPOSITION_PROPERTY_VALUE_BYTES` (1 MiB across the
-/// composition), and all caller text by `MAX_COMPOSITION_TEXT_BYTES` (8 MiB at the most expansive
+/// (16 KiB and 256 nodes each) and `MAX_COMPOSITION_PROPERTY_VALUE_BYTES` (512 KiB across the
+/// composition), and all caller text by `MAX_COMPOSITION_TEXT_BYTES` (768 KiB at the most expansive
 /// encoding). `the_largest_legal_composition_fits_inside_the_declared_body_limit` builds the plan at
 /// those caps and budgets and measures it at no less than the most expansive per-character encoder
-/// would send: **11,742,820 bytes** `[measured — 2026-10-07]`, 2.2x under this number. It is an
-/// upper bound: the measure charges six bytes for every punctuation character, `_` and `-`
-/// included, which no encoder escapes. So a plan the
-/// contract calls legal never meets a bare 413.
+/// would send, separators at Python's default width: **4,270,310 bytes** `[measured —
+/// 2026-10-07]`, 5% under the platform's 4.5 MB and 6x under this number. It is an upper bound: the
+/// measure charges six bytes for every punctuation character, `_` and `-` included, which no
+/// encoder escapes. So a plan the contract calls legal never meets a bare 413, from this door or
+/// from the platform in front of it.
 ///
 /// **What this limit still catches is bytes that are not the plan**: whitespace, and fields serde
 /// ignores. A caller can pad a legal plan past any limit that way, and a 413 is the right answer
@@ -81,6 +89,7 @@ mod tests {
     use temper_core::types::query::stage::{StageInput, StageName, StageRelation};
     use temper_core::types::query::validate::validate;
     use temper_core::types::resource_view::ResourceSection;
+    use temper_services::transport::VERCEL_REQUEST_BODY_CAP_BYTES;
 
     /// **The coherence condition that makes the caps one decision rather than several ifs.**
     ///
@@ -103,7 +112,7 @@ mod tests {
     /// door must accept, and the next edit to this fixture would have had no guard at all.
     ///
     /// The largest terms in the selection shape are the narrowing strings at their length caps
-    /// (two 256-entry lists of 256-byte strings per stage), the caller id sets, and the 1 MiB of
+    /// (two 256-entry lists of 256-byte strings per stage), the caller id sets, and the 512 KiB of
     /// property-predicate values the fixture grows to exactly `MAX_COMPOSITION_PROPERTY_VALUE_BYTES`.
     ///
     /// **What it does NOT prove**, stated because a green here reads like completeness:
@@ -161,12 +170,16 @@ mod tests {
             })
             .collect();
         let bytes = sizes.iter().map(|s| s.1).max().expect("two shapes");
+        // The tighter ceiling binds. On Vercel the platform refuses a body past its cap with a
+        // bare 413 before the door's own limit is reached, so the plan is held under both.
+        let ceiling = QUERY_MAX_BODY_BYTES.min(VERCEL_REQUEST_BODY_CAP_BYTES);
         assert!(
-            bytes < QUERY_MAX_BODY_BYTES,
+            bytes < ceiling,
             "the largest composition at every published cap encodes to {bytes} bytes at worst \
-             (walk {:?}, selection {:?}, as (serde, worst)), which the declared body limit of \
-             {QUERY_MAX_BODY_BYTES} would refuse with a bare 413 — raise the limit, or lower the \
-             caps, but do not let the contract admit a plan the door cannot read",
+             (walk {:?}, selection {:?}, as (serde, worst)), which a ceiling of {ceiling} (the \
+             door's {QUERY_MAX_BODY_BYTES}, the platform's {VERCEL_REQUEST_BODY_CAP_BYTES}) \
+             would refuse with a bare 413 — lower the budgets, but do not let the contract admit \
+             a plan the deployment cannot deliver",
             sizes[0],
             sizes[1]
         );
@@ -309,7 +322,7 @@ mod tests {
     /// and is passed rather than assumed.
     /// Grow the plan's predicate values, none past the per-value cap, until together they total
     /// exactly the composition budget. The count caps admit 16,384 values, so at a few bytes each
-    /// the fixture would leave out the ~1 MiB of value bytes a legal plan may carry.
+    /// the fixture would leave out the 512 KiB of value bytes a legal plan may carry.
     fn at_the_property_value_budget(mut c: Composition) -> Composition {
         // Facet values first: they are budgeted as raw string bytes, not JSON.
         let mut facet_values: Vec<&mut String> = Vec::new();

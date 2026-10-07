@@ -29,7 +29,7 @@ class FacetPredicate(BaseModel):
     One `kb_properties` facet predicate, at the inner-key grain the facet model uses.
     """ # noqa: E501
     key: Annotated[str, Field(strict=True, max_length=256)]
-    value: Annotated[str, Field(strict=True, max_length=16384)] = Field(description="At most 16384 bytes, and counted toward the composition's 1048576-byte total of property-predicate values.")
+    value: Annotated[str, Field(strict=True, max_length=16384)] = Field(description="At most 16384 bytes, and counted toward the composition's 524288-byte total of property-predicate values.")
     __properties: ClassVar[List[str]] = ["key", "value"]
 
     model_config = ConfigDict(

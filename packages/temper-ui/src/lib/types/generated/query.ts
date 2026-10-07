@@ -478,7 +478,7 @@ export type Extent = { "extent": "complete" } | { "extent": "partial" } | { "ext
  */
 export type FacetPredicate = { key: string, 
 /**
- * At most 16384 bytes, and counted toward the composition's 1048576-byte total of
+ * At most 16384 bytes, and counted toward the composition's 524288-byte total of
  * property-predicate values.
  */
 value: string, };

@@ -1,6 +1,7 @@
 use crate::auth_config::{parse_auth_config, AuthConfig, ConfigError};
 use crate::broker::VercelConnectConfig;
 use crate::services::grant_crypto::VaultKey;
+use crate::transport::VERCEL_REQUEST_BODY_CAP_BYTES;
 use std::env;
 use temper_auth::config::shared_secret;
 
@@ -413,11 +414,6 @@ fn parse_cron_host(lookup: impl Fn(&str) -> Option<String>) -> Option<String> {
 /// closes the doors; an unrecognized value closes them too, loudly (fail closed).
 /// Misconfigured CREDENTIALS (unparseable token, bad caps) are never "policy" — those
 /// keep the plain-unconfigured vocabulary.
-/// The platform's hard request-body cap: the cliff `BLOB_SINGLE_REQUEST_MAX_BYTES` is
-/// warned against when it exceeds this (WARN, not refuse — self-hosted proxies may
-/// admit more; B-C5, final-pass review).
-const VERCEL_REQUEST_BODY_CAP_BYTES: usize = 4_500_000;
-
 ///
 /// Public because the MCP server reads the same posture at its own boot, without an `ApiConfig`:
 /// the door it advertises must be the door the API serves, so the two parse it once.

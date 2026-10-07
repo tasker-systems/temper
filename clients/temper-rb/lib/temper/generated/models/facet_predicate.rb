@@ -18,7 +18,7 @@ module Temper::Generated
   class FacetPredicate < ApiModelBase
     attr_accessor :key
 
-    # At most 16384 bytes, and counted toward the composition's 1048576-byte total of property-predicate values.
+    # At most 16384 bytes, and counted toward the composition's 524288-byte total of property-predicate values.
     attr_accessor :value
 
     # Attribute mapping from ruby-style variable name to JSON key.

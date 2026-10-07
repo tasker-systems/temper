@@ -169,7 +169,7 @@
         },
         {
           "const": "property_value_budget_exceeded",
-          "description": "The property-predicate values across the whole composition sum past 1048576 bytes.\n\nComposition-level, like `too_many_stages`. It is what keeps the largest\nlegal composition inside the query door's body limit once each value may be 16 KiB.",
+          "description": "The property-predicate values across the whole composition sum past 524288 bytes.\n\nComposition-level, like `too_many_stages`. It is what keeps the largest\nlegal composition inside the query door's body limit once each value may be 16 KiB.",
           "type": "string"
         },
         {
@@ -184,7 +184,7 @@
         },
         {
           "const": "text_budget_exceeded",
-          "description": "The composition's caller text — narrowing strings, facet and predicate values, questions —\nexceeds 8388608 bytes counted as the most expansive encoder that escapes per character would\nsend it.\n\nWhat makes a legal plan fit the body limit under any encoder that escapes per character.",
+          "description": "The composition's caller text — narrowing strings, facet and predicate values, questions —\nexceeds 786432 bytes counted as the most expansive encoder that escapes per character would\nsend it.\n\nWhat makes a legal plan fit the body limit under any encoder that escapes per character.",
           "type": "string"
         },
         {

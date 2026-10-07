@@ -3194,9 +3194,18 @@ mod tests {
             nodes.push(sink);
             plan(nodes, vec!["hits"])
         };
-        // Per stage: 256 tags x 256 characters x 6 bytes = 393,216 worst-case bytes.
+        // Per stage: 256 tags x 256 characters x 6 bytes = 393,216 worst-case bytes. The sink's
+        // question counts too, so "under" is the most tag stages that fit beside it, and one more
+        // is over by construction rather than by however much slack the budget happens to leave.
         let per_stage = MAX_FILTER_VALUES * MAX_FILTER_STRING_BYTES * 6;
-        let under = MAX_COMPOSITION_TEXT_BYTES / per_stage;
+        let question = match act("hits", ActName::FindExact, None) {
+            StageNode::Act(a) => a.intention.map_or(0, |i| {
+                crate::types::query::filter::worst_case_string_bytes(&i.query)
+            }),
+            StageNode::Combine(_) => unreachable!("act builds an act"),
+        };
+        let under = (MAX_COMPOSITION_TEXT_BYTES - question) / per_stage;
+        assert!(under >= 1, "the budget fits at least one tag stage");
         assert_eq!(
             count_refusals(&stages(under), RefusalReason::TextBudgetExceeded),
             0
