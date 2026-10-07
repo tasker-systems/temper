@@ -25,13 +25,14 @@ pub(super) fn query_routes() -> OpenApiRouter<AppState> {
 ///
 /// # Declared because the inherited number is wrong, not merely because inheriting is untidy
 ///
-/// Without its own limit this door inherits the 2 MiB default (`MAX_REQUEST_BODY_BYTES`), and that
-/// is wrong in the direction that refuses legal plans: a composition the contract calls legal
-/// encodes to up to **11,742,820 bytes** (below). The door would answer a plan its own contract
-/// admits with a bare 413 — no refusal list, no vocabulary, in the door whose whole promise is that
-/// every refusal arrives at once and in the caller's own terms.
-/// `the_largest_legal_composition_fits_inside_the_declared_body_limit` holds the plan against this
-/// number, and fails against the inherited one.
+/// The gated router this door mounts in inherits 25 MiB (`GATED_MAX_BODY_BYTES`), the same number,
+/// but that is a transport ruling which may move on its own; a door outside it gets axum's 2 MiB
+/// (`MAX_REQUEST_BODY_BYTES`). Either way the inherited number is chosen without this door in
+/// mind, and a composition the contract calls legal encodes to up to **11,742,820 bytes** (below).
+/// Below that, the door would answer a plan its own contract admits with a bare 413 — no refusal
+/// list, no vocabulary, in the door whose whole promise is that every refusal arrives at once and
+/// in the caller's own terms. `the_largest_legal_composition_fits_inside_the_declared_body_limit`
+/// holds the plan against this number.
 ///
 /// # Why 25 MB, and what it backstops
 ///
@@ -47,8 +48,10 @@ pub(super) fn query_routes() -> OpenApiRouter<AppState> {
 /// (16 KiB and 256 nodes each) and `MAX_COMPOSITION_PROPERTY_VALUE_BYTES` (1 MiB across the
 /// composition), and all caller text by `MAX_COMPOSITION_TEXT_BYTES` (8 MiB at the most expansive
 /// encoding). `the_largest_legal_composition_fits_inside_the_declared_body_limit` builds the plan at
-/// those caps and budgets and measures it as the most expansive per-character encoder would send
-/// it: **11,742,820 bytes** `[measured — 2026-10-07]`, 2.2x under this number. So a plan the
+/// those caps and budgets and measures it at no less than the most expansive per-character encoder
+/// would send: **11,742,820 bytes** `[measured — 2026-10-07]`, 2.2x under this number. It is an
+/// upper bound: the measure charges six bytes for every punctuation character, `_` and `-`
+/// included, which no encoder escapes. So a plan the
 /// contract calls legal never meets a bare 413.
 ///
 /// **What this limit still catches is bytes that are not the plan**: whitespace, and fields serde
@@ -106,7 +109,10 @@ mod tests {
     /// **What it does NOT prove**, stated because a green here reads like completeness:
     ///
     /// - **It measures the plan, not the request.** Whitespace and fields serde ignores are bytes
-    ///   a caller may add to any plan; they are padding, and the body limit answers padding.
+    ///   a caller may add to any plan; they are padding, and the body limit answers padding. One
+    ///   kind is not a caller's choice: Python's default `json.dumps` writes `", "` and `": "`, a
+    ///   byte per separator more than measured here. The largest plan has a few hundred thousand
+    ///   separators, so a few hundred KB, well inside the headroom.
     /// - **The maximum is over two pure shapes, not every mixture.** No single act admits every
     ///   bounded field: the walk carries id sets and no `ResourceFilter`, the selection the reverse.
     ///   Both are measured and the larger reported, which is the walk shape `[measured —
@@ -141,7 +147,7 @@ mod tests {
             );
         }
 
-        // Measured at the MOST EXPANSIVE standard encoder, not serde's: a client escaping every
+        // Measured at the MOST EXPANSIVE per-character escaping encoder, not serde's: a client escaping every
         // non-ASCII character or `<>&` as `\uXXXX` sends the same legal plan in more bytes, and the
         // door must read it all the same. Serde's size is a lower bound beside it.
         let sizes: Vec<(usize, usize)> = [&walk, &select]
@@ -427,12 +433,14 @@ mod tests {
         let mut slack = MAX_COMPOSITION_TEXT_BYTES
             .checked_sub(text)
             .expect("the fixture's text starts inside the budget");
+        let mut short_of_cap = 0usize;
         for (s, cap, head) in strings {
             let current = worst_case_string_bytes(s);
             // The head is alphanumeric: one byte at worst. Every other byte is a six-byte `=`.
             let widest_worst = head.len() + 6 * (cap - head.len());
             let target = widest_worst.min(current + slack);
             if target <= current {
+                short_of_cap += usize::from(current < widest_worst);
                 continue;
             }
             let room = target - head.len();
@@ -442,7 +450,18 @@ mod tests {
             let narrow = (room % 6).min(cap - head.len() - wide);
             *s = format!("{head}{}{}", "=".repeat(wide), "x".repeat(narrow));
             slack -= worst_case_string_bytes(s) - current;
+            short_of_cap += usize::from(worst_case_string_bytes(s) < widest_worst);
         }
+        // Saturated means one of two things: the budget is spent, or every string is at its
+        // widest. A clipped remainder only clips a string at its cap, and the next string takes up
+        // what it left. Anything else is a
+        // fixture measuring less than the contract admits, which is how this test once reported
+        // a maximum about 7.3 MB of text short.
+        assert!(
+            slack == 0 || short_of_cap == 0,
+            "the fixture stopped {slack} bytes short of the text budget with {short_of_cap} \
+             strings below their cap"
+        );
         c
     }
 

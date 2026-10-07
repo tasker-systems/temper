@@ -1188,10 +1188,12 @@ fn filter_strings(inv: &ActInvocation) -> Vec<(&'static str, usize, Vec<&str>)> 
     out
 }
 
-/// A stage's caller text at the most expansive standard encoding (`worst_case_string_bytes`): every
-/// narrowing string, facet value, predicate value and its question. The parts of a plan that are
-/// not caller text — ids, numbers, stage names, closed vocabularies — encode the same under every
-/// encoder, so this is all an encoder can inflate.
+/// A stage's caller text at the most expansive per-character escaping encoder
+/// (`worst_case_string_bytes`): every narrowing string, facet value, predicate value and its
+/// question. Predicate values go through `worst_case_value_bytes`, which also widens their numbers,
+/// since a float or an integer past 64 bits is not encoder-invariant. The rest of a plan — ids,
+/// stage names, closed vocabularies, integer bounds — encodes the same under every such encoder,
+/// so this is all one can inflate.
 fn caller_text_bytes(inv: &ActInvocation) -> usize {
     let strings: usize = filter_strings(inv)
         .iter()

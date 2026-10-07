@@ -141,7 +141,7 @@ where
 
 /// `text` whole when it fits [`MAX_REJECTION_TEXT_BYTES`], else its longest prefix that does,
 /// ending on a character boundary, followed by how many bytes were left out.
-fn bounded_rejection_text(mut text: String) -> String {
+fn bounded_rejection_text(text: String) -> String {
     if text.len() <= MAX_REJECTION_TEXT_BYTES {
         return text;
     }
@@ -149,10 +149,13 @@ fn bounded_rejection_text(mut text: String) -> String {
     while !text.is_char_boundary(cut) {
         cut -= 1;
     }
-    let elided = text.len() - cut;
-    text.truncate(cut);
-    text.push_str(&format!(" … ({elided} more bytes not repeated)"));
-    text
+    // A fresh string, not `truncate`: a truncated `String` keeps its capacity, and the response
+    // body would hold the whole serde message alive until a slow reader drained it.
+    format!(
+        "{} … ({} more bytes not repeated)",
+        &text[..cut],
+        text.len() - cut
+    )
 }
 
 #[cfg(test)]
