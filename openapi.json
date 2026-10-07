@@ -9317,7 +9317,7 @@
             }
           },
           "400": {
-            "description": "The composition will not run, with **every** static reason at once in `error.details.refusals` under the code `PLAN_REFUSED` — never just the first, because repairing a plan one refusal per round trip is the experience this contract exists to avoid. A caller meets this response before they meet a 200, so it is the door's most-read documentation.",
+            "description": "Two codes. `PLAN_REFUSED`: the composition will not run, with **every** static reason at once in `error.details.refusals` — never just the first, because repairing a plan one refusal per round trip is the experience this contract exists to avoid. A caller meets this response before they meet a 200, so it is the door's most-read documentation. `UNREADABLE_PLAN`, with no `details`: the body is not JSON at all, so there is no plan to refuse (see the `422`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9347,7 +9347,7 @@
             }
           },
           "422": {
-            "description": "The body is not a composition this door can read — a value of the wrong type, or a name outside a closed vocabulary — under the code `UNREADABLE_PLAN`. There is no plan yet, so there are no refusals: the message names what failed and repeats at most 1024 bytes of it. Malformed JSON answers `400`, a body past the limit `413` and a non-JSON content type `415`, each under the same code.",
+            "description": "The body is not a composition this door can read — a value of the wrong type, or a name outside a closed vocabulary — under the code `UNREADABLE_PLAN`. There is no plan yet, so there are no refusals: the message names what failed and repeats at most 1024 bytes of it. Malformed JSON answers `400`, a non-JSON content type `415`, and a body past this door's own limit `413`, each under the same code. A deployment's platform may refuse a large body before this door reads it, without the code.",
             "content": {
               "application/json": {
                 "schema": {

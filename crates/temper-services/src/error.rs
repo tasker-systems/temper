@@ -250,8 +250,10 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(_) => {
                 tracing::warn!(status_code, error_code = code, message = %bounded(&message), "bad request");
             }
+            // The code and status only, never the message: it is serde's account of a composition,
+            // which is caller-authored content and can quote it — the `PlanRefused` rule below.
             ApiError::UnreadablePlan { .. } => {
-                tracing::warn!(status_code, error_code = code, message = %bounded(&message), "unreadable plan");
+                tracing::warn!(status_code, error_code = code, "unreadable plan");
             }
             ApiError::DataArtifactRefusal(_) => {
                 tracing::warn!(status_code, error_code = code, message = %bounded(&message), "data artifact refused");

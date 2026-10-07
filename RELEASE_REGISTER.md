@@ -79,8 +79,8 @@ status: signal-only
   `with` section once per section; the invocation-`properties` redirect once per stage, naming only
   a key inside the cap; an unknown act name or id kind is repeated only when 64 bytes or shorter. A body `/api/query` cannot read now answers in the standard
   error envelope under the new code `UNREADABLE_PLAN` (was plain text), at the reader's own status
-  (`422` for a wrong type, now declared in the OpenAPI document; `400`, `413`, `415`), with a
-  message of at most 1024 bytes: serde's `invalid type` and `unknown variant` messages quoted the
+  (`422` for a wrong type, now declared in the OpenAPI document; `400`, `415`, and `413` when the
+  door's own limit fires), with a message repeating at most 1024 bytes of what failed: serde's `invalid type` and `unknown variant` messages quoted the
   caller's string whole. MCP `run_query` relays `plan` unread, its schema still `Composition`'s
   (`tools/list` is byte-identical), so an unreadable plan is the API's to refuse and reaches the
   agent as `invalid_params` in the API's words, where the edge's own parse used to quote it whole;
@@ -91,8 +91,8 @@ status: signal-only
   `embedding` 768 components, `bound_ids` or `cogmap_ids` 256 ids, or `doc_type`, `context_ref` or
   `search_config` 256 bytes. Caps are published as `maxLength`/`maxItems` where the schema can carry
   them (the generated Ruby and Python models now reject an over-long scalar before sending) and in
-  descriptions where it cannot. The largest legal composition measures at most 11,742,820 bytes at the most
-  expansive encoding. temper-py now sends request bodies as UTF-8 rather than ASCII-escaped
+  descriptions where it cannot. The largest legal composition measures 11,742,820 bytes at the most
+  expansive per-character encoding, with compact separators. temper-py now sends request bodies as UTF-8 rather than ASCII-escaped
   (`ensure_ascii=False`), and the UI's search palette declines a query over 4096 bytes itself.
   Every cap clears both installs' live maxima (community / enterprise, 2026-10-06): property value
   1,528 / 8,460 bytes and 20 / 144 nodes, facet value 778 / 1,304, title 279 / 2,316, tag 94 / 74,
@@ -100,7 +100,9 @@ status: signal-only
   against a stored 1M-element array: 1.49 s, against 11.6 s for ~2,000) but not the comparison;
   the execution bound remains the deployment's (`docs/concepts/query-cost-and-bounds.md`). The wire-class comparator now reads a new
   member of an open vocabulary (a `oneOf` with an unconstrained string arm) as growth. Who observes:
-  a caller sending a value, string or search field over its cap. User-visible: yes, as a refusal.
+  a caller sending a value, string or search field over its cap; a caller whose body `/api/query`
+  cannot read, and an MCP agent, whose `run_query` error for such a plan is now the API's bounded
+  sentence. User-visible: yes, as a refusal.
   Release relevance: additive (five refusal reasons, the `UNREADABLE_PLAN` code) and behavioral
   (requests that were accepted can now be refused; an unreadable plan's body is JSON, not text).
 pr: self

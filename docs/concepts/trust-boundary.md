@@ -123,12 +123,14 @@ is a stable string; `details` rides only `SYSTEM_ACCESS_REQUIRED` and `PLAN_REFU
 | 403 | `FORBIDDEN_DETAIL` | refused, message names the capability | obtain it | no |
 | 404 | `NOT_FOUND` | absent or masked (a probe is not an existence oracle) | infer nothing either way | no |
 | 400 | `PLAN_REFUSED` | composition invalid; `details.refusals[]` lists every reason | repair all in one round trip | no |
+| 400, 413, 415, 422 | `UNREADABLE_PLAN` | the body is not a readable composition (malformed JSON, wrong content type, over the door's limit, a wrong type); no `details`, and the message repeats at most 1024 bytes of what failed | fix the body; there is no plan to refuse yet | no |
 | 409 | `INGEST_ENDED` | append or finalize on an ingest that has ended (`cancelled` or `abandoned`); not resumable | start a new upload | no |
 | 422 | `CONTENT_INTEGRITY` | stored bytes fail the hash; not resumable | re-upload from scratch | no |
 | 500 | `INTERNAL_ERROR` | server fault | back off | yes |
 
-MCP collapses all of these to JSON-RPC `-32600` with prose — no status, no `code`, no
-`details`. An integrator writing a service targets HTTP; MCP is an agent-runtime target.
+MCP renders these as JSON-RPC errors with prose — no status, no `code`, no `details`: a
+caller fault the agent can repair (a refused or unreadable plan, a refused search) as `-32602`,
+the terminal auth refusals as `-32600`, everything else as `-32603`. An integrator writing a service targets HTTP; MCP is an agent-runtime target.
 
 ## The machine-principal sharp edge
 

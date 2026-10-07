@@ -593,8 +593,9 @@ pub struct CompositionShape {
     pub caller_ids: usize,
     /// The longest narrowing list — `doc_type`, `tags` or `labels` — on any one stage.
     pub largest_filter_list: usize,
-    /// Stages arriving with a vector already computed. Zero for every MCP caller, structurally:
-    /// that door cannot run the model, which is why the server embeds on its behalf.
+    /// Stages arriving with a vector already computed. Rarely non-zero for an MCP caller: the
+    /// tool's schema admits a vector, but an agent seldom runs the model, so the server usually
+    /// embeds on its behalf.
     pub embeddings_supplied: usize,
     /// Floats in the largest supplied vector. A number other than the model's dimension is a
     /// caller sending a vector for a different space.
@@ -688,8 +689,8 @@ impl CompositionShape {
     /// silently attach to whatever span happens to be current once a nested one appears.
     ///
     /// `door` distinguishes the HTTP surface from MCP, which matters more than it looks:
-    /// `embeddings_supplied` is structurally zero for every MCP caller, so any bound on what the
-    /// server must embed binds that door alone and its distribution has to be read separately.
+    /// an MCP caller seldom supplies an embedding, so any bound on what the server must embed binds
+    /// that door hardest and its distribution has to be read separately.
     pub fn record(&self, door: &'static str) {
         tracing::info!(
             door,

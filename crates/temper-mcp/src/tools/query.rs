@@ -54,6 +54,13 @@ use crate::service::{AcrossAuth, TemperMcpService};
 /// decide, once, for both doors. A plan the API cannot read comes back as its own
 /// `UNREADABLE_PLAN` sentence, bounded there, rather than as this door's deserializer quoting the
 /// caller's input back whole.
+///
+/// **What "unread" still is, declared.** rmcp has already parsed the tool arguments into JSON
+/// values, and the relay re-serializes them, so the API reads this door's encoding of the plan,
+/// not the caller's bytes. Two consequences: a duplicate key keeps its last value here, where
+/// `/api/query` read directly refuses it as a duplicate field; and serde_json writes floats in
+/// its own form (`1e15` becomes `1000000000000000.0`), so a body's size can grow between the edge
+/// and the API's body limit.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct QueryInput {
     /// The composition plan: an ordered DAG of act invocations and set combinations, plus a
@@ -88,31 +95,26 @@ fn default_trace() -> bool {
 
 /// Run a composition query against the knowledge base.
 ///
-/// Sends a composition plan to the server, which validates it (returning every refusal at once if
-/// the plan is malformed), embeds any missing query vectors, compiles and executes the DAG, and
-/// returns the requested stages' hydrated rows plus a trace covering every stage.
+/// Relays the plan, unread, to the server, which reads it (answering `UNREADABLE_PLAN` if it
+/// cannot), validates it (returning every refusal at once), embeds any missing query vectors,
+/// compiles and executes the DAG, and returns the requested stages' hydrated rows plus a trace
+/// covering every stage.
 ///
 /// A refused plan returns an `invalid_params` error carrying every refusal — each names its stage
-/// and its reason — so the plan can be repaired in one round trip, not one refusal per call.
+/// and its reason — so the plan can be repaired in one round trip, not one refusal per call. An
+/// unreadable plan returns `invalid_params` in the server's own words.
 pub async fn run_query(
     svc: &TemperMcpService,
     parts: &http::request::Parts,
     input: QueryInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    // The client is constructed BEFORE the act measures: an arrival with no bearer, or a
-    // deployment missing its relay config, is refused by the constructor and never enters
-    // the distribution — the direct binding's gate-first ordering excluded unauthenticated
-    // arrivals the same way. Measuring before the send (not after) keeps
-    // the property `CompositionShape` requires: the act is counted before the server
-    // decides whether to answer it. The `mcp` door is measured separately from `http`
-    // because `embeddings_supplied` is structurally zero here — this door cannot run the
-    // model, which is why the server embeds on its behalf — so any bound on what the
-    // server must embed binds this door alone, and its distribution is the one that
-    // decides it. The API skips its own `door=http` event when the act arrives relayed,
-    // so one act measures once, on the door it arrived on.
+    // **This door measures nothing.** It holds no composition, only the caller's JSON, relayed
+    // unread; the API measures the plan once it reads it, labelled `mcp` by the `RelayedSurface`
+    // the relay's credential earns, so one act measures once, on the door it arrived on. Do not
+    // add a record here: the API's would still fire, and every MCP act would count twice. The
+    // client is constructed first, so an arrival with no bearer, or a deployment missing its
+    // relay config, is refused here and never reaches the API at all.
     let client = svc.relay_client(parts)?;
-    // No shape measurement here: this door holds no composition, only the caller's JSON. The API
-    // measures the plan once it reads it, labelled `mcp` by the relay's `RelayedSurface`.
 
     let response = client
         .query()
@@ -142,8 +144,9 @@ pub async fn run_query(
 
 /// Map a query-path error onto an MCP error.
 ///
-/// `PlanRefused` is the one error shape this door produces that an agent can act on: it carries
-/// every static refusal, each naming its stage and reason. The 400 arrives under the wire code
+/// Two error shapes this door produces are ones an agent can act on. `UnreadablePlan` carries the
+/// server's bounded account of what in the body it could not read. `PlanRefused` carries every
+/// static refusal, each naming its stage and reason. The 400 arrives under the wire code
 /// `PLAN_REFUSED` and temper-client reconstructs the refusal list
 /// (`ClientError::PlanRefused`), so the rendering is the direct binding's, arm for arm —
 /// `invalid_params` with the joined refusal details lets the agent repair the plan in one round

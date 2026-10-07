@@ -8,7 +8,7 @@ use temper_core::types::query::envelope::QueryResponse;
 use temper_services::backend::query_read;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::state::AppState;
-use temper_workflow::operations::RelayedSurface;
+use temper_workflow::operations::{RelayedSurface, Surface};
 
 #[utoipa::path(
     post,
@@ -28,11 +28,12 @@ use temper_workflow::operations::RelayedSurface;
         ),
         (
             status = 400,
-            description = "The composition will not run, with **every** static reason at once in \
-                `error.details.refusals` under the code `PLAN_REFUSED` — never just the first, \
-                because repairing a plan one refusal per round trip is the experience this \
-                contract exists to avoid. A caller meets this response before they meet a 200, so \
-                it is the door's most-read documentation.",
+            description = "Two codes. `PLAN_REFUSED`: the composition will not run, with \
+                **every** static reason at once in `error.details.refusals` — never just the first, \
+                because repairing a plan one refusal per round trip is the experience this contract \
+                exists to avoid. A caller meets this response before they meet a 200, so it is the \
+                door's most-read documentation. `UNREADABLE_PLAN`, with no `details`: the body is \
+                not JSON at all, so there is no plan to refuse (see the `422`).",
             body = ErrorBody,
         ),
         (
@@ -40,8 +41,10 @@ use temper_workflow::operations::RelayedSurface;
             description = "The body is not a composition this door can read — a value of the wrong \
                 type, or a name outside a closed vocabulary — under the code `UNREADABLE_PLAN`. \
                 There is no plan yet, so there are no refusals: the message names what failed and \
-                repeats at most 1024 bytes of it. Malformed JSON answers `400`, a body past the \
-                limit `413` and a non-JSON content type `415`, each under the same code.",
+                repeats at most 1024 bytes of it. Malformed JSON answers `400`, a non-JSON content \
+                type `415`, and a body past this door's own limit `413`, each under the same code. \
+                A deployment's platform may refuse a large body before this door reads it, without \
+                the code.",
             body = ErrorBody,
         ),
         (status = 401, description = "Unauthorized", body = ErrorBody),
@@ -91,9 +94,13 @@ pub async fn query(
     // - While the API's `mcp_service_secret` is unset or mid-rotation (and the MCP edge is
     // configured), the extension is never planted and relayed acts measure as `http` — the
     // degrade is `debug`-silent by design, so the skew self-heals only at rotation end.
-    let door = relayed.map_or("http", |Extension(RelayedSurface(surface))| {
-        surface.marker()
-    });
+    // Labels are this measurement's own vocabulary, not the emitter markers: `relay_trust` plants
+    // `Surface::Mcp` alone, and any other relayed surface would need its label decided here.
+    let door = match relayed {
+        None => "http",
+        Some(Extension(RelayedSurface(Surface::Mcp))) => "mcp",
+        Some(Extension(RelayedSurface(_))) => "relayed",
+    };
     CompositionShape::of(&composition).record(door);
 
     let validated = query_read::prepare(composition)
