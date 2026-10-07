@@ -111,6 +111,27 @@ pr: self
 classes: additive, behavioral
 surfaces: http, mcp, clients
 status: signal-only
+- **The sweep's memo keeps a clean unit's hash for 30 days, and an erased resource's place observations go on the next expiry call**
+  Erasure's digest expiry (`sensitivity.expire_erased_fingerprints`, run on every
+  `/api/sensitivity/sweep` call whether or not the deployment sweeps) gave up a finding's
+  salt-keyed digests 30 days after its erased place closed, but two other stores of the same
+  `sha256(salt || unit)` sat outside it. `sensitivity.memo` held the hash of every unit a detector
+  found nothing in, indefinitely. `sensitivity.place_observations` held the pre-erasure hash of an
+  erased resource's title and `origin_uri` until a head tick re-read the place, which never happens
+  while every detector is off. Each was a confirmation oracle over erased content for a salt holder.
+  The memo gains `memoized_at`, and the expiry deletes a memo row 30 days after it was written,
+  at most 50,000 per call, oldest first: a memo row names no place, so age is the only bound that
+  reaches an erased unit. Rows written before this release read as `-infinity` and are due at once,
+  so a deployment that has swept clears its memo over its next door calls (about 20 for 1M rows).
+  The expiry also deletes every place observation of an erased resource. The memo is a cache: a
+  deleted row costs at most one re-scan of that unit where it next appears. The expiry's signature
+  and the count it returns are unchanged. Who observes: operators reading the `sensitivity` schema.
+  User-visible: no. Release relevance: additive (a column and an index) and behavioral (memo rows
+  and observations are deleted that were kept).
+pr: self
+classes: additive, behavioral
+surfaces: internal, schema
+status: signal-only
 
 ## Shipped in v0.6.0
 - **This release — the 0.6.0 fleet alignment: VERSION 0.5.4 → 0.6.0 across crates, packages, and clients**

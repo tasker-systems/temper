@@ -1534,6 +1534,241 @@ async fn content_a_scrub_or_principal_erasure_emptied_gives_up_its_digests_after
     );
 }
 
+// ── The memo and the place observations are bounded by the expiry too (security review §4.3) ───
+
+/// What the expiry door runs on every cron call, whether or not the deployment sweeps (Q53).
+async fn expiry_door(pool: &PgPool) -> i32 {
+    sqlx::query_scalar("SELECT sensitivity_expire_erased_fingerprints()")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// How many rows of each store still confirm `unit` to a salt holder: `(memo, place_observations)`.
+async fn confirmations(pool: &PgPool, unit: &str) -> (i64, i64) {
+    sqlx::query_as(
+        "SELECT (SELECT count(*) FROM sensitivity.memo \
+                  WHERE content_hash = sensitivity.keyed_hash($1, $2)), \
+                (SELECT count(*) FROM sensitivity.place_observations \
+                  WHERE content_hash = sensitivity.keyed_hash($1, $2))",
+    )
+    .bind(SALT)
+    .bind(unit)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// `(surface, content_hash)` of each place observation of `resource`.
+async fn observations_of(pool: &PgPool, resource: Uuid) -> Vec<(String, String)> {
+    sqlx::query_as(
+        "SELECT surface, content_hash FROM sensitivity.place_observations \
+          WHERE target_id = $1 ORDER BY surface",
+    )
+    .bind(resource)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// A clean title leaves no finding, so the finding expiry never reaches its hash. With every
+/// detector off before the act, no head tick re-reads the place, so nothing but the expiry can take
+/// the pre-erasure observation away. The door takes it on its next call; a live resource's
+/// observations stay. Once a detector is back on and the head records the husk, the door takes that
+/// observation too.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_erased_resources_place_observations_go_on_the_next_expiry_call(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+         VALUES ('kb_profiles', $1, 'observation-expiry', 'observation-expiry') RETURNING id",
+    )
+    .bind(owner.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let title = "Quarterly roadmap for the harbour project";
+    let erased = created_resource(&pool, owner, emitter, home, title).await;
+    let live = created_resource(&pool, owner, emitter, home, "Kept roadmap").await;
+    for surface in ["kb_resources.title", "kb_resources.origin_uri"] {
+        assert!(!tick(&pool, surface).await.failed, "{surface}");
+    }
+    assert_eq!(
+        observations_of(&pool, erased.uuid()).await.len(),
+        2,
+        "the head observes the erased resource's title and origin_uri before the act"
+    );
+    let findings: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM sensitivity.findings WHERE resource_id = $1")
+            .bind(erased.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        findings, 0,
+        "the title is clean, so no finding carries its hash"
+    );
+    let live_before = observations_of(&pool, live.uuid()).await;
+    assert_eq!(live_before.len(), 2);
+
+    sqlx::query("UPDATE sensitivity.detectors SET enabled = false")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("SELECT resource_erasure_execute($1, $2, $2, $3)")
+        .bind(erased.uuid())
+        .bind(emitter)
+        .bind(Uuid::now_v7())
+        .execute(&pool)
+        .await
+        .expect("the act completes");
+    assert_eq!(
+        confirmations(&pool, title).await.1,
+        2,
+        "with no tick after the act, both pre-erasure observations are still there (the fixture's \
+         origin_uri is its title)"
+    );
+
+    assert_eq!(expiry_door(&pool).await, 0, "no finding is expired");
+    assert_eq!(
+        observations_of(&pool, erased.uuid()).await,
+        vec![],
+        "the door takes the erased resource's observations"
+    );
+    assert_eq!(
+        confirmations(&pool, title).await.1,
+        0,
+        "no observation confirms the erased title"
+    );
+    assert_eq!(
+        observations_of(&pool, live.uuid()).await,
+        live_before,
+        "a live resource keeps its observations"
+    );
+
+    enable_seeded_detectors(&pool).await;
+    assert!(!tick(&pool, "kb_resources.title").await.failed);
+    assert_eq!(
+        observations_of(&pool, erased.uuid()).await.len(),
+        1,
+        "the head re-reads the moved place and observes the husk"
+    );
+    expiry_door(&pool).await;
+    assert_eq!(
+        observations_of(&pool, erased.uuid()).await,
+        vec![],
+        "the husk's observation goes too"
+    );
+}
+
+/// A memo row is deleted 30 days after it was written, whatever it hashes: a memo row names no
+/// place, so its age is the only bound that reaches an erased unit. A row the scan writes carries
+/// its age (and so survives the call that follows it); one 29 days old stays; one 31 days old goes,
+/// and so does a row from before the column existed, which reads as -infinity.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_memo_row_is_deleted_thirty_days_after_it_was_written(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
+    let young = "A memo row the window keeps";
+    let old = "A memo row past the window";
+    let unaged = "A memo row older than its column";
+    for title in [young, old, unaged] {
+        bare_resource(&pool, title).await;
+    }
+    assert!(!tick(&pool, "kb_resources.title").await.failed);
+    for title in [young, old, unaged] {
+        assert!(
+            confirmations(&pool, title).await.0 > 0,
+            "the scan memoises the clean title {title:?}"
+        );
+    }
+    expiry_door(&pool).await;
+    for title in [young, old, unaged] {
+        assert!(
+            confirmations(&pool, title).await.0 > 0,
+            "a row the scan just wrote is not due: {title:?}"
+        );
+    }
+
+    for (title, age) in [
+        (young, "now() - interval '29 days'"),
+        (old, "now() - interval '31 days'"),
+        (unaged, "'-infinity'::timestamptz"),
+    ] {
+        sqlx::query(&format!(
+            "UPDATE sensitivity.memo SET memoized_at = {age} \
+              WHERE content_hash = sensitivity.keyed_hash($1, $2)"
+        ))
+        .bind(SALT)
+        .bind(title)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    expiry_door(&pool).await;
+    assert!(
+        confirmations(&pool, young).await.0 > 0,
+        "a row 29 days old stays"
+    );
+    assert_eq!(
+        confirmations(&pool, old).await.0,
+        0,
+        "a row 31 days old goes"
+    );
+    assert_eq!(
+        confirmations(&pool, unaged).await.0,
+        0,
+        "a row with no recorded age goes"
+    );
+}
+
+/// One call deletes at most 50,000 memo rows, so a memo that predates the column clears over
+/// several door calls rather than in one statement, and the next call takes the rest.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_memo_is_cleared_in_bounded_batches(pool: PgPool) {
+    sqlx::query(
+        "INSERT INTO sensitivity.memo (content_hash, detector_id, detector_version, memoized_at) \
+         SELECT encode(sha256(convert_to(i::text, 'UTF8')), 'hex'), v.detector_id, v.version, \
+                '-infinity' \
+           FROM generate_series(1, 50001) i \
+          CROSS JOIN (SELECT detector_id, version FROM sensitivity.detector_versions \
+                       ORDER BY detector_id, version LIMIT 1) v",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let left = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sensitivity.memo")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+    expiry_door(&pool).await;
+    assert_eq!(left().await, 1, "one call takes 50,000");
+    expiry_door(&pool).await;
+    assert_eq!(left().await, 0, "the next call takes the rest");
+}
+
+/// The expiry's observation arm names the kb_resources surfaces, because only they are
+/// mutable_timestamp and only a mutable surface writes an observation. A surface that becomes
+/// mutable fails here until the arm covers it.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn every_mutable_surface_is_a_resource_surface(pool: PgPool) {
+    let mutable: Vec<String> = sqlx::query_scalar(
+        "SELECT surface FROM sensitivity.surfaces WHERE cursor_kind = 'mutable_timestamp' \
+          ORDER BY surface",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        mutable,
+        vec!["kb_resources.origin_uri", "kb_resources.title"],
+        "a new mutable surface needs an arm in expire_erased_fingerprints' observation DELETE"
+    );
+}
+
 // ── Q51: payment_card's noise closes as false positives, never a card ───────────────────────────
 
 /// Moves payment_card to its next version under `validator`, as a migration would.
