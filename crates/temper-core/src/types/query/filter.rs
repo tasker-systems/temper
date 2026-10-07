@@ -478,8 +478,8 @@ pub fn worst_case_string_bytes(s: &str) -> usize {
 /// **Numbers are not encoder-invariant.** An integer past 64 bits is parsed to an `f64` and
 /// serde re-writes it short (`1e300`), while Python's `json.dumps(10**300)` sent all 301 digits; a
 /// float may come back with a longer exponent or more digits than serde writes. So an `f64` that is
-/// integral and beyond 2^63 counts as [`MAX_F64_DIGITS`] bytes, and any other `f64` as at least
-/// [`MAX_F64_REPR_BYTES`]. Integers within 64 bits print the same digits everywhere.
+/// integral and beyond 2^63 counts as `MAX_F64_DIGITS` (310) bytes, and any other `f64` as at least
+/// `MAX_F64_REPR_BYTES` (24). Integers within 64 bits print the same digits everywhere.
 pub fn worst_case_value_bytes(value: &serde_json::Value) -> usize {
     use serde_json::Value;
     let separators = |n: usize| n.saturating_sub(1);
