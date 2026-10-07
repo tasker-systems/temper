@@ -332,9 +332,9 @@ pub const MAX_FILTER_VALUES: usize = 256;
 ///
 /// # 256, measured against live data
 ///
-/// The longest of each `[measured — 2026-10-06]`, community / enterprise: edge label 61 / 45 bytes,
-/// tag 94 / 74, property key 29 / 31, facet key 39 / 24, stage or status value 32 / 33, profile
-/// handle 38 / 33. 256 is 2.7x the longest.
+/// The longest of each stored on the running installs `[measured — 2026-10-06]`: edge label 61
+/// bytes, tag 94, property key 31, facet key 39, stage or status value 33, profile handle 38. 256
+/// is 2.7x the longest.
 ///
 /// # Published as characters, enforced as escaped bytes
 ///
@@ -349,8 +349,8 @@ pub const MAX_FILTER_STRING_BYTES: usize = 256;
 
 /// The longest `title_contains`, in JSON-escaped bytes. Refused as
 /// [`super::disposition::RefusalReason::FilterStringTooLong`]. A substring probe never usefully
-/// exceeds the longest title `[measured — 2026-10-06]`: 279 bytes on community production, 2,316 on
-/// the enterprise install (p99.9 578). 4096 is 1.8x the longer.
+/// exceeds the longest title stored on the running installs `[measured — 2026-10-06]`: 2,316 bytes.
+/// 4096 is 1.8x it.
 pub const MAX_TITLE_CONTAINS_BYTES: usize = 4096;
 
 /// The largest single property-predicate value — one `contains` value or `compare` bound in
@@ -364,17 +364,12 @@ pub const MAX_TITLE_CONTAINS_BYTES: usize = 4096;
 /// bound into the predicate SQL as jsonb and compared against every candidate row that carries
 /// the key, so its size multiplies that work and the request's memory.
 ///
-/// # 16 KiB, measured against live data on both installs
+/// # 16 KiB, measured against live data
 ///
 /// A `contains` probe matches only a stored value that contains it, so no useful probe is larger
-/// than the largest stored value `[measured — 2026-10-06]`:
-///
-/// | install | values | largest | p99.9 | largest array element |
-/// |---|---|---|---|---|
-/// | community | 25,421 | 1,528 bytes (an object) | ~1.4 KB | 164 bytes |
-/// | enterprise | 111,433 | 8,460 bytes (a `claims` array) | 4,935 | 1,020 bytes |
-///
-/// 16 KiB is 1.9x the largest, so a probe naming any live value whole is admitted.
+/// than the largest value stored on the running installs `[measured — 2026-10-06]`: 8,460 bytes,
+/// and 1,020 for a single array element. 16 KiB is 1.9x the largest, so a probe naming any live
+/// value whole is admitted.
 ///
 /// JSON Schema has no keyword for the serialized size of an arbitrary value, so this bound is
 /// published in the field's documentation rather than as a schema constraint.
@@ -393,11 +388,10 @@ pub const MAX_PROPERTY_VALUE_BYTES: usize = 16384;
 /// controls. It does not bound the comparison: the stored side is any value a caller can write. The
 /// execution bound is the deployment's (`docs/concepts/query-cost-and-bounds.md`).
 ///
-/// # 256, measured against live data on both installs
+/// # 256, measured against live data
 ///
 /// A probe matches only a stored value that contains it, so no useful probe has more nodes than the
-/// largest stored value `[measured — 2026-10-06]`: 20 on community (p99.9 10), 144 on the
-/// enterprise install (p99.9 72; 208 values over 64). 256 is 1.8x the largest.
+/// largest value stored on the running installs `[measured — 2026-10-06]`: 144. 256 is 1.8x it.
 pub const MAX_PROPERTY_VALUE_NODES: usize = 256;
 
 /// The nested nodes of one property-predicate value, as [`MAX_PROPERTY_VALUE_NODES`] counts them:
@@ -429,7 +423,7 @@ pub fn property_value_nodes(value: &serde_json::Value) -> usize {
 ///
 /// Sized down from 1 MiB so the whole plan fits Vercel's 4.5 MB request cap, where it must fit
 /// inside the text budget that also counts it. It still holds up to about sixty values at the
-/// largest either install stores (8,460 bytes, enterprise, 2026-10-06), fewer if they carry
+/// largest value stored on the running installs (8,460 bytes, 2026-10-06), fewer if they carry
 /// punctuation or non-ASCII, which the text budget counts wider; a real plan carries a few.
 pub const MAX_COMPOSITION_PROPERTY_VALUE_BYTES: usize = 512 * 1024;
 
@@ -461,8 +455,8 @@ pub fn property_value_bytes(value: &serde_json::Value) -> usize {
 /// platform with a bare 413 before the door reads it, and the non-text parts of the largest legal
 /// plan (its id sets, supplied embeddings and structure) already take about 3.6 MB at their caps.
 /// What is left is the room for caller text. It is still far above any plan a person or agent
-/// writes: the longest live title on either install is 2,316 bytes, and every per-string and
-/// per-value cap is unchanged, so no single item either install stores is refused.
+/// writes: the longest live title is 2,316 bytes, and every per-string and per-value cap is
+/// unchanged, so no single item stored on the running installs is refused.
 pub const MAX_COMPOSITION_TEXT_BYTES: usize = 768 * 1024;
 
 /// A string's bytes inside its quotes under the most expansive JSON encoder that escapes per

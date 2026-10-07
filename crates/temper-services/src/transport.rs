@@ -92,7 +92,7 @@ where
     ))
 }
 
-/// The hosting platform's hard request-body cap on Vercel, where both community deployments run:
+/// The hosting platform's hard request-body cap on Vercel, where temper's hosted deployments run:
 /// a body past it is refused by the platform with a bare `413` before any door here reads it, so no
 /// door limit above it is reachable there. Self-hosted proxies may admit more.
 ///

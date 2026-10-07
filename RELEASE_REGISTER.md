@@ -96,9 +96,9 @@ status: signal-only
   are sized so it fits the 4.5 MB request cap Vercel enforces ahead of the door, not only the
   door's 25 MB. temper-py now sends request bodies as UTF-8 rather than ASCII-escaped
   (`ensure_ascii=False`), and the UI's search palette declines a query over 4096 bytes itself.
-  Every cap clears both installs' live maxima (community / enterprise, 2026-10-06): property value
-  1,528 / 8,460 bytes and 20 / 144 nodes, facet value 778 / 1,304, title 279 / 2,316, tag 94 / 74,
-  edge label 61 / 45. The node cap bounds the probe's factor in a comparison's cost (256 nodes
+  Every cap clears the largest value stored on the running installs (2026-10-06) by about 2x:
+  property value 8,460 bytes and 144 nodes, facet value 1,304, title 2,316, tag 94, edge label
+  61. The node cap bounds the probe's factor in a comparison's cost (256 nodes
   against a stored 1M-element array: 1.49 s, against 11.6 s for ~2,000) but not the comparison;
   the execution bound remains the deployment's (`docs/concepts/query-cost-and-bounds.md`). The wire-class comparator now reads a new
   member of an open vocabulary (a `oneOf` with an unconstrained string arm) as growth. Who observes:

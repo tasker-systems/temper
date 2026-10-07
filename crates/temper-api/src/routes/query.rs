@@ -36,7 +36,7 @@ pub(super) fn query_routes() -> OpenApiRouter<AppState> {
 ///
 /// # The platform's cap binds first, and the contract is sized under it
 ///
-/// On Vercel, where both community deployments run, the platform refuses a request body past
+/// On Vercel, where temper's hosted deployments run, the platform refuses a request body past
 /// `VERCEL_REQUEST_BODY_CAP_BYTES` (4.5 MB) with its own bare 413 before this door reads a byte.
 /// This number cannot lift that. So the composition budgets are sized to fit the platform's cap,
 /// not this one, and the coherence test holds the plan against whichever is smaller.
