@@ -467,7 +467,7 @@ async fn an_unparseable_body_answers_from_the_extractor_not_the_refusal_contract
     // A wrong TYPE on a known field — nothing to do with unknown keys.
     let bad_type = serde_json::json!({
         "outcome": {"returns": [{"stage": "hits", "with": []}]},
-        "stages": [{"act": {"act": "find-exact", "name": "hits", "terms": "not-a-map"}}]
+        "stages": [{"act": "find-exact", "name": "hits", "terms": "not-a-map"}]
     });
     let resp = app
         .reqwest_client

@@ -114,8 +114,9 @@ const MAX_REJECTION_TEXT_BYTES: usize = 1024;
 /// two of them: `invalid type` (a string sent where `stages`, `outcome` or `returns` belongs) and
 /// `unknown variant` (a `with` section this contract does not name). On a door whose body limit is
 /// 25 MiB, that is a response as large as the request. Not every malformed plan echoes: a stage is
-/// an untagged enum, so anything wrong inside one — an unknown act, an unknown field, a wrong type
-/// — is reported as matching no variant, without the caller's text. The status is kept, and the
+/// an untagged enum, so an unknown field or a wrong type inside one is reported as matching no
+/// variant, without the caller's text, and an unknown act name parses into the open `ActName`
+/// vocabulary for `validate` to refuse under its own 64-byte echo rule. The status is kept, and the
 /// text is cut to 1024 bytes (`MAX_REJECTION_TEXT_BYTES`) on a character boundary, so a
 /// typo-sized message passes unchanged.
 #[derive(Debug)]
