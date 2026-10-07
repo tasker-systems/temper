@@ -1,4 +1,5 @@
-use axum::extract::State;
+use axum::extract::{FromRequest, Request, State};
+use axum::http::StatusCode;
 use axum::{Extension, Json};
 
 use crate::middleware::auth::AuthUser;
@@ -61,7 +62,7 @@ pub async fn query(
     State(state): State<AppState>,
     auth: AuthUser,
     relayed: Option<Extension<RelayedSurface>>,
-    Json(composition): Json<Composition>,
+    CompositionBody(composition): CompositionBody,
 ) -> ApiResult<Json<QueryResponse>> {
     // **Measured before anything decides whether to answer it**, which is the entire design. A
     // shape emitted after validation would show only the traffic that already passes — never the
@@ -98,4 +99,135 @@ pub async fn query(
     )
     .await?;
     Ok(Json(response))
+}
+
+/// The most of a body rejection's text this door returns.
+///
+/// Room for any message a mistyped plan produces — serde's path, the offending token when it is
+/// typo-sized, and the expected names, which are this contract's own — and no room for an
+/// arbitrary caller string.
+const MAX_REJECTION_TEXT_BYTES: usize = 1024;
+
+/// The composition, read as `Json` reads it, but rejected without repeating the caller's payload.
+///
+/// axum's `JsonRejection` text carries serde's message, and serde quotes the caller's text whole in
+/// two of them: `invalid type` (a string sent where `stages`, `outcome` or `returns` belongs) and
+/// `unknown variant` (a `with` section this contract does not name). On a door whose body limit is
+/// 25 MiB, that is a response as large as the request. Not every malformed plan echoes: a stage is
+/// an untagged enum, so anything wrong inside one — an unknown act, an unknown field, a wrong type
+/// — is reported as matching no variant, without the caller's text. The status is kept, and the
+/// text is cut to 1024 bytes (`MAX_REJECTION_TEXT_BYTES`) on a character boundary, so a
+/// typo-sized message passes unchanged.
+#[derive(Debug)]
+pub struct CompositionBody(pub Composition);
+
+impl<S> FromRequest<S> for CompositionBody
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, String);
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        match Json::<Composition>::from_request(req, state).await {
+            Ok(Json(composition)) => Ok(Self(composition)),
+            Err(rejection) => Err((
+                rejection.status(),
+                bounded_rejection_text(rejection.body_text()),
+            )),
+        }
+    }
+}
+
+/// `text` whole when it fits [`MAX_REJECTION_TEXT_BYTES`], else its longest prefix that does,
+/// ending on a character boundary, followed by how many bytes were left out.
+fn bounded_rejection_text(mut text: String) -> String {
+    if text.len() <= MAX_REJECTION_TEXT_BYTES {
+        return text;
+    }
+    let mut cut = MAX_REJECTION_TEXT_BYTES;
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let elided = text.len() - cut;
+    text.truncate(cut);
+    text.push_str(&format!(" … ({elided} more bytes not repeated)"));
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::header::CONTENT_TYPE;
+
+    async fn read(body: String) -> Result<CompositionBody, (StatusCode, String)> {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query")
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .expect("request builds");
+        CompositionBody::from_request(req, &()).await
+    }
+
+    /// Bound on what a rejection may add past the cap: the elision note.
+    const NOTE_BYTES: usize = 64;
+
+    #[tokio::test]
+    async fn a_rejected_body_never_repeats_more_than_the_cap_of_what_the_caller_sent() {
+        let huge = "z".repeat(100_000);
+        // Every position found where serde quotes the caller's string, by probing the default
+        // rejection: 5,000 bytes in came back as 5,132 to 5,192.
+        for (what, body) in [
+            (
+                "stages",
+                format!(r#"{{"outcome":{{"returns":[{{"stage":"a"}}]}},"stages":"{huge}"}}"#),
+            ),
+            ("outcome", format!(r#"{{"outcome":"{huge}","stages":[]}}"#)),
+            (
+                "returns",
+                format!(r#"{{"outcome":{{"returns":"{huge}"}},"stages":[]}}"#),
+            ),
+            (
+                "with",
+                format!(
+                    r#"{{"outcome":{{"returns":[{{"stage":"a","with":["{huge}"]}}]}},"stages":[]}}"#
+                ),
+            ),
+        ] {
+            let (status, text) = read(body)
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("{what}: the fixture must be a body serde refuses"));
+            assert!(
+                status.is_client_error(),
+                "{what}: the rejection keeps axum's status, got {status}"
+            );
+            assert!(
+                text.len() <= MAX_REJECTION_TEXT_BYTES + NOTE_BYTES,
+                "{what}: a rejection repeated {} bytes of a 100 KB string",
+                text.len()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_typo_sized_rejection_is_returned_whole() {
+        let (_, text) = read(r#"{"outcome":{"returns":[{"stage":"a"}]},"stages":"oops"}"#.into())
+            .await
+            .expect_err("a string where the stage list belongs is refused");
+        assert!(
+            text.contains("oops") && !text.contains("not repeated"),
+            "a short message keeps the caller's token so they can see the typo: {text}"
+        );
+    }
+
+    #[test]
+    fn the_cut_lands_on_a_character_boundary() {
+        // A three-byte character straddling the cap.
+        let text = format!("{}€€", "x".repeat(MAX_REJECTION_TEXT_BYTES - 1));
+        let out = bounded_rejection_text(text);
+        assert!(out.starts_with(&"x".repeat(MAX_REJECTION_TEXT_BYTES - 1)));
+        assert!(out.contains("(6 more bytes not repeated)"), "{out}");
+    }
 }

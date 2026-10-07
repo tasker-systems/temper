@@ -69,15 +69,15 @@ status: signal-only
   (`property_value_budget_exceeded`); and a label, tag, `doc_type`, facet or property key,
   `stage`, `status` or `owner` longer than 256 bytes, or a `title_contains` longer than 4096
   (`filter_string_too_long`). Strings and facet values are measured as JSON-escaped bytes. All
-  caller text in one composition is also budgeted at 8 MiB counted at the most expansive standard
-  JSON encoding (`text_budget_exceeded`), so a legal plan fits the body limit under any per-character escaping encoder its
+  caller text in one composition is also budgeted at 8 MiB counted at the most expansive
+  per-character escaping encoder (`text_budget_exceeded`), so a legal plan fits the body limit under any per-character escaping encoder its
   client uses; `returns` and a combine stage's `inputs` past 64, or an act's `inputs` past 2, are
   refused once up front (`list_too_long`). All five are new members of the open `RefusalReason` vocabulary,
   arriving in the existing `PLAN_REFUSED` answer beside every sibling refusal. No refusal fires once
   per entry of a caller-sized list any more, and none repeats an unbounded caller string: empty
   keys, empty `contains` and oversized values refuse once per source with a count; an inadmissible
   `with` section once per section; the invocation-`properties` redirect once per stage, naming only
-  a key inside the cap; an unknown act name or id kind is repeated only when 64 bytes or shorter. `/api/search` (and MCP `search`, which
+  a key inside the cap; an unknown act name or id kind is repeated only when 64 bytes or shorter. A body `/api/query` cannot deserialize keeps its status (422 for a type error) but its message is cut to 1024 bytes, because serde's `invalid type` and `unknown variant` messages quoted the caller's string whole. `/api/search` (and MCP `search`, which
   forwards to it) answers `400 BAD_REQUEST` naming each field when `query` exceeds 4096 bytes,
   `embedding` 768 components, `bound_ids` or `cogmap_ids` 256 ids, or `doc_type`, `context_ref` or
   `search_config` 256 bytes. Caps are published as `maxLength`/`maxItems` where the schema can carry
