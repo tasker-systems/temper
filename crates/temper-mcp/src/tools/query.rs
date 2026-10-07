@@ -38,25 +38,29 @@
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use temper_client::error::ClientError;
-use temper_core::types::query::composition::CompositionShape;
 use temper_core::types::query::Composition;
 
 use crate::service::{AcrossAuth, TemperMcpService};
 
 /// MCP input for `run_query`: a composition plan and a trace flag.
 ///
-/// The `plan` field IS the composition wire type — the same struct `/api/query` deserializes. Its
-/// `JsonSchema` derive is already active under the `mcp` feature, so the tool's input schema is the
-/// contract, not a restatement of it.
+/// **The plan is declared as a composition and relayed unread.** Its schema is `Composition`'s own
+/// (`schemars(with)`), so the tool's input schema is the contract, not a restatement of it, and an
+/// agent composes against exactly what `/api/query` reads. But this door never deserializes it:
+/// whether a plan is readable — its structure, its sizes, every name in it — is `/api/query`'s to
+/// decide, once, for both doors. A plan the API cannot read comes back as its own
+/// `UNREADABLE_PLAN` sentence, bounded there, rather than as this door's deserializer quoting the
+/// caller's input back whole.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct QueryInput {
     /// The composition plan: an ordered DAG of act invocations and set combinations, plus a
     /// declaration of which stages' rows come back. The schema for this object IS the composition
     /// contract — every stage, act, filter, and combinator is described there.
-    pub plan: Composition,
+    #[schemars(with = "Composition")]
+    pub plan: serde_json::Value,
 
     /// Whether to include the full stage trace in the response. Default `true`.
     ///
@@ -65,8 +69,17 @@ pub struct QueryInput {
     /// disclosures. It is the composition's legibility: without it, a multi-stage plan is a black
     /// box with an answer at the end. Set `false` to omit the trace and receive only the returned
     /// arms, useful when iterating on a plan and the intermediate legibility is not needed.
-    #[serde(default = "default_trace")]
+    #[serde(default = "default_trace", deserialize_with = "trace_flag")]
     pub trace: bool,
+}
+
+/// `trace` as a boolean, refused in a fixed sentence: serde's own `invalid type` message would
+/// quote a non-boolean whole, and this field is read by this door, not relayed.
+fn trace_flag<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    match serde_json::Value::deserialize(d)? {
+        serde_json::Value::Bool(b) => Ok(b),
+        _ => Err(serde::de::Error::custom("`trace` must be a boolean")),
+    }
 }
 
 fn default_trace() -> bool {
@@ -98,7 +111,8 @@ pub async fn run_query(
     // decides it. The API skips its own `door=http` event when the act arrives relayed,
     // so one act measures once, on the door it arrived on.
     let client = svc.relay_client(parts)?;
-    CompositionShape::of(&input.plan).record("mcp");
+    // No shape measurement here: this door holds no composition, only the caller's JSON. The API
+    // measures the plan once it reads it, labelled `mcp` by the relay's `RelayedSurface`.
 
     let response = client
         .query()
@@ -164,6 +178,12 @@ fn map_query_error(context: &str, err: ClientError) -> rmcp::ErrorData {
                 .join("\n");
             rmcp::ErrorData::invalid_params(format!("{context}: plan refused — {details}"), None)
         }
+        // The API could not read the plan this door relayed unread. A caller error, in the API's
+        // own words (bounded there), so the agent can repair it.
+        ClientError::UnreadablePlan { message } => rmcp::ErrorData::invalid_params(
+            format!("{context}: plan could not be read — {message}"),
+            None,
+        ),
         other => rmcp::ErrorData::internal_error(format!("{context} failed: {other}"), None),
     }
 }
@@ -171,6 +191,46 @@ fn map_query_error(context: &str, err: ClientError) -> rmcp::ErrorData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The edge reads `trace` and nothing of `plan`: any plan passes its parse, so whether a
+    /// plan is readable is the API's to say, and a non-boolean `trace` is refused in a fixed
+    /// sentence rather than serde's, which would quote it back whole.
+    #[test]
+    fn the_edge_parses_no_plan_and_quotes_no_trace() {
+        let input: QueryInput =
+            serde_json::from_value(serde_json::json!({ "plan": "not a composition" }))
+                .expect("any plan passes the edge");
+        assert_eq!(input.plan, serde_json::json!("not a composition"));
+        assert!(input.trace, "trace defaults to true");
+
+        let huge = "z".repeat(100_000);
+        let err =
+            serde_json::from_value::<QueryInput>(serde_json::json!({ "plan": {}, "trace": huge }))
+                .expect_err("a non-boolean trace is refused");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("`trace` must be a boolean") && msg.len() < 256,
+            "a fixed sentence, not the caller's string: {} bytes",
+            msg.len()
+        );
+    }
+
+    /// An unreadable plan is a caller error in the API's own words, not an opaque fault.
+    #[test]
+    fn an_unreadable_plan_renders_as_invalid_params_with_the_apis_sentence() {
+        let err = map_query_error(
+            "run_query",
+            ClientError::UnreadablePlan {
+                message: "stages: invalid type".to_string(),
+            },
+        );
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert!(
+            err.message.contains("stages: invalid type"),
+            "{}",
+            err.message
+        );
+    }
     use temper_client::error::ClientError;
     use temper_core::types::query::PlanRefusal;
     use temper_core::types::query::RefusalReason;

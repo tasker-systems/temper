@@ -487,7 +487,11 @@ async fn an_unparseable_body_answers_from_the_extractor_not_the_refusal_contract
     assert!(
         !body.contains("refusals"),
         "and it does NOT carry the every-refusal-at-once envelope — that promise is about plans \
-         that parse. This is the pre-existing extractor boundary, which every type error already \
-         takes: {body}"
+         that parse. This is the extractor boundary, which every type error takes: {body}"
+    );
+    assert!(
+        body.contains(temper_core::error::UNREADABLE_PLAN_CODE),
+        "it answers in the ErrorBody envelope under its own code, so a client can tell an \
+         unreadable plan from a refused one without reading the message: {body}"
     );
 }

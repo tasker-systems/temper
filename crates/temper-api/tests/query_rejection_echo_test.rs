@@ -1,6 +1,6 @@
 #![cfg(feature = "test-db")]
-//! `/api/query` reads its body through `CompositionBody`, whose rejection never repeats more than
-//! a typo's worth of what the caller sent.
+//! `/api/query` reads its body through `CompositionBody`, whose rejection is an `ErrorBody` under
+//! `UNREADABLE_PLAN` and never repeats more than a typo's worth of what the caller sent.
 //!
 //! Asserted through the HTTP door because the extractor's own tests cannot see the wiring: a
 //! handler that went back to plain `Json<Composition>` would leave them green while the door
@@ -43,5 +43,18 @@ async fn the_query_door_does_not_echo_an_unreadable_body(pool: PgPool) {
         text.len() < 2048,
         "the door repeated {} bytes of a 100 KB string",
         text.len()
+    );
+    let body: serde_json::Value =
+        serde_json::from_str(&text).expect("the rejection is an ErrorBody");
+    assert_eq!(
+        body["error"]["code"],
+        temper_core::error::UNREADABLE_PLAN_CODE,
+        "the code is what lets the MCP edge hand this back as a caller error: {text}"
+    );
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("invalid type")),
+        "the message still says what failed: {text}"
     );
 }

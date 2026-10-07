@@ -61,6 +61,12 @@
 //!   re-check `exp` on planted claims — `auth_seam_parity_e2e`); its witness joined
 //!   at the swap. The other arms' full matrix lives in
 //!   `resources_wire_arms_test.rs`, which already pins the shared mapping.
+//! - *UNREADABLE_PLAN* — the tool relays `plan` unread (its schema is `Composition`'s, its
+//!   type is a JSON value), so a plan the API cannot read is refused by the API under the code
+//!   `UNREADABLE_PLAN`, bounded there, and arrives as `invalid_params` carrying the API's own
+//!   sentence. **DECLARED DELTA**: before the pass-through, rmcp's parameter parse refused such a
+//!   plan at the edge as `invalid_params` quoting serde's message — and the caller's input —
+//!   whole, and the API never saw it. Kind unchanged; prose is now the API's, and bounded.
 //! - *Body ceiling* — the wire face at `/api/query` is witnessed at the same route by
 //!   `resources_wire_arms_test.rs`; not duplicated here.
 //! - *Non-refusal errors stay opaque* — pinned at the rendering function by the
@@ -636,13 +642,13 @@ async fn a_direct_http_query_measures_the_http_door_once(pool: PgPool) {
     );
 }
 
-/// A relayed-shaped act never measures `door=http`: the `RelayedSurface`
-/// extension (planted by `relay_trust` ONLY beside a valid service credential
-/// AND the honored carrier) suppresses the route's own event, because the MCP
-/// edge records the same composition as `door=mcp` BEFORE it forwards. A forged
-/// carrier without the credential degrades to measurement, not to suppression.
+/// A relayed-shaped act is measured once, as `door=mcp`, at the API: the MCP edge relays
+/// plans unread, so the route is the one place a relayed composition exists, and the
+/// `RelayedSurface` extension (planted by `relay_trust` ONLY beside a valid service
+/// credential AND the honored carrier) names the door. A forged carrier without the
+/// credential degrades to `door=http`, not to a relabel.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_relayed_query_never_measures_the_http_door(pool: PgPool) {
+async fn a_relayed_query_measures_the_mcp_door_and_a_forged_one_the_http_door(pool: PgPool) {
     let (layer, captured) = TestTracingLayer::new();
     let _guard = tracing_subscriber::registry().with(layer).set_default();
     let app = common::setup_relay(pool).await;
@@ -679,14 +685,13 @@ async fn a_relayed_query_never_measures_the_http_door(pool: PgPool) {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert_eq!(
         shape_event_doors(&captured.lock().unwrap()),
-        vec!["http".to_string()],
-        "the credentialed relay shape is suppressed; the carrier-only forgery still measures"
+        vec!["mcp".to_string(), "http".to_string()],
+        "the credentialed relay measures as mcp; the carrier-only forgery measures as http"
     );
 }
 
-/// An MCP query measures `door=mcp` exactly ONCE — the edge's own event, recorded
-/// pre-relay (before the swap: in-process where the direct binding runs; after it:
-/// before the forward). The API's skip keeps the count at one across the swap.
+/// An MCP query measures `door=mcp` exactly ONCE — the API's event for the relayed plan.
+/// The edge records nothing: it relays the plan unread.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn an_mcp_query_measures_the_mcp_door_once(pool: PgPool) {
     let (layer, captured) = TestTracingLayer::new();
@@ -703,5 +708,39 @@ async fn an_mcp_query_measures_the_mcp_door_once(pool: PgPool) {
         shape_event_doors(&captured.lock().unwrap()),
         vec!["mcp".to_string()],
         "one act, one measurement, door=mcp"
+    );
+}
+
+/// A plan the API cannot read reaches the MCP caller as `invalid_params` in the API's own
+/// bounded sentence. The tool relays `plan` unread, so this is the API's `UNREADABLE_PLAN`
+/// crossing the wire; before the pass-through, the edge's own parameter parse refused it and
+/// quoted the caller's 100 KB string back whole.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_unreadable_plan_reaches_the_mcp_caller_in_the_apis_bounded_words(pool: PgPool) {
+    let (_app, svc, parts) = harness(pool).await;
+    let huge = "z".repeat(100_000);
+
+    let err = run_query(
+        &svc,
+        &parts,
+        json!({ "plan": { "outcome": { "returns": [] }, "stages": huge } }),
+    )
+    .await
+    .expect_err("a string where the stage list belongs is unreadable");
+
+    assert_eq!(
+        code_of(&err),
+        -32602,
+        "a caller error, not a server fault: {err:?}"
+    );
+    assert!(
+        err.message.contains("plan could not be read") && err.message.contains("invalid type"),
+        "the API's own account of what failed: {}",
+        &err.message[..err.message.len().min(300)]
+    );
+    assert!(
+        err.message.len() < 2048,
+        "the door repeated {} bytes of a 100 KB string",
+        err.message.len()
     );
 }

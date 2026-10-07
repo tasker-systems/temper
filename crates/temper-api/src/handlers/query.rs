@@ -1,5 +1,4 @@
 use axum::extract::{FromRequest, Request, State};
-use axum::http::StatusCode;
 use axum::{Extension, Json};
 
 use crate::middleware::auth::AuthUser;
@@ -36,6 +35,15 @@ use temper_workflow::operations::RelayedSurface;
                 it is the door's most-read documentation.",
             body = ErrorBody,
         ),
+        (
+            status = 422,
+            description = "The body is not a composition this door can read — a value of the wrong \
+                type, or a name outside a closed vocabulary — under the code `UNREADABLE_PLAN`. \
+                There is no plan yet, so there are no refusals: the message names what failed and \
+                repeats at most 1024 bytes of it. Malformed JSON answers `400`, a body past the \
+                limit `413` and a non-JSON content type `415`, each under the same code.",
+            body = ErrorBody,
+        ),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "System access required", body = ErrorBody),
     )
@@ -69,24 +77,24 @@ pub async fn query(
     // traffic a ceiling refuses — and the question this exists to answer is whether the ceilings
     // sit above what callers actually send. See `CompositionShape`.
     //
-    // **Skip when the act arrived relayed** (Pete's ruling, beat G3b): the MCP edge records the
-    // same composition as `door=mcp` BEFORE it forwards, so recording here too would double-count
-    // one act across two doors. The extension is planted by `relay_trust` ONLY beside a valid
-    // service credential AND the honored carrier, so a forged carrier degrades to measurement, not
-    // to trust — a caller cannot suppress their own `http` measurement with headers.
+    // **Measured here for every door, labelled by the door it arrived on.** The MCP edge relays a
+    // plan unread (it never deserializes one), so this is the only place a relayed composition
+    // exists as one. `RelayedSurface` names the edge; it is planted by `relay_trust` ONLY beside a
+    // valid service credential AND the honored carrier, so a forged carrier degrades to `http`, not
+    // to a relabel — a caller cannot move their own measurement with headers.
     //
-    // Two accepted residuals, named (RG-2 pass, ruled 2026-09-25):
-    // - A caller HOLDING the service credential can POST here directly, bypassing the MCP edge:
-    // the skip fires and no `door=mcp` record exists anywhere, so the act measures zero times.
-    // This is the first consumption of `RelayedSurface` that shapes a measurement rather than
-    // only attributing it; accepted because it is telemetry-only and the credential's documented
-    // residual already covers stolen-secret `@mcp` attribution on the thief's own acts.
+    // Two accepted residuals, named (RG-2 pass, ruled 2026-09-25, restated when the measurement
+    // moved here from the edge):
+    // - A caller HOLDING the service credential can POST here directly, bypassing the MCP edge,
+    // and is measured as `mcp`. Telemetry-only; the credential's documented residual already
+    // covers stolen-secret `@mcp` attribution on the thief's own acts.
     // - While the API's `mcp_service_secret` is unset or mid-rotation (and the MCP edge is
-    // configured), the extension is never planted and every relayed act measures twice —
-    // the degrade is `debug`-silent by design, so the skew self-heals only at rotation end.
-    if relayed.is_none() {
-        CompositionShape::of(&composition).record("http");
-    }
+    // configured), the extension is never planted and relayed acts measure as `http` — the
+    // degrade is `debug`-silent by design, so the skew self-heals only at rotation end.
+    let door = relayed.map_or("http", |Extension(RelayedSurface(surface))| {
+        surface.marker()
+    });
+    CompositionShape::of(&composition).record(door);
 
     let validated = query_read::prepare(composition)
         .await
@@ -110,6 +118,10 @@ const MAX_REJECTION_TEXT_BYTES: usize = 1024;
 
 /// The composition, read as `Json` reads it, but rejected without repeating the caller's payload.
 ///
+/// Every rejection answers as [`ApiError::UnreadablePlan`]: the reader's own status under the code
+/// `UNREADABLE_PLAN`, so a client — the MCP edge, which relays plans unread, above all — can tell a
+/// plan it could not read from a server fault without reading the message.
+///
 /// axum's `JsonRejection` text carries serde's message, and serde quotes the caller's text whole in
 /// two of them: `invalid type` (a string sent where `stages`, `outcome` or `returns` belongs) and
 /// `unknown variant` (a `with` section this contract does not name). On a door whose body limit is
@@ -126,15 +138,15 @@ impl<S> FromRequest<S> for CompositionBody
 where
     S: Send + Sync,
 {
-    type Rejection = (StatusCode, String);
+    type Rejection = ApiError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
         match Json::<Composition>::from_request(req, state).await {
             Ok(Json(composition)) => Ok(Self(composition)),
-            Err(rejection) => Err((
-                rejection.status(),
-                bounded_rejection_text(rejection.body_text()),
-            )),
+            Err(rejection) => Err(ApiError::UnreadablePlan {
+                status: rejection.status(),
+                message: bounded_rejection_text(rejection.body_text()),
+            }),
         }
     }
 }
@@ -164,14 +176,19 @@ mod tests {
     use axum::body::Body;
     use axum::http::header::CONTENT_TYPE;
 
-    async fn read(body: String) -> Result<CompositionBody, (StatusCode, String)> {
+    /// The rejection's status and message, or `None` when the body was read.
+    async fn read(body: String) -> Option<(axum::http::StatusCode, String)> {
         let req = Request::builder()
             .method("POST")
             .uri("/api/query")
             .header(CONTENT_TYPE, "application/json")
             .body(Body::from(body))
             .expect("request builds");
-        CompositionBody::from_request(req, &()).await
+        match CompositionBody::from_request(req, &()).await {
+            Ok(_) => None,
+            Err(ApiError::UnreadablePlan { status, message }) => Some((status, message)),
+            Err(other) => panic!("every rejection is UnreadablePlan, got {other:?}"),
+        }
     }
 
     /// Bound on what a rejection may add past the cap: the elision note.
@@ -201,7 +218,6 @@ mod tests {
         ] {
             let (status, text) = read(body)
                 .await
-                .err()
                 .unwrap_or_else(|| panic!("{what}: the fixture must be a body serde refuses"));
             assert!(
                 status.is_client_error(),
@@ -219,7 +235,7 @@ mod tests {
     async fn a_typo_sized_rejection_is_returned_whole() {
         let (_, text) = read(r#"{"outcome":{"returns":[{"stage":"a"}]},"stages":"oops"}"#.into())
             .await
-            .expect_err("a string where the stage list belongs is refused");
+            .expect("a string where the stage list belongs is refused");
         assert!(
             text.contains("oops") && !text.contains("not repeated"),
             "a short message keeps the caller's token so they can see the typo: {text}"

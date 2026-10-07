@@ -16609,6 +16609,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description The body is not a composition this door can read — a value of the wrong type, or a name outside a closed vocabulary — under the code `UNREADABLE_PLAN`. There is no plan yet, so there are no refusals: the message names what failed and repeats at most 1024 bytes of it. Malformed JSON answers `400`, a body past the limit `413` and a non-JSON content type `415`, each under the same code. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     assert: {

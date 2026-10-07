@@ -131,6 +131,17 @@ pub enum ClientError {
     #[error("the plan was refused:{}", render_refusals(.refusals))]
     PlanRefused { refusals: Vec<PlanRefusal> },
 
+    /// The server could not read the body as a composition — malformed JSON, a value of the wrong
+    /// type, a name outside a closed vocabulary — so there is no plan and no refusal list. A
+    /// **caller** error, like [`Self::PlanRefused`], and the message is the server's own account of
+    /// what failed (bounded by the server).
+    ///
+    /// Discriminated by the wire `code` being [`temper_core::error::UNREADABLE_PLAN_CODE`], at any
+    /// status the reader chose. A caller that sends plans it never parsed — the MCP edge relays
+    /// them unread — depends on this to report the server's sentence rather than a server fault.
+    #[error("the plan could not be read: {message}")]
+    UnreadablePlan { message: String },
+
     /// A finalize raw-bytes integrity check failed (HTTP 422, `CONTENT_INTEGRITY`) — the stored bytes
     /// do not match the caller's declared hash (W2 PR 5). Distinct from `Conflict` because it is **not**
     /// resumable: the caller must discard the poisoned resource and re-upload, not retry.

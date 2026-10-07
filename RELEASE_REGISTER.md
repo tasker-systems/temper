@@ -77,7 +77,16 @@ status: signal-only
   per entry of a caller-sized list any more, and none repeats an unbounded caller string: empty
   keys, empty `contains` and oversized values refuse once per source with a count; an inadmissible
   `with` section once per section; the invocation-`properties` redirect once per stage, naming only
-  a key inside the cap; an unknown act name or id kind is repeated only when 64 bytes or shorter. A body `/api/query` cannot deserialize keeps its status (422 for a type error) but its message is cut to 1024 bytes, because serde's `invalid type` and `unknown variant` messages quoted the caller's string whole. `/api/search` (and MCP `search`, which
+  a key inside the cap; an unknown act name or id kind is repeated only when 64 bytes or shorter. A body `/api/query` cannot read now answers in the standard
+  error envelope under the new code `UNREADABLE_PLAN` (was plain text), at the reader's own status
+  (`422` for a wrong type, now declared in the OpenAPI document; `400`, `413`, `415`), with a
+  message of at most 1024 bytes: serde's `invalid type` and `unknown variant` messages quoted the
+  caller's string whole. MCP `run_query` relays `plan` unread, its schema still `Composition`'s
+  (`tools/list` is byte-identical), so an unreadable plan is the API's to refuse and reaches the
+  agent as `invalid_params` in the API's words, where the edge's own parse used to quote it whole;
+  temper-client reads the code as `ClientError::UnreadablePlan`, and the composition-shape
+  measurement for relayed plans moved from the edge to the API (still `door=mcp`, still once).
+  `/api/search` (and MCP `search`, which
   forwards to it) answers `400 BAD_REQUEST` naming each field when `query` exceeds 4096 bytes,
   `embedding` 768 components, `bound_ids` or `cogmap_ids` 256 ids, or `doc_type`, `context_ref` or
   `search_config` 256 bytes. Caps are published as `maxLength`/`maxItems` where the schema can carry
@@ -92,8 +101,8 @@ status: signal-only
   the execution bound remains the deployment's (`docs/concepts/query-cost-and-bounds.md`). The wire-class comparator now reads a new
   member of an open vocabulary (a `oneOf` with an unconstrained string arm) as growth. Who observes:
   a caller sending a value, string or search field over its cap. User-visible: yes, as a refusal.
-  Release relevance: additive (three refusal reasons) and behavioral (requests that were accepted
-  can now be refused).
+  Release relevance: additive (five refusal reasons, the `UNREADABLE_PLAN` code) and behavioral
+  (requests that were accepted can now be refused; an unreadable plan's body is JSON, not text).
 pr: self
 classes: additive, behavioral
 surfaces: http, mcp, clients
