@@ -82,7 +82,7 @@ status: signal-only
   `embedding` 768 components, `bound_ids` or `cogmap_ids` 256 ids, or `doc_type`, `context_ref` or
   `search_config` 256 bytes. Caps are published as `maxLength`/`maxItems` where the schema can carry
   them (the generated Ruby and Python models now reject an over-long scalar before sending) and in
-  descriptions where it cannot. The largest legal composition measures 10,694,244 bytes at the most
+  descriptions where it cannot. The largest legal composition measures 11,742,820 bytes at the most
   expansive encoding. temper-py now sends request bodies as UTF-8 rather than ASCII-escaped
   (`ensure_ascii=False`), and the UI's search palette declines a query over 4096 bytes itself.
   Every cap clears both installs' live maxima (community / enterprise, 2026-10-06): property value

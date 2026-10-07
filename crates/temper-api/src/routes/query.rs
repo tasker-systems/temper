@@ -27,7 +27,7 @@ pub(super) fn query_routes() -> OpenApiRouter<AppState> {
 ///
 /// Without its own limit this door inherits the 2 MiB default (`MAX_REQUEST_BODY_BYTES`), and that
 /// is wrong in the direction that refuses legal plans: a composition the contract calls legal
-/// encodes to up to **10,694,244 bytes** (below). The door would answer a plan its own contract
+/// encodes to up to **11,742,820 bytes** (below). The door would answer a plan its own contract
 /// admits with a bare 413 — no refusal list, no vocabulary, in the door whose whole promise is that
 /// every refusal arrives at once and in the caller's own terms.
 /// `the_largest_legal_composition_fits_inside_the_declared_body_limit` holds the plan against this
@@ -48,7 +48,7 @@ pub(super) fn query_routes() -> OpenApiRouter<AppState> {
 /// composition), and all caller text by `MAX_COMPOSITION_TEXT_BYTES` (8 MiB at the most expansive
 /// encoding). `the_largest_legal_composition_fits_inside_the_declared_body_limit` builds the plan at
 /// those caps and budgets and measures it as the most expansive per-character encoder would send
-/// it: **10,694,244 bytes** `[measured — 2026-10-06]`, 2.4x under this number. So a plan the
+/// it: **11,742,820 bytes** `[measured — 2026-10-07]`, 2.2x under this number. So a plan the
 /// contract calls legal never meets a bare 413.
 ///
 /// **What this limit still catches is bytes that are not the plan**: whitespace, and fields serde
@@ -109,8 +109,8 @@ mod tests {
     ///   a caller may add to any plan; they are padding, and the body limit answers padding.
     /// - **The maximum is over two pure shapes, not every mixture.** No single act admits every
     ///   bounded field: the walk carries id sets and no `ResourceFilter`, the selection the reverse.
-    ///   Both are measured and the larger reported, which is the selection shape since string
-    ///   lengths were capped.
+    ///   Both are measured and the larger reported, which is the walk shape `[measured —
+    ///   2026-10-07]`.
     #[test]
     fn the_largest_legal_composition_fits_inside_the_declared_body_limit() {
         // **Two shapes, both measured, because no single act admits every bounded field and the
@@ -358,22 +358,19 @@ mod tests {
     /// Grow every caller string — narrowing strings, keys, questions — toward its own cap, at its
     /// widest encoding, until the plan's caller text reaches `MAX_COMPOSITION_TEXT_BYTES` counted
     /// at `worst_case_string_bytes`, or every string is at its cap. The predicate values were
-    /// already grown to their own budget and count toward this one. Control characters cost the
-    /// same six bytes to every encoder, so the filler's worst case is also its serde size.
+    /// already grown to their own budget and count toward this one. The filler is `=`: one byte
+    /// to serde, decoded or escaped, and six to an encoder that escapes it (Gson does), so a string
+    /// at its cap in either unit is also at its widest worst case. A control character would cost
+    /// six bytes to serde too, and reach an escaped cap at a sixth of the worst-case text.
     fn at_the_text_budget(mut c: Composition) -> Composition {
-        // (string, its cap in the unit its check counts, true when the cap counts escaped bytes
-        // rather than decoded ones, the fixed prefix that keeps a key distinct).
-        let mut strings: Vec<(&mut String, usize, bool, String)> = Vec::new();
+        // (string, its cap in the unit its check counts, the fixed prefix that keeps a key
+        // distinct). `=` is one byte in both units, so the unit no longer changes the fill.
+        let mut strings: Vec<(&mut String, usize, String)> = Vec::new();
         let mut value_text = 0usize;
         for node in &mut c.stages {
             let StageNode::Act(inv) = node else { continue };
             if let Some(i) = inv.intention.as_mut() {
-                strings.push((
-                    &mut i.query,
-                    MAX_INTENTION_QUERY_BYTES,
-                    false,
-                    String::new(),
-                ));
+                strings.push((&mut i.query, MAX_INTENTION_QUERY_BYTES, String::new()));
             }
             if let Some(f) = inv.resource_filter.as_mut() {
                 for p in &f.properties {
@@ -384,25 +381,25 @@ mod tests {
                             .sum::<usize>();
                 }
                 for x in f.doc_type.iter_mut().chain(f.tags.iter_mut()) {
-                    strings.push((x, MAX_FILTER_STRING_BYTES, true, String::new()));
+                    strings.push((x, MAX_FILTER_STRING_BYTES, String::new()));
                 }
                 for facet in &mut f.facets {
                     value_text += worst_case_string_bytes(&facet.value);
                     let head = facet.key.clone();
-                    strings.push((&mut facet.key, MAX_FILTER_STRING_BYTES, true, head));
+                    strings.push((&mut facet.key, MAX_FILTER_STRING_BYTES, head));
                 }
                 for p in &mut f.properties {
                     let head = p.key.clone();
-                    strings.push((&mut p.key, MAX_FILTER_STRING_BYTES, true, head));
+                    strings.push((&mut p.key, MAX_FILTER_STRING_BYTES, head));
                 }
                 for x in [&mut f.stage, &mut f.status, &mut f.owner]
                     .into_iter()
                     .flatten()
                 {
-                    strings.push((x, MAX_FILTER_STRING_BYTES, true, String::new()));
+                    strings.push((x, MAX_FILTER_STRING_BYTES, String::new()));
                 }
                 if let Some(x) = f.title_contains.as_mut() {
-                    strings.push((x, MAX_TITLE_CONTAINS_BYTES, true, String::new()));
+                    strings.push((x, MAX_TITLE_CONTAINS_BYTES, String::new()));
                 }
             }
             if let Some(f) = inv.edge_filter.as_mut() {
@@ -414,11 +411,11 @@ mod tests {
                             .sum::<usize>();
                 }
                 for x in &mut f.labels {
-                    strings.push((x, MAX_FILTER_STRING_BYTES, true, String::new()));
+                    strings.push((x, MAX_FILTER_STRING_BYTES, String::new()));
                 }
                 for p in &mut f.properties {
                     let head = p.key.clone();
-                    strings.push((&mut p.key, MAX_FILTER_STRING_BYTES, true, head));
+                    strings.push((&mut p.key, MAX_FILTER_STRING_BYTES, head));
                 }
             }
         }
@@ -430,16 +427,20 @@ mod tests {
         let mut slack = MAX_COMPOSITION_TEXT_BYTES
             .checked_sub(text)
             .expect("the fixture's text starts inside the budget");
-        for (s, cap, escaped, head) in strings {
+        for (s, cap, head) in strings {
             let current = worst_case_string_bytes(s);
-            // A control character is six bytes escaped and at worst, one byte decoded.
-            let widest_worst = if escaped { cap } else { cap * 6 };
+            // The head is alphanumeric: one byte at worst. Every other byte is a six-byte `=`.
+            let widest_worst = head.len() + 6 * (cap - head.len());
             let target = widest_worst.min(current + slack);
             if target <= current {
                 continue;
             }
             let room = target - head.len();
-            *s = format!("{head}{}{}", "\u{1}".repeat(room / 6), "x".repeat(room % 6));
+            // Where slack binds, the remainder is `x` (one byte at worst), clipped so the string
+            // never passes its cap.
+            let wide = room / 6;
+            let narrow = (room % 6).min(cap - head.len() - wide);
+            *s = format!("{head}{}{}", "=".repeat(wide), "x".repeat(narrow));
             slack -= worst_case_string_bytes(s) - current;
         }
         c

@@ -131,7 +131,7 @@ where
 ///
 /// **It is emphatically not ample for every payload the contract admits, and that is the reason the
 /// table above exists rather than a reason to raise this.** A composition `/api/query` calls legal
-/// encodes to up to **10,694,244 bytes** `[measured — 2026-10-06]`, 5.1x this number. Had that
+/// encodes to up to **11,742,820 bytes** `[measured — 2026-10-07]`, 5.6x this number. Had that
 /// door inherited this ceiling it would have answered a legal plan with a bare 413. The doors
 /// carrying large payloads by design — a composition, and the MCP tool surface with `ingest`'s
 /// inline content and `data_artifacts`' JSON — each declare their own, which is the shape this

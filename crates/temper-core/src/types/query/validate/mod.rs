@@ -2762,7 +2762,8 @@ mod tests {
         // A comparison costs probe nodes x stored nodes, so a small-byte value can still be an
         // expensive probe. Nodes are counted at every depth.
         let flat = |n: usize| serde_json::Value::Array(vec![serde_json::json!(0); n]);
-        // 32 objects of one member each: 32 elements + 32 members = 64 nodes, then 65.
+        // `n / 2` objects of one member each: as many elements as members, so `n` nodes; the
+        // over-cap case pushes one more element.
         let nested = |n: usize| serde_json::Value::Array(vec![serde_json::json!({"a": 0}); n / 2]);
         for (label, at, over) in [
             (
