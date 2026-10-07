@@ -83,7 +83,7 @@ describe('the search proxy', () => {
 		expect(apiPost).not.toHaveBeenCalled();
 	});
 
-	it('declines a query over the search cap with no upstream read, as the caller\'s to fix', async () => {
+	it("declines a query over the search cap with no upstream read, as the caller's to fix", async () => {
 		// 4097 bytes: over `/api/search`'s cap, which would otherwise surface as a 503.
 		const resp = await run('é'.repeat(2048) + 'x');
 
