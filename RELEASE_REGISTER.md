@@ -124,10 +124,13 @@ status: signal-only
   reaches an erased unit. Rows written before this release read as `-infinity` and are due at once,
   so a deployment that has swept clears its memo over its next door calls (about 20 for 1M rows).
   The expiry also deletes every place observation of an erased resource. The memo is a cache: a
-  deleted row costs at most one re-scan of that unit where it next appears. The expiry's signature
+  deleted row costs at most one re-scan of that unit where it next appears. The four hash columns
+  (`content_hash` on the memo, place observations and findings, and `fingerprint`) keep no planner
+  statistics, whose histograms held sampled hashes past the rows' deletion: their statistics
+  target is 0 and the migration removes what was gathered, without rewriting a table or index. The expiry's signature
   and the count it returns are unchanged. Who observes: operators reading the `sensitivity` schema.
-  User-visible: no. Release relevance: additive (a column and an index) and behavioral (memo rows
-  and observations are deleted that were kept).
+  User-visible: no. Release relevance: additive (a column and an index) and behavioral (memo rows,
+  observations and hash-column statistics are deleted that were kept).
 pr: self
 classes: additive, behavioral
 surfaces: internal, schema

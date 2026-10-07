@@ -1613,7 +1613,7 @@ async fn an_erased_resources_place_observations_go_on_the_next_expiry_call(pool:
     let live_before = observations_of(&pool, live.uuid()).await;
     assert_eq!(live_before.len(), 2);
 
-    sqlx::query("UPDATE sensitivity.detectors SET enabled = false")
+    sqlx::query("SELECT sensitivity.disable_detectors(4, 'temper')")
         .execute(&pool)
         .await
         .unwrap();
@@ -1723,14 +1723,15 @@ async fn a_memo_row_is_deleted_thirty_days_after_it_was_written(pool: PgPool) {
     );
 }
 
-/// One call deletes at most 50,000 memo rows, so a memo that predates the column clears over
-/// several door calls rather than in one statement, and the next call takes the rest.
+/// One call deletes at most 50,000 memo rows, oldest first, so a memo that predates the column
+/// clears over several door calls rather than in one statement, and the next call takes the rest.
+/// The one row the first call leaves is the youngest due row.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn the_memo_is_cleared_in_bounded_batches(pool: PgPool) {
+async fn the_memo_is_cleared_in_bounded_batches_oldest_first(pool: PgPool) {
     sqlx::query(
         "INSERT INTO sensitivity.memo (content_hash, detector_id, detector_version, memoized_at) \
          SELECT encode(sha256(convert_to(i::text, 'UTF8')), 'hex'), v.detector_id, v.version, \
-                '-infinity' \
+                CASE WHEN i = 1 THEN now() - interval '31 days' ELSE '-infinity' END \
            FROM generate_series(1, 50001) i \
           CROSS JOIN (SELECT detector_id, version FROM sensitivity.detector_versions \
                        ORDER BY detector_id, version LIMIT 1) v",
@@ -1746,8 +1747,82 @@ async fn the_memo_is_cleared_in_bounded_batches(pool: PgPool) {
     };
     expiry_door(&pool).await;
     assert_eq!(left().await, 1, "one call takes 50,000");
+    let kept: String = sqlx::query_scalar("SELECT content_hash FROM sensitivity.memo")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        kept, "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+        "the row the first call leaves is the youngest, sha256('1')"
+    );
     expiry_door(&pool).await;
     assert_eq!(left().await, 0, "the next call takes the rest");
+}
+
+/// A memo row written before the column existed reads as -infinity, so it is due on the first call
+/// after the migration rather than 30 days later. Read from the catalog, because a test database
+/// migrates an empty memo: the value a pre-existing row takes is the column's stored missing value.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_memo_row_from_before_the_column_has_no_age(pool: PgPool) {
+    let missing: Option<String> = sqlx::query_scalar(
+        "SELECT attmissingval::text FROM pg_attribute \
+          WHERE attrelid = 'sensitivity.memo'::regclass AND attname = 'memoized_at'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(missing.as_deref(), Some("{-infinity}"));
+}
+
+/// The planner keeps no statistics on a keyed-hash column, so pg_stats never holds a copy of a hash
+/// the expiry deleted. Swept, erased-free rows in all four tables, then ANALYZE: none of the four
+/// columns gains a pg_stats row. The migration's removal of statistics gathered before it ran is
+/// not witnessed here, because a test database migrates empty tables.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn no_hash_column_keeps_planner_statistics(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
+    for i in 0..20 {
+        bare_resource(&pool, &format!("Payroll {i} for {SSN_A}")).await;
+        bare_resource(&pool, &format!("Clean title {i}")).await;
+    }
+    assert!(!tick(&pool, "kb_resources.title").await.failed);
+    for table in [
+        "memo",
+        "place_observations",
+        "findings",
+        "finding_fingerprints",
+    ] {
+        let rows: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM sensitivity.{table}"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(rows > 0, "the tick wrote sensitivity.{table}");
+        sqlx::query(&format!("ANALYZE sensitivity.{table}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let gathered: Vec<(String, String)> = sqlx::query_as(
+        "SELECT tablename::text, attname::text FROM pg_stats WHERE schemaname = 'sensitivity' \
+            AND (tablename, attname) IN (('memo', 'content_hash'), \
+                 ('place_observations', 'content_hash'), ('findings', 'content_hash'), \
+                 ('finding_fingerprints', 'fingerprint'))",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(gathered, vec![], "ANALYZE gathers no hash column");
+    let analysed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_stats WHERE schemaname = 'sensitivity' \
+            AND tablename = 'place_observations' AND attname = 'surface'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        analysed, 1,
+        "the ANALYZE ran: the other columns have statistics"
+    );
 }
 
 /// The expiry's observation arm names the kb_resources surfaces, because only they are
