@@ -14653,7 +14653,8 @@
             "items": {
               "$ref": "#/components/schemas/StageInput"
             },
-            "description": "Where this stage's sets come from, and what this act does with each: caller-supplied ids or\nan upstream stage, each carrying its own [`super::stage::StageRelation`]. Empty for a root\nact that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal\n`bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].\n\nThere is deliberately no sibling `bounds_mode` here `[decided — 2026-08-08, Pete]`. It was\nan `Option<BoundsMode>` whose\n\"required whenever an input is present\" invariant lived in prose, which admitted a\nmeaningless state the validator then read as `bound`. The relation belongs to the edge, and\nnesting it there makes the meaningless state unrepresentable rather than merely invalid.\n\n# A LIST, and at most one per relation\n\n`[widened — 2026-08-14, Pete]` This was `Option<StageInput>` — **one** set, carrying **one**\nrelation. That made a bounded walk inexpressible: `follow-from` needs seeds to start from\n*and* a bound to stay inside, at the same time, and a single slot can hold one or the other.\nThe fragment (`20260814000030`) had the `p_bound_ids` parameter and no caller could fill it,\nso `accepts_bounds: [Resource]` would have declared a capability nothing could reach.\n\n**The cardinality rule is one per RELATION, not one per source.** Two seeds is malformed\n([`super::disposition::RefusalReason::DuplicateInputRelation`]) rather than a union — a union\nis `CombineOp::Union`, which is an existing, visible stage rather than a silent merge inside\none. So the list is short by construction and is not a general fan-in.\n\n**Why a list rather than a second `bound` field beside this one.** The relation already\ndistinguishes them, so a list gives a bound exactly one spelling; a sibling field would give\nit two — the new field, and this one with a `Bound` relation — which is the incumbent\nliteral `bounds: Option<IdSet>` shape this contract deliberately replaced\n`[decided — 2026-08-14, Pete]`, returning under a different name."
+            "description": "Where this stage's sets come from, and what this act does with each: caller-supplied ids or\nan upstream stage, each carrying its own [`super::stage::StageRelation`]. Empty for a root\nact that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal\n`bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].\n\nThere is deliberately no sibling `bounds_mode` here `[decided — 2026-08-08, Pete]`. It was\nan `Option<BoundsMode>` whose\n\"required whenever an input is present\" invariant lived in prose, which admitted a\nmeaningless state the validator then read as `bound`. The relation belongs to the edge, and\nnesting it there makes the meaningless state unrepresentable rather than merely invalid.\n\n# A LIST, and at most one per relation\n\n`[widened — 2026-08-14, Pete]` This was `Option<StageInput>` — **one** set, carrying **one**\nrelation. That made a bounded walk inexpressible: `follow-from` needs seeds to start from\n*and* a bound to stay inside, at the same time, and a single slot can hold one or the other.\nThe fragment (`20260814000030`) had the `p_bound_ids` parameter and no caller could fill it,\nso `accepts_bounds: [Resource]` would have declared a capability nothing could reach.\n\n**The cardinality rule is one per RELATION, not one per source.** Two seeds is malformed\n([`super::disposition::RefusalReason::DuplicateInputRelation`]) rather than a union — a union\nis `CombineOp::Union`, which is an existing, visible stage rather than a silent merge inside\none. So the list is short by construction and is not a general fan-in.\n\n**Why a list rather than a second `bound` field beside this one.** The relation already\ndistinguishes them, so a list gives a bound exactly one spelling; a sibling field would give\nit two — the new field, and this one with a `Bound` relation — which is the incumbent\nliteral `bounds: Option<IdSet>` shape this contract deliberately replaced\n`[decided — 2026-08-14, Pete]`, returning under a different name.\n\nAt most two, one per relation (`list_too_long` past that).",
+            "maxItems": 2
           },
           "intention": {
             "oneOf": [
@@ -17578,6 +17579,7 @@
               "$ref": "#/components/schemas/StageName"
             },
             "description": "Two or more. One input is not a combination; validation refuses it (beat B).\n\n**For `difference` it is exactly two, and it is ORDERED**: `inputs[0]` minus `inputs[1]`.\n`[decided — 2026-08-15, Pete]`\n\nA left fold was the alternative and it is the one Postgres would have given away free —\n`A EXCEPT B EXCEPT C` already evaluates as `A − (B ∪ C)`, which is the exact shape of the\nquestion that motivated this op, with one stage fewer. It is refused for two reasons that\ncompound:\n\n- **This field would mean two different things at once.** It is a set for `union` and\n  `intersect` and would be a distinguished head plus a set for `difference` — one `Vec` with\n  two readings, in a struct that carries no marker saying which is in force.\n- **Nothing would disclose the size of what was subtracted.** With `B ∪ C` written as its\n  own union stage, that stage carries a tally and a reader can see `|B ∪ C|`. Folded into\n  the difference, the union has no stage, no tally and no name — the same\n  no-stage-no-disclosure shape [`super::disposition::RefusalReason::DuplicateInputRelation`]\n  refuses for act inputs, one node kind over.\n\nThe cost is stated rather than hidden: `A − (B ∪ C)` is three stages here and two under a\nfold.",
+            "maxItems": 64,
             "minItems": 2
           },
           "name": {
@@ -21098,6 +21100,7 @@
               "$ref": "#/components/schemas/ReturnSpec"
             },
             "description": "The stages whose rows are hydrated and returned. DECLARED, not inferred from graph shape:\ninferring from out-degree zero makes returning an intermediate impossible without a dummy\nconsumer, and means adding a downstream stage silently stops returning what you used to get\nback. The composition's produced kind(s) are DERIVED from these, replacing the old single\n`produces` field which could only ever be right for a one-arm plan.",
+            "maxItems": 64,
             "minItems": 1
           }
         }
@@ -22841,6 +22844,20 @@
             "description": "A narrowing string — a label, tag, `doc_type`, facet or property key, `stage`, `status`,\n`owner` or `title_contains` — is longer than its published cap: 256 bytes, or 1024 for\n`title_contains`, counted as JSON-escaped bytes.\n\nThe count caps bound how many strings a stage carries, never how long each is; without\nthis a plan inside every count cap could exceed the body limit and meet a bare 413. The\nrefusal names the field and the limit, never the string.",
             "enum": [
               "filter_string_too_long"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A list whose entries must be distinct carries more than any legal plan can: `returns` or a\ncombine stage's `inputs` past 64, or an act's `inputs` past 2 (one per relation).\n\nRefused once, up front, like `too_many_stages`, so no check runs once per entry: an\nover-long list would otherwise answer with a refusal list many times its own size.",
+            "enum": [
+              "list_too_long"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "The composition's caller text — narrowing strings, facet and predicate values, questions —\nexceeds 8388608 bytes counted at the most expansive standard JSON encoding.\n\nWhat makes a legal plan fit the body limit whichever encoder its client uses.",
+            "enum": [
+              "text_budget_exceeded"
             ]
           },
           {

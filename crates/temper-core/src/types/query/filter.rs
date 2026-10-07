@@ -429,6 +429,65 @@ pub fn property_value_bytes(value: &serde_json::Value) -> usize {
     json_bytes(value)
 }
 
+/// The caller text one composition may carry — every narrowing string, facet value, predicate
+/// value and question — counted at [`worst_case_string_bytes`]. Refused as
+/// [`super::disposition::RefusalReason::TextBudgetExceeded`].
+///
+/// # Why a budget at the worst encoder, not the per-string caps alone
+///
+/// The per-string and per-value caps count the minimal JSON encoding, so a 256-byte tag can still
+/// hold 128 accented letters. But clients do not all encode minimally: Python's `json.dumps`
+/// escapes every non-ASCII character as `\uXXXX` by default (up to 3x), and Go's `encoding/json`
+/// escapes `<`, `>` and `&` the same way (6x). Against the per-string caps alone, a legal plan of
+/// accented tags sent through our own Python SDK was ~31 MB, past the body limit. No standard
+/// encoder exceeds the per-character cost counted here, so a plan inside this budget fits the
+/// body limit however its client encodes it; the coherence test measures that worst case.
+///
+/// # 8 MiB
+///
+/// Far above any plan a person or agent writes (the largest live title is 279 bytes), and with
+/// the non-text parts of the largest legal plan at their caps, still 2x under the 25 MB body
+/// limit.
+pub const MAX_COMPOSITION_TEXT_BYTES: usize = 8 * 1024 * 1024;
+
+/// A string's bytes inside its quotes under the most expansive standard JSON encoder: printable
+/// ASCII is one byte (`"` and `\` two); control characters, `<`, `>`, `&` and every other
+/// non-ASCII character are a six-byte `\uXXXX`; a character outside the Basic Multilingual Plane is
+/// a twelve-byte surrogate pair. This bounds serde, Python's `ensure_ascii`, Go's HTML escaping and
+/// JavaScript's `JSON.stringify` alike.
+pub fn worst_case_string_bytes(s: &str) -> usize {
+    s.chars()
+        .map(|c| match c {
+            '"' | '\\' => 2,
+            '<' | '>' | '&' => 6,
+            ' '..='~' => 1,
+            c if (c as u32) > 0xFFFF => 12,
+            _ => 6,
+        })
+        .sum()
+}
+
+/// A JSON value's serialized bytes under the same most expansive encoder: every string (object
+/// keys included) at [`worst_case_string_bytes`] plus its quotes, everything else as serde
+/// writes it.
+pub fn worst_case_value_bytes(value: &serde_json::Value) -> usize {
+    use serde_json::Value;
+    let separators = |n: usize| n.saturating_sub(1);
+    match value {
+        Value::String(s) => worst_case_string_bytes(s) + 2,
+        Value::Array(xs) => {
+            2 + separators(xs.len()) + xs.iter().map(worst_case_value_bytes).sum::<usize>()
+        }
+        Value::Object(m) => {
+            2 + separators(m.len())
+                + m.iter()
+                    .map(|(k, v)| worst_case_string_bytes(k) + 3 + worst_case_value_bytes(v))
+                    .sum::<usize>()
+        }
+        other => json_bytes(other),
+    }
+}
+
 /// The bytes a string occupies inside its JSON quotes on the wire: escapes counted, so a control
 /// character costs its six-byte `\u00XX`. Every narrowing string and facet value is measured this
 /// way, because the body limit sees the escaped form; counting decoded bytes let a plan inside

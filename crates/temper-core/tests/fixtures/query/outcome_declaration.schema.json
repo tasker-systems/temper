@@ -46,6 +46,7 @@
         ],
         "type": "object"
       },
+      "maxItems": 64,
       "type": "array"
     }
   },

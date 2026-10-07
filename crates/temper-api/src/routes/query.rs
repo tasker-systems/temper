@@ -67,10 +67,10 @@ mod tests {
     };
     use temper_core::types::query::envelope::ActInvocation;
     use temper_core::types::query::filter::{
-        json_string_bytes, property_value_bytes, EdgeFilter, FacetPredicate, PropertyOp,
-        PropertyPredicate, ResourceFilter, MAX_COMPOSITION_PROPERTY_VALUE_BYTES,
-        MAX_FILTER_STRING_BYTES, MAX_FILTER_VALUES, MAX_PROPERTY_VALUE_BYTES,
-        MAX_TITLE_CONTAINS_BYTES,
+        json_string_bytes, property_value_bytes, worst_case_string_bytes, worst_case_value_bytes,
+        EdgeFilter, FacetPredicate, PropertyOp, PropertyPredicate, ResourceFilter,
+        MAX_COMPOSITION_PROPERTY_VALUE_BYTES, MAX_COMPOSITION_TEXT_BYTES, MAX_FILTER_STRING_BYTES,
+        MAX_FILTER_VALUES, MAX_PROPERTY_VALUE_BYTES, MAX_TITLE_CONTAINS_BYTES,
     };
     use temper_core::types::query::id_set::{IdKind, IdSet, MAX_ID_SET_IDS};
     use temper_core::types::query::scalars::BoundTerm;
@@ -119,8 +119,14 @@ mod tests {
         // A first version mixed them and measured 1,756,196 — LESS than either pure shape, because
         // half its stages carried no id sets. Measuring both and taking the larger is what stops
         // this test from quietly reporting a maximum that is not one.
-        let walk = at_the_property_value_budget(plan_of(MAX_STAGES, ActName::FollowFrom));
-        let select = at_the_property_value_budget(plan_of(MAX_STAGES, ActName::FindResourcesWith));
+        let walk = at_the_text_budget(at_the_property_value_budget(plan_of(
+            MAX_STAGES,
+            ActName::FollowFrom,
+        )));
+        let select = at_the_text_budget(at_the_property_value_budget(plan_of(
+            MAX_STAGES,
+            ActName::FindResourcesWith,
+        )));
 
         for (what, c) in [("walk", &walk), ("selection", &select)] {
             // Legal FIRST. A byte count over a plan the validator refuses is a measurement of
@@ -134,21 +140,26 @@ mod tests {
             );
         }
 
-        let sizes: Vec<usize> = [&walk, &select]
+        // Measured at the MOST EXPANSIVE standard encoder, not serde's: a client escaping every
+        // non-ASCII character or `<>&` as `\uXXXX` sends the same legal plan in more bytes, and the
+        // door must read it all the same. Serde's size is a lower bound beside it.
+        let sizes: Vec<(usize, usize)> = [&walk, &select]
             .iter()
             .map(|c| {
-                serde_json::to_vec(c)
-                    .expect("a composition serializes")
-                    .len()
+                let value = serde_json::to_value(c).expect("a composition serializes");
+                (
+                    serde_json::to_vec(&value).expect("serializes").len(),
+                    worst_case_value_bytes(&value),
+                )
             })
             .collect();
-        let bytes = *sizes.iter().max().expect("two shapes");
+        let bytes = sizes.iter().map(|s| s.1).max().expect("two shapes");
         assert!(
             bytes < QUERY_MAX_BODY_BYTES,
-            "the largest composition at every published cap serializes to {bytes} bytes (walk \
-             {}, selection {}), which the declared body limit of {QUERY_MAX_BODY_BYTES} would \
-             refuse with a bare 413 — raise the limit, or lower the field caps, but do not let the \
-             contract admit a plan the door cannot read",
+            "the largest composition at every published cap encodes to {bytes} bytes at worst \
+             (walk {:?}, selection {:?}, as (serde, worst)), which the declared body limit of \
+             {QUERY_MAX_BODY_BYTES} would refuse with a bare 413 — raise the limit, or lower the \
+             caps, but do not let the contract admit a plan the door cannot read",
             sizes[0],
             sizes[1]
         );
@@ -179,8 +190,8 @@ mod tests {
                         act.clone()
                     },
                     intention: Some(Intention {
-                        // Control characters: the cap counts decoded bytes, and each escapes to six.
-                        query: "\u{1}".repeat(MAX_INTENTION_QUERY_BYTES),
+                        // Grown toward the text budget by `at_the_text_budget`.
+                        query: "x".to_string(),
                         // A real normalized BGE component, so the serialized width is the one a
                         // caller actually sends rather than the two bytes `0.0` would cost.
                         //
@@ -246,13 +257,12 @@ mod tests {
     /// `capability.rs` enforces — 32 predicates summing to 256 probes.
     fn full_resource_filter() -> ResourceFilter {
         ResourceFilter {
-            // Every narrowing string at its length cap: the count caps alone left the plan's
-            // largest term unmeasured.
-            doc_type: vec![widest(MAX_FILTER_STRING_BYTES); MAX_FILTER_VALUES],
-            tags: vec![widest(MAX_FILTER_STRING_BYTES); MAX_FILTER_VALUES],
+            // Every string starts short and is grown by `at_the_text_budget`.
+            doc_type: vec!["d".to_string(); MAX_FILTER_VALUES],
+            tags: vec!["t".to_string(); MAX_FILTER_VALUES],
             facets: (0..16)
                 .map(|i| FacetPredicate {
-                    key: capped_name("k", i),
+                    key: format!("k{i}"),
                     // Grown toward the value budget by `at_the_property_value_budget`.
                     value: "v".to_string(),
                 })
@@ -261,10 +271,10 @@ mod tests {
             // the probe cap. Facets count against BOTH, which is what the container's own doc
             // means by summing what walks the same candidate set.
             properties: capped_properties(16, 15),
-            stage: Some(widest(MAX_FILTER_STRING_BYTES)),
-            status: Some(widest(MAX_FILTER_STRING_BYTES)),
-            owner: Some(widest(MAX_FILTER_STRING_BYTES)),
-            title_contains: Some(widest(MAX_TITLE_CONTAINS_BYTES)),
+            stage: Some("s".to_string()),
+            status: Some("a".to_string()),
+            owner: Some("o".to_string()),
+            title_contains: Some("t".to_string()),
         }
     }
 
@@ -279,7 +289,7 @@ mod tests {
                 EdgeKind::LeadsTo,
                 EdgeKind::Near,
             ],
-            labels: vec![widest(MAX_FILTER_STRING_BYTES); MAX_FILTER_VALUES],
+            labels: vec!["l".to_string(); MAX_FILTER_VALUES],
             // No facets on an edge container, so all 32 predicates and all 256 probes are the
             // property list's.
             properties: capped_properties(32, 8),
@@ -344,25 +354,100 @@ mod tests {
         c
     }
 
-    /// The widest string a `cap`-byte field admits: as many control characters as fit (six escaped
-    /// bytes each), padded to exactly `cap` escaped bytes. Plain ASCII here would measure a plan
-    /// several times smaller than the largest legal one.
-    fn widest(cap: usize) -> String {
-        let s = format!("{}{}", "\u{1}".repeat(cap / 6), "x".repeat(cap % 6));
-        assert_eq!(json_string_bytes(&s), cap);
-        s
-    }
-
-    /// A distinct key at exactly the string cap, at its widest.
-    fn capped_name(prefix: &str, i: usize) -> String {
-        let head = format!("{prefix}{i}");
-        format!("{head}{}", widest(MAX_FILTER_STRING_BYTES - head.len()))
+    /// Grow every caller string — narrowing strings, keys, questions — toward its own cap, at its
+    /// widest encoding, until the plan's caller text reaches `MAX_COMPOSITION_TEXT_BYTES` counted
+    /// at `worst_case_string_bytes`, or every string is at its cap. The predicate values were
+    /// already grown to their own budget and count toward this one. Control characters cost the
+    /// same six bytes to every encoder, so the filler's worst case is also its serde size.
+    fn at_the_text_budget(mut c: Composition) -> Composition {
+        // (string, its cap in the unit its check counts, true when the cap counts escaped bytes
+        // rather than decoded ones, the fixed prefix that keeps a key distinct).
+        let mut strings: Vec<(&mut String, usize, bool, String)> = Vec::new();
+        let mut value_text = 0usize;
+        for node in &mut c.stages {
+            let StageNode::Act(inv) = node else { continue };
+            if let Some(i) = inv.intention.as_mut() {
+                strings.push((
+                    &mut i.query,
+                    MAX_INTENTION_QUERY_BYTES,
+                    false,
+                    String::new(),
+                ));
+            }
+            if let Some(f) = inv.resource_filter.as_mut() {
+                for p in &f.properties {
+                    value_text +=
+                        p.op.values()
+                            .iter()
+                            .map(worst_case_value_bytes)
+                            .sum::<usize>();
+                }
+                for x in f.doc_type.iter_mut().chain(f.tags.iter_mut()) {
+                    strings.push((x, MAX_FILTER_STRING_BYTES, true, String::new()));
+                }
+                for facet in &mut f.facets {
+                    value_text += worst_case_string_bytes(&facet.value);
+                    let head = facet.key.clone();
+                    strings.push((&mut facet.key, MAX_FILTER_STRING_BYTES, true, head));
+                }
+                for p in &mut f.properties {
+                    let head = p.key.clone();
+                    strings.push((&mut p.key, MAX_FILTER_STRING_BYTES, true, head));
+                }
+                for x in [&mut f.stage, &mut f.status, &mut f.owner]
+                    .into_iter()
+                    .flatten()
+                {
+                    strings.push((x, MAX_FILTER_STRING_BYTES, true, String::new()));
+                }
+                if let Some(x) = f.title_contains.as_mut() {
+                    strings.push((x, MAX_TITLE_CONTAINS_BYTES, true, String::new()));
+                }
+            }
+            if let Some(f) = inv.edge_filter.as_mut() {
+                for p in &f.properties {
+                    value_text +=
+                        p.op.values()
+                            .iter()
+                            .map(worst_case_value_bytes)
+                            .sum::<usize>();
+                }
+                for x in &mut f.labels {
+                    strings.push((x, MAX_FILTER_STRING_BYTES, true, String::new()));
+                }
+                for p in &mut f.properties {
+                    let head = p.key.clone();
+                    strings.push((&mut p.key, MAX_FILTER_STRING_BYTES, true, head));
+                }
+            }
+        }
+        let text: usize = value_text
+            + strings
+                .iter()
+                .map(|(s, ..)| worst_case_string_bytes(s))
+                .sum::<usize>();
+        let mut slack = MAX_COMPOSITION_TEXT_BYTES
+            .checked_sub(text)
+            .expect("the fixture's text starts inside the budget");
+        for (s, cap, escaped, head) in strings {
+            let current = worst_case_string_bytes(s);
+            // A control character is six bytes escaped and at worst, one byte decoded.
+            let widest_worst = if escaped { cap } else { cap * 6 };
+            let target = widest_worst.min(current + slack);
+            if target <= current {
+                continue;
+            }
+            let room = target - head.len();
+            *s = format!("{head}{}{}", "\u{1}".repeat(room / 6), "x".repeat(room % 6));
+            slack -= worst_case_string_bytes(s) - current;
+        }
+        c
     }
 
     fn capped_properties(preds: usize, vals: usize) -> Vec<PropertyPredicate> {
         (0..preds)
             .map(|i| PropertyPredicate {
-                key: capped_name("p", i),
+                key: format!("p{i}"),
                 op: PropertyOp::Contains {
                     values: (0..vals)
                         .map(|v| serde_json::json!(format!("v{v}")))

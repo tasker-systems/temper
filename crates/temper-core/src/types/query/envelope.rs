@@ -92,7 +92,11 @@ pub struct ActInvocation {
     /// it two — the new field, and this one with a `Bound` relation — which is the incumbent
     /// literal `bounds: Option<IdSet>` shape this contract deliberately replaced
     /// `[decided — 2026-08-14, Pete]`, returning under a different name.
+    ///
+    /// At most two, one per relation (`list_too_long` past that).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "web-api", schema(max_items = 2))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 2)))]
     pub inputs: Vec<StageInput>,
     /// Act-level bound terms. A term this act does not admit is refused STATICALLY
     /// (`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.

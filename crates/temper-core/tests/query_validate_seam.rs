@@ -139,6 +139,10 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         // Clears the bar through `max_length` on each scalar field (`inner` on the MCP door's
         // lists) and the published description on the lists.
         ("FilterStringTooLong", 1),
+        // `ListTooLong` and `TextBudgetExceeded` `[added — 2026-10-06]`: `max_items` on `returns`
+        // and both `inputs` fields, and the text budget's number in `TextBudgetExceeded`'s and
+        // `MAX_COMPOSITION_TEXT_BYTES`' published description.
+        ("ListTooLong", 1),
         ("EmptyContains", 1),
         ("EmptyPropertyKey", 1),
         // `IntentionTooLong` and `TooManyIds` `[added — 2026-08-28]`. Two more entries clearing the
@@ -182,6 +186,7 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         // three sites would be three numbers waiting to drift, and would say three judgments were
         // made where there was one. Clears the bar the same way `TooManyIds` does: `max_items` on
         // each of `doc_type`, `tags` and `labels`, published on both doors.
+        ("TextBudgetExceeded", 1),
         ("TooManyFilterValues", 1),
         ("TooManyIds", 1),
         ("TooManyStages", 1),

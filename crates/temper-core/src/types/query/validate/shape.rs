@@ -45,8 +45,9 @@ use crate::types::query::composition::{
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
 use crate::types::query::filter::{
-    json_string_bytes, property_value_bytes, property_value_nodes, PropertyOp, PropertyPredicate,
-    MAX_COMPOSITION_PROPERTY_VALUE_BYTES, MAX_FILTER_STRING_BYTES, MAX_FILTER_VALUES,
+    json_string_bytes, property_value_bytes, property_value_nodes, worst_case_string_bytes,
+    worst_case_value_bytes, PropertyOp, PropertyPredicate, MAX_COMPOSITION_PROPERTY_VALUE_BYTES,
+    MAX_COMPOSITION_TEXT_BYTES, MAX_FILTER_STRING_BYTES, MAX_FILTER_VALUES,
     MAX_PROPERTY_VALUE_BYTES, MAX_PROPERTY_VALUE_NODES, MAX_TITLE_CONTAINS_BYTES,
 };
 use crate::types::query::id_set::{IdKind, MAX_ID_SET_IDS};
@@ -54,6 +55,9 @@ use crate::types::query::stage::{StageInput, StageName, StageRelation};
 use crate::types::resource_view::ResourceSection;
 
 use super::{index_by_name, refusal, term_wire_name, wire_name, PlanRefusal};
+
+/// An act's inputs: one set per relation, and there are two relations.
+const MAX_STAGE_INPUTS: usize = 2;
 
 /// The longest unknown act name a refusal repeats back. Every declared act name is under 32 bytes.
 const MAX_ECHOED_ACT_BYTES: usize = 64;
@@ -158,6 +162,40 @@ pub(super) fn validate_shape_indexed(
         return (errs, None);
     }
 
+    // **Lists that must be distinct, at their legal length.** `returns` and a combine stage's
+    // `inputs` name distinct declared stages, so neither can legally exceed `MAX_STAGES`; an act's
+    // `inputs` holds one set per relation, so never more than two. Every later check walks these
+    // per entry, so an over-long list would answer with a refusal list many times its own size —
+    // the stage ceiling's argument one level down. Refused once, here, with the same early return.
+    {
+        let mut long: Vec<String> = Vec::new();
+        if c.outcome.returns.len() > MAX_STAGES {
+            long.push(format!(
+                "`outcome.returns` carries {} entries; at most {MAX_STAGES}",
+                c.outcome.returns.len()
+            ));
+        }
+        for node in &c.stages {
+            match node {
+                StageNode::Combine(cn) if cn.inputs.len() > MAX_STAGES => long.push(format!(
+                    "stage `{}` combines {} inputs; at most {MAX_STAGES}",
+                    node.name().as_str(),
+                    cn.inputs.len()
+                )),
+                StageNode::Act(inv) if inv.inputs.len() > MAX_STAGE_INPUTS => long.push(format!(
+                    "stage `{}` carries {} inputs; at most {MAX_STAGE_INPUTS}, one per relation",
+                    node.name().as_str(),
+                    inv.inputs.len()
+                )),
+                _ => {}
+            }
+        }
+        if !long.is_empty() {
+            errs.push(refusal(None, RefusalReason::ListTooLong, long.join("; ")));
+            return (errs, None);
+        }
+    }
+
     // **The predicate-value budget, summed over the whole composition.** Composition-level and
     // raised before the graph is read, like the stage ceiling above, so it holds beside a cycle
     // too. The per-value cap bounds one value; this bounds what the count caps multiply it by, and
@@ -171,7 +209,7 @@ pub(super) fn validate_shape_indexed(
             _ => None,
         })
         .flat_map(predicate_value_sizes)
-        .flat_map(|(_, sizes)| sizes)
+        .flat_map(|(_, _, sizes)| sizes)
         .map(|s| s.bytes)
         .sum();
     if predicate_bytes > MAX_COMPOSITION_PROPERTY_VALUE_BYTES {
@@ -181,6 +219,28 @@ pub(super) fn validate_shape_indexed(
             format!(
                 "a composition's property-predicate values may total at most \
                  {MAX_COMPOSITION_PROPERTY_VALUE_BYTES} bytes; this one carries {predicate_bytes}"
+            ),
+        ));
+    }
+
+    // **Caller text at the worst encoder.** The per-string and per-value caps count the minimal
+    // encoding; a client that escapes every non-ASCII character can send several times that.
+    // `MAX_COMPOSITION_TEXT_BYTES` carries the arithmetic.
+    let text: usize = c
+        .stages
+        .iter()
+        .filter_map(|node| match node {
+            StageNode::Act(inv) => Some(caller_text_bytes(inv)),
+            _ => None,
+        })
+        .sum();
+    if text > MAX_COMPOSITION_TEXT_BYTES {
+        errs.push(refusal(
+            None,
+            RefusalReason::TextBudgetExceeded,
+            format!(
+                "a composition's caller text may total at most {MAX_COMPOSITION_TEXT_BYTES} bytes \
+                 counted at the most expansive JSON encoding; this one carries {text}"
             ),
         ));
     }
@@ -946,34 +1006,51 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
     // oversized values. The detail names neither the value nor the key: a refusal must not hand
     // back an oversized payload.
     // Too large is either measure: bytes, or nested nodes (`MAX_PROPERTY_VALUE_NODES` says why a
-    // comparison's cost needs the second).
-    for (field, sizes) in predicate_value_sizes(inv) {
-        let oversized: Vec<ValueSize> = sizes
-            .into_iter()
+    // comparison's cost needs the second). One refusal per source, counted, never one per
+    // predicate: a value over the node cap is ~130 bytes, so a refusal each would make a body of
+    // them into a larger refusal list.
+    let mut by_source: Vec<(&'static str, usize, usize, usize, usize)> = Vec::new();
+    for (source, index, sizes) in predicate_value_sizes(inv) {
+        let over: Vec<&ValueSize> = sizes
+            .iter()
             .filter(|s| s.bytes > MAX_PROPERTY_VALUE_BYTES || s.nodes > MAX_PROPERTY_VALUE_NODES)
             .collect();
-        if !oversized.is_empty() {
-            let bytes = oversized.iter().map(|s| s.bytes).max().unwrap_or(0);
-            let nodes = oversized.iter().map(|s| s.nodes).max().unwrap_or(0);
-            errs.push(refusal(
-                Some(name),
-                RefusalReason::PropertyValueTooLarge,
-                format!(
-                    "a property value may be at most {MAX_PROPERTY_VALUE_BYTES} bytes and \
-                     {MAX_PROPERTY_VALUE_NODES} nested elements; `{field}` carries {} over it, \
-                     the largest {bytes} bytes and {nodes} elements",
-                    oversized.len()
-                ),
-            ));
+        if over.is_empty() {
+            continue;
         }
+        let bytes = over.iter().map(|s| s.bytes).max().unwrap_or(0);
+        let nodes = over.iter().map(|s| s.nodes).max().unwrap_or(0);
+        match by_source.iter_mut().find(|e| e.0 == source) {
+            Some(e) => {
+                e.2 += 1;
+                e.3 = e.3.max(bytes);
+                e.4 = e.4.max(nodes);
+            }
+            None => by_source.push((source, index, 1, bytes, nodes)),
+        }
+    }
+    for (source, first, count, bytes, nodes) in by_source {
+        errs.push(refusal(
+            Some(name),
+            RefusalReason::PropertyValueTooLarge,
+            format!(
+                "a property value may be at most {MAX_PROPERTY_VALUE_BYTES} bytes and \
+                 {MAX_PROPERTY_VALUE_NODES} nested elements; {count} in `{source}` exceed it, the \
+                 first `{source}[{first}]`, the largest {bytes} bytes and {nodes} elements"
+            ),
+        ));
     }
 
     // **Each narrowing string's LENGTH.** The count caps bound how many labels, tags, keys and
     // names a stage carries, never how long each is, so a plan inside every count cap could still
     // exceed the body limit and meet a bare 413. One refusal per field, naming the field and the
     // limit, never the string. `MAX_FILTER_STRING_BYTES` carries the measurement.
-    for (field, limit, lens) in filter_strings(inv) {
-        let over: Vec<usize> = lens.into_iter().filter(|&n| n > limit).collect();
+    for (field, limit, strings) in filter_strings(inv) {
+        let over: Vec<usize> = strings
+            .into_iter()
+            .map(json_string_bytes)
+            .filter(|&n| n > limit)
+            .collect();
         if let Some(longest) = over.iter().max() {
             errs.push(refusal(
                 Some(name),
@@ -993,8 +1070,8 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
 ///
 /// A facet is a `kb_properties` predicate too, so its value is bounded and budgeted with the
 /// others. It is measured as the escaped string inside its quotes, as the wire carries it.
-fn predicate_value_sizes(inv: &ActInvocation) -> Vec<(String, Vec<ValueSize>)> {
-    let mut out: Vec<(String, Vec<ValueSize>)> = Vec::new();
+fn predicate_value_sizes(inv: &ActInvocation) -> Vec<(&'static str, usize, Vec<ValueSize>)> {
+    let mut out: Vec<(&'static str, usize, Vec<ValueSize>)> = Vec::new();
     for (field, preds) in predicate_sources(inv) {
         for (i, p) in preds.iter().enumerate() {
             let sizes: Vec<ValueSize> =
@@ -1006,14 +1083,15 @@ fn predicate_value_sizes(inv: &ActInvocation) -> Vec<(String, Vec<ValueSize>)> {
                     })
                     .collect();
             if !sizes.is_empty() {
-                out.push((format!("{field}[{i}]"), sizes));
+                out.push((field, i, sizes));
             }
         }
     }
     if let Some(f) = &inv.resource_filter {
         for (i, facet) in f.facets.iter().enumerate() {
             out.push((
-                format!("resource_filter.facets[{i}].value"),
+                "resource_filter.facets",
+                i,
                 vec![ValueSize {
                     bytes: json_string_bytes(&facet.value),
                     nodes: 0,
@@ -1034,15 +1112,16 @@ struct ValueSize {
 ///
 /// The fields whose lengths are bounded elsewhere are absent: a stage name (`StageName`, 63), a
 /// question (`MAX_INTENTION_QUERY_BYTES`), and a facet value (a predicate value, above).
-fn filter_strings(inv: &ActInvocation) -> Vec<(&'static str, usize, Vec<usize>)> {
-    // Escaped length, as the body limit sees it — see `json_string_bytes`.
-    let names = |xs: &[String]| xs.iter().map(|s| json_string_bytes(s)).collect::<Vec<_>>();
-    let keys = |ps: &[PropertyPredicate]| {
-        ps.iter()
-            .map(|p| json_string_bytes(&p.key))
-            .collect::<Vec<_>>()
-    };
-    let one = |x: &Option<String>| x.iter().map(|s| json_string_bytes(s)).collect::<Vec<_>>();
+fn filter_strings(inv: &ActInvocation) -> Vec<(&'static str, usize, Vec<&str>)> {
+    fn names(xs: &[String]) -> Vec<&str> {
+        xs.iter().map(String::as_str).collect()
+    }
+    fn keys(ps: &[PropertyPredicate]) -> Vec<&str> {
+        ps.iter().map(|p| p.key.as_str()).collect()
+    }
+    fn one(x: &Option<String>) -> Vec<&str> {
+        x.iter().map(String::as_str).collect()
+    }
     let mut out = vec![(
         "properties[].key",
         MAX_FILTER_STRING_BYTES,
@@ -1063,7 +1142,7 @@ fn filter_strings(inv: &ActInvocation) -> Vec<(&'static str, usize, Vec<usize>)>
             (
                 "resource_filter.facets[].key",
                 MAX_FILTER_STRING_BYTES,
-                f.facets.iter().map(|x| json_string_bytes(&x.key)).collect(),
+                f.facets.iter().map(|x| x.key.as_str()).collect(),
             ),
             (
                 "resource_filter.properties[].key",
@@ -1107,6 +1186,35 @@ fn filter_strings(inv: &ActInvocation) -> Vec<(&'static str, usize, Vec<usize>)>
         ]);
     }
     out
+}
+
+/// A stage's caller text at the most expansive standard encoding (`worst_case_string_bytes`): every
+/// narrowing string, facet value, predicate value and its question. The parts of a plan that are
+/// not caller text — ids, numbers, stage names, closed vocabularies — encode the same under every
+/// encoder, so this is all an encoder can inflate.
+fn caller_text_bytes(inv: &ActInvocation) -> usize {
+    let strings: usize = filter_strings(inv)
+        .iter()
+        .flat_map(|(_, _, xs)| xs.iter())
+        .map(|s| worst_case_string_bytes(s))
+        .sum();
+    let facets: usize = inv
+        .resource_filter
+        .iter()
+        .flat_map(|f| &f.facets)
+        .map(|f| worst_case_string_bytes(&f.value))
+        .sum();
+    let values: usize = predicate_sources(inv)
+        .iter()
+        .flat_map(|(_, preds)| preds.iter())
+        .flat_map(|p| p.op.values())
+        .map(worst_case_value_bytes)
+        .sum();
+    let question = inv
+        .intention
+        .as_ref()
+        .map_or(0, |i| worst_case_string_bytes(&i.query));
+    strings + facets + values + question
 }
 
 /// The three places a property predicate can sit on a stage, each named as the wire names it.

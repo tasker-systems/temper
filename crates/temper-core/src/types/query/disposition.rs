@@ -389,6 +389,17 @@ pub enum RefusalReason {
     /// this a plan inside every count cap could exceed the body limit and meet a bare 413. The
     /// refusal names the field and the limit, never the string.
     FilterStringTooLong,
+    /// A list whose entries must be distinct carries more than any legal plan can: `returns` or a
+    /// combine stage's `inputs` past 64, or an act's `inputs` past 2 (one per relation).
+    ///
+    /// Refused once, up front, like `too_many_stages`, so no check runs once per entry: an
+    /// over-long list would otherwise answer with a refusal list many times its own size.
+    ListTooLong,
+    /// The composition's caller text — narrowing strings, facet and predicate values, questions —
+    /// exceeds 8388608 bytes counted at the most expansive standard JSON encoding.
+    ///
+    /// What makes a legal plan fit the body limit whichever encoder its client uses.
+    TextBudgetExceeded,
 
     /// A reason outside the declared vocabulary.
     ///
@@ -581,6 +592,8 @@ mod tests {
             RefusalReason::PropertyValueTooLarge,
             RefusalReason::PropertyValueBudgetExceeded,
             RefusalReason::FilterStringTooLong,
+            RefusalReason::ListTooLong,
+            RefusalReason::TextBudgetExceeded,
         ] {
             assert!(
                 reason.is_known(),

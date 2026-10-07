@@ -463,8 +463,8 @@ mod tests {
     use crate::types::query::filter::{
         property_value_bytes, property_value_nodes, EdgeFilter, FacetPredicate, OrdOp, PropertyOp,
         PropertyPredicate, ResourceFilter, MAX_COMPOSITION_PROPERTY_VALUE_BYTES,
-        MAX_FILTER_STRING_BYTES, MAX_PROPERTY_VALUE_BYTES, MAX_PROPERTY_VALUE_NODES,
-        MAX_TITLE_CONTAINS_BYTES,
+        MAX_COMPOSITION_TEXT_BYTES, MAX_FILTER_STRING_BYTES, MAX_PROPERTY_VALUE_BYTES,
+        MAX_PROPERTY_VALUE_NODES, MAX_TITLE_CONTAINS_BYTES,
     };
     use crate::types::query::id_set::{IdKind, IdProvenance, IdSet, MAX_ID_SET_IDS};
     use crate::types::query::scalars::BoundTerm;
@@ -1467,6 +1467,47 @@ mod tests {
         }
     }
 
+    /// The node cap, the text budget, and the search door's caps are published as the numbers
+    /// enforced: in `PropertyOp`'s and `RefusalReason`'s descriptions, and as `maxLength` /
+    /// `maxItems` on `SearchParams`, which `reject_oversized_search` holds to these constants.
+    #[cfg(feature = "web-api")]
+    #[test]
+    fn the_published_node_text_and_search_ceilings_are_the_enforced_ones() {
+        use crate::types::api::SearchParams;
+        use utoipa::PartialSchema;
+        let op = serde_json::to_string(&PropertyOp::schema()).expect("PropertyOp has a schema");
+        assert_eq!(
+            op.matches(&format!("{MAX_PROPERTY_VALUE_NODES} nested"))
+                .count(),
+            2,
+            "the node cap must be published on both `contains` and `compare`"
+        );
+        let reason =
+            serde_json::to_string(&RefusalReason::schema()).expect("RefusalReason has a schema");
+        assert!(reason.contains(&MAX_COMPOSITION_TEXT_BYTES.to_string()));
+
+        let search =
+            serde_json::to_value(SearchParams::schema()).expect("SearchParams has a schema");
+        for (ptr, bound) in [
+            ("/properties/query/maxLength", MAX_INTENTION_QUERY_BYTES),
+            ("/properties/embedding/maxItems", MAX_EMBEDDING_DIM),
+            ("/properties/bound_ids/maxItems", MAX_ID_SET_IDS),
+            ("/properties/cogmap_ids/maxItems", MAX_ID_SET_IDS),
+            ("/properties/doc_type/maxLength", MAX_FILTER_STRING_BYTES),
+            ("/properties/context_ref/maxLength", MAX_FILTER_STRING_BYTES),
+            (
+                "/properties/search_config/maxLength",
+                MAX_FILTER_STRING_BYTES,
+            ),
+        ] {
+            let published = search
+                .pointer(ptr)
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_else(|| panic!("nothing published at `{ptr}`"));
+            assert_eq!(published as usize, bound, "{ptr}");
+        }
+    }
+
     /// Every narrowing string's length cap is published on the `web-api` door as the number the
     /// shape pass enforces: `maxLength` on each scalar field, and the description on each list,
     /// whose items utoipa cannot constrain.
@@ -2051,10 +2092,11 @@ mod tests {
             vec!["a"],
         );
         let errs = validate(&c).unwrap_err();
+        // A combine stage of more inputs than any legal plan has stages is refused up front as
+        // `list_too_long`, before the per-input `dangling_reference` check walks them.
         assert!(
-            errs.iter()
-                .any(|e| e.reason == RefusalReason::DanglingReference),
-            "an undeclared name must still be refused; got {} refusals",
+            errs.iter().any(|e| e.reason == RefusalReason::ListTooLong),
+            "the over-long input list must be refused; got {} refusals",
             errs.len()
         );
         assert!(
@@ -3045,6 +3087,130 @@ mod tests {
             .unwrap_err()
             .iter()
             .any(|e| e.reason == RefusalReason::UnknownAct && e.detail.contains("`find-exacct`")));
+    }
+
+    #[test]
+    fn an_over_long_list_is_refused_once_and_nothing_walks_its_entries() {
+        // `returns`, a combine stage's `inputs` and an act's `inputs` must be distinct, so past their
+        // legal length every per-entry check would answer with a refusal per entry.
+        let base = a_legal_single_stage_plan_over(ActName::FindExact);
+
+        let mut many_returns = base.clone();
+        let one = many_returns.outcome.returns[0].clone();
+        many_returns.outcome.returns = vec![one; 200_000];
+        let refusals = validate(&many_returns).unwrap_err();
+        assert_eq!(count_refusals(&many_returns, RefusalReason::ListTooLong), 1);
+        assert!(
+            refusals.len() <= 4,
+            "a refusal per entry survived: {}",
+            refusals.len()
+        );
+
+        let mut many_inputs = base.clone();
+        if let StageNode::Act(a) = &mut many_inputs.stages[0] {
+            a.inputs = vec![caller_ids(IdKind::Resource); 10_000];
+        }
+        let refusals = validate(&many_inputs).unwrap_err();
+        assert_eq!(count_refusals(&many_inputs, RefusalReason::ListTooLong), 1);
+        assert!(
+            refusals.len() <= 4,
+            "a refusal per input survived: {}",
+            refusals.len()
+        );
+    }
+
+    #[test]
+    fn oversized_values_refuse_once_per_source() {
+        // A value over the node cap is ~130 bytes, so a refusal each would amplify.
+        let preds: Vec<PropertyPredicate> = (0..10_000)
+            .map(|_| PropertyPredicate {
+                key: "k".to_string(),
+                op: PropertyOp::Contains {
+                    values: vec![serde_json::Value::Array(vec![
+                        serde_json::json!(0);
+                        MAX_PROPERTY_VALUE_NODES + 1
+                    ])],
+                },
+            })
+            .collect();
+        let c = selection_with_properties(preds);
+        assert_eq!(count_refusals(&c, RefusalReason::PropertyValueTooLarge), 1);
+        let detail = validate(&c)
+            .unwrap_err()
+            .into_iter()
+            .find(|e| e.reason == RefusalReason::PropertyValueTooLarge)
+            .unwrap()
+            .detail;
+        assert!(
+            detail.contains("10000 in `resource_filter.properties`"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_id_kind_is_not_echoed() {
+        let kind = "k".repeat(100_000);
+        let mut c = a_legal_single_stage_plan_over(ActName::FindExact);
+        if let StageNode::Act(a) = &mut c.stages[0] {
+            let mut input = caller_ids(IdKind::Resource);
+            if let StageInput::Caller { ids, .. } = &mut input {
+                ids.kind = IdKind::Other(kind.clone());
+            }
+            a.inputs = vec![input];
+        }
+        let refusals = validate(&c).unwrap_err();
+        assert!(!refusals.is_empty());
+        assert!(
+            refusals.iter().all(|e| !e.detail.contains(&kind)),
+            "a refusal echoed the kind"
+        );
+    }
+
+    #[test]
+    fn caller_text_is_budgeted_at_the_most_expansive_encoding() {
+        // `<` is one byte to serde and six to Go's encoder; the budget counts six. Stages of
+        // 256-character `<` tags are small to serde and large on that wire.
+        let stages = |n: usize| -> Composition {
+            let mut nodes: Vec<StageNode> = (0..n)
+                .map(|i| {
+                    let mut node = act(&format!("sel{i}"), ActName::FindResourcesWith, None);
+                    if let StageNode::Act(a) = &mut node {
+                        a.resource_filter = Some(ResourceFilter {
+                            tags: vec!["<".repeat(MAX_FILTER_STRING_BYTES); MAX_FILTER_VALUES],
+                            ..Default::default()
+                        });
+                    }
+                    node
+                })
+                .collect();
+            let mut sink = act("hits", ActName::FindExact, None);
+            if let StageNode::Act(a) = &mut sink {
+                a.inputs = vec![StageInput::Upstream {
+                    relation: StageRelation::Bound,
+                    stage: StageName::parse("sel0").unwrap(),
+                }];
+            }
+            nodes.push(sink);
+            plan(nodes, vec!["hits"])
+        };
+        // Per stage: 256 tags x 256 characters x 6 bytes = 393,216 worst-case bytes.
+        let per_stage = MAX_FILTER_VALUES * MAX_FILTER_STRING_BYTES * 6;
+        let under = MAX_COMPOSITION_TEXT_BYTES / per_stage;
+        assert_eq!(
+            count_refusals(&stages(under), RefusalReason::TextBudgetExceeded),
+            0
+        );
+        assert_eq!(
+            count_refusals(&stages(under + 1), RefusalReason::TextBudgetExceeded),
+            1
+        );
+        // And the serde encoding of the over-budget plan is far smaller: counting the minimal
+        // encoding instead would not have refused it.
+        let serde_bytes = serde_json::to_vec(&stages(under + 1)).unwrap().len();
+        assert!(
+            serde_bytes < MAX_COMPOSITION_TEXT_BYTES / 2,
+            "{serde_bytes}"
+        );
     }
 
     #[test]

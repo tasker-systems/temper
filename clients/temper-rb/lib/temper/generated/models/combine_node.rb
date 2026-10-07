@@ -126,6 +126,10 @@ module Temper::Generated
         invalid_properties.push('invalid value for "inputs", inputs cannot be nil.')
       end
 
+      if @inputs.length > 64
+        invalid_properties.push('invalid value for "inputs", number of items must be less than or equal to 64.')
+      end
+
       if @inputs.length < 2
         invalid_properties.push('invalid value for "inputs", number of items must be greater than or equal to 2.')
       end
@@ -151,6 +155,7 @@ module Temper::Generated
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @inputs.nil?
+      return false if @inputs.length > 64
       return false if @inputs.length < 2
       return false if @name.nil?
       return false if @name !~ Regexp.new(/^[a-z][a-z0-9_]{0,62}$/)
@@ -163,6 +168,10 @@ module Temper::Generated
     def inputs=(inputs)
       if inputs.nil?
         fail ArgumentError, 'inputs cannot be nil'
+      end
+
+      if inputs.length > 64
+        fail ArgumentError, 'invalid value for "inputs", number of items must be less than or equal to 64.'
       end
 
       if inputs.length < 2

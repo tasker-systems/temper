@@ -3458,6 +3458,8 @@ export interface components {
              *     it two — the new field, and this one with a `Bound` relation — which is the incumbent
              *     literal `bounds: Option<IdSet>` shape this contract deliberately replaced
              *     `[decided — 2026-08-14, Pete]`, returning under a different name.
+             *
+             *     At most two, one per relation (`list_too_long` past that).
              */
             inputs?: components["schemas"]["StageInput"][];
             intention?: null | components["schemas"]["Intention"];
@@ -8262,7 +8264,7 @@ export interface components {
          *     change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
          *     matched exhaustively.
          */
-        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | string;
+        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | string;
         /**
          * @description One region a `survey` stage matched, and the score it matched at.
          *

@@ -68,18 +68,23 @@ status: signal-only
   (`property_value_too_large`); predicate values summing past 1048576 bytes per composition
   (`property_value_budget_exceeded`); and a label, tag, `doc_type`, facet or property key,
   `stage`, `status` or `owner` longer than 256 bytes, or a `title_contains` longer than 1024
-  (`filter_string_too_long`). Strings and facet values are measured as JSON-escaped bytes, which
-  is what the body limit sees. All three are new members of the open `RefusalReason` vocabulary,
-  arriving in the existing `PLAN_REFUSED` answer beside every sibling refusal. Refusals no longer
-  repeat caller strings: an empty key or empty `contains` refuses once per source with a count,
-  the invocation-`properties` redirect once per stage naming only a key inside the cap, and an
-  unknown act name is repeated only when 64 bytes or shorter. `/api/search` (and MCP `search`, which
+  (`filter_string_too_long`). Strings and facet values are measured as JSON-escaped bytes. All
+  caller text in one composition is also budgeted at 8 MiB counted at the most expansive standard
+  JSON encoding (`text_budget_exceeded`), so a legal plan fits the body limit whichever encoder its
+  client uses; `returns` and a combine stage's `inputs` past 64, or an act's `inputs` past 2, are
+  refused once up front (`list_too_long`). All five are new members of the open `RefusalReason` vocabulary,
+  arriving in the existing `PLAN_REFUSED` answer beside every sibling refusal. No refusal fires once
+  per entry of a caller-sized list any more, and none repeats an unbounded caller string: empty
+  keys, empty `contains` and oversized values refuse once per source with a count; an inadmissible
+  `with` section once per section; the invocation-`properties` redirect once per stage, naming only
+  a key inside the cap; an unknown act name or id kind is repeated only when 64 bytes or shorter. `/api/search` (and MCP `search`, which
   forwards to it) answers `400 BAD_REQUEST` naming each field when `query` exceeds 4096 bytes,
   `embedding` 768 components, `bound_ids` or `cogmap_ids` 256 ids, or `doc_type`, `context_ref` or
   `search_config` 256 bytes. Caps are published as `maxLength`/`maxItems` where the schema can carry
   them (the generated Ruby and Python models now reject an over-long scalar before sending) and in
-  descriptions where it cannot. The largest legal composition, every string at its widest encoding,
-  measures 12,439,582 bytes. Live maxima on community production: property value 1,528 bytes and
+  descriptions where it cannot. The largest legal composition measures 9,889,828 bytes at the most
+  expansive encoding. temper-py now sends request bodies as UTF-8 rather than ASCII-escaped
+  (`ensure_ascii=False`), and the UI's search palette declines a query over 4096 bytes itself. Live maxima on community production: property value 1,528 bytes and
   20 nodes, facet value 778, title 279, tag 94, edge label 61. The node cap cuts a comparison's cost
   against a large stored value about 30x but does not bound it; the execution bound remains the
   deployment's (`docs/concepts/query-cost-and-bounds.md`). The wire-class comparator now reads a new

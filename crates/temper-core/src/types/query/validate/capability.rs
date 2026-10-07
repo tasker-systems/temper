@@ -331,13 +331,18 @@ pub(super) fn validate_stages(
 /// would take a refusal away from a caller who used to get it, against this module's own rule that
 /// `validate` returns every refusal rather than the first.
 pub(super) fn validate_returns(c: &Composition, errs: &mut Vec<PlanRefusal>) {
+    // **Once per distinct section, never once per entry.** This runs even when the shape pass has
+    // refused an over-long `returns` or `with`, so iterating entries would answer a repeated
+    // section with a refusal per repeat.
+    let mut refused: Vec<ResourceSection> = Vec::new();
     for ret in &c.outcome.returns {
         // Refused here rather than at deserialization, which is the whole reason `with` carries
         // the shared `ResourceSection` vocabulary instead of a narrow query-local enum: a serde
         // failure short-circuits before this function runs, so a caller with several problems
         // would learn about one of them, phrased by a deserializer.
         for section in &ret.with {
-            if !ReturnSpec::ADMITTED_SECTIONS.contains(section) {
+            if !ReturnSpec::ADMITTED_SECTIONS.contains(section) && !refused.contains(section) {
+                refused.push(*section);
                 errs.push(refusal(
                     Some(&ret.stage),
                     RefusalReason::SectionNotAvailable,
@@ -354,6 +359,16 @@ pub(super) fn validate_returns(c: &Composition, errs: &mut Vec<PlanRefusal>) {
                 ));
             }
         }
+    }
+}
+
+/// An id kind as a refusal names it: the kind itself when it is one this binary knows or short
+/// enough to be a typo, otherwise only its length. `IdKind`'s open arm carries whatever string the
+/// caller sent, and a refusal must not return it.
+fn kind_label(kind: &IdKind) -> String {
+    match kind {
+        IdKind::Other(raw) if raw.len() > 64 => format!("of {} bytes", raw.len()),
+        _ => format!("`{kind:?}`"),
     }
 }
 
@@ -453,9 +468,10 @@ fn check_act(
                     RefusalReason::UnsupportedSeedKind,
                     format!(
                         "act `{}` cannot grow from a set — it does not accept seeds of kind \
-                         `{kind:?}`. Narrowing within the set instead would answer a different \
-                         question than the one asked",
-                        act_wire_name(&inv.act)
+                         {}. Narrowing within the set instead would answer a different question \
+                         than the one asked",
+                        act_wire_name(&inv.act),
+                        kind_label(&kind)
                     ),
                 ));
             } else if !as_seed && !decl.accepts_bounds.contains(&kind) {
@@ -463,8 +479,9 @@ fn check_act(
                     Some(name),
                     RefusalReason::UnsupportedBoundKind,
                     format!(
-                        "act `{}` does not accept bounds of kind `{kind:?}`",
-                        act_wire_name(&inv.act)
+                        "act `{}` does not accept bounds of kind {}",
+                        act_wire_name(&inv.act),
+                        kind_label(&kind)
                     ),
                 ));
             }
