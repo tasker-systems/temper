@@ -19,7 +19,8 @@ use temper_services::state::AppState;
 /// attached to, and the blob doors that accept bodies are exactly these two (every other
 /// blob route is JSON of trivial size or body-free). They stay inside `gated_routes`'
 /// auth layers, applied by the table's `Gated` tier.
-pub(super) const BLOB_SEGMENT_MAX_BODY_BYTES: usize = 4_500_000;
+pub(super) const BLOB_SEGMENT_MAX_BODY_BYTES: usize =
+    temper_services::transport::VERCEL_REQUEST_BODY_CAP_BYTES;
 
 pub(super) fn blob_segment_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(handlers::blobs::append_segment))

@@ -142,7 +142,7 @@ pub const VERCEL_REQUEST_BODY_CAP_BYTES: usize = 4_500_000;
 ///
 /// **It is emphatically not ample for every payload the contract admits, and that is the reason the
 /// table above exists rather than a reason to raise this.** A composition `/api/query` calls legal
-/// encodes to up to **4,270,310 bytes** `[measured — 2026-10-07]`, 2.0x this number. Had that
+/// encodes to up to **4,358,218 bytes** `[measured — 2026-10-07]`, 2.1x this number. Had that
 /// door inherited this ceiling it would have answered a legal plan with a bare 413. The doors
 /// carrying large payloads by design — a composition, and the MCP tool surface with `ingest`'s
 /// inline content and `data_artifacts`' JSON — each declare their own, which is the shape this

@@ -1247,7 +1247,7 @@ mod tests {
                 "application/pdf".to_string(),
             ]
         );
-        assert!(cfg.single_request_max_bytes <= 4_500_000);
+        assert!(cfg.single_request_max_bytes <= VERCEL_REQUEST_BODY_CAP_BYTES);
     }
 
     // FAILS IF: the vocabulary is not configuration — D7 says the cap and the

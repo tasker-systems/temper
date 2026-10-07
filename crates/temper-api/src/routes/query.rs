@@ -28,11 +28,11 @@ pub(super) fn query_routes() -> OpenApiRouter<AppState> {
 /// The gated router this door mounts in inherits 25 MiB (`GATED_MAX_BODY_BYTES`), the same number,
 /// but that is a transport ruling which may move on its own; a door outside it gets axum's 2 MiB
 /// (`MAX_REQUEST_BODY_BYTES`). Either way the inherited number is chosen without this door in
-/// mind, and a composition the contract calls legal encodes to up to **4,270,310 bytes** (below).
+/// mind, and a composition the contract calls legal encodes to up to **4,358,218 bytes** (below).
 /// Below that, the door would answer a plan its own contract admits with a bare 413 — no refusal
 /// list, no vocabulary, in the door whose whole promise is that every refusal arrives at once and
 /// in the caller's own terms. `the_largest_legal_composition_fits_inside_the_declared_body_limit`
-/// holds the plan against this number.
+/// holds the plan against this number and against the platform's cap below, whichever is smaller.
 ///
 /// # The platform's cap binds first, and the contract is sized under it
 ///
@@ -56,8 +56,8 @@ pub(super) fn query_routes() -> OpenApiRouter<AppState> {
 /// composition), and all caller text by `MAX_COMPOSITION_TEXT_BYTES` (768 KiB at the most expansive
 /// encoding). `the_largest_legal_composition_fits_inside_the_declared_body_limit` builds the plan at
 /// those caps and budgets and measures it at no less than the most expansive per-character encoder
-/// would send, separators at Python's default width: **4,270,310 bytes** `[measured —
-/// 2026-10-07]`, 5% under the platform's 4.5 MB and 6x under this number. It is an upper bound: the
+/// would send, separators at Python's default width: **4,358,218 bytes** `[measured —
+/// 2026-10-07]`, 3% under the platform's 4.5 MB and 6x under this number. It is an upper bound: the
 /// measure charges six bytes for every punctuation character, `_` and `-` included, which no
 /// encoder escapes. So a plan the contract calls legal never meets a bare 413, from this door or
 /// from the platform in front of it.
@@ -111,17 +111,19 @@ mod tests {
     /// total by 512 bytes — but a size measured over an illegal plan proves nothing about what the
     /// door must accept, and the next edit to this fixture would have had no guard at all.
     ///
-    /// The largest terms in the selection shape are the narrowing strings at their length caps
-    /// (two 256-entry lists of 256-byte strings per stage), the caller id sets, and the 512 KiB of
-    /// property-predicate values the fixture grows to exactly `MAX_COMPOSITION_PROPERTY_VALUE_BYTES`.
+    /// The largest terms are the non-text ones at their count caps — in the walk shape, two
+    /// 256-id caller sets and a 768-float embedding per stage — and then caller text up to
+    /// `MAX_COMPOSITION_TEXT_BYTES`, which binds long before every narrowing string can reach its
+    /// length cap. The fixture grows predicate values to exactly
+    /// `MAX_COMPOSITION_PROPERTY_VALUE_BYTES` first, then the strings until the text budget is
+    /// spent.
     ///
     /// **What it does NOT prove**, stated because a green here reads like completeness:
     ///
-    /// - **It measures the plan, not the request.** Whitespace and fields serde ignores are bytes
-    ///   a caller may add to any plan; they are padding, and the body limit answers padding. One
-    ///   kind is not a caller's choice: Python's default `json.dumps` writes `", "` and `": "`, a
-    ///   byte per separator more than measured here. The largest plan has a few hundred thousand
-    ///   separators, so a few hundred KB, well inside the headroom.
+    /// - **It measures the plan, not the request.** Indentation and fields serde ignores are bytes
+    ///   a caller may add to any plan; they are padding, and the body limit answers padding.
+    ///   Separators are not padding: Python's default `json.dumps` writes `", "` and `": "`, and
+    ///   `worst_case_value_bytes` counts them at that width.
     /// - **The maximum is over two pure shapes, not every mixture.** No single act admits every
     ///   bounded field: the walk carries id sets and no `ResourceFilter`, the selection the reverse.
     ///   Both are measured and the larger reported, which is the walk shape `[measured —
@@ -198,10 +200,12 @@ mod tests {
             .map(|i| {
                 let walk = all_walk || i == n - 1;
                 StageNode::Act(ActInvocation {
-                    // Stage names at their own ceiling — 63 (`stage.rs:43`).
+                    // Stage names at their own ceiling, 63 bytes (`StageName::parse`), filled with
+                    // `_`: the measure counts punctuation at six bytes, and a legal name may be
+                    // mostly underscores, so this is the widest a name can be under that measure.
                     name: StageName::parse(&format!(
                         "s{i}{}",
-                        "n".repeat(60 - i.to_string().len())
+                        "_".repeat(62 - i.to_string().len())
                     ))
                     .expect("legal stage name"),
                     act: if walk {
@@ -234,9 +238,9 @@ mod tests {
                             },
                         ]
                     } else {
-                        // A selection accepts no bounds of any kind and no page terms — it declares
-                        // a set. Both are `capability`'s refusals, and hitting them is how this
-                        // fixture learned the shape rather than assuming it.
+                        // A selection accepts no page terms, and as a bound only one context or
+                        // cogmap id (`registry.rs`); the fixture leaves that out, because the walk
+                        // shape sets the maximum and a single id cannot change which shape does.
                         vec![]
                     },
                     terms: if walk {

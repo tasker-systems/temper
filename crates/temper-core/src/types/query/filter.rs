@@ -315,8 +315,8 @@ pub struct PropertyPredicate {
 ///
 /// 256 is chosen against what this actually bounds — **body bytes, not work** — together with
 /// [`MAX_FILTER_STRING_BYTES`], which bounds each string: at `MAX_STAGES` stages of 256 labels at
-/// that cap the labels are ~4.2 MB, inside the door's declared limit, and the coherence test
-/// measures the whole plan at every cap. 256 is twice today's label vocabulary with room for a
+/// that cap the labels would be ~4.2 MB, but all caller text in a composition is held to
+/// [`MAX_COMPOSITION_TEXT_BYTES`], and the coherence test measures the whole plan at every cap. 256 is twice today's label vocabulary with room for a
 /// corpus an order of magnitude larger.
 /// It matches `MAX_PER_CANDIDATE_PROBES`' number by arithmetic coincidence rather than by
 /// analogy — that one bounds a per-candidate multiplier and this one bounds a serialization.
@@ -428,8 +428,9 @@ pub fn property_value_nodes(value: &serde_json::Value) -> usize {
 /// # 512 KiB
 ///
 /// Sized down from 1 MiB so the whole plan fits Vercel's 4.5 MB request cap, where it must fit
-/// inside the text budget that also counts it. It still holds about sixty values at the largest
-/// either install stores (8,460 bytes, enterprise, 2026-10-06), where a real plan carries a few.
+/// inside the text budget that also counts it. It still holds up to about sixty values at the
+/// largest either install stores (8,460 bytes, enterprise, 2026-10-06), fewer if they carry
+/// punctuation or non-ASCII, which the text budget counts wider; a real plan carries a few.
 pub const MAX_COMPOSITION_PROPERTY_VALUE_BYTES: usize = 512 * 1024;
 
 /// The size of one property-predicate value, as [`MAX_PROPERTY_VALUE_BYTES`] measures it: compact
@@ -458,7 +459,7 @@ pub fn property_value_bytes(value: &serde_json::Value) -> usize {
 ///
 /// Sized from the platform, not from callers. On Vercel, a body past 4.5 MB is refused by the
 /// platform with a bare 413 before the door reads it, and the non-text parts of the largest legal
-/// plan (its id sets, supplied embeddings and structure) already take about 3.5 MB at their caps.
+/// plan (its id sets, supplied embeddings and structure) already take about 3.6 MB at their caps.
 /// What is left is the room for caller text. It is still far above any plan a person or agent
 /// writes: the longest live title on either install is 2,316 bytes, and every per-string and
 /// per-value cap is unchanged, so no single item either install stores is refused.
@@ -487,7 +488,7 @@ pub fn worst_case_string_bytes(s: &str) -> usize {
 /// serde re-writes it short (`1e300`), while Python's `json.dumps(10**300)` sent all 301 digits; a
 /// float may come back with a longer exponent or more digits than serde writes. So an `f64` that is
 /// integral and beyond 2^63 counts as `MAX_F64_DIGITS` (310) bytes, and any other `f64` as at least
-/// `MAX_F64_REPR_BYTES` (24). Integers within 64 bits print the same digits everywhere.
+/// `MAX_F64_REPR_BYTES` (25). Integers within 64 bits print the same digits everywhere.
 ///
 /// **Separators at their widest default too.** Python's `json.dumps` writes `", "` and `": "` unless
 /// told otherwise, a byte more per separator than a compact encoder, and our own SDK is a Python
@@ -522,9 +523,12 @@ pub fn worst_case_value_bytes(value: &serde_json::Value) -> usize {
 /// The most decimal characters an integral `f64` can need: 309 digits for `f64::MAX`, and a sign.
 const MAX_F64_DIGITS: usize = 310;
 
-/// The most characters a shortest round-trip `f64` takes in any common encoder: 17 significant
-/// digits, a sign, a point, and a signed three-digit exponent (`-1.2345678901234567e-308`).
-const MAX_F64_REPR_BYTES: usize = 24;
+/// The most characters a shortest round-trip `f64` takes in any common encoder. Exponent form is 24:
+/// 17 significant digits, a sign, a point, and a signed three-digit exponent
+/// (`-1.2345678901234567e-308`). But JavaScript's `JSON.stringify` and Go's `encoding/json` write a
+/// magnitude in `[1e-6, 1e-5)` in decimal form, five zeros before the digits:
+/// `-0.0000012345678901234567` is 25, the widest either form reaches.
+const MAX_F64_REPR_BYTES: usize = 25;
 
 /// The bytes a string occupies inside its JSON quotes on the wire: escapes counted, so a control
 /// character costs its six-byte `\u00XX`. Every narrowing string and facet value is measured this
@@ -596,6 +600,13 @@ mod tests {
         assert_eq!(
             worst_case_value_bytes(&serde_json::json!(0.5)),
             MAX_F64_REPR_BYTES
+        );
+        // The decimal form JavaScript and Go write just above 1e-6 is the widest of all: a
+        // `Float32Array` component widened to a double lands there.
+        assert_eq!("-0.0000012345678901234567".len(), MAX_F64_REPR_BYTES);
+        assert!(
+            worst_case_value_bytes(&serde_json::json!(-0.000_001_234_567_890_123_456_7))
+                >= "-0.0000012345678901234567".len()
         );
         // An integer within 64 bits prints the same digits everywhere.
         assert_eq!(worst_case_value_bytes(&serde_json::json!(12345)), 5);

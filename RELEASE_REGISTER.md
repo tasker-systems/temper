@@ -91,7 +91,7 @@ status: signal-only
   `embedding` 768 components, `bound_ids` or `cogmap_ids` 256 ids, or `doc_type`, `context_ref` or
   `search_config` 256 bytes. Caps are published as `maxLength`/`maxItems` where the schema can carry
   them (the generated Ruby and Python models now reject an over-long scalar before sending) and in
-  descriptions where it cannot. The largest legal composition measures 4,270,310 bytes at the most
+  descriptions where it cannot. The largest legal composition measures 4,358,218 bytes at the most
   expansive per-character encoding, separators at Python's default width: the composition budgets
   are sized so it fits the 4.5 MB request cap Vercel enforces ahead of the door, not only the
   door's 25 MB. temper-py now sends request bodies as UTF-8 rather than ASCII-escaped
