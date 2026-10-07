@@ -344,6 +344,7 @@ args = ["nextest", "run", "--workspace", "--no-fail-fast"]
 
 [tasks.test-db]
 description = "Run tests including database integration tests (requires Docker Postgres)"
+dependencies = ["test-template-auto"]
 command = "cargo"
 args = [
   "nextest",
@@ -356,6 +357,7 @@ args = [
 
 [tasks.coverage]
 description = "Generate code coverage via llvm-cov + nextest, incl. DB tests (requires Docker Postgres + the llvm-tools-preview rustup component)"
+dependencies = ["test-template-auto"]
 command = "cargo"
 args = [
   "llvm-cov",
@@ -372,6 +374,7 @@ dependencies = ["test-all-rust", "ts-test", "ts-test-integration"]
 
 [tasks.test-e2e]
 description = "Run E2E tests only (requires Docker Postgres)"
+dependencies = ["test-template-auto"]
 command = "cargo"
 args = [
   "nextest",
@@ -385,6 +388,7 @@ args = [
 
 [tasks.test-e2e-embed]
 description = "Run E2E tests with embed pipeline gated on (requires Docker Postgres + ONNX runtime); matches CI's Embed job"
+dependencies = ["test-template-auto"]
 command = "cargo"
 args = [
   "nextest",
@@ -698,6 +702,31 @@ description = "Apply any pending sqlx migrations to the development database (id
 script = ['''
 cargo run -q -p temper-migrate --bin temper-migrate
 ''']
+
+[tasks.test-template]
+description = "Migrate the local test server's template1 so every #[sqlx::test] database starts migrated. Rebuilt whenever migrations/ changes; a no-op when current."
+# Explicit: works whether or not TEMPER_TEST_TEMPLATE is set. The mechanism, its measurement and its
+# safety (local hosts only; a failed rebuild leaves template1 pristine) are in the script's header.
+script = ['''
+DATABASE_URL="${DATABASE_URL:-postgresql://temper:temper@localhost:5437/temper_development}" \
+  bash .github/scripts/sqlx-test-template.sh
+''']
+
+[tasks.test-template-reset]
+description = "Put the local test server's template1 back to pristine (opting out of the migrated test template)."
+script = ['''
+DATABASE_URL="${DATABASE_URL:-postgresql://temper:temper@localhost:5437/temper_development}" \
+  bash .github/scripts/sqlx-test-template.sh --reset
+''']
+
+# The local opt-in. With `TEMPER_TEST_TEMPLATE=true` (in `.env`, which every task loads), each DB test
+# task refreshes the template first, so it follows migrations/ without anyone remembering to. Without
+# it, nothing about a local test run changes. To opt out, run `cargo make test-template-reset`:
+# unsetting the variable stops the refresh but leaves the last migrated template in place.
+[tasks.test-template-auto]
+private = true
+condition = { env_true = ["TEMPER_TEST_TEMPLATE"] }
+run_task = "test-template"
 
 [tasks.docker-up]
 description = "Start PostgreSQL development database and bring its schema up to date"

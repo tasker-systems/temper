@@ -99,6 +99,12 @@ jobs:
       - name: Run migrations
         run: cargo sqlx migrate run --source migrations
 
+      # Every `#[sqlx::test]` database is a copy of template1. Migrated once here, each test's own
+      # migrator finds the chain applied and applies nothing (~0.5s -> ~0.05s of setup per test).
+      # The script's header carries the mechanism and the measurement.
+      - name: Migrate the test-database template
+        run: bash .github/scripts/sqlx-test-template.sh
+
       - name: Generate coverage
         # Now measures the SAME tier the integration job gates on — test-db AND test-embed. The old
         # coverage job measured test-db only, so every embed-gated path was invisible to it.

@@ -261,6 +261,12 @@ jobs:
       - name: Run migrations
         run: cargo sqlx migrate run --source migrations
 
+      # Every `#[sqlx::test]` database is a copy of template1. Migrated once here, each test's own
+      # migrator finds the chain applied and applies nothing (~0.5s -> ~0.05s of setup per test).
+      # The script's header carries the mechanism and the measurement.
+      - name: Migrate the test-database template
+        run: bash .github/scripts/sqlx-test-template.sh
+
       - name: Run integration & E2E tests (shard ${{ matrix.partition }}/3)
         # ONE command for the whole DB-backed workspace, SHARDED. `--partition count:i/3` runs a
         # deterministic (test-name-hash) 1/3 slice; the `--workspace` selection is UNCHANGED, so this
@@ -338,6 +344,12 @@ jobs:
         # The tests themselves get ephemeral per-test databases from `#[sqlx::test(migrator = ...)]`;
         # this migrated database exists purely to satisfy the macros.
         run: cargo sqlx migrate run --source migrations
+
+      # Every `#[sqlx::test]` database is a copy of template1. Migrated once here, each test's own
+      # migrator finds the chain applied and applies nothing (~0.5s -> ~0.05s of setup per test).
+      # The script's header carries the mechanism and the measurement.
+      - name: Migrate the test-database template
+        run: bash .github/scripts/sqlx-test-template.sh
 
       - name: Run substrate artifact tests
         run: cargo nextest run -p temper-substrate --features artifact-tests --profile ci --locked --no-fail-fast
