@@ -62,26 +62,31 @@ pr: self
 classes: behavioral
 surfaces: clients, internal
 status: signal-only
-- **A composition's predicate values and narrowing strings are bounded in size, so every legal plan fits the body limit**
-  The shape pass now refuses: a `contains` value, `compare` bound or facet value larger than 4096
-  bytes (`property_value_too_large`); a composition whose predicate values together exceed 1048576
-  bytes (`property_value_budget_exceeded`); and a label, tag, `doc_type`, facet or property key,
+- **The query and search doors bound the size of every value and string a request carries, so every legal plan fits the body limit**
+  `/api/query`'s shape pass now refuses: a `contains` value, `compare` bound or facet value larger
+  than 4096 bytes or carrying more than 64 nested array elements or object members
+  (`property_value_too_large`); predicate values summing past 1048576 bytes per composition
+  (`property_value_budget_exceeded`); and a label, tag, `doc_type`, facet or property key,
   `stage`, `status` or `owner` longer than 256 bytes, or a `title_contains` longer than 1024
-  (`filter_string_too_long`). All three are new members of the open `RefusalReason` vocabulary,
-  arriving in the existing `PLAN_REFUSED` answer beside every sibling refusal, and none echoes the
-  value or string it refuses. The string caps are published as `maxLength` (OpenAPI scalars, MCP
-  scalars and list items) and in the list fields' descriptions, so the generated Ruby and Python
-  models now reject an over-long scalar before sending. Before this the count caps bounded how many
-  values and strings a plan carried but not their size, so one value up to the 25 MB body limit
-  validated and was bound into SQL, and a plan inside every cap could exceed the body limit and get
-  a bare 413. The largest legal composition now measures 11,128,846 bytes. The bounds sit in
-  `validate`, which every door reaches: `/api/query`, MCP `run_query` (which forwards to it) and
-  `temper query --check`. Live maxima on community production: property value 1,528 bytes, facet
-  value 778, title 279, tag 94, edge label 61. The wire-class comparator now reads a new member of
-  an open vocabulary (a `oneOf` with an unconstrained string arm) as growth. Who observes: a caller
-  sending a predicate value over 4 KiB or a narrowing string over its cap. User-visible: yes, as a
-  refusal. Release relevance: additive (three refusal reasons) and behavioral (a plan that
-  validated can now be refused).
+  (`filter_string_too_long`). Strings and facet values are measured as JSON-escaped bytes, which
+  is what the body limit sees. All three are new members of the open `RefusalReason` vocabulary,
+  arriving in the existing `PLAN_REFUSED` answer beside every sibling refusal. Refusals no longer
+  repeat caller strings: an empty key or empty `contains` refuses once per source with a count,
+  the invocation-`properties` redirect once per stage naming only a key inside the cap, and an
+  unknown act name is repeated only when 64 bytes or shorter. `/api/search` (and MCP `search`, which
+  forwards to it) answers `400 BAD_REQUEST` naming each field when `query` exceeds 4096 bytes,
+  `embedding` 768 components, `bound_ids` or `cogmap_ids` 256 ids, or `doc_type`, `context_ref` or
+  `search_config` 256 bytes. Caps are published as `maxLength`/`maxItems` where the schema can carry
+  them (the generated Ruby and Python models now reject an over-long scalar before sending) and in
+  descriptions where it cannot. The largest legal composition, every string at its widest encoding,
+  measures 12,439,582 bytes. Live maxima on community production: property value 1,528 bytes and
+  20 nodes, facet value 778, title 279, tag 94, edge label 61. The node cap cuts a comparison's cost
+  against a large stored value about 30x but does not bound it; the execution bound remains the
+  deployment's (`docs/concepts/query-cost-and-bounds.md`). The wire-class comparator now reads a new
+  member of an open vocabulary (a `oneOf` with an unconstrained string arm) as growth. Who observes:
+  a caller sending a value, string or search field over its cap. User-visible: yes, as a refusal.
+  Release relevance: additive (three refusal reasons) and behavioral (requests that were accepted
+  can now be refused).
 pr: self
 classes: additive, behavioral
 surfaces: http, mcp, clients

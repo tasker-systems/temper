@@ -25,21 +25,13 @@ pub(super) fn query_routes() -> OpenApiRouter<AppState> {
 ///
 /// # Declared because the inherited number is wrong, not merely because inheriting is untidy
 ///
-/// Nothing in temper-api set `DefaultBodyLimit`, so axum's 2 MB default was this door's operative
-/// bound by accident. `MAX_PER_CANDIDATE_PROBES`' own doc already reasons *against* that number as
-/// a bound — *"the list fits in a fraction of axum's default 2 MB body limit"* — which is the tell
-/// that it was doing work nobody had chosen.
-///
-/// **And it is wrong in the direction that refuses legal plans.** A caller may send a precomputed
-/// 768-float embedding beside each question (`Intention::embedding`, which the CLI always does),
-/// and that is ~10 KB per stage on the wire. At `MAX_STAGES` stages, with a question at
-/// `MAX_INTENTION_QUERY_BYTES` and bounds at `MAX_ID_SET_IDS`, a composition the contract calls
-/// legal serializes to **2,194,320 bytes** `[measured — 2026-08-28, by the test named below]` —
-/// 97 KB past the inherited 2,097,152. So the door would have answered a plan its own contract
-/// admits with a bare 413: no refusal list, no vocabulary, in the door whose whole promise is that
+/// Without its own limit this door inherits the 2 MiB default (`MAX_REQUEST_BODY_BYTES`), and that
+/// is wrong in the direction that refuses legal plans: a composition the contract calls legal
+/// serializes to up to **12,439,582 bytes** (below). The door would answer a plan its own contract
+/// admits with a bare 413 — no refusal list, no vocabulary, in the door whose whole promise is that
 /// every refusal arrives at once and in the caller's own terms.
-/// `the_largest_legal_composition_fits_inside_the_declared_body_limit` holds that, and fails
-/// against the inherited number rather than merely describing it.
+/// `the_largest_legal_composition_fits_inside_the_declared_body_limit` holds the plan against this
+/// number, and fails against the inherited one.
 ///
 /// # Why 25 MB, and what it backstops
 ///
@@ -54,8 +46,9 @@ pub(super) fn query_routes() -> OpenApiRouter<AppState> {
 /// `MAX_TITLE_CONTAINS_BYTES` (1024), and property-predicate values by `MAX_PROPERTY_VALUE_BYTES`
 /// (4 KiB each) and `MAX_COMPOSITION_PROPERTY_VALUE_BYTES` (1 MiB across the composition).
 /// `the_largest_legal_composition_fits_inside_the_declared_body_limit` builds the plan at every one
-/// of those caps and measures it at **11,128,846 bytes** `[measured — 2026-10-06]`, 2.4x under this
-/// number. So a plan the contract calls legal never meets a bare 413.
+/// of those caps, with every string at its widest JSON encoding, and measures it at **12,439,582
+/// bytes** `[measured — 2026-10-06]`, 2.1x under this number. So a plan the contract calls legal
+/// never meets a bare 413.
 ///
 /// **What this limit still catches is bytes that are not the plan**: whitespace, and fields serde
 /// ignores. A caller can pad a legal plan past any limit that way, and a 413 is the right answer
@@ -74,9 +67,10 @@ mod tests {
     };
     use temper_core::types::query::envelope::ActInvocation;
     use temper_core::types::query::filter::{
-        property_value_bytes, EdgeFilter, FacetPredicate, PropertyOp, PropertyPredicate,
-        ResourceFilter, MAX_COMPOSITION_PROPERTY_VALUE_BYTES, MAX_FILTER_STRING_BYTES,
-        MAX_FILTER_VALUES, MAX_PROPERTY_VALUE_BYTES, MAX_TITLE_CONTAINS_BYTES,
+        json_string_bytes, property_value_bytes, EdgeFilter, FacetPredicate, PropertyOp,
+        PropertyPredicate, ResourceFilter, MAX_COMPOSITION_PROPERTY_VALUE_BYTES,
+        MAX_FILTER_STRING_BYTES, MAX_FILTER_VALUES, MAX_PROPERTY_VALUE_BYTES,
+        MAX_TITLE_CONTAINS_BYTES,
     };
     use temper_core::types::query::id_set::{IdKind, IdSet, MAX_ID_SET_IDS};
     use temper_core::types::query::scalars::BoundTerm;
@@ -185,7 +179,8 @@ mod tests {
                         act.clone()
                     },
                     intention: Some(Intention {
-                        query: "x".repeat(MAX_INTENTION_QUERY_BYTES),
+                        // Control characters: the cap counts decoded bytes, and each escapes to six.
+                        query: "\u{1}".repeat(MAX_INTENTION_QUERY_BYTES),
                         // A real normalized BGE component, so the serialized width is the one a
                         // caller actually sends rather than the two bytes `0.0` would cost.
                         //
@@ -214,7 +209,10 @@ mod tests {
                         vec![]
                     },
                     terms: if walk {
-                        BTreeMap::from([(BoundTerm::Limit, 50), (BoundTerm::Offset, 50)])
+                        BTreeMap::from([
+                            (BoundTerm::Limit, i64::from(i32::MAX)),
+                            (BoundTerm::Offset, i64::from(i32::MAX)),
+                        ])
                     } else {
                         BTreeMap::new()
                     },
@@ -250,8 +248,8 @@ mod tests {
         ResourceFilter {
             // Every narrowing string at its length cap: the count caps alone left the plan's
             // largest term unmeasured.
-            doc_type: vec!["d".repeat(MAX_FILTER_STRING_BYTES); MAX_FILTER_VALUES],
-            tags: vec!["t".repeat(MAX_FILTER_STRING_BYTES); MAX_FILTER_VALUES],
+            doc_type: vec![widest(MAX_FILTER_STRING_BYTES); MAX_FILTER_VALUES],
+            tags: vec![widest(MAX_FILTER_STRING_BYTES); MAX_FILTER_VALUES],
             facets: (0..16)
                 .map(|i| FacetPredicate {
                     key: capped_name("k", i),
@@ -263,10 +261,10 @@ mod tests {
             // the probe cap. Facets count against BOTH, which is what the container's own doc
             // means by summing what walks the same candidate set.
             properties: capped_properties(16, 15),
-            stage: Some("s".repeat(MAX_FILTER_STRING_BYTES)),
-            status: Some("a".repeat(MAX_FILTER_STRING_BYTES)),
-            owner: Some("o".repeat(MAX_FILTER_STRING_BYTES)),
-            title_contains: Some("t".repeat(MAX_TITLE_CONTAINS_BYTES)),
+            stage: Some(widest(MAX_FILTER_STRING_BYTES)),
+            status: Some(widest(MAX_FILTER_STRING_BYTES)),
+            owner: Some(widest(MAX_FILTER_STRING_BYTES)),
+            title_contains: Some(widest(MAX_TITLE_CONTAINS_BYTES)),
         }
     }
 
@@ -281,7 +279,7 @@ mod tests {
                 EdgeKind::LeadsTo,
                 EdgeKind::Near,
             ],
-            labels: vec!["l".repeat(MAX_FILTER_STRING_BYTES); MAX_FILTER_VALUES],
+            labels: vec![widest(MAX_FILTER_STRING_BYTES); MAX_FILTER_VALUES],
             // No facets on an edge container, so all 32 predicates and all 256 probes are the
             // property list's.
             properties: capped_properties(32, 8),
@@ -307,7 +305,7 @@ mod tests {
                     .map(|f| &mut f.value),
             );
         }
-        let facet_total: usize = facet_values.iter().map(|v| v.len()).sum();
+        let facet_total: usize = facet_values.iter().map(|v| json_string_bytes(v)).sum();
         let mut values: Vec<&mut serde_json::Value> = Vec::new();
         for node in &mut c.stages {
             let StageNode::Act(inv) = node else { continue };
@@ -346,10 +344,19 @@ mod tests {
         c
     }
 
-    /// A distinct key at exactly the string cap.
+    /// The widest string a `cap`-byte field admits: as many control characters as fit (six escaped
+    /// bytes each), padded to exactly `cap` escaped bytes. Plain ASCII here would measure a plan
+    /// several times smaller than the largest legal one.
+    fn widest(cap: usize) -> String {
+        let s = format!("{}{}", "\u{1}".repeat(cap / 6), "x".repeat(cap % 6));
+        assert_eq!(json_string_bytes(&s), cap);
+        s
+    }
+
+    /// A distinct key at exactly the string cap, at its widest.
     fn capped_name(prefix: &str, i: usize) -> String {
         let head = format!("{prefix}{i}");
-        format!("{head}{}", "x".repeat(MAX_FILTER_STRING_BYTES - head.len()))
+        format!("{head}{}", widest(MAX_FILTER_STRING_BYTES - head.len()))
     }
 
     fn capped_properties(preds: usize, vals: usize) -> Vec<PropertyPredicate> {

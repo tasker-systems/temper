@@ -45,14 +45,18 @@ use crate::types::query::composition::{
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
 use crate::types::query::filter::{
-    property_value_bytes, PropertyOp, PropertyPredicate, MAX_COMPOSITION_PROPERTY_VALUE_BYTES,
-    MAX_FILTER_STRING_BYTES, MAX_FILTER_VALUES, MAX_PROPERTY_VALUE_BYTES, MAX_TITLE_CONTAINS_BYTES,
+    json_string_bytes, property_value_bytes, property_value_nodes, PropertyOp, PropertyPredicate,
+    MAX_COMPOSITION_PROPERTY_VALUE_BYTES, MAX_FILTER_STRING_BYTES, MAX_FILTER_VALUES,
+    MAX_PROPERTY_VALUE_BYTES, MAX_PROPERTY_VALUE_NODES, MAX_TITLE_CONTAINS_BYTES,
 };
 use crate::types::query::id_set::{IdKind, MAX_ID_SET_IDS};
 use crate::types::query::stage::{StageInput, StageName, StageRelation};
 use crate::types::resource_view::ResourceSection;
 
 use super::{index_by_name, refusal, term_wire_name, wire_name, PlanRefusal};
+
+/// The longest unknown act name a refusal repeats back. Every declared act name is under 32 bytes.
+const MAX_ECHOED_ACT_BYTES: usize = 64;
 
 /// Kahn's topological sort over the resolvable edges. `None` iff a cycle prevents a total order.
 fn topo_order(by_name: &BTreeMap<&str, &StageNode>) -> Option<Vec<StageNode>> {
@@ -168,6 +172,7 @@ pub(super) fn validate_shape_indexed(
         })
         .flat_map(predicate_value_sizes)
         .flat_map(|(_, sizes)| sizes)
+        .map(|s| s.bytes)
         .sum();
     if predicate_bytes > MAX_COMPOSITION_PROPERTY_VALUE_BYTES {
         errs.push(refusal(
@@ -466,11 +471,18 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
     // moving it to capability, buys the rare stale-binary case at the cost of the common typo, and
     // was declined; see the design's ⟨3⟩.
     if let ActName::Other(raw) = &inv.act {
+        // Named back only when short enough to be a typo; an act name has no published cap, and
+        // the refusal must not return whatever the caller sent.
+        let shown = if raw.len() <= MAX_ECHOED_ACT_BYTES {
+            format!("`{raw}`")
+        } else {
+            format!("an act name of {} bytes", raw.len())
+        };
         errs.push(refusal(
             Some(name),
             RefusalReason::UnknownAct,
             format!(
-                "`{raw}` is not an act this binary knows — check the spelling, or update if your \
+                "{shown} is not an act this binary knows — check the spelling, or update if your \
                  server is newer than it"
             ),
         ));
@@ -890,28 +902,41 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
     // two byte-identical refusals and no way to tell which to fix. That is the same *a refusal must
     // say WHERE* rule this change applies to the tombstone redirect, one layer down — and the layer
     // where it is easiest to leave unapplied, because the refusal still fires and still reads fine.
+    //
+    // **One refusal per source and kind, never one per predicate, and no key in the detail.** The
+    // predicate COUNT is capped in capability, after this pass, so per-predicate refusals let a
+    // body of empty predicates become a refusal list several times its size; and echoing the key
+    // returned whatever the caller sent. The detail names the source, how many, and the first.
     for (field, preds) in predicate_sources(inv) {
-        for (i, p) in preds.iter().enumerate() {
-            if p.key.is_empty() {
-                errs.push(refusal(
-                    Some(name),
-                    RefusalReason::EmptyPropertyKey,
-                    format!("a property predicate needs a key; `{field}[{i}]` has none"),
-                ));
-            }
-            if let PropertyOp::Contains { values } = &p.op {
-                if values.is_empty() {
-                    errs.push(refusal(
-                        Some(name),
-                        RefusalReason::EmptyContains,
-                        format!(
-                            "`contains` with no values narrows nothing; `{field}[{i}]` \
-                             (key `{}`) carries an empty list",
-                            p.key
-                        ),
-                    ));
-                }
-            }
+        let keyless: Vec<usize> = (0..preds.len())
+            .filter(|&i| preds[i].key.is_empty())
+            .collect();
+        if let Some(first) = keyless.first() {
+            errs.push(refusal(
+                Some(name),
+                RefusalReason::EmptyPropertyKey,
+                format!(
+                    "a property predicate needs a key; {} in `{field}` have none, the first \
+                     `{field}[{first}]`",
+                    keyless.len()
+                ),
+            ));
+        }
+        let empty: Vec<usize> = (0..preds.len())
+            .filter(
+                |&i| matches!(&preds[i].op, PropertyOp::Contains { values } if values.is_empty()),
+            )
+            .collect();
+        if let Some(first) = empty.first() {
+            errs.push(refusal(
+                Some(name),
+                RefusalReason::EmptyContains,
+                format!(
+                    "`contains` with no values narrows nothing; {} in `{field}` carry an empty \
+                     list, the first `{field}[{first}]`",
+                    empty.len()
+                ),
+            ));
         }
     }
 
@@ -920,18 +945,23 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
     // One refusal per predicate, not per value, so the refusal list cannot grow with the number of
     // oversized values. The detail names neither the value nor the key: a refusal must not hand
     // back an oversized payload.
+    // Too large is either measure: bytes, or nested nodes (`MAX_PROPERTY_VALUE_NODES` says why a
+    // comparison's cost needs the second).
     for (field, sizes) in predicate_value_sizes(inv) {
-        let oversized: Vec<usize> = sizes
+        let oversized: Vec<ValueSize> = sizes
             .into_iter()
-            .filter(|&b| b > MAX_PROPERTY_VALUE_BYTES)
+            .filter(|s| s.bytes > MAX_PROPERTY_VALUE_BYTES || s.nodes > MAX_PROPERTY_VALUE_NODES)
             .collect();
-        if let Some(largest) = oversized.iter().max() {
+        if !oversized.is_empty() {
+            let bytes = oversized.iter().map(|s| s.bytes).max().unwrap_or(0);
+            let nodes = oversized.iter().map(|s| s.nodes).max().unwrap_or(0);
             errs.push(refusal(
                 Some(name),
                 RefusalReason::PropertyValueTooLarge,
                 format!(
-                    "a property value may be at most {MAX_PROPERTY_VALUE_BYTES} bytes; `{field}` \
-                     carries {} over it, the largest {largest} bytes",
+                    "a property value may be at most {MAX_PROPERTY_VALUE_BYTES} bytes and \
+                     {MAX_PROPERTY_VALUE_NODES} nested elements; `{field}` carries {} over it, \
+                     the largest {bytes} bytes and {nodes} elements",
                     oversized.len()
                 ),
             ));
@@ -962,12 +992,19 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
 /// `contains` value and `compare` bound in compact JSON bytes, and each facet value in bytes.
 ///
 /// A facet is a `kb_properties` predicate too, so its value is bounded and budgeted with the
-/// others. It is measured as the raw string, which is what its published `max_length` describes.
-fn predicate_value_sizes(inv: &ActInvocation) -> Vec<(String, Vec<usize>)> {
-    let mut out: Vec<(String, Vec<usize>)> = Vec::new();
+/// others. It is measured as the escaped string inside its quotes, as the wire carries it.
+fn predicate_value_sizes(inv: &ActInvocation) -> Vec<(String, Vec<ValueSize>)> {
+    let mut out: Vec<(String, Vec<ValueSize>)> = Vec::new();
     for (field, preds) in predicate_sources(inv) {
         for (i, p) in preds.iter().enumerate() {
-            let sizes: Vec<usize> = p.op.values().iter().map(property_value_bytes).collect();
+            let sizes: Vec<ValueSize> =
+                p.op.values()
+                    .iter()
+                    .map(|v| ValueSize {
+                        bytes: property_value_bytes(v),
+                        nodes: property_value_nodes(v),
+                    })
+                    .collect();
             if !sizes.is_empty() {
                 out.push((format!("{field}[{i}]"), sizes));
             }
@@ -977,11 +1014,20 @@ fn predicate_value_sizes(inv: &ActInvocation) -> Vec<(String, Vec<usize>)> {
         for (i, facet) in f.facets.iter().enumerate() {
             out.push((
                 format!("resource_filter.facets[{i}].value"),
-                vec![facet.value.len()],
+                vec![ValueSize {
+                    bytes: json_string_bytes(&facet.value),
+                    nodes: 0,
+                }],
             ));
         }
     }
     out
+}
+
+/// One predicate value's two sizes: its wire bytes, and its nested nodes.
+struct ValueSize {
+    bytes: usize,
+    nodes: usize,
 }
 
 /// Every free-text narrowing string on a stage, as (wire field, its byte limit, each length).
@@ -989,9 +1035,14 @@ fn predicate_value_sizes(inv: &ActInvocation) -> Vec<(String, Vec<usize>)> {
 /// The fields whose lengths are bounded elsewhere are absent: a stage name (`StageName`, 63), a
 /// question (`MAX_INTENTION_QUERY_BYTES`), and a facet value (a predicate value, above).
 fn filter_strings(inv: &ActInvocation) -> Vec<(&'static str, usize, Vec<usize>)> {
-    let names = |xs: &[String]| xs.iter().map(String::len).collect::<Vec<_>>();
-    let keys = |ps: &[PropertyPredicate]| ps.iter().map(|p| p.key.len()).collect::<Vec<_>>();
-    let one = |x: &Option<String>| x.iter().map(String::len).collect::<Vec<_>>();
+    // Escaped length, as the body limit sees it — see `json_string_bytes`.
+    let names = |xs: &[String]| xs.iter().map(|s| json_string_bytes(s)).collect::<Vec<_>>();
+    let keys = |ps: &[PropertyPredicate]| {
+        ps.iter()
+            .map(|p| json_string_bytes(&p.key))
+            .collect::<Vec<_>>()
+    };
+    let one = |x: &Option<String>| x.iter().map(|s| json_string_bytes(s)).collect::<Vec<_>>();
     let mut out = vec![(
         "properties[].key",
         MAX_FILTER_STRING_BYTES,
@@ -1012,7 +1063,7 @@ fn filter_strings(inv: &ActInvocation) -> Vec<(&'static str, usize, Vec<usize>)>
             (
                 "resource_filter.facets[].key",
                 MAX_FILTER_STRING_BYTES,
-                f.facets.iter().map(|x| x.key.len()).collect(),
+                f.facets.iter().map(|x| json_string_bytes(&x.key)).collect(),
             ),
             (
                 "resource_filter.properties[].key",

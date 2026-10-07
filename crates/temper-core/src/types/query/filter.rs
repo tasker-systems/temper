@@ -199,9 +199,9 @@ pub enum PropertyOp {
     /// not what makes the predicate span the population, and a caller who lists only the array
     /// shape silently answers for one half of it.
     ///
-    /// **Size.** Each value is at most 4096 bytes of compact JSON, and every predicate value in
-    /// one composition totals at most 1048576 bytes (`property_value_too_large`,
-    /// `property_value_budget_exceeded`).
+    /// **Size.** Each value is at most 4096 bytes of compact JSON and at most 64 nested array
+    /// elements or object members, and every predicate value in one composition totals at most
+    /// 1048576 bytes (`property_value_too_large`, `property_value_budget_exceeded`).
     Contains { values: Vec<serde_json::Value> },
     /// `property_value <direction> $value` over jsonb's native ordering, type-guarded.
     ///
@@ -228,8 +228,9 @@ pub enum PropertyOp {
     /// NOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,
     /// and adding it saves one probe at the cost of a second value slot and a second SQL branch.
     ///
-    /// **Size.** The bound is at most 4096 bytes of compact JSON, and counts toward the same
-    /// 1048576-byte composition total as `contains` values.
+    /// **Size.** The bound is at most 4096 bytes of compact JSON and at most 64 nested array
+    /// elements or object members, and counts toward the same 1048576-byte composition total as
+    /// `contains` values.
     Compare {
         direction: OrdOp,
         value: serde_json::Value,
@@ -312,15 +313,17 @@ pub struct PropertyPredicate {
 /// resources is a small corpus: these vocabularies GROW with the material, so the field where the
 /// cap was already too tight is the one where the margin erodes fastest.
 ///
-/// 256 is chosen against what this actually bounds — **body bytes, not work**. At `MAX_STAGES`
-/// stages of 256 twenty-byte labels that is ~330 KB, comfortably inside the door's declared limit,
-/// and it is twice today's label vocabulary with room for a corpus an order of magnitude larger.
+/// 256 is chosen against what this actually bounds — **body bytes, not work** — together with
+/// [`MAX_FILTER_STRING_BYTES`], which bounds each string: at `MAX_STAGES` stages of 256 labels at
+/// that cap the labels are ~4.2 MB, inside the door's declared limit, and the coherence test
+/// measures the whole plan at every cap. 256 is twice today's label vocabulary with room for a
+/// corpus an order of magnitude larger.
 /// It matches `MAX_PER_CANDIDATE_PROBES`' number by arithmetic coincidence rather than by
 /// analogy — that one bounds a per-candidate multiplier and this one bounds a serialization.
 pub const MAX_FILTER_VALUES: usize = 256;
 
 /// The longest narrowing string — a label, tag, `doc_type`, facet key, property key, `stage`,
-/// `status` or `owner` — in bytes. Refused as
+/// `status` or `owner` — in JSON-escaped bytes ([`json_string_bytes`]). Refused as
 /// [`super::disposition::RefusalReason::FilterStringTooLong`].
 ///
 /// The count caps bound how many of these a stage carries and never how long each is, so before
@@ -331,18 +334,27 @@ pub const MAX_FILTER_VALUES: usize = 256;
 ///
 /// On community production `[measured — 2026-10-06]` the longest of each is: edge label 61 bytes,
 /// tag 94, property key 29, facet key 39, stage or status value 32, profile handle 38. 256 is 2.7x
-/// the longest. Each is published as `max_length` (a character count, never fewer than the bytes
-/// checked here, so the contract promises less than the server admits and never more).
+/// the longest.
+///
+/// # Published as characters, enforced as escaped bytes
+///
+/// Each is published as `max_length`, which JSON Schema counts in characters. A character is never
+/// more than its escaped bytes, so a client that checks the schema never refuses a string the
+/// server would accept. The converse does not hold: a string of multi-byte or control characters
+/// can be schema-valid and still refused here, with this typed reason. That is the same trade
+/// `Intention::query`'s published bound makes. Escaped bytes are the measure because they are what
+/// the body limit sees: counting decoded bytes, a plan of control-character labels inside every cap
+/// serialized to ~53 MB.
 pub const MAX_FILTER_STRING_BYTES: usize = 256;
 
-/// The longest `title_contains`, in bytes. Refused as
+/// The longest `title_contains`, in JSON-escaped bytes. Refused as
 /// [`super::disposition::RefusalReason::FilterStringTooLong`]. A substring probe never usefully
 /// exceeds the longest title, which is 279 bytes on community production
 /// `[measured — 2026-10-06]`.
 pub const MAX_TITLE_CONTAINS_BYTES: usize = 1024;
 
 /// The largest single property-predicate value — one `contains` value or `compare` bound in
-/// compact serialized JSON bytes, or one facet value in bytes. Refused as
+/// compact serialized JSON bytes, or one facet value in JSON-escaped bytes. Refused as
 /// [`super::disposition::RefusalReason::PropertyValueTooLarge`].
 ///
 /// # What it bounds, and why the count caps did not
@@ -364,6 +376,40 @@ pub const MAX_TITLE_CONTAINS_BYTES: usize = 1024;
 /// published here, in the field's documentation, rather than as a schema constraint.
 pub const MAX_PROPERTY_VALUE_BYTES: usize = 4096;
 
+/// The most nested nodes — array elements and object members, at every depth — one property
+/// predicate value may carry. Refused, like an over-long value, as
+/// [`super::disposition::RefusalReason::PropertyValueTooLarge`].
+///
+/// # Why a count as well as bytes
+///
+/// `stored @> probe` walks the stored value once per node of the probe, so a comparison costs the
+/// product of the two sizes, not their bytes. A 4 KiB probe holds ~2,000 nodes: against a stored
+/// 1M-element array it took 11.6 s per comparison `[measured on local Postgres — 2026-10-06]`, and
+/// 64 nodes took 392 ms. This cuts the per-comparison factor the probe controls. It does not bound
+/// the comparison: the stored side is any value a caller can write. The execution bound is the
+/// deployment's (`docs/concepts/query-cost-and-bounds.md`).
+///
+/// # 64, measured against live data
+///
+/// A probe matches only a stored value that contains it, so no useful probe has more nodes than the
+/// largest stored value. On community production `[measured — 2026-10-06]` that is 20 nodes across
+/// 28,989 values (p99.9: 10). 64 is 3.2x the largest.
+pub const MAX_PROPERTY_VALUE_NODES: usize = 64;
+
+/// The nested nodes of one property-predicate value, as [`MAX_PROPERTY_VALUE_NODES`] counts them:
+/// every array element and object member at every depth. A scalar has none.
+pub fn property_value_nodes(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Array(xs) => {
+            xs.len() + xs.iter().map(property_value_nodes).sum::<usize>()
+        }
+        serde_json::Value::Object(m) => {
+            m.len() + m.values().map(property_value_nodes).sum::<usize>()
+        }
+        _ => 0,
+    }
+}
+
 /// The summed size of every property-predicate value in one composition, in the same measure as
 /// [`MAX_PROPERTY_VALUE_BYTES`]. Refused as
 /// [`super::disposition::RefusalReason::PropertyValueBudgetExceeded`].
@@ -380,6 +426,19 @@ pub const MAX_COMPOSITION_PROPERTY_VALUE_BYTES: usize = 1024 * 1024;
 /// The size of one property-predicate value, as [`MAX_PROPERTY_VALUE_BYTES`] measures it: compact
 /// serialized JSON bytes. Counted through a sink, so measuring a large value allocates nothing.
 pub fn property_value_bytes(value: &serde_json::Value) -> usize {
+    json_bytes(value)
+}
+
+/// The bytes a string occupies inside its JSON quotes on the wire: escapes counted, so a control
+/// character costs its six-byte `\u00XX`. Every narrowing string and facet value is measured this
+/// way, because the body limit sees the escaped form; counting decoded bytes let a plan inside
+/// every cap serialize to several times its counted size.
+pub fn json_string_bytes(s: &str) -> usize {
+    // The serializer writes the opening and closing quote; they are not the string's.
+    json_bytes(s) - 2
+}
+
+fn json_bytes<T: Serialize + ?Sized>(value: &T) -> usize {
     struct Count(usize);
     impl std::io::Write for Count {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -391,8 +450,9 @@ pub fn property_value_bytes(value: &serde_json::Value) -> usize {
         }
     }
     let mut count = Count(0);
-    // Serializing a `Value` to an infallible writer cannot fail: every map key is a string.
-    serde_json::to_writer(&mut count, value).expect("a serde_json::Value always serializes");
+    // Writing to an infallible sink cannot fail for a string or a `Value`: every map key is a
+    // string.
+    serde_json::to_writer(&mut count, value).expect("a string or Value always serializes");
     count.0
 }
 

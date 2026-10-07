@@ -21361,7 +21361,7 @@
           },
           {
             "type": "object",
-            "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.\n\n**Size.** Each value is at most 4096 bytes of compact JSON, and every predicate value in\none composition totals at most 1048576 bytes (`property_value_too_large`,\n`property_value_budget_exceeded`).",
+            "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.\n\n**Size.** Each value is at most 4096 bytes of compact JSON and at most 64 nested array\nelements or object members, and every predicate value in one composition totals at most\n1048576 bytes (`property_value_too_large`, `property_value_budget_exceeded`).",
             "required": [
               "values",
               "op"
@@ -21381,7 +21381,7 @@
           },
           {
             "type": "object",
-            "description": "`property_value <direction> $value` over jsonb's native ordering, type-guarded.\n\n**The type is inferred from the caller's bound, never declared on the operator.**\n`jsonb_typeof(property_value) = jsonb_typeof($value)` segments by JSON type before the\ncomparison, so a row whose JSON type differs from the bound's is an **honest empty** rather\nthan a type-confusion match. jsonb defines a total type ordering\n(`null < boolean < number < string < array < object`), so without the guard a numeric\nbound against a string-valued key would match **every** string row (`string > number` is\ntrue in jsonb's ordering) — a type-confusion artifact, not an answer. The guard makes each\ncomparison run only within a homogeneous sub-population.\n\n**Per-VALUE inference, not per-key — and the distinction is the trap.** `temper-pr` is\n68 string / 7 numeric on ONE key, so no per-key answer exists; each caller sends one bound\nwith one JSON type, and the guard makes the other-type rows honest empties. A numeric bound\ncompares the 7 numeric rows; a string bound compares the 68 string rows; neither is wrong.\n\n**Numbers stored as JSON STRINGS** that need numeric comparison are out of scope: that is a\nconvention the key should fix (store numbers as JSON numbers), and `temper-seq` (132 numeric\nrows) already does. A comparison operator is not a type-coercion mechanism.\n\n`probe_count` for `Compare` is **1** — one bound, one comparison per row that carries the\nkey — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is\nNOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,\nand adding it saves one probe at the cost of a second value slot and a second SQL branch.\n\n**Size.** The bound is at most 4096 bytes of compact JSON, and counts toward the same\n1048576-byte composition total as `contains` values.",
+            "description": "`property_value <direction> $value` over jsonb's native ordering, type-guarded.\n\n**The type is inferred from the caller's bound, never declared on the operator.**\n`jsonb_typeof(property_value) = jsonb_typeof($value)` segments by JSON type before the\ncomparison, so a row whose JSON type differs from the bound's is an **honest empty** rather\nthan a type-confusion match. jsonb defines a total type ordering\n(`null < boolean < number < string < array < object`), so without the guard a numeric\nbound against a string-valued key would match **every** string row (`string > number` is\ntrue in jsonb's ordering) — a type-confusion artifact, not an answer. The guard makes each\ncomparison run only within a homogeneous sub-population.\n\n**Per-VALUE inference, not per-key — and the distinction is the trap.** `temper-pr` is\n68 string / 7 numeric on ONE key, so no per-key answer exists; each caller sends one bound\nwith one JSON type, and the guard makes the other-type rows honest empties. A numeric bound\ncompares the 7 numeric rows; a string bound compares the 68 string rows; neither is wrong.\n\n**Numbers stored as JSON STRINGS** that need numeric comparison are out of scope: that is a\nconvention the key should fix (store numbers as JSON numbers), and `temper-seq` (132 numeric\nrows) already does. A comparison operator is not a type-coercion mechanism.\n\n`probe_count` for `Compare` is **1** — one bound, one comparison per row that carries the\nkey — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is\nNOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,\nand adding it saves one probe at the cost of a second value slot and a second SQL branch.\n\n**Size.** The bound is at most 4096 bytes of compact JSON and at most 64 nested array\nelements or object members, and counts toward the same 1048576-byte composition total as\n`contains` values.",
             "required": [
               "direction",
               "value",
@@ -22824,21 +22824,21 @@
           },
           {
             "type": "string",
-            "description": "A property-predicate value — a `contains` value or a `compare` bound — is larger than\n[`super::filter::MAX_PROPERTY_VALUE_BYTES`].\n\nThe probe cap counts values, not bytes, so without this one value of any size validated.\nThe refusal names the predicate's position and the limit, never the value: echoing a value\nrefused for its size would return the oversized payload in the error body.",
+            "description": "A property-predicate value — a `contains` value, a `compare` bound or a facet value — is\nlarger than 4096 bytes, or carries more than 64 nested array elements or object members.\n\nThe probe cap counts values, not bytes, so without this one value of any size validated.\nThe refusal names the predicate's position and the limit, never the value: echoing a value\nrefused for its size would return the oversized payload in the error body.",
             "enum": [
               "property_value_too_large"
             ]
           },
           {
             "type": "string",
-            "description": "The property-predicate values across the whole composition sum past\n[`super::filter::MAX_COMPOSITION_PROPERTY_VALUE_BYTES`].\n\nComposition-level, like [`RefusalReason::TooManyStages`]. It is what keeps the largest\nlegal composition inside the query door's body limit once each value may be 4 KiB.",
+            "description": "The property-predicate values across the whole composition sum past 1048576 bytes.\n\nComposition-level, like `too_many_stages`. It is what keeps the largest\nlegal composition inside the query door's body limit once each value may be 4 KiB.",
             "enum": [
               "property_value_budget_exceeded"
             ]
           },
           {
             "type": "string",
-            "description": "A narrowing string — a label, tag, `doc_type`, facet or property key, `stage`, `status`,\n`owner` or `title_contains` — is longer than its published `max_length`.\n\nThe count caps bound how many strings a stage carries, never how long each is; without\nthis a plan inside every count cap could exceed the body limit and meet a bare 413. The\nrefusal names the field and the limit, never the string.",
+            "description": "A narrowing string — a label, tag, `doc_type`, facet or property key, `stage`, `status`,\n`owner` or `title_contains` — is longer than its published cap: 256 bytes, or 1024 for\n`title_contains`, counted as JSON-escaped bytes.\n\nThe count caps bound how many strings a stage carries, never how long each is; without\nthis a plan inside every count cap could exceed the body limit and meet a bare 413. The\nrefusal names the field and the limit, never the string.",
             "enum": [
               "filter_string_too_long"
             ]
@@ -24521,7 +24521,8 @@
               "type": "string",
               "format": "uuid"
             },
-            "description": "Narrow to a set of resource ids. Composes with `context_ref` / `cogmap_id` rather than\nreplacing them — the fragments apply bound and anchor conjunctively.\n\nReachable from every door: the MCP `search` tool takes this whole struct as its\n`Parameters`, so the field arrives there without a tool change."
+            "description": "Narrow to a set of resource ids. Composes with `context_ref` / `cogmap_id` rather than\nreplacing them — the fragments apply bound and anchor conjunctively.\n\nReachable from every door: the MCP `search` tool takes this whole struct as its\n`Parameters`, so the field arrives there without a tool change. At most 256 ids.",
+            "maxItems": 256
           },
           "cogmap_id": {
             "type": [
@@ -24540,21 +24541,24 @@
               "type": "string",
               "format": "uuid"
             },
-            "description": "Multi-map scope. Additive beside `cogmap_id` — an older server ignores it and falls back to\n`cogmap_id`. Mutually exclusive with `context_ref`.\n\n**A set larger than one is now a `400`.** Search scopes to a single anchor; asking several\nmaps at once is a composition, which is `/api/query`'s job. The plural is kept because\nclients send it and a one-element set is still honoured."
+            "description": "Multi-map scope. Additive beside `cogmap_id` — an older server ignores it and falls back to\n`cogmap_id`. Mutually exclusive with `context_ref`.\n\n**A set larger than one is now a `400`.** Search scopes to a single anchor; asking several\nmaps at once is a composition, which is `/api/query`'s job. The plural is kept because\nclients send it and a one-element set is still honoured.",
+            "maxItems": 256
           },
           "context_ref": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Filter by context **ref** (UUID or decorated @owner/slug), resolved server-side."
+            "description": "Filter by context **ref** (UUID or decorated @owner/slug), resolved server-side.",
+            "maxLength": 256
           },
           "doc_type": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Filter by document type."
+            "description": "Filter by document type.",
+            "maxLength": 256
           },
           "embedding": {
             "type": [
@@ -24565,7 +24569,8 @@
               "type": "number",
               "format": "float"
             },
-            "description": "Pre-computed 768-dim embedding vector."
+            "description": "Pre-computed 768-dim embedding vector. At most 768 components.",
+            "maxItems": 768
           },
           "limit": {
             "type": [
@@ -24588,11 +24593,13 @@
               "string",
               "null"
             ],
-            "description": "Plain-text query for full-text search."
+            "description": "Plain-text query for full-text search. At most 4096 bytes.",
+            "maxLength": 4096
           },
           "search_config": {
             "type": "string",
-            "description": "Postgres text-search configuration (default \"english\").\n\nNOTE: reserved/inert — FTS is hardcoded `'english'` in the `search_exact` SQL function\n(Beat 1 kept multilingual storage-only); this param does not affect results yet."
+            "description": "Postgres text-search configuration (default \"english\").\n\nNOTE: reserved/inert — FTS is hardcoded `'english'` in the `search_exact` SQL function\n(Beat 1 kept multilingual storage-only); this param does not affect results yet.",
+            "maxLength": 256
           }
         }
       },

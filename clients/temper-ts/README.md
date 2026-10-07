@@ -141,13 +141,16 @@ uses them for its own auth tests).
 ## Composition bounds are NOT enforced here `[2026-08-28]`
 
 `/api/query`'s contract publishes ceilings on what one composition may declare — 64 stages,
-4096 bytes per question, 256 ids per set, 256 values per narrowing list, 4096 bytes per
-property-predicate value and 1048576 bytes of them per composition. `schema.ts` carries
+4096 bytes per question, 256 ids per set, 256 values per narrowing list, 256 bytes per
+narrowing string (1024 for `title_contains`), and per property-predicate value 4096 bytes and 64
+nested elements, with 1048576 bytes of them per composition. `/api/search` holds its fields to the
+same numbers. `schema.ts` carries
 them as types only; there is no runtime validator in this package, so an over-cap plan is
 sent and the server answers `400 PLAN_REFUSED` with the typed reason
 (`too_many_stages`, `intention_too_long`, `too_many_ids`, `too_many_filter_values`,
 `duplicate_set_member`, `malformed_embedding`, `intention_budget_exceeded`,
-`property_value_too_large`, `property_value_budget_exceeded`).
+`property_value_too_large`, `property_value_budget_exceeded`, `filter_string_too_long`). An
+over-cap `/api/search` request is a `400 BAD_REQUEST` naming each field.
 
 That is a deliberate difference from the Ruby gem and the Python package, whose generated
 models raise locally. Handle the refusal; do not assume a client-side guard.

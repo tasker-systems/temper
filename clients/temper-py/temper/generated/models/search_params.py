@@ -17,8 +17,9 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt
 from typing import Any, ClassVar, Dict, List, Optional, Union
+from typing_extensions import Annotated
 from uuid import UUID
 from typing import Optional, Set
 from typing_extensions import Self
@@ -28,16 +29,16 @@ class SearchParams(BaseModel):
     """
     Request body for POST /api/search.
     """ # noqa: E501
-    bound_ids: Optional[List[UUID]] = Field(default=None, description="Narrow to a set of resource ids. Composes with `context_ref` / `cogmap_id` rather than replacing them — the fragments apply bound and anchor conjunctively.  Reachable from every door: the MCP `search` tool takes this whole struct as its `Parameters`, so the field arrives there without a tool change.")
+    bound_ids: Optional[Annotated[List[UUID], Field(max_length=256)]] = Field(default=None, description="Narrow to a set of resource ids. Composes with `context_ref` / `cogmap_id` rather than replacing them — the fragments apply bound and anchor conjunctively.  Reachable from every door: the MCP `search` tool takes this whole struct as its `Parameters`, so the field arrives there without a tool change. At most 256 ids.")
     cogmap_id: Optional[UUID] = Field(default=None, description="Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only). Mutually exclusive with `context_ref`. When set, the corpus is the map's homed participants the principal can see.  Retained for back-compat beside the plural `cogmap_ids`: an older client (temper-rb, a pre-multi-map CLI) still sends this scalar. When `cogmap_ids` is non-empty it wins; otherwise a set `cogmap_id` is treated as a one-element set.")
-    cogmap_ids: Optional[List[UUID]] = Field(default=None, description="Multi-map scope. Additive beside `cogmap_id` — an older server ignores it and falls back to `cogmap_id`. Mutually exclusive with `context_ref`.  **A set larger than one is now a `400`.** Search scopes to a single anchor; asking several maps at once is a composition, which is `/api/query`'s job. The plural is kept because clients send it and a one-element set is still honoured.")
-    context_ref: Optional[StrictStr] = Field(default=None, description="Filter by context **ref** (UUID or decorated @owner/slug), resolved server-side.")
-    doc_type: Optional[StrictStr] = Field(default=None, description="Filter by document type.")
-    embedding: Optional[List[Union[StrictFloat, StrictInt]]] = Field(default=None, description="Pre-computed 768-dim embedding vector.")
+    cogmap_ids: Optional[Annotated[List[UUID], Field(max_length=256)]] = Field(default=None, description="Multi-map scope. Additive beside `cogmap_id` — an older server ignores it and falls back to `cogmap_id`. Mutually exclusive with `context_ref`.  **A set larger than one is now a `400`.** Search scopes to a single anchor; asking several maps at once is a composition, which is `/api/query`'s job. The plural is kept because clients send it and a one-element set is still honoured.")
+    context_ref: Optional[Annotated[str, Field(strict=True, max_length=256)]] = Field(default=None, description="Filter by context **ref** (UUID or decorated @owner/slug), resolved server-side.")
+    doc_type: Optional[Annotated[str, Field(strict=True, max_length=256)]] = Field(default=None, description="Filter by document type.")
+    embedding: Optional[Annotated[List[Union[StrictFloat, StrictInt]], Field(max_length=768)]] = Field(default=None, description="Pre-computed 768-dim embedding vector. At most 768 components.")
     limit: Optional[StrictInt] = Field(default=None, description="Maximum results (default 10, max 50).")
     offset: Optional[StrictInt] = Field(default=None, description="Offset for pagination.")
-    query: Optional[StrictStr] = Field(default=None, description="Plain-text query for full-text search.")
-    search_config: Optional[StrictStr] = Field(default=None, description="Postgres text-search configuration (default \"english\").  NOTE: reserved/inert — FTS is hardcoded `'english'` in the `search_exact` SQL function (Beat 1 kept multilingual storage-only); this param does not affect results yet.")
+    query: Optional[Annotated[str, Field(strict=True, max_length=4096)]] = Field(default=None, description="Plain-text query for full-text search. At most 4096 bytes.")
+    search_config: Optional[Annotated[str, Field(strict=True, max_length=256)]] = Field(default=None, description="Postgres text-search configuration (default \"english\").  NOTE: reserved/inert — FTS is hardcoded `'english'` in the `search_exact` SQL function (Beat 1 kept multilingual storage-only); this param does not affect results yet.")
     __properties: ClassVar[List[str]] = ["bound_ids", "cogmap_id", "cogmap_ids", "context_ref", "doc_type", "embedding", "limit", "offset", "query", "search_config"]
 
     model_config = ConfigDict(

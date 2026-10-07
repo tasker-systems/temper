@@ -1271,6 +1271,79 @@ fn reject_degenerate_embedding(embedding: Option<&[f32]>) -> ApiResult<()> {
     Ok(())
 }
 
+/// Refuse a search request whose fields exceed the bounds `/api/query` already holds its
+/// equivalents to, before anything is embedded or bound into SQL.
+///
+/// Both search doors arrive here: the HTTP handler calls [`search_select`], and MCP `search`
+/// forwards to `/api/search`. The numbers are the composition contract's, not new ones, so the two
+/// query doors cannot drift apart: a question is `MAX_INTENTION_QUERY_BYTES`, a vector is at most
+/// `MAX_EMBEDDING_DIM` components, an id set is `MAX_ID_SET_IDS`, and a name is
+/// `MAX_FILTER_STRING_BYTES` escaped bytes. Every violation is named at once, and none echoes the
+/// value. A longer question was tokenized in full and truncated to 512 tokens, and the id lists were
+/// bound into SQL whole, so each excess was work done and discarded.
+fn reject_oversized_search(params: &SearchParams) -> ApiResult<()> {
+    use temper_core::types::query::composition::{MAX_EMBEDDING_DIM, MAX_INTENTION_QUERY_BYTES};
+    use temper_core::types::query::filter::{json_string_bytes, MAX_FILTER_STRING_BYTES};
+    use temper_core::types::query::id_set::MAX_ID_SET_IDS;
+
+    let mut over: Vec<String> = Vec::new();
+    let mut check = |field: &str, len: usize, limit: usize, unit: &str| {
+        if len > limit {
+            over.push(format!(
+                "`{field}` may carry at most {limit} {unit}; this carries {len}"
+            ));
+        }
+    };
+    let names = |s: Option<&str>| s.map_or(0, json_string_bytes);
+    check(
+        "query",
+        params.query.as_ref().map_or(0, String::len),
+        MAX_INTENTION_QUERY_BYTES,
+        "bytes",
+    );
+    check(
+        "embedding",
+        params.embedding.as_ref().map_or(0, Vec::len),
+        MAX_EMBEDDING_DIM,
+        "components",
+    );
+    check(
+        "bound_ids",
+        params.bound_ids.as_ref().map_or(0, Vec::len),
+        MAX_ID_SET_IDS,
+        "ids",
+    );
+    check(
+        "cogmap_ids",
+        params.cogmap_ids.as_ref().map_or(0, Vec::len),
+        MAX_ID_SET_IDS,
+        "ids",
+    );
+    check(
+        "doc_type",
+        names(params.doc_type.as_deref()),
+        MAX_FILTER_STRING_BYTES,
+        "bytes",
+    );
+    check(
+        "context_ref",
+        names(params.context_ref.as_deref()),
+        MAX_FILTER_STRING_BYTES,
+        "bytes",
+    );
+    check(
+        "search_config",
+        names(Some(&params.search_config)),
+        MAX_FILTER_STRING_BYTES,
+        "bytes",
+    );
+    if over.is_empty() {
+        Ok(())
+    } else {
+        Err(ApiError::BadRequest(over.join("; ")))
+    }
+}
+
 /// `search` — the two arms of `/api/search`, run independently and returned unmerged.
 ///
 /// Each arm is asked the same question of the same scope and answers with its own quantity. Nothing
@@ -1285,6 +1358,7 @@ pub async fn search_select(
     profile_id: ProfileId,
     mut params: SearchParams,
 ) -> ApiResult<SearchResponse> {
+    reject_oversized_search(&params)?;
     reject_degenerate_embedding(params.embedding.as_deref())?;
     // `degraded` is the WIDE arm's property: a failed embed leaves the exact arm untouched and makes
     // the wide arm impossible. It is reported on that arm rather than on the response.
@@ -2361,5 +2435,63 @@ mod degenerate_embedding_tests {
         // that error somewhere less informative.
         assert!(reject_degenerate_embedding(None).is_ok());
         assert!(reject_degenerate_embedding(Some(&[])).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod oversized_search_tests {
+    use super::reject_oversized_search;
+    use temper_core::types::api::SearchParams;
+    use temper_core::types::query::composition::{MAX_EMBEDDING_DIM, MAX_INTENTION_QUERY_BYTES};
+    use temper_core::types::query::filter::MAX_FILTER_STRING_BYTES;
+    use temper_core::types::query::id_set::MAX_ID_SET_IDS;
+    use uuid::Uuid;
+
+    fn at(extra: usize) -> SearchParams {
+        SearchParams {
+            embedding: Some(vec![0.5; MAX_EMBEDDING_DIM + extra]),
+            query: Some("q".repeat(MAX_INTENTION_QUERY_BYTES + extra)),
+            search_config: "c".repeat(MAX_FILTER_STRING_BYTES + extra),
+            context_ref: Some("r".repeat(MAX_FILTER_STRING_BYTES + extra)),
+            doc_type: Some("d".repeat(MAX_FILTER_STRING_BYTES + extra)),
+            cogmap_ids: Some(vec![Uuid::nil(); MAX_ID_SET_IDS + extra]),
+            bound_ids: Some(vec![Uuid::nil(); MAX_ID_SET_IDS + extra]),
+            ..SearchParams::default()
+        }
+    }
+
+    #[test]
+    fn every_search_field_at_its_cap_passes_and_one_over_is_named_without_its_value() {
+        assert!(reject_oversized_search(&at(0)).is_ok());
+        let msg = reject_oversized_search(&at(1)).unwrap_err().to_string();
+        for field in [
+            "query",
+            "embedding",
+            "bound_ids",
+            "cogmap_ids",
+            "doc_type",
+            "context_ref",
+            "search_config",
+        ] {
+            assert!(
+                msg.contains(&format!("`{field}`")),
+                "`{field}` not named: {msg}"
+            );
+        }
+        assert!(
+            msg.len() < 2048,
+            "the refusal must not echo the values: {} bytes",
+            msg.len()
+        );
+    }
+
+    #[test]
+    fn an_escaped_name_is_measured_as_the_wire_carries_it() {
+        // 43 control characters are 258 escaped bytes, though only 43 decoded.
+        let p = SearchParams {
+            doc_type: Some("\u{1}".repeat(43)),
+            ..SearchParams::default()
+        };
+        assert!(reject_oversized_search(&p).is_err());
     }
 }

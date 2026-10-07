@@ -461,9 +461,10 @@ mod tests {
     use crate::types::query::envelope::ActInvocation;
     use crate::types::query::filter::MAX_FILTER_VALUES;
     use crate::types::query::filter::{
-        property_value_bytes, EdgeFilter, FacetPredicate, OrdOp, PropertyOp, PropertyPredicate,
-        ResourceFilter, MAX_COMPOSITION_PROPERTY_VALUE_BYTES, MAX_FILTER_STRING_BYTES,
-        MAX_PROPERTY_VALUE_BYTES, MAX_TITLE_CONTAINS_BYTES,
+        property_value_bytes, property_value_nodes, EdgeFilter, FacetPredicate, OrdOp, PropertyOp,
+        PropertyPredicate, ResourceFilter, MAX_COMPOSITION_PROPERTY_VALUE_BYTES,
+        MAX_FILTER_STRING_BYTES, MAX_PROPERTY_VALUE_BYTES, MAX_PROPERTY_VALUE_NODES,
+        MAX_TITLE_CONTAINS_BYTES,
     };
     use crate::types::query::id_set::{IdKind, IdProvenance, IdSet, MAX_ID_SET_IDS};
     use crate::types::query::scalars::BoundTerm;
@@ -2689,8 +2690,10 @@ mod tests {
                     .into_iter()
                     .find(|e| e.reason == RefusalReason::PropertyValueTooLarge)
                     .unwrap();
+                // The exact indexed path: every source's name contains "properties", so a bare
+                // substring check could not tell them apart.
                 assert!(
-                    refusal.detail.contains(source) && refusal.detail.len() < 512,
+                    refusal.detail.contains(&format!("`{source}[0]`")) && refusal.detail.len() < 512,
                     "the refusal must name where the value sits and must not echo it; got {} bytes: {}",
                     refusal.detail.len(),
                     &refusal.detail[..refusal.detail.len().min(200)]
@@ -2709,6 +2712,64 @@ mod tests {
                     "a {op_name} value exactly at the cap in {source} was refused"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_property_value_with_too_many_nested_elements_is_refused_however_few_its_bytes() {
+        // A comparison costs probe nodes x stored nodes, so a small-byte value can still be an
+        // expensive probe. Nodes are counted at every depth.
+        let flat = |n: usize| serde_json::Value::Array(vec![serde_json::json!(0); n]);
+        // 32 objects of one member each: 32 elements + 32 members = 64 nodes, then 65.
+        let nested = |n: usize| serde_json::Value::Array(vec![serde_json::json!({"a": 0}); n / 2]);
+        for (label, at, over) in [
+            (
+                "flat",
+                flat(MAX_PROPERTY_VALUE_NODES),
+                flat(MAX_PROPERTY_VALUE_NODES + 1),
+            ),
+            ("nested", nested(MAX_PROPERTY_VALUE_NODES), {
+                let mut v = nested(MAX_PROPERTY_VALUE_NODES);
+                v.as_array_mut().unwrap().push(serde_json::json!(0));
+                v
+            }),
+        ] {
+            assert_eq!(
+                property_value_nodes(&at),
+                MAX_PROPERTY_VALUE_NODES,
+                "{label} fixture"
+            );
+            assert!(
+                property_value_bytes(&over) < MAX_PROPERTY_VALUE_BYTES,
+                "{label}: nodes, not bytes"
+            );
+            for op in [
+                PropertyOp::Contains {
+                    values: vec![over.clone()],
+                },
+                PropertyOp::Compare {
+                    direction: OrdOp::Gte,
+                    value: over.clone(),
+                },
+            ] {
+                let c = selection_with_properties(vec![PropertyPredicate {
+                    key: "k".to_string(),
+                    op,
+                }]);
+                assert_eq!(
+                    count_refusals(&c, RefusalReason::PropertyValueTooLarge),
+                    1,
+                    "a {label} value one node over the cap was not refused"
+                );
+            }
+            let c = selection_with_properties(vec![PropertyPredicate {
+                key: "k".to_string(),
+                op: PropertyOp::Contains { values: vec![at] },
+            }]);
+            assert!(
+                validate(&c).is_ok(),
+                "a {label} value exactly at the node cap must validate"
+            );
         }
     }
 
@@ -2858,6 +2919,19 @@ mod tests {
                 plan_with_property(&s, PropertyOp::HasKey)
             }),
         ];
+        // Several oversized strings in one list still refuse once, counted.
+        let many = selection_plan(ResourceFilter {
+            tags: vec!["x".repeat(MAX_FILTER_STRING_BYTES + 1); 50],
+            ..Default::default()
+        });
+        let found: Vec<_> = validate(&many)
+            .unwrap_err()
+            .into_iter()
+            .filter(|e| e.reason == RefusalReason::FilterStringTooLong)
+            .collect();
+        assert_eq!(found.len(), 1, "one refusal per field, not per string");
+        assert!(found[0].detail.contains("50 over it"));
+
         for (field, limit, build) in rows {
             let over = build("x".repeat(limit + 1));
             assert_eq!(
@@ -2884,6 +2958,93 @@ mod tests {
                 "`{field}` exactly at its cap was refused"
             );
         }
+    }
+
+    #[test]
+    fn empty_predicates_refuse_once_per_source_and_never_echo_the_key() {
+        // The predicate count is capped in capability, after the shape pass, so a refusal per
+        // predicate let a body of empty predicates become a larger refusal list. One per source
+        // and kind bounds it; the key, which the caller chose, never appears in the detail.
+        let key = "k".repeat(MAX_FILTER_STRING_BYTES + 1);
+        let mut preds: Vec<PropertyPredicate> = (0..1000)
+            .map(|_| PropertyPredicate {
+                key: key.clone(),
+                op: PropertyOp::Contains { values: vec![] },
+            })
+            .collect();
+        preds.extend((0..1000).map(|_| PropertyPredicate {
+            key: String::new(),
+            op: PropertyOp::HasKey,
+        }));
+        let refusals = validate(&selection_with_properties(preds)).unwrap_err();
+        for reason in [
+            RefusalReason::EmptyContains,
+            RefusalReason::EmptyPropertyKey,
+        ] {
+            let found: Vec<_> = refusals.iter().filter(|e| e.reason == reason).collect();
+            assert_eq!(
+                found.len(),
+                1,
+                "{reason:?} fired {} times for one source",
+                found.len()
+            );
+            assert!(
+                found[0].detail.contains("1000") && !found[0].detail.contains(&key),
+                "{reason:?} must count and must not echo the key: {}",
+                &found[0].detail[..found[0].detail.len().min(200)]
+            );
+        }
+        assert!(
+            refusals.iter().all(|e| !e.detail.contains(&key)),
+            "no refusal may echo the caller's key"
+        );
+    }
+
+    #[test]
+    fn the_tombstone_redirect_and_an_unknown_act_never_echo_a_caller_string() {
+        let key = "k".repeat(10_000);
+        let mut c = plan_with_property(&key, PropertyOp::HasKey);
+        if let StageNode::Act(a) = &mut c.stages[0] {
+            let p = a.properties[0].clone();
+            a.properties = vec![p; 1000];
+        }
+        let refusals = validate(&c).unwrap_err();
+        let redirects: Vec<_> = refusals
+            .iter()
+            .filter(|e| e.detail.contains("filter container"))
+            .collect();
+        assert_eq!(
+            redirects.len(),
+            1,
+            "one redirect for the field, not one per predicate"
+        );
+        assert!(redirects[0].detail.contains("the 999 after it"));
+        assert!(
+            refusals.iter().all(|e| !e.detail.contains(&key)),
+            "a refusal echoed the key"
+        );
+
+        let act_name = "a".repeat(10_000);
+        let mut c = a_legal_single_stage_plan_over(ActName::FindExact);
+        if let StageNode::Act(a) = &mut c.stages[0] {
+            a.act = ActName::Other(act_name.clone());
+        }
+        let refusals = validate(&c).unwrap_err();
+        let unknown = refusals
+            .iter()
+            .find(|e| e.reason == RefusalReason::UnknownAct)
+            .expect("an unknown act is refused");
+        assert!(!unknown.detail.contains(&act_name) && unknown.detail.contains("10000 bytes"));
+
+        // A short unknown name is still repeated back: it is what makes a typo fixable.
+        let mut c = a_legal_single_stage_plan_over(ActName::FindExact);
+        if let StageNode::Act(a) = &mut c.stages[0] {
+            a.act = ActName::Other("find-exacct".to_string());
+        }
+        assert!(validate(&c)
+            .unwrap_err()
+            .iter()
+            .any(|e| e.reason == RefusalReason::UnknownAct && e.detail.contains("`find-exacct`")));
     }
 
     #[test]

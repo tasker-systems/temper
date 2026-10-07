@@ -126,3 +126,32 @@ async fn a_bounded_search_returns_only_the_named_resource(pool: PgPool) {
          id_b={id_b} id_c={id_c} were seeded but must not appear"
     );
 }
+
+/// The search door refuses an over-cap request at the door, with a 400 naming the field, before
+/// anything is embedded or bound into SQL. Through HTTP, so it witnesses that `search_select`
+/// actually runs the check, not only that the check exists.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_over_cap_search_is_refused_with_a_400_naming_the_field(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let email = format!("search-cap-{}@example.com", uuid::Uuid::new_v4());
+    let (profile_id, _context_id) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &email).await;
+    let token = common::generate_test_jwt(&format!("test|{profile_id}"), &email);
+
+    let too_many: Vec<String> = (0..257).map(|_| uuid::Uuid::now_v7().to_string()).collect();
+    let resp = post_search(
+        &app,
+        &token,
+        json!({ "query": "anything", "bound_ids": too_many }),
+    )
+    .await;
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body = resp.text().await.expect("body");
+    assert!(
+        body.contains("`bound_ids`"),
+        "the refusal must name the field: {body}"
+    );
+
+    let resp = post_search(&app, &token, json!({ "query": "q".repeat(4097) })).await;
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+}

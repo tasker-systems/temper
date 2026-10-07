@@ -16,7 +16,7 @@ require 'time'
 module Temper::Generated
   # Request body for POST /api/search.
   class SearchParams < ApiModelBase
-    # Narrow to a set of resource ids. Composes with `context_ref` / `cogmap_id` rather than replacing them — the fragments apply bound and anchor conjunctively.  Reachable from every door: the MCP `search` tool takes this whole struct as its `Parameters`, so the field arrives there without a tool change.
+    # Narrow to a set of resource ids. Composes with `context_ref` / `cogmap_id` rather than replacing them — the fragments apply bound and anchor conjunctively.  Reachable from every door: the MCP `search` tool takes this whole struct as its `Parameters`, so the field arrives there without a tool change. At most 256 ids.
     attr_accessor :bound_ids
 
     # Single-map scope (Surface B). Resolved client-side (cogmap refs are trailing-UUID-only). Mutually exclusive with `context_ref`. When set, the corpus is the map's homed participants the principal can see.  Retained for back-compat beside the plural `cogmap_ids`: an older client (temper-rb, a pre-multi-map CLI) still sends this scalar. When `cogmap_ids` is non-empty it wins; otherwise a set `cogmap_id` is treated as a one-element set.
@@ -31,7 +31,7 @@ module Temper::Generated
     # Filter by document type.
     attr_accessor :doc_type
 
-    # Pre-computed 768-dim embedding vector.
+    # Pre-computed 768-dim embedding vector. At most 768 components.
     attr_accessor :embedding
 
     # Maximum results (default 10, max 50).
@@ -40,7 +40,7 @@ module Temper::Generated
     # Offset for pagination.
     attr_accessor :offset
 
-    # Plain-text query for full-text search.
+    # Plain-text query for full-text search. At most 4096 bytes.
     attr_accessor :query
 
     # Postgres text-search configuration (default \"english\").  NOTE: reserved/inert — FTS is hardcoded `'english'` in the `search_exact` SQL function (Beat 1 kept multilingual storage-only); this param does not affect results yet.
@@ -171,6 +171,34 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
+      if !@bound_ids.nil? && @bound_ids.length > 256
+        invalid_properties.push('invalid value for "bound_ids", number of items must be less than or equal to 256.')
+      end
+
+      if !@cogmap_ids.nil? && @cogmap_ids.length > 256
+        invalid_properties.push('invalid value for "cogmap_ids", number of items must be less than or equal to 256.')
+      end
+
+      if !@context_ref.nil? && @context_ref.to_s.length > 256
+        invalid_properties.push('invalid value for "context_ref", the character length must be smaller than or equal to 256.')
+      end
+
+      if !@doc_type.nil? && @doc_type.to_s.length > 256
+        invalid_properties.push('invalid value for "doc_type", the character length must be smaller than or equal to 256.')
+      end
+
+      if !@embedding.nil? && @embedding.length > 768
+        invalid_properties.push('invalid value for "embedding", number of items must be less than or equal to 768.')
+      end
+
+      if !@query.nil? && @query.to_s.length > 4096
+        invalid_properties.push('invalid value for "query", the character length must be smaller than or equal to 4096.')
+      end
+
+      if !@search_config.nil? && @search_config.to_s.length > 256
+        invalid_properties.push('invalid value for "search_config", the character length must be smaller than or equal to 256.')
+      end
+
       invalid_properties
     end
 
@@ -178,7 +206,88 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
+      return false if !@bound_ids.nil? && @bound_ids.length > 256
+      return false if !@cogmap_ids.nil? && @cogmap_ids.length > 256
+      return false if !@context_ref.nil? && @context_ref.to_s.length > 256
+      return false if !@doc_type.nil? && @doc_type.to_s.length > 256
+      return false if !@embedding.nil? && @embedding.length > 768
+      return false if !@query.nil? && @query.to_s.length > 4096
+      return false if !@search_config.nil? && @search_config.to_s.length > 256
       true
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] bound_ids Value to be assigned
+    def bound_ids=(bound_ids)
+      if !bound_ids.nil? && bound_ids.length > 256
+        fail ArgumentError, 'invalid value for "bound_ids", number of items must be less than or equal to 256.'
+      end
+
+      @bound_ids = bound_ids
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] cogmap_ids Value to be assigned
+    def cogmap_ids=(cogmap_ids)
+      if !cogmap_ids.nil? && cogmap_ids.length > 256
+        fail ArgumentError, 'invalid value for "cogmap_ids", number of items must be less than or equal to 256.'
+      end
+
+      @cogmap_ids = cogmap_ids
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] context_ref Value to be assigned
+    def context_ref=(context_ref)
+      if !context_ref.nil? && context_ref.to_s.length > 256
+        fail ArgumentError, 'invalid value for "context_ref", the character length must be smaller than or equal to 256.'
+      end
+
+      @context_ref = context_ref
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] doc_type Value to be assigned
+    def doc_type=(doc_type)
+      if !doc_type.nil? && doc_type.to_s.length > 256
+        fail ArgumentError, 'invalid value for "doc_type", the character length must be smaller than or equal to 256.'
+      end
+
+      @doc_type = doc_type
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] embedding Value to be assigned
+    def embedding=(embedding)
+      if !embedding.nil? && embedding.length > 768
+        fail ArgumentError, 'invalid value for "embedding", number of items must be less than or equal to 768.'
+      end
+
+      @embedding = embedding
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] query Value to be assigned
+    def query=(query)
+      if !query.nil? && query.to_s.length > 4096
+        fail ArgumentError, 'invalid value for "query", the character length must be smaller than or equal to 4096.'
+      end
+
+      @query = query
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] search_config Value to be assigned
+    def search_config=(search_config)
+      if search_config.nil?
+        fail ArgumentError, 'search_config cannot be nil'
+      end
+
+      if search_config.to_s.length > 256
+        fail ArgumentError, 'invalid value for "search_config", the character length must be smaller than or equal to 256.'
+      end
+
+      @search_config = search_config
     end
 
     # Checks equality by comparing each attribute.

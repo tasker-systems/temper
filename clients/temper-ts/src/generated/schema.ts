@@ -9457,7 +9457,7 @@ export interface components {
              *     replacing them — the fragments apply bound and anchor conjunctively.
              *
              *     Reachable from every door: the MCP `search` tool takes this whole struct as its
-             *     `Parameters`, so the field arrives there without a tool change.
+             *     `Parameters`, so the field arrives there without a tool change. At most 256 ids.
              */
             bound_ids?: string[] | null;
             /**
@@ -9484,7 +9484,7 @@ export interface components {
             context_ref?: string | null;
             /** @description Filter by document type. */
             doc_type?: string | null;
-            /** @description Pre-computed 768-dim embedding vector. */
+            /** @description Pre-computed 768-dim embedding vector. At most 768 components. */
             embedding?: number[] | null;
             /**
              * Format: int64
@@ -9496,7 +9496,7 @@ export interface components {
              * @description Offset for pagination.
              */
             offset?: number | null;
-            /** @description Plain-text query for full-text search. */
+            /** @description Plain-text query for full-text search. At most 4096 bytes. */
             query?: string | null;
             /**
              * @description Postgres text-search configuration (default "english").
