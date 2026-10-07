@@ -918,6 +918,7 @@ const SCAN_TABLE_COLUMNS: &[(&str, &str, &str)] = &[
     ("memo", "content_hash", "text"),
     ("memo", "detector_id", "text"),
     ("memo", "detector_version", "integer"),
+    ("memo", "memoized_at", "timestamp with time zone"),
     ("place_observations", "surface", "text"),
     ("place_observations", "target_id", "uuid"),
     ("place_observations", "content_hash", "text"),

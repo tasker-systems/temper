@@ -517,7 +517,9 @@ value.
 
 1. **Opt in with `SENSITIVITY_SWEEP_ENABLED=true`** on the Vercel project. Unset, the call answers
    `enabled: false` and does not sweep: no claim, no run, no error event. It still runs erasure's
-   30-day digest expiry, which writes only on a deployment holding findings on erased places. Any value other than
+   30-day digest expiry, which writes only on a deployment that has swept: it deletes memo rows
+   older than 30 days, 50,000 per call, the place observations of erased resources, and the
+   digests of findings on erased places 30 days after they close. Any value other than
    `true`/`1`/`false`/`0` leaves it off and logs an error at boot.
 2. **Enable the detectors you want**, in SQL with database access. Temper's detectors ship off, a
    detector you add is off unless you say otherwise, and no migration turns one on. (One you added
