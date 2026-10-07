@@ -57,8 +57,8 @@ calls legal always fits the request body limit:
 | Bound | Limit | Refused as |
 |---|---|---|
 | A narrowing string: label, tag, `doc_type`, facet or property key, `stage`, `status`, `owner` | 256 bytes | `filter_string_too_long` |
-| `title_contains` | 1024 bytes | `filter_string_too_long` |
-| A property-predicate value: `contains` value, `compare` bound, facet value | 4096 bytes, 64 nested elements | `property_value_too_large` |
+| `title_contains` | 4096 bytes | `filter_string_too_long` |
+| A property-predicate value: `contains` value, `compare` bound, facet value | 16384 bytes, 256 nested elements | `property_value_too_large` |
 | All predicate values in a composition | 1 MiB | `property_value_budget_exceeded` |
 | All caller text in a composition, counted at the most expansive JSON encoding | 8 MiB | `text_budget_exceeded` |
 | `returns`, a combine stage's `inputs` | 64 entries | `list_too_long` |
@@ -69,10 +69,12 @@ character count. So the guarantee runs one way. A client checking the schema nev
 the server would run, but the server can refuse a schema-valid string of multi-byte or control
 characters, with the typed reason above.
 
-The text budget counts every character at the most any standard encoder spends on it (six bytes
-for a non-ASCII character or for `<`, `>` or `&`), because clients differ. Python's `json.dumps`
-escapes non-ASCII by default and Go's encoder escapes `<>&`. A plan inside the budget fits the
-body limit however its client encodes it.
+The text budget counts every character an encoder could escape at its full six-byte `\uXXXX`
+width (twelve outside the Basic Multilingual Plane), because clients differ: Python's `json.dumps`
+escapes non-ASCII by default, Go's encoder escapes `<>&`, Gson and .NET escape more punctuation.
+Only ASCII letters, digits and spaces count one byte. Numbers count at the widest a client could
+have written them. A plan inside the budget fits the body limit under any encoder that escapes
+per character.
 
 `/api/search` holds the matching fields to the same numbers, and answers `400 BAD_REQUEST` naming
 each field that is over.

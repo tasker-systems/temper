@@ -142,7 +142,7 @@ uses them for its own auth tests).
 
 `/api/query`'s contract publishes ceilings on what one composition may declare — 64 stages,
 4096 bytes per question, 256 ids per set, 256 values per narrowing list, 256 bytes per
-narrowing string (1024 for `title_contains`), and per property-predicate value 4096 bytes and 64
+narrowing string (4096 for `title_contains`), and per property-predicate value 16384 bytes and 256
 nested elements, with 1048576 bytes of them per composition. `/api/search` holds its fields to the
 same numbers. `schema.ts` carries
 them as types only; there is no runtime validator in this package, so an over-cap plan is

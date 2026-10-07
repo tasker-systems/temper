@@ -166,8 +166,8 @@ module Temper::Generated
         invalid_properties.push('invalid value for "tags", number of items must be less than or equal to 256.')
       end
 
-      if !@title_contains.nil? && @title_contains.to_s.length > 1024
-        invalid_properties.push('invalid value for "title_contains", the character length must be smaller than or equal to 1024.')
+      if !@title_contains.nil? && @title_contains.to_s.length > 4096
+        invalid_properties.push('invalid value for "title_contains", the character length must be smaller than or equal to 4096.')
       end
 
       invalid_properties
@@ -182,7 +182,7 @@ module Temper::Generated
       return false if !@stage.nil? && @stage.to_s.length > 256
       return false if !@status.nil? && @status.to_s.length > 256
       return false if !@tags.nil? && @tags.length > 256
-      return false if !@title_contains.nil? && @title_contains.to_s.length > 1024
+      return false if !@title_contains.nil? && @title_contains.to_s.length > 4096
       true
     end
 
@@ -247,8 +247,8 @@ module Temper::Generated
     # Custom attribute writer method with validation
     # @param [Object] title_contains Value to be assigned
     def title_contains=(title_contains)
-      if !title_contains.nil? && title_contains.to_s.length > 1024
-        fail ArgumentError, 'invalid value for "title_contains", the character length must be smaller than or equal to 1024.'
+      if !title_contains.nil? && title_contains.to_s.length > 4096
+        fail ArgumentError, 'invalid value for "title_contains", the character length must be smaller than or equal to 4096.'
       end
 
       @title_contains = title_contains

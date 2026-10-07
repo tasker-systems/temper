@@ -370,7 +370,7 @@ pub enum RefusalReason {
     /// A `contains` predicate was supplied with no values, so it narrows nothing.
     EmptyContains,
     /// A property-predicate value — a `contains` value, a `compare` bound or a facet value — is
-    /// larger than 4096 bytes, or carries more than 64 nested array elements or object members.
+    /// larger than 16384 bytes, or carries more than 256 nested array elements or object members.
     ///
     /// The probe cap counts values, not bytes, so without this one value of any size validated.
     /// The refusal names the predicate's position and the limit, never the value: echoing a value
@@ -382,7 +382,7 @@ pub enum RefusalReason {
     /// legal composition inside the query door's body limit once each value may be 4 KiB.
     PropertyValueBudgetExceeded,
     /// A narrowing string — a label, tag, `doc_type`, facet or property key, `stage`, `status`,
-    /// `owner` or `title_contains` — is longer than its published cap: 256 bytes, or 1024 for
+    /// `owner` or `title_contains` — is longer than its published cap: 256 bytes, or 4096 for
     /// `title_contains`, counted as JSON-escaped bytes.
     ///
     /// The count caps bound how many strings a stage carries, never how long each is; without
@@ -398,7 +398,7 @@ pub enum RefusalReason {
     /// The composition's caller text — narrowing strings, facet and predicate values, questions —
     /// exceeds 8388608 bytes counted at the most expansive standard JSON encoding.
     ///
-    /// What makes a legal plan fit the body limit whichever encoder its client uses.
+    /// What makes a legal plan fit the body limit under any encoder that escapes per character.
     TextBudgetExceeded,
 
     /// A reason outside the declared vocabulary.

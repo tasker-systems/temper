@@ -64,7 +64,18 @@ impl TryFrom<String> for StageName {
     type Error = String;
 
     fn try_from(raw: String) -> Result<Self, Self::Error> {
-        StageName::parse(&raw).ok_or_else(|| format!("`{raw}` is not a valid stage name"))
+        // The message reaches the caller through the deserializer's rejection, so it repeats the
+        // name only when short enough to be a typo; the name has no length cap until it parses.
+        StageName::parse(&raw).ok_or_else(|| {
+            if raw.len() <= 64 {
+                format!("`{raw}` is not a valid stage name")
+            } else {
+                format!(
+                    "a stage name of {} bytes is not a valid stage name",
+                    raw.len()
+                )
+            }
+        })
     }
 }
 
@@ -274,6 +285,32 @@ impl StageOutput {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_invalid_stage_name_is_repeated_only_when_short() {
+        let long = "!".repeat(100_000);
+        let err = StageName::try_from(long.clone()).unwrap_err();
+        assert!(
+            !err.contains(&long) && err.contains("100000 bytes"),
+            "{}",
+            &err[..err.len().min(120)]
+        );
+        let err = StageName::try_from("bad name!".to_string()).unwrap_err();
+        assert!(
+            err.contains("`bad name!`"),
+            "a short name is still repeated: {err}"
+        );
+        // And through the deserializer, which is how a caller meets it.
+        let json = serde_json::to_string(&long).unwrap();
+        let err = serde_json::from_str::<StageName>(&json)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.len() < 512,
+            "the rejection echoed the name: {} bytes",
+            err.len()
+        );
+    }
+
     use super::*;
     use crate::types::query::hits::{MatchLocation, ScoreKind, Scoring};
     use crate::types::query::id_set::{IdKind, IdSet};

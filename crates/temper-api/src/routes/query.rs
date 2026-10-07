@@ -27,7 +27,7 @@ pub(super) fn query_routes() -> OpenApiRouter<AppState> {
 ///
 /// Without its own limit this door inherits the 2 MiB default (`MAX_REQUEST_BODY_BYTES`), and that
 /// is wrong in the direction that refuses legal plans: a composition the contract calls legal
-/// serializes to up to **12,439,582 bytes** (below). The door would answer a plan its own contract
+/// encodes to up to **10,694,244 bytes** (below). The door would answer a plan its own contract
 /// admits with a bare 413 — no refusal list, no vocabulary, in the door whose whole promise is that
 /// every refusal arrives at once and in the caller's own terms.
 /// `the_largest_legal_composition_fits_inside_the_declared_body_limit` holds the plan against this
@@ -43,12 +43,13 @@ pub(super) fn query_routes() -> OpenApiRouter<AppState> {
 /// **Every count, every predicate value, and every string's length the contract admits is
 /// bounded.** The narrowing lists are capped by `MAX_FILTER_VALUES`, the closed vocabularies by
 /// `DuplicateSetMember`, each narrowing string by `MAX_FILTER_STRING_BYTES` (256) or
-/// `MAX_TITLE_CONTAINS_BYTES` (1024), and property-predicate values by `MAX_PROPERTY_VALUE_BYTES`
-/// (4 KiB each) and `MAX_COMPOSITION_PROPERTY_VALUE_BYTES` (1 MiB across the composition).
-/// `the_largest_legal_composition_fits_inside_the_declared_body_limit` builds the plan at every one
-/// of those caps, with every string at its widest JSON encoding, and measures it at **12,439,582
-/// bytes** `[measured — 2026-10-06]`, 2.1x under this number. So a plan the contract calls legal
-/// never meets a bare 413.
+/// `MAX_TITLE_CONTAINS_BYTES` (4096), property-predicate values by `MAX_PROPERTY_VALUE_BYTES`
+/// (16 KiB and 256 nodes each) and `MAX_COMPOSITION_PROPERTY_VALUE_BYTES` (1 MiB across the
+/// composition), and all caller text by `MAX_COMPOSITION_TEXT_BYTES` (8 MiB at the most expansive
+/// encoding). `the_largest_legal_composition_fits_inside_the_declared_body_limit` builds the plan at
+/// those caps and budgets and measures it as the most expansive per-character encoder would send
+/// it: **10,694,244 bytes** `[measured — 2026-10-06]`, 2.4x under this number. So a plan the
+/// contract calls legal never meets a bare 413.
 ///
 /// **What this limit still catches is bytes that are not the plan**: whitespace, and fields serde
 /// ignores. A caller can pad a legal plan past any limit that way, and a 413 is the right answer

@@ -6252,7 +6252,7 @@ export interface components {
         FacetPredicate: {
             key: string;
             /**
-             * @description At most 4096 bytes, and counted toward the composition's 1048576-byte total of
+             * @description At most 16384 bytes, and counted toward the composition's 1048576-byte total of
              *     property-predicate values.
              */
             value: string;

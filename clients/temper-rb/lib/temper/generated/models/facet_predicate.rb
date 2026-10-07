@@ -18,7 +18,7 @@ module Temper::Generated
   class FacetPredicate < ApiModelBase
     attr_accessor :key
 
-    # At most 4096 bytes, and counted toward the composition's 1048576-byte total of property-predicate values.
+    # At most 16384 bytes, and counted toward the composition's 1048576-byte total of property-predicate values.
     attr_accessor :value
 
     # Attribute mapping from ruby-style variable name to JSON key.
@@ -99,8 +99,8 @@ module Temper::Generated
         invalid_properties.push('invalid value for "value", value cannot be nil.')
       end
 
-      if @value.to_s.length > 4096
-        invalid_properties.push('invalid value for "value", the character length must be smaller than or equal to 4096.')
+      if @value.to_s.length > 16384
+        invalid_properties.push('invalid value for "value", the character length must be smaller than or equal to 16384.')
       end
 
       invalid_properties
@@ -113,7 +113,7 @@ module Temper::Generated
       return false if @key.nil?
       return false if @key.to_s.length > 256
       return false if @value.nil?
-      return false if @value.to_s.length > 4096
+      return false if @value.to_s.length > 16384
       true
     end
 
@@ -138,8 +138,8 @@ module Temper::Generated
         fail ArgumentError, 'value cannot be nil'
       end
 
-      if value.to_s.length > 4096
-        fail ArgumentError, 'invalid value for "value", the character length must be smaller than or equal to 4096.'
+      if value.to_s.length > 16384
+        fail ArgumentError, 'invalid value for "value", the character length must be smaller than or equal to 16384.'
       end
 
       @value = value

@@ -37,7 +37,7 @@ class ResourceFilter(BaseModel):
     stage: Optional[Annotated[str, Field(strict=True, max_length=256)]] = None
     status: Optional[Annotated[str, Field(strict=True, max_length=256)]] = None
     tags: Optional[Annotated[List[StrictStr], Field(max_length=256)]] = Field(default=None, description="`kb_properties` where `property_key = 'tags'`. AND-containment. Each tag is at most 256 bytes.")
-    title_contains: Optional[Annotated[str, Field(strict=True, max_length=1024)]] = None
+    title_contains: Optional[Annotated[str, Field(strict=True, max_length=4096)]] = None
     __properties: ClassVar[List[str]] = ["doc_type", "facets", "owner", "properties", "stage", "status", "tags", "title_contains"]
 
     model_config = ConfigDict(
