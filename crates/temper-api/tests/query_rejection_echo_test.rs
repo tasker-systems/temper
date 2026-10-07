@@ -58,3 +58,40 @@ async fn the_query_door_does_not_echo_an_unreadable_body(pool: PgPool) {
         "the message still says what failed: {text}"
     );
 }
+
+/// Every status the reader chooses carries the code, not only the 422: malformed JSON answers 400
+/// and a non-JSON content type 415, and a client keys on the code at all of them.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn every_reader_status_answers_under_the_unreadable_plan_code(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+
+    let email = format!("query-echo-{}@example.com", uuid::Uuid::new_v4());
+    let (profile_id, _) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &email).await;
+    let token = common::generate_test_jwt(&format!("test|{profile_id}"), &email);
+
+    for (what, content_type, body, expected) in [
+        ("malformed JSON", "application/json", "{\"stages\": [", 400),
+        ("not JSON at all", "text/plain", "stages", 415),
+    ] {
+        let resp = app
+            .client
+            .post(app.url("/api/query"))
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", content_type)
+            .body(body)
+            .send()
+            .await
+            .expect("query request failed");
+        let status = resp.status();
+        let text = resp.text().await.expect("rejection body");
+        assert_eq!(status, expected, "{what}: {text}");
+        let body: serde_json::Value = serde_json::from_str(&text)
+            .unwrap_or_else(|_| panic!("{what}: the rejection is an ErrorBody: {text}"));
+        assert_eq!(
+            body["error"]["code"],
+            temper_core::error::UNREADABLE_PLAN_CODE,
+            "{what}: {text}"
+        );
+    }
+}
