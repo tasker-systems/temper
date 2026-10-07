@@ -135,6 +135,10 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         // section would still not admit that section twice.
         ("DuplicateSetMember", 3),
         ("DuplicateStageName", 1),
+        // `FilterStringTooLong` `[added — 2026-10-06]`: one site over every narrowing string.
+        // Clears the bar through `max_length` on each scalar field (`inner` on the MCP door's
+        // lists) and the published description on the lists.
+        ("FilterStringTooLong", 1),
         ("EmptyContains", 1),
         ("EmptyPropertyKey", 1),
         // `IntentionTooLong` and `TooManyIds` `[added — 2026-08-28]`. Two more entries clearing the
@@ -164,6 +168,11 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         ("MissingProvenance", 1),
         ("NoReturns", 1),
         ("NoStages", 1),
+        // Both clear the bar through the operator's published description: the byte bounds are
+        // stated there as numbers, so changing either is an `openapi.json` change, and
+        // `the_published_property_value_bounds_are_the_enforced_ones` pins them to the constants.
+        ("PropertyValueBudgetExceeded", 1),
+        ("PropertyValueTooLarge", 1),
         // `TooManyStages` `[added — 2026-08-26]`. A new entry, and this guard's own message names
         // the bar it has to clear: "asserting it cannot change without a wire-contract change".
         // It clears it — the ceiling is `max_items` on `Composition::stages`, so raising the cap

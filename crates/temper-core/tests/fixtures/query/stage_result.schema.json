@@ -469,6 +469,21 @@
           "type": "string"
         },
         {
+          "const": "property_value_too_large",
+          "description": "A property-predicate value — a `contains` value or a `compare` bound — is larger than\n[`super::filter::MAX_PROPERTY_VALUE_BYTES`].\n\nThe probe cap counts values, not bytes, so without this one value of any size validated.\nThe refusal names the predicate's position and the limit, never the value: echoing a value\nrefused for its size would return the oversized payload in the error body.",
+          "type": "string"
+        },
+        {
+          "const": "property_value_budget_exceeded",
+          "description": "The property-predicate values across the whole composition sum past\n[`super::filter::MAX_COMPOSITION_PROPERTY_VALUE_BYTES`].\n\nComposition-level, like [`RefusalReason::TooManyStages`]. It is what keeps the largest\nlegal composition inside the query door's body limit once each value may be 4 KiB.",
+          "type": "string"
+        },
+        {
+          "const": "filter_string_too_long",
+          "description": "A narrowing string — a label, tag, `doc_type`, facet or property key, `stage`, `status`,\n`owner` or `title_contains` — is longer than its published `max_length`.\n\nThe count caps bound how many strings a stage carries, never how long each is; without\nthis a plan inside every count cap could exceed the body limit and meet a bare 413. The\nrefusal names the field and the limit, never the string.",
+          "type": "string"
+        },
+        {
           "description": "A reason outside the declared vocabulary.\n\n`[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by\ndeserializing a producer newer than this consumer.\" **That was false at the time**:\n`validate` constructed it for twelve topology and vocabulary refusals, kebab-case, while\nevery declared variant was snake_case — a client's vocabulary was two conventions at once.\nFound in review; recorded rather than repaired then, because promoting twelve strings to\nvariants is a wire change and nothing consumed them yet — `/api/query` did not exist, so\nthe change was free and the door was the moment it would stop being free.\n\n`[promoted — 2026-08-12]` That moment arrived first: the twelve are now the variants\nabove, and this crate no longer constructs `Other` for anything. What `Other` is FOR now is\nexactly what its original doc said — a reason from a producer newer than this consumer, one\nthis binary has never been taught to name. Deserializing it never fails; `is_known` answers\n`false`; a caller degrades gracefully instead of losing the whole response to a parse error.",
           "type": "string"
         }

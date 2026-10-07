@@ -184,6 +184,11 @@ per-stage predicate and probe caps, and the aggregate embed budget
 (`intention_budget_exceeded`) — what a deployment can embed in one request is a property of
 that deployment. Those arrive as refusals.
 
+The property-predicate value bounds (4096 bytes per `contains` value or `compare` bound,
+1048576 bytes across one composition) ARE contract facts, but JSON Schema has no keyword for
+a value's serialized size, so the generated models cannot check them. They arrive as
+`property_value_too_large` and `property_value_budget_exceeded`.
+
 
 ## Credentials
 

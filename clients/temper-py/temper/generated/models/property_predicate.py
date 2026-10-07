@@ -17,8 +17,9 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictStr
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, ClassVar, Dict, List
+from typing_extensions import Annotated
 from temper.generated.models.property_op import PropertyOp
 from typing import Optional, Set
 from typing_extensions import Self
@@ -28,7 +29,7 @@ class PropertyPredicate(BaseModel):
     """
     A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an [`EdgeFilter`] means the edge's own `kb_properties` rows, a [`ResourceFilter`] means the resource's own, and nothing else has to be said.  `[2026-08-15]` Both containers now exist, so the subject-tagged variant that floated free on the invocation is **deleted**, along with the `PropertySubject` tag it carried and the `UnknownFilterValue` refusal that tag's open arm existed to raise. What survives is [`super::ActInvocation::properties`], retyped to this struct: it is a **tombstone**, refusing with a redirect rather than being removed, because `ActInvocation` carries `deny_unknown_fields` and removing the field would route a stale caller into a deserializer 400 outside the `ErrorBody` shape — a worse answer than the one being replaced.
     """ # noqa: E501
-    key: StrictStr
+    key: Annotated[str, Field(strict=True, max_length=256)]
     op: PropertyOp
     __properties: ClassVar[List[str]] = ["key", "op"]
 

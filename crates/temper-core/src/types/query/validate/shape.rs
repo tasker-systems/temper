@@ -44,7 +44,10 @@ use crate::types::query::composition::{
 };
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
-use crate::types::query::filter::{PropertyOp, MAX_FILTER_VALUES};
+use crate::types::query::filter::{
+    property_value_bytes, PropertyOp, PropertyPredicate, MAX_COMPOSITION_PROPERTY_VALUE_BYTES,
+    MAX_FILTER_STRING_BYTES, MAX_FILTER_VALUES, MAX_PROPERTY_VALUE_BYTES, MAX_TITLE_CONTAINS_BYTES,
+};
 use crate::types::query::id_set::{IdKind, MAX_ID_SET_IDS};
 use crate::types::query::stage::{StageInput, StageName, StageRelation};
 use crate::types::resource_view::ResourceSection;
@@ -149,6 +152,32 @@ pub(super) fn validate_shape_indexed(
             ),
         ));
         return (errs, None);
+    }
+
+    // **The predicate-value budget, summed over the whole composition.** Composition-level and
+    // raised before the graph is read, like the stage ceiling above, so it holds beside a cycle
+    // too. The per-value cap bounds one value; this bounds what the count caps multiply it by, and
+    // keeps the largest legal composition inside the query door's body limit.
+    // `MAX_COMPOSITION_PROPERTY_VALUE_BYTES` carries the arithmetic.
+    let predicate_bytes: usize = c
+        .stages
+        .iter()
+        .filter_map(|node| match node {
+            StageNode::Act(inv) => Some(inv),
+            _ => None,
+        })
+        .flat_map(predicate_value_sizes)
+        .flat_map(|(_, sizes)| sizes)
+        .sum();
+    if predicate_bytes > MAX_COMPOSITION_PROPERTY_VALUE_BYTES {
+        errs.push(refusal(
+            None,
+            RefusalReason::PropertyValueBudgetExceeded,
+            format!(
+                "a composition's property-predicate values may total at most \
+                 {MAX_COMPOSITION_PROPERTY_VALUE_BYTES} bytes; this one carries {predicate_bytes}"
+            ),
+        ));
     }
 
     // **A composition with no returns answers nothing.** `[added — 2026-08-10]` The contract
@@ -861,20 +890,7 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
     // two byte-identical refusals and no way to tell which to fix. That is the same *a refusal must
     // say WHERE* rule this change applies to the tombstone redirect, one layer down — and the layer
     // where it is easiest to leave unapplied, because the refusal still fires and still reads fine.
-    let sources: [(&str, &[_]); 3] = [
-        ("properties", &inv.properties),
-        (
-            "resource_filter.properties",
-            inv.resource_filter
-                .as_ref()
-                .map_or(&[][..], |f| &f.properties),
-        ),
-        (
-            "edge_filter.properties",
-            inv.edge_filter.as_ref().map_or(&[][..], |f| &f.properties),
-        ),
-    ];
-    for (field, preds) in sources {
+    for (field, preds) in predicate_sources(inv) {
         for (i, p) in preds.iter().enumerate() {
             if p.key.is_empty() {
                 errs.push(refusal(
@@ -898,4 +914,163 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
             }
         }
     }
+
+    // **Each predicate value's SIZE.** The probe cap in capability counts values and charges one
+    // per value however large, so this is the only bound on the bytes a predicate binds into SQL.
+    // One refusal per predicate, not per value, so the refusal list cannot grow with the number of
+    // oversized values. The detail names neither the value nor the key: a refusal must not hand
+    // back an oversized payload.
+    for (field, sizes) in predicate_value_sizes(inv) {
+        let oversized: Vec<usize> = sizes
+            .into_iter()
+            .filter(|&b| b > MAX_PROPERTY_VALUE_BYTES)
+            .collect();
+        if let Some(largest) = oversized.iter().max() {
+            errs.push(refusal(
+                Some(name),
+                RefusalReason::PropertyValueTooLarge,
+                format!(
+                    "a property value may be at most {MAX_PROPERTY_VALUE_BYTES} bytes; `{field}` \
+                     carries {} over it, the largest {largest} bytes",
+                    oversized.len()
+                ),
+            ));
+        }
+    }
+
+    // **Each narrowing string's LENGTH.** The count caps bound how many labels, tags, keys and
+    // names a stage carries, never how long each is, so a plan inside every count cap could still
+    // exceed the body limit and meet a bare 413. One refusal per field, naming the field and the
+    // limit, never the string. `MAX_FILTER_STRING_BYTES` carries the measurement.
+    for (field, limit, lens) in filter_strings(inv) {
+        let over: Vec<usize> = lens.into_iter().filter(|&n| n > limit).collect();
+        if let Some(longest) = over.iter().max() {
+            errs.push(refusal(
+                Some(name),
+                RefusalReason::FilterStringTooLong,
+                format!(
+                    "each `{field}` string may be at most {limit} bytes; this stage supplied {} \
+                     over it, the longest {longest} bytes",
+                    over.len()
+                ),
+            ));
+        }
+    }
+}
+
+/// Every property-predicate value on a stage, as (wire path, the size of each value): every
+/// `contains` value and `compare` bound in compact JSON bytes, and each facet value in bytes.
+///
+/// A facet is a `kb_properties` predicate too, so its value is bounded and budgeted with the
+/// others. It is measured as the raw string, which is what its published `max_length` describes.
+fn predicate_value_sizes(inv: &ActInvocation) -> Vec<(String, Vec<usize>)> {
+    let mut out: Vec<(String, Vec<usize>)> = Vec::new();
+    for (field, preds) in predicate_sources(inv) {
+        for (i, p) in preds.iter().enumerate() {
+            let sizes: Vec<usize> = p.op.values().iter().map(property_value_bytes).collect();
+            if !sizes.is_empty() {
+                out.push((format!("{field}[{i}]"), sizes));
+            }
+        }
+    }
+    if let Some(f) = &inv.resource_filter {
+        for (i, facet) in f.facets.iter().enumerate() {
+            out.push((
+                format!("resource_filter.facets[{i}].value"),
+                vec![facet.value.len()],
+            ));
+        }
+    }
+    out
+}
+
+/// Every free-text narrowing string on a stage, as (wire field, its byte limit, each length).
+///
+/// The fields whose lengths are bounded elsewhere are absent: a stage name (`StageName`, 63), a
+/// question (`MAX_INTENTION_QUERY_BYTES`), and a facet value (a predicate value, above).
+fn filter_strings(inv: &ActInvocation) -> Vec<(&'static str, usize, Vec<usize>)> {
+    let names = |xs: &[String]| xs.iter().map(String::len).collect::<Vec<_>>();
+    let keys = |ps: &[PropertyPredicate]| ps.iter().map(|p| p.key.len()).collect::<Vec<_>>();
+    let one = |x: &Option<String>| x.iter().map(String::len).collect::<Vec<_>>();
+    let mut out = vec![(
+        "properties[].key",
+        MAX_FILTER_STRING_BYTES,
+        keys(&inv.properties),
+    )];
+    if let Some(f) = &inv.resource_filter {
+        out.extend([
+            (
+                "resource_filter.doc_type",
+                MAX_FILTER_STRING_BYTES,
+                names(&f.doc_type),
+            ),
+            (
+                "resource_filter.tags",
+                MAX_FILTER_STRING_BYTES,
+                names(&f.tags),
+            ),
+            (
+                "resource_filter.facets[].key",
+                MAX_FILTER_STRING_BYTES,
+                f.facets.iter().map(|x| x.key.len()).collect(),
+            ),
+            (
+                "resource_filter.properties[].key",
+                MAX_FILTER_STRING_BYTES,
+                keys(&f.properties),
+            ),
+            (
+                "resource_filter.stage",
+                MAX_FILTER_STRING_BYTES,
+                one(&f.stage),
+            ),
+            (
+                "resource_filter.status",
+                MAX_FILTER_STRING_BYTES,
+                one(&f.status),
+            ),
+            (
+                "resource_filter.owner",
+                MAX_FILTER_STRING_BYTES,
+                one(&f.owner),
+            ),
+            (
+                "resource_filter.title_contains",
+                MAX_TITLE_CONTAINS_BYTES,
+                one(&f.title_contains),
+            ),
+        ]);
+    }
+    if let Some(f) = &inv.edge_filter {
+        out.extend([
+            (
+                "edge_filter.labels",
+                MAX_FILTER_STRING_BYTES,
+                names(&f.labels),
+            ),
+            (
+                "edge_filter.properties[].key",
+                MAX_FILTER_STRING_BYTES,
+                keys(&f.properties),
+            ),
+        ]);
+    }
+    out
+}
+
+/// The three places a property predicate can sit on a stage, each named as the wire names it.
+fn predicate_sources(inv: &ActInvocation) -> [(&'static str, &[PropertyPredicate]); 3] {
+    [
+        ("properties", &inv.properties),
+        (
+            "resource_filter.properties",
+            inv.resource_filter
+                .as_ref()
+                .map_or(&[][..], |f| &f.properties),
+        ),
+        (
+            "edge_filter.properties",
+            inv.edge_filter.as_ref().map_or(&[][..], |f| &f.properties),
+        ),
+    ]
 }

@@ -420,7 +420,11 @@ filters_unapplied: Array<FilterField>, };
  * it narrowed. So these constrain the traversal from inside it, and the only act that traverses an
  * edge is `follow-from`.
  */
-export type EdgeFilter = { edge_kinds: Array<EdgeKind>, labels: Array<string>, 
+export type EdgeFilter = { edge_kinds: Array<EdgeKind>, 
+/**
+ * Edge labels, OR within the list. Each label is at most 256 bytes.
+ */
+labels: Array<string>, 
 /**
  * `kb_properties` rows owned by the edge itself: open key space, closed operator set.
  * AND across the list, OR within a [`PropertyOp::Contains`].
@@ -470,7 +474,12 @@ export type Extent = { "extent": "complete" } | { "extent": "partial" } | { "ext
 /**
  * One `kb_properties` facet predicate, at the inner-key grain the facet model uses.
  */
-export type FacetPredicate = { key: string, value: string, };
+export type FacetPredicate = { key: string, 
+/**
+ * At most 4096 bytes, and counted toward the composition's 1048576-byte total of
+ * property-predicate values.
+ */
+value: string, };
 
 /**
  * Which filter slot an act admits. An unadmitted filter is DECLINED, never ignored.
@@ -764,7 +773,7 @@ trace: CompositionTrace, };
  * change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
  * matched exhaustively.
  */
-export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
+export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | string;
 
 /**
  * One region a `survey` stage matched, and the score it matched at.
@@ -844,11 +853,12 @@ region: CogmapRegionRow, scoring: Scoring, };
  */
 export type ResourceFilter = { 
 /**
- * `kb_properties` where `property_key = 'doc_type'`.
+ * `kb_properties` where `property_key = 'doc_type'`. Each value is at most 256 bytes.
  */
 doc_type: Array<string>, 
 /**
- * `kb_properties` where `property_key = 'tags'`. AND-containment.
+ * `kb_properties` where `property_key = 'tags'`. AND-containment. Each tag is at most 256
+ * bytes.
  */
 tags: Array<string>, 
 /**

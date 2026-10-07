@@ -62,6 +62,30 @@ pr: self
 classes: behavioral
 surfaces: clients, internal
 status: signal-only
+- **A composition's predicate values and narrowing strings are bounded in size, so every legal plan fits the body limit**
+  The shape pass now refuses: a `contains` value, `compare` bound or facet value larger than 4096
+  bytes (`property_value_too_large`); a composition whose predicate values together exceed 1048576
+  bytes (`property_value_budget_exceeded`); and a label, tag, `doc_type`, facet or property key,
+  `stage`, `status` or `owner` longer than 256 bytes, or a `title_contains` longer than 1024
+  (`filter_string_too_long`). All three are new members of the open `RefusalReason` vocabulary,
+  arriving in the existing `PLAN_REFUSED` answer beside every sibling refusal, and none echoes the
+  value or string it refuses. The string caps are published as `maxLength` (OpenAPI scalars, MCP
+  scalars and list items) and in the list fields' descriptions, so the generated Ruby and Python
+  models now reject an over-long scalar before sending. Before this the count caps bounded how many
+  values and strings a plan carried but not their size, so one value up to the 25 MB body limit
+  validated and was bound into SQL, and a plan inside every cap could exceed the body limit and get
+  a bare 413. The largest legal composition now measures 11,128,846 bytes. The bounds sit in
+  `validate`, which every door reaches: `/api/query`, MCP `run_query` (which forwards to it) and
+  `temper query --check`. Live maxima on community production: property value 1,528 bytes, facet
+  value 778, title 279, tag 94, edge label 61. The wire-class comparator now reads a new member of
+  an open vocabulary (a `oneOf` with an unconstrained string arm) as growth. Who observes: a caller
+  sending a predicate value over 4 KiB or a narrowing string over its cap. User-visible: yes, as a
+  refusal. Release relevance: additive (three refusal reasons) and behavioral (a plan that
+  validated can now be refused).
+pr: self
+classes: additive, behavioral
+surfaces: http, mcp, clients
+status: signal-only
 
 ## Shipped in v0.6.0
 - **This release — the 0.6.0 fleet alignment: VERSION 0.5.4 → 0.6.0 across crates, packages, and clients**

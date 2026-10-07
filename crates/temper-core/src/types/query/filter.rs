@@ -37,9 +37,10 @@ use crate::types::graph::EdgeKind;
 pub struct EdgeFilter {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edge_kinds: Vec<EdgeKind>,
+    /// Edge labels, OR within the list. Each label is at most 256 bytes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "web-api", schema(max_items = 256))]
-    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256), inner(length(max = 256))))]
     pub labels: Vec<String>,
     /// `kb_properties` rows owned by the edge itself: open key space, closed operator set.
     /// AND across the list, OR within a [`PropertyOp::Contains`].
@@ -66,7 +67,13 @@ pub struct EdgeFilter {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct FacetPredicate {
+    #[cfg_attr(feature = "web-api", schema(max_length = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub key: String,
+    /// At most 4096 bytes, and counted toward the composition's 1048576-byte total of
+    /// property-predicate values.
+    #[cfg_attr(feature = "web-api", schema(max_length = 4096))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 4096)))]
     pub value: String,
 }
 
@@ -91,15 +98,16 @@ pub struct FacetPredicate {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct ResourceFilter {
-    /// `kb_properties` where `property_key = 'doc_type'`.
+    /// `kb_properties` where `property_key = 'doc_type'`. Each value is at most 256 bytes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "web-api", schema(max_items = 256))]
-    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256), inner(length(max = 256))))]
     pub doc_type: Vec<String>,
-    /// `kb_properties` where `property_key = 'tags'`. AND-containment.
+    /// `kb_properties` where `property_key = 'tags'`. AND-containment. Each tag is at most 256
+    /// bytes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "web-api", schema(max_items = 256))]
-    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256), inner(length(max = 256))))]
     pub tags: Vec<String>,
     /// `kb_properties` where `property_key = 'facet'`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -126,12 +134,20 @@ pub struct ResourceFilter {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<PropertyPredicate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "web-api", schema(max_length = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub stage: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "web-api", schema(max_length = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "web-api", schema(max_length = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub owner: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "web-api", schema(max_length = 1024))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 1024)))]
     pub title_contains: Option<String>,
 }
 
@@ -182,6 +198,10 @@ pub enum PropertyOp {
     /// key needs the scalar shape, not both. Listing both is harmless — the values OR — but it is
     /// not what makes the predicate span the population, and a caller who lists only the array
     /// shape silently answers for one half of it.
+    ///
+    /// **Size.** Each value is at most 4096 bytes of compact JSON, and every predicate value in
+    /// one composition totals at most 1048576 bytes (`property_value_too_large`,
+    /// `property_value_budget_exceeded`).
     Contains { values: Vec<serde_json::Value> },
     /// `property_value <direction> $value` over jsonb's native ordering, type-guarded.
     ///
@@ -207,6 +227,9 @@ pub enum PropertyOp {
     /// key — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is
     /// NOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,
     /// and adding it saves one probe at the cost of a second value slot and a second SQL branch.
+    ///
+    /// **Size.** The bound is at most 4096 bytes of compact JSON, and counts toward the same
+    /// 1048576-byte composition total as `contains` values.
     Compare {
         direction: OrdOp,
         value: serde_json::Value,
@@ -251,6 +274,8 @@ pub enum OrdOp {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct PropertyPredicate {
+    #[cfg_attr(feature = "web-api", schema(max_length = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub key: String,
     pub op: PropertyOp,
 }
@@ -293,6 +318,95 @@ pub struct PropertyPredicate {
 /// It matches `MAX_PER_CANDIDATE_PROBES`' number by arithmetic coincidence rather than by
 /// analogy — that one bounds a per-candidate multiplier and this one bounds a serialization.
 pub const MAX_FILTER_VALUES: usize = 256;
+
+/// The longest narrowing string — a label, tag, `doc_type`, facet key, property key, `stage`,
+/// `status` or `owner` — in bytes. Refused as
+/// [`super::disposition::RefusalReason::FilterStringTooLong`].
+///
+/// The count caps bound how many of these a stage carries and never how long each is, so before
+/// this a plan inside every count cap could exceed the query door's body limit through string
+/// length alone (64 stages of 256 two-kilobyte labels is ~33 MB) and meet a bare 413.
+///
+/// # 256, measured against live data
+///
+/// On community production `[measured — 2026-10-06]` the longest of each is: edge label 61 bytes,
+/// tag 94, property key 29, facet key 39, stage or status value 32, profile handle 38. 256 is 2.7x
+/// the longest. Each is published as `max_length` (a character count, never fewer than the bytes
+/// checked here, so the contract promises less than the server admits and never more).
+pub const MAX_FILTER_STRING_BYTES: usize = 256;
+
+/// The longest `title_contains`, in bytes. Refused as
+/// [`super::disposition::RefusalReason::FilterStringTooLong`]. A substring probe never usefully
+/// exceeds the longest title, which is 279 bytes on community production
+/// `[measured — 2026-10-06]`.
+pub const MAX_TITLE_CONTAINS_BYTES: usize = 1024;
+
+/// The largest single property-predicate value — one `contains` value or `compare` bound in
+/// compact serialized JSON bytes, or one facet value in bytes. Refused as
+/// [`super::disposition::RefusalReason::PropertyValueTooLarge`].
+///
+/// # What it bounds, and why the count caps did not
+///
+/// `MAX_PER_CANDIDATE_PROBES` charges one probe per value whatever its size, so it bounds how
+/// MANY values a container carries and says nothing about how LARGE each one is. Each value is
+/// bound into the predicate SQL as jsonb and compared against every candidate row that carries
+/// the key, so its size multiplies that work and the request's memory.
+///
+/// # 4 KiB, measured against live data
+///
+/// A `contains` probe matches only a stored value that contains it, so no useful probe is larger
+/// than the largest stored value. On community production `[measured — 2026-10-06]`, across
+/// 25,421 resource and edge property values, the largest is 1,528 bytes (an object). p99.9 is
+/// ~1.4 KB for objects and ~420 bytes for every other type, and the largest array element is
+/// 164 bytes. 4 KiB is 2.7x the largest, and leaves room for an install whose values run larger.
+///
+/// JSON Schema has no keyword for the serialized size of an arbitrary value, so this bound is
+/// published here, in the field's documentation, rather than as a schema constraint.
+pub const MAX_PROPERTY_VALUE_BYTES: usize = 4096;
+
+/// The summed size of every property-predicate value in one composition, in the same measure as
+/// [`MAX_PROPERTY_VALUE_BYTES`]. Refused as
+/// [`super::disposition::RefusalReason::PropertyValueBudgetExceeded`].
+///
+/// The per-value cap alone does not keep the contract coherent. The count caps admit up to
+/// 16,384 values across `MAX_STAGES` stages, and 16,384 values at 4 KiB is ~67 MB, past the
+/// query door's 25 MB body limit. A plan the contract called legal would then meet a bare 413
+/// rather than a refusal list. This budget keeps the largest legal composition well inside that
+/// limit (`the_largest_legal_composition_fits_inside_the_declared_body_limit` holds it). It is
+/// also the ceiling on predicate bytes one request can make Postgres compare: 1 MiB, against the
+/// ~25 MB the body limit alone would admit.
+pub const MAX_COMPOSITION_PROPERTY_VALUE_BYTES: usize = 1024 * 1024;
+
+/// The size of one property-predicate value, as [`MAX_PROPERTY_VALUE_BYTES`] measures it: compact
+/// serialized JSON bytes. Counted through a sink, so measuring a large value allocates nothing.
+pub fn property_value_bytes(value: &serde_json::Value) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    // Serializing a `Value` to an infallible writer cannot fail: every map key is a string.
+    serde_json::to_writer(&mut count, value).expect("a serde_json::Value always serializes");
+    count.0
+}
+
+impl PropertyOp {
+    /// The caller-supplied values this operator binds into SQL: every `contains` value, the one
+    /// `compare` bound, and none for `has_key`.
+    pub fn values(&self) -> &[serde_json::Value] {
+        match self {
+            PropertyOp::HasKey => &[],
+            PropertyOp::Contains { values } => values,
+            PropertyOp::Compare { value, .. } => std::slice::from_ref(value),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

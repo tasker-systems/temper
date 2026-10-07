@@ -461,7 +461,9 @@ mod tests {
     use crate::types::query::envelope::ActInvocation;
     use crate::types::query::filter::MAX_FILTER_VALUES;
     use crate::types::query::filter::{
-        EdgeFilter, FacetPredicate, PropertyOp, PropertyPredicate, ResourceFilter,
+        property_value_bytes, EdgeFilter, FacetPredicate, OrdOp, PropertyOp, PropertyPredicate,
+        ResourceFilter, MAX_COMPOSITION_PROPERTY_VALUE_BYTES, MAX_FILTER_STRING_BYTES,
+        MAX_PROPERTY_VALUE_BYTES, MAX_TITLE_CONTAINS_BYTES,
     };
     use crate::types::query::id_set::{IdKind, IdProvenance, IdSet, MAX_ID_SET_IDS};
     use crate::types::query::scalars::BoundTerm;
@@ -1440,6 +1442,95 @@ mod tests {
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or_else(|| panic!("`{what}` publishes a `maxItems`"));
             assert_eq!(published as usize, MAX_FILTER_VALUES, "{what}");
+        }
+    }
+
+    /// The property-value size bounds are published in the operator's schema description, as the
+    /// numbers the shape pass enforces. JSON Schema has no keyword for a value's serialized size,
+    /// so the description is where the contract carries them, and this keeps it from drifting
+    /// from the constants.
+    #[cfg(feature = "web-api")]
+    #[test]
+    fn the_published_property_value_bounds_are_the_enforced_ones() {
+        use utoipa::PartialSchema;
+        let schema = serde_json::to_string(&PropertyOp::schema()).expect("PropertyOp has a schema");
+        for (bound, what) in [
+            (MAX_PROPERTY_VALUE_BYTES, "per-value"),
+            (MAX_COMPOSITION_PROPERTY_VALUE_BYTES, "composition"),
+        ] {
+            assert_eq!(
+                schema.matches(&format!("{bound}")).count(),
+                2,
+                "the {what} bound {bound} must be published on both `contains` and `compare`"
+            );
+        }
+    }
+
+    /// Every narrowing string's length cap is published on the `web-api` door as the number the
+    /// shape pass enforces: `maxLength` on each scalar field, and the description on each list,
+    /// whose items utoipa cannot constrain.
+    #[cfg(feature = "web-api")]
+    #[test]
+    fn the_published_filter_string_ceilings_are_the_enforced_ones() {
+        use utoipa::PartialSchema;
+        let resource =
+            serde_json::to_value(ResourceFilter::schema()).expect("ResourceFilter has a schema");
+        let edge = serde_json::to_value(EdgeFilter::schema()).expect("EdgeFilter has a schema");
+        let facet =
+            serde_json::to_value(FacetPredicate::schema()).expect("FacetPredicate has a schema");
+        let predicate = serde_json::to_value(PropertyPredicate::schema())
+            .expect("PropertyPredicate has a schema");
+        for (schema, ptr, bound) in [
+            (
+                &resource,
+                "/properties/stage/maxLength",
+                MAX_FILTER_STRING_BYTES,
+            ),
+            (
+                &resource,
+                "/properties/status/maxLength",
+                MAX_FILTER_STRING_BYTES,
+            ),
+            (
+                &resource,
+                "/properties/owner/maxLength",
+                MAX_FILTER_STRING_BYTES,
+            ),
+            (
+                &resource,
+                "/properties/title_contains/maxLength",
+                MAX_TITLE_CONTAINS_BYTES,
+            ),
+            (&facet, "/properties/key/maxLength", MAX_FILTER_STRING_BYTES),
+            (
+                &facet,
+                "/properties/value/maxLength",
+                MAX_PROPERTY_VALUE_BYTES,
+            ),
+            (
+                &predicate,
+                "/properties/key/maxLength",
+                MAX_FILTER_STRING_BYTES,
+            ),
+        ] {
+            let published = schema
+                .pointer(ptr)
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_else(|| panic!("nothing published at `{ptr}`"));
+            assert_eq!(published as usize, bound, "{ptr}");
+        }
+        for (schema, ptr) in [
+            (&resource, "/properties/doc_type/description"),
+            (&resource, "/properties/tags/description"),
+            (&edge, "/properties/labels/description"),
+        ] {
+            let description = schema.pointer(ptr).and_then(serde_json::Value::as_str);
+            assert!(
+                description.is_some_and(|d| d
+                    .replace('\n', " ")
+                    .contains(&format!("at most {MAX_FILTER_STRING_BYTES} bytes"))),
+                "`{ptr}` must publish the per-item cap; got {description:?}"
+            );
         }
     }
 
@@ -2509,6 +2600,344 @@ mod tests {
         // silently treating it as either is the confident-empty failure this contract exists to end.
         let c = plan_with_property("tags", PropertyOp::Contains { values: vec![] });
         assert!(validate(&c).is_err());
+    }
+
+    /// A JSON string value that serializes to exactly `bytes` bytes (its two quotes included).
+    fn value_of_bytes(bytes: usize) -> serde_json::Value {
+        let v = serde_json::json!("x".repeat(bytes - 2));
+        assert_eq!(property_value_bytes(&v), bytes);
+        v
+    }
+
+    fn count_refusals(c: &Composition, reason: RefusalReason) -> usize {
+        validate(c)
+            .err()
+            .unwrap_or_default()
+            .iter()
+            .filter(|e| e.reason == reason)
+            .count()
+    }
+
+    /// The same predicate in each of the three places a predicate can sit.
+    fn plans_with_predicate_in_every_source(
+        p: PropertyPredicate,
+    ) -> [(&'static str, Composition); 3] {
+        let mut walk = act("w", ActName::FollowFrom, None);
+        if let StageNode::Act(a) = &mut walk {
+            a.inputs = vec![StageInput::Caller {
+                relation: StageRelation::Seed,
+                ids: IdSet {
+                    kind: IdKind::Resource,
+                    provenance: None,
+                    ids: vec![Uuid::now_v7()],
+                },
+            }];
+            a.edge_filter = Some(EdgeFilter {
+                properties: vec![p.clone()],
+                ..Default::default()
+            });
+        }
+        [
+            ("properties", plan_with_property(&p.key, p.op.clone())),
+            (
+                "resource_filter.properties",
+                selection_with_properties(vec![p]),
+            ),
+            (
+                "edge_filter.properties",
+                plan_with_intention(vec![walk], vec!["w"]),
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_property_value_over_the_cap_is_refused_in_every_source_for_both_operators() {
+        // The probe cap counts values, not bytes, so before this bound one value of any size
+        // validated. Both operators bind a caller value into the predicate SQL, so both are bounded,
+        // and in all three sources, since a bound on one source with another open is no bound.
+        let over = value_of_bytes(MAX_PROPERTY_VALUE_BYTES + 1);
+        let at = value_of_bytes(MAX_PROPERTY_VALUE_BYTES);
+        let ops = |v: serde_json::Value| {
+            [
+                (
+                    "contains",
+                    PropertyOp::Contains {
+                        values: vec![serde_json::json!("small"), v.clone()],
+                    },
+                ),
+                (
+                    "compare",
+                    PropertyOp::Compare {
+                        direction: OrdOp::Gte,
+                        value: v,
+                    },
+                ),
+            ]
+        };
+        for (op_name, op) in ops(over) {
+            for (source, c) in plans_with_predicate_in_every_source(PropertyPredicate {
+                key: "k".to_string(),
+                op,
+            }) {
+                assert_eq!(
+                    count_refusals(&c, RefusalReason::PropertyValueTooLarge),
+                    1,
+                    "a {op_name} value one byte over the cap in {source} was not refused"
+                );
+                let refusal = validate(&c)
+                    .unwrap_err()
+                    .into_iter()
+                    .find(|e| e.reason == RefusalReason::PropertyValueTooLarge)
+                    .unwrap();
+                assert!(
+                    refusal.detail.contains(source) && refusal.detail.len() < 512,
+                    "the refusal must name where the value sits and must not echo it; got {} bytes: {}",
+                    refusal.detail.len(),
+                    &refusal.detail[..refusal.detail.len().min(200)]
+                );
+            }
+        }
+        // At the cap is legal. Without this the assertions above could pass on an off-by-one.
+        for (op_name, op) in ops(at) {
+            for (source, c) in plans_with_predicate_in_every_source(PropertyPredicate {
+                key: "k".to_string(),
+                op,
+            }) {
+                assert_eq!(
+                    count_refusals(&c, RefusalReason::PropertyValueTooLarge),
+                    0,
+                    "a {op_name} value exactly at the cap in {source} was refused"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn property_values_past_the_composition_budget_are_refused() {
+        // One container at the probe cap, every value at the per-value cap, is exactly the budget,
+        // and is a plan this server runs.
+        let full = PropertyPredicate {
+            key: "k".to_string(),
+            op: PropertyOp::Contains {
+                values: (0..MAX_COMPOSITION_PROPERTY_VALUE_BYTES / MAX_PROPERTY_VALUE_BYTES)
+                    .map(|_| value_of_bytes(MAX_PROPERTY_VALUE_BYTES))
+                    .collect(),
+            },
+        };
+        let at_budget = selection_with_properties(vec![full]);
+        assert!(
+            validate(&at_budget).is_ok(),
+            "a plan exactly at the budget must validate: {:?}",
+            validate(&at_budget).err()
+        );
+
+        // Three more bytes anywhere in the composition, here on a sibling stage, is past it.
+        let mut over_budget = at_budget.clone();
+        if let StageNode::Act(a) = &mut over_budget.stages[1] {
+            a.properties.push(PropertyPredicate {
+                key: "k".to_string(),
+                op: PropertyOp::Contains {
+                    values: vec![serde_json::json!("x")],
+                },
+            });
+        }
+        assert_eq!(
+            count_refusals(&over_budget, RefusalReason::PropertyValueBudgetExceeded),
+            1,
+            "a composition three bytes past the predicate-value budget was not refused"
+        );
+    }
+
+    /// A follow-from walk carrying `f` as its edge filter.
+    fn walk_with_edge_filter(f: EdgeFilter) -> Composition {
+        let mut walk = act("w", ActName::FollowFrom, None);
+        if let StageNode::Act(a) = &mut walk {
+            a.inputs = vec![StageInput::Caller {
+                relation: StageRelation::Seed,
+                ids: IdSet {
+                    kind: IdKind::Resource,
+                    provenance: None,
+                    ids: vec![Uuid::now_v7()],
+                },
+            }];
+            a.edge_filter = Some(f);
+        }
+        plan_with_intention(vec![walk], vec!["w"])
+    }
+
+    #[test]
+    fn every_narrowing_string_over_its_cap_is_refused_and_at_its_cap_is_not() {
+        // The count caps bound how many strings a stage carries, never how long each is; this is
+        // the bound that makes "a legal plan always fits the body limit" hold through LENGTH too.
+        // One row per field, so a field left out of the check fails here by name.
+        type Build = fn(String) -> Composition;
+        let rows: [(&str, usize, Build); 11] = [
+            ("resource_filter.doc_type", MAX_FILTER_STRING_BYTES, |s| {
+                selection_plan(ResourceFilter {
+                    doc_type: vec![s],
+                    ..Default::default()
+                })
+            }),
+            ("resource_filter.tags", MAX_FILTER_STRING_BYTES, |s| {
+                selection_plan(ResourceFilter {
+                    tags: vec![s],
+                    ..Default::default()
+                })
+            }),
+            (
+                "resource_filter.facets[].key",
+                MAX_FILTER_STRING_BYTES,
+                |s| {
+                    selection_plan(ResourceFilter {
+                        facets: vec![FacetPredicate {
+                            key: s,
+                            value: "v".to_string(),
+                        }],
+                        ..Default::default()
+                    })
+                },
+            ),
+            (
+                "resource_filter.properties[].key",
+                MAX_FILTER_STRING_BYTES,
+                |s| {
+                    selection_with_properties(vec![PropertyPredicate {
+                        key: s,
+                        op: PropertyOp::HasKey,
+                    }])
+                },
+            ),
+            ("resource_filter.stage", MAX_FILTER_STRING_BYTES, |s| {
+                selection_plan(ResourceFilter {
+                    stage: Some(s),
+                    ..Default::default()
+                })
+            }),
+            ("resource_filter.status", MAX_FILTER_STRING_BYTES, |s| {
+                selection_plan(ResourceFilter {
+                    status: Some(s),
+                    ..Default::default()
+                })
+            }),
+            ("resource_filter.owner", MAX_FILTER_STRING_BYTES, |s| {
+                selection_plan(ResourceFilter {
+                    owner: Some(s),
+                    ..Default::default()
+                })
+            }),
+            (
+                "resource_filter.title_contains",
+                MAX_TITLE_CONTAINS_BYTES,
+                |s| {
+                    selection_plan(ResourceFilter {
+                        title_contains: Some(s),
+                        ..Default::default()
+                    })
+                },
+            ),
+            ("edge_filter.labels", MAX_FILTER_STRING_BYTES, |s| {
+                walk_with_edge_filter(EdgeFilter {
+                    labels: vec![s],
+                    ..Default::default()
+                })
+            }),
+            (
+                "edge_filter.properties[].key",
+                MAX_FILTER_STRING_BYTES,
+                |s| {
+                    walk_with_edge_filter(EdgeFilter {
+                        properties: vec![PropertyPredicate {
+                            key: s,
+                            op: PropertyOp::HasKey,
+                        }],
+                        ..Default::default()
+                    })
+                },
+            ),
+            ("properties[].key", MAX_FILTER_STRING_BYTES, |s| {
+                plan_with_property(&s, PropertyOp::HasKey)
+            }),
+        ];
+        for (field, limit, build) in rows {
+            let over = build("x".repeat(limit + 1));
+            assert_eq!(
+                count_refusals(&over, RefusalReason::FilterStringTooLong),
+                1,
+                "`{field}` one byte over its cap was not refused"
+            );
+            let detail = validate(&over)
+                .unwrap_err()
+                .into_iter()
+                .find(|e| e.reason == RefusalReason::FilterStringTooLong)
+                .unwrap()
+                .detail;
+            assert!(
+                detail.contains(field) && detail.len() < 512,
+                "the refusal must name `{field}` and not echo the string; got {detail}"
+            );
+            assert_eq!(
+                count_refusals(
+                    &build("x".repeat(limit)),
+                    RefusalReason::FilterStringTooLong
+                ),
+                0,
+                "`{field}` exactly at its cap was refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_facet_value_is_bounded_and_budgeted_as_a_property_value() {
+        let with_facet_value = |v: String| {
+            selection_plan(ResourceFilter {
+                facets: vec![FacetPredicate {
+                    key: "k".to_string(),
+                    value: v,
+                }],
+                ..Default::default()
+            })
+        };
+        assert_eq!(
+            count_refusals(
+                &with_facet_value("x".repeat(MAX_PROPERTY_VALUE_BYTES + 1)),
+                RefusalReason::PropertyValueTooLarge
+            ),
+            1,
+            "a facet value one byte over the per-value cap was not refused"
+        );
+        assert!(validate(&with_facet_value("x".repeat(MAX_PROPERTY_VALUE_BYTES))).is_ok());
+
+        // The budget counts it. `contains` values one byte short of the budget validate on their
+        // own; a two-byte facet value, well inside its own cap, is what tips the composition past.
+        let mut values: Vec<serde_json::Value> =
+            (0..MAX_COMPOSITION_PROPERTY_VALUE_BYTES / MAX_PROPERTY_VALUE_BYTES - 1)
+                .map(|_| value_of_bytes(MAX_PROPERTY_VALUE_BYTES))
+                .collect();
+        values.push(value_of_bytes(MAX_PROPERTY_VALUE_BYTES - 1));
+        let short_of_budget = selection_with_properties(vec![PropertyPredicate {
+            key: "k".to_string(),
+            op: PropertyOp::Contains { values },
+        }]);
+        assert_eq!(
+            count_refusals(&short_of_budget, RefusalReason::PropertyValueBudgetExceeded),
+            0
+        );
+        let mut tipped = short_of_budget.clone();
+        if let StageNode::Act(a) = &mut tipped.stages[0] {
+            a.resource_filter
+                .as_mut()
+                .unwrap()
+                .facets
+                .push(FacetPredicate {
+                    key: "k".to_string(),
+                    value: "xx".to_string(),
+                });
+        }
+        assert_eq!(
+            count_refusals(&tipped, RefusalReason::PropertyValueBudgetExceeded),
+            1,
+            "the facet value was not counted toward the composition budget"
+        );
     }
 
     #[test]

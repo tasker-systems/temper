@@ -447,6 +447,42 @@ if [ "$v" = "moved" ]; then
   ok "derivation: enum growth in the same diff that opens a response ref computes as moved (D2)"
 else bad "derivation: enum growth in the same diff that opens a response ref computes as moved (D2)" "verdict=$v"; fi
 
+# 15p–15u — the OPEN-VOCABULARY arm (2026-10-06): a `oneOf` of string arms with exactly
+# one unconstrained catch-all (utoipa's rendering of a serde enum with an untagged
+# `Other(String)`, e.g. `RefusalReason`) accepts every string in both contracts, so a
+# new `enum` arm inserted before the catch-all is growth even in OUTPUT position. The
+# fixture is response-reachable, so the input-side tolerance cannot be what passes it.
+cat > "${WORK}/vocab_base.json" <<'JSON'
+{"paths":{"/api/query":{"post":{"responses":{"400":{"description":"refused","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Reason"}}}}}}}},
+ "components":{"schemas":{
+   "Reason":{"oneOf":[{"type":"string","description":"a","enum":["alpha"]},{"type":"string","description":"b","enum":["beta"]},{"type":"string","description":"anything newer"}]},
+   "Closed":{"oneOf":[{"type":"string","enum":["alpha"]},{"type":"string","enum":["beta"]}]}}}}
+JSON
+vocab_probe() { # $1 = jq mutation, $2 = expected verdict, $3 = label
+  jq -S "$1" "${WORK}/vocab_base.json" > "${WORK}/vocab_head.json"
+  v="$(derive_with "${WORK}/vocab_base.json" "${WORK}/vocab_head.json")"
+  if [ "$v" = "$2" ]; then ok "derivation: $3"; else bad "derivation: $3" "verdict=$v (want $2)"; fi
+}
+# 15p — an enum arm inserted before the catch-all: grew. BITE-PROVEN: without the arm
+# in wire-shape-lib.jq this computes `moved` (the catch-all's index shifts).
+vocab_probe '.components.schemas.Reason.oneOf |= .[0:2] + [{"type":"string","description":"new","enum":["gamma"]}] + .[2:]' \
+  grew "an open vocabulary gaining an enum arm in output position computes as grew"
+# 15q — the same insertion with a prose edit on a surviving arm: still grew.
+vocab_probe '.components.schemas.Reason.oneOf |= ([.[0] | .description = "a, reworded"] + .[1:2] + [{"type":"string","enum":["gamma"]}] + .[2:])' \
+  grew "open-vocabulary growth beside a prose edit computes as grew"
+# 15r — a CLOSED oneOf (no catch-all) gaining an arm: moved — an old exhaustive parse breaks.
+vocab_probe '.components.schemas.Closed.oneOf += [{"type":"string","enum":["gamma"]}]' \
+  moved "a closed oneOf gaining an enum arm computes as moved"
+# 15s — an open vocabulary LOSING an arm: moved.
+vocab_probe '.components.schemas.Reason.oneOf |= ([.[0]] + .[2:])' \
+  moved "an open vocabulary losing an enum arm computes as moved"
+# 15t — growth while the catch-all gains a constraint: moved — the accepted set narrows.
+vocab_probe '.components.schemas.Reason.oneOf |= (.[0:2] + [{"type":"string","enum":["gamma"]}] + [.[2] | .pattern = "^[a-z_]+$"])' \
+  moved "open-vocabulary growth with a constrained catch-all computes as moved"
+# 15u — growth while a surviving arm's enum is edited (a rename): moved.
+vocab_probe '.components.schemas.Reason.oneOf |= ([.[0] | .enum = ["alpha_renamed"]] + .[1:2] + [{"type":"string","enum":["gamma"]}] + .[2:])' \
+  moved "open-vocabulary growth beside a renamed member computes as moved"
+
 echo
 echo "  ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

@@ -102,22 +102,26 @@ where
 ///
 /// # Read the per-door limits before reasoning about this one
 ///
-/// This is the floor for ordinary requests, not a ceiling over the whole instance. Four doors
-/// declare their own, each for a reason recorded next to it, and a limit applied to a single route
-/// runs *inside* this one and therefore wins there:
+/// This is the floor for ordinary requests, not a ceiling over the whole instance. A limit applied
+/// to a narrower router runs *inside* this one and therefore wins there, and most of temper-api's
+/// authenticated surface carries one:
 ///
 /// | Door | Limit | Where |
 /// |---|---|---|
-/// | signed internal routes | 64 KiB | `temper-api/src/middleware/internal_auth.rs` |
+/// | every `Tier::Gated` route (system-access routes, admin routes) | 25 MB | `GATED_MAX_BODY_BYTES`, `temper-api/src/routes/mod.rs` |
 /// | `/api/query` | 25 MB | `QUERY_MAX_BODY_BYTES`, `temper-api/src/routes/query.rs` |
+/// | blob segment uploads | 4.5 MB | `BLOB_SEGMENT_MAX_BODY_BYTES`, `temper-api/src/routes/blob_doors.rs` |
+/// | blob commit | the config's single-request threshold | `blob_commit_body_limit`, `temper-api/src/routes/blob_doors.rs` |
+/// | signed internal routes | 64 KiB | `temper-api/src/middleware/internal_auth.rs` |
 /// | GitHub webhook intake | 25 MiB | `GITHUB_MAX_WEBHOOK_BYTES`, `temper-api/src/routes/webhook_intake.rs` |
 /// | `/mcp` | 25 MB | `MCP_MAX_BODY_BYTES`, `temper-mcp-server/src/router.rs` |
 ///
+/// So this constant governs temper-api's public, auth-only and self-gated routes that declare no
+/// limit, and temper-mcp's *axum* routes (discovery, registration, health).
+///
 /// **`/mcp` is not merely an exception — this constant cannot reach it.** That door is mounted with
 /// `nest_service` over a raw tower service, so no axum extractor runs and `DefaultBodyLimit` is
-/// inapplicable rather than overridden; it uses `RequestBodyLimitLayer` instead. So this constant
-/// governs temper-api's undeclared routes and temper-mcp's *axum* routes (discovery, registration,
-/// health) — not the MCP tool surface.
+/// inapplicable rather than overridden; it uses `RequestBodyLimitLayer` instead.
 ///
 /// # Why 2 MiB, and the measurement that bounds the claim
 ///
@@ -127,14 +131,14 @@ where
 ///
 /// **It is emphatically not ample for every payload the contract admits, and that is the reason the
 /// table above exists rather than a reason to raise this.** A composition `/api/query` calls legal
-/// serializes to **2,194,320 bytes** `[measured — 2026-08-28]` — 97 KB *past* this number. Had that
+/// serializes to **11,128,846 bytes** `[measured — 2026-10-06]`, 5.3x this number. Had that
 /// door inherited this ceiling it would have answered a legal plan with a bare 413. The doors
 /// carrying large payloads by design — a composition, and the MCP tool surface with `ingest`'s
 /// inline content and `data_artifacts`' JSON — each declare their own, which is the shape this
 /// constant is the default half of.
 ///
 /// So: **do not raise this to accommodate a door that needs more.** Give that door its own limit and
-/// state why, as all four above do.
+/// state why, as every door above does.
 pub const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
 
 /// Apply the layers that sit **below** a surface's root span: the fallback handler, request

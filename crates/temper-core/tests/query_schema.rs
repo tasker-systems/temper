@@ -227,7 +227,75 @@ fn the_mcp_door_publishes_the_ceilings_it_enforces() {
 
     let edge = serde_json::to_value(schemars::schema_for!(q::EdgeFilter)).unwrap();
     assert_eq!(
-        published(edge, "/properties/labels/maxItems") as usize,
+        published(edge.clone(), "/properties/labels/maxItems") as usize,
         MAX_FILTER_VALUES
     );
+
+    // Every narrowing string's length, and the facet value's, on both containers.
+    use temper_core::types::query::filter::{
+        MAX_FILTER_STRING_BYTES, MAX_PROPERTY_VALUE_BYTES, MAX_TITLE_CONTAINS_BYTES,
+    };
+    for (schema, pointer, bound) in [
+        (
+            &resource,
+            "/properties/doc_type/items/maxLength",
+            MAX_FILTER_STRING_BYTES,
+        ),
+        (
+            &resource,
+            "/properties/tags/items/maxLength",
+            MAX_FILTER_STRING_BYTES,
+        ),
+        (
+            &resource,
+            "/properties/facets/items/properties/key/maxLength",
+            MAX_FILTER_STRING_BYTES,
+        ),
+        (
+            &resource,
+            "/properties/facets/items/properties/value/maxLength",
+            MAX_PROPERTY_VALUE_BYTES,
+        ),
+        (
+            &resource,
+            "/properties/properties/items/properties/key/maxLength",
+            MAX_FILTER_STRING_BYTES,
+        ),
+        (
+            &resource,
+            "/properties/stage/maxLength",
+            MAX_FILTER_STRING_BYTES,
+        ),
+        (
+            &resource,
+            "/properties/status/maxLength",
+            MAX_FILTER_STRING_BYTES,
+        ),
+        (
+            &resource,
+            "/properties/owner/maxLength",
+            MAX_FILTER_STRING_BYTES,
+        ),
+        (
+            &resource,
+            "/properties/title_contains/maxLength",
+            MAX_TITLE_CONTAINS_BYTES,
+        ),
+        (
+            &edge,
+            "/properties/labels/items/maxLength",
+            MAX_FILTER_STRING_BYTES,
+        ),
+        (
+            &edge,
+            "/properties/properties/items/properties/key/maxLength",
+            MAX_FILTER_STRING_BYTES,
+        ),
+    ] {
+        assert_eq!(
+            published(schema.clone(), pointer) as usize,
+            bound,
+            "{pointer}"
+        );
+    }
 }

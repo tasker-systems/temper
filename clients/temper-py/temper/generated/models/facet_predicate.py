@@ -17,8 +17,9 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictStr
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, ClassVar, Dict, List
+from typing_extensions import Annotated
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -27,8 +28,8 @@ class FacetPredicate(BaseModel):
     """
     One `kb_properties` facet predicate, at the inner-key grain the facet model uses.
     """ # noqa: E501
-    key: StrictStr
-    value: StrictStr
+    key: Annotated[str, Field(strict=True, max_length=256)]
+    value: Annotated[str, Field(strict=True, max_length=4096)] = Field(description="At most 4096 bytes, and counted toward the composition's 1048576-byte total of property-predicate values.")
     __properties: ClassVar[List[str]] = ["key", "value"]
 
     model_config = ConfigDict(

@@ -264,10 +264,11 @@ fn apply_tier(router: Router<AppState>, tier: Tier, state: &AppState) -> Router<
 /// `GITHUB_MAX_WEBHOOK_BYTES`, the repo's existing generous transport bound, which puts the
 /// number on an in-repo precedent rather than on a guess.
 ///
-/// The doors that DID choose — `/api/query`'s 4 MB composition backstop, the blob segment
-/// door's platform-derived 4.5 MB, the commit door's config-derived threshold — merge with
-/// their own `DefaultBodyLimit` layers INNER to this one, so their decisions win on their
-/// routes and this number changes nothing there.
+/// The doors that DID choose — `/api/query`'s composition backstop (`QUERY_MAX_BODY_BYTES`,
+/// also 25 MB, declared separately because it is held against the largest legal composition),
+/// the blob segment door's platform-derived 4.5 MB, the commit door's config-derived threshold —
+/// merge with their own `DefaultBodyLimit` layers INNER to this one, so their decisions win on
+/// their routes and this number changes nothing there.
 const GATED_MAX_BODY_BYTES: usize = 25 * 1024 * 1024;
 
 pub fn create_app(state: AppState) -> Router {

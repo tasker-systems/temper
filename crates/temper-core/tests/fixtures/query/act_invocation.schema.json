@@ -68,7 +68,9 @@
           "type": "array"
         },
         "labels": {
+          "description": "Edge labels, OR within the list. Each label is at most 256 bytes.",
           "items": {
+            "maxLength": 256,
             "type": "string"
           },
           "maxItems": 256,
@@ -80,6 +82,7 @@
             "description": "A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an\n[`EdgeFilter`] means the edge's own `kb_properties` rows, a [`ResourceFilter`] means the\nresource's own, and nothing else has to be said.\n\n`[2026-08-15]` Both containers now exist, so the subject-tagged variant that floated free on the\ninvocation is **deleted**, along with the `PropertySubject` tag it carried and the\n`UnknownFilterValue` refusal that tag's open arm existed to raise. What survives is\n[`super::ActInvocation::properties`], retyped to this struct: it is a **tombstone**, refusing\nwith a redirect rather than being removed, because `ActInvocation` carries `deny_unknown_fields`\nand removing the field would route a stale caller into a deserializer 400 outside the\n`ErrorBody` shape — a worse answer than the one being replaced.",
             "properties": {
               "key": {
+                "maxLength": 256,
                 "type": "string"
               },
               "op": {
@@ -99,7 +102,7 @@
                     "type": "object"
                   },
                   {
-                    "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.",
+                    "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.\n\n**Size.** Each value is at most 4096 bytes of compact JSON, and every predicate value in\none composition totals at most 1048576 bytes (`property_value_too_large`,\n`property_value_budget_exceeded`).",
                     "properties": {
                       "op": {
                         "const": "contains",
@@ -117,7 +120,7 @@
                     "type": "object"
                   },
                   {
-                    "description": "`property_value <direction> $value` over jsonb's native ordering, type-guarded.\n\n**The type is inferred from the caller's bound, never declared on the operator.**\n`jsonb_typeof(property_value) = jsonb_typeof($value)` segments by JSON type before the\ncomparison, so a row whose JSON type differs from the bound's is an **honest empty** rather\nthan a type-confusion match. jsonb defines a total type ordering\n(`null < boolean < number < string < array < object`), so without the guard a numeric\nbound against a string-valued key would match **every** string row (`string > number` is\ntrue in jsonb's ordering) — a type-confusion artifact, not an answer. The guard makes each\ncomparison run only within a homogeneous sub-population.\n\n**Per-VALUE inference, not per-key — and the distinction is the trap.** `temper-pr` is\n68 string / 7 numeric on ONE key, so no per-key answer exists; each caller sends one bound\nwith one JSON type, and the guard makes the other-type rows honest empties. A numeric bound\ncompares the 7 numeric rows; a string bound compares the 68 string rows; neither is wrong.\n\n**Numbers stored as JSON STRINGS** that need numeric comparison are out of scope: that is a\nconvention the key should fix (store numbers as JSON numbers), and `temper-seq` (132 numeric\nrows) already does. A comparison operator is not a type-coercion mechanism.\n\n`probe_count` for `Compare` is **1** — one bound, one comparison per row that carries the\nkey — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is\nNOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,\nand adding it saves one probe at the cost of a second value slot and a second SQL branch.",
+                    "description": "`property_value <direction> $value` over jsonb's native ordering, type-guarded.\n\n**The type is inferred from the caller's bound, never declared on the operator.**\n`jsonb_typeof(property_value) = jsonb_typeof($value)` segments by JSON type before the\ncomparison, so a row whose JSON type differs from the bound's is an **honest empty** rather\nthan a type-confusion match. jsonb defines a total type ordering\n(`null < boolean < number < string < array < object`), so without the guard a numeric\nbound against a string-valued key would match **every** string row (`string > number` is\ntrue in jsonb's ordering) — a type-confusion artifact, not an answer. The guard makes each\ncomparison run only within a homogeneous sub-population.\n\n**Per-VALUE inference, not per-key — and the distinction is the trap.** `temper-pr` is\n68 string / 7 numeric on ONE key, so no per-key answer exists; each caller sends one bound\nwith one JSON type, and the guard makes the other-type rows honest empties. A numeric bound\ncompares the 7 numeric rows; a string bound compares the 68 string rows; neither is wrong.\n\n**Numbers stored as JSON STRINGS** that need numeric comparison are out of scope: that is a\nconvention the key should fix (store numbers as JSON numbers), and `temper-seq` (132 numeric\nrows) already does. A comparison operator is not a type-coercion mechanism.\n\n`probe_count` for `Compare` is **1** — one bound, one comparison per row that carries the\nkey — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is\nNOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,\nand adding it saves one probe at the cost of a second value slot and a second SQL branch.\n\n**Size.** The bound is at most 4096 bytes of compact JSON, and counts toward the same\n1048576-byte composition total as `contains` values.",
                     "properties": {
                       "direction": {
                         "description": "The ordering direction for [`PropertyOp::Compare`]. A closed sub-enum, the same shape as\n`Contains`'s `Vec` — a nested closed set inside one `PropertyOp` discriminant.\n\nAll four directions are needed: inclusivity matters for dates (*\"on or after 2026-07-01\"* is\n`gte`, not `gt*). `Gt`/`Lt` are the half-open bounds; `Gte`/`Lte` are the closed ones; a\n`Between` is `gte` AND `lte` composed through the existing AND-across-the-list.",
@@ -358,6 +361,7 @@
         "description": "A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an\n[`EdgeFilter`] means the edge's own `kb_properties` rows, a [`ResourceFilter`] means the\nresource's own, and nothing else has to be said.\n\n`[2026-08-15]` Both containers now exist, so the subject-tagged variant that floated free on the\ninvocation is **deleted**, along with the `PropertySubject` tag it carried and the\n`UnknownFilterValue` refusal that tag's open arm existed to raise. What survives is\n[`super::ActInvocation::properties`], retyped to this struct: it is a **tombstone**, refusing\nwith a redirect rather than being removed, because `ActInvocation` carries `deny_unknown_fields`\nand removing the field would route a stale caller into a deserializer 400 outside the\n`ErrorBody` shape — a worse answer than the one being replaced.",
         "properties": {
           "key": {
+            "maxLength": 256,
             "type": "string"
           },
           "op": {
@@ -377,7 +381,7 @@
                 "type": "object"
               },
               {
-                "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.",
+                "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.\n\n**Size.** Each value is at most 4096 bytes of compact JSON, and every predicate value in\none composition totals at most 1048576 bytes (`property_value_too_large`,\n`property_value_budget_exceeded`).",
                 "properties": {
                   "op": {
                     "const": "contains",
@@ -395,7 +399,7 @@
                 "type": "object"
               },
               {
-                "description": "`property_value <direction> $value` over jsonb's native ordering, type-guarded.\n\n**The type is inferred from the caller's bound, never declared on the operator.**\n`jsonb_typeof(property_value) = jsonb_typeof($value)` segments by JSON type before the\ncomparison, so a row whose JSON type differs from the bound's is an **honest empty** rather\nthan a type-confusion match. jsonb defines a total type ordering\n(`null < boolean < number < string < array < object`), so without the guard a numeric\nbound against a string-valued key would match **every** string row (`string > number` is\ntrue in jsonb's ordering) — a type-confusion artifact, not an answer. The guard makes each\ncomparison run only within a homogeneous sub-population.\n\n**Per-VALUE inference, not per-key — and the distinction is the trap.** `temper-pr` is\n68 string / 7 numeric on ONE key, so no per-key answer exists; each caller sends one bound\nwith one JSON type, and the guard makes the other-type rows honest empties. A numeric bound\ncompares the 7 numeric rows; a string bound compares the 68 string rows; neither is wrong.\n\n**Numbers stored as JSON STRINGS** that need numeric comparison are out of scope: that is a\nconvention the key should fix (store numbers as JSON numbers), and `temper-seq` (132 numeric\nrows) already does. A comparison operator is not a type-coercion mechanism.\n\n`probe_count` for `Compare` is **1** — one bound, one comparison per row that carries the\nkey — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is\nNOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,\nand adding it saves one probe at the cost of a second value slot and a second SQL branch.",
+                "description": "`property_value <direction> $value` over jsonb's native ordering, type-guarded.\n\n**The type is inferred from the caller's bound, never declared on the operator.**\n`jsonb_typeof(property_value) = jsonb_typeof($value)` segments by JSON type before the\ncomparison, so a row whose JSON type differs from the bound's is an **honest empty** rather\nthan a type-confusion match. jsonb defines a total type ordering\n(`null < boolean < number < string < array < object`), so without the guard a numeric\nbound against a string-valued key would match **every** string row (`string > number` is\ntrue in jsonb's ordering) — a type-confusion artifact, not an answer. The guard makes each\ncomparison run only within a homogeneous sub-population.\n\n**Per-VALUE inference, not per-key — and the distinction is the trap.** `temper-pr` is\n68 string / 7 numeric on ONE key, so no per-key answer exists; each caller sends one bound\nwith one JSON type, and the guard makes the other-type rows honest empties. A numeric bound\ncompares the 7 numeric rows; a string bound compares the 68 string rows; neither is wrong.\n\n**Numbers stored as JSON STRINGS** that need numeric comparison are out of scope: that is a\nconvention the key should fix (store numbers as JSON numbers), and `temper-seq` (132 numeric\nrows) already does. A comparison operator is not a type-coercion mechanism.\n\n`probe_count` for `Compare` is **1** — one bound, one comparison per row that carries the\nkey — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is\nNOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,\nand adding it saves one probe at the cost of a second value slot and a second SQL branch.\n\n**Size.** The bound is at most 4096 bytes of compact JSON, and counts toward the same\n1048576-byte composition total as `contains` values.",
                 "properties": {
                   "direction": {
                     "description": "The ordering direction for [`PropertyOp::Compare`]. A closed sub-enum, the same shape as\n`Contains`'s `Vec` — a nested closed set inside one `PropertyOp` discriminant.\n\nAll four directions are needed: inclusivity matters for dates (*\"on or after 2026-07-01\"* is\n`gte`, not `gt*). `Gt`/`Lt` are the half-open bounds; `Gte`/`Lte` are the closed ones; a\n`Between` is `gte` AND `lte` composed through the existing AND-across-the-list.",
@@ -436,8 +440,9 @@
       "description": "Narrowing by what a thing IS. At most one slot applies per act; supplying the other is\n`RefusalReason::FilterNotApplicable`.",
       "properties": {
         "doc_type": {
-          "description": "`kb_properties` where `property_key = 'doc_type'`.",
+          "description": "`kb_properties` where `property_key = 'doc_type'`. Each value is at most 256 bytes.",
           "items": {
+            "maxLength": 256,
             "type": "string"
           },
           "maxItems": 256,
@@ -449,9 +454,12 @@
             "description": "One `kb_properties` facet predicate, at the inner-key grain the facet model uses.",
             "properties": {
               "key": {
+                "maxLength": 256,
                 "type": "string"
               },
               "value": {
+                "description": "At most 4096 bytes, and counted toward the composition's 1048576-byte total of\nproperty-predicate values.",
+                "maxLength": 4096,
                 "type": "string"
               }
             },
@@ -464,6 +472,7 @@
           "type": "array"
         },
         "owner": {
+          "maxLength": 256,
           "type": [
             "string",
             "null"
@@ -475,6 +484,7 @@
             "description": "A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an\n[`EdgeFilter`] means the edge's own `kb_properties` rows, a [`ResourceFilter`] means the\nresource's own, and nothing else has to be said.\n\n`[2026-08-15]` Both containers now exist, so the subject-tagged variant that floated free on the\ninvocation is **deleted**, along with the `PropertySubject` tag it carried and the\n`UnknownFilterValue` refusal that tag's open arm existed to raise. What survives is\n[`super::ActInvocation::properties`], retyped to this struct: it is a **tombstone**, refusing\nwith a redirect rather than being removed, because `ActInvocation` carries `deny_unknown_fields`\nand removing the field would route a stale caller into a deserializer 400 outside the\n`ErrorBody` shape — a worse answer than the one being replaced.",
             "properties": {
               "key": {
+                "maxLength": 256,
                 "type": "string"
               },
               "op": {
@@ -494,7 +504,7 @@
                     "type": "object"
                   },
                   {
-                    "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.",
+                    "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.\n\n**Size.** Each value is at most 4096 bytes of compact JSON, and every predicate value in\none composition totals at most 1048576 bytes (`property_value_too_large`,\n`property_value_budget_exceeded`).",
                     "properties": {
                       "op": {
                         "const": "contains",
@@ -512,7 +522,7 @@
                     "type": "object"
                   },
                   {
-                    "description": "`property_value <direction> $value` over jsonb's native ordering, type-guarded.\n\n**The type is inferred from the caller's bound, never declared on the operator.**\n`jsonb_typeof(property_value) = jsonb_typeof($value)` segments by JSON type before the\ncomparison, so a row whose JSON type differs from the bound's is an **honest empty** rather\nthan a type-confusion match. jsonb defines a total type ordering\n(`null < boolean < number < string < array < object`), so without the guard a numeric\nbound against a string-valued key would match **every** string row (`string > number` is\ntrue in jsonb's ordering) — a type-confusion artifact, not an answer. The guard makes each\ncomparison run only within a homogeneous sub-population.\n\n**Per-VALUE inference, not per-key — and the distinction is the trap.** `temper-pr` is\n68 string / 7 numeric on ONE key, so no per-key answer exists; each caller sends one bound\nwith one JSON type, and the guard makes the other-type rows honest empties. A numeric bound\ncompares the 7 numeric rows; a string bound compares the 68 string rows; neither is wrong.\n\n**Numbers stored as JSON STRINGS** that need numeric comparison are out of scope: that is a\nconvention the key should fix (store numbers as JSON numbers), and `temper-seq` (132 numeric\nrows) already does. A comparison operator is not a type-coercion mechanism.\n\n`probe_count` for `Compare` is **1** — one bound, one comparison per row that carries the\nkey — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is\nNOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,\nand adding it saves one probe at the cost of a second value slot and a second SQL branch.",
+                    "description": "`property_value <direction> $value` over jsonb's native ordering, type-guarded.\n\n**The type is inferred from the caller's bound, never declared on the operator.**\n`jsonb_typeof(property_value) = jsonb_typeof($value)` segments by JSON type before the\ncomparison, so a row whose JSON type differs from the bound's is an **honest empty** rather\nthan a type-confusion match. jsonb defines a total type ordering\n(`null < boolean < number < string < array < object`), so without the guard a numeric\nbound against a string-valued key would match **every** string row (`string > number` is\ntrue in jsonb's ordering) — a type-confusion artifact, not an answer. The guard makes each\ncomparison run only within a homogeneous sub-population.\n\n**Per-VALUE inference, not per-key — and the distinction is the trap.** `temper-pr` is\n68 string / 7 numeric on ONE key, so no per-key answer exists; each caller sends one bound\nwith one JSON type, and the guard makes the other-type rows honest empties. A numeric bound\ncompares the 7 numeric rows; a string bound compares the 68 string rows; neither is wrong.\n\n**Numbers stored as JSON STRINGS** that need numeric comparison are out of scope: that is a\nconvention the key should fix (store numbers as JSON numbers), and `temper-seq` (132 numeric\nrows) already does. A comparison operator is not a type-coercion mechanism.\n\n`probe_count` for `Compare` is **1** — one bound, one comparison per row that carries the\nkey — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is\nNOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,\nand adding it saves one probe at the cost of a second value slot and a second SQL branch.\n\n**Size.** The bound is at most 4096 bytes of compact JSON, and counts toward the same\n1048576-byte composition total as `contains` values.",
                     "properties": {
                       "direction": {
                         "description": "The ordering direction for [`PropertyOp::Compare`]. A closed sub-enum, the same shape as\n`Contains`'s `Vec` — a nested closed set inside one `PropertyOp` discriminant.\n\nAll four directions are needed: inclusivity matters for dates (*\"on or after 2026-07-01\"* is\n`gte`, not `gt*). `Gt`/`Lt` are the half-open bounds; `Gte`/`Lte` are the closed ones; a\n`Between` is `gte` AND `lte` composed through the existing AND-across-the-list.",
@@ -549,26 +559,30 @@
           "type": "array"
         },
         "stage": {
+          "maxLength": 256,
           "type": [
             "string",
             "null"
           ]
         },
         "status": {
+          "maxLength": 256,
           "type": [
             "string",
             "null"
           ]
         },
         "tags": {
-          "description": "`kb_properties` where `property_key = 'tags'`. AND-containment.",
+          "description": "`kb_properties` where `property_key = 'tags'`. AND-containment. Each tag is at most 256\nbytes.",
           "items": {
+            "maxLength": 256,
             "type": "string"
           },
           "maxItems": 256,
           "type": "array"
         },
         "title_contains": {
+          "maxLength": 1024,
           "type": [
             "string",
             "null"

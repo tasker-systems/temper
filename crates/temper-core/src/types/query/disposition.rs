@@ -369,6 +369,26 @@ pub enum RefusalReason {
     EmptyPropertyKey,
     /// A `contains` predicate was supplied with no values, so it narrows nothing.
     EmptyContains,
+    /// A property-predicate value — a `contains` value or a `compare` bound — is larger than
+    /// [`super::filter::MAX_PROPERTY_VALUE_BYTES`].
+    ///
+    /// The probe cap counts values, not bytes, so without this one value of any size validated.
+    /// The refusal names the predicate's position and the limit, never the value: echoing a value
+    /// refused for its size would return the oversized payload in the error body.
+    PropertyValueTooLarge,
+    /// The property-predicate values across the whole composition sum past
+    /// [`super::filter::MAX_COMPOSITION_PROPERTY_VALUE_BYTES`].
+    ///
+    /// Composition-level, like [`RefusalReason::TooManyStages`]. It is what keeps the largest
+    /// legal composition inside the query door's body limit once each value may be 4 KiB.
+    PropertyValueBudgetExceeded,
+    /// A narrowing string — a label, tag, `doc_type`, facet or property key, `stage`, `status`,
+    /// `owner` or `title_contains` — is longer than its published `max_length`.
+    ///
+    /// The count caps bound how many strings a stage carries, never how long each is; without
+    /// this a plan inside every count cap could exceed the body limit and meet a bare 413. The
+    /// refusal names the field and the limit, never the string.
+    FilterStringTooLong,
 
     /// A reason outside the declared vocabulary.
     ///
@@ -558,6 +578,9 @@ mod tests {
             RefusalReason::UnknownAct,
             RefusalReason::EmptyPropertyKey,
             RefusalReason::EmptyContains,
+            RefusalReason::PropertyValueTooLarge,
+            RefusalReason::PropertyValueBudgetExceeded,
+            RefusalReason::FilterStringTooLong,
         ] {
             assert!(
                 reason.is_known(),

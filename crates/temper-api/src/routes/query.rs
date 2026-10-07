@@ -41,39 +41,25 @@ pub(super) fn query_routes() -> OpenApiRouter<AppState> {
 /// `the_largest_legal_composition_fits_inside_the_declared_body_limit` holds that, and fails
 /// against the inherited number rather than merely describing it.
 ///
-/// # Why a raised number and not the sum
+/// # Why 25 MB, and what it backstops
 ///
-/// The 4 MB this constant carried from 2026-08-28 to the network door was the same argument in
-/// miniature: the measured largest legal composition (2,455,972 bytes — the test named below
-/// holds it against the number) fits 1.71x under it. The network-door ruling (design §D4) then
-/// re-sized the backstop to the transport contract: `/api/query` is a tool-carrying endpoint,
-/// and a second, smaller opinion about body size is exactly the invisible gate ruling 3
-/// removes. The declaration caps above remain the real bound; this number catches only the
-/// cost they cannot see.
+/// The network-door ruling (design §D4) sized this to the transport contract: `/api/query` is a
+/// tool-carrying endpoint, and a second, smaller opinion about body size would be an invisible gate
+/// the MCP edge's callers cannot see. The declaration caps are the real bound. This number catches
+/// only the cost they cannot see.
 ///
-/// **Every COUNT the contract admits is now bounded, and what remains unbounded is LENGTH.**
-/// `[narrowed — 2026-08-28, after review]` This paragraph first named only the length half, which
-/// understated why the backstop was needed: `ReturnSpec::with`, `EdgeFilter::edge_kinds`,
-/// `EdgeFilter::labels`, `ResourceFilter::doc_type` and `ResourceFilter::tags` were `Vec`s no pass
-/// capped, and `validate_returns` checked section MEMBERSHIP only — so `with: [open_meta; 10_000]`
-/// per return validated `Ok` and serialized to **9.6 MB**, and ten thousand one-character labels
-/// per stage to **4.7 MB**. Both are refused now: `MAX_FILTER_VALUES` bounds the three open lists,
-/// and `DuplicateSetMember` bounds the two closed vocabularies at their own size.
+/// **Every count, every predicate value, and every string's length the contract admits is
+/// bounded.** The narrowing lists are capped by `MAX_FILTER_VALUES`, the closed vocabularies by
+/// `DuplicateSetMember`, each narrowing string by `MAX_FILTER_STRING_BYTES` (256) or
+/// `MAX_TITLE_CONTAINS_BYTES` (1024), and property-predicate values by `MAX_PROPERTY_VALUE_BYTES`
+/// (4 KiB each) and `MAX_COMPOSITION_PROPERTY_VALUE_BYTES` (1 MiB across the composition).
+/// `the_largest_legal_composition_fits_inside_the_declared_body_limit` builds the plan at every one
+/// of those caps and measures it at **11,128,846 bytes** `[measured — 2026-10-06]`, 2.4x under this
+/// number. So a plan the contract calls legal never meets a bare 413.
 ///
-/// So the coherence property below holds over every field whose COUNT the contract fixes, and
-/// `the_largest_legal_composition_fits_inside_the_declared_body_limit` measures that maximum at
-/// **2,455,972 bytes** — under this number at either size it has carried (4 MB: 1.71x under;
-/// 25 MB: 10.6x under).
-///
-/// What it does not bound is SIZE, and there are two kinds `[both named — 2026-08-28, after review]`:
-/// the LENGTH of a string inside a counted list (a facet key, a label, a `title_contains`), and the
-/// serialized size of a single `Contains` VALUE — `probe_count` charges one probe per value however
-/// large, so one value holding a million-element JSON array is 6.9 MB and validates `Ok`.
-///
-/// Through the counted lists, reaching 4 MB now takes ~400 bytes per label across every stage
-/// rather than one byte, which is the difference between a caller and an adversary. Through a
-/// `Contains` value it takes a single field. That second one is the thing to bound next, and it is
-/// why this limit is a backstop and not a sum.
+/// **What this limit still catches is bytes that are not the plan**: whitespace, and fields serde
+/// ignores. A caller can pad a legal plan past any limit that way, and a 413 is the right answer
+/// to padding.
 pub const QUERY_MAX_BODY_BYTES: usize = 25 * 1024 * 1024;
 
 #[cfg(test)]
@@ -88,8 +74,9 @@ mod tests {
     };
     use temper_core::types::query::envelope::ActInvocation;
     use temper_core::types::query::filter::{
-        EdgeFilter, FacetPredicate, PropertyOp, PropertyPredicate, ResourceFilter,
-        MAX_FILTER_VALUES,
+        property_value_bytes, EdgeFilter, FacetPredicate, PropertyOp, PropertyPredicate,
+        ResourceFilter, MAX_COMPOSITION_PROPERTY_VALUE_BYTES, MAX_FILTER_STRING_BYTES,
+        MAX_FILTER_VALUES, MAX_PROPERTY_VALUE_BYTES, MAX_TITLE_CONTAINS_BYTES,
     };
     use temper_core::types::query::id_set::{IdKind, IdSet, MAX_ID_SET_IDS};
     use temper_core::types::query::scalars::BoundTerm;
@@ -117,26 +104,18 @@ mod tests {
     /// total by 512 bytes — but a size measured over an illegal plan proves nothing about what the
     /// door must accept, and the next edit to this fixture would have had no guard at all.
     ///
-    /// The dominant term is the **caller id sets**, at roughly twice the embeddings
-    /// `[measured — 2026-08-28]`: 1,286,912 bytes against 639,872, with the questions third at
-    /// 262,144. Named because both were misattributed here first — strip the id sets and the
-    /// fixture is 907,408 bytes, comfortably inside the inherited limit, so they are what carries
-    /// it past.
+    /// The largest terms in the selection shape are the narrowing strings at their length caps
+    /// (two 256-entry lists of 256-byte strings per stage), the caller id sets, and the 1 MiB of
+    /// property-predicate values the fixture grows to exactly `MAX_COMPOSITION_PROPERTY_VALUE_BYTES`.
     ///
-    /// **What it does NOT prove**, stated because a green here reads like completeness. Two things:
+    /// **What it does NOT prove**, stated because a green here reads like completeness:
     ///
-    /// - **It is a floor, not the maximum.** Every COUNT the contract admits is bounded as of
-    ///   2026-08-28, so what escapes is SIZE: the length of a string inside a counted list (a facet
-    ///   key, a label, a `title_contains`), and the serialized size of a `Contains` VALUE, which
-    ///   `probe_count` counts as one probe however large — a single value holding a million-element
-    ///   JSON array is 6.9 MB and validates `Ok` `[measured — 2026-08-28]`. Reaching the limit
-    ///   through the counted lists now takes ~400 bytes per label across every stage instead of
-    ///   one; through a `Contains` value it takes one.
-    /// - **The headline number is the WALK shape, which admits no `ResourceFilter`** — so
-    ///   `doc_type` and `tags` at their cap appear only in the selection shape, which is half the
-    ///   size. No single act admits every bounded field, which is why both are measured; but the
-    ///   maximum reported is not maximal in those two fields.
-    ///
+    /// - **It measures the plan, not the request.** Whitespace and fields serde ignores are bytes
+    ///   a caller may add to any plan; they are padding, and the body limit answers padding.
+    /// - **The maximum is over two pure shapes, not every mixture.** No single act admits every
+    ///   bounded field: the walk carries id sets and no `ResourceFilter`, the selection the reverse.
+    ///   Both are measured and the larger reported, which is the selection shape since string
+    ///   lengths were capped.
     #[test]
     fn the_largest_legal_composition_fits_inside_the_declared_body_limit() {
         // **Two shapes, both measured, because no single act admits every bounded field and the
@@ -146,8 +125,8 @@ mod tests {
         // A first version mixed them and measured 1,756,196 — LESS than either pure shape, because
         // half its stages carried no id sets. Measuring both and taking the larger is what stops
         // this test from quietly reporting a maximum that is not one.
-        let walk = plan_of(MAX_STAGES, ActName::FollowFrom);
-        let select = plan_of(MAX_STAGES, ActName::FindResourcesWith);
+        let walk = at_the_property_value_budget(plan_of(MAX_STAGES, ActName::FollowFrom));
+        let select = at_the_property_value_budget(plan_of(MAX_STAGES, ActName::FindResourcesWith));
 
         for (what, c) in [("walk", &walk), ("selection", &select)] {
             // Legal FIRST. A byte count over a plan the validator refuses is a measurement of
@@ -269,11 +248,14 @@ mod tests {
     /// `capability.rs` enforces — 32 predicates summing to 256 probes.
     fn full_resource_filter() -> ResourceFilter {
         ResourceFilter {
-            doc_type: vec!["d".to_string(); MAX_FILTER_VALUES],
-            tags: vec!["t".to_string(); MAX_FILTER_VALUES],
+            // Every narrowing string at its length cap: the count caps alone left the plan's
+            // largest term unmeasured.
+            doc_type: vec!["d".repeat(MAX_FILTER_STRING_BYTES); MAX_FILTER_VALUES],
+            tags: vec!["t".repeat(MAX_FILTER_STRING_BYTES); MAX_FILTER_VALUES],
             facets: (0..16)
                 .map(|i| FacetPredicate {
-                    key: format!("k{i}"),
+                    key: capped_name("k", i),
+                    // Grown toward the value budget by `at_the_property_value_budget`.
                     value: "v".to_string(),
                 })
                 .collect(),
@@ -281,10 +263,10 @@ mod tests {
             // the probe cap. Facets count against BOTH, which is what the container's own doc
             // means by summing what walks the same candidate set.
             properties: capped_properties(16, 15),
-            stage: Some("s".to_string()),
-            status: Some("a".to_string()),
-            owner: Some("o".to_string()),
-            title_contains: Some("t".to_string()),
+            stage: Some("s".repeat(MAX_FILTER_STRING_BYTES)),
+            status: Some("a".repeat(MAX_FILTER_STRING_BYTES)),
+            owner: Some("o".repeat(MAX_FILTER_STRING_BYTES)),
+            title_contains: Some("t".repeat(MAX_TITLE_CONTAINS_BYTES)),
         }
     }
 
@@ -299,7 +281,7 @@ mod tests {
                 EdgeKind::LeadsTo,
                 EdgeKind::Near,
             ],
-            labels: vec!["l".to_string(); MAX_FILTER_VALUES],
+            labels: vec!["l".repeat(MAX_FILTER_STRING_BYTES); MAX_FILTER_VALUES],
             // No facets on an edge container, so all 32 predicates and all 256 probes are the
             // property list's.
             properties: capped_properties(32, 8),
@@ -310,10 +292,70 @@ mod tests {
     /// `MAX_PER_CANDIDATE_PREDICATES` (32, summed with `facets` where the container has them) and
     /// `MAX_PER_CANDIDATE_PROBES` (256, likewise) — so the split differs between the two containers
     /// and is passed rather than assumed.
+    /// Grow the plan's predicate values, none past the per-value cap, until together they total
+    /// exactly the composition budget. The count caps admit 16,384 values, so at a few bytes each
+    /// the fixture would leave out the ~1 MiB of value bytes a legal plan may carry.
+    fn at_the_property_value_budget(mut c: Composition) -> Composition {
+        // Facet values first: they are budgeted as raw string bytes, not JSON.
+        let mut facet_values: Vec<&mut String> = Vec::new();
+        for node in &mut c.stages {
+            let StageNode::Act(inv) = node else { continue };
+            facet_values.extend(
+                inv.resource_filter
+                    .iter_mut()
+                    .flat_map(|f| &mut f.facets)
+                    .map(|f| &mut f.value),
+            );
+        }
+        let facet_total: usize = facet_values.iter().map(|v| v.len()).sum();
+        let mut values: Vec<&mut serde_json::Value> = Vec::new();
+        for node in &mut c.stages {
+            let StageNode::Act(inv) = node else { continue };
+            let resource = inv
+                .resource_filter
+                .iter_mut()
+                .flat_map(|f| &mut f.properties);
+            let edge = inv.edge_filter.iter_mut().flat_map(|f| &mut f.properties);
+            for p in resource.chain(edge) {
+                match &mut p.op {
+                    PropertyOp::Contains { values: vs } => values.extend(vs.iter_mut()),
+                    PropertyOp::Compare { value, .. } => values.push(value),
+                    PropertyOp::HasKey => {}
+                }
+            }
+        }
+        let total: usize = values
+            .iter()
+            .map(|v| property_value_bytes(v))
+            .sum::<usize>()
+            + facet_total;
+        let mut slack = MAX_COMPOSITION_PROPERTY_VALUE_BYTES
+            .checked_sub(total)
+            .expect("the fixture's values start inside the budget");
+        for v in values {
+            let current = property_value_bytes(v);
+            let target = MAX_PROPERTY_VALUE_BYTES.min(current + slack);
+            // A JSON string of n characters serializes to n + 2 bytes.
+            *v = serde_json::json!("x".repeat(target - 2));
+            slack -= target - current;
+        }
+        assert_eq!(
+            slack, 0,
+            "the fixture has too few values to reach the budget"
+        );
+        c
+    }
+
+    /// A distinct key at exactly the string cap.
+    fn capped_name(prefix: &str, i: usize) -> String {
+        let head = format!("{prefix}{i}");
+        format!("{head}{}", "x".repeat(MAX_FILTER_STRING_BYTES - head.len()))
+    }
+
     fn capped_properties(preds: usize, vals: usize) -> Vec<PropertyPredicate> {
         (0..preds)
             .map(|i| PropertyPredicate {
-                key: format!("p{i}"),
+                key: capped_name("p", i),
                 op: PropertyOp::Contains {
                     values: (0..vals)
                         .map(|v| serde_json::json!(format!("v{v}")))
