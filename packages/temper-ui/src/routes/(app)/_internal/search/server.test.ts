@@ -82,4 +82,19 @@ describe('the search proxy', () => {
 		expect(resp.status).toBe(400);
 		expect(apiPost).not.toHaveBeenCalled();
 	});
+
+	it("declines a query over the search cap with no upstream read, as the caller's to fix", async () => {
+		// 4097 bytes: over `/api/search`'s cap, which would otherwise surface as a 503.
+		const resp = await run('é'.repeat(2048) + 'x');
+
+		expect(resp.status).toBe(400);
+		expect(await resp.json()).toEqual({ error: 'query too long' });
+		expect(apiPost).not.toHaveBeenCalled();
+	});
+
+	it('reads a query exactly at the cap upstream', async () => {
+		await run('x'.repeat(4096));
+
+		expect(apiPost).toHaveBeenCalledTimes(1);
+	});
 });

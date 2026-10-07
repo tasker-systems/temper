@@ -101,6 +101,7 @@ class QueryApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '422': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -175,6 +176,7 @@ class QueryApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '422': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -249,6 +251,7 @@ class QueryApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '422': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,

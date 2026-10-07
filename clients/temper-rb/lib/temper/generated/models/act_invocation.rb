@@ -20,7 +20,7 @@ module Temper::Generated
 
     attr_accessor :edge_filter
 
-    # Where this stage's sets come from, and what this act does with each: caller-supplied ids or an upstream stage, each carrying its own [`super::stage::StageRelation`]. Empty for a root act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal `bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].  There is deliberately no sibling `bounds_mode` here `[decided — 2026-08-08, Pete]`. It was an `Option<BoundsMode>` whose \"required whenever an input is present\" invariant lived in prose, which admitted a meaningless state the validator then read as `bound`. The relation belongs to the edge, and nesting it there makes the meaningless state unrepresentable rather than merely invalid.  # A LIST, and at most one per relation  `[widened — 2026-08-14, Pete]` This was `Option<StageInput>` — **one** set, carrying **one** relation. That made a bounded walk inexpressible: `follow-from` needs seeds to start from *and* a bound to stay inside, at the same time, and a single slot can hold one or the other. The fragment (`20260814000030`) had the `p_bound_ids` parameter and no caller could fill it, so `accepts_bounds: [Resource]` would have declared a capability nothing could reach.  **The cardinality rule is one per RELATION, not one per source.** Two seeds is malformed ([`super::disposition::RefusalReason::DuplicateInputRelation`]) rather than a union — a union is `CombineOp::Union`, which is an existing, visible stage rather than a silent merge inside one. So the list is short by construction and is not a general fan-in.  **Why a list rather than a second `bound` field beside this one.** The relation already distinguishes them, so a list gives a bound exactly one spelling; a sibling field would give it two — the new field, and this one with a `Bound` relation — which is the incumbent literal `bounds: Option<IdSet>` shape this contract deliberately replaced `[decided — 2026-08-14, Pete]`, returning under a different name.
+    # Where this stage's sets come from, and what this act does with each: caller-supplied ids or an upstream stage, each carrying its own [`super::stage::StageRelation`]. Empty for a root act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal `bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].  There is deliberately no sibling `bounds_mode` here `[decided — 2026-08-08, Pete]`. It was an `Option<BoundsMode>` whose \"required whenever an input is present\" invariant lived in prose, which admitted a meaningless state the validator then read as `bound`. The relation belongs to the edge, and nesting it there makes the meaningless state unrepresentable rather than merely invalid.  # A LIST, and at most one per relation  `[widened — 2026-08-14, Pete]` This was `Option<StageInput>` — **one** set, carrying **one** relation. That made a bounded walk inexpressible: `follow-from` needs seeds to start from *and* a bound to stay inside, at the same time, and a single slot can hold one or the other. The fragment (`20260814000030`) had the `p_bound_ids` parameter and no caller could fill it, so `accepts_bounds: [Resource]` would have declared a capability nothing could reach.  **The cardinality rule is one per RELATION, not one per source.** Two seeds is malformed ([`super::disposition::RefusalReason::DuplicateInputRelation`]) rather than a union — a union is `CombineOp::Union`, which is an existing, visible stage rather than a silent merge inside one. So the list is short by construction and is not a general fan-in.  **Why a list rather than a second `bound` field beside this one.** The relation already distinguishes them, so a list gives a bound exactly one spelling; a sibling field would give it two — the new field, and this one with a `Bound` relation — which is the incumbent literal `bounds: Option<IdSet>` shape this contract deliberately replaced `[decided — 2026-08-14, Pete]`, returning under a different name.  At most two, one per relation (`list_too_long` past that).
     attr_accessor :inputs
 
     # The question this act asks: its text, and the caller's vector when there is one.  **A parameter of the act, exactly like [`Self::terms`] and [`Self::resource_filter`]** `[decided — 2026-08-12, Pete]`, spec ⟨7⟩. It lived on the composition envelope until then, which made a DAG able to ask only one question — every find stage reading the same string.  `None` for an act that asks nothing (`follow-from`, `survey`, the combinators). `None` on a find act is `MissingIntention`, refused by the shape pass: `find-exact` sources its `p_query` from here and there is nowhere else to get it.
@@ -153,6 +153,10 @@ module Temper::Generated
         invalid_properties.push('invalid value for "act", act cannot be nil.')
       end
 
+      if !@inputs.nil? && @inputs.length > 2
+        invalid_properties.push('invalid value for "inputs", number of items must be less than or equal to 2.')
+      end
+
       if @name.nil?
         invalid_properties.push('invalid value for "name", name cannot be nil.')
       end
@@ -170,6 +174,7 @@ module Temper::Generated
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @act.nil?
+      return false if !@inputs.nil? && @inputs.length > 2
       return false if @name.nil?
       return false if @name !~ Regexp.new(/^[a-z][a-z0-9_]{0,62}$/)
       true
@@ -183,6 +188,20 @@ module Temper::Generated
       end
 
       @act = act
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] inputs Value to be assigned
+    def inputs=(inputs)
+      if inputs.nil?
+        fail ArgumentError, 'inputs cannot be nil'
+      end
+
+      if inputs.length > 2
+        fail ArgumentError, 'invalid value for "inputs", number of items must be less than or equal to 2.'
+      end
+
+      @inputs = inputs
     end
 
     # Custom attribute writer method with validation

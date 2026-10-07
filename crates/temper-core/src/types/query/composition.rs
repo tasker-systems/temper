@@ -161,7 +161,10 @@ pub struct OutcomeDeclaration {
     /// `produces` field which could only ever be right for a one-arm plan.
     // Same reason as [`CombineNode::inputs`]: `validate` refuses an empty list as `no_returns`, and
     // a contract that admits one describes a request that cannot succeed.
-    #[cfg_attr(feature = "web-api", schema(min_items = 1))]
+    // `max_items = 64`: returns must be distinct declared stages, so more than `MAX_STAGES` is
+    // never legal, and it is refused as `list_too_long` before any per-entry check runs.
+    #[cfg_attr(feature = "web-api", schema(min_items = 1, max_items = 64))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 64)))]
     pub returns: Vec<ReturnSpec>,
 }
 
@@ -251,7 +254,11 @@ pub struct CombineNode {
     // but only when `op` is `difference`". A blanket `max_items = 2` would publish a bound that
     // forbids the three-way union `validate` admits. So the upper bound is `validate`'s alone —
     // the same division `min_items` and `combinator_arity` already have, one bound over.
-    #[cfg_attr(feature = "web-api", schema(min_items = 2))]
+    // The upper bound `max_items = 64` is not arity: inputs must be distinct declared stages, so
+    // more than `MAX_STAGES` cannot be legal, and it is refused as `list_too_long` before any
+    // per-input check runs.
+    #[cfg_attr(feature = "web-api", schema(min_items = 2, max_items = 64))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 64)))]
     pub inputs: Vec<StageName>,
 }
 
@@ -586,8 +593,9 @@ pub struct CompositionShape {
     pub caller_ids: usize,
     /// The longest narrowing list — `doc_type`, `tags` or `labels` — on any one stage.
     pub largest_filter_list: usize,
-    /// Stages arriving with a vector already computed. Zero for every MCP caller, structurally:
-    /// that door cannot run the model, which is why the server embeds on its behalf.
+    /// Stages arriving with a vector already computed. Rarely non-zero for an MCP caller: the
+    /// tool's schema admits a vector, but an agent seldom runs the model, so the server usually
+    /// embeds on its behalf.
     pub embeddings_supplied: usize,
     /// Floats in the largest supplied vector. A number other than the model's dimension is a
     /// caller sending a vector for a different space.
@@ -681,8 +689,8 @@ impl CompositionShape {
     /// silently attach to whatever span happens to be current once a nested one appears.
     ///
     /// `door` distinguishes the HTTP surface from MCP, which matters more than it looks:
-    /// `embeddings_supplied` is structurally zero for every MCP caller, so any bound on what the
-    /// server must embed binds that door alone and its distribution has to be read separately.
+    /// an MCP caller seldom supplies an embedding, so any bound on what the server must embed binds
+    /// that door hardest and its distribution has to be read separately.
     pub fn record(&self, door: &'static str) {
         tracing::info!(
             door,

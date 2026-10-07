@@ -135,6 +135,14 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         // section would still not admit that section twice.
         ("DuplicateSetMember", 3),
         ("DuplicateStageName", 1),
+        // `FilterStringTooLong` `[added — 2026-10-06]`: one site over every narrowing string.
+        // Clears the bar through `max_length` on each scalar field (`inner` on the MCP door's
+        // lists) and the published description on the lists.
+        ("FilterStringTooLong", 1),
+        // `ListTooLong` and `TextBudgetExceeded` `[added — 2026-10-06]`: `max_items` on `returns`
+        // and both `inputs` fields, and the text budget's number in `TextBudgetExceeded`'s and
+        // `MAX_COMPOSITION_TEXT_BYTES`' published description.
+        ("ListTooLong", 1),
         ("EmptyContains", 1),
         ("EmptyPropertyKey", 1),
         // `IntentionTooLong` and `TooManyIds` `[added — 2026-08-28]`. Two more entries clearing the
@@ -164,6 +172,11 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         ("MissingProvenance", 1),
         ("NoReturns", 1),
         ("NoStages", 1),
+        // Both clear the bar through the operator's published description: the byte bounds are
+        // stated there as numbers, so changing either is an `openapi.json` change, and
+        // `the_published_property_value_bounds_are_the_enforced_ones` pins them to the constants.
+        ("PropertyValueBudgetExceeded", 1),
+        ("PropertyValueTooLarge", 1),
         // `TooManyStages` `[added — 2026-08-26]`. A new entry, and this guard's own message names
         // the bar it has to clear: "asserting it cannot change without a wire-contract change".
         // It clears it — the ceiling is `max_items` on `Composition::stages`, so raising the cap
@@ -173,6 +186,7 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         // three sites would be three numbers waiting to drift, and would say three judgments were
         // made where there was one. Clears the bar the same way `TooManyIds` does: `max_items` on
         // each of `doc_type`, `tags` and `labels`, published on both doors.
+        ("TextBudgetExceeded", 1),
         ("TooManyFilterValues", 1),
         ("TooManyIds", 1),
         ("TooManyStages", 1),

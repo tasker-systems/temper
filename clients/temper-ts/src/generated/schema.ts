@@ -3458,6 +3458,8 @@ export interface components {
              *     it two — the new field, and this one with a `Bound` relation — which is the incumbent
              *     literal `bounds: Option<IdSet>` shape this contract deliberately replaced
              *     `[decided — 2026-08-14, Pete]`, returning under a different name.
+             *
+             *     At most two, one per relation (`list_too_long` past that).
              */
             inputs?: components["schemas"]["StageInput"][];
             intention?: null | components["schemas"]["Intention"];
@@ -5826,6 +5828,7 @@ export interface components {
          */
         EdgeFilter: {
             edge_kinds?: components["schemas"]["EdgeKind"][];
+            /** @description Edge labels, OR within the list. Each label is at most 256 bytes. */
             labels?: string[];
             /**
              * @description `kb_properties` rows owned by the edge itself: open key space, closed operator set.
@@ -6248,6 +6251,10 @@ export interface components {
         /** @description One `kb_properties` facet predicate, at the inner-key grain the facet model uses. */
         FacetPredicate: {
             key: string;
+            /**
+             * @description At most 16384 bytes, and counted toward the composition's 524288-byte total of
+             *     property-predicate values.
+             */
             value: string;
         };
         /**
@@ -8257,7 +8264,7 @@ export interface components {
          *     change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
          *     matched exhaustively.
          */
-        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
+        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | string;
         /**
          * @description One region a `survey` stage matched, and the score it matched at.
          *
@@ -8850,7 +8857,7 @@ export interface components {
          *     scope you asked about* is an honest empty. `doc_type` is the second kind.
          */
         ResourceFilter: {
-            /** @description `kb_properties` where `property_key = 'doc_type'`. */
+            /** @description `kb_properties` where `property_key = 'doc_type'`. Each value is at most 256 bytes. */
             doc_type?: string[];
             /** @description `kb_properties` where `property_key = 'facet'`. */
             facets?: components["schemas"]["FacetPredicate"][];
@@ -8879,7 +8886,10 @@ export interface components {
             properties?: components["schemas"]["PropertyPredicate"][];
             stage?: string | null;
             status?: string | null;
-            /** @description `kb_properties` where `property_key = 'tags'`. AND-containment. */
+            /**
+             * @description `kb_properties` where `property_key = 'tags'`. AND-containment. Each tag is at most 256
+             *     bytes.
+             */
             tags?: string[];
             title_contains?: string | null;
         };
@@ -9449,7 +9459,7 @@ export interface components {
              *     replacing them — the fragments apply bound and anchor conjunctively.
              *
              *     Reachable from every door: the MCP `search` tool takes this whole struct as its
-             *     `Parameters`, so the field arrives there without a tool change.
+             *     `Parameters`, so the field arrives there without a tool change. At most 256 ids.
              */
             bound_ids?: string[] | null;
             /**
@@ -9476,7 +9486,7 @@ export interface components {
             context_ref?: string | null;
             /** @description Filter by document type. */
             doc_type?: string | null;
-            /** @description Pre-computed 768-dim embedding vector. */
+            /** @description Pre-computed 768-dim embedding vector. At most 768 components. */
             embedding?: number[] | null;
             /**
              * Format: int64
@@ -9488,7 +9498,7 @@ export interface components {
              * @description Offset for pagination.
              */
             offset?: number | null;
-            /** @description Plain-text query for full-text search. */
+            /** @description Plain-text query for full-text search. At most 4096 bytes. */
             query?: string | null;
             /**
              * @description Postgres text-search configuration (default "english").
@@ -16572,7 +16582,7 @@ export interface operations {
                     "application/json": components["schemas"]["QueryResponse"];
                 };
             };
-            /** @description The composition will not run, with **every** static reason at once in `error.details.refusals` under the code `PLAN_REFUSED` — never just the first, because repairing a plan one refusal per round trip is the experience this contract exists to avoid. A caller meets this response before they meet a 200, so it is the door's most-read documentation. */
+            /** @description Two codes. `PLAN_REFUSED`: the composition will not run, with **every** static reason at once in `error.details.refusals` — never just the first, because repairing a plan one refusal per round trip is the experience this contract exists to avoid. A caller meets this response before they meet a 200, so it is the door's most-read documentation. `UNREADABLE_PLAN`, with no `details`: the body is not JSON at all, so there is no plan to refuse (see the `422`). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -16592,6 +16602,15 @@ export interface operations {
             };
             /** @description System access required */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The body is not a composition this door can read — a value of the wrong type, or a name outside a closed vocabulary — under the code `UNREADABLE_PLAN`. There is no plan yet, so there are no refusals: the message names what failed and repeats at most 1024 bytes of it. Malformed JSON answers `400`, a non-JSON content type `415`, and a body past this door's own limit `413`, each under the same code. A deployment's platform may refuse a large body before this door reads it, without the code. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

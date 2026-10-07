@@ -23,6 +23,22 @@ pub const FORBIDDEN_DETAIL_CODE: &str = "FORBIDDEN_DETAIL";
 /// `[decided — 2026-08-13, Pete]` The spec (§B) authorized "its own code" and named no string.
 pub const PLAN_REFUSED_CODE: &str = "PLAN_REFUSED";
 
+/// The wire `error.code` a composition body the server could not read travels under — malformed
+/// JSON, a value of the wrong type, an unknown `with` section, a body past the door's own limit. The
+/// status is the reader's own (`400`, `413`, `415` or `422`); the message names what failed and
+/// repeats at most a typo's worth of what the caller sent. A platform that refuses a large body
+/// before the door reads it answers without this code.
+///
+/// **Not [`PLAN_REFUSED_CODE`].** A refused plan parsed and failed `validate`, and carries every
+/// refusal at once; an unreadable one has no plan to collect refusals for. **Not `BAD_REQUEST`**
+/// either, because the MCP door relays plans unread and needs the code to hand its caller the
+/// API's own sentence as a caller error rather than a server fault.
+///
+/// Spelled here for the same reason as [`FORBIDDEN_DETAIL_CODE`] — the producer
+/// (`temper-services`' `IntoResponse`) and the consumer (`temper-client`'s status mapper) name one
+/// constant rather than two literals nothing checks.
+pub const UNREADABLE_PLAN_CODE: &str = "UNREADABLE_PLAN";
+
 /// The wire `error.code` a declined data-artifact write travels under — a `400` carrying the
 /// refusal's own words: the SQL wrapper's vocabulary (a missing namespace, an unrecognized
 /// enforcement term) or the enforcing-shape verdict's per-violation detail.

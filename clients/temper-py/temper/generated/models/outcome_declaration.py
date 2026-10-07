@@ -29,7 +29,7 @@ class OutcomeDeclaration(BaseModel):
     """
     Which stages come back, and how much of each row.
     """ # noqa: E501
-    returns: Annotated[List[ReturnSpec], Field(min_length=1)] = Field(description="The stages whose rows are hydrated and returned. DECLARED, not inferred from graph shape: inferring from out-degree zero makes returning an intermediate impossible without a dummy consumer, and means adding a downstream stage silently stops returning what you used to get back. The composition's produced kind(s) are DERIVED from these, replacing the old single `produces` field which could only ever be right for a one-arm plan.")
+    returns: Annotated[List[ReturnSpec], Field(min_length=1, max_length=64)] = Field(description="The stages whose rows are hydrated and returned. DECLARED, not inferred from graph shape: inferring from out-degree zero makes returning an intermediate impossible without a dummy consumer, and means adding a downstream stage silently stops returning what you used to get back. The composition's produced kind(s) are DERIVED from these, replacing the old single `produces` field which could only ever be right for a one-arm plan.")
     __properties: ClassVar[List[str]] = ["returns"]
 
     model_config = ConfigDict(

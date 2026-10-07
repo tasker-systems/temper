@@ -469,6 +469,31 @@
           "type": "string"
         },
         {
+          "const": "property_value_too_large",
+          "description": "A property-predicate value — a `contains` value, a `compare` bound or a facet value — is\nlarger than 16384 bytes, or carries more than 256 nested array elements or object members.\n\nThe probe cap counts values, not bytes, so without this one value of any size validated.\nThe refusal names the predicate's position and the limit, never the value: echoing a value\nrefused for its size would return the oversized payload in the error body.",
+          "type": "string"
+        },
+        {
+          "const": "property_value_budget_exceeded",
+          "description": "The property-predicate values across the whole composition sum past 524288 bytes.\n\nComposition-level, like `too_many_stages`. It is what keeps the largest\nlegal composition inside the query door's body limit once each value may be 16 KiB.",
+          "type": "string"
+        },
+        {
+          "const": "filter_string_too_long",
+          "description": "A narrowing string — a label, tag, `doc_type`, facet or property key, `stage`, `status`,\n`owner` or `title_contains` — is longer than its published cap: 256 bytes, or 4096 for\n`title_contains`, counted as JSON-escaped bytes.\n\nThe count caps bound how many strings a stage carries, never how long each is; without\nthis a plan inside every count cap could exceed the body limit and meet a bare 413. The\nrefusal names the field and the limit, never the string.",
+          "type": "string"
+        },
+        {
+          "const": "list_too_long",
+          "description": "A list whose entries must be distinct carries more than any legal plan can: `returns` or a\ncombine stage's `inputs` past 64, or an act's `inputs` past 2 (one per relation).\n\nRefused once, up front, like `too_many_stages`, so no check runs once per entry: an\nover-long list would otherwise answer with a refusal list many times its own size.",
+          "type": "string"
+        },
+        {
+          "const": "text_budget_exceeded",
+          "description": "The composition's caller text — narrowing strings, facet and predicate values, questions —\nexceeds 786432 bytes counted as the most expansive encoder that escapes per character would\nsend it.\n\nWhat makes a legal plan fit the body limit under any encoder that escapes per character.",
+          "type": "string"
+        },
+        {
           "description": "A reason outside the declared vocabulary.\n\n`[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by\ndeserializing a producer newer than this consumer.\" **That was false at the time**:\n`validate` constructed it for twelve topology and vocabulary refusals, kebab-case, while\nevery declared variant was snake_case — a client's vocabulary was two conventions at once.\nFound in review; recorded rather than repaired then, because promoting twelve strings to\nvariants is a wire change and nothing consumed them yet — `/api/query` did not exist, so\nthe change was free and the door was the moment it would stop being free.\n\n`[promoted — 2026-08-12]` That moment arrived first: the twelve are now the variants\nabove, and this crate no longer constructs `Other` for anything. What `Other` is FOR now is\nexactly what its original doc said — a reason from a producer newer than this consumer, one\nthis binary has never been taught to name. Deserializing it never fails; `is_known` answers\n`false`; a caller degrades gracefully instead of losing the whole response to a parse error.",
           "type": "string"
         }

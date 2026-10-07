@@ -37,9 +37,10 @@ use crate::types::graph::EdgeKind;
 pub struct EdgeFilter {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edge_kinds: Vec<EdgeKind>,
+    /// Edge labels, OR within the list. Each label is at most 256 bytes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "web-api", schema(max_items = 256))]
-    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256), inner(length(max = 256))))]
     pub labels: Vec<String>,
     /// `kb_properties` rows owned by the edge itself: open key space, closed operator set.
     /// AND across the list, OR within a [`PropertyOp::Contains`].
@@ -66,7 +67,13 @@ pub struct EdgeFilter {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct FacetPredicate {
+    #[cfg_attr(feature = "web-api", schema(max_length = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub key: String,
+    /// At most 16384 bytes, and counted toward the composition's 524288-byte total of
+    /// property-predicate values.
+    #[cfg_attr(feature = "web-api", schema(max_length = 16384))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 16384)))]
     pub value: String,
 }
 
@@ -91,15 +98,16 @@ pub struct FacetPredicate {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct ResourceFilter {
-    /// `kb_properties` where `property_key = 'doc_type'`.
+    /// `kb_properties` where `property_key = 'doc_type'`. Each value is at most 256 bytes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "web-api", schema(max_items = 256))]
-    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256), inner(length(max = 256))))]
     pub doc_type: Vec<String>,
-    /// `kb_properties` where `property_key = 'tags'`. AND-containment.
+    /// `kb_properties` where `property_key = 'tags'`. AND-containment. Each tag is at most 256
+    /// bytes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "web-api", schema(max_items = 256))]
-    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256), inner(length(max = 256))))]
     pub tags: Vec<String>,
     /// `kb_properties` where `property_key = 'facet'`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -126,12 +134,20 @@ pub struct ResourceFilter {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<PropertyPredicate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "web-api", schema(max_length = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub stage: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "web-api", schema(max_length = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "web-api", schema(max_length = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub owner: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "web-api", schema(max_length = 4096))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 4096)))]
     pub title_contains: Option<String>,
 }
 
@@ -182,6 +198,10 @@ pub enum PropertyOp {
     /// key needs the scalar shape, not both. Listing both is harmless — the values OR — but it is
     /// not what makes the predicate span the population, and a caller who lists only the array
     /// shape silently answers for one half of it.
+    ///
+    /// **Size.** Each value is at most 16384 bytes of compact JSON and at most 256 nested array
+    /// elements or object members, and every predicate value in one composition totals at most
+    /// 524288 bytes (`property_value_too_large`, `property_value_budget_exceeded`).
     Contains { values: Vec<serde_json::Value> },
     /// `property_value <direction> $value` over jsonb's native ordering, type-guarded.
     ///
@@ -207,6 +227,10 @@ pub enum PropertyOp {
     /// key — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is
     /// NOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,
     /// and adding it saves one probe at the cost of a second value slot and a second SQL branch.
+    ///
+    /// **Size.** The bound is at most 16384 bytes of compact JSON and at most 256 nested array
+    /// elements or object members, and counts toward the same 524288-byte composition total as
+    /// `contains` values.
     Compare {
         direction: OrdOp,
         value: serde_json::Value,
@@ -251,6 +275,8 @@ pub enum OrdOp {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct PropertyPredicate {
+    #[cfg_attr(feature = "web-api", schema(max_length = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub key: String,
     pub op: PropertyOp,
 }
@@ -287,16 +313,298 @@ pub struct PropertyPredicate {
 /// resources is a small corpus: these vocabularies GROW with the material, so the field where the
 /// cap was already too tight is the one where the margin erodes fastest.
 ///
-/// 256 is chosen against what this actually bounds — **body bytes, not work**. At `MAX_STAGES`
-/// stages of 256 twenty-byte labels that is ~330 KB, comfortably inside the door's declared limit,
-/// and it is twice today's label vocabulary with room for a corpus an order of magnitude larger.
+/// 256 is chosen against what this actually bounds — **body bytes, not work** — together with
+/// [`MAX_FILTER_STRING_BYTES`], which bounds each string: at `MAX_STAGES` stages of 256 labels at
+/// that cap the labels would be ~4.2 MB, but all caller text in a composition is held to
+/// [`MAX_COMPOSITION_TEXT_BYTES`], and the coherence test measures the whole plan at every cap. 256 is twice today's label vocabulary with room for a
+/// corpus an order of magnitude larger.
 /// It matches `MAX_PER_CANDIDATE_PROBES`' number by arithmetic coincidence rather than by
 /// analogy — that one bounds a per-candidate multiplier and this one bounds a serialization.
 pub const MAX_FILTER_VALUES: usize = 256;
 
+/// The longest narrowing string — a label, tag, `doc_type`, facet key, property key, `stage`,
+/// `status` or `owner` — in JSON-escaped bytes ([`json_string_bytes`]). Refused as
+/// [`super::disposition::RefusalReason::FilterStringTooLong`].
+///
+/// The count caps bound how many of these a stage carries and never how long each is, so before
+/// this a plan inside every count cap could exceed the query door's body limit through string
+/// length alone (64 stages of 256 two-kilobyte labels is ~33 MB) and meet a bare 413.
+///
+/// # 256, measured against live data
+///
+/// The longest of each stored on the running installs `[measured — 2026-10-06]`: edge label 61
+/// bytes, tag 94, property key 31, facet key 39, stage or status value 33, profile handle 38. 256
+/// is 2.7x the longest.
+///
+/// # Published as characters, enforced as escaped bytes
+///
+/// Each is published as `max_length`, which JSON Schema counts in characters. A character is never
+/// more than its escaped bytes, so a client that checks the schema never refuses a string the
+/// server would accept. The converse does not hold: a string of multi-byte or control characters
+/// can be schema-valid and still refused here, with this typed reason. That is the same trade
+/// `Intention::query`'s published bound makes. Escaped bytes are the measure because they are what
+/// the body limit sees: counting decoded bytes, a plan of control-character labels inside every cap
+/// serialized to ~53 MB.
+pub const MAX_FILTER_STRING_BYTES: usize = 256;
+
+/// The longest `title_contains`, in JSON-escaped bytes. Refused as
+/// [`super::disposition::RefusalReason::FilterStringTooLong`]. A substring probe never usefully
+/// exceeds the longest title stored on the running installs `[measured — 2026-10-06]`: 2,316 bytes.
+/// 4096 is 1.8x it.
+pub const MAX_TITLE_CONTAINS_BYTES: usize = 4096;
+
+/// The largest single property-predicate value — one `contains` value or `compare` bound in
+/// compact serialized JSON bytes, or one facet value in JSON-escaped bytes. Refused as
+/// [`super::disposition::RefusalReason::PropertyValueTooLarge`].
+///
+/// # What it bounds, and why the count caps did not
+///
+/// `MAX_PER_CANDIDATE_PROBES` charges one probe per value whatever its size, so it bounds how
+/// MANY values a container carries and says nothing about how LARGE each one is. Each value is
+/// bound into the predicate SQL as jsonb and compared against every candidate row that carries
+/// the key, so its size multiplies that work and the request's memory.
+///
+/// # 16 KiB, measured against live data
+///
+/// A `contains` probe matches only a stored value that contains it, so no useful probe is larger
+/// than the largest value stored on the running installs `[measured — 2026-10-06]`: 8,460 bytes,
+/// and 1,020 for a single array element. 16 KiB is 1.9x the largest, so a probe naming any live
+/// value whole is admitted.
+///
+/// JSON Schema has no keyword for the serialized size of an arbitrary value, so this bound is
+/// published in the field's documentation rather than as a schema constraint.
+pub const MAX_PROPERTY_VALUE_BYTES: usize = 16384;
+
+/// The most nested nodes — array elements and object members, at every depth — one property
+/// predicate value may carry. Refused, like an over-long value, as
+/// [`super::disposition::RefusalReason::PropertyValueTooLarge`].
+///
+/// # Why a count as well as bytes
+///
+/// `stored @> probe` walks the stored value once per node of the probe, so a comparison costs the
+/// product of the two sizes, not their bytes. Against a stored 1M-element array, per comparison
+/// `[measured on local Postgres — 2026-10-06]`: a ~2,000-node probe (what 4 KiB of small elements
+/// holds) took 11.6 s, 256 nodes 1.49 s, 64 nodes 392 ms. This bounds the factor the probe
+/// controls. It does not bound the comparison: the stored side is any value a caller can write. The
+/// execution bound is the deployment's (`docs/concepts/query-cost-and-bounds.md`).
+///
+/// # 256, measured against live data
+///
+/// A probe matches only a stored value that contains it, so no useful probe has more nodes than the
+/// largest value stored on the running installs `[measured — 2026-10-06]`: 144. 256 is 1.8x it.
+pub const MAX_PROPERTY_VALUE_NODES: usize = 256;
+
+/// The nested nodes of one property-predicate value, as [`MAX_PROPERTY_VALUE_NODES`] counts them:
+/// every array element and object member at every depth. A scalar has none.
+pub fn property_value_nodes(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Array(xs) => {
+            xs.len() + xs.iter().map(property_value_nodes).sum::<usize>()
+        }
+        serde_json::Value::Object(m) => {
+            m.len() + m.values().map(property_value_nodes).sum::<usize>()
+        }
+        _ => 0,
+    }
+}
+
+/// The summed size of every property-predicate value in one composition, in the same measure as
+/// [`MAX_PROPERTY_VALUE_BYTES`]. Refused as
+/// [`super::disposition::RefusalReason::PropertyValueBudgetExceeded`].
+///
+/// The per-value cap alone does not keep the contract coherent. The count caps admit up to
+/// 16,384 values across `MAX_STAGES` stages, and 16,384 values at 16 KiB is ~268 MB, past any body
+/// limit. A plan the contract called legal would then meet a bare 413 rather than a refusal list.
+/// This budget, inside [`MAX_COMPOSITION_TEXT_BYTES`], keeps the largest legal composition under
+/// the hosting platform's request cap (`the_largest_legal_composition_fits_inside_the_declared_body_limit`
+/// holds it). It is also the ceiling on predicate bytes one request can make Postgres compare.
+///
+/// # 512 KiB
+///
+/// Sized down from 1 MiB so the whole plan fits Vercel's 4.5 MB request cap, where it must fit
+/// inside the text budget that also counts it. It still holds up to about sixty values at the
+/// largest value stored on the running installs (8,460 bytes, 2026-10-06), fewer if they carry
+/// punctuation or non-ASCII, which the text budget counts wider; a real plan carries a few.
+pub const MAX_COMPOSITION_PROPERTY_VALUE_BYTES: usize = 512 * 1024;
+
+/// The size of one property-predicate value, as [`MAX_PROPERTY_VALUE_BYTES`] measures it: compact
+/// serialized JSON bytes. Counted through a sink, so measuring a large value allocates nothing.
+pub fn property_value_bytes(value: &serde_json::Value) -> usize {
+    json_bytes(value)
+}
+
+/// The caller text one composition may carry — every narrowing string, facet value, predicate
+/// value and question — counted at [`worst_case_string_bytes`]. Refused as
+/// [`super::disposition::RefusalReason::TextBudgetExceeded`].
+///
+/// # Why a budget at the worst encoder, not the per-string caps alone
+///
+/// The per-string and per-value caps count the minimal JSON encoding, so a 256-byte tag can still
+/// hold 128 accented letters. But clients do not all encode minimally: Python's `json.dumps`
+/// escapes every non-ASCII character as `\uXXXX` by default (up to 3x), and Go's `encoding/json`
+/// escapes `<`, `>` and `&` the same way (6x), Gson also `=` and `'`, and .NET's
+/// `System.Text.Json` also `+`, `` ` `` and `"`. Against the per-string caps alone, a legal plan of
+/// accented tags sent through our own Python SDK was ~31 MB, past the body limit. The count here
+/// charges every character an encoder could escape at its full `\uXXXX` width, so a plan inside
+/// this budget fits the body limit under any encoder that escapes per character; the coherence test
+/// measures that worst case.
+///
+/// # 768 KiB
+///
+/// Sized from the platform, not from callers. On Vercel, a body past 4.5 MB is refused by the
+/// platform with a bare 413 before the door reads it, and the non-text parts of the largest legal
+/// plan (its id sets, supplied embeddings and structure) already take about 3.6 MB at their caps.
+/// What is left is the room for caller text. It is still far above any plan a person or agent
+/// writes: the longest live title is 2,316 bytes, and every per-string and per-value cap is
+/// unchanged, so no single item stored on the running installs is refused.
+pub const MAX_COMPOSITION_TEXT_BYTES: usize = 768 * 1024;
+
+/// A string's bytes inside its quotes under the most expansive JSON encoder that escapes per
+/// character: an ASCII letter, digit or space is one byte, because no encoder escapes those; every
+/// other character could be written as a six-byte `\uXXXX` (serde: controls; Python's
+/// `ensure_ascii`: all non-ASCII; Go: `<>&`; Gson: also `=` and `'`; .NET: also `+`, `` ` `` and
+/// `"`), and a character outside the Basic Multilingual Plane as a twelve-byte surrogate pair.
+pub fn worst_case_string_bytes(s: &str) -> usize {
+    s.chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | ' ' => 1,
+            c if (c as u32) > 0xFFFF => 12,
+            _ => 6,
+        })
+        .sum()
+}
+
+/// A JSON value's serialized bytes under the same most expansive encoder: every string (object
+/// keys included) at [`worst_case_string_bytes`] plus its quotes, and every number at the widest
+/// a client could have written it.
+///
+/// **Numbers are not encoder-invariant.** An integer past 64 bits is parsed to an `f64` and
+/// serde re-writes it short (`1e300`), while Python's `json.dumps(10**300)` sent all 301 digits; a
+/// float may come back with a longer exponent or more digits than serde writes. So an `f64` that is
+/// integral and beyond 2^63 counts as `MAX_F64_DIGITS` (310) bytes, and any other `f64` as at least
+/// `MAX_F64_REPR_BYTES` (25). Integers within 64 bits print the same digits everywhere.
+///
+/// **Separators at their widest default too.** Python's `json.dumps` writes `", "` and `": "` unless
+/// told otherwise, a byte more per separator than a compact encoder, and our own SDK is a Python
+/// client. So a comma counts two bytes and a member's colon two. Indentation is a caller's choice,
+/// not an encoder default, and stays padding.
+pub fn worst_case_value_bytes(value: &serde_json::Value) -> usize {
+    use serde_json::Value;
+    let separators = |n: usize| 2 * n.saturating_sub(1);
+    match value {
+        Value::String(s) => worst_case_string_bytes(s) + 2,
+        Value::Array(xs) => {
+            2 + separators(xs.len()) + xs.iter().map(worst_case_value_bytes).sum::<usize>()
+        }
+        Value::Object(m) => {
+            2 + separators(m.len())
+                + m.iter()
+                    .map(|(k, v)| worst_case_string_bytes(k) + 4 + worst_case_value_bytes(v))
+                    .sum::<usize>()
+        }
+        Value::Number(n) if n.is_f64() => {
+            let x = n.as_f64().unwrap_or(0.0);
+            if x.fract() == 0.0 && x.abs() >= 9.223_372_036_854_776e18 {
+                MAX_F64_DIGITS
+            } else {
+                json_bytes(value).max(MAX_F64_REPR_BYTES)
+            }
+        }
+        other => json_bytes(other),
+    }
+}
+
+/// The most decimal characters an integral `f64` can need: 309 digits for `f64::MAX`, and a sign.
+const MAX_F64_DIGITS: usize = 310;
+
+/// The most characters a shortest round-trip `f64` takes in any common encoder. Exponent form is 24:
+/// 17 significant digits, a sign, a point, and a signed three-digit exponent
+/// (`-1.2345678901234567e-308`). But JavaScript's `JSON.stringify` and Go's `encoding/json` write a
+/// magnitude in `[1e-6, 1e-5)` in decimal form, five zeros before the digits:
+/// `-0.0000012345678901234567` is 25, the widest either form reaches.
+const MAX_F64_REPR_BYTES: usize = 25;
+
+/// The bytes a string occupies inside its JSON quotes on the wire: escapes counted, so a control
+/// character costs its six-byte `\u00XX`. Every narrowing string and facet value is measured this
+/// way, because the body limit sees the escaped form; counting decoded bytes let a plan inside
+/// every cap serialize to several times its counted size.
+pub fn json_string_bytes(s: &str) -> usize {
+    // The serializer writes the opening and closing quote; they are not the string's.
+    json_bytes(s) - 2
+}
+
+fn json_bytes<T: Serialize + ?Sized>(value: &T) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    // Writing to an infallible sink cannot fail for a string or a `Value`: every map key is a
+    // string.
+    serde_json::to_writer(&mut count, value).expect("a string or Value always serializes");
+    count.0
+}
+
+impl PropertyOp {
+    /// The caller-supplied values this operator binds into SQL: every `contains` value, the one
+    /// `compare` bound, and none for `has_key`.
+    pub fn values(&self) -> &[serde_json::Value] {
+        match self {
+            PropertyOp::HasKey => &[],
+            PropertyOp::Contains { values } => values,
+            PropertyOp::Compare { value, .. } => std::slice::from_ref(value),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_worst_case_measure_charges_every_character_some_encoder_escapes() {
+        // One byte only where no encoder escapes; six for anything Gson, .NET, Go or Python's
+        // ensure_ascii may write as \uXXXX; twelve for a surrogate pair.
+        assert_eq!(worst_case_string_bytes("aZ9 "), 4);
+        for c in [
+            "=", "'", "+", "`", "\"", "\\", "/", "<", "&", "é", "\u{1}", "\u{2028}",
+        ] {
+            assert_eq!(worst_case_string_bytes(c), 6, "{c:?}");
+        }
+        assert_eq!(worst_case_string_bytes("😀"), 12);
+    }
+
+    #[test]
+    fn a_number_counts_at_the_widest_a_client_could_have_written_it() {
+        // Python sends 10**300 as 301 digits; serde parses it to an f64 and would re-write `1e300`.
+        let big: serde_json::Value =
+            serde_json::from_str(&format!("1{}", "0".repeat(300))).unwrap();
+        assert!(
+            worst_case_value_bytes(&big) >= 301,
+            "{}",
+            worst_case_value_bytes(&big)
+        );
+        // A float is charged its longest shortest-round-trip form.
+        assert_eq!(
+            worst_case_value_bytes(&serde_json::json!(0.5)),
+            MAX_F64_REPR_BYTES
+        );
+        // The decimal form JavaScript and Go write just above 1e-6 is the widest of all: a
+        // `Float32Array` component widened to a double lands there.
+        assert_eq!("-0.0000012345678901234567".len(), MAX_F64_REPR_BYTES);
+        assert!(
+            worst_case_value_bytes(&serde_json::json!(-0.000_001_234_567_890_123_456_7))
+                >= "-0.0000012345678901234567".len()
+        );
+        // An integer within 64 bits prints the same digits everywhere.
+        assert_eq!(worst_case_value_bytes(&serde_json::json!(12345)), 5);
+    }
 
     #[test]
     fn edge_kind_is_closed_at_the_four_the_ddl_declares() {

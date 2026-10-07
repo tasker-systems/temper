@@ -16,7 +16,7 @@ Temper bounds a composed read in three places, and the split is deliberate:
 - **The contract bounds a plan's shape.** Anything knowable from the request alone — how many
   stages it declares, whether it is well-formed — is refused by the validator before the request
   costs anything. These bounds are **published in the wire contract**, not merely enforced, so a
-  client can refuse the same plan the server would.
+  client checking the contract never refuses a plan the server would run.
 - **Each act declares its own ceilings.** A row ceiling belongs to the act that produces the rows,
   because only the act knows whether truncating its answer would make that answer wrong. There is
   no global row cap, and that is a choice rather than an omission.
@@ -50,6 +50,36 @@ That cap is published as `max_items` on `Composition.stages` in the wire contrac
 matters more than it looks. A bound a client enforces but the contract does not declare is a
 client refusing plans a newer server would happily run. Publishing it is what makes local
 `--check` trustworthy rather than a source of false refusals.
+
+The same layer bounds the **size** of everything a plan carries, so that a plan the contract
+calls legal always fits the request body limit — and the hosting platform's request cap in front
+of it, which on Vercel is 4.5 MB, far below the door's own 25 MB. The two composition budgets are
+sized for that cap:
+
+| Bound | Limit | Refused as |
+|---|---|---|
+| A narrowing string: label, tag, `doc_type`, facet or property key, `stage`, `status`, `owner` | 256 bytes | `filter_string_too_long` |
+| `title_contains` | 4096 bytes | `filter_string_too_long` |
+| A property-predicate value: `contains` value, `compare` bound, facet value | 16384 bytes, 256 nested elements | `property_value_too_large` |
+| All predicate values in a composition | 512 KiB | `property_value_budget_exceeded` |
+| All caller text in a composition, counted at the most expansive JSON encoding | 768 KiB | `text_budget_exceeded` |
+| `returns`, a combine stage's `inputs` | 64 entries | `list_too_long` |
+| An act's `inputs` | 2, one per relation | `list_too_long` |
+
+String sizes count JSON-escaped bytes, which the schema cannot express exactly: it publishes a
+character count. So the guarantee runs one way. A client checking the schema never refuses a plan
+the server would run, but the server can refuse a schema-valid string of multi-byte or control
+characters, with the typed reason above.
+
+The text budget counts every character an encoder could escape at its full six-byte `\uXXXX`
+width (twelve outside the Basic Multilingual Plane), because clients differ: Python's `json.dumps`
+escapes non-ASCII by default, Go's encoder escapes `<>&`, Gson and .NET escape more punctuation.
+Only ASCII letters, digits and spaces count one byte. Numbers count at the widest a client could
+have written them, and separators at Python's default `", "` and `": "`. A plan inside the budget
+fits the platform's cap under any encoder that escapes per character.
+
+`/api/search` holds the matching fields to the same numbers, and answers `400 BAD_REQUEST` naming
+each field that is over.
 
 ## A bound on waiting is not a bound on work
 

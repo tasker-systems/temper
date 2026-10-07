@@ -31,19 +31,19 @@ use crate::middleware::require_mcp_auth;
 /// function. `RequestBodyLimitLayer` is the instrument that works on a raw service, and sitting
 /// inside decompression it measures decompressed bytes, the same property `/api/query`'s limit has.
 ///
-/// **Why this is not `QUERY_MAX_BODY_BYTES`.** `/api/query` reads one composition and 4 MB is
-/// generous for it. This door carries the whole tool surface, including `ingest`'s inline
-/// `content: String` and `data_artifacts`' `content: serde_json::Value`, so a 4 MB ceiling could
-/// refuse legitimate work — and lowering a limit later is the breaking direction. 25 MB matches
-/// `GITHUB_MAX_WEBHOOK_BYTES`, this repo's existing generous transport bound, which puts the number
-/// on an in-repo precedent rather than on a guess.
+/// **Why this is its own constant, though `QUERY_MAX_BODY_BYTES` is the same number.**
+/// `/api/query` reads one composition, and its limit is held against the largest legal one. This
+/// door carries the whole tool surface, including `ingest`'s inline `content: String` and
+/// `data_artifacts`' `content: serde_json::Value`, so it is sized to that work instead — and
+/// lowering a limit later is the breaking direction. 25 MB matches `GITHUB_MAX_WEBHOOK_BYTES`,
+/// this repo's existing generous transport bound, which puts the number on an in-repo precedent
+/// rather than on a guess.
 ///
 /// **What it does NOT bound**, stated so it is not mistaken for more than it is: every declaration
-/// cap on a composition is enforced identically on this door, because `run_query` calls the same
-/// `query_read::prepare`. What a transport limit adds is the backstop for the cost the declaration
-/// caps cannot see — `QUERY_MAX_BODY_BYTES`' own doc names it, a single `Contains` value counting
-/// as one probe however large. At 25 MB that shape is bounded far more loosely here than at 4 MB on
-/// the HTTP door. Closing it properly is a declaration-cap question, not a transport one.
+/// cap on a composition — counts, string lengths, and property-predicate values — is enforced
+/// identically on this door, because `run_query` forwards to `/api/query` and its validator, so a
+/// legal plan fits here as it fits there. A transport limit adds only the backstop for bytes that
+/// are not the plan: whitespace and fields serde ignores.
 const MCP_MAX_BODY_BYTES: usize = 25 * 1024 * 1024;
 
 /// Shared state for discovery handlers and the MCP middleware: the JWT edge's verification

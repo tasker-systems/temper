@@ -90,6 +90,10 @@ module Temper::Generated
         invalid_properties.push('invalid value for "key", key cannot be nil.')
       end
 
+      if @key.to_s.length > 256
+        invalid_properties.push('invalid value for "key", the character length must be smaller than or equal to 256.')
+      end
+
       if @op.nil?
         invalid_properties.push('invalid value for "op", op cannot be nil.')
       end
@@ -102,6 +106,7 @@ module Temper::Generated
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @key.nil?
+      return false if @key.to_s.length > 256
       return false if @op.nil?
       true
     end
@@ -111,6 +116,10 @@ module Temper::Generated
     def key=(key)
       if key.nil?
         fail ArgumentError, 'key cannot be nil'
+      end
+
+      if key.to_s.length > 256
+        fail ArgumentError, 'invalid value for "key", the character length must be smaller than or equal to 256.'
       end
 
       @key = key

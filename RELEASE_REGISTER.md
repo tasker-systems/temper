@@ -62,6 +62,55 @@ pr: self
 classes: behavioral
 surfaces: clients, internal
 status: signal-only
+- **The query and search doors bound the size of every value and string a request carries, so every legal plan fits the body limit**
+  `/api/query`'s shape pass now refuses: a `contains` value, `compare` bound or facet value larger
+  than 16384 bytes or carrying more than 256 nested array elements or object members
+  (`property_value_too_large`); predicate values summing past 524288 bytes per composition
+  (`property_value_budget_exceeded`); and a label, tag, `doc_type`, facet or property key,
+  `stage`, `status` or `owner` longer than 256 bytes, or a `title_contains` longer than 4096
+  (`filter_string_too_long`). Strings and facet values are measured as JSON-escaped bytes. All
+  caller text in one composition is also budgeted at 768 KiB counted at the most expansive
+  per-character escaping encoder (`text_budget_exceeded`), so a legal plan fits the body limit under any per-character escaping encoder its
+  client uses; `returns` and a combine stage's `inputs` past 64, or an act's `inputs` past 2, are
+  refused once up front (`list_too_long`). All five are new members of the open `RefusalReason` vocabulary,
+  arriving in the existing `PLAN_REFUSED` answer beside every sibling refusal. No refusal fires once
+  per entry of a caller-sized list any more, and none repeats an unbounded caller string: empty
+  keys, empty `contains` and oversized values refuse once per source with a count; an inadmissible
+  `with` section once per section; the invocation-`properties` redirect once per stage, naming only
+  a key inside the cap; an unknown act name or id kind is repeated only when 64 bytes or shorter. A body `/api/query` cannot read now answers in the standard
+  error envelope under the new code `UNREADABLE_PLAN` (was plain text), at the reader's own status
+  (`422` for a wrong type, now declared in the OpenAPI document; `400`, `415`, and `413` when the
+  door's own limit fires), with a message repeating at most 1024 bytes of what failed: serde's `invalid type` and `unknown variant` messages quoted the
+  caller's string whole. MCP `run_query` relays `plan` unread, its schema still `Composition`'s
+  (`tools/list` is byte-identical), so an unreadable plan is the API's to refuse and reaches the
+  agent as `invalid_params` in the API's words, where the edge's own parse used to quote it whole;
+  temper-client reads the code as `ClientError::UnreadablePlan`, and the composition-shape
+  measurement for relayed plans moved from the edge to the API (still `door=mcp`, still once).
+  `/api/search` (and MCP `search`, which
+  forwards to it) answers `400 BAD_REQUEST` naming each field when `query` exceeds 4096 bytes,
+  `embedding` 768 components, `bound_ids` or `cogmap_ids` 256 ids, or `doc_type`, `context_ref` or
+  `search_config` 256 bytes. Caps are published as `maxLength`/`maxItems` where the schema can carry
+  them (the generated Ruby and Python models now reject an over-long scalar before sending) and in
+  descriptions where it cannot. The largest legal composition measures 4,358,218 bytes at the most
+  expansive per-character encoding, separators at Python's default width: the composition budgets
+  are sized so it fits the 4.5 MB request cap Vercel enforces ahead of the door, not only the
+  door's 25 MB. temper-py now sends request bodies as UTF-8 rather than ASCII-escaped
+  (`ensure_ascii=False`), and the UI's search palette declines a query over 4096 bytes itself.
+  Every cap clears the largest value stored on the running installs (2026-10-06) by about 2x:
+  property value 8,460 bytes and 144 nodes, facet value 1,304, title 2,316, tag 94, edge label
+  61. The node cap bounds the probe's factor in a comparison's cost (256 nodes
+  against a stored 1M-element array: 1.49 s, against 11.6 s for ~2,000) but not the comparison;
+  the execution bound remains the deployment's (`docs/concepts/query-cost-and-bounds.md`). The wire-class comparator now reads a new
+  member of an open vocabulary (a `oneOf` with an unconstrained string arm) as growth. Who observes:
+  a caller sending a value, string or search field over its cap; a caller whose body `/api/query`
+  cannot read, and an MCP agent, whose `run_query` error for such a plan is now the API's bounded
+  sentence. User-visible: yes, as a refusal.
+  Release relevance: additive (five refusal reasons, the `UNREADABLE_PLAN` code) and behavioral
+  (requests that were accepted can now be refused; an unreadable plan's body is JSON, not text).
+pr: self
+classes: additive, behavioral
+surfaces: http, mcp, clients
+status: signal-only
 
 ## Shipped in v0.6.0
 - **This release — the 0.6.0 fleet alignment: VERSION 0.5.4 → 0.6.0 across crates, packages, and clients**

@@ -868,6 +868,16 @@ async fn finish_attempt(
 ///
 /// Extracted as a pure function so it can be unit-tested without network calls.
 pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
+    // Keyed on the CODE alone, ahead of the status arms: the reader picks the status (`400`
+    // malformed, `413`, `415`, `422` a wrong type), and every one of them is the same caller fault.
+    if status.is_client_error()
+        && parse_error_field(body, "code").as_deref()
+            == Some(temper_core::error::UNREADABLE_PLAN_CODE)
+    {
+        let message = parse_error_field(body, "message")
+            .unwrap_or_else(|| "the server could not read the plan".to_owned());
+        return ClientError::UnreadablePlan { message };
+    }
     match status.as_u16() {
         // Keyed on the CODE, mirroring the 403 and 422 arms — a 400 is otherwise an ordinary
         // caller error, and only `PLAN_REFUSED` carries a refusal list. A body-shape heuristic
@@ -1369,6 +1379,28 @@ mod tests {
             } => assert_eq!(message, "Invalid JSON"),
             other => panic!("expected the incumbent Server mapping, got {other:?}"),
         }
+    }
+
+    /// An unreadable plan is a caller error at whatever status the server's reader chose, keyed on
+    /// the code. Before it had a code, a `422` with no envelope fell to the catch-all and reached
+    /// the MCP edge as `Server { status: 422, message: "unexpected status 422" }`: a caller fault
+    /// reported as a server fault, with what failed thrown away.
+    #[test]
+    fn an_unreadable_plan_is_a_caller_error_at_any_reader_status() {
+        let body = r#"{"error":{"code":"UNREADABLE_PLAN","message":"stages: invalid type"}}"#;
+        for code in [400, 413, 415, 422] {
+            match map_status_to_error(status(code), body) {
+                ClientError::UnreadablePlan { message } => {
+                    assert_eq!(message, "stages: invalid type", "status {code}");
+                }
+                other => panic!("status {code}: expected UnreadablePlan, got {other:?}"),
+            }
+        }
+        // The same code on a 5xx is not a caller error, and is not reclassified as one.
+        assert!(matches!(
+            map_status_to_error(status(500), body),
+            ClientError::Server { status: 500, .. }
+        ));
     }
 
     /// The code claimed refusals and the payload was not refusals. Reporting an empty list would

@@ -54,7 +54,9 @@ use crate::types::query::composition::{
 };
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
-use crate::types::query::filter::{FilterField, PropertyOp, PropertyPredicate};
+use crate::types::query::filter::{
+    json_string_bytes, FilterField, PropertyOp, PropertyPredicate, MAX_FILTER_STRING_BYTES,
+};
 use crate::types::query::id_set::IdKind;
 use crate::types::query::registry::declaration;
 use crate::types::query::stage::{StageInput, StageName, StageRelation};
@@ -329,13 +331,18 @@ pub(super) fn validate_stages(
 /// would take a refusal away from a caller who used to get it, against this module's own rule that
 /// `validate` returns every refusal rather than the first.
 pub(super) fn validate_returns(c: &Composition, errs: &mut Vec<PlanRefusal>) {
+    // **Once per distinct section, never once per entry.** This runs even when the shape pass has
+    // refused an over-long `returns` or `with`, so iterating entries would answer a repeated
+    // section with a refusal per repeat.
+    let mut refused: Vec<ResourceSection> = Vec::new();
     for ret in &c.outcome.returns {
         // Refused here rather than at deserialization, which is the whole reason `with` carries
         // the shared `ResourceSection` vocabulary instead of a narrow query-local enum: a serde
         // failure short-circuits before this function runs, so a caller with several problems
         // would learn about one of them, phrased by a deserializer.
         for section in &ret.with {
-            if !ReturnSpec::ADMITTED_SECTIONS.contains(section) {
+            if !ReturnSpec::ADMITTED_SECTIONS.contains(section) && !refused.contains(section) {
+                refused.push(*section);
                 errs.push(refusal(
                     Some(&ret.stage),
                     RefusalReason::SectionNotAvailable,
@@ -352,6 +359,16 @@ pub(super) fn validate_returns(c: &Composition, errs: &mut Vec<PlanRefusal>) {
                 ));
             }
         }
+    }
+}
+
+/// An id kind as a refusal names it: the kind itself when it is one this binary knows or short
+/// enough to be a typo, otherwise only its length. `IdKind`'s open arm carries whatever string the
+/// caller sent, and a refusal must not return it.
+fn kind_label(kind: &IdKind) -> String {
+    match kind {
+        IdKind::Other(raw) if raw.len() > 64 => format!("of {} bytes", raw.len()),
+        _ => format!("`{kind:?}`"),
     }
 }
 
@@ -451,9 +468,10 @@ fn check_act(
                     RefusalReason::UnsupportedSeedKind,
                     format!(
                         "act `{}` cannot grow from a set — it does not accept seeds of kind \
-                         `{kind:?}`. Narrowing within the set instead would answer a different \
-                         question than the one asked",
-                        act_wire_name(&inv.act)
+                         {}. Narrowing within the set instead would answer a different question \
+                         than the one asked",
+                        act_wire_name(&inv.act),
+                        kind_label(&kind)
                     ),
                 ));
             } else if !as_seed && !decl.accepts_bounds.contains(&kind) {
@@ -461,8 +479,9 @@ fn check_act(
                     Some(name),
                     RefusalReason::UnsupportedBoundKind,
                     format!(
-                        "act `{}` does not accept bounds of kind `{kind:?}`",
-                        act_wire_name(&inv.act)
+                        "act `{}` does not accept bounds of kind {}",
+                        act_wire_name(&inv.act),
+                        kind_label(&kind)
                     ),
                 ));
             }
@@ -563,10 +582,10 @@ fn check_act(
             // can still spend arbitrary time by other means.
             //
             // Note the residual this cap leaves even with the stage cap in place: these are
-            // PER-STAGE ceilings, and `MAX_STAGES` of them multiply. There is no composition-level
-            // analogue of `MAX_COMPOSITION_INTENTION_BYTES` for the axes that reach Postgres, which
-            // is a known hole and not an oversight — it is the same question as the execution
-            // bound, and it is sized by measurement rather than by argument.
+            // PER-STAGE ceilings, and `MAX_STAGES` of them multiply. The predicate VALUES have a
+            // composition-level bound (`MAX_COMPOSITION_PROPERTY_VALUE_BYTES`), but the probe COUNT
+            // does not, and neither bounds what a comparison costs against a large stored value —
+            // that is the execution bound, the deployment's to set by measurement.
             //
             // That is task `01a000ee-9fec-7283-baa5-75cd1580f023`, whose successor
             // `01a0013c-06d2-7f22-bafc-409154f72af3` holds the number. Not fixed here
@@ -619,16 +638,29 @@ fn check_act(
     // **The field still REFUSES, and is not removed**, which is the whole point of retyping it: see
     // `ActInvocation::properties`. Removing it would route a stale caller into `deny_unknown_fields`
     // and answer with a deserializer 400 outside `ErrorBody` — worse than the refusal it replaces.
-    for p in &inv.properties {
+    //
+    // **One refusal for the field, not one per predicate.** Nothing caps how many predicates this
+    // field carries, so a refusal each turned a body of them into a larger refusal list. It names
+    // the first key, which is what makes the redirect actionable, only when that key is inside the
+    // narrowing-string cap; a longer one is refused for its length already.
+    if let Some(first) = inv.properties.first() {
+        let shown = if json_string_bytes(&first.key) <= MAX_FILTER_STRING_BYTES {
+            format!("`{}`", first.key)
+        } else {
+            "the first predicate".to_string()
+        };
+        let others = match inv.properties.len() - 1 {
+            0 => String::new(),
+            n => format!(" and the {n} after it"),
+        };
         errs.push(refusal(
             Some(name),
             RefusalReason::FilterNotApplicable,
             format!(
                 "a property predicate belongs in a filter container, not on the invocation — move \
-                 `{}` into `resource_filter.properties` or `edge_filter.properties` depending on \
-                 what it narrows. Carried here it would name a subject the stage's filter already \
-                 names",
-                p.key
+                 {shown}{others} into `resource_filter.properties` or `edge_filter.properties` \
+                 depending on what each narrows. Carried here it would name a subject the stage's \
+                 filter already names"
             ),
         ));
     }

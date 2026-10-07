@@ -65,6 +65,12 @@ pub enum ApiError {
     /// code is what lets a client know a body carries refusals without sniffing `details`.
     #[error("Plan refused: {} refusal(s)", .refusals.len())]
     PlanRefused { refusals: Vec<PlanRefusal> },
+    /// A composition body the door could not read, under the distinct code
+    /// [`temper_core::error::UNREADABLE_PLAN_CODE`] and the reader's own status. The message is
+    /// the producer's to bound: it carries serde's account of what failed, which can quote the
+    /// caller's input.
+    #[error("{message}")]
+    UnreadablePlan { status: StatusCode, message: String },
     #[error("Conflict: {0}")]
     Conflict(String),
     /// An append or finalize on an ingest that has ended (`cancelled` or `abandoned`, SQLSTATE
@@ -180,6 +186,9 @@ impl IntoResponse for ApiError {
                 StatusCode::BAD_REQUEST,
                 temper_core::error::PLAN_REFUSED_CODE,
             ),
+            ApiError::UnreadablePlan { status, .. } => {
+                (*status, temper_core::error::UNREADABLE_PLAN_CODE)
+            }
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
             ApiError::IngestEnded(_) => {
                 (StatusCode::CONFLICT, temper_core::error::INGEST_ENDED_CODE)
@@ -240,6 +249,11 @@ impl IntoResponse for ApiError {
             }
             ApiError::BadRequest(_) => {
                 tracing::warn!(status_code, error_code = code, message = %bounded(&message), "bad request");
+            }
+            // The code and status only, never the message: it is serde's account of a composition,
+            // which is caller-authored content and can quote it — the `PlanRefused` rule below.
+            ApiError::UnreadablePlan { .. } => {
+                tracing::warn!(status_code, error_code = code, "unreadable plan");
             }
             ApiError::DataArtifactRefusal(_) => {
                 tracing::warn!(status_code, error_code = code, message = %bounded(&message), "data artifact refused");
@@ -376,6 +390,9 @@ impl From<ApiError> for temper_core::error::TemperError {
                     .collect::<Vec<_>>()
                     .join("; "),
             ),
+            // Degrades to BadRequest text for the same reason as `PlanRefused` above: the
+            // extractor renders it straight to HTTP, and no server-side path converts it.
+            ApiError::UnreadablePlan { message, .. } => TemperError::BadRequest(message),
             ApiError::Conflict(s) => TemperError::Conflict(s),
             ApiError::IngestEnded(s) => TemperError::IngestEnded(s),
             ApiError::ContentIntegrity(s) => TemperError::ContentIntegrity(s),

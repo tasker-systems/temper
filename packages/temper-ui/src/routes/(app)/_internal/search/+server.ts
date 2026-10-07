@@ -2,6 +2,9 @@ import { json } from '@sveltejs/kit';
 import { runSearch } from '$lib/server/vault-search';
 import type { RequestHandler } from './$types';
 
+/** `/api/search`'s cap on `query`: `SearchParams.query`'s published `maxLength`. */
+const MAX_QUERY_BYTES = 4096;
+
 /**
  * The palette's proxy onto the real asking door, `POST /api/search` (spec D1, the graph page's
  * `/api/query` precedent). The session token stays server-side; the browser never sees it.
@@ -19,6 +22,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// incumbent GET, which never spent a read on a blank query either. Plain JSON, same
 		// body shape as the 503: a caller checking the body shape reads both as non-answers.
 		return json({ error: 'empty query' }, { status: 400 });
+	}
+	// `/api/search` refuses a question over 4096 bytes as a 400. Declined here in the same shape as
+	// the empty query, so an over-long paste reads as the caller's to shorten rather than as the
+	// 503 an upstream refusal would otherwise surface as.
+	if (new TextEncoder().encode(query).length > MAX_QUERY_BYTES) {
+		return json({ error: 'query too long' }, { status: 400 });
 	}
 
 	try {

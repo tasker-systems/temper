@@ -41,21 +41,31 @@ fn default_search_config() -> String {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct SearchParams {
-    /// Pre-computed 768-dim embedding vector.
+    /// Pre-computed 768-dim embedding vector. At most 768 components.
     #[serde(default)]
+    #[cfg_attr(feature = "web-api", schema(max_items = 768))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 768)))]
     pub embedding: Option<Vec<f32>>,
-    /// Plain-text query for full-text search.
+    /// Plain-text query for full-text search. At most 4096 bytes.
     #[serde(default)]
+    #[cfg_attr(feature = "web-api", schema(max_length = 4096))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 4096)))]
     pub query: Option<String>,
     /// Postgres text-search configuration (default "english").
     ///
     /// NOTE: reserved/inert — FTS is hardcoded `'english'` in the `search_exact` SQL function
     /// (Beat 1 kept multilingual storage-only); this param does not affect results yet.
     #[serde(default = "default_search_config")]
+    #[cfg_attr(feature = "web-api", schema(max_length = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub search_config: String,
     /// Filter by context **ref** (UUID or decorated @owner/slug), resolved server-side.
+    #[cfg_attr(feature = "web-api", schema(max_length = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub context_ref: Option<String>,
     /// Filter by document type.
+    #[cfg_attr(feature = "web-api", schema(max_length = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub doc_type: Option<String>,
     /// Maximum results (default 10, max 50).
     pub limit: Option<i64>,
@@ -78,13 +88,17 @@ pub struct SearchParams {
     /// maps at once is a composition, which is `/api/query`'s job. The plural is kept because
     /// clients send it and a one-element set is still honoured.
     #[serde(default)]
+    #[cfg_attr(feature = "web-api", schema(max_items = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub cogmap_ids: Option<Vec<Uuid>>,
     /// Narrow to a set of resource ids. Composes with `context_ref` / `cogmap_id` rather than
     /// replacing them — the fragments apply bound and anchor conjunctively.
     ///
     /// Reachable from every door: the MCP `search` tool takes this whole struct as its
-    /// `Parameters`, so the field arrives there without a tool change.
+    /// `Parameters`, so the field arrives there without a tool change. At most 256 ids.
     #[serde(default)]
+    #[cfg_attr(feature = "web-api", schema(max_items = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub bound_ids: Option<Vec<Uuid>>,
 }
 

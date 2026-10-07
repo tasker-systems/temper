@@ -184,6 +184,17 @@ per-stage predicate and probe caps, and the aggregate embed budget
 (`intention_budget_exceeded`) — what a deployment can embed in one request is a property of
 that deployment. Those arrive as refusals.
 
+The narrowing-string caps (256 bytes for a label, tag, `doc_type`, key, `stage`, `status` or
+`owner`; 4096 for `title_contains`) are published as `maxLength` on the scalar fields, which the
+generated models check as characters. The server counts JSON-escaped bytes, so a string of
+multi-byte or control characters can pass here and still be refused as
+`filter_string_too_long`. The property-predicate value bounds (16384 bytes and 256 nested elements
+per `contains` value, `compare` bound or facet value; 524288 bytes across one composition) have
+no JSON Schema keyword, so they arrive only as `property_value_too_large` and
+`property_value_budget_exceeded`. Nor does the composition's caller-text budget: 786432 bytes of
+narrowing strings, facet and predicate values and questions, counted as the most expansive
+per-character encoder would send them, refused as `text_budget_exceeded`.
+
 
 ## Credentials
 

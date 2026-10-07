@@ -16,7 +16,7 @@ require 'time'
 module Temper::Generated
   # Narrowing over resources. Every field is AND-composed; an unset field narrows nothing.  **No field here has a closed vocabulary, and none is checked against one.** `[corrected — 2026-08-10, ADJ-10]` This claimed `doc_type`, `stage` and `status` were closed vocabularies whose unknown values raise `RefusalReason::UnknownFilterValue`. None of the three is: `stage` and `status` are free-form `Option<String>` and are refused wholesale by this door as `FilterNotApplicable`, and `doc_type` is a `kb_properties` row a resource may carry any value for. `[2026-08-15]` `UnknownFilterValue` used to be raised here for exactly one thing — an unrecognized `PropertySubject` — and **that reason is now gone with the type**, so nothing on this struct raises it.  The rule that replaces the old claim: *an unknown value in a genuinely closed set* is a refusal, because it can never match; *a string that may be perfectly legitimate and matches nothing in the scope you asked about* is an honest empty. `doc_type` is the second kind.
   class ResourceFilter < ApiModelBase
-    # `kb_properties` where `property_key = 'doc_type'`.
+    # `kb_properties` where `property_key = 'doc_type'`. Each value is at most 256 bytes.
     attr_accessor :doc_type
 
     # `kb_properties` where `property_key = 'facet'`.
@@ -31,7 +31,7 @@ module Temper::Generated
 
     attr_accessor :status
 
-    # `kb_properties` where `property_key = 'tags'`. AND-containment.
+    # `kb_properties` where `property_key = 'tags'`. AND-containment. Each tag is at most 256 bytes.
     attr_accessor :tags
 
     attr_accessor :title_contains
@@ -150,8 +150,24 @@ module Temper::Generated
         invalid_properties.push('invalid value for "doc_type", number of items must be less than or equal to 256.')
       end
 
+      if !@owner.nil? && @owner.to_s.length > 256
+        invalid_properties.push('invalid value for "owner", the character length must be smaller than or equal to 256.')
+      end
+
+      if !@stage.nil? && @stage.to_s.length > 256
+        invalid_properties.push('invalid value for "stage", the character length must be smaller than or equal to 256.')
+      end
+
+      if !@status.nil? && @status.to_s.length > 256
+        invalid_properties.push('invalid value for "status", the character length must be smaller than or equal to 256.')
+      end
+
       if !@tags.nil? && @tags.length > 256
         invalid_properties.push('invalid value for "tags", number of items must be less than or equal to 256.')
+      end
+
+      if !@title_contains.nil? && @title_contains.to_s.length > 4096
+        invalid_properties.push('invalid value for "title_contains", the character length must be smaller than or equal to 4096.')
       end
 
       invalid_properties
@@ -162,7 +178,11 @@ module Temper::Generated
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if !@doc_type.nil? && @doc_type.length > 256
+      return false if !@owner.nil? && @owner.to_s.length > 256
+      return false if !@stage.nil? && @stage.to_s.length > 256
+      return false if !@status.nil? && @status.to_s.length > 256
       return false if !@tags.nil? && @tags.length > 256
+      return false if !@title_contains.nil? && @title_contains.to_s.length > 4096
       true
     end
 
@@ -181,6 +201,36 @@ module Temper::Generated
     end
 
     # Custom attribute writer method with validation
+    # @param [Object] owner Value to be assigned
+    def owner=(owner)
+      if !owner.nil? && owner.to_s.length > 256
+        fail ArgumentError, 'invalid value for "owner", the character length must be smaller than or equal to 256.'
+      end
+
+      @owner = owner
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] stage Value to be assigned
+    def stage=(stage)
+      if !stage.nil? && stage.to_s.length > 256
+        fail ArgumentError, 'invalid value for "stage", the character length must be smaller than or equal to 256.'
+      end
+
+      @stage = stage
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] status Value to be assigned
+    def status=(status)
+      if !status.nil? && status.to_s.length > 256
+        fail ArgumentError, 'invalid value for "status", the character length must be smaller than or equal to 256.'
+      end
+
+      @status = status
+    end
+
+    # Custom attribute writer method with validation
     # @param [Object] tags Value to be assigned
     def tags=(tags)
       if tags.nil?
@@ -192,6 +242,16 @@ module Temper::Generated
       end
 
       @tags = tags
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] title_contains Value to be assigned
+    def title_contains=(title_contains)
+      if !title_contains.nil? && title_contains.to_s.length > 4096
+        fail ArgumentError, 'invalid value for "title_contains", the character length must be smaller than or equal to 4096.'
+      end
+
+      @title_contains = title_contains
     end
 
     # Checks equality by comparing each attribute.

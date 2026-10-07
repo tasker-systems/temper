@@ -109,3 +109,21 @@ else
   echo "       openapi-generator ${GENERATOR_VERSION} (both were absent)." >&2
   exit 1
 fi
+
+# Send JSON bodies as UTF-8, not ASCII-escaped. The generated transport calls `json.dumps(body)`,
+# whose default `ensure_ascii=True` writes every non-ASCII character as `\uXXXX` — up to three times
+# the bytes the server's per-string caps count, so a plan of accented tags at their caps left this
+# SDK larger on the wire than the same plan from any other client. openapi-generator has no option
+# for it, so the one line is rewritten here, in the single definition both `cargo make openapi-py`
+# and the drift gate run. Exactly one occurrence, or this fails: a generator upgrade that moves the
+# line must be looked at, not silently skipped.
+python3 - "$REPO_ROOT/clients/temper-py/temper/generated/rest.py" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+old = "request_body = json.dumps(body)"
+new = "request_body = json.dumps(body, ensure_ascii=False)"
+if src.count(old) != 1:
+    sys.exit(f"generate-temper-py: expected exactly one `{old}` in {path}, found {src.count(old)}")
+open(path, "w", encoding="utf-8").write(src.replace(old, new))
+PY

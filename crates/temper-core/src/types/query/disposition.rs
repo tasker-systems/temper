@@ -369,6 +369,38 @@ pub enum RefusalReason {
     EmptyPropertyKey,
     /// A `contains` predicate was supplied with no values, so it narrows nothing.
     EmptyContains,
+    /// A property-predicate value — a `contains` value, a `compare` bound or a facet value — is
+    /// larger than 16384 bytes, or carries more than 256 nested array elements or object members.
+    ///
+    /// The probe cap counts values, not bytes, so without this one value of any size validated.
+    /// The refusal names the predicate's position and the limit, never the value: echoing a value
+    /// refused for its size would return the oversized payload in the error body.
+    PropertyValueTooLarge,
+    /// The property-predicate values across the whole composition sum past 524288 bytes.
+    ///
+    /// Composition-level, like `too_many_stages`. It is what keeps the largest
+    /// legal composition inside the query door's body limit once each value may be 16 KiB.
+    PropertyValueBudgetExceeded,
+    /// A narrowing string — a label, tag, `doc_type`, facet or property key, `stage`, `status`,
+    /// `owner` or `title_contains` — is longer than its published cap: 256 bytes, or 4096 for
+    /// `title_contains`, counted as JSON-escaped bytes.
+    ///
+    /// The count caps bound how many strings a stage carries, never how long each is; without
+    /// this a plan inside every count cap could exceed the body limit and meet a bare 413. The
+    /// refusal names the field and the limit, never the string.
+    FilterStringTooLong,
+    /// A list whose entries must be distinct carries more than any legal plan can: `returns` or a
+    /// combine stage's `inputs` past 64, or an act's `inputs` past 2 (one per relation).
+    ///
+    /// Refused once, up front, like `too_many_stages`, so no check runs once per entry: an
+    /// over-long list would otherwise answer with a refusal list many times its own size.
+    ListTooLong,
+    /// The composition's caller text — narrowing strings, facet and predicate values, questions —
+    /// exceeds 786432 bytes counted as the most expansive encoder that escapes per character would
+    /// send it.
+    ///
+    /// What makes a legal plan fit the body limit under any encoder that escapes per character.
+    TextBudgetExceeded,
 
     /// A reason outside the declared vocabulary.
     ///
@@ -558,6 +590,11 @@ mod tests {
             RefusalReason::UnknownAct,
             RefusalReason::EmptyPropertyKey,
             RefusalReason::EmptyContains,
+            RefusalReason::PropertyValueTooLarge,
+            RefusalReason::PropertyValueBudgetExceeded,
+            RefusalReason::FilterStringTooLong,
+            RefusalReason::ListTooLong,
+            RefusalReason::TextBudgetExceeded,
         ] {
             assert!(
                 reason.is_known(),

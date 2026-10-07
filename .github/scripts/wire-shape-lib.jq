@@ -152,6 +152,41 @@ def child_side($k; $side):
 # parameter; anything else is a different one.
 def param_key: "\(.in)|\(.name)";
 
+# The open-vocabulary arm (added 2026-10-06, P2 of the v0.6.0 security review): a
+# `oneOf` whose arms are all strings, exactly one of them UNCONSTRAINED (`{type:
+# string}` and prose, nothing else), declares an open vocabulary. That catch-all
+# accepts every string, so the accepted set is every string in base and head alike:
+# a new `enum` arm NAMES a member without narrowing or widening what is accepted,
+# and is tolerant in both skew directions. This is how utoipa renders a serde enum
+# with an `#[serde(untagged)] Other(String)` arm — `RefusalReason`, open by recorded
+# decision so that a new way to decline is not a breaking change. Positional
+# comparison read every such addition as moved, because the new arm shifts the
+# catch-all's index.
+#
+# Growth only: every base arm survives unchanged modulo prose, the catch-all
+# included, and every head-only arm is a plain string `enum`. A removed arm, an edited
+# enum, a constraint gained by the catch-all, a second catch-all, or a closed
+# `oneOf` (no catch-all) all fall through to the fail-closed array arm.
+#
+# Strict JSON Schema reads a known member as matching TWO arms, its own and the
+# catch-all, which `oneOf` forbids; that is true of every existing member in base
+# already, so a strict validator cannot use this schema in either contract, and the
+# new member changes nothing about that.
+def sans_prose: del(.description, .title, .summary, .example, .examples);
+def is_catch_all: (type == "object") and ((sans_prose | keys) == ["type"]) and (.type == "string");
+def is_enum_arm:
+  (type == "object") and ((sans_prose | keys) == ["enum", "type"]) and (.type == "string")
+  and ((.enum | type) == "array") and (.enum | all(type == "string"));
+def open_vocabulary($a):
+  (($a | type) == "array")
+  and ($a | all(is_catch_all or is_enum_arm))
+  and ([ $a[] | select(is_catch_all) ] | length == 1);
+def open_vocabulary_grew($b; $h):
+  open_vocabulary($b) and open_vocabulary($h)
+  and (($h | length) > ($b | length))
+  and ([ $h[] | sans_prose ] as $hs
+       | [ $b[] | sans_prose ] | all(. as $x | any($hs[]; . == $x)));
+
 def broke_node($b; $h; $side):
   if ($b | type) != ($h | type) then true
   elif ($b | type) == "array" then
@@ -219,6 +254,8 @@ def broke_node($b; $h; $side):
           then broke_node($b[$k]; $h[$k]; child_side($k; $side))
           elif $k == "required" and (($b[$k] | type) == "array")
           then ($h[$k] != $b[$k])
+          elif $k == "oneOf" and open_vocabulary_grew($b[$k]; $h[$k])
+          then false
           elif $k == "description" or $k == "title" or $k == "summary"
             or $k == "example" or $k == "examples"
           then false
