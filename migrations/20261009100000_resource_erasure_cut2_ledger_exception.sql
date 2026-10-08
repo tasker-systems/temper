@@ -169,13 +169,14 @@ LANGUAGE sql IMMUTABLE AS $$
     END;
 $$;
 
--- An edge label that redaction leaves as it is: none, empty (the edge identity's COALESCE reads
--- both as ''), or already a label sentinel, so erasing an edge's other end later renumbers nothing.
+-- An edge label that redaction leaves as it is: none, or empty (the edge identity's COALESCE
+-- reads both as ''). Every other label is text to number, a label typed in a sentinel's shape
+-- included: treating one as already redacted let a real label be numbered onto the same text and
+-- merge two edges on replay (found by the security review, 2026-10-08).
 CREATE FUNCTION _erasure_label_is_kept(p_label jsonb)
 RETURNS boolean
 LANGUAGE sql IMMUTABLE AS $$
-    SELECT p_label IS NULL OR jsonb_typeof(p_label) <> 'string' OR p_label #>> '{}' = ''
-        OR p_label #>> '{}' ~ '^erased-label-[1-9][0-9]*$';
+    SELECT p_label IS NULL OR jsonb_typeof(p_label) <> 'string' OR p_label #>> '{}' = '';
 $$;
 
 -- Whether p_new is the sentinel the verifier admits at one location (D3 condition 3). Exact for
@@ -266,12 +267,20 @@ projection, rebuilt by replay.$c$;
 -- fence (D9), not the event, decides what an erasure may name.
 CREATE FUNCTION _project_resource_erased_redactions(p_event uuid, p_payload jsonb)
 RETURNS void
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
 DECLARE
     v_entry jsonb;
     v_path  text;
     v_type  text;
+    v_trail jsonb;
 BEGIN
+    -- The subject's trail, once: event id → true.
+    SELECT coalesce(jsonb_object_agg(ts.event_id::text, true), '{}'::jsonb)
+      INTO v_trail
+      FROM _resource_erasure_trail_scope((p_payload ->> 'subject_id')::uuid) ts
+     WHERE jsonb_array_length(coalesce(p_payload -> 'redacted_fields', '[]'::jsonb)) > 0;
     FOR v_entry IN
         SELECT e FROM jsonb_array_elements(coalesce(p_payload -> 'redacted_fields', '[]'::jsonb)) e
     LOOP
@@ -282,8 +291,12 @@ BEGIN
             RAISE EXCEPTION '_project_resource_erased_redactions: event % names a missing event %',
                 p_event, v_entry ->> 'event';
         END IF;
-        IF NOT EXISTS (SELECT 1 FROM _resource_erasure_trail_scope((p_payload ->> 'subject_id')::uuid) ts
-                        WHERE ts.event_id = (v_entry ->> 'event')::uuid) THEN
+        -- The replay walk projects the record as the ledger holds it, and a D14 order inversion
+        -- can put a trail event's own block or edge after the act: checking the trail there would
+        -- abort the whole replay. Live, kb_events_redaction_in_trail checks it again at the
+        -- rewrite, so this check is the earlier of two.
+        IF NOT v_trail ? (v_entry ->> 'event')
+           AND coalesce(current_setting('temper.replaying', true), '') <> 'on' THEN
             RAISE EXCEPTION '_project_resource_erased_redactions: event % names event %, which is not in its subject''s trail',
                 p_event, v_entry ->> 'event';
         END IF;
@@ -371,19 +384,29 @@ LANGUAGE sql STABLE AS $$
       FROM marks mk;
 $$;
 
--- The edge-label numbering (ruled 2026-10-08): each distinct original label the resource's trail
--- asserts, with the n of erased-label-<n>, in ledger order of its first assertion (occurred_at,
--- then event id; never the text). A label is part of an edge's identity (uq_kb_edges_assertion),
--- and every edge whose identity could collide with an edge touching R also touches R, so a
--- numbering injective over R's trail keeps every equality replay's ON CONFLICT decides on.
-CREATE FUNCTION _resource_erasure_label_numbers(p_resource uuid)
+-- The edge-label numbering (ruled 2026-10-08): each distinct label asserted from one endpoint to
+-- another, with the n of erased-label-<n>, in ledger order of its first assertion (occurred_at,
+-- then event id; never the text). A label is part of an edge's identity (uq_kb_edges_assertion
+-- covers source, target, kind, home and label), so two assertions can collide only between the
+-- same ordered pair of endpoints: a numbering injective within the pair keeps every equality
+-- replay's ON CONFLICT decides on. Numbering per pair, not per erased resource, makes it the same
+-- whichever endpoint is erased, so erasing the other end later finds every label already at its
+-- sentinel and renumbers nothing; it also tells a reader of one pair nothing about another.
+-- Reads the asserting events by their payload endpoints, so a re-assertion (whose edge_id never
+-- became a row) is numbered with the rest.
+CREATE FUNCTION _resource_erasure_label_numbers(p_source_table text, p_source_id uuid,
+                                                p_target_table text, p_target_id uuid)
 RETURNS TABLE(label text, n integer)
 LANGUAGE sql STABLE AS $$
     WITH firsts AS (
         SELECT DISTINCT ON (ev.payload ->> 'label') ev.payload ->> 'label' AS label, ev.occurred_at, ev.id
-          FROM _resource_erasure_trail_scope(p_resource) s
-          JOIN kb_events ev ON ev.id = s.event_id
-         WHERE s.event_type = 'relationship_asserted'
+          FROM kb_events ev
+          JOIN kb_event_types et ON et.id = ev.event_type_id
+         WHERE (ev.payload -> 'source') ->> 'id' = p_source_id::text
+           AND (ev.payload -> 'source') ->> 'table' = p_source_table
+           AND (ev.payload -> 'target') ->> 'id' = p_target_id::text
+           AND (ev.payload -> 'target') ->> 'table' = p_target_table
+           AND et.name = 'relationship_asserted'
            AND NOT _erasure_label_is_kept(ev.payload -> 'label')
          ORDER BY ev.payload ->> 'label', ev.occurred_at, ev.id
     )
@@ -399,9 +422,18 @@ $$;
 -- running it first. A location with no sentinel number raises: the derivation never guesses.
 CREATE FUNCTION _resource_erasure_payload_redaction(p_resource uuid)
 RETURNS TABLE(event_id uuid, new_payload jsonb, new_metadata jsonb, paths jsonb)
-LANGUAGE plpgsql STABLE AS $$
+LANGUAGE plpgsql STABLE
+SET search_path = public, pg_temp
+AS $$
 DECLARE
     v_remote   jsonb;
+    -- Each numbering is computed once per owner or endpoint pair and kept here, keyed
+    -- '<owner or pair>|<text>': the per-location lookups read the cache, so the cost is linear in
+    -- the trail, not in the trail times its owners' families.
+    v_keys     jsonb := '{}'::jsonb;
+    v_facets   jsonb := '{}'::jsonb;
+    v_labels   jsonb := '{}'::jsonb;
+    v_done     jsonb := '{}'::jsonb;
     v_ev       record;
     v_path     text;
     v_loc      record;
@@ -412,6 +444,7 @@ DECLARE
     v_paths    jsonb;
     v_new      jsonb;
     v_block    uuid;
+    v_owner    text;
     v_n        integer;
 BEGIN
     -- The remote-source numbering, captured once: (block, normalized URI) → n, from the ONE
@@ -421,10 +454,16 @@ BEGIN
       FROM _resource_erasure_remote_originals(p_resource) o
       JOIN kb_remote_sources rs ON rs.id = o.source_id;
 
+    -- An erasure act's own events (its relationship_folded, correlated with its resource_erased)
+    -- are that act's record, not R's text: a later erasure of an edge's other end leaves them.
     FOR v_ev IN
         SELECT s.event_id AS id, s.event_type AS type, ev.payload, ev.metadata
           FROM _resource_erasure_trail_scope(p_resource) s
           JOIN kb_events ev ON ev.id = s.event_id
+         WHERE NOT EXISTS (
+                   SELECT 1 FROM kb_events er JOIN kb_event_types ert ON ert.id = er.event_type_id
+                    WHERE ert.name = 'resource_erased'
+                      AND er.correlation_id = ev.correlation_id AND er.id <> ev.id)
          ORDER BY s.event_id
     LOOP
         v_payload  := v_ev.payload;
@@ -443,6 +482,9 @@ BEGIN
                   FROM _erasure_expand(CASE WHEN v_meta THEN v_ev.metadata ELSE v_ev.payload END,
                                        CASE WHEN v_meta THEN substr(v_path, 10) ELSE v_path END) x
             LOOP
+                -- A JSON null carries no text. Rewriting it would make replay project a value
+                -- live never held (a doc_type row, and every later key number with it).
+                CONTINUE WHEN jsonb_typeof(v_loc.val) = 'null';
                 v_new := _erasure_sentinel_exact(v_class, v_ev.id, v_ev.payload);
                 IF v_class = 'remote-source-url' THEN
                     IF coalesce(_erasure_location_is_remote(v_ev.payload, v_loc.at), false) THEN
@@ -461,35 +503,61 @@ BEGIN
                     IF _erasure_label_is_kept(v_loc.val) THEN
                         v_new := v_loc.val;
                     ELSE
-                        SELECT l.n INTO v_n FROM _resource_erasure_label_numbers(p_resource) l
-                         WHERE l.label = v_loc.val #>> '{}';
+                        v_owner := concat_ws('|', v_ev.payload #>> '{source,table}', v_ev.payload #>> '{source,id}',
+                                             v_ev.payload #>> '{target,table}', v_ev.payload #>> '{target,id}');
+                        IF NOT v_done ? ('label|' || v_owner) THEN
+                            SELECT v_labels || coalesce(jsonb_object_agg(v_owner || '|' || l.label, l.n), '{}'::jsonb)
+                              INTO v_labels
+                              FROM _resource_erasure_label_numbers(
+                                       v_ev.payload #>> '{source,table}', (v_ev.payload #>> '{source,id}')::uuid,
+                                       v_ev.payload #>> '{target,table}', (v_ev.payload #>> '{target,id}')::uuid) l;
+                            v_done := v_done || jsonb_build_object('label|' || v_owner, true);
+                        END IF;
+                        v_n := (v_labels ->> (v_owner || '|' || (v_loc.val #>> '{}')))::integer;
+                        IF v_n IS NULL THEN
+                            RAISE EXCEPTION '_resource_erasure_payload_redaction: no label number for event %', v_ev.id;
+                        END IF;
                         v_new := to_jsonb('erased-label-' || v_n::text);
                     END IF;
-                ELSIF v_class = 'property-key' THEN
-                    SELECT k.n INTO v_n
-                      FROM _resource_erasure_ledger_key_numbers(v_ev.payload #>> '{owner,table}',
-                                                                (v_ev.payload #>> '{owner,id}')::uuid) k
-                     WHERE k.property_key = v_loc.val #>> '{}';
-                    IF v_n IS NULL THEN
-                        RAISE EXCEPTION '_resource_erasure_payload_redaction: no key number for event %', v_ev.id;
+                ELSIF v_class IN ('property-key', 'facet-value') THEN
+                    v_owner := (v_ev.payload #>> '{owner,table}') || '|' || (v_ev.payload #>> '{owner,id}');
+                    IF NOT v_done ? ('owner|' || v_owner) THEN
+                        SELECT v_keys || coalesce(jsonb_object_agg(v_owner || '|' || k.property_key, k.n), '{}'::jsonb)
+                          INTO v_keys
+                          FROM _resource_erasure_ledger_key_numbers(v_ev.payload #>> '{owner,table}',
+                                                                    (v_ev.payload #>> '{owner,id}')::uuid) k;
+                        SELECT v_facets || coalesce(jsonb_object_agg(v_owner || '|' || f.inner_key, f.m), '{}'::jsonb)
+                          INTO v_facets
+                          FROM _resource_erasure_facet_numbers(v_ev.payload #>> '{owner,table}',
+                                                               (v_ev.payload #>> '{owner,id}')::uuid) f;
+                        v_done := v_done || jsonb_build_object('owner|' || v_owner, true);
                     END IF;
-                    v_new := to_jsonb('erased-key-' || v_n::text);
-                ELSIF v_class = 'facet-value' THEN
-                    IF EXISTS (SELECT 1 FROM _facet_marks(v_loc.val) fm WHERE fm.inner_key IS NULL) THEN
+                    IF v_class = 'property-key' THEN
+                        v_n := (v_keys ->> (v_owner || '|' || (v_loc.val #>> '{}')))::integer;
+                        IF v_n IS NULL THEN
+                            RAISE EXCEPTION '_resource_erasure_payload_redaction: no key number for event %', v_ev.id;
+                        END IF;
+                        v_new := to_jsonb('erased-key-' || v_n::text);
+                    ELSIF EXISTS (SELECT 1 FROM _facet_marks(v_loc.val) fm WHERE fm.inner_key IS NULL) THEN
                         v_new := to_jsonb('erased:' || v_ev.id::text);
+                    ELSIF NOT EXISTS (SELECT 1 FROM _facet_marks(v_loc.val)) THEN
+                        -- An empty facet value names no mark: nothing to redact (found by the
+                        -- code review, 2026-10-08: it raised, and blocked the act).
+                        v_new := v_loc.val;
                     ELSE
-                        SELECT jsonb_object_agg('erased-facet-' || f.m::text, 'erased')
-                          INTO v_new
-                          FROM _facet_marks(v_loc.val) fm
-                          JOIN _resource_erasure_facet_numbers(v_ev.payload #>> '{owner,table}',
-                                                               (v_ev.payload #>> '{owner,id}')::uuid) f
-                            ON f.inner_key = fm.inner_key;
-                        IF v_new IS NULL
-                           OR (SELECT count(*) FROM jsonb_object_keys(v_new))
-                              <> (SELECT count(*) FROM _facet_marks(v_loc.val)) THEN
+                        IF EXISTS (SELECT 1 FROM _facet_marks(v_loc.val) fm
+                                    WHERE NOT v_facets ? (v_owner || '|' || fm.inner_key)) THEN
                             RAISE EXCEPTION '_resource_erasure_payload_redaction: no mark number for a facet of event %', v_ev.id;
                         END IF;
+                        SELECT jsonb_object_agg('erased-facet-' || (v_facets ->> (v_owner || '|' || fm.inner_key)), 'erased')
+                          INTO v_new
+                          FROM _facet_marks(v_loc.val) fm;
                     END IF;
+                END IF;
+                IF v_new IS NULL THEN
+                    -- jsonb_set with a NULL value returns NULL: never let a missing number empty
+                    -- a whole payload.
+                    RAISE EXCEPTION '_resource_erasure_payload_redaction: no sentinel for % of event %', v_path, v_ev.id;
                 END IF;
                 IF v_new IS DISTINCT FROM v_loc.val THEN
                     IF v_meta THEN
@@ -528,13 +596,25 @@ writes its payloads.$c$;
 -- Section 5. The verifier (D3).
 -- ---------------------------------------------------------------------------
 -- DELETE always raises. An UPDATE is admitted only when (1) no column but payload and metadata
--- changes, (2) every path a kb_event_field_redactions row names for the event is authorized by a
--- resource_erased event, and each location under it holds its class sentinel, and (3) with those
--- locations set aside on both sides, nothing else changed. Every refusal raises the message the
--- trigger has always raised, so a refusal says no more than it did. No GUC, role or session flag
--- reaches it.
+-- changes; (2) every location that changes lies under a path a kb_event_field_redactions row names
+-- for the event, and that row's resource_erased event was written in THIS transaction, lists the
+-- event and the path in its own redacted_fields, and names a subject that is already erased; (3)
+-- each changed location holds its class sentinel; and (4) with every named location set aside on
+-- both sides, nothing else changed. The trail check, that the event is in the erasure's subject's
+-- trail, runs once per statement in kb_events_redaction_in_trail below. Every refusal raises the
+-- message the trigger has always raised. No GUC, role or session flag reaches it.
+--
+-- "This transaction" makes an authorization single-use: the act's own transaction, never a later
+-- UPDATE that renumbers a sentinel the pattern checks would admit (found by both reviews,
+-- 2026-10-08). It is read as the authorizing event's `created` equal to now(), the transaction's
+-- start time, which kb_events.created defaults to and which a savepoint shares. xmin was the first
+-- choice and would refuse an act run inside a savepoint, whose rows carry the subtransaction's id.
+-- A later transaction cannot match an earlier event's stamp, and a concurrent one's uncommitted
+-- event is invisible here.
 CREATE OR REPLACE FUNCTION kb_events_append_only() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
 DECLARE
     v_type   text;
     v_row    record;
@@ -542,6 +622,7 @@ DECLARE
     v_class  text;
     v_meta   boolean;
     v_rows   integer := 0;
+    v_new    jsonb;
     v_old_p  jsonb := OLD.payload;
     v_new_p  jsonb;
     v_old_m  jsonb := OLD.metadata;
@@ -560,18 +641,6 @@ BEGIN
         SELECT r.path, r.redacted_by FROM kb_event_field_redactions r WHERE r.event_id = OLD.id
     LOOP
         v_rows := v_rows + 1;
-        -- The row is not the authority; the erasure event is. Its own redacted_fields must name
-        -- this event and this path, and this event must be in its subject's trail: the exception
-        -- never reaches another resource's events (Q1), whatever a row inserted by hand says.
-        IF NOT EXISTS (
-            SELECT 1 FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id
-             WHERE e.id = v_row.redacted_by AND t.name = 'resource_erased'
-               AND e.payload -> 'redacted_fields' @> jsonb_build_array(jsonb_build_object(
-                       'event', OLD.id::text, 'paths', jsonb_build_array(v_row.path)))
-               AND EXISTS (SELECT 1 FROM _resource_erasure_trail_scope((e.payload ->> 'subject_id')::uuid) ts
-                            WHERE ts.event_id = OLD.id)) THEN
-            RAISE EXCEPTION 'event ledger is append-only';
-        END IF;
         v_class := _erasure_path_class(v_type, v_row.path, OLD.payload);
         IF v_class IS NULL THEN
             RAISE EXCEPTION 'event ledger is append-only';
@@ -582,10 +651,20 @@ BEGIN
               FROM _erasure_expand(CASE WHEN v_meta THEN OLD.metadata ELSE OLD.payload END,
                                    CASE WHEN v_meta THEN substr(v_row.path, 10) ELSE v_row.path END) x
         LOOP
-            IF NOT _erasure_sentinel_admits(
-                       v_class, OLD.id, OLD.payload, v_loc.at, v_loc.val,
-                       (CASE WHEN v_meta THEN NEW.metadata ELSE NEW.payload END) #> v_loc.at) THEN
-                RAISE EXCEPTION 'event ledger is append-only';
+            v_new := (CASE WHEN v_meta THEN NEW.metadata ELSE NEW.payload END) #> v_loc.at;
+            IF v_new IS DISTINCT FROM v_loc.val THEN
+                IF NOT EXISTS (
+                    SELECT 1 FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id
+                     WHERE e.id = v_row.redacted_by AND t.name = 'resource_erased'
+                       AND e.created = now()
+                       AND e.payload -> 'redacted_fields' @> jsonb_build_array(jsonb_build_object(
+                               'event', OLD.id::text, 'paths', jsonb_build_array(v_row.path)))
+                       AND EXISTS (SELECT 1 FROM kb_resources r
+                                    WHERE r.id = (e.payload ->> 'subject_id')::uuid
+                                      AND r.erased_at IS NOT NULL))
+                   OR NOT _erasure_sentinel_admits(v_class, OLD.id, OLD.payload, v_loc.at, v_loc.val, v_new) THEN
+                    RAISE EXCEPTION 'event ledger is append-only';
+                END IF;
             END IF;
             IF v_meta THEN
                 v_old_m := jsonb_set(v_old_m, v_loc.at, 'null'::jsonb, false);
@@ -607,17 +686,75 @@ $$;
 
 COMMENT ON FUNCTION kb_events_append_only() IS
 $c$The ledger's guard (spec 2026-09-28 D3). DELETE always raises. An UPDATE is admitted only as a
-resource erasure's redaction: no column but payload and metadata changes, every changed location
-lies under a path a kb_event_field_redactions row names for the event, authorized by a
-resource_erased event, and holds that path's class sentinel (_erasure_sentinel_admits). Anything
-else raises 'event ledger is append-only', as it always has.$c$;
+resource erasure's redaction in the erasure's own transaction: no column but payload and metadata
+changes; every changed location lies under a path a kb_event_field_redactions row names, whose
+resource_erased event was written in this transaction, lists the event and the path, and names an
+erased subject; each changed location holds its class sentinel (_erasure_sentinel_admits); nothing
+else changed. kb_events_redaction_in_trail adds, per statement, that each changed event is in the
+erasure's subject's trail. Anything else raises 'event ledger is append-only', as it always has.$c$;
+
+-- The trail check, once per statement and once per erasure subject rather than once per row: every
+-- event the statement changed under this transaction's erasure must be in that erasure's subject's
+-- trail. The exception never reaches another resource's events (Q1), whatever a row inserted by
+-- hand or a forged record says.
+CREATE FUNCTION kb_events_redaction_in_trail() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_subject uuid;
+BEGIN
+    FOR v_subject IN
+        SELECT DISTINCT (e.payload ->> 'subject_id')::uuid
+          FROM new_rows n
+          JOIN old_rows o ON o.id = n.id
+          JOIN kb_event_field_redactions r ON r.event_id = n.id
+          JOIN kb_events e ON e.id = r.redacted_by
+         WHERE (n.payload, n.metadata) IS DISTINCT FROM (o.payload, o.metadata)
+           AND e.created = now()
+    LOOP
+        IF EXISTS (
+            WITH trail AS MATERIALIZED (
+                SELECT ts.event_id FROM _resource_erasure_trail_scope(v_subject) ts
+            )
+            SELECT 1
+              FROM new_rows n
+              JOIN old_rows o ON o.id = n.id
+              JOIN kb_event_field_redactions r ON r.event_id = n.id
+              JOIN kb_events e ON e.id = r.redacted_by
+             WHERE (n.payload, n.metadata) IS DISTINCT FROM (o.payload, o.metadata)
+               AND e.created = now()
+               AND (e.payload ->> 'subject_id')::uuid = v_subject
+               AND NOT EXISTS (SELECT 1 FROM trail t WHERE t.event_id = n.id)) THEN
+            RAISE EXCEPTION 'event ledger is append-only';
+        END IF;
+    END LOOP;
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER kb_events_redaction_in_trail
+    AFTER UPDATE ON kb_events
+    REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
+    FOR EACH STATEMENT EXECUTE FUNCTION kb_events_redaction_in_trail();
 
 -- ---------------------------------------------------------------------------
 -- Section 6. The trail scope as a UNION of indexed arms (ruled 2026-10-08).
 -- ---------------------------------------------------------------------------
--- Same set as 20261008100000's single predicate, arm for arm, each on the expression an index of
--- kb_events carries (payload->>'resource_id', ->'owner'->>'id', ->>'block_id', ->>'edge_id'),
--- the element_trail_node form. The OR form read every ledger row on every call.
+-- A relationship_asserted that re-asserts a live edge carries a freshly minted edge_id, and
+-- relationship_assert's ON CONFLICT answers with the existing edge, so that id never becomes a
+-- row and the edge_id arm cannot reach the event. Production held 243 such events on
+-- 2026-10-08, every one labelled and touching a resource. They are reached by their payload
+-- endpoints instead, through these two indexes (text, not uuid: a received webhook's version-1
+-- body sits at the payload root and may carry a non-uuid `source.id`, which a uuid cast in an
+-- index expression would refuse to store).
+CREATE INDEX idx_kb_events_payload_source_id ON kb_events (((payload -> 'source') ->> 'id'));
+CREATE INDEX idx_kb_events_payload_target_id ON kb_events (((payload -> 'target') ->> 'id'));
+
+-- 20261008100000's single predicate, arm for arm, each on the expression an index of kb_events
+-- carries (payload->>'resource_id', ->'owner'->>'id', ->>'block_id', ->>'edge_id'), the
+-- element_trail_node form; the OR form read every ledger row on every call. Plus the two
+-- endpoint arms above, which reach a re-assertion the edge_id arm cannot.
 CREATE OR REPLACE FUNCTION public._resource_erasure_trail_scope(p_resource uuid)
  RETURNS TABLE(event_id uuid, event_type text)
  LANGUAGE sql
@@ -650,6 +787,14 @@ AS $function$
         SELECT ev.id FROM touching t
           JOIN kb_events ev ON ((ev.payload -> 'owner') ->> 'id')::uuid = t.id
          WHERE (ev.payload -> 'owner') ->> 'table' = 'kb_edges'
+        UNION
+        SELECT ev.id FROM kb_events ev
+         WHERE (ev.payload -> 'source') ->> 'id' = p_resource::text
+           AND (ev.payload -> 'source') ->> 'table' = 'kb_resources'
+        UNION
+        SELECT ev.id FROM kb_events ev
+         WHERE (ev.payload -> 'target') ->> 'id' = p_resource::text
+           AND (ev.payload -> 'target') ->> 'table' = 'kb_resources'
     )
     SELECT ev.id, et.name
       FROM ids
@@ -659,6 +804,33 @@ AS $function$
        AND et.name <> 'webhook_received';
 $function$
 ;
+
+-- The sweep attributes a ledger finding to the resource whose trail holds its event, and its own
+-- witness holds that attribution to the trail scope: the endpoint arm joins it, last, after the
+-- edge arms, so a projected edge still answers through its row.
+CREATE OR REPLACE FUNCTION sensitivity.event_resource(p_type text, p_category text, p_payload jsonb) RETURNS uuid
+LANGUAGE sql STABLE AS $$
+    SELECT CASE WHEN p_category <> 'domain' OR p_type = 'webhook_received' THEN NULL ELSE coalesce(
+        sensitivity.as_uuid(p_payload ->> 'resource_id'),
+        CASE WHEN p_payload #>> '{owner,table}' = 'kb_resources'
+             THEN sensitivity.as_uuid(p_payload #>> '{owner,id}') END,
+        (SELECT b.resource_id FROM kb_content_blocks b
+          WHERE b.id = sensitivity.as_uuid(p_payload ->> 'block_id')),
+        (SELECT b.resource_id FROM kb_content_blocks b
+          WHERE p_payload #>> '{owner,table}' = 'kb_content_blocks'
+            AND b.id = sensitivity.as_uuid(p_payload #>> '{owner,id}')),
+        (SELECT CASE WHEN e.source_table = 'kb_resources' THEN e.source_id
+                     WHEN e.target_table = 'kb_resources' THEN e.target_id END
+           FROM kb_edges e
+          WHERE e.id = coalesce(sensitivity.as_uuid(p_payload ->> 'edge_id'),
+                                CASE WHEN p_payload #>> '{owner,table}' = 'kb_edges'
+                                     THEN sensitivity.as_uuid(p_payload #>> '{owner,id}') END)),
+        CASE WHEN p_payload #>> '{source,table}' = 'kb_resources'
+             THEN sensitivity.as_uuid(p_payload #>> '{source,id}')
+             WHEN p_payload #>> '{target,table}' = 'kb_resources'
+             THEN sensitivity.as_uuid(p_payload #>> '{target,id}') END)
+    END;
+$$;
 
 -- ---------------------------------------------------------------------------
 -- Section 7. The survey plan: redacted_fields from the derivation; ledger_remainder keeps the rest.
@@ -1130,8 +1302,10 @@ BEGIN
     --    rewrites to its class sentinel, in exactly the shape `RedactedEventFields` uses —
     --    {event, paths}. One definition, _resource_erasure_payload_redaction, which the act runs
     --    for the payloads it writes. A path already at its sentinel is not listed, so on a husk
-    --    erased under cut 2 this is empty, and on one erased under cut 1 it is what the completion
-    --    pass has left to do. Paths only, never values.
+    --    erased under cut 2 this is empty. On a husk erased under cut 1 it is NOT yet the
+    --    completion pass's list: step (9e) has re-pointed that husk's provenance, so the remote-
+    --    source numbering this reads finds no original and the derivation raises. The completion
+    --    pass must number those sources from the ledger. Paths only, never values.
     SELECT coalesce(jsonb_agg(jsonb_build_object('event', d.event_id, 'paths', d.paths)
                                ORDER BY d.event_id), '[]'::jsonb)
       INTO v_redacted
@@ -1196,6 +1370,7 @@ $function$
 CREATE OR REPLACE FUNCTION public.resource_erasure_execute(p_resource uuid, p_operator uuid, p_emitter uuid, p_request_ref uuid, p_also_strike_blobs uuid[] DEFAULT '{}'::uuid[])
  RETURNS jsonb
  LANGUAGE plpgsql
+ SET search_path = public, pg_temp
 AS $function$
 DECLARE
     v_plan    jsonb;
@@ -1386,17 +1561,22 @@ BEGIN
                 'target', jsonb_build_object('kind','kb_events','id', p_request_ref))),
         p_correlation => p_request_ref);
 
-    -- ── The ledger exception, in D3's order: the event is appended, its projector records each
-    --    (event, path) it names, and only then are the events rewritten; kb_events_append_only
-    --    admits each UPDATE against those rows and the class sentinels. ─────────────────────
+    -- ── The ledger exception, in D3's order: the event is appended and its projector records
+    --    each (event, path) it names. The redaction body runs next, over the ledger as it was:
+    --    step (9e)'s capture reads each remote source's position in its event's list, which the
+    --    rewrite would erase, and it marks the subject erased, which the verifier requires. Only
+    --    then are the events rewritten, in one statement; kb_events_append_only admits each row
+    --    against those rows, this transaction's erasure and the class sentinels, and
+    --    kb_events_redaction_in_trail checks the trail once for the statement. ─────────────
     PERFORM _project_resource_erased_redactions(v_ev, v_payload);
+
+    PERFORM _resource_erasure_apply_redaction(p_resource, v_ev);
+
     UPDATE kb_events e
        SET payload  = r->'payload',
            metadata = r->'metadata'
       FROM jsonb_array_elements(v_redact) r
      WHERE e.id = (r->>'event')::uuid;
-
-    PERFORM _resource_erasure_apply_redaction(p_resource, v_ev);
 
     RETURN jsonb_build_object(
         'event_id',        v_ev,
