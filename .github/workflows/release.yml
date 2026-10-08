@@ -171,15 +171,68 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  # THE REGISTRY LANES: BUILD, THEN PUBLISH. Each lane is two jobs. The build job
+  # holds no `id-token`: it installs, compiles and packs, and so runs third-party
+  # code (install scripts, build backends, build scripts). The publish job holds
+  # `id-token: write` and runs nothing from the package trees — it downloads the
+  # build job's bytes, checks their name and version, and pushes them. Any step in
+  # a job holding `id-token: write` can mint the OIDC token a registry accepts, so
+  # this is what keeps that token away from dependency code.
+  #
+  # What the split does NOT stop: a compromised build tampering with the bytes the
+  # publish job then pushes, with provenance. The build jobs therefore still pin
+  # what they run (`--ignore-scripts`, a hash-pinned Python build backend, a
+  # pinned uv), and the crates lane checks the publish job's own packaging is
+  # byte-identical to the verified one.
+  #
+  # Trusted publishers on all four registries match on repository + workflow file
+  # (+ an optional environment, none set here), never on job name, so the job
+  # names below are free to change (RELEASING.md, "Publishing-side auth").
+  #
+  # The scripts probe the registry in both stages, so a re-cut tag skips loudly:
+  # the build job uploads nothing (`if-no-files-found: ignore`), and the publish
+  # job's download then finds no artifact. That download is `continue-on-error`
+  # because the script, not the download, is the check: it skips a published
+  # version, and fails loudly when a version is unpublished and its file absent.
+
   # The TS clients publish to the public npm registry (@tasker-systems/* scope,
-  # --access public). The script's duplicate probe decides BEFORE anything
-  # builds or publishes, so re-cutting an existing tag skips loudly rather
-  # than failing or overwriting (tools/scripts/release/publish-npm.sh header).
-  # Auth is npm trusted publishing: --provenance attests via the job's OIDC
-  # identity token (id-token: write) — no registry secret exists.
+  # --access public; tools/scripts/release/publish-npm.sh header). Auth is npm
+  # trusted publishing: --provenance attests via the publish job's OIDC identity
+  # token — no registry secret exists.
+  build-npm-clients:
+    name: Build npm Clients
+    needs: determine-version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Build and pack the TS clients
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+        run: bash tools/scripts/release/publish-npm.sh "$VERSION" --out dist
+
+      - name: Upload the built package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: registry-npm-${{ needs.determine-version.outputs.version }}
+          path: dist/
+          retention-days: 7
+          if-no-files-found: ignore
+
   publish-npm-clients:
     name: Publish npm Clients
-    needs: determine-version
+    needs: [determine-version, build-npm-clients]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
@@ -197,21 +250,57 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
+      - name: Download the built package
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: registry-npm-${{ needs.determine-version.outputs.version }}
+          path: dist/
       - name: Publish the TS clients
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
-        run: bash tools/scripts/release/publish-npm.sh "$VERSION"
+        run: bash tools/scripts/release/publish-npm.sh "$VERSION" --from dist
 
-  # The Ruby gem publishes to rubygems.org. The script probes the host's
-  # versions API before pushing, so a re-cut release skips loudly and stays
-  # idempotent. Auth is RubyGems trusted publishing: the credentials action
-  # mints short-lived credentials from the job's OIDC identity token
-  # (id-token: write) — no API key secret exists. The trusted publisher on
-  # rubygems.org names THIS workflow (release.yml — the identity claim names
-  # the job's own file, not the chain's entry).
+  # The Ruby gem publishes to rubygems.org. Auth is RubyGems trusted publishing:
+  # the credentials action mints short-lived credentials from the publish job's
+  # OIDC identity token — no API key secret exists. The trusted publisher on
+  # rubygems.org names THIS workflow (release.yml — the identity claim names the
+  # job's own file, not the chain's entry).
+  build-ruby-client:
+    name: Build Ruby Client
+    needs: determine-version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
+        with:
+          # .ruby-version / mise.toml is 3.4.10.
+          ruby-version: "3.4"
+
+      - name: Build the gem
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+        run: bash tools/scripts/release/publish-ruby.sh "$VERSION" --out dist
+
+      - name: Upload the built package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: registry-ruby-${{ needs.determine-version.outputs.version }}
+          path: dist/
+          retention-days: 7
+          if-no-files-found: ignore
+
   publish-ruby-client:
     name: Publish Ruby Client
-    needs: determine-version
+    needs: [determine-version, build-ruby-client]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
@@ -226,38 +315,72 @@ jobs:
       - name: Set up Ruby
         uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
-          # .ruby-version / mise.toml is 3.4.10.
           ruby-version: "3.4"
 
+      - name: Download the built package
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: registry-ruby-${{ needs.determine-version.outputs.version }}
+          path: dist/
       - name: Configure RubyGems credentials (trusted publishing)
         uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
 
       - name: Publish the gem
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
-        run: bash tools/scripts/release/publish-ruby.sh "$VERSION"
+        run: bash tools/scripts/release/publish-ruby.sh "$VERSION" --from dist
 
   # The Python client publishes to pypi.org as temperkb-py — the distribution
   # name; the import package stays `temper` (PyPI has no scopes, and both
   # natural names were taken by unrelated projects, so the distribution
-  # carries the kb). This REPLACED shipping the wheel + sdist as Release
-  # assets: the registry is the lane, the way it already is for npm and
-  # RubyGems, and the GitHub Release carries only the CLI binaries and the
-  # skill bundle. Like those lanes this is its own job: it needs uv and
-  # Python, not the Rust toolchain.
+  # carries the kb). The registry is the lane, the way it is for npm and
+  # RubyGems; the GitHub Release carries only the CLI binaries and the skill
+  # bundle.
   #
-  # Auth is PyPI trusted publishing: `uv publish` exchanges the job's OIDC
-  # identity token (id-token: write) for a short-lived upload token — no
-  # registry secret exists. There is deliberately no
-  # actions/attest-build-provenance here: PEP 740 attestations are minted by
-  # uv and ride the PyPI exchange itself, not GitHub's artifact attestation.
-  # The script's duplicate probe decides BEFORE anything builds, so re-cutting
-  # an existing tag skips loudly. The trusted publisher on pypi.org names THIS
-  # workflow (release.yml — the claim names the job's own file, not the
-  # chain's entry).
+  # Auth is PyPI trusted publishing: `uv publish` exchanges the publish job's
+  # OIDC identity token for a short-lived upload token — no registry secret
+  # exists. There is deliberately no actions/attest-build-provenance here: PEP
+  # 740 attestations are minted by uv and ride the PyPI exchange itself. The
+  # trusted publisher on pypi.org names THIS workflow (release.yml — the claim
+  # names the job's own file, not the chain's entry).
+  #
+  # uv via pipx (preinstalled on the runner), pinned: an unpinned `pipx install
+  # uv` resolves whatever PyPI serves that minute. The build runs against the
+  # interpreter in clients/temper-py/.python-version, the choice test-python.yml
+  # makes too.
+  build-py-client:
+    name: Build Python Client
+    needs: determine-version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        run: pipx install uv==0.12.18
+
+      - name: Build the distributions
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+        run: bash tools/scripts/release/publish-py.sh "$VERSION" --out dist
+
+      - name: Upload the built package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: registry-py-${{ needs.determine-version.outputs.version }}
+          path: dist/
+          retention-days: 7
+          if-no-files-found: ignore
+
   publish-py-client:
     name: Publish Python Client
-    needs: determine-version
+    needs: [determine-version, build-py-client]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
@@ -269,45 +392,43 @@ jobs:
         with:
           persist-credentials: false
 
-      # uv via pipx, which is preinstalled on ubuntu-latest, rather than a
-      # setup-python: the build must run against the interpreter pinned in
-      # clients/temper-py/.python-version (the same choice test-python.yml
-      # makes).
       - name: Install uv
-        run: pipx install uv
+        run: pipx install uv==0.12.18
 
+      - name: Download the built package
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: registry-py-${{ needs.determine-version.outputs.version }}
+          path: dist/
       - name: Publish the Python client
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
-        run: bash tools/scripts/release/publish-py.sh "$VERSION"
+        run: bash tools/scripts/release/publish-py.sh "$VERSION" --from dist
 
-  # The Rust client closure publishes to crates.io as temperkb-* — the Rust
-  # counterpart of the PyPI/npm/RubyGems lanes. The script publishes in
-  # dependency order (a published crate's manifest must resolve its siblings
-  # from the registry, so the order is structural) and probes each crate's
-  # versions API first, so a re-cut release or a re-run after a partial
-  # failure skips loudly rather than failing or re-publishing.
+  # The Rust client closure publishes to crates.io as temperkb-*, in dependency
+  # order (tools/scripts/release/publish-crates.sh header). The build job
+  # verify-compiles all seven at once; the publish job compiles nothing and
+  # checks each `.crate` it packages is the one the build job verified.
   #
   # Auth is crates.io trusted publishing: rust-lang/crates-io-auth-action
-  # exchanges the job's OIDC identity token (id-token: write) for a
-  # short-lived upload token, auto-revoked when the job ends — no registry
-  # secret exists. crates.io matches the token's CALLING workflow, so inside
-  # the release-tag.yml chain it checks release-tag.yml, and on the tag-push
-  # and dispatch doors release.yml; trusted publishers for both are
-  # configured on every temperkb-* name (RELEASING.md, "Publishing-side
-  # auth"). The closure's 0.5.3 initial versions, and temperkb-mcp's 0.6.0,
-  # were bootstrapped once with an API token
-  # (crates.io attaches publishers only to existing crates — no pending-
-  # publisher pre-registration), and every version after that rides this
-  # job's OIDC exchange.
-  publish-rust-crates:
-    name: Publish Rust Crates (temperkb-*)
+  # exchanges the publish job's OIDC identity token for a short-lived upload
+  # token, auto-revoked when the job ends — no registry secret exists.
+  # crates.io matches the token's CALLING workflow, so inside the
+  # release-tag.yml chain it checks release-tag.yml, and on the tag-push and
+  # dispatch doors release.yml; trusted publishers for both are configured on
+  # every temperkb-* name (RELEASING.md, "Publishing-side auth"). The closure's
+  # 0.5.3 initial versions, and temperkb-mcp's 0.6.0, were bootstrapped once
+  # with an API token (crates.io attaches publishers only to existing crates —
+  # no pending-publisher pre-registration), and every version after that rides
+  # this job's OIDC exchange.
+  build-rust-crates:
+    name: Verify Rust Crates (temperkb-*)
     needs: determine-version
     runs-on: ubuntu-22.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
-      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -321,6 +442,46 @@ jobs:
           rustup default stable
           rustc --version --verbose
 
+      - name: Verify-package the client closure
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+        run: bash tools/scripts/release/publish-crates.sh "$VERSION" --out dist
+
+      - name: Upload the built package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: registry-crates-${{ needs.determine-version.outputs.version }}
+          path: dist/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  publish-rust-crates:
+    name: Publish Rust Crates (temperkb-*)
+    needs: [determine-version, build-rust-crates]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The same toolchain as the build job: packaging must reproduce its bytes.
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc --version --verbose
+
+      - name: Download the built package
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: registry-crates-${{ needs.determine-version.outputs.version }}
+          path: dist/
       - name: Authenticate with crates.io (trusted publishing)
         id: auth
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
@@ -329,7 +490,7 @@ jobs:
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: bash tools/scripts/release/publish-crates.sh "$VERSION"
+        run: bash tools/scripts/release/publish-crates.sh "$VERSION" --from dist
 
   update-homebrew-tap:
     name: Update the homebrew tap
@@ -356,6 +517,10 @@ jobs:
             exit 1
           fi
 
+      # The one checkout that keeps its credential: the push step below runs
+      # `git -C tap push` with it. It is the tap's deploy key, scoped to that one
+      # repository, and the only code that runs while it is on disk is the tap's
+      # own script/apply_release.py.
       - name: Checkout the tap (deploy-key-scoped, for the push)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -393,8 +558,13 @@ jobs:
     permissions:
       contents: write
     steps:
+      # No git credential left in .git/config: create-github-release.sh reaches the
+      # Release through `gh` and GH_TOKEN, never through git, and this job holds
+      # `contents: write`.
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # One download, both producers: the skill bundle uploads under the same
       # `cli-v<version>-*` artifact-name prefix, so this pattern collects it too.
