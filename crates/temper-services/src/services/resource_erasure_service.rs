@@ -88,6 +88,16 @@ const POST_COMMIT_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 /// The SQLSTATE Postgres raises when it resolves a deadlock by aborting one transaction.
 pub(super) const DEADLOCK_DETECTED: &str = "40P01";
 
+/// The SQLSTATE of a unique violation, retryable for one constraint only (below).
+const UNIQUE_VIOLATION: &str = "23505";
+
+/// The redaction rows' key. Two acts whose subjects share trail events, the two ends of one edge,
+/// both derive the shared events' paths; the second to commit violates this key on the rows the
+/// first just wrote. A retry re-derives against the rewritten ledger, finds those paths already at
+/// their sentinels, and names them no more. A completion pass folds no edge, so it takes no edge
+/// lock that would have serialized the two first (found by the code review, 2026-10-08).
+const REDACTIONS_KEY: &str = "\"kb_event_field_redactions_pkey\"";
+
 /// The SQLSTATE of a bare `RAISE EXCEPTION` (no ERRCODE), which every raise the classifier
 /// matches by message is.
 pub(super) const RAISE_EXCEPTION: &str = "P0001";
@@ -531,7 +541,9 @@ fn classify_act_error(err: &sqlx::Error) -> ActFailure {
 /// `p_resource is required` and `p_request_ref is required` are `Other`: the service always
 /// supplies both, so either raise is a bug here, not a state of the resource.
 fn classify_act_failure(code: Option<&str>, message: &str) -> ActFailure {
-    if code == Some(DEADLOCK_DETECTED) {
+    if code == Some(DEADLOCK_DETECTED)
+        || (code == Some(UNIQUE_VIOLATION) && message.contains(REDACTIONS_KEY))
+    {
         return ActFailure::Retryable;
     }
     // Every message arm is a bare RAISE: the same text under any other SQLSTATE is not the act's.
@@ -1052,6 +1064,26 @@ mod classifier_tests {
         assert_eq!(classify_act_failure(None, &msg), ActFailure::Other);
         assert_eq!(
             classify_act_failure(Some("23505"), "resource_erasure_execute: already erased"),
+            ActFailure::Other
+        );
+    }
+
+    // FAILS IF two acts racing over a shared edge's events answer 500 rather than retry, or if
+    // any other unique violation is retried.
+    #[test]
+    fn a_collision_on_the_redaction_rows_is_retryable_and_no_other_unique_violation_is() {
+        assert_eq!(
+            classify_act_failure(
+                Some("23505"),
+                "duplicate key value violates unique constraint \"kb_event_field_redactions_pkey\""
+            ),
+            ActFailure::Retryable
+        );
+        assert_eq!(
+            classify_act_failure(
+                Some("23505"),
+                "duplicate key value violates unique constraint \"kb_block_provenance_pkey\""
+            ),
             ActFailure::Other
         );
     }

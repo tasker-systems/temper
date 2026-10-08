@@ -8,7 +8,7 @@
 -- same subject, carrying only redacted_fields, and the ledger rewrite that record authorizes, in the
 -- same transaction (20261009100000's verifier admits nothing else).
 --
---   1. _resource_erasure_ledger_remote_numbers(resource): a husk's remote-source numbering, read
+--   1. _resource_erasure_ledger_remote_elements / _numbers(resource): a husk's remote-source numbering, read
 --      from the ledger in step (9e)'s order, because (9e) has already re-pointed the husk's
 --      provenance and _resource_erasure_remote_originals finds no original there (ruling 14).
 --   2. _resource_erasure_payload_redaction reads that numbering on an erased resource, after
@@ -40,8 +40,9 @@
 -- _insert_block_provenance's ON CONFLICT DO NOTHING keeps the first element's accretion_seq, which
 -- is the seq (9e) orders by. _resource_erasure_payload_redaction checks the result against the husk's provenance
 -- before using it.
-CREATE FUNCTION _resource_erasure_ledger_remote_numbers(p_resource uuid)
-RETURNS TABLE(block_id uuid, uri_normalized text, n integer)
+CREATE FUNCTION _resource_erasure_ledger_remote_elements(p_resource uuid)
+RETURNS TABLE(block_id uuid, event_id uuid, occurred_at timestamptz, seq integer, pos bigint,
+              uri_normalized text)
 LANGUAGE sql STABLE
 SET search_path = public, pg_temp
 AS $$
@@ -93,10 +94,26 @@ AS $$
                 CASE WHEN jsonb_typeof(l.list) = 'array' THEN l.list ELSE '[]'::jsonb END)
                     WITH ORDINALITY AS el(v, ord)
          WHERE el.v #>> '{source,kind}' = 'remote'
-    ), firsts AS (
+    )
+    SELECT e.block_id, e.event_id, e.occurred_at, e.seq, e.pos, e.uri_normalized FROM elements e;
+$$;
+
+COMMENT ON FUNCTION _resource_erasure_ledger_remote_elements(uuid) IS
+$c$Every remote-source element R's trail events list for a block of R (spec 2026-09-28 D4, ruling 14
+of cut 2 PR 2): the event, its occurred_at, the element's seq, its position in that event's list for
+the block (every element counted, as step (9e) counts it) and its normalized URL. The per-type lists
+are (9e)'s. Read by _resource_erasure_ledger_remote_numbers, and by the derivation's check of a
+husk's provenance against it.$c$;
+
+CREATE FUNCTION _resource_erasure_ledger_remote_numbers(p_resource uuid)
+RETURNS TABLE(block_id uuid, uri_normalized text, n integer)
+LANGUAGE sql STABLE
+SET search_path = public, pg_temp
+AS $$
+    WITH firsts AS (
         SELECT DISTINCT ON (e.block_id, e.uri_normalized)
                e.block_id, e.uri_normalized, e.occurred_at, e.event_id, e.seq, e.pos
-          FROM elements e
+          FROM _resource_erasure_ledger_remote_elements(p_resource) e
          ORDER BY e.block_id, e.uri_normalized, e.occurred_at, e.event_id, e.pos
     )
     SELECT f.block_id, f.uri_normalized,
@@ -117,7 +134,7 @@ from provenance; this is its form for a husk, whose provenance (9e) has already 
 -- ---------------------------------------------------------------------------
 -- 20261009100000's function with one change: the remote-source map. On a live resource it is
 -- still the capture (9e) re-points by. On an erased one it is Section 1's numbering, after a check
--- that, block by block, it names exactly the sentinel rows the husk's provenance cites. On a husk
+-- that, provenance row by provenance row, it gives each row's element the sentinel that row cites. On a husk
 -- erased under cut 1 the ledger holds the originals and provenance the sentinels; on one erased
 -- under cut 2, both hold the sentinels. A disagreement raises: the derivation never guesses.
 CREATE OR REPLACE FUNCTION _resource_erasure_payload_redaction(p_resource uuid)
@@ -152,20 +169,42 @@ BEGIN
     -- (9e) has already re-pointed it, so the numbering is read from the ledger in (9e)'s order
     -- (ruling 14), and must name exactly the sentinel rows the husk's provenance cites.
     IF EXISTS (SELECT 1 FROM kb_resources r WHERE r.id = p_resource AND r.erased_at IS NOT NULL) THEN
+        -- The check is per provenance row, not per set: a set comparison would pass a
+        -- permutation, the ledger giving one URL the n another URL's row cites, and the first
+        -- rewrite of a path is final (kb_event_field_redactions' key), so a wrong n could never be
+        -- corrected. Each remote row of the husk was inserted for the first element its
+        -- contributing event lists for the block (ON CONFLICT DO NOTHING per event), at that
+        -- element's seq, and (9e) re-pointed it to that element's n; so some element of that event,
+        -- block and seq must carry a URL the ledger numbers to exactly the sentinel the row cites.
+        -- Within one (event, seq), two URLs are ordered by their position in the list on both sides.
+        -- And every number the ledger gives a block must be cited by some row of it, or the
+        -- ledger names a source (9e) never re-pointed.
         IF EXISTS (
-            WITH ledger AS (
-                SELECT l.block_id, normalize_remote_uri('erased:' || l.block_id::text || ':' || l.n::text) AS uri
-                  FROM _resource_erasure_ledger_remote_numbers(p_resource) l
-            ), cited AS (
-                SELECT DISTINCT bp.block_id, rs.uri_normalized AS uri
-                  FROM kb_block_provenance bp
-                  JOIN kb_content_blocks b ON b.id = bp.block_id
-                  JOIN kb_remote_sources rs ON rs.id = bp.source_id
-                 WHERE b.resource_id = p_resource AND bp.source_kind = 'remote'
-            )
-            (SELECT * FROM ledger EXCEPT SELECT * FROM cited)
-            UNION ALL
-            (SELECT * FROM cited EXCEPT SELECT * FROM ledger)) THEN
+            SELECT 1
+              FROM kb_block_provenance bp
+              JOIN kb_content_blocks b ON b.id = bp.block_id
+              JOIN kb_remote_sources rs ON rs.id = bp.source_id
+             WHERE b.resource_id = p_resource AND bp.source_kind = 'remote'
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM _resource_erasure_ledger_remote_elements(p_resource) el
+                     JOIN _resource_erasure_ledger_remote_numbers(p_resource) ln
+                       ON ln.block_id = el.block_id AND ln.uri_normalized = el.uri_normalized
+                    WHERE el.block_id = bp.block_id
+                      AND el.event_id = bp.contributed_by_event_id
+                      AND el.seq = bp.accretion_seq
+                      AND normalize_remote_uri('erased:' || ln.block_id::text || ':' || ln.n::text)
+                          = rs.uri_normalized))
+           OR EXISTS (
+            SELECT 1
+              FROM _resource_erasure_ledger_remote_numbers(p_resource) ln
+             WHERE NOT EXISTS (
+                   SELECT 1
+                     FROM kb_block_provenance bp
+                     JOIN kb_remote_sources rs ON rs.id = bp.source_id
+                    WHERE bp.block_id = ln.block_id AND bp.source_kind = 'remote'
+                      AND rs.uri_normalized
+                          = normalize_remote_uri('erased:' || ln.block_id::text || ':' || ln.n::text))) THEN
             RAISE EXCEPTION '_resource_erasure_payload_redaction: the ledger''s remote-source numbering of erased resource % does not match the sentinels its provenance cites',
                 p_resource;
         END IF;
@@ -428,10 +467,13 @@ BEGIN
     --    AFTER the rewrite, the reverse of a first erasure: the subject is already erased, which is
     --    what a first erasure runs the body first to establish, and replay's arm runs the body at
     --    this record's position over the rewritten ledger, so live runs it over the same ledger.
-    --    Over a husk the body changes nothing (witnessed); step (9e)'s capture, run over the
-    --    original URLs a cut-1 husk's ledger holds, would find no position for the sentinel rows
-    --    its provenance cites. No edge is folded, no blob struck, nothing named: the first record
-    --    did all of that. ──
+    --    Over a husk erased under this body it changes only its stamps, the husk's `updated`
+    --    and its property rows' `last_event_id` (witnessed); over one erased under an older body
+    --    it also applies the steps that body lacked, as replay's arm does at this position, and
+    --    on a husk whose home was materialized since, steps (7)-(7c) run again. Run before the
+    --    rewrite instead, step (9e)'s capture would read the original URLs a cut-1 husk's ledger
+    --    holds and find no position for the sentinel rows its provenance cites. No edge is
+    --    folded, no blob struck, nothing named: the first record did all of that. ──
     IF v_erased THEN
         SELECT coalesce(jsonb_agg(jsonb_build_object('event', d.event_id, 'payload', d.new_payload,
                                                      'metadata', d.new_metadata, 'paths', d.paths)
@@ -634,14 +676,17 @@ $function$
 -- one relation both read). A `keep` line refines a redact line back to structural for one literal
 -- key; the sweep's per-path read has no payload to qualify by, so the redact line it refines
 -- answers. The trail gate is unchanged (Q41): a path counts only on an event inside some resource's
--- erasure trail, because the act redacts nothing else. Closing a finding the pass redacted is not
+-- erasure trail, because the act redacts nothing else. And it counts only for a resource the act
+-- will run on: a cogmap's charter resource is refused (D5; map-grain erasure is filed task
+-- 01a0e960-0ca2-7f42-b33e-1ed19b024e6b), so its findings read `blocked:map-grain`, never a remedy
+-- that does not exist (found by the security review, 2026-10-08). Closing a finding the pass redacted is not
 -- this: place_closure reads no ledger surface yet (plan ruling 3, a separate PR).
 CREATE OR REPLACE FUNCTION sensitivity.ledger_remediability(p_surface text, p_event_type text, p_path text, p_resource uuid)
 RETURNS text
 LANGUAGE sql STABLE
 SET search_path = public, pg_temp
 AS $$
-    SELECT CASE WHEN p_resource IS NOT NULL AND EXISTS (
+    SELECT CASE WHEN p_resource IS NULL OR NOT EXISTS (
                SELECT 1
                  FROM _erasure_redact_paths() l
                 CROSS JOIN LATERAL (
@@ -653,7 +698,10 @@ AS $$
                   AND w.surface = p_surface
                   AND (l.event_type = p_event_type OR l.event_type IS NULL)
                   AND (p_path = w.path OR left(p_path, length(w.path) + 1) = w.path || '/'))
-           THEN 'remediable' ELSE 'unremediable' END;
+                THEN 'unremediable'
+                WHEN EXISTS (SELECT 1 FROM kb_cogmaps c WHERE c.telos_resource_id = p_resource)
+                THEN 'blocked:map-grain'
+                ELSE 'remediable' END;
 $$;
 
 DROP TABLE sensitivity.ledger_redact_paths;
@@ -661,5 +709,5 @@ DROP TABLE sensitivity.ledger_redact_paths;
 SELECT declare_migration(
     20261010100000,
     'additive',
-    'New: the functions _resource_erasure_ledger_remote_numbers and resource_erasure_completion_fields. CREATE OR REPLACE, with unchanged signatures and return types, of _resource_erasure_payload_redaction (on an erased resource, remote sources are numbered from the ledger, checked against the sentinels its provenance cites), resource_erasure_execute (an erased resource whose ledger still holds text is completed under a second resource_erased carrying only redacted_fields; one with nothing left still raises already erased) and sensitivity.ledger_remediability (reads _erasure_redact_paths and answers remediable instead of blocked:cut-2). Drops sensitivity.ledger_redact_paths, which only ledger_remediability read. A binary that predates this reads the execute outcome it always read, and a completion record is a resource_erased whose other fields are omitted, which ResourceErased already defaults.'
+    'New: the functions _resource_erasure_ledger_remote_elements, _resource_erasure_ledger_remote_numbers and resource_erasure_completion_fields. CREATE OR REPLACE, with unchanged signatures and return types, of _resource_erasure_payload_redaction (on an erased resource, remote sources are numbered from the ledger, checked against the sentinels its provenance cites), resource_erasure_execute (an erased resource whose ledger still holds text is completed under a second resource_erased carrying only redacted_fields; one with nothing left still raises already erased) and sensitivity.ledger_remediability (reads _erasure_redact_paths and answers remediable instead of blocked:cut-2, or blocked:map-grain on a cogmap charter resource, which this act refuses). Drops sensitivity.ledger_redact_paths, which only ledger_remediability read. A binary that predates this reads the execute outcome it always read, and a completion record is a resource_erased whose other fields are omitted, which ResourceErased already defaults.'
 );

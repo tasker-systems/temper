@@ -6760,7 +6760,9 @@ async fn a_cut1_husk_completes_once_and_replays_byte_identical(pool: sqlx::PgPoo
                         .iter()
                         .filter(|(k, v)| y.get(k.as_str()) != Some(*v))
                         .filter(|(k, v)| {
-                            !(table == "kb_resources" && k.as_str() == "updated")
+                            !(table == "kb_resources"
+                                && k.as_str() == "updated"
+                                && y["id"] == serde_json::json!(r))
                                 && !(table == "kb_properties"
                                     && k.as_str() == "last_event_id"
                                     && y[k.as_str()] == serde_json::json!(completion)
@@ -6963,4 +6965,105 @@ async fn a_null_on_the_ledger_is_kept_and_replays(pool: sqlx::PgPool) {
         "the key is still redacted: {after}"
     );
     assert_replay_byte_identical(&pool, "with a null value on R's trail").await;
+}
+
+/// The husk's remote-source check is per provenance row, not per set (found by the security
+/// review, 2026-10-08). A permutation, two rows of one block each pointing at the other's element
+/// (their seqs swapped, so each cites the sentinel of a URL its element does not carry), leaves
+/// the SET of cited sentinels equal to the ledger's numbering, so a set check passes it; the
+/// completion pass would then write each URL's ledger number where its provenance says the
+/// other, and the first rewrite of a path is final. The check must refuse instead, at the survey
+/// and at the act.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_husk_whose_provenance_permutes_its_sentinels_is_refused_not_completed(
+    pool: sqlx::PgPool,
+) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    register_block_provenance_annotated(&pool).await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "permute-home").await;
+    let twin_home = make_home(&pool, owner, "permute-twin").await;
+    let leak = seed_leak(&pool, owner, emitter, home, twin_home).await;
+    let r = leak.resource.uuid();
+    let block: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id = $1 AND NOT is_folded \
+          ORDER BY seq LIMIT 1",
+    )
+    .bind(r)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    writes::annotate_block_sources(
+        &pool,
+        writes::AnnotateParams {
+            resource: leak.resource,
+            sources: vec![
+                Incorporation {
+                    source: ProvenanceSource::Remote("https://leak.example/first".to_owned()),
+                    seq: 1,
+                },
+                Incorporation {
+                    source: ProvenanceSource::Remote("https://leak.example/second".to_owned()),
+                    seq: 2,
+                },
+            ],
+            content_block: Some(block),
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    simulate_cut1_husk(&pool, r).await;
+    let swapped = sqlx::query(
+        "WITH two AS (SELECT block_id, source_id, contributed_by_event_id, accretion_seq \
+                        FROM kb_block_provenance \
+                       WHERE block_id = $1 AND source_kind = 'remote' AND accretion_seq IN (1, 2)), \
+              seqs AS (SELECT array_agg(accretion_seq ORDER BY accretion_seq) AS q FROM two) \
+         UPDATE kb_block_provenance bp \
+            SET accretion_seq = CASE WHEN two.accretion_seq = seqs.q[1] THEN seqs.q[2] ELSE seqs.q[1] END \
+           FROM seqs, two \
+          WHERE bp.block_id = two.block_id AND bp.source_id = two.source_id \
+            AND bp.contributed_by_event_id = two.contributed_by_event_id",
+    )
+    .bind(block)
+    .execute(&pool)
+    .await
+    .expect("permute the husk's two sentinel citations");
+    assert_eq!(swapped.rows_affected(), 2, "precondition: two rows swapped");
+
+    let survey = sqlx::query("SELECT resource_erasure_completion_fields($1)")
+        .bind(r)
+        .execute(&pool)
+        .await
+        .expect_err("the survey refuses to derive over a permuted husk");
+    assert!(
+        survey
+            .to_string()
+            .contains("does not match the sentinels its provenance cites"),
+        "{survey}"
+    );
+    let ledger_before: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let (_, operator_entity) = system_actor(&pool).await;
+    let act = sqlx::query("SELECT resource_erasure_execute($1, $2, $2, $3)")
+        .bind(r)
+        .bind(operator_entity)
+        .bind(Uuid::now_v7())
+        .execute(&pool)
+        .await
+        .expect_err("the act refuses too");
+    assert!(
+        act.to_string().contains("does not match the sentinels"),
+        "{act}"
+    );
+    let ledger_after: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(ledger_before, ledger_after, "nothing was written");
 }

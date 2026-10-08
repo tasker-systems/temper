@@ -713,7 +713,8 @@ async fn remediability_is_read_per_event_type_and_path(pool: PgPool) {
 /// (sweep spec Q39, as carried to erasure cut 2: one relation the verifier and the sweep both read).
 /// Every redact line reads `remediable` on an event in some resource's trail, at its path and under
 /// it, and a path beside it does not: a copy of the list that drifted from the verifier's would
-/// fail one of the two.
+/// fail one of the two. On a cogmap's charter resource, which the act refuses, a listed path reads
+/// `blocked:map-grain`.
 ///
 /// The `telos_centroid` copies on a goal's home context's `region_materialized` /
 /// `salience_refreshed` events are outside the list on purpose: those events sit in no resource's
@@ -752,6 +753,30 @@ async fn remediability_is_the_ledger_exceptions_allowlist(pool: PgPool) {
                     .unwrap();
             assert_eq!(got, expect, "{event_type} {path} read at {at} on {surface}");
         }
+    }
+    // A charter resource is refused by the act (D5; map-grain erasure is its own task), so a
+    // listed path on its trail has no remedy yet. The L0 kernel's telos resource is a charter by
+    // migration (20260625000001).
+    let charter: Uuid = "00000000-0000-0000-0005-000000000002".parse().unwrap();
+    let (_, _, surface, finding_path) = &lines[0];
+    for (event_type, at, expect) in [
+        (
+            lines[0].0.as_deref().unwrap_or("resource_updated"),
+            finding_path.as_str(),
+            "blocked:map-grain",
+        ),
+        ("resource_updated", "/not_on_the_list", "unremediable"),
+    ] {
+        let got: String =
+            sqlx::query_scalar("SELECT sensitivity.ledger_remediability($1, $2, $3, $4)")
+                .bind(surface)
+                .bind(event_type)
+                .bind(at)
+                .bind(charter)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(got, expect, "on a charter, {event_type} at {at}");
     }
     let gone: Option<String> =
         sqlx::query_scalar("SELECT to_regclass('sensitivity.ledger_redact_paths')::text")
