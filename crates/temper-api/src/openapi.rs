@@ -741,7 +741,10 @@ mod tests {
                 );
             }
         }
-        assert!(checked > 0, "no path parameters found — this guard would pass vacuously");
+        assert!(
+            checked > 0,
+            "no path parameters found — this guard would pass vacuously"
+        );
     }
 
     /// The header is optional and never required: a browser omits it, and the server degrades.

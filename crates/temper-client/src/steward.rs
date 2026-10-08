@@ -129,7 +129,10 @@ mod tests {
     #[test]
     fn delta_path_omits_threshold_when_none() {
         let id = Uuid::from_u128(7);
-        assert_eq!(delta_path(id, None).unwrap(), format!("/api/steward/{id}/delta"));
+        assert_eq!(
+            delta_path(id, None).unwrap(),
+            format!("/api/steward/{id}/delta")
+        );
     }
 
     #[test]

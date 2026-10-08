@@ -402,7 +402,9 @@ mod orientation_path_tests {
             context_region_metrics_path(ctx, None).unwrap(),
             "/api/contexts/00000000-0000-0000-0000-000000000000/region-metrics"
         );
-        assert!(context_region_metrics_path(ctx, Some(Uuid::nil())).unwrap().contains("?lens="));
+        assert!(context_region_metrics_path(ctx, Some(Uuid::nil()))
+            .unwrap()
+            .contains("?lens="));
     }
 
     #[test]

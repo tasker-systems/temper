@@ -392,13 +392,19 @@ mod tests {
             op.path(&[&"task?x=1#f"]).unwrap(),
             "/api/schema/doc-types/task%3Fx%3D1%23f"
         );
-        assert_eq!(op.path(&[&"%2e%2e"]).unwrap(), "/api/schema/doc-types/%252e%252e");
+        assert_eq!(
+            op.path(&[&"%2e%2e"]).unwrap(),
+            "/api/schema/doc-types/%252e%252e"
+        );
         assert_eq!(
             op.path(&[&"data_artifact"]).unwrap(),
             "/api/schema/doc-types/data_artifact"
         );
         let id = uuid::Uuid::now_v7();
-        assert_eq!(op.path(&[&id]).unwrap(), format!("/api/schema/doc-types/{id}"));
+        assert_eq!(
+            op.path(&[&id]).unwrap(),
+            format!("/api/schema/doc-types/{id}")
+        );
     }
 
     /// FAILS IF a value of `.` or `..` renders to a path at all. Encoding cannot carry either one:
@@ -422,7 +428,10 @@ mod tests {
                 "{value:?}: {err}"
             );
         }
-        assert_eq!(op.path(&[&"..."]).unwrap(), "/api/schema/doc-types/%2E%2E%2E");
+        assert_eq!(
+            op.path(&[&"..."]).unwrap(),
+            "/api/schema/doc-types/%2E%2E%2E"
+        );
         assert_eq!(op.path(&[&"a.b"]).unwrap(), "/api/schema/doc-types/a%2Eb");
     }
 
