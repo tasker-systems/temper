@@ -57,7 +57,8 @@ pub const DATA_ARTIFACT_REFUSAL_CODE: &str = "DATA_ARTIFACT_REFUSAL";
 
 /// The wire `error.code` a read of an erased resource travels under — a `410` rendered only to a
 /// caller who holds standing on the husk (`resource_husk_held_by`); every other caller gets the
-/// uniform `404` an unknown id gets, so the `410` is never an erasure oracle.
+/// uniform `404` an unknown id gets. Standing is decided at read time, not frozen at the act
+/// (resource erasure spec D6), so it includes anyone who joined a granted team since.
 ///
 /// **The spelling.** The resource erasure spec's `resource_erased` names the *signal*, not this
 /// literal. The literal is upper snake, `RESOURCE_ERASED`, like every other code on the wire.

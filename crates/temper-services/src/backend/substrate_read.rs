@@ -773,8 +773,11 @@ pub async fn get_content_select(
 /// `resource_husk_held_by` (migration `20260930000060`), called, never restated: the owner home, a
 /// direct profile grant, or a team grant. A caller who reached the resource only through its
 /// context or a cogmap, or who never reached it, gets `not_found` — the same `404` an unknown id
-/// gets — so the `410` cannot become an erasure oracle. A tombstone (soft-deleted, not erased) is
-/// not a husk and keeps its `404`.
+/// gets — so the `410` tells nobody without standing that the id was ever a resource. Standing is
+/// decided when the read happens, not frozen at the act (spec D6): a profile that joins a granted
+/// team after the erasure, by a roster change, auto-join enrolment or a team re-parent, gets the
+/// `410`, as one of the population that could read the resource in full if it still existed. A
+/// tombstone (soft-deleted, not erased) is not a husk and keeps its `404`.
 ///
 /// The write side classifies its deny through the same probe
 /// (`backend::write_floor`), so a read and a write of one husk name the same population.

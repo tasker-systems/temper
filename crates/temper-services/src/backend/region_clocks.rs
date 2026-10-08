@@ -97,12 +97,30 @@ pub async fn tick(
     // `OR erased` — an erased resource still a member of a live region under THIS lens. The erasure
     // act recomputes the live centroids it can see and queues a settling, but a materialize already
     // in flight when the act commits loaded the resource before the act: it keeps it a live member
-    // under a fresh watermark (and may carry its share), and absorbs the act's queued job. Its
-    // centroid is recomputed over the survivors FIRST, because the materialize below folds the
-    // region as it stands; that materialize loads after the act, so the husk (inactive) leaves
-    // every region of this lens and the telos snapshot is re-armed. Lens-scoped because the
-    // materialize folds only this lens's regions: an erased member of another lens's live region
-    // would trip the gate forever. Those regions' centroids were recomputed by the act itself.
+    // under a fresh watermark (and may carry its share), and absorbs the act's queued job. The
+    // materialize below loads after the act, so the husk (inactive) leaves every region of this lens
+    // and the telos snapshot is re-armed. Lens-scoped because the materialize folds only this lens's
+    // regions: an erased member of another lens's live region would trip the gate forever. Those
+    // regions' centroids were recomputed by the act itself.
+    let erased = recompute_before_materialize(pool, anchor, lens_id).await?;
+    if events >= threshold || deleted || !erased.is_empty() {
+        write::incremental_materialize(pool, anchor, lens_name, emitter).await?;
+        tick.materialized = true;
+    }
+
+    Ok(tick)
+}
+
+/// Recompute over their survivors the centroid of every live region under `lens_id` that still
+/// lists an erased member, and return those members. Every materialize of the lens runs this
+/// first: a materialize folds a region as it stands, and a region folded with an erased member's
+/// share keeps it for good, because the act zeroed the folded centroids it could see and nothing
+/// recomputes a folded region afterwards.
+pub async fn recompute_before_materialize(
+    pool: &sqlx::PgPool,
+    anchor: HomeAnchor,
+    lens_id: temper_substrate::ids::LensId,
+) -> anyhow::Result<Vec<uuid::Uuid>> {
     let erased = erased_live_members(pool, anchor, lens_id).await?;
     for resource in &erased {
         sqlx::query_scalar!(
@@ -112,12 +130,7 @@ pub async fn tick(
         .fetch_one(pool)
         .await?;
     }
-    if events >= threshold || deleted || !erased.is_empty() {
-        write::incremental_materialize(pool, anchor, lens_name, emitter).await?;
-        tick.materialized = true;
-    }
-
-    Ok(tick)
+    Ok(erased)
 }
 
 /// Erased resources that are still members of a live region on this anchor under `lens_id` — the

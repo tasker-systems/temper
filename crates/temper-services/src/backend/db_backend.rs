@@ -4505,10 +4505,22 @@ impl Backend for DbBackend {
         // The lens is the ONLY thing that differs between materializing a context and a cogmap —
         // `default_lens_for` keeps that choice in one place. A context under the declared-graph-only
         // `telos-default` (w_cos = 0) carries no facets and would form nothing.
+        let lens_name = default_lens_for(cmd.anchor);
+        // A region drain in flight during an erasure can leave the erased resource a live member
+        // with its share in the centroid. This materialize would fold that region as it stands.
+        let (_, lens_id) =
+            temper_substrate::substrate::load_lens(&self.pool, cmd.anchor, lens_name)
+                .await
+                .map_err(api_err)?;
+        crate::backend::region_clocks::recompute_before_materialize(
+            &self.pool, cmd.anchor, lens_id,
+        )
+        .await
+        .map_err(api_err)?;
         let outcome = temper_substrate::write::incremental_materialize(
             &self.pool,
             cmd.anchor,
-            default_lens_for(cmd.anchor),
+            lens_name,
             EntityId::from(emitter),
         )
         .await
