@@ -36,23 +36,36 @@ A versioned formula ships in the [`tasker-systems` tap](https://github.com/taske
 fleet on a minor the same way a client pins a contract:
 
 ```sh
-brew trust tasker-systems/tap                # once — Homebrew loads a third-party tap only once trusted
-brew install tasker-systems/tap/temper@0.5   # pinned to the 0.5 wire contract
+brew install tasker-systems/tap/temper@0.6   # pinned to the 0.6 wire contract
+```
+
+Homebrew loads formulae from a third-party tap only once they are trusted. Installing (or
+upgrading) by the **full versioned name** grants that trust for the one formula, so the
+line above needs no `brew trust` step.
+
+The `temper` alias — always the current minor — is the exception: Homebrew trusts a
+formula named in full, and an alias is not one, so the alias refuses until its target is
+trusted. Trust the tap once and the alias keeps working as it moves between minors:
+
+```sh
+brew trust tasker-systems/tap                # once — covers every formula, and the alias
 brew install tasker-systems/tap/temper       # alias — always the current minor
 ```
 
-For fleet pinning, the Brewfile line:
+For fleet pinning, the Brewfile line — `trusted: true` has `brew bundle` grant the trust,
+so an unattended run does not stop on it:
 
 ```ruby
-brew "tasker-systems/tap/temper@0.5"
+brew "tasker-systems/tap/temper@0.6", trusted: true
 ```
 
 Upgrade discipline:
 
 - **Patches** (`0.5.1 → 0.5.2`) update the formula in place; `brew upgrade` carries them.
   Within a minor the wire contract is additive-only, so an upgrade never strands you.
-- **A new minor** ships a NEW formula (`temper@0.6`); moving to it is a deliberate
-  Brewfile edit, at your cadence.
+- **A new minor** ships a NEW formula (`temper@0.7`); moving to it is a deliberate
+  Brewfile edit, at your cadence. Trust is per formula, so install the new one by its full
+  name (or carry `trusted: true` on the new Brewfile line).
 
 `temper update` **refuses** on a brew install — the install carries a `BREW-MANAGED`
 marker, and `brew upgrade` is the only updater there. `temper update --check` still

@@ -84,9 +84,12 @@ curl -fsSL https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/
 **Homebrew (macOS Apple Silicon, Linux x64):**
 
 ```sh
-brew trust tasker-systems/tap
-brew install tasker-systems/tap/temper
+brew install tasker-systems/tap/temper@0.6
 ```
+
+Installing by the full versioned name trusts that formula — no `brew trust` step. See the
+[install playbook](docs/playbooks/install-temper.md#homebrew-macos-apple-silicon-linux-x64)
+for the `temper` alias and Brewfiles.
 
 **Windows (x86_64, PowerShell):**
 
