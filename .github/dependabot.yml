@@ -1,45 +1,87 @@
 # Dependabot configuration.
 #
-# WHY THIS FILE EXISTS: the release signing job pins three actions by full
-# commit SHA (`attest-build-provenance`, `checkout`, `upload-artifact` in
-# `build-cli-binaries.yml`), because a moving tag on a job that holds
-# `attestations: write` is a signing oracle waiting to be repointed. A SHA pin
-# is the right posture and it has a cost — the pin never moves on its own, so a
-# pinned action can silently rot years behind its upstream, including past
-# security fixes.
+# VERSION UPDATES are what this file turns on. Dependabot alerts and security updates — the
+# org-level toggles in the GitHub UI — act on dependency manifests, but they only open a PR once an
+# advisory names a version, and they never act on workflow `uses:` pins at all. Version updates
+# only run from a committed config file, which is why this file exists.
 #
-# Dependabot ALERTS and SECURITY UPDATES — the org-level toggles in the GitHub
-# UI — do not close that gap. They act on dependency manifests, not on workflow
-# `uses:` pins. Bumping a pinned action requires Dependabot VERSION UPDATES with
-# the `github-actions` ecosystem, and version updates only run from a committed
-# config file. So without this file, an org with "Dependabot" switched on still
-# has no bump path for those three SHAs at all.
+# Three kinds of tree, each for its own reason:
 #
-# Deliberately scoped to `github-actions` only. Adding `cargo` or `npm` here is a
-# separate operational decision with a very different PR volume across a
-# workspace this size, and nothing about the pinned-action gap requires it.
+# - `github-actions`. The release jobs pin actions by full commit SHA, because a moving tag on a
+#   job that holds `attestations: write` or `id-token: write` is a signing oracle waiting to be
+#   repointed. A pin never moves on its own, so without this entry a pinned action silently rots
+#   past its upstream's security fixes.
+# - `cargo`. The workspace publishes seven crates and ships the `temper` binary. `cargo audit`
+#   reds the build on a known advisory, but nothing else moved the tree forward.
+# - The JavaScript trees: the root bun workspace (temper-cloud, temper-ui), the two published
+#   client packages, and the two agent workflows, each with its own npm lockfile.
+#
+# Every entry groups minor and patch bumps into one weekly PR per tree; a major bump arrives on its
+# own. The question a reviewer asks of a bump set is "do I trust this set of upstream revisions",
+# and splitting it across a PR per package makes each look trivial while the aggregate goes
+# unexamined. A major is a different question (what broke), so it is not folded in.
+#
+# A merged bump to `packages/agent-workflows/steward` deploys it: the steward deploys by git.
 version: 2
 
 updates:
   - package-ecosystem: github-actions
-    # `/` is the required value for this ecosystem — it means "this repository's
-    # workflows", not "the root directory". It covers `.github/workflows/*.yml`
-    # plus the composite actions under `.github/actions/*/action.yml`, which pin
-    # by tag rather than SHA and so are the likelier source of routine churn.
+    # `/` is the required value for this ecosystem — it means "this repository's workflows", not
+    # "the root directory". It covers `.github/workflows/*.yml` plus the composite actions under
+    # `.github/actions/*/action.yml`.
     directory: "/"
     schedule:
       interval: weekly
-    # One grouped PR rather than one per action. The SHA pins move together in
-    # review — the question a reviewer asks is "do I trust this set of upstream
-    # revisions", and splitting that across three PRs makes each one look
-    # individually trivial while the aggregate posture goes unexamined.
+    # One grouped PR for every action, majors included: the SHA pins move together in review.
     groups:
       actions:
         patterns:
           - "*"
-    # A SHA-pinned `uses:` carries a `# v4` trailer that names the tag the pin
-    # was taken from. Dependabot rewrites both the SHA and that comment, so the
-    # trailer stays honest across bumps rather than drifting into a lie about
-    # which version is pinned.
+    # A SHA-pinned `uses:` carries a `# v4` trailer naming the tag the pin was taken from.
+    # Dependabot rewrites both the SHA and that comment, so the trailer stays honest across bumps.
     commit-message:
       prefix: "chore(ci)"
+
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: bun
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      bun-workspace:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: npm
+    directories:
+      - "/clients/temper-ts"
+      - "/clients/temper-telemetry-ts"
+    schedule:
+      interval: weekly
+    groups:
+      ts-clients:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: npm
+    directories:
+      - "/packages/agent-workflows/mention"
+      - "/packages/agent-workflows/steward"
+    schedule:
+      interval: weekly
+    groups:
+      agent-workflows:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "chore(deps)"
