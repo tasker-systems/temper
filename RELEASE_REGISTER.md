@@ -23,6 +23,25 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.6.0 — unreleased
+- **Resource erasure rewrites the erased resource's own ledger events, and the survey and execute answers gain `redacted_fields`**
+  An erasure run from now on rewrites the free text in the erased resource's own trail events in
+  `kb_events` (titles, origin URIs, doc types, remote-source URLs, property keys and values, facet
+  marks, artifact families, edge labels, reasons, scars and authorship prose) to fixed sentinels,
+  and records each rewritten (event, path) in the `resource_erased` event's `redacted_fields`.
+  The ledger trigger admits exactly that rewrite and still refuses every other UPDATE and every
+  DELETE. `ResourceErasurePlan` (the survey door) and the execute door's completed answer gain
+  `redacted_fields`, the paths the act will rewrite or rewrote; `ledger_remainder` now lists only
+  what the act cannot reach. The new field defaults to empty, so a client reads an older server's
+  answer unchanged. Edge labels on the ledger read `erased-label-<n>`, so another principal reading
+  the trail of their own edge into an erased resource sees the sentinel where the label was.
+  Resources erased before this release are not rewritten until the completion pass ships. Who
+  observes: erasure operators (the survey and execute answers, the CLI's rendering of them) and
+  anyone reading trail events of an erased resource's edges. User-visible: no. Release relevance:
+  additive (the answer field) and behavioral (the act's reach).
+pr: self
+classes: additive, behavioral
+surfaces: http, cli-stdout, clients, schema
+status: signal-only
 - **`TEMPER_EDGE_PROXY_SECRET`: the web UI and the MCP relay mark the requests they send the API**
   When the new optional variable is set, temper-ui (its reverse proxy and its server-side data
   loaders) and the MCP function's relay send it as `x-temper-edge-proxy` on every request they

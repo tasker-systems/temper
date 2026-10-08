@@ -126,6 +126,11 @@ pub struct ResourceErasurePlan {
     pub fingerprint_available: bool,
     /// Derivers, related blobs, cross-resource ledger text and shared remote sources (D8).
     pub remainder: Vec<ErasureTargetOutcome>,
+    /// The resource's own ledger paths the act would rewrite to their sentinels (D3). Empty from a
+    /// server that predates the ledger exception.
+    #[serde(default)]
+    pub redacted_fields: Vec<RedactedEventFields>,
+    /// The ledger paths carrying the resource's content that the act cannot reach (D12).
     pub ledger_remainder: Vec<RedactedEventFields>,
     pub other_author_edges: Vec<OtherAuthorEdge>,
     pub other_author_edge_properties: Vec<OtherAuthorEdgeProperty>,
@@ -277,6 +282,10 @@ pub enum ResourceErasureExecuteResponse {
         folded_edges: Vec<EdgeId>,
         targets: Vec<ErasureTargetOutcome>,
         remainder: Vec<ErasureTargetOutcome>,
+        /// The ledger paths the act rewrote to their sentinels (D3). Empty from a server that
+        /// predates the ledger exception.
+        #[serde(default)]
+        redacted_fields: Vec<RedactedEventFields>,
         ledger_remainder: Vec<RedactedEventFields>,
         blob_strikes: Vec<BlobStrikeView>,
     },

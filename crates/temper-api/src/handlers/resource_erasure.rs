@@ -96,6 +96,7 @@ pub async fn execute(
                 folded_edges: c.folded_edges,
                 targets: c.targets,
                 remainder: c.remainder,
+                redacted_fields: c.redacted_fields,
                 ledger_remainder: c.ledger_remainder,
                 blob_strikes: c
                     .blob_strikes

@@ -28,6 +28,7 @@ module Temper::Generated
 
     attr_accessor :ingest_state
 
+    # The ledger paths carrying the resource's content that the act cannot reach (D12).
     attr_accessor :ledger_remainder
 
     attr_accessor :n_artifacts
@@ -43,6 +44,9 @@ module Temper::Generated
     attr_accessor :other_author_edge_properties
 
     attr_accessor :other_author_edges
+
+    # The resource's own ledger paths the act would rewrite to their sentinels (D3). Empty from a server that predates the ledger exception.
+    attr_accessor :redacted_fields
 
     # Derivers, related blobs, cross-resource ledger text and shared remote sources (D8).
     attr_accessor :remainder
@@ -65,6 +69,7 @@ module Temper::Generated
         :'n_revisions' => :'n_revisions',
         :'other_author_edge_properties' => :'other_author_edge_properties',
         :'other_author_edges' => :'other_author_edges',
+        :'redacted_fields' => :'redacted_fields',
         :'remainder' => :'remainder',
         :'targets' => :'targets'
       }
@@ -96,6 +101,7 @@ module Temper::Generated
         :'n_revisions' => :'Integer',
         :'other_author_edge_properties' => :'Array<OtherAuthorEdgeProperty>',
         :'other_author_edges' => :'Array<OtherAuthorEdge>',
+        :'redacted_fields' => :'Array<RedactedEventFields>',
         :'remainder' => :'Array<ErasureTargetOutcome>',
         :'targets' => :'Array<ErasureTargetOutcome>'
       }
@@ -208,6 +214,12 @@ module Temper::Generated
         end
       else
         self.other_author_edges = nil
+      end
+
+      if attributes.key?(:'redacted_fields')
+        if (value = attributes[:'redacted_fields']).is_a?(Array)
+          self.redacted_fields = value
+        end
       end
 
       if attributes.key?(:'remainder')
@@ -470,6 +482,7 @@ module Temper::Generated
           n_revisions == o.n_revisions &&
           other_author_edge_properties == o.other_author_edge_properties &&
           other_author_edges == o.other_author_edges &&
+          redacted_fields == o.redacted_fields &&
           remainder == o.remainder &&
           targets == o.targets
     end
@@ -483,7 +496,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [blob_co_links, charter_of, edges, fingerprint_available, ingest_state, ledger_remainder, n_artifacts, n_blocks, n_chunks, n_edges, n_revisions, other_author_edge_properties, other_author_edges, remainder, targets].hash
+      [blob_co_links, charter_of, edges, fingerprint_available, ingest_state, ledger_remainder, n_artifacts, n_blocks, n_chunks, n_edges, n_revisions, other_author_edge_properties, other_author_edges, redacted_fields, remainder, targets].hash
     end
 
     # Builds the object from hash

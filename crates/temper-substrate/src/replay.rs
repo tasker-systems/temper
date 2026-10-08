@@ -128,6 +128,11 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
         "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id), '[]'::jsonb) FROM kb_edges t",
     ),
     (
+        "kb_event_field_redactions",
+        // Projected from `resource_erased.redacted_fields` (spec D3); every column is payload-carried.
+        "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.event_id, t.path), '[]'::jsonb) FROM kb_event_field_redactions t",
+    ),
+    (
         "kb_cogmap_lenses",
         "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id), '[]'::jsonb) FROM kb_cogmap_lenses t",
     ),
@@ -1010,6 +1015,15 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .context("resource_erased payload missing subject_id")?
                     .parse()
                     .context("resource_erased subject_id is not a uuid")?;
+                // The redaction rows project at the event's own position: they read only the
+                // payload, and nothing later in the act's span changes them (spec D3).
+                sqlx::query!(
+                    "SELECT _project_resource_erased_redactions($1, $2)",
+                    id,
+                    payload
+                )
+                .fetch_one(&mut *tx)
+                .await?;
                 match apply_after.get(&id) {
                     Some(after) => pending.entry(*after).or_default().push((subject, id)),
                     None => apply_resource_erasure(&mut tx, subject, id).await?,
