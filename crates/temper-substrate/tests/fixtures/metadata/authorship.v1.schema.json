@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentAuthorship",
+  "description": "Per-act agent-authorship metadata — rides in `kb_events.metadata`, NOT the payload, so it is\ninvisible to projections (and thus affinity math) by construction.\n\n`confidence` is **required whenever authorship is supplied** (it is non-`Option`): a caller either\nattaches authorship — and must grade its confidence — or attaches none at all (the whole\n[`ActContext::authorship`] is `None`). The other fields are optional context.",
+  "type": "object",
+  "properties": {
+    "confidence": {
+      "$ref": "#/$defs/ConfidenceBand"
+    },
+    "model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "persona": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "rationale": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reasoning": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "confidence"
+  ],
+  "$defs": {
+    "ConfidenceBand": {
+      "description": "The agent's SUBJECTIVE self-assessment of an authored act — a graded band, not a false-precision\nscalar. Ordinal: `Tentative < Probable < Confident`.",
+      "type": "string",
+      "enum": [
+        "tentative",
+        "probable",
+        "confident"
+      ]
+    }
+  }
+}

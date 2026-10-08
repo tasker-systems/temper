@@ -8,12 +8,21 @@ use temper_substrate::payloads as p;
 
 const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/payloads");
 
+/// The schema of what rides `kb_events.metadata`, beside the payloads rather than among them (the
+/// payload directory holds exactly the typed event names). The resource-erasure payload fence
+/// (temper-services `resource_erasure_surface_test`) walks it for authorship strings.
+const METADATA_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/metadata");
+
 fn check<T: schemars::JsonSchema>(name: &str) {
+    check_in::<T>(DIR, name);
+}
+
+fn check_in<T: schemars::JsonSchema>(dir: &str, name: &str) {
     let schema = schemars::SchemaGenerator::default().into_root_schema_for::<T>();
     let rendered = serde_json::to_string_pretty(&schema).unwrap() + "\n";
-    let path = format!("{DIR}/{name}.v1.schema.json");
+    let path = format!("{dir}/{name}.v1.schema.json");
     if std::env::var("UPDATE_SCHEMA").is_ok() {
-        std::fs::create_dir_all(DIR).unwrap();
+        std::fs::create_dir_all(dir).unwrap();
         std::fs::write(&path, &rendered).unwrap();
     }
     let committed = std::fs::read_to_string(&path).unwrap_or_default();
@@ -58,6 +67,12 @@ fn payload_schemas_match_snapshots() {
     check::<p::ResourceErased>("resource_erased");
     check::<p::ResourceErasureRefused>("resource_erasure_refused");
     check::<p::BlockHistoryScrubbed>("block_history_scrubbed");
+}
+
+/// `EventContext` serializes an act's authorship, and nothing else, into `kb_events.metadata`.
+#[test]
+fn authorship_metadata_schema_matches_snapshot() {
+    check_in::<p::AgentAuthorship>(METADATA_DIR, "authorship");
 }
 
 #[test]
