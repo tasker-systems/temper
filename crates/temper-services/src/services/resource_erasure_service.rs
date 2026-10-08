@@ -140,7 +140,9 @@ pub struct ResourceErasureCompletion {
     pub targets: Vec<ErasureTargetOutcome>,
     /// What the act names and does not touch, by design (D8).
     pub remainder: Vec<ErasureTargetOutcome>,
-    /// The resource's own ledger paths the act has not reached (D12).
+    /// The resource's own ledger paths the act rewrote to their sentinels (D3).
+    pub redacted_fields: Vec<RedactedEventFields>,
+    /// The ledger paths carrying the resource's content that the act cannot reach (D12).
     pub ledger_remainder: Vec<RedactedEventFields>,
     /// The operator-listed strikes, in the operator's order, each with its strike-time verdict.
     pub blob_strikes: Vec<BlobStrikeOutcome>,
@@ -170,6 +172,7 @@ struct ExecuteOutcomeWire {
     edges: Vec<EdgeId>,
     targets: Vec<ErasureTargetOutcome>,
     remainder: Vec<ErasureTargetOutcome>,
+    redacted_fields: Vec<RedactedEventFields>,
     ledger_remainder: Vec<RedactedEventFields>,
 }
 
@@ -189,6 +192,7 @@ struct SurveyPlanWire {
     ingest_state: String,
     fingerprint_available: bool,
     remainder: Vec<ErasureTargetOutcome>,
+    redacted_fields: Vec<RedactedEventFields>,
     ledger_remainder: Vec<RedactedEventFields>,
 }
 
@@ -305,6 +309,7 @@ async fn execute_with_release_timeout(
             folded_edges: wire.edges,
             targets: wire.targets,
             remainder: wire.remainder,
+            redacted_fields: wire.redacted_fields,
             ledger_remainder: wire.ledger_remainder,
             blob_strikes,
         },
@@ -773,6 +778,7 @@ pub async fn survey_resource_erasure(
             ingest_state: wire.ingest_state,
             fingerprint_available: wire.fingerprint_available,
             remainder: wire.remainder,
+            redacted_fields: wire.redacted_fields,
             ledger_remainder: wire.ledger_remainder,
             other_author_edges,
             other_author_edge_properties,

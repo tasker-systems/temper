@@ -18,7 +18,7 @@ import re  # noqa: F401
 import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
-from typing import Any, ClassVar, Dict, List
+from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from temper.generated.models.blob_strike_view import BlobStrikeView
 from temper.generated.models.erasure_target_outcome import ErasureTargetOutcome
@@ -35,11 +35,12 @@ class ResourceErasureExecuteResponseOneOf(BaseModel):
     event_id: UUID
     folded_edges: List[UUID]
     ledger_remainder: List[RedactedEventFields]
+    redacted_fields: Optional[List[RedactedEventFields]] = Field(default=None, description="The ledger paths the act rewrote to their sentinels (D3). Empty from a server that predates the ledger exception.")
     remainder: List[ErasureTargetOutcome]
     request_reference: UUID = Field(description="The server-minted reference the operator cites.")
     status: StrictStr
     targets: List[ErasureTargetOutcome]
-    __properties: ClassVar[List[str]] = ["blob_strikes", "event_id", "folded_edges", "ledger_remainder", "remainder", "request_reference", "status", "targets"]
+    __properties: ClassVar[List[str]] = ["blob_strikes", "event_id", "folded_edges", "ledger_remainder", "redacted_fields", "remainder", "request_reference", "status", "targets"]
 
     @field_validator('status')
     def status_validate_enum(cls, value):
@@ -101,6 +102,13 @@ class ResourceErasureExecuteResponseOneOf(BaseModel):
                 if _item_ledger_remainder:
                     _items.append(_item_ledger_remainder.to_dict())
             _dict['ledger_remainder'] = _items
+        # override the default output from pydantic by calling `to_dict()` of each item in redacted_fields (list)
+        _items = []
+        if self.redacted_fields:
+            for _item_redacted_fields in self.redacted_fields:
+                if _item_redacted_fields:
+                    _items.append(_item_redacted_fields.to_dict())
+            _dict['redacted_fields'] = _items
         # override the default output from pydantic by calling `to_dict()` of each item in remainder (list)
         _items = []
         if self.remainder:
@@ -131,6 +139,7 @@ class ResourceErasureExecuteResponseOneOf(BaseModel):
             "event_id": obj.get("event_id"),
             "folded_edges": obj.get("folded_edges"),
             "ledger_remainder": [RedactedEventFields.from_dict(_item) for _item in obj["ledger_remainder"]] if obj.get("ledger_remainder") is not None else None,
+            "redacted_fields": [RedactedEventFields.from_dict(_item) for _item in obj["redacted_fields"]] if obj.get("redacted_fields") is not None else None,
             "remainder": [ErasureTargetOutcome.from_dict(_item) for _item in obj["remainder"]] if obj.get("remainder") is not None else None,
             "request_reference": obj.get("request_reference"),
             "status": obj.get("status"),

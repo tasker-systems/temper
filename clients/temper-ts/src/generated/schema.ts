@@ -8646,6 +8646,11 @@ export interface components {
             event_id: string;
             folded_edges: components["schemas"]["EdgeId"][];
             ledger_remainder: components["schemas"]["RedactedEventFields"][];
+            /**
+             * @description The ledger paths the act rewrote to their sentinels (D3). Empty from a server that
+             *     predates the ledger exception.
+             */
+            redacted_fields?: components["schemas"]["RedactedEventFields"][];
             remainder: components["schemas"]["ErasureTargetOutcome"][];
             /**
              * Format: uuid
@@ -8680,6 +8685,7 @@ export interface components {
             edges: components["schemas"]["EdgeId"][];
             fingerprint_available: boolean;
             ingest_state: string;
+            /** @description The ledger paths carrying the resource's content that the act cannot reach (D12). */
             ledger_remainder: components["schemas"]["RedactedEventFields"][];
             /** Format: int64 */
             n_artifacts: number;
@@ -8693,6 +8699,11 @@ export interface components {
             n_revisions: number;
             other_author_edge_properties: components["schemas"]["OtherAuthorEdgeProperty"][];
             other_author_edges: components["schemas"]["OtherAuthorEdge"][];
+            /**
+             * @description The resource's own ledger paths the act would rewrite to their sentinels (D3). Empty from a
+             *     server that predates the ledger exception.
+             */
+            redacted_fields?: components["schemas"]["RedactedEventFields"][];
             /** @description Derivers, related blobs, cross-resource ledger text and shared remote sources (D8). */
             remainder: components["schemas"]["ErasureTargetOutcome"][];
             targets: components["schemas"]["ErasureTargetOutcome"][];

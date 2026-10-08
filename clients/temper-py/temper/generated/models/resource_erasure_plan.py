@@ -38,7 +38,7 @@ class ResourceErasurePlan(BaseModel):
     edges: List[UUID] = Field(description="The live edges the act would fold.")
     fingerprint_available: StrictBool
     ingest_state: StrictStr
-    ledger_remainder: List[RedactedEventFields]
+    ledger_remainder: List[RedactedEventFields] = Field(description="The ledger paths carrying the resource's content that the act cannot reach (D12).")
     n_artifacts: StrictInt
     n_blocks: StrictInt
     n_chunks: StrictInt
@@ -46,9 +46,10 @@ class ResourceErasurePlan(BaseModel):
     n_revisions: StrictInt
     other_author_edge_properties: List[OtherAuthorEdgeProperty]
     other_author_edges: List[OtherAuthorEdge]
+    redacted_fields: Optional[List[RedactedEventFields]] = Field(default=None, description="The resource's own ledger paths the act would rewrite to their sentinels (D3). Empty from a server that predates the ledger exception.")
     remainder: List[ErasureTargetOutcome] = Field(description="Derivers, related blobs, cross-resource ledger text and shared remote sources (D8).")
     targets: List[ErasureTargetOutcome]
-    __properties: ClassVar[List[str]] = ["blob_co_links", "charter_of", "edges", "fingerprint_available", "ingest_state", "ledger_remainder", "n_artifacts", "n_blocks", "n_chunks", "n_edges", "n_revisions", "other_author_edge_properties", "other_author_edges", "remainder", "targets"]
+    __properties: ClassVar[List[str]] = ["blob_co_links", "charter_of", "edges", "fingerprint_available", "ingest_state", "ledger_remainder", "n_artifacts", "n_blocks", "n_chunks", "n_edges", "n_revisions", "other_author_edge_properties", "other_author_edges", "redacted_fields", "remainder", "targets"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -117,6 +118,13 @@ class ResourceErasurePlan(BaseModel):
                 if _item_other_author_edges:
                     _items.append(_item_other_author_edges.to_dict())
             _dict['other_author_edges'] = _items
+        # override the default output from pydantic by calling `to_dict()` of each item in redacted_fields (list)
+        _items = []
+        if self.redacted_fields:
+            for _item_redacted_fields in self.redacted_fields:
+                if _item_redacted_fields:
+                    _items.append(_item_redacted_fields.to_dict())
+            _dict['redacted_fields'] = _items
         # override the default output from pydantic by calling `to_dict()` of each item in remainder (list)
         _items = []
         if self.remainder:
@@ -161,6 +169,7 @@ class ResourceErasurePlan(BaseModel):
             "n_revisions": obj.get("n_revisions"),
             "other_author_edge_properties": [OtherAuthorEdgeProperty.from_dict(_item) for _item in obj["other_author_edge_properties"]] if obj.get("other_author_edge_properties") is not None else None,
             "other_author_edges": [OtherAuthorEdge.from_dict(_item) for _item in obj["other_author_edges"]] if obj.get("other_author_edges") is not None else None,
+            "redacted_fields": [RedactedEventFields.from_dict(_item) for _item in obj["redacted_fields"]] if obj.get("redacted_fields") is not None else None,
             "remainder": [ErasureTargetOutcome.from_dict(_item) for _item in obj["remainder"]] if obj.get("remainder") is not None else None,
             "targets": [ErasureTargetOutcome.from_dict(_item) for _item in obj["targets"]] if obj.get("targets") is not None else None
         })

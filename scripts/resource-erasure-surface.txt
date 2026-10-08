@@ -248,7 +248,7 @@ property_folded:*                                         | permissive          
 property_reweighted:*                                     | permissive               | registered with no write path (canonical_seed); nothing emits one
 
 # ── edges ───────────────────────────────────────────────────────────────────────────────────
-relationship_asserted:/label                              | redact:edge-label        | D4: JSON null
+relationship_asserted:/label                              | redact:edge-label        | erased-label-<n>, numbered per resource by first assertion; a label is part of an edge's identity (ruled 2026-10-08)
 relationship_folded:/reason                               | redact:reason            | D4: JSON null
 relationship_corrected:/scar                              | redact:scar              | D4: "erased"
 relationship_retracted:*                                  | permissive               | registered with no write path (canonical_seed); nothing emits one

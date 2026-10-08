@@ -25,7 +25,7 @@
 # temper_services::MIGRATOR (so `_sqlx_migrations` is included). The complement is that set minus
 # every `table.column` declared in personal-data-surface.txt.
 #
-# COUNT at 44d3a4f: 166 text/varchar columns; 18 declared in the sibling; 148 declared here.
+# COUNT at migration 20261009100000: 167 text/varchar columns; 18 declared in the sibling; 149 declared here.
 # (The spec measured 147 at 7c6d0f2. The schema did not change between the two commits; the
 # difference is `_sqlx_migrations.description`, which exists in every migrated test database.)
 #
@@ -84,6 +84,7 @@ kb_blob_upload_segments.segment_hash         | structural   | sha256
 kb_data_artifact_content.content_hash        | structural   | sha256
 kb_data_artifacts.content_hash               | structural   | sha256
 kb_data_artifact_verdicts.content_hash       | structural   | sha256
+kb_event_field_redactions.path               | structural   | a dotted payload path from the erasure allowlist (_erasure_redact_paths), never a value
 kb_erased_content.content_hash               | structural   | sha256; the erasure tombstone key
 kb_erasure_blob_deletes.content_hash         | structural   | sha256
 kb_erasure_blob_deletes.pathname             | structural   | copy of a content-addressed blob pathname

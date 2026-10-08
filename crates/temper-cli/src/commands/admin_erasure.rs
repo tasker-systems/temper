@@ -282,7 +282,8 @@ mod tests {
             "folded_edges": [],
             "targets": [{ "target": "kb_blocks", "outcome": "erased" }],
             "remainder": [{ "target": "kb_blobs", "outcome": "named-unreached" }],
-            "ledger_remainder": [{ "event": uuid::Uuid::now_v7(), "paths": ["origin_uri"] }],
+            "redacted_fields": [{ "event": uuid::Uuid::now_v7(), "paths": ["title"] }],
+            "ledger_remainder": [{ "event": uuid::Uuid::now_v7(), "paths": ["telos_centroid"] }],
             "blob_strikes": [],
         })
     }
@@ -331,8 +332,9 @@ mod tests {
         }
     }
 
-    /// FAILS IF a completed act's answer drops what it reached or left: targets, remainder and
-    /// ledger remainder are all rendered, in either format, and the token is not.
+    /// FAILS IF a completed act's answer drops what it reached or left: targets, remainder, the
+    /// redacted ledger paths and the ledger remainder are all rendered, in either format, and the
+    /// token is not.
     #[tokio::test]
     async fn a_completed_resource_erasure_renders_targets_remainder_and_ledger_remainder() {
         for fmt in FORMATS {
@@ -355,8 +357,10 @@ mod tests {
                 "kb_blocks",
                 "remainder",
                 "kb_blobs",
+                "redacted_fields",
+                "title",
                 "ledger_remainder",
-                "origin_uri",
+                "telos_centroid",
             ] {
                 assert!(
                     out.contains(needle),

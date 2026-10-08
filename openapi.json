@@ -23381,6 +23381,13 @@
                   "$ref": "#/components/schemas/RedactedEventFields"
                 }
               },
+              "redacted_fields": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/RedactedEventFields"
+                },
+                "description": "The ledger paths the act rewrote to their sentinels (D3). Empty from a server that\npredates the ledger exception."
+              },
               "remainder": {
                 "type": "array",
                 "items": {
@@ -23494,7 +23501,8 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/RedactedEventFields"
-            }
+            },
+            "description": "The ledger paths carrying the resource's content that the act cannot reach (D12)."
           },
           "n_artifacts": {
             "type": "integer",
@@ -23527,6 +23535,13 @@
             "items": {
               "$ref": "#/components/schemas/OtherAuthorEdge"
             }
+          },
+          "redacted_fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RedactedEventFields"
+            },
+            "description": "The resource's own ledger paths the act would rewrite to their sentinels (D3). Empty from a\nserver that predates the ledger exception."
           },
           "remainder": {
             "type": "array",

@@ -23,6 +23,9 @@ module Temper::Generated
 
     attr_accessor :ledger_remainder
 
+    # The ledger paths the act rewrote to their sentinels (D3). Empty from a server that predates the ledger exception.
+    attr_accessor :redacted_fields
+
     attr_accessor :remainder
 
     # The server-minted reference the operator cites.
@@ -61,6 +64,7 @@ module Temper::Generated
         :'event_id' => :'event_id',
         :'folded_edges' => :'folded_edges',
         :'ledger_remainder' => :'ledger_remainder',
+        :'redacted_fields' => :'redacted_fields',
         :'remainder' => :'remainder',
         :'request_reference' => :'request_reference',
         :'status' => :'status',
@@ -85,6 +89,7 @@ module Temper::Generated
         :'event_id' => :'String',
         :'folded_edges' => :'Array<String>',
         :'ledger_remainder' => :'Array<RedactedEventFields>',
+        :'redacted_fields' => :'Array<RedactedEventFields>',
         :'remainder' => :'Array<ErasureTargetOutcome>',
         :'request_reference' => :'String',
         :'status' => :'String',
@@ -142,6 +147,12 @@ module Temper::Generated
         end
       else
         self.ledger_remainder = nil
+      end
+
+      if attributes.key?(:'redacted_fields')
+        if (value = attributes[:'redacted_fields']).is_a?(Array)
+          self.redacted_fields = value
+        end
       end
 
       if attributes.key?(:'remainder')
@@ -319,6 +330,7 @@ module Temper::Generated
           event_id == o.event_id &&
           folded_edges == o.folded_edges &&
           ledger_remainder == o.ledger_remainder &&
+          redacted_fields == o.redacted_fields &&
           remainder == o.remainder &&
           request_reference == o.request_reference &&
           status == o.status &&
@@ -334,7 +346,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [blob_strikes, event_id, folded_edges, ledger_remainder, remainder, request_reference, status, targets].hash
+      [blob_strikes, event_id, folded_edges, ledger_remainder, redacted_fields, remainder, request_reference, status, targets].hash
     end
 
     # Builds the object from hash

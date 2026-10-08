@@ -86,7 +86,8 @@ use temper_substrate::ids::{
 };
 use temper_substrate::payloads::EdgePolarity;
 use temper_substrate::payloads::{
-    self, AnchorRef, ArtifactIntent, Incorporation, KindOwner, ProvenanceSource,
+    self, AgentAuthorship, AnchorRef, ArtifactIntent, ConfidenceBand, Incorporation, KindOwner,
+    ProvenanceSource,
 };
 use temper_substrate::replay;
 use temper_substrate::writes::CommitBlobParams;
@@ -571,6 +572,39 @@ async fn replay_of_a_resource_erasure_is_byte_identical(pool: sqlx::PgPool) {
         searchable_before,
         "the witness needs a non-empty search vector on R"
     );
+    // Witness 4's authorship half: an agent's prose and persona on an edit of R, and another
+    // author's value on R's edge.
+    writes::set_property_with(
+        &pool,
+        leak.resource,
+        "status",
+        &serde_json::json!("under review"),
+        emitter,
+        EventContext {
+            authorship: Some(AgentAuthorship {
+                reasoning: Some("jane smith asked for the review".into()),
+                confidence: ConfidenceBand::Probable,
+                rationale: Some("the merger memo names her".into()),
+                persona: Some("jane's assistant".into()),
+                model: Some("model-under-test".into()),
+            }),
+            ..EventContext::default()
+        },
+    )
+    .await
+    .unwrap();
+    writes::assert_keyed_property_with(
+        &pool,
+        PropertyOwner::edge(leak.edge),
+        "evidence",
+        &serde_json::json!("jane's diary, page 4"),
+        1.0,
+        emitter,
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+
     // Witness 9's denominator: every property row R owns, live and folded, before the act.
     let family_before: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_properties WHERE owner_table = 'kb_resources' AND owner_id = $1",
@@ -586,30 +620,70 @@ async fn replay_of_a_resource_erasure_is_byte_identical(pool: sqlx::PgPool) {
 
     let event_id = execute_act(&pool, leak.resource.uuid()).await;
 
-    // 14 is IN the record: the `resource_erased` payload names every unreached ledger path in
-    // ledger_remainder — cut 1 redacts nothing on the ledger, so EVERY free-text path of every
-    // trail-scope event is named (the F3 catalog), and the record is the plan's, verbatim.
-    let (ledger_remainder, remainder, folded_edges): (
+    // The record names what the act rewrote on the ledger (cut 2, D3): `redacted_fields` lists
+    // every free-text path of every trail-scope event that held text, by class (the F3 catalog
+    // through the allowlist), and `ledger_remainder` keeps only what the exception cannot reach,
+    // the telos copies, of which R (not a goal) has none.
+    let (redacted, ledger_remainder, remainder, folded_edges): (
+        serde_json::Value,
         serde_json::Value,
         serde_json::Value,
         serde_json::Value,
     ) = sqlx::query_as(
-        "SELECT payload->'ledger_remainder', payload->'remainder', payload->'folded_edges' \
+        "SELECT payload->'redacted_fields', payload->'ledger_remainder', payload->'remainder', \
+                payload->'folded_edges' \
            FROM kb_events WHERE id = $1",
     )
     .bind(event_id)
     .fetch_one(&pool)
     .await
     .unwrap();
+    assert_eq!(
+        ledger_remainder,
+        serde_json::json!([]),
+        "a resource that was never a goal leaves nothing on the ledger unreached"
+    );
+    // Witness 4: R's own trail no longer says what the erased text was, in any payload or any
+    // authorship metadata.
+    for planted in [
+        "M&A notes (leaked)",
+        "test://seed-leak",
+        URL,
+        "\"research\"",
+        "jane smith spoke to us",
+        "transient",
+        "\"notes\"",
+        "jane smith confirmed the figures",
+        "jane smith asked for the review",
+        "the merger memo names her",
+        "jane's assistant",
+        "model-under-test",
+        "under review",
+        "jane's diary",
+    ] {
+        let still: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT ev.id FROM _resource_erasure_trail_scope($1) s \
+               JOIN kb_events ev ON ev.id = s.event_id \
+              WHERE strpos(ev.payload::text || ev.metadata::text, $2) > 0",
+        )
+        .bind(leak.resource.uuid())
+        .bind(planted)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(
+            still.is_empty(),
+            "the trail still carries {planted:?} in {still:?}"
+        );
+    }
     let paths_named_for = |event: Uuid| -> Vec<String> {
-        ledger_remainder
+        redacted
             .as_array()
-            .expect("ledger_remainder is an array")
+            .expect("redacted_fields is an array")
             .iter()
             .find(|entry| entry["event"] == serde_json::json!(event))
-            .unwrap_or_else(|| {
-                panic!("ledger_remainder names event {event}; got {ledger_remainder}")
-            })["paths"]
+            .unwrap_or_else(|| panic!("redacted_fields names event {event}; got {redacted}"))
+            ["paths"]
             .as_array()
             .expect("an entry's paths is an array")
             .iter()
@@ -3124,6 +3198,15 @@ async fn a_property_set_holding_its_transaction_makes_the_act_wait_then_is_senti
     )
     .await
     .expect("the racing property set writes inside its open transaction");
+    // Its event id, read inside the writer's transaction: after the act the payload's key is a
+    // sentinel, so the key text no longer finds it.
+    let raced_event: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'property_set' AND e.payload->>'property_key' = 'raced'",
+    )
+    .fetch_one(&mut *writer)
+    .await
+    .unwrap();
 
     let pool_for_act = pool.clone();
     let resource = leak.resource.uuid();
@@ -3138,16 +3221,22 @@ async fn a_property_set_holding_its_transaction_makes_the_act_wait_then_is_senti
     writer.commit().await.unwrap();
     let event_id = act.await.expect("the act task must not panic");
 
-    let set_events: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
-          WHERE t.name = 'property_set' AND e.payload->>'property_key' = 'raced'",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
     assert!(
-        set_events.len() == 1 && set_events[0] < event_id,
-        "the racing set committed before the act; got {set_events:?} vs {event_id}"
+        raced_event < event_id,
+        "the racing set committed before the act; got {raced_event} vs {event_id}"
+    );
+    let raced_payload: serde_json::Value =
+        sqlx::query_scalar("SELECT payload FROM kb_events WHERE id = $1")
+            .bind(raced_event)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        raced_payload["property_key"]
+            .as_str()
+            .is_some_and(|k| k.starts_with("erased-key-"))
+            && raced_payload["value"] == serde_json::json!(format!("erased:{raced_event}")),
+        "the raced event's key and value are redacted on the ledger too: {raced_payload}"
     );
     let raced_rows: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_properties \
@@ -3894,7 +3983,15 @@ async fn a_pre_minted_look_alike_sentinel_does_not_stop_the_re_point(pool: sqlx:
         "R cited URL exclusively, so its row is deleted"
     );
 
-    assert_replay_byte_identical(&pool, "of a re-point onto a look-alike").await;
+    // Replay matches in every table but one column of these rows (ruled 2026-10-08, a declared
+    // replay limit under D14). The redacted ledger cites `erased:<block>:1` at R's original
+    // citation, before the other resource minted its look-alike, so replay keeps the canonical
+    // spelling where live kept the look-alike's. The row is the other resource's, so the act
+    // cannot respell it (Q1).
+    assert_replay_identical_but_first_writer_spelling(&pool, blocks.len(), |live, _| {
+        live.starts_with(' ')
+    })
+    .await;
 }
 
 /// (22, concurrent-citer half, citer first) R exclusively cites URL. Another resource's annotate
@@ -4877,12 +4974,40 @@ async fn replay_projects_a_lawful_write_that_sorts_after_the_act(pool: sqlx::PgP
     );
 }
 
+/// A husk as cut 1 left it: the act's projection-side body under a `resource_erased` that names
+/// no `redacted_fields`, and the ledger's text untouched. Cut 2's act no longer makes one, but every
+/// resource erased before it shipped is one until the completion pass reaches it.
+async fn simulate_cut1_husk(pool: &PgPool, resource: Uuid) -> Uuid {
+    let (operator, emitter) = system_actor(pool).await;
+    let erased: Uuid = sqlx::query_scalar(
+        "SELECT _event_append('resource_erased', $2, NULL, NULL, jsonb_build_object( \
+             'subject_table', 'kb_resources', 'subject_id', $1, 'actor', $3, \
+             'redacted_fields', '[]'::jsonb, 'targets', '[]'::jsonb, 'remainder', '[]'::jsonb, \
+             'ledger_remainder', '[]'::jsonb))",
+    )
+    .bind(resource)
+    .bind(emitter.uuid())
+    .bind(operator.uuid())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query("SELECT _resource_erasure_apply_redaction($1, $2)")
+        .bind(resource)
+        .bind(erased)
+        .execute(pool)
+        .await
+        .unwrap();
+    erased
+}
+
 /// (25) The facet regrain cannot re-inflate a husk. `_facet_regrain_from_events` deletes an owner's
-/// `facet` rows and re-projects them from the ledger, and cut 1 leaves the ledger's facet payloads
-/// in plain text. What stops it is the write guard both property projectors call first: a regrain
-/// that reaches R, an edge into R, or every owner raises and rolls back whole. The control at the
-/// end runs the same regrain under the replay walk's guard bypass and watches the planted value
-/// come back, so the absence checks above it can see a re-inflation.
+/// `facet` rows and re-projects them from the ledger. Cut 2's act redacts the ledger's facet
+/// payloads (Witness 28), but a husk erased under cut 1 keeps them in plain text until its
+/// completion pass, so this witness runs on one, and the write guard both property projectors call
+/// first is what stops the regrain: one that reaches R, an edge into R, or every owner raises and
+/// rolls back whole. The control at the end runs the same regrain under the replay walk's guard
+/// bypass and watches the planted value come back, so the absence checks above it can see a
+/// re-inflation.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_facet_regrain_cannot_reinflate_an_erased_resource(pool: sqlx::PgPool) {
     common::reset_schema(&pool).await;
@@ -4971,14 +5096,14 @@ async fn the_facet_regrain_cannot_reinflate_an_erased_resource(pool: sqlx::PgPoo
         "setup: one facet row on R, one on the edge"
     );
 
-    execute_act(&pool, r.uuid()).await;
+    simulate_cut1_husk(&pool, r.uuid()).await;
     assert_eq!(
         leaked(pool.clone()).await,
         0,
         "the act sentineled both facets"
     );
 
-    // The premise: the ledger still holds both original facet payloads.
+    // The premise: a cut-1 husk's ledger still holds both original facet payloads.
     let ledger: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_events \
           WHERE payload->>'property_key' = 'facet' \
@@ -5172,14 +5297,16 @@ async fn a_blocks_own_properties_are_erased_with_it(pool: sqlx::PgPool) {
 
 /// The remainder names a shape in R's home for a family R's artifacts used, by shape id (D4,
 /// ruled 2026-10-03, ruling 5), and the trail scope reaches a property event owned by one of R's
-/// blocks (20261008100000), so `ledger_remainder` names its key and value for cut 2.
+/// blocks (20261008100000), so the act redacts its key and value on the ledger (cut 2).
 ///
 /// No write path emits a block-owned property event today (`block_role` rows come from the block
 /// projector), so the event here is appended directly, as a future writer would. The arm matches
 /// on (home, kind owner, family): a shape for a family R never used, the same family in another
-/// home, and the same family under another kind owner are not named. After the act (9f) has
-/// erased the artifact's family, a plan on the husk still names the shape through the ledger, and
-/// the act's own record names it.
+/// home, and the same family under another kind owner are not named. The act's own record names
+/// the shape. Since cut 2 the act also redacts the family on the ledger, so a plan recomputed on
+/// the husk finds no family left to match: the record is where the shape stays named. (On a husk
+/// erased under cut 1 the ledger still carries the family until its completion pass, and the arm
+/// reads it there.)
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_remainder_names_the_homes_shapes_and_block_owned_property_events(pool: sqlx::PgPool) {
     common::reset_schema(&pool).await;
@@ -5276,7 +5403,7 @@ async fn the_remainder_names_the_homes_shapes_and_block_owned_property_events(po
     let plan = plan_now().await;
     assert_names_only_the_notes_shape(&plan["remainder"], "before the act");
 
-    let entry = plan["ledger_remainder"]
+    let entry = plan["redacted_fields"]
         .as_array()
         .unwrap()
         .iter()
@@ -5309,5 +5436,1038 @@ async fn the_remainder_names_the_homes_shapes_and_block_owned_property_events(po
         "the record claims step (9f): {}",
         record["targets"]
     );
-    assert_names_only_the_notes_shape(&plan_now().await["remainder"], "on the husk, after (9f)");
+    let husk_plan = plan_now().await;
+    assert!(
+        !husk_plan["remainder"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["target"] == "kb_data_artifact_shapes"),
+        "on the husk, the family is gone from the row and the ledger alike: {}",
+        husk_plan["remainder"]
+    );
+}
+
+// ── Cut 2: the ledger exception (spec D3, D4; migration 20261009100000) ─────────────────────────
+
+/// One event's payload.
+async fn payload_of(pool: &PgPool, event: Uuid) -> serde_json::Value {
+    sqlx::query_scalar("SELECT payload FROM kb_events WHERE id = $1")
+        .bind(event)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// The `resource_created` event of `resource`.
+async fn created_event(pool: &PgPool, resource: Uuid) -> Uuid {
+    sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'resource_created' AND (e.payload->>'resource_id')::uuid = $1",
+    )
+    .bind(resource)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// Run `sql` (one statement or several) in a transaction that is rolled back, and return its
+/// error text, or None.
+async fn refused(pool: &PgPool, sql: &str) -> Option<String> {
+    let mut tx = pool.begin().await.unwrap();
+    let out = sqlx::raw_sql(sql)
+        .execute(&mut *tx)
+        .await
+        .err()
+        .map(|e| e.to_string());
+    tx.rollback().await.unwrap();
+    out
+}
+
+/// (5) The verifier admits only an erasure's own rewrite. DELETE raises. So does an UPDATE of a
+/// column other than payload and metadata, of a path no redaction row names, of a named path to a
+/// value that is not its sentinel, and of an event the erasure's own record does not list, even
+/// when a row for it was inserted by hand. Another resource's event is refused at the projector
+/// and at the trigger. Every refusal says only what the trigger has always said.
+///
+/// FAILS IF: any of the five conditions is dropped from `kb_events_append_only`, or the projector
+/// stops checking the subject's trail.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_ledger_admits_only_an_erasures_own_sentinel_rewrite(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "verifier-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "verifier-twin").await,
+    )
+    .await;
+    let other = other_resource(&pool, owner, emitter, "verifier-other").await;
+    let erased = execute_act(&pool, leak.resource.uuid()).await;
+    let r_created = created_event(&pool, leak.resource.uuid()).await;
+    let s_created = created_event(&pool, other.uuid()).await;
+    let fold: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'relationship_folded' AND e.payload->>'edge_id' = $1",
+    )
+    .bind(leak.edge.uuid().to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let append_only = |what: &str, err: Option<String>| {
+        let err = err.unwrap_or_else(|| panic!("{what} was admitted"));
+        assert!(
+            err.contains("event ledger is append-only"),
+            "{what}: refused with the trigger's own message; got {err}"
+        );
+    };
+    append_only(
+        "a DELETE",
+        refused(
+            &pool,
+            &format!("DELETE FROM kb_events WHERE id = '{r_created}'"),
+        )
+        .await,
+    );
+    append_only(
+        "an UPDATE of a column other than payload and metadata",
+        refused(
+            &pool,
+            &format!(
+                "UPDATE kb_events SET occurred_at = occurred_at + interval '1 second' \
+                  WHERE id = '{r_created}'"
+            ),
+        )
+        .await,
+    );
+    append_only(
+        "an UPDATE of a path no redaction row names",
+        refused(
+            &pool,
+            &format!(
+                "UPDATE kb_events SET payload = jsonb_set(payload, '{{segmented}}', 'true') \
+                  WHERE id = '{r_created}'"
+            ),
+        )
+        .await,
+    );
+    append_only(
+        "an UPDATE of a named path to a value that is not its sentinel",
+        refused(
+            &pool,
+            &format!(
+                "UPDATE kb_events SET payload = jsonb_set(payload, '{{title}}', '\"rewritten\"') \
+                  WHERE id = '{r_created}'"
+            ),
+        )
+        .await,
+    );
+    append_only(
+        "another resource's event, to its own sentinel, with no row",
+        refused(
+            &pool,
+            &format!(
+                "UPDATE kb_events SET payload = jsonb_set(payload, '{{title}}', \
+                         to_jsonb('erased-' || (payload->>'resource_id'))) \
+                  WHERE id = '{s_created}'"
+            ),
+        )
+        .await,
+    );
+    append_only(
+        "another resource's event, under a row inserted by hand",
+        refused(
+            &pool,
+            &format!(
+                "INSERT INTO kb_event_field_redactions VALUES ('{s_created}', 'title', '{erased}'); \
+                 UPDATE kb_events SET payload = jsonb_set(payload, '{{title}}', \
+                         to_jsonb('erased-' || (payload->>'resource_id'))) \
+                  WHERE id = '{s_created}'"
+            ),
+        )
+        .await,
+    );
+    append_only(
+        "R's own event, at a path the erasure's record does not list, under a row inserted by hand",
+        refused(
+            &pool,
+            &format!(
+                "INSERT INTO kb_event_field_redactions VALUES ('{fold}', 'reason', '{erased}'); \
+                 UPDATE kb_events SET payload = jsonb_set(payload, '{{reason}}', 'null') \
+                  WHERE id = '{fold}'"
+            ),
+        )
+        .await,
+    );
+    // A resource_erased appended by hand, naming R as its subject and S's event in its record,
+    // with the row inserted past the projector: the record check passes, the trail check is what
+    // refuses (the exception never crosses the resource boundary, Q1).
+    append_only(
+        "another resource's event, under a forged erasure record that lists it",
+        refused(
+            &pool,
+            &format!(
+                "WITH forged AS (SELECT _event_append('resource_erased', '{emitter}', NULL, NULL,                      jsonb_build_object('subject_table', 'kb_resources', 'subject_id', '{r}',                          'redacted_fields', jsonb_build_array(jsonb_build_object(                              'event', '{s_created}', 'paths', jsonb_build_array('title'))))) AS id)                  INSERT INTO kb_event_field_redactions SELECT '{s_created}', 'title', id FROM forged;                  UPDATE kb_events SET payload = jsonb_set(payload, '{{title}}',                          to_jsonb('erased-' || (payload->>'resource_id')))                   WHERE id = '{s_created}'",
+                emitter = emitter.uuid(),
+                r = leak.resource.uuid(),
+            ),
+        )
+        .await,
+    );
+    let crossing = refused(
+        &pool,
+        &format!(
+            "SELECT _project_resource_erased_redactions('{erased}', jsonb_build_object( \
+                 'subject_id', '{}', \
+                 'redacted_fields', jsonb_build_array(jsonb_build_object( \
+                     'event', '{s_created}', 'paths', jsonb_build_array('title')))))",
+            leak.resource.uuid()
+        ),
+    )
+    .await
+    .expect("the projector refuses another resource's event");
+    assert!(
+        crossing.contains("not in its subject's trail"),
+        "refused for the trail; got {crossing}"
+    );
+    append_only(
+        "a DELETE of a redaction row",
+        refused(
+            &pool,
+            &format!("DELETE FROM kb_event_field_redactions WHERE event_id = '{r_created}'"),
+        )
+        .await
+        .map(|e| e.replace("kb_event_field_redactions is", "event ledger is")),
+    );
+
+    // After the act's transaction, an authorization is spent: a pattern-valid renumbering of a
+    // sentinel the act wrote is refused (found by both reviews, 2026-10-08).
+    let r_set: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'property_set' AND (e.payload#>>'{owner,id}')::uuid = $1 \
+            AND e.payload->>'property_key' LIKE 'erased-key-%' ORDER BY e.id LIMIT 1",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    append_only(
+        "a later renumbering of a property-key sentinel",
+        refused(
+            &pool,
+            &format!(
+                "UPDATE kb_events SET payload = jsonb_set(payload, '{{property_key}}', '\"erased-key-99\"') \
+                  WHERE id = '{r_set}'"
+            ),
+        )
+        .await,
+    );
+    append_only(
+        "a later renumbering of a remote-source sentinel",
+        refused(
+            &pool,
+            &format!(
+                "UPDATE kb_events SET payload = jsonb_set(payload, '{{blocks,0,incorporated,0,source,value}}', \
+                         to_jsonb('erased:' || (payload#>>'{{blocks,0,block_id}}') || ':7')) \
+                  WHERE id = '{r_created}'"
+            ),
+        )
+        .await,
+    );
+    append_only(
+        "an element added under a wildcard path",
+        refused(
+            &pool,
+            &format!(
+                "UPDATE kb_events SET payload = jsonb_set(payload, '{{blocks}}', \
+                         (payload->'blocks') || (payload->'blocks'->0)) \
+                  WHERE id = '{r_created}'"
+            ),
+        )
+        .await,
+    );
+    append_only(
+        "a metadata key added",
+        refused(
+            &pool,
+            &format!(
+                "UPDATE kb_events SET metadata = metadata || '{{\"reasoning\": \"erased\"}}' \
+                  WHERE id = '{r_created}'"
+            ),
+        )
+        .await,
+    );
+    // A forged erasure of a LIVE resource, record, row and rewrite all in one transaction: the
+    // subject is not erased, so nothing it authorizes lands.
+    append_only(
+        "a forged erasure of a live resource, in its own transaction",
+        refused(
+            &pool,
+            &format!(
+                "WITH forged AS (SELECT _event_append('resource_erased', '{emitter}', NULL, NULL, \
+                     jsonb_build_object('subject_table', 'kb_resources', 'subject_id', '{s}', \
+                         'redacted_fields', jsonb_build_array(jsonb_build_object( \
+                             'event', '{s_created}', 'paths', jsonb_build_array('title'))))) AS id) \
+                 INSERT INTO kb_event_field_redactions SELECT '{s_created}', 'title', id FROM forged; \
+                 UPDATE kb_events SET payload = jsonb_set(payload, '{{title}}', \
+                         to_jsonb('erased-' || (payload->>'resource_id'))) \
+                  WHERE id = '{s_created}'",
+                emitter = emitter.uuid(),
+                s = other.uuid(),
+            ),
+        )
+        .await,
+    );
+
+    // Control: inside an act's own transaction, a pattern-valid value at a path its record lists
+    // IS admitted, so the refusals of the same change above are the transaction rule's. The act
+    // runs inside a savepoint here: its rows then carry a subtransaction's id, and the rule must
+    // still hold (it reads the transaction's start time, not xmin).
+    let s2 = other_resource(&pool, owner, emitter, "verifier-control").await;
+    writes::set_property(&pool, s2, "colour", &serde_json::json!("blue"), emitter)
+        .await
+        .unwrap();
+    let s2_set: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e WHERE e.payload->>'property_key' = 'colour' \
+            AND (e.payload#>>'{owner,id}')::uuid = $1",
+    )
+    .bind(s2.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let (_, operator_entity) = system_actor(&pool).await;
+    assert_eq!(
+        refused(
+            &pool,
+            &format!(
+                "SAVEPOINT inner_act; \
+                 SELECT resource_erasure_execute('{s2}', '{operator_entity}', '{operator_entity}', '{}'); \
+                 RELEASE SAVEPOINT inner_act; \
+                 UPDATE kb_events SET payload = jsonb_set(payload, '{{property_key}}', '\"erased-key-9\"') \
+                  WHERE id = '{s2_set}'",
+                Uuid::now_v7(),
+                s2 = s2.uuid(),
+                operator_entity = operator_entity.uuid(),
+            ),
+        )
+        .await,
+        None,
+        "inside the act's transaction, a pattern-valid key at a listed path is admitted"
+    );
+
+    // Control: at a path the record lists, the sentinel already there is admitted, so each
+    // refusal above is its condition's, not a blanket one.
+    assert_eq!(
+        refused(
+            &pool,
+            &format!(
+                "UPDATE kb_events SET payload = jsonb_set(payload, '{{title}}', payload->'title') \
+                  WHERE id = '{r_created}'"
+            ),
+        )
+        .await,
+        None,
+        "a rewrite to the sentinel at a listed path is admitted"
+    );
+}
+
+/// (25) The ledger agrees with the projection on keys. Every non-literal property event of R and
+/// of its edges carries, as `property_key`, the projection key of the row it asserted; an unset
+/// carries its sibling assertion's key; a key only ever unset is numbered above the asserted
+/// range. Replay cannot see a wrong `n` (step 9 re-ranks), which is why this witness exists.
+///
+/// FAILS IF: the payload derivation numbers a key differently from `_resource_erasure_key_numbers`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_ledgers_property_keys_are_the_projections(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "keys-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "keys-twin").await,
+    )
+    .await;
+    let r = leak.resource.uuid();
+    writes::set_property(
+        &pool,
+        leak.resource,
+        "colour",
+        &serde_json::json!("blue"),
+        emitter,
+    )
+    .await
+    .unwrap();
+    writes::assert_keyed_property_with(
+        &pool,
+        PropertyOwner::edge(leak.edge),
+        "evidence",
+        &serde_json::json!("jane said so"),
+        1.0,
+        emitter,
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+    writes::update_resource(
+        &pool,
+        UpdateParams {
+            resource: leak.resource,
+            body: None,
+            title: None,
+            origin_uri: None,
+            properties: &[],
+            unset_keys: &["transient".to_string(), "never-set".to_string()],
+            chunks: None,
+            sources: vec![],
+            content_block: None,
+            rehome_to: None,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+
+    // The original key of each property event, read before the act rewrites it.
+    let originals: Vec<(Uuid, String, String, Uuid, String)> = sqlx::query_as(
+        "SELECT e.id, t.name, e.payload#>>'{owner,table}', (e.payload#>>'{owner,id}')::uuid, \
+                e.payload->>'property_key' \
+           FROM _resource_erasure_trail_scope($1) s \
+           JOIN kb_events e ON e.id = s.event_id JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name IN ('property_set', 'property_asserted', 'property_unset') \
+            AND e.payload->>'property_key' NOT IN ('doc_type', 'facet')",
+    )
+    .bind(r)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        originals.iter().any(|o| o.4 == "never-set") && originals.iter().any(|o| o.4 == "evidence"),
+        "the witness needs an unset-only key and an edge-owned key: {originals:?}"
+    );
+
+    execute_act(&pool, r).await;
+
+    let mut by_original: std::collections::BTreeMap<(Uuid, String), String> = Default::default();
+    for (event, kind, owner_table, owner_id, original) in &originals {
+        let key = payload_of(&pool, *event).await["property_key"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            key.starts_with("erased-key-"),
+            "{kind} {event} keeps {key:?}"
+        );
+        if kind != "property_unset" {
+            let row_key: String = sqlx::query_scalar(
+                "SELECT property_key FROM kb_properties \
+                  WHERE asserted_by_event_id = $1 AND owner_table = $2 AND owner_id = $3",
+            )
+            .bind(event)
+            .bind(owner_table)
+            .bind(owner_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                key, row_key,
+                "{kind} {event}: the payload key is its row's key"
+            );
+        }
+        let seen = by_original
+            .entry((*owner_id, original.clone()))
+            .or_insert_with(|| key.clone());
+        assert_eq!(
+            *seen, key,
+            "every event naming one original key of one owner carries one sentinel"
+        );
+    }
+    let asserted_max: i64 = sqlx::query_scalar(
+        "SELECT max(n)::bigint FROM _resource_erasure_key_numbers('kb_resources', $1)",
+    )
+    .bind(r)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        by_original[&(r, "never-set".to_string())],
+        format!("erased-key-{}", asserted_max + 1),
+        "a key only ever unset is numbered above the asserted range"
+    );
+    assert_replay_byte_identical(&pool, "after redacting property keys").await;
+}
+
+/// (26) Two live values of one plain key replay, on R and on an edge touching R: each value
+/// redacts to `"erased:<event_id>"`, distinct per event, so replay never meets two live rows of
+/// one (owner, key, value).
+///
+/// FAILS IF: values redact to one constant (replay raises 23505 on `uq_kb_properties_active`).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn two_live_values_of_one_key_replay_after_redaction(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "two-values-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "two-values-twin").await,
+    )
+    .await;
+    for owner_ref in [
+        PropertyOwner::resource(leak.resource),
+        PropertyOwner::edge(leak.edge),
+    ] {
+        for value in ["jane", "smith"] {
+            writes::assert_keyed_property_with(
+                &pool,
+                owner_ref,
+                "name",
+                &serde_json::json!(value),
+                1.0,
+                emitter,
+                EventContext::default(),
+            )
+            .await
+            .unwrap();
+        }
+    }
+    execute_act(&pool, leak.resource.uuid()).await;
+    let values: Vec<(Uuid, serde_json::Value)> = sqlx::query_as(
+        "SELECT e.id, e.payload->'value' FROM _resource_erasure_trail_scope($1) s \
+           JOIN kb_events e ON e.id = s.event_id \
+          WHERE s.event_type = 'property_asserted' AND e.payload->>'property_key' LIKE 'erased-key-%'",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        values.len() >= 4,
+        "the witness needs both owners' asserts: {values:?}"
+    );
+    for (event, value) in &values {
+        assert_eq!(*value, serde_json::json!(format!("erased:{event}")));
+    }
+    assert_replay_byte_identical(&pool, "with two live values of one key").await;
+}
+
+/// (27) A retype keeps the numbering. R is created with a doc type, retyped, and given an open
+/// key. The doc type keeps its literal key on the ledger, its values become `"erased:<event_id>"`,
+/// and the open key is `erased-key-2` in the payload and the projection alike.
+///
+/// FAILS IF: the retype's key is redacted (step 9 would then rank it as a second key and the open
+/// key would become `erased-key-3` in the projection, against the payload).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_retype_keeps_the_key_numbering(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let r = other_resource(&pool, owner, emitter, "retype-home").await;
+    writes::set_property(&pool, r, "doc_type", &serde_json::json!("memo"), emitter)
+        .await
+        .unwrap();
+    writes::set_property(&pool, r, "colour", &serde_json::json!("blue"), emitter)
+        .await
+        .unwrap();
+    let events: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT e.id, e.payload->>'property_key' FROM kb_events e \
+           JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'property_set' AND (e.payload#>>'{owner,id}')::uuid = $1 ORDER BY e.id",
+    )
+    .bind(r.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let created = created_event(&pool, r.uuid()).await;
+
+    execute_act(&pool, r.uuid()).await;
+
+    assert_eq!(
+        payload_of(&pool, created).await["doc_type"],
+        serde_json::json!(format!("erased:{created}"))
+    );
+    for (event, original) in &events {
+        let p = payload_of(&pool, *event).await;
+        match original.as_str() {
+            "doc_type" => {
+                assert_eq!(p["property_key"], "doc_type", "the literal key stays");
+                assert_eq!(p["value"], serde_json::json!(format!("erased:{event}")));
+            }
+            "colour" => assert_eq!(p["property_key"], "erased-key-2"),
+            other => panic!("unexpected key {other}"),
+        }
+    }
+    let projected: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_properties WHERE owner_id = $1 AND property_key = 'erased-key-2'",
+    )
+    .bind(r.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        projected, 1,
+        "the projection's open key is erased-key-2 too"
+    );
+    assert_replay_byte_identical(&pool, "after a retype").await;
+}
+
+/// (28) Facet marks survive redaction. A facet value of two inner keys redacts to an object of two
+/// `erased-facet-<m>` keys, a later assert of one original inner key carries that key's same `m`,
+/// and replay projects the same rows.
+///
+/// FAILS IF: a facet value redacts to one mark (replay projects one row where live has two).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn facet_marks_survive_redaction(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let r = other_resource(&pool, owner, emitter, "facets-home").await;
+    let owner_ref = PropertyOwner::resource(r);
+    writes::set_facet(
+        &pool,
+        owner_ref,
+        &serde_json::json!({"a": "jane", "bb": "smith"}),
+        1.0,
+        emitter,
+    )
+    .await
+    .unwrap();
+    writes::set_facet(
+        &pool,
+        owner_ref,
+        &serde_json::json!({"a": "doe"}),
+        1.0,
+        emitter,
+    )
+    .await
+    .unwrap();
+    let facet_events: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e \
+          WHERE e.payload->>'property_key' = 'facet' AND (e.payload#>>'{owner,id}')::uuid = $1 \
+          ORDER BY e.id",
+    )
+    .bind(r.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(facet_events.len(), 2);
+
+    execute_act(&pool, r.uuid()).await;
+
+    assert_eq!(
+        payload_of(&pool, facet_events[0]).await["value"],
+        serde_json::json!({"erased-facet-1": "erased", "erased-facet-2": "erased"}),
+        "two marks stay two, numbered by stored position"
+    );
+    assert_eq!(
+        payload_of(&pool, facet_events[1]).await["value"],
+        serde_json::json!({"erased-facet-1": "erased"}),
+        "a later assert of inner key `a` carries a's m"
+    );
+    assert_replay_byte_identical(&pool, "after redacting facet marks").await;
+}
+
+/// The trail scope's UNION form (ruled 2026-10-08) is the set its OR form was, over every arm:
+/// R's own events, owner-keyed property events of R, its blocks and its edges, block-keyed and
+/// edge-keyed events, and relationship_asserted events by their payload endpoints, which reach a
+/// re-assertion whose edge_id never became a row. Checked for R and for its twin, so an arm that
+/// leaks across resources shows.
+///
+/// FAILS IF: an arm is dropped from, or added to, the UNION.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_trail_scope_is_the_or_predicates_set(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "scope-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "scope-twin").await,
+    )
+    .await;
+    writes::assert_keyed_property_with(
+        &pool,
+        PropertyOwner::edge(leak.edge),
+        "evidence",
+        &serde_json::json!("x"),
+        1.0,
+        emitter,
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+    let block: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id = $1 ORDER BY seq LIMIT 1",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "SELECT _event_append('property_set', $1, 'kb_contexts', $3,
+                jsonb_build_object('property_id', gen_random_uuid(),
+                                   'owner', jsonb_build_object('table', 'kb_content_blocks', 'id', $2),
+                                   'property_key', 'note', 'value', 'x', 'weight', 1.0))",
+    )
+    .bind(emitter.uuid())
+    .bind(block)
+    .bind(home.uuid())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // A re-assertion of seed_leak's edge: its payload edge_id never becomes a row.
+    let edge_row: (Uuid, Uuid, String) =
+        sqlx::query_as("SELECT target_id, home_anchor_id, label FROM kb_edges WHERE id = $1")
+            .bind(leak.edge.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    writes::assert_relationship(
+        &pool,
+        AssertParams {
+            src: leak.resource,
+            tgt: ResourceId::from(edge_row.0),
+            kind: EdgeKind::LeadsTo,
+            polarity: EdgePolarity::Forward,
+            label: Some(&edge_row.2),
+            weight: 0.5,
+            home: ContextId::from(edge_row.1),
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    let reassertions: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'relationship_asserted' \
+            AND NOT EXISTS (SELECT 1 FROM kb_edges g WHERE g.id = (e.payload->>'edge_id')::uuid)",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        reassertions, 1,
+        "setup: one re-assertion whose edge_id is no row"
+    );
+
+    // 20261008100000's predicate verbatim, plus 20261009100000's two endpoint arms.
+    let or_form = "SELECT ev.id FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id \
+         WHERE et.category = 'domain' AND et.name <> 'webhook_received' AND ( \
+              (ev.payload ->> 'resource_id')::uuid = $1 \
+           OR ((ev.payload #>> '{owner,table}') = 'kb_resources' AND (ev.payload #>> '{owner,id}')::uuid = $1) \
+           OR EXISTS (SELECT 1 FROM kb_content_blocks b WHERE b.id = (ev.payload ->> 'block_id')::uuid AND b.resource_id = $1) \
+           OR EXISTS (SELECT 1 FROM kb_edges ee WHERE ee.id = (ev.payload ->> 'edge_id')::uuid \
+                       AND ((ee.source_table = 'kb_resources' AND ee.source_id = $1) \
+                         OR (ee.target_table = 'kb_resources' AND ee.target_id = $1))) \
+           OR ((ev.payload #>> '{owner,table}') = 'kb_content_blocks' \
+               AND EXISTS (SELECT 1 FROM kb_content_blocks b2 WHERE b2.id = (ev.payload #>> '{owner,id}')::uuid AND b2.resource_id = $1)) \
+           OR ((ev.payload #>> '{owner,table}') = 'kb_edges' \
+               AND (ev.payload #>> '{owner,id}')::uuid IN ( \
+                   SELECT ee2.id FROM kb_edges ee2 \
+                    WHERE (ee2.source_table = 'kb_resources' AND ee2.source_id = $1) \
+                       OR (ee2.target_table = 'kb_resources' AND ee2.target_id = $1))) \
+           OR (ev.payload #>> '{source,table}' = 'kb_resources' AND ev.payload #>> '{source,id}' = $1::text) \
+           OR (ev.payload #>> '{target,table}' = 'kb_resources' AND ev.payload #>> '{target,id}' = $1::text)) \
+         ORDER BY 1";
+    for resource in [leak.resource.uuid(), leak.twin.uuid()] {
+        let expected: Vec<Uuid> = sqlx::query_scalar(or_form)
+            .bind(resource)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        let actual: Vec<Uuid> =
+            sqlx::query_scalar("SELECT event_id FROM _resource_erasure_trail_scope($1) ORDER BY 1")
+                .bind(resource)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(!expected.is_empty());
+        assert_eq!(
+            actual, expected,
+            "the UNION form is the OR form's set for {resource}"
+        );
+    }
+}
+
+/// Edge labels redact per endpoint pair, every non-empty label counting as text (ruled 2026-10-08,
+/// with the review fixes). A re-assertion, whose payload edge_id never became a row, is in the
+/// trail and redacts to its first assertion's sentinel; a label someone typed in a sentinel's shape
+/// is numbered like any other label, so it never lands on another label's text. Replay builds the
+/// same edges.
+///
+/// FAILS IF: the trail misses a re-assertion (replay then mints an edge live never had), or a
+/// sentinel-shaped label is kept as already redacted (replay merges two edges and aborts).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn reassertions_and_sentinel_shaped_labels_redact_and_replay(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "labels-home").await;
+    let r = other_resource(&pool, owner, emitter, "labels-r").await;
+    let t = other_resource(&pool, owner, emitter, "labels-t").await;
+    for label in ["foo", "erased-label-1", "foo"] {
+        writes::assert_relationship(
+            &pool,
+            AssertParams {
+                src: r,
+                tgt: t,
+                kind: EdgeKind::LeadsTo,
+                polarity: EdgePolarity::Forward,
+                label: Some(label),
+                weight: 1.0,
+                home,
+                emitter,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let asserts: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT e.id, e.payload->>'label' FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'relationship_asserted' AND e.payload#>>'{source,id}' = $1::text ORDER BY e.id",
+    )
+    .bind(r.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        asserts.len(),
+        3,
+        "setup: foo, a sentinel-shaped label, and foo again"
+    );
+
+    execute_act(&pool, r.uuid()).await;
+
+    let after: Vec<String> = {
+        let mut out = Vec::new();
+        for (event, _) in &asserts {
+            out.push(
+                payload_of(&pool, *event).await["label"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            );
+        }
+        out
+    };
+    assert_eq!(
+        after,
+        vec!["erased-label-1", "erased-label-2", "erased-label-1"],
+        "foo is 1 in both its assertions; the typed label is text, numbered 2"
+    );
+    assert_replay_byte_identical(&pool, "with a re-assertion and a sentinel-shaped label").await;
+}
+
+/// An empty facet value names no mark, so it has nothing to redact, and it does not stop the act
+/// (found by the code review, 2026-10-08: the derivation raised, so anyone able to set an empty
+/// facet on an edge into R could make R unerasable).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_empty_facet_does_not_block_the_act(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let r = other_resource(&pool, owner, emitter, "empty-facet").await;
+    writes::set_facet(
+        &pool,
+        PropertyOwner::resource(r),
+        &serde_json::json!({}),
+        1.0,
+        emitter,
+    )
+    .await
+    .unwrap();
+    execute_act(&pool, r.uuid()).await;
+    assert_replay_byte_identical(&pool, "after an empty facet").await;
+}
+
+/// An erasure act's own events are its record. When the other end of an edge an earlier act folded
+/// is erased later, that act's `relationship_folded` keeps its fixed reason.
+///
+/// FAILS IF: the derivation rewrites another erasure act's events.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_later_erasure_leaves_an_earlier_acts_record(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "two-acts-home").await;
+    let r = other_resource(&pool, owner, emitter, "two-acts-r").await;
+    let s = other_resource(&pool, owner, emitter, "two-acts-s").await;
+    let edge = writes::assert_relationship(
+        &pool,
+        AssertParams {
+            src: r,
+            tgt: s,
+            kind: EdgeKind::LeadsTo,
+            polarity: EdgePolarity::Forward,
+            label: Some("jane's link"),
+            weight: 1.0,
+            home,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    execute_act(&pool, r.uuid()).await;
+    let fold: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'relationship_folded' AND e.payload->>'edge_id' = $1",
+    )
+    .bind(edge.uuid().to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    execute_act(&pool, s.uuid()).await;
+    assert_eq!(
+        payload_of(&pool, fold).await["reason"],
+        "resource_erased",
+        "the first act's fold keeps its reason"
+    );
+    assert_replay_byte_identical(&pool, "after erasing both ends of an edge").await;
+}
+
+/// Snapshot, reset, replay and diff, as [`assert_replay_byte_identical`] does, except that
+/// `kb_remote_sources.uri` may differ on exactly `differing` rows, each of which `is_respelled`
+/// accepts as (live spelling, replayed spelling) and whose `uri_normalized` is unchanged. This is
+/// the declared replay limit of ruling 10 (D14): `uri` keeps its first writer's spelling, and cut 2
+/// moves the first write of a URL R cited to R's original citation.
+async fn assert_replay_identical_but_first_writer_spelling(
+    pool: &PgPool,
+    differing: usize,
+    is_respelled: impl Fn(&str, &str) -> bool,
+) {
+    let before = replay::dump_projections(pool).await.unwrap();
+    let snap = replay::snapshot(pool).await.unwrap();
+    common::reset_schema(pool).await;
+    replay::replay(pool, &snap).await.unwrap();
+    let after = replay::dump_projections(pool).await.unwrap();
+    for ((table, live), (_, replayed)) in before.iter().zip(after.iter()) {
+        if table != "kb_remote_sources" {
+            assert_eq!(
+                live, replayed,
+                "projection table {table} diverged under replay"
+            );
+            continue;
+        }
+        let (live, replayed) = (live.as_array().unwrap(), replayed.as_array().unwrap());
+        assert_eq!(
+            live.len(),
+            replayed.len(),
+            "kb_remote_sources row count under replay"
+        );
+        let mut seen = 0;
+        for (l, r) in live.iter().zip(replayed) {
+            let (mut lm, mut rm) = (l.clone(), r.clone());
+            lm["uri"] = serde_json::Value::Null;
+            rm["uri"] = serde_json::Value::Null;
+            assert_eq!(
+                lm, rm,
+                "kb_remote_sources differs under replay beyond `uri`"
+            );
+            if l != r {
+                seen += 1;
+                let (lu, ru) = (l["uri"].as_str().unwrap(), r["uri"].as_str().unwrap());
+                assert!(
+                    is_respelled(lu, ru),
+                    "an unexpected respelling: {lu:?} live, {ru:?} replayed"
+                );
+            }
+        }
+        assert_eq!(
+            seen, differing,
+            "exactly the expected rows keep a different spelling"
+        );
+    }
+}
+
+/// (Ruling 10, widened 2026-10-08) A remote source R cited first and another resource also cites
+/// keeps R's spelling live (the row is kept, Q1), while replay of the redacted ledger mints it from
+/// the other citer's. The difference is that row's `uri` spelling and nothing else.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_shared_remote_sources_spelling_is_its_first_remaining_writers_on_replay(
+    pool: sqlx::PgPool,
+) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let cite = |slug: &'static str, url: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let home = make_home(&pool, owner, slug).await;
+            writes::create_resource_with(
+                &pool,
+                CreateParams {
+                    idempotency_key: None,
+                    title: slug,
+                    origin_uri: "test://shared-url",
+                    body: CLEAN,
+                    doc_type: "research",
+                    home: AnchorRef::context(home),
+                    owner,
+                    originator: owner,
+                    emitter,
+                    properties: &[],
+                    chunks: Some(vec![chunk(CLEAN, "")]),
+                    sources: vec![Incorporation {
+                        source: ProvenanceSource::Remote(url.to_owned()),
+                        seq: 1,
+                    }],
+                },
+                EventContext::default(),
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let r = cite("shared-url-r", "HTTPS://Leak.Example/a").await;
+    cite("shared-url-q", "https://leak.example/a").await;
+    execute_act(&pool, r.uuid()).await;
+    let kept: String = sqlx::query_scalar(
+        "SELECT uri FROM kb_remote_sources WHERE uri_normalized = normalize_remote_uri('https://leak.example/a')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        kept, "HTTPS://Leak.Example/a",
+        "setup: live keeps R's spelling"
+    );
+    assert_replay_identical_but_first_writer_spelling(&pool, 1, |live, replayed| {
+        live == "HTTPS://Leak.Example/a" && replayed == "https://leak.example/a"
+    })
+    .await;
 }

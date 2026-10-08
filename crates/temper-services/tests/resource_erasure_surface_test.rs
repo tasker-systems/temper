@@ -1435,6 +1435,90 @@ async fn the_redact_lines_are_the_sweeps_interim_list(pool: PgPool) {
     );
 }
 
+/// A manifest JSON pointer in the dotted form `redacted_fields` records: `/blocks/*/x` is
+/// `blocks[*].x`, and a metadata key is `metadata.<key>`.
+fn dotted(event_type: &str, pointer: &str) -> String {
+    let mut out = String::new();
+    for seg in pointer.trim_start_matches('/').split('/') {
+        if seg == "*" {
+            out.push_str("[*]");
+        } else {
+            if !out.is_empty() {
+                out.push('.');
+            }
+            out.push_str(seg);
+        }
+    }
+    if event_type == "metadata" {
+        format!("metadata.{out}")
+    } else {
+        out
+    }
+}
+
+/// `(event_type, path, key qualifier, owner qualifier, class)` as `_erasure_redact_paths` holds it.
+type AllowlistRow = (
+    Option<String>,
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+);
+
+/// FAILS IF: the ledger exception's allowlist (`_erasure_redact_paths`, migration
+/// 20261009100000) and the manifest's `redact` lines disagree. Every `redact:<class>` line is a row
+/// of that class, qualified or not, and every qualified `structural` line is a `keep` row (it
+/// refines a redact line back to structural); nothing else is. D9: the verifier's allowlist is
+/// generated from the redact lines, and this is what holds it to them.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_allowlist_is_the_manifests_redact_lines(pool: PgPool) {
+    let live: BTreeSet<AllowlistRow> = sqlx::query_as(
+        "SELECT event_type, path, key_qualifier, owner_qualifier, class FROM _erasure_redact_paths()",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("read the allowlist")
+    .into_iter()
+    .collect();
+    let manifest: BTreeSet<AllowlistRow> = payload_lines()
+        .into_iter()
+        .filter_map(|l| {
+            let class = match (&l.disposition, &l.qualifier) {
+                (PayloadDisposition::Redact(class), _) => class.clone(),
+                (PayloadDisposition::Structural, Some(_)) => "keep".to_string(),
+                _ => return None,
+            };
+            let mut key = None;
+            let mut owner = None;
+            for part in l.qualifier.iter().flat_map(|q| q.split(',')) {
+                match part.split_once('=') {
+                    Some(("key", v)) => key = Some(v.to_string()),
+                    Some(("owner", v)) => owner = Some(v.to_string()),
+                    _ => panic!("line {}: unknown qualifier {part}", l.lineno),
+                }
+            }
+            let event_type = (l.event_type != "metadata").then(|| l.event_type.clone());
+            Some((
+                event_type,
+                dotted(&l.event_type, &l.path),
+                key,
+                owner,
+                class,
+            ))
+        })
+        .collect();
+    assert_eq!(
+        manifest.difference(&live).collect::<Vec<_>>(),
+        Vec::<&AllowlistRow>::new(),
+        "manifest lines missing from _erasure_redact_paths()"
+    );
+    assert_eq!(
+        live.difference(&manifest).collect::<Vec<_>>(),
+        Vec::<&AllowlistRow>::new(),
+        "_erasure_redact_paths() rows the manifest does not hold"
+    );
+}
+
 /// FAILS IF: a string field in a newly registered schema, or a type registered without one, is
 /// not reported. The bite for `every_payload_string_path_is_declared`: both probes are the ways a
 /// new free-text field reaches the ledger (a field added to an existing struct changes its

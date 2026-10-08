@@ -708,22 +708,19 @@ async fn remediability_is_read_per_event_type_and_path(pool: PgPool) {
     );
 }
 
-/// The interim table is the live `ledger_remainder` CASE, arm for arm. When erasure changes the
-/// CASE, this fails until the table follows.
+/// The interim table is the ledger exception's allowlist (`_erasure_redact_paths`), path for path:
+/// what the act redacts is what the sweep reads as `blocked:cut-2`. When the allowlist changes,
+/// this fails until the table follows.
 ///
-/// The plan's other arm, the `telos_centroid` copies on a goal's home context's
-/// `region_materialized` / `salience_refreshed` events (a `UNION ALL`, not a CASE arm), is outside
-/// this table on purpose: those events sit in no resource's erasure trail, so under Q41 they read
-/// `unremediable` whether listed or not.
+/// The `telos_centroid` copies on a goal's home context's `region_materialized` /
+/// `salience_refreshed` events are outside both on purpose: those events sit in no resource's
+/// erasure trail, so under Q41 they read `unremediable` whether listed or not.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn the_interim_remediability_table_is_the_live_erasure_survey(pool: PgPool) {
+    // The survey's redaction reads the ledger exception's allowlist (20261009100000): every
+    // (event type, path) it classes for redaction, metadata keys with no event type.
     let live: std::collections::BTreeSet<(Option<String>, String)> = sqlx::query_as(
-        r#"WITH def AS (SELECT pg_get_functiondef('resource_erasure_survey_plan'::regproc) AS d)
-           SELECT m[1], jsonb_array_elements_text(m[2]::jsonb)
-             FROM def, regexp_matches(d, $$WHEN '([a-z_]+)'\s+THEN '(\[[^']*\])'::jsonb$$, 'g') m
-           UNION
-           SELECT NULL, jsonb_array_elements_text(m[1]::jsonb)
-             FROM def, regexp_matches(d, $$THEN '(\["metadata\.[^']*\])'::jsonb$$, 'g') m"#,
+        "SELECT DISTINCT event_type, path FROM _erasure_redact_paths() WHERE class <> 'keep'",
     )
     .fetch_all(&pool)
     .await
@@ -737,7 +734,10 @@ async fn the_interim_remediability_table_is_the_live_erasure_survey(pool: PgPool
             .unwrap()
             .into_iter()
             .collect();
-    assert!(live.len() > 20, "the parse found the CASE: {live:?}");
+    assert!(
+        live.len() > 20,
+        "the allowlist holds the redact lines: {live:?}"
+    );
     assert_eq!(table, live);
 }
 
