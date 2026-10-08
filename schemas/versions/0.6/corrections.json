@@ -1,0 +1,594 @@
+{
+  "$comment": "Recorded corrections to the 0.6 pin. check-openapi-pin.sh replaces each operation in the pin with `operation` before comparing; see its RECORDED CORRECTIONS header.",
+  "corrections": [
+    {
+      "method": "delete",
+      "operation": {
+        "description": "Folds one facet row owned by the edge, addressed by the `property_id` the facets read\nreturned. The row persists as history and the read stops returning it; asserting the same\naddress again mints a fresh row. Authorizes through the same clauses as the other edge\nwrites. A property id naming another edge, an unknown one, and an already-retracted one all\nanswer the same 404.",
+        "operationId": "retract_edge_facet",
+        "parameters": [
+          {
+            "description": "Relationship edge handle",
+            "in": "path",
+            "name": "edge_handle",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Facet row id to retract",
+            "in": "path",
+            "name": "property_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a\ncorrelation aid, never a substitute for authn/authz.",
+            "in": "query",
+            "name": "invocation_id",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/InvocationId"
+            }
+          },
+          {
+            "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship.",
+            "in": "query",
+            "name": "correlation_id",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/CorrelationId"
+            }
+          },
+          {
+            "description": "Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.",
+            "in": "query",
+            "name": "reasoning",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Graded self-assessed confidence band. Required whenever any other authorship field is set.",
+            "in": "query",
+            "name": "confidence",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ConfidenceBand"
+            }
+          },
+          {
+            "description": "Structured rationale for the act. Authorship field — requires `confidence`. At most 16384\nbytes.",
+            "in": "query",
+            "name": "rationale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The persona/role the author acted as. Authorship field — requires `confidence`. At most 256\nbytes.",
+            "in": "query",
+            "name": "persona",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.",
+            "in": "query",
+            "name": "model",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacetRetractAck"
+                }
+              }
+            },
+            "description": "Facet retracted"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Cannot modify this relationship"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No live facet row with that id on this relationship"
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "summary": "Retract one facet of a relationship",
+        "tags": [
+          "Facets"
+        ],
+        "x-apidog-folder": "Reference/API Reference/Facets"
+      },
+      "path": "/api/relationships/{edge_handle}/facets/{property_id}",
+      "reason": "The pin declared ActInput's seven fields in: path with no placeholder to fill; the handler has always read them from the query string (Query<ActInput>), so no client could send them as pinned.",
+      "register_row": "`DELETE /api/relationships/{edge_handle}/facets/{property_id}` documents its authorship fields as query parameters"
+    },
+    {
+      "method": "delete",
+      "operation": {
+        "description": "One gate, two arms, inside the strike's own transaction: delete standing (custody) over\nEVERY live relation's resource peer, or — when the blob has no live relations — custody\nof its home (a personal context's owner; a team context's owning-team owner role). The\nstrike empties the row, fires exactly one `blob_deleted`, and folds no edge; when the\nstruck row was the LAST live row carrying its content hash (`released: true`), the\nprovider bytes are deleted post-commit and the byte-delete fence retries-and-alerts on\nany residue. Already-struck and unknown ids both read 404 with no second event. Author\nstanding, role, and admin standing confer nothing here — custody alone deletes.",
+        "operationId": "delete_blob",
+        "parameters": [
+          {
+            "description": "Blob ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a\ncorrelation aid, never a substitute for authn/authz.",
+            "in": "query",
+            "name": "invocation_id",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/InvocationId"
+            }
+          },
+          {
+            "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship.",
+            "in": "query",
+            "name": "correlation_id",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/CorrelationId"
+            }
+          },
+          {
+            "description": "Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.",
+            "in": "query",
+            "name": "reasoning",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Graded self-assessed confidence band. Required whenever any other authorship field is set.",
+            "in": "query",
+            "name": "confidence",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ConfidenceBand"
+            }
+          },
+          {
+            "description": "Structured rationale for the act. Authorship field — requires `confidence`. At most 16384\nbytes.",
+            "in": "query",
+            "name": "rationale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The persona/role the author acted as. Authorship field — requires `confidence`. At most 256\nbytes.",
+            "in": "query",
+            "name": "persona",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.",
+            "in": "query",
+            "name": "model",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobDeleteAck"
+                }
+              }
+            },
+            "description": "Struck — the row is emptied and one `blob_deleted` fired; `released` reports whether the provider bytes were this act's to release"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The blob is readable but the caller holds no delete standing over it (custody refusal, `blob_delete:` vocabulary)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Blob absent, not visible, or already struck — each indistinguishable from absent by design; no second event"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "summary": "Delete one blob — the ordinary delete act's ruled door",
+        "tags": [
+          "Blobs"
+        ],
+        "x-apidog-folder": "Reference/API Reference/Blobs"
+      },
+      "path": "/api/blobs/{id}",
+      "reason": "ActInput's query parameters lose the explicit null branch. A query parameter has no null to send; the server reads absent and null alike.",
+      "register_row": "`DELETE /api/relationships/{edge_handle}/facets/{property_id}` documents its authorship fields as query parameters"
+    },
+    {
+      "method": "put",
+      "operation": {
+        "operationId": "reconcile",
+        "parameters": [
+          {
+            "description": "Cognitive map ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a\ncorrelation aid, never a substitute for authn/authz.",
+            "in": "query",
+            "name": "invocation_id",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/InvocationId"
+            }
+          },
+          {
+            "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship.",
+            "in": "query",
+            "name": "correlation_id",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/CorrelationId"
+            }
+          },
+          {
+            "description": "Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.",
+            "in": "query",
+            "name": "reasoning",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Graded self-assessed confidence band. Required whenever any other authorship field is set.",
+            "in": "query",
+            "name": "confidence",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ConfidenceBand"
+            }
+          },
+          {
+            "description": "Structured rationale for the act. Authorship field — requires `confidence`. At most 16384\nbytes.",
+            "in": "query",
+            "name": "rationale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The persona/role the author acted as. Authorship field — requires `confidence`. At most 256\nbytes.",
+            "in": "query",
+            "name": "persona",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.",
+            "in": "query",
+            "name": "model",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconcileCogmapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconcileOutcome"
+                }
+              }
+            },
+            "description": "Reconcile applied"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The manifest or the act is invalid: it fails the pre-flight (an edge naming an unknown target), names an unknown edge kind or polarity, or carries malformed authorship fields"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Caller does not author this map, or is not a system admin for an L0 or root-team map"
+          },
+          "409": {
+            "description": "A reconcile is already in progress on this map"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "summary": "Reconcile a cognitive map's contents",
+        "tags": [
+          "Cognitive Maps"
+        ],
+        "x-apidog-folder": "Reference/API Reference/Cognitive Maps"
+      },
+      "path": "/api/cognitive-maps/{id}",
+      "reason": "ActInput's query parameters lose the explicit null branch. A query parameter has no null to send; the server reads absent and null alike.",
+      "register_row": "`DELETE /api/relationships/{edge_handle}/facets/{property_id}` documents its authorship fields as query parameters"
+    },
+    {
+      "method": "delete",
+      "operation": {
+        "operationId": "delete_resource",
+        "parameters": [
+          {
+            "description": "Resource ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a\ncorrelation aid, never a substitute for authn/authz.",
+            "in": "query",
+            "name": "invocation_id",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/InvocationId"
+            }
+          },
+          {
+            "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship.",
+            "in": "query",
+            "name": "correlation_id",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/CorrelationId"
+            }
+          },
+          {
+            "description": "Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.",
+            "in": "query",
+            "name": "reasoning",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Graded self-assessed confidence band. Required whenever any other authorship field is set.",
+            "in": "query",
+            "name": "confidence",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ConfidenceBand"
+            }
+          },
+          {
+            "description": "Structured rationale for the act. Authorship field — requires `confidence`. At most 16384\nbytes.",
+            "in": "query",
+            "name": "rationale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The persona/role the author acted as. Authorship field — requires `confidence`. At most 256\nbytes.",
+            "in": "query",
+            "name": "persona",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.",
+            "in": "query",
+            "name": "model",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteResponse"
+                }
+              }
+            },
+            "description": "Resource deleted"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "summary": "Soft-delete a resource",
+        "tags": [
+          "Resources"
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
+      },
+      "path": "/api/resources/{id}",
+      "reason": "ActInput's query parameters lose the explicit null branch. A query parameter has no null to send; the server reads absent and null alike.",
+      "register_row": "`DELETE /api/relationships/{edge_handle}/facets/{property_id}` documents its authorship fields as query parameters"
+    }
+  ]
+}

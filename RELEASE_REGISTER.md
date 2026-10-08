@@ -27,6 +27,9 @@ and that the movement brings the contract to what the server always did. The cro
 on a moved shape with a note, because CI cannot check the claim: like `behavioral`, it is
 review-owned, and the row must name what the server always did and why both skew directions hold.
 It never rides with `shape-breaking`, and it does not answer growth, which is still `additive`'s.
+Because the pin gate judges the tree rather than the PR, each corrected operation is also recorded,
+with its corrected shape and this row's title, in `corrections.json` beside the current pin
+(`schemas/versions/<M.m>/`); the pin gate checks the record names a `spec-correction` row.
 
 ## Since v0.6.0 — unreleased
 - **Every client refuses a path value of `.` or `..`; temper-rb and temper-py also escape `.` in path values**

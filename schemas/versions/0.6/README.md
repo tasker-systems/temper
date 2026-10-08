@@ -15,6 +15,12 @@ skew directions — computed by the same comparator (`wire-shape-lib.jq`). The
 release-time discipline is documented in [RELEASING.md](../../RELEASING.md),
 "Versioning: 0.M.P, the era level, and the declared-class gate".
 
+**Recorded corrections:** [`corrections.json`](corrections.json) beside this pin lists
+operations whose pinned shape described a request the server never accepted, each with the
+shape it is corrected to and the `spec-correction` register row that declares it. The gate
+compares against this pin with those operations replaced by their recorded shapes; the
+`openapi.json` here stays byte-identical to the release. The rules are in the gate's header.
+
 **Relation to pin 0.5:** this pin holds everything pin 0.5 does, plus the additive growth
 of the 0.5 era (v0.5.1 → v0.6.0). Pin selection takes the greatest pin ≤ `VERSION`'s
 minor, so from this commit the 0.6 era is judged against this shape, not the 0.5 founding
