@@ -1125,6 +1125,9 @@ fn payload_lines() -> Vec<PayloadLine> {
 /// items, `?` for a map's keys). A `format: uuid` or `date-time` string, and a string confined by
 /// `enum` or `const`, are classed by the walk itself and not returned (the manifest's header).
 fn string_paths(schema: &serde_json::Value) -> BTreeSet<String> {
+    // Every branch below adds to `out` and none stops the others: a node may carry `$ref` or
+    // composition arms beside its own `properties` (a `#[serde(flatten)]` enum does), and a type
+    // list may admit a string beside an object. A node with no structure at all is an open value.
     fn walk(
         node: &serde_json::Value,
         root: &serde_json::Value,
@@ -1141,20 +1144,22 @@ fn string_paths(schema: &serde_json::Value) -> BTreeSet<String> {
             serde_json::Value::Object(o) => o,
             _ => return,
         };
+        let mut structured = false;
         if let Some(r) = obj.get("$ref").and_then(|v| v.as_str()) {
             let name = r.rsplit('/').next().unwrap();
             let target = root
                 .get("$defs")
                 .and_then(|d| d.get(name))
                 .unwrap_or_else(|| panic!("unresolved $ref {r} at {path}"));
-            return walk(target, root, path, depth + 1, out);
+            walk(target, root, path, depth + 1, out);
+            structured = true;
         }
         for key in ["anyOf", "oneOf", "allOf"] {
             if let Some(arms) = obj.get(key).and_then(|v| v.as_array()) {
                 for arm in arms {
                     walk(arm, root, path, depth + 1, out);
                 }
-                return;
+                structured = true;
             }
         }
         if obj.contains_key("enum") || obj.contains_key("const") {
@@ -1165,32 +1170,48 @@ fn string_paths(schema: &serde_json::Value) -> BTreeSet<String> {
             Some(serde_json::Value::Array(a)) => a.iter().filter_map(|v| v.as_str()).collect(),
             _ => vec![],
         };
-        if types.contains(&"object") || obj.contains_key("properties") {
-            if let Some(props) = obj.get("properties").and_then(|v| v.as_object()) {
-                for (k, v) in props {
-                    walk(v, root, &format!("{path}/{k}"), depth + 1, out);
-                }
+        let props = obj.get("properties").and_then(|v| v.as_object());
+        let patterns = obj.get("patternProperties").and_then(|v| v.as_object());
+        if types.contains(&"object") || props.is_some() || patterns.is_some() {
+            for (k, v) in props.into_iter().flatten() {
+                walk(v, root, &format!("{path}/{k}"), depth + 1, out);
+            }
+            for v in patterns.into_iter().flat_map(|p| p.values()) {
+                walk(v, root, &format!("{path}/?"), depth + 1, out);
             }
             match obj.get("additionalProperties") {
-                None | Some(serde_json::Value::Bool(false)) => {}
+                Some(serde_json::Value::Bool(false)) => {}
+                // An object that names nothing and closes nothing holds anything.
+                None if props.is_none() && patterns.is_none() && !structured => {
+                    out.insert(path.to_string());
+                }
+                None => {}
                 Some(ap) => walk(ap, root, &format!("{path}/?"), depth + 1, out),
             }
-            return;
+            structured = true;
         }
-        if types.contains(&"array") {
-            if let Some(items) = obj.get("items") {
-                walk(items, root, &format!("{path}/*"), depth + 1, out);
+        if types.contains(&"array") || obj.contains_key("items") || obj.contains_key("prefixItems")
+        {
+            let tuple = ["items", "prefixItems"]
+                .iter()
+                .filter_map(|k| obj.get(*k))
+                .flat_map(|v| match v {
+                    serde_json::Value::Array(a) => a.iter().collect::<Vec<_>>(),
+                    other => vec![other],
+                });
+            for item in tuple {
+                walk(item, root, &format!("{path}/*"), depth + 1, out);
             }
-            return;
+            structured = true;
         }
         if types.contains(&"string") {
             let format = obj.get("format").and_then(|v| v.as_str());
             if !matches!(format, Some("uuid" | "date-time")) {
                 out.insert(path.to_string());
             }
-            return;
+            structured = true;
         }
-        if types.is_empty() {
+        if types.is_empty() && !structured {
             out.insert(path.to_string());
         }
     }
@@ -1224,16 +1245,16 @@ fn schema_snapshots() -> BTreeMap<String, serde_json::Value> {
     by_type.into_iter().map(|(k, (_, s))| (k, s)).collect()
 }
 
-/// Each registered event type with the schema the walk reads: its committed snapshot when it has
-/// one, else its registered `payload_schema`, else `None` (a permissive type).
+/// Each registered event type with every schema the walk reads: its committed snapshot, and its
+/// registered `payload_schema`. Empty is a type with neither (a permissive type).
 ///
-/// **The snapshot wins over the registry.** A migrated database's `payload_schema` is stamped by
-/// the migration that registered the type and lags the code: on 2026-10-08 it had no
-/// `incorporated` on the block events and no `role` on `block_created`, all of which the code
-/// writes. The snapshots are emitted from the structs the code serializes, so they are what the
-/// ledger actually carries. A type with a schema and no snapshot is still walked, from the
-/// registry.
-async fn registry(pool: &PgPool) -> BTreeMap<String, Option<serde_json::Value>> {
+/// **Both are walked.** A migrated database's `payload_schema` is stamped by the migration that
+/// registered the type and lags the code: on 2026-10-08 it had no `incorporated` on the block
+/// events and no `role` on `block_created`, all of which the code writes, and the snapshots are
+/// emitted from the structs the code serializes. But a field a struct has since dropped is still
+/// on the ledger's older rows, and only the registry may still name it, so neither schema alone is
+/// the ledger's shape.
+async fn registry(pool: &PgPool) -> BTreeMap<String, Vec<serde_json::Value>> {
     let snapshots = schema_snapshots();
     sqlx::query_as::<_, (String, Option<serde_json::Value>)>(
         "SELECT name, payload_schema FROM kb_event_types",
@@ -1243,31 +1264,56 @@ async fn registry(pool: &PgPool) -> BTreeMap<String, Option<serde_json::Value>> 
     .expect("read the event registry")
     .into_iter()
     .map(|(name, registered)| {
-        let schema = snapshots.get(&name).cloned().or(registered);
-        (name, schema)
+        let schemas = snapshots
+            .get(&name)
+            .cloned()
+            .into_iter()
+            .chain(registered)
+            .collect();
+        (name, schemas)
     })
     .collect()
 }
 
 /// `(event_type, path)` of every string path the registered schemas nominate.
-fn walked(registry: &BTreeMap<String, Option<serde_json::Value>>) -> BTreeSet<(String, String)> {
+fn walked(registry: &BTreeMap<String, Vec<serde_json::Value>>) -> BTreeSet<(String, String)> {
     registry
         .iter()
-        .filter_map(|(name, schema)| schema.as_ref().map(|s| (name, s)))
-        .flat_map(|(name, schema)| {
-            string_paths(schema)
-                .into_iter()
+        .flat_map(|(name, schemas)| {
+            schemas
+                .iter()
+                .flat_map(string_paths)
                 .map(move |p| (name.clone(), p))
         })
+        .collect()
+}
+
+/// The schema of what `EventContext` writes into `kb_events.metadata`, emitted from
+/// `AgentAuthorship` (temper-substrate `tests/payload_schema.rs`).
+const METADATA_SNAPSHOT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../temper-substrate/tests/fixtures/metadata/authorship.v1.schema.json"
+);
+
+/// `("metadata", path)` of every string path an event's metadata can carry.
+fn metadata_walked() -> BTreeSet<(String, String)> {
+    let schema: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(METADATA_SNAPSHOT).expect("read the metadata schema snapshot"),
+    )
+    .unwrap();
+    string_paths(&schema)
+        .into_iter()
+        .map(|p| ("metadata".to_string(), p))
         .collect()
 }
 
 /// The `[payload]` problems against `registry`: undeclared walked paths, lines naming a walked
 /// type's path the schema does not have, permissive declarations that disagree with the registry,
 /// and qualified lines with no unqualified line to refine.
-fn payload_problems(registry: &BTreeMap<String, Option<serde_json::Value>>) -> Vec<String> {
+fn payload_problems(registry: &BTreeMap<String, Vec<serde_json::Value>>) -> Vec<String> {
     let lines = payload_lines();
-    let walked = walked(registry);
+    let mut walked = walked(registry);
+    walked.extend(metadata_walked());
     let declared: BTreeSet<(String, String)> = lines
         .iter()
         .filter(|l| l.qualifier.is_none() && l.path != "*")
@@ -1286,18 +1332,24 @@ fn payload_problems(registry: &BTreeMap<String, Option<serde_json::Value>>) -> V
     }
     for l in &lines {
         if l.event_type == "metadata" {
+            if !walked.contains(&(l.event_type.clone(), l.path.clone())) {
+                problems.push(format!(
+                    "line {}: stale: metadata:{} is not a string path of AgentAuthorship",
+                    l.lineno, l.path
+                ));
+            }
             continue;
         }
-        match registry.get(&l.event_type) {
+        match registry.get(&l.event_type).map(Vec::is_empty) {
             None => problems.push(format!(
                 "line {}: {} is not a registered event type",
                 l.lineno, l.event_type
             )),
-            Some(Some(_)) if l.path == "*" => problems.push(format!(
+            Some(false) if l.path == "*" => problems.push(format!(
                 "line {}: {} has a payload schema, so the walk reads it; drop `permissive`",
                 l.lineno, l.event_type
             )),
-            Some(Some(_))
+            Some(false)
                 if l.qualifier.is_none()
                     && !walked.contains(&(l.event_type.clone(), l.path.clone())) =>
             {
@@ -1306,7 +1358,7 @@ fn payload_problems(registry: &BTreeMap<String, Option<serde_json::Value>>) -> V
                     l.lineno, l.event_type, l.path
                 ))
             }
-            Some(None) if !permissive.contains(l.event_type.as_str()) => problems.push(format!(
+            Some(true) if !permissive.contains(l.event_type.as_str()) => problems.push(format!(
                 "line {}: {} has no payload schema; declare `{}:* | permissive | <where its fields came from>`",
                 l.lineno, l.event_type, l.event_type
             )),
@@ -1325,8 +1377,8 @@ fn payload_problems(registry: &BTreeMap<String, Option<serde_json::Value>>) -> V
             ));
         }
     }
-    for (name, schema) in registry {
-        if schema.is_none() && !permissive.contains(name.as_str()) {
+    for (name, schemas) in registry {
+        if schemas.is_empty() && !permissive.contains(name.as_str()) {
             problems.push(format!(
                 "undeclared: {name} is registered with no payload schema; declare `{name}:* | permissive | …` and its string paths"
             ));
@@ -1441,15 +1493,29 @@ fn the_walk_nominates_strings_and_open_values_only() {
             "srcs": {"type": "array", "items": {"$ref": "#/$defs/Src"}},
             "map": {"type": "object", "additionalProperties": {"type": "string"}},
             "either": {"anyOf": [{"type": "null"}, {"type": "string"}]},
-            "mode": {"const": "x"}
+            "mode": {"const": "x"},
+            "flat": {"type": "object",
+                     "oneOf": [{"properties": {"a": {"type": "string"}}}],
+                     "properties": {"b": {"type": "string"}}},
+            "both": {"type": ["string", "object"], "properties": {"c": {"type": "string"}}},
+            "pair": {"type": "array", "prefixItems": [{"type": "integer"}, {"type": "string"}]},
+            "pats": {"type": "object", "patternProperties": {"^x": {"type": "string"}}},
+            "open": {"type": "object"}
         }
     });
     let got: Vec<String> = string_paths(&schema).into_iter().collect();
     assert_eq!(
         got,
         [
+            "/both",
+            "/both/c",
             "/either",
+            "/flat/a",
+            "/flat/b",
             "/map/?",
+            "/open",
+            "/pair/*",
+            "/pats/?",
             "/srcs/*/value",
             "/tags/*",
             "/title",

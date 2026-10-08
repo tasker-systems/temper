@@ -116,7 +116,7 @@ kb_remote_sources.uri                   | repointed:D2.9:kb_block_provenance.sou
 
 # ── out of scope: the ledger (cut 2) ────────────────────────────────────────────────────────
 kb_events.payload                       | out-of-scope  | the ledger: cut 1 leaves payloads unchanged and names the unreached paths of R's own trail in the record; cut 2 redacts them (D3) under D9's payload half. Events outside R's trail that quote R are not named
-kb_events.metadata                      | out-of-scope  | the ledger: authorship reasoning and rationale are cut 2's (D4 sentinel class), under D9's payload half
+kb_events.metadata                      | out-of-scope  | the ledger: authorship reasoning, rationale, persona and model are cut 2's (D4 sentinel class), under D9's payload half; the fence walks AgentAuthorship's schema
 
 # ── out of scope: derived vectors (filed under the erasure goal) ───────────────────────────
 kb_cogmap_regions.centroid              | handled:D2.6  | a FOLDED region holding R as a member is zeroed (never recomputed; R's vector was recoverable from it). A LIVE region holding R is recomputed over the survivors by _resource_erasure_recompute_live_centroids, which the body PERFORMs: a recompute is not an erasure constant, so this fence does not bind it; the act's witnesses do. The re-form the service queues after commit then folds a clean row; a materialize already in flight at the act, which loaded R live, is followed by the region drain's erased-member gate (region_clocks::tick), which recomputes and re-forms the anchor's default-lens regions (ruled 2026-10-04)
@@ -150,8 +150,11 @@ kb_blob_upload_segments.bytes           | out-of-scope  | staged upload bytes, r
 # record lists those paths of R's own trail events in `ledger_remainder`. Cut 2 (D3) generates the
 # verifier's allowlist from the `redact` lines, so a path the verifier admits is a reviewed line here.
 #
-# WHAT IS NOMINATED. resource_erasure_surface_test walks every registered payload_schema
-# (kb_event_types) and nominates each path that holds a string or an open value. Arrays read as
+# WHAT IS NOMINATED. resource_erasure_surface_test walks, for every registered event type, both its
+# committed schema snapshot (temper-substrate tests/fixtures/payloads) and its registered
+# payload_schema (kb_event_types), and nominates each path that holds a string or an open value;
+# the `metadata:` lines are walked the same way from AgentAuthorship's snapshot
+# (tests/fixtures/metadata). Arrays read as
 # `*`, a map's keys as `?`. Three kinds of string are classed by the walk itself and never appear
 # here: a `format: uuid` or `format: date-time` string (an id or a time), and a string confined by
 # `enum` or `const` (vocabulary). A number or boolean is never nominated.
@@ -215,7 +218,7 @@ resource_reblocked:/created/*/chunks/*/content_hash       | structural          
 citation_audited:*                                        | permissive               | fields from payloads.rs CitationAudited; production shapes checked 2026-10-08
 citation_audited:/reason                                  | redact:reason            | the auditor's free text
 citation_audited:/source/kind                             | structural               | provenance kind vocabulary
-citation_audited:/source/value                            | redact:remote-source-url | ProvenanceSource::Remote carries the URL as supplied; found 2026-10-08, missing from the remainder until 20261008100000
+citation_audited:/source/value                            | structural               | the cited resource's id: citation_audit refuses every kind but resource (20260724000110), and the projector casts it to uuid
 data_artifact_committed:/artifact_kind                    | redact:artifact-family   | free text, F3 corrected 2026-10-03; step 9f writes the same sentinel to the projection
 data_artifact_committed:/content_hash                     | structural               | a hash
 
@@ -253,6 +256,8 @@ relationship_retracted:*                                  | permissive          
 # ── authorship, on any event ────────────────────────────────────────────────────────────────
 metadata:/reasoning                                       | redact:authorship        | D4: "erased"
 metadata:/rationale                                       | redact:authorship        | D4: "erased"
+metadata:/persona                                         | redact:authorship        | D4: "erased"; caller-supplied, up to 256 bytes
+metadata:/model                                           | redact:authorship        | D4: "erased"; caller-supplied, up to 256 bytes
 
 # ── records: an act's own record, written from fixed strings and ids ────────────────────────
 resource_erased:/targets/*/target                         | structural               | the record never repeats what it erased (goal §8)
@@ -317,9 +322,9 @@ context_reassigned:*                                      | permissive          
 context_reassigned:/from_owner_table                      | structural               | an owner table name
 context_reassigned:/to_owner_table                        | structural               | an owner table name
 delegated_launch:*                                        | permissive               | fields from payloads.rs DelegatedLaunch
-delegated_launch:/trigger_kind                            | structural               | trigger vocabulary
+delegated_launch:/trigger_kind                            | out-of-scope             | free text by type, a label vocabulary by use (sensitivity-scan-surface.txt); anchored on a cogmap, in no resource's trail
 invocation_closed:*                                       | permissive               | fields from payloads.rs InvocationClosed; production shapes checked 2026-10-08
 invocation_closed:/disposition                            | structural               | disposition vocabulary
 invocation_closed:/outcome                                | out-of-scope             | an agent's free-form account of a run, anchored on the invocation, not R; it may quote R, and arm 3 lists it when it carries R's id (Q1)
-webhook_received:*                                        | permissive               | a remote's body, stored under `body` since version 2
+webhook_received:*                                        | permissive               | a remote's body: under `body` since version 2; a version-1 row (1322 of 1328 in production, 2026-10-08) carries it at the payload root
 webhook_received:/body                                    | out-of-scope             | foreign text in no trail (20261007100000); a delivery that quotes R is named (D8, arm 5)

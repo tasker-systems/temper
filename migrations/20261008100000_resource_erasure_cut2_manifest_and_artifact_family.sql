@@ -5,13 +5,13 @@
 -- kb_events_append_only; the ledger is not written.
 --
 --   1. The act gains step (9f): an artifact's family takes 'erased:<asserted_by_event_id>'.
---   2. The survey plan's ledger remainder names three paths it missed: resource_created.doc_type
+--   2. The survey plan's ledger remainder names the paths it missed: resource_created.doc_type
 --      and data_artifact_committed.artifact_kind (both free text since F3 was corrected,
---      2026-10-03), and citation_audited.source.value (a remote source's URL; ProvenanceSource
---      Remote carries the URL as supplied).
+--      2026-10-03), metadata.persona and metadata.model (caller-supplied authorship text beside
+--      reasoning and rationale), and shapes in R's home for a family R's artifacts used.
 --   3. The trail scope gains property events owned by R's blocks, which step 9d' already erases
 --      in the projection (20261007100000); the remainder now names their ledger copies.
---   4. The sweep's interim sensitivity.ledger_redact_paths gains the same three paths, so the
+--   4. The sweep's interim sensitivity.ledger_redact_paths gains the same four paths, so the
 --      manifest's [payload] redact lines and the table agree (resource_erasure_surface_test), and
 --      sensitivity.event_resource attributes a block-owned property event to its block's resource,
 --      as the trail scope now does.
@@ -474,7 +474,7 @@ and _block_history_scrub_apply calls it for the scrub; only resource_erasure_exe
 block_history_scrub_execute append events around it.';
 
 -- ---------------------------------------------------------------------------
--- Section 2. The survey plan: three remainder paths.
+-- Section 2. The survey plan: the remainder paths it missed, a step (9f) target, the home's shapes.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.resource_erasure_survey_plan(p_resource uuid)
  RETURNS jsonb
@@ -728,6 +728,14 @@ BEGIN
             'outcome', v_a || ' exclusive remote sources deleted; '
                        || v_b || ' shared remote sources kept, named in the remainder');
     END IF;
+    -- D2 step (9f): the artifact families.
+    SELECT count(*) INTO v_a FROM kb_data_artifacts da
+     WHERE da.resource_id = p_resource
+       AND da.artifact_kind <> 'erased:' || da.asserted_by_event_id::text;
+    IF v_a > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_data_artifacts.artifact_kind',
+            'outcome', v_a || ' artifact families set to erased:<asserted_by_event_id>');
+    END IF;
 
     -- ── THE REFUSAL FACE (D5), computed here so execute consumes the verdict rather than
     -- re-deriving it: a charter resource (Q2 — the map-grain act is another task, named), an
@@ -863,18 +871,23 @@ BEGIN
     -- 6. Shapes in R's home for a family R's artifacts used (D4, ruled 2026-10-03, ruling 5;
     --    20261008100000). A shape's artifact_kind is the home's declaration of a family, not R's
     --    instance, so the act never touches it (Q1), and it may still name what R's artifacts
-    --    were. Named by shape id, live shapes only. Matched on (home, kind owner, family) from R's
-    --    artifacts as they stand: step (9f) erases those families, so a plan computed on the
-    --    husk finds none here, and the act's record keeps what its own pre-act plan named.
+    --    were. Named by shape id, live shapes only. Matched on (home, kind owner, family), the
+    --    family read from the artifact's row OR from the data_artifact_committed event that
+    --    asserted it: step (9f) erases the row's family, so a plan computed on the husk (the
+    --    survey after the act, a cut-1 husk the backfill below rewrote, cut 2's completion pass
+    --    re-deriving) still finds the shapes through the ledger until cut 2 redacts that payload.
+    --    Only R's current home: a shape in a home R was rehomed out of is not named.
     FOR v_row IN
         SELECT DISTINCT s.id
           FROM kb_data_artifacts da
+          JOIN kb_events ev ON ev.id = da.asserted_by_event_id
           JOIN kb_resource_homes h ON h.resource_id = da.resource_id
           JOIN kb_data_artifact_shapes s
                ON NOT s.is_folded
               AND s.home_anchor_table = h.anchor_table AND s.home_anchor_id = h.anchor_id
               AND s.kind_owner_table = da.kind_owner_table AND s.kind_owner_id = da.kind_owner_id
-              AND s.artifact_kind = da.artifact_kind
+              AND (s.artifact_kind = da.artifact_kind
+                OR s.artifact_kind = ev.payload ->> 'artifact_kind')
          WHERE da.resource_id = p_resource
          ORDER BY s.id
     LOOP
@@ -926,7 +939,8 @@ BEGIN
     --    by the fence (D9, build order 2d) rather than drifting silent here. Ids of EXISTING
     --    events only — no id is minted; paths only, never values (a redaction record must not
     --    carry what it would redact). `metadata` authorship prose (F3's last row: reasoning /
-    --    rationale) rides each event's own list when the metadata carries those keys.
+    --    rationale, and the caller-supplied persona / model since 20261008100000) rides each
+    --    event's own list when the metadata carries any of those keys.
     SELECT coalesce(jsonb_agg(jsonb_build_object('event', s.event_id, 'paths', s.paths)
                                ORDER BY s.event_id), '[]'::jsonb)
       INTO v_ledger
@@ -938,7 +952,7 @@ BEGIN
                    WHEN 'block_created'              THEN '["block.incorporated[*].source.value"]'::jsonb
                    WHEN 'block_mutated'              THEN '["incorporated[*].source.value"]'::jsonb
                    WHEN 'block_folded'               THEN '["reason"]'::jsonb
-                   WHEN 'citation_audited'           THEN '["reason","source.value"]'::jsonb
+                   WHEN 'citation_audited'           THEN '["reason"]'::jsonb
                    WHEN 'relationship_asserted'      THEN '["label"]'::jsonb
                    WHEN 'relationship_folded'        THEN '["reason"]'::jsonb
                    WHEN 'relationship_corrected'     THEN '["scar"]'::jsonb
@@ -953,8 +967,8 @@ BEGIN
                END
              || (CASE WHEN EXISTS (
                        SELECT 1 FROM jsonb_object_keys(t.metadata) k
-                        WHERE k = 'reasoning' OR k = 'rationale')
-                      THEN '["metadata.reasoning","metadata.rationale"]'::jsonb
+                        WHERE k IN ('reasoning', 'rationale', 'persona', 'model'))
+                      THEN '["metadata.reasoning","metadata.rationale","metadata.persona","metadata.model"]'::jsonb
                       ELSE '[]'::jsonb END) AS paths
           FROM (
             SELECT s.event_id, s.event_type, ev.metadata
@@ -1056,8 +1070,8 @@ body carries (20261007100000). Every consumer — the survey''s ledger remainder
 pass, any operator audit — walks THIS predicate, never a second derivation.';
 
 -- The sweep attributes a ledger finding to the resource whose trail holds its event, and its own
--- witness holds that attribution to this scope. The same block-owned arm, second in line after
--- the resource-owned one, as the scope's arms are ordered.
+-- witness holds that attribution to this scope. The same block-owned arm, after the block_id arm
+-- and before the edge arms, as in the scope.
 CREATE OR REPLACE FUNCTION sensitivity.event_resource(p_type text, p_category text, p_payload jsonb) RETURNS uuid
 LANGUAGE sql STABLE AS $$
     SELECT CASE WHEN p_category <> 'domain' OR p_type = 'webhook_received' THEN NULL ELSE coalesce(
@@ -1084,7 +1098,8 @@ $$;
 INSERT INTO sensitivity.ledger_redact_paths (event_type, erasure_path) VALUES
     ('resource_created',        'doc_type'),
     ('data_artifact_committed', 'artifact_kind'),
-    ('citation_audited',        'source.value');
+    (NULL,                      'metadata.persona'),
+    (NULL,                      'metadata.model');
 
 -- ---------------------------------------------------------------------------
 -- Section 5. Two scan surfaces, registered disabled.
@@ -1106,5 +1121,5 @@ UPDATE kb_data_artifacts da
 SELECT declare_migration(
     20261008100000,
     'additive',
-    'CREATE OR REPLACE of _resource_erasure_apply_redaction, resource_erasure_survey_plan and _resource_erasure_trail_scope with unchanged signatures and return types, plus a COMMENT. The act also sets an erased resource''s artifact families to erased:<asserted_by_event_id> (step 9f), and existing husks get the same once; no reader keys on an erased artifact''s family, since the husk answers 410. The plan''s ledger_remainder names three more paths and, through the trail scope, property events owned by the resource''s blocks; ledger_remainder is a list of paths, so a binary that predates this reads it unchanged. Rows are added to sensitivity.ledger_redact_paths and sensitivity.surfaces (two disabled text surfaces), and sensitivity.event_resource (unchanged signature) attributes a block-owned property event to its block''s resource; no deployed binary names the sensitivity schema. No table, column, constraint or grant changes.'
+    'CREATE OR REPLACE of _resource_erasure_apply_redaction, resource_erasure_survey_plan and _resource_erasure_trail_scope with unchanged signatures and return types, plus a COMMENT. The act also sets an erased resource''s artifact families to erased:<asserted_by_event_id> (step 9f), and existing husks get the same once; no reader keys on an erased artifact''s family, since the husk answers 410. The plan names step (9f) among its targets, its remainder names the home''s shapes for the resource''s families, and its ledger_remainder names four more paths and, through the trail scope, property events owned by the resource''s blocks; ledger_remainder is a list of paths, so a binary that predates this reads it unchanged. Rows are added to sensitivity.ledger_redact_paths and sensitivity.surfaces (two disabled text surfaces), and sensitivity.event_resource (unchanged signature) attributes a block-owned property event to its block''s resource; no deployed binary names the sensitivity schema. No table, column, constraint or grant changes.'
 );
