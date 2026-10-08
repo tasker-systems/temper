@@ -12,6 +12,7 @@
 #   cargo make fix         Auto-fix all issues
 #   cargo make build       Build everything
 #   cargo make audit       Security audit (dependency CVEs)
+#   cargo make deny        Dependency sources + licenses (deny.toml)
 #   cargo make tripwires   Run every audit-*.sh tripwire (also runs inside `check`)
 #   cargo make run         Run temper-api locally
 #
@@ -68,6 +69,7 @@ echo "Quality:"
 echo "  cargo make check       Run all quality checks (Rust + TypeScript)"
 echo "  cargo make fix         Auto-fix formatting and lint issues"
 echo "  cargo make audit       Security audit on dependencies"
+echo "  cargo make deny        Dependency sources and licenses (deny.toml)"
 echo ""
 echo "Testing:"
 echo "  cargo make test        Rust unit tests (no feature flags)"

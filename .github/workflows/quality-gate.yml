@@ -49,10 +49,10 @@ jobs:
       # Pinned prebuilt binaries. cargo-audit was moved to a prebuilt pin by the 2026-07-29
       # supply-chain review (`cargo install` resolved and compiled it unpinned on every run);
       # cargo-machete follows for that reason and for this gate's own: `cargo install` compiles.
-      - name: Install cargo-machete and cargo-audit
+      - name: Install cargo-machete, cargo-audit and cargo-deny
         uses: taiki-e/install-action@v2.87.18
         with:
-          tool: cargo-machete,cargo-audit
+          tool: cargo-machete,cargo-audit,cargo-deny
 
       # First, so a formatting slip is the first thing reported. Two of the tripwires below
       # (audit-as-entry-points, audit-mcp-route-auth) rely on it: their parsers do not read
@@ -188,6 +188,11 @@ jobs:
       # fresh here.
       - name: Security audit
         run: cargo audit
+
+      # BLOCKING, beside the audit: every crate comes from crates.io, and every license
+      # expression is satisfiable from deny.toml's allowlist. Advisories stay with cargo audit.
+      - name: Dependency sources and licenses
+        run: cargo deny check sources licenses
 
   # The guards' own tests. Every script above is a bash tripwire whose entire value is that it
   # FAILS when the thing it protects is broken — and nothing about a passing tripwire distinguishes
