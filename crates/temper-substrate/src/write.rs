@@ -191,10 +191,11 @@ pub async fn materialize(
     .await?
     .materialize_event()?;
 
+    // no region folds with an erased resource's share: see the function.
+    recompute_erased_member_centroids(&mut tx, anchor, s.lens_id).await?;
     // a full pass folds every prior live region AND component for this lens, then recreates them —
     // EXCEPT the regions whose member set is unchanged, which survive under their own ids and are
     // refreshed in place.
-    recompute_erased_member_centroids(&mut tx, anchor, s.lens_id).await?;
     fold_live_regions(&mut tx, anchor, s.lens_id, ev, &keep).await?;
     fold_live_components(&mut tx, anchor, s.lens_id, ev).await?;
 
@@ -292,9 +293,10 @@ pub async fn incremental_materialize(
     .await?
     .materialize_event()?;
 
+    // no region folds with an erased resource's share: see the function.
+    recompute_erased_member_centroids(&mut tx, anchor, s.lens_id).await?;
     // fold the stale components and their regions; leave matched components + their regions live, and
     // leave the reused regions of the STALE components live too — their member sets did not change.
-    recompute_erased_member_centroids(&mut tx, anchor, s.lens_id).await?;
     fold_components(&mut tx, &diff.stale, ev, &keep).await?;
 
     let zero = zero_centroid();

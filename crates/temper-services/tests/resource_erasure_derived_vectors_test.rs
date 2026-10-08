@@ -1240,6 +1240,16 @@ async fn a_full_materialize_after_the_race_recomputes_then_folds(pool: PgPool) {
             .execute(&pool)
             .await
             .expect("plant R's share in the R-holding centroid");
+        assert!(
+            distance(
+                &pool,
+                &p.pre_act_centroid,
+                &member_mean(&pool, *region).await
+            )
+            .await
+                > MOVED,
+            "vacuity guard: the survivors' mean must differ from the planted R-inclusive centroid"
+        );
     }
 
     let (_, emitter) = principal(&pool).await;
