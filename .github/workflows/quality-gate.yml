@@ -265,6 +265,12 @@ jobs:
       - name: Check docs/ holds only public documentation
         run: bash .github/scripts/check-docs-public-only.sh
 
+      # The docs install by the versioned formula name (it is what Homebrew trusts without a
+      # `brew trust` step), so a minor bump must move those lines with it — see the script's
+      # header. Ungated for the reason above: a docs-only PR is the other edit that can stale them.
+      - name: Check brew install references name the workspace minor
+        run: bash .github/scripts/check-brew-install-minor.sh
+
       # Pure bash, one second, and it lives in this ungated job for the same reason the
       # docs/ gate does: the change class it catches — a returning internal/superpowers/
       # tree — is markdown under a non-product root, which every heavy job skips.
