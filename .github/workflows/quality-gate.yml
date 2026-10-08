@@ -519,6 +519,12 @@ jobs:
       - name: Guard test — package-skill
         run: bash .github/scripts/test-package-skill.sh
 
+      # The registry lanes' publish jobs push only the bytes their own build job hashed into a job
+      # output (release.yml). The lanes run only on a tag, so this harness is the only place a check
+      # that stopped comparing bytes would show before a release.
+      - name: Guard test — artifact-sums
+        run: bash .github/scripts/test-artifact-sums.sh
+
       # Release-integrity harnesses. emit-manifest produces the per-file manifest the CLI parses;
       # test-install drives install.sh with a locally-built archive. Both are pure bash and belong
       # here for the same reason as the rest: a manifest generator that silently emitted constant

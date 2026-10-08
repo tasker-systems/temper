@@ -179,11 +179,16 @@ jobs:
   # a job holding `id-token: write` can mint the OIDC token a registry accepts, so
   # this is what keeps that token away from dependency code.
   #
-  # What the split does NOT stop: a compromised build tampering with the bytes the
-  # publish job then pushes, with provenance. The build jobs therefore still pin
-  # what they run (`--ignore-scripts`, a hash-pinned Python build backend, a
-  # pinned uv), and the crates lane checks the publish job's own packaging is
-  # byte-identical to the verified one.
+  # Every job in the run shares one artifact namespace, so a compromised build job
+  # could replace ANOTHER lane's artifact by name. Each build job therefore hashes
+  # its files into a job output, which only it can write, and its publish job
+  # refuses a download that differs (tools/scripts/release/artifact-sums.sh).
+  #
+  # What the split does NOT stop: a lane's own compromised build tampering with
+  # its bytes before it hashes them. Those are then pushed with provenance. The
+  # build jobs therefore still pin what they run (`--ignore-scripts`, a
+  # hash-pinned Python build backend, a pinned uv), and the crates lane checks
+  # the publish job's own packaging is byte-identical to the verified one.
   #
   # Trusted publishers on all four registries match on repository + workflow file
   # (+ an optional environment, none set here), never on job name, so the job
@@ -204,6 +209,8 @@ jobs:
     needs: determine-version
     runs-on: ubuntu-22.04
     timeout-minutes: 10
+    outputs:
+      sums: ${{ steps.sums.outputs.sums }}
     permissions:
       contents: read
     steps:
@@ -221,6 +228,17 @@ jobs:
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
         run: bash tools/scripts/release/publish-npm.sh "$VERSION" --out dist
+
+      # The hashes leave this job as a job output, which no other job can write: the publish
+      # job checks its download against them (tools/scripts/release/artifact-sums.sh).
+      - name: Record the built files' hashes
+        id: sums
+        run: |
+          {
+            echo 'sums<<SUMS_EOF'
+            bash tools/scripts/release/artifact-sums.sh emit dist
+            echo 'SUMS_EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload the built package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -256,6 +274,12 @@ jobs:
         with:
           name: registry-npm-${{ needs.determine-version.outputs.version }}
           path: dist/
+
+      - name: Check the download against the build job's hashes
+        env:
+          SUMS: ${{ needs.build-npm-clients.outputs.sums }}
+        run: bash tools/scripts/release/artifact-sums.sh verify dist
+
       - name: Publish the TS clients
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
@@ -271,6 +295,8 @@ jobs:
     needs: determine-version
     runs-on: ubuntu-22.04
     timeout-minutes: 10
+    outputs:
+      sums: ${{ steps.sums.outputs.sums }}
     permissions:
       contents: read
     steps:
@@ -289,6 +315,17 @@ jobs:
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
         run: bash tools/scripts/release/publish-ruby.sh "$VERSION" --out dist
+
+      # The hashes leave this job as a job output, which no other job can write: the publish
+      # job checks its download against them (tools/scripts/release/artifact-sums.sh).
+      - name: Record the built files' hashes
+        id: sums
+        run: |
+          {
+            echo 'sums<<SUMS_EOF'
+            bash tools/scripts/release/artifact-sums.sh emit dist
+            echo 'SUMS_EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload the built package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -323,6 +360,12 @@ jobs:
         with:
           name: registry-ruby-${{ needs.determine-version.outputs.version }}
           path: dist/
+
+      - name: Check the download against the build job's hashes
+        env:
+          SUMS: ${{ needs.build-ruby-client.outputs.sums }}
+        run: bash tools/scripts/release/artifact-sums.sh verify dist
+
       - name: Configure RubyGems credentials (trusted publishing)
         uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
 
@@ -354,6 +397,8 @@ jobs:
     needs: determine-version
     runs-on: ubuntu-22.04
     timeout-minutes: 10
+    outputs:
+      sums: ${{ steps.sums.outputs.sums }}
     permissions:
       contents: read
     steps:
@@ -369,6 +414,17 @@ jobs:
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
         run: bash tools/scripts/release/publish-py.sh "$VERSION" --out dist
+
+      # The hashes leave this job as a job output, which no other job can write: the publish
+      # job checks its download against them (tools/scripts/release/artifact-sums.sh).
+      - name: Record the built files' hashes
+        id: sums
+        run: |
+          {
+            echo 'sums<<SUMS_EOF'
+            bash tools/scripts/release/artifact-sums.sh emit dist
+            echo 'SUMS_EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload the built package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -401,6 +457,12 @@ jobs:
         with:
           name: registry-py-${{ needs.determine-version.outputs.version }}
           path: dist/
+
+      - name: Check the download against the build job's hashes
+        env:
+          SUMS: ${{ needs.build-py-client.outputs.sums }}
+        run: bash tools/scripts/release/artifact-sums.sh verify dist
+
       - name: Publish the Python client
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
@@ -427,6 +489,8 @@ jobs:
     needs: determine-version
     runs-on: ubuntu-22.04
     timeout-minutes: 30
+    outputs:
+      sums: ${{ steps.sums.outputs.sums }}
     permissions:
       contents: read
     steps:
@@ -446,6 +510,17 @@ jobs:
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
         run: bash tools/scripts/release/publish-crates.sh "$VERSION" --out dist
+
+      # The hashes leave this job as a job output, which no other job can write: the publish
+      # job checks its download against them (tools/scripts/release/artifact-sums.sh).
+      - name: Record the built files' hashes
+        id: sums
+        run: |
+          {
+            echo 'sums<<SUMS_EOF'
+            bash tools/scripts/release/artifact-sums.sh emit dist
+            echo 'SUMS_EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload the built package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -482,6 +557,12 @@ jobs:
         with:
           name: registry-crates-${{ needs.determine-version.outputs.version }}
           path: dist/
+
+      - name: Check the download against the build job's hashes
+        env:
+          SUMS: ${{ needs.build-rust-crates.outputs.sums }}
+        run: bash tools/scripts/release/artifact-sums.sh verify dist
+
       - name: Authenticate with crates.io (trusted publishing)
         id: auth
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
