@@ -33,6 +33,9 @@ Plan for three layers, because per-IP limits alone cannot separate people:
   installed by Temper's migrations. Running the queries below against production is a decision
   for whoever owns that database: ask before you do.
 - A secret store for one new value, `TEMPER_EDGE_PROXY_SECRET`.
+- Vercel Deployment Protection on the API project's generated deployment URLs. The API project's
+  rules below are scoped to one public host so crons stay out of their buckets; any other host
+  that answers unprotected is a way around them.
 
 ## 1. Map where traffic enters
 
@@ -43,6 +46,10 @@ call the API, because there the firewall sees your server's address, not the use
   instance, its server forwards `/api`, `/mcp`, `/oauth` and `/.well-known` to the API project
   with a server-side `fetch`. The UI project's firewall sees real client addresses; the API
   project sees a few of the UI function's egress addresses for all of that traffic.
+- **The web UI's page loaders.** Rendering a page (a vault listing, a search, the graph) makes the
+  UI's server call the API directly — the same egress addresses again. The person behind it
+  requested a page route, which the UI project's API-path rule below does not match, so that
+  request meets no per-IP rule of its own.
 - **The MCP relay.** Every MCP tool call is two requests: the caller to the MCP function, then
   the MCP function to the API. The second always comes from the MCP function's addresses.
 - **Crons.** Vercel Cron calls the deployment's generated URL, not your domain.
@@ -57,10 +64,16 @@ vercel metrics vercel.request.count -p <api-project> --prod -s 7d \
 Hostnames that are your domain or the project's production alias carry user traffic; hostnames
 ending in the deployment-specific `.vercel.app` suffix are crons and internal calls.
 
-**Both server-side hops mark their requests** with the `x-temper-edge-proxy` header when
-`TEMPER_EDGE_PROXY_SECRET` is set, so the API project's rules can exempt them. Those requests
-already met per-IP limits where the client's own address was visible. The header confers no
-access; a leaked value only skips the API project's per-IP limits.
+**Every server-side hop marks its requests** — the UI's proxy and page loaders, and the MCP
+relay — with the `x-temper-edge-proxy` header when `TEMPER_EDGE_PROXY_SECRET` is set, so the API
+project's rules can exempt them. The header confers no access, and nothing in the API reads it.
+But a leaked value lets its holder skip the API project's per-IP rules on that host, which are
+the control for unauthenticated volume there, so keep it in your secret store, never in a
+client, and rotate it if it leaks.
+
+**Hosted MCP clients share addresses too.** An agent product's connector (a hosted chat
+assistant calling your `/mcp`) reaches you from that vendor's egress range, so all of its users
+share the UI project's per-IP buckets. Watch those addresses in step 7 as your user count grows.
 
 ## 2. Measure the traffic you have
 
@@ -176,6 +189,11 @@ people each doing a few listings or searches a minute. Today's heavy reads are
 `GET /api/resources`, `GET /api/contexts`, `/api/search` and `/api/query`; check yours against
 step 3's top statements.
 
+These path rules do not see heavy reads made through MCP: a search an agent makes arrives as a
+request to `/mcp`, and its relay hop to `/api/search` carries the marker. An agent's rate is
+bounded by its model's turn time, so in practice it stays well under the backstop, but the
+limit that would bind it is a per-identity one, not anything at the edge.
+
 ## 6. Create the rules in log mode
 
 Rules are project configuration in the Vercel firewall, not part of `vercel.json`, so they
@@ -232,11 +250,18 @@ exemption for marked requests:
 { "type": "header", "key": "x-temper-edge-proxy", "op": "eq", "value": "<TEMPER_EDGE_PROXY_SECRET>", "neg": true }
 ```
 
-Before publishing these, generate the secret (`openssl rand -base64 32`; it must differ from
-`TEMPER_MCP_SERVICE_SECRET`), set `TEMPER_EDGE_PROXY_SECRET` on the UI project and on the API
-project (the MCP function reads it), and redeploy both: a function's environment is fixed when it
-is deployed. Without the marker, the UI's and the MCP relay's traffic counts against a few shared
-addresses.
+Before publishing these, generate the secret (`openssl rand -base64 32`). The API and MCP
+functions refuse to boot when it is under 16 characters or, on the API, equal to another shared
+secret; the refusal names the variable and never its value. Then set `TEMPER_EDGE_PROXY_SECRET`
+on the UI project and on the API project (the MCP function reads it), and redeploy both: a
+function's environment is fixed when it is deployed. Without the marker, the UI's and the MCP relay's traffic counts against a few
+shared addresses. A value that cannot be a header value is never sent; the function logs a fixed
+sentence saying so.
+
+To rotate it: set the new value on both projects and redeploy both, then update the value in
+both API-project rules and publish. Between the redeploy and the publish, marked requests carry
+a value the rules do not know and count per address — harmless while the rules only log; while
+they enforce, do it in a quiet hour.
 
 ## 7. Read a week, then enforce
 
@@ -247,9 +272,9 @@ vercel metrics vercel.firewall_action.count -p <project> -s 7d \
   --group-by wafRuleId --group-by wafAction
 ```
 
-This metric takes no `--prod` filter (it has no environment dimension; the request is
-refused as invalid). If nothing legitimate would have been refused, switch each rule's `rateLimit.action` from `log`
-to `rate_limit` (a `429`), and publish. If something would have, find out who it was before
+The firewall metric has no environment dimension, so leave `--prod` off; with it the request
+is refused as invalid. If nothing legitimate would have been refused, switch each rule's
+`rateLimit.action` from `log` to `rate_limit` (a `429`), and publish. If something would have, find out who it was before
 raising the number: a raised limit is a decision about capacity, not a fix.
 
 Repeat steps 2 to 5 when the compute ceiling changes, when a new kind of client starts calling

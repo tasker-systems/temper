@@ -133,14 +133,30 @@ async fn relayed_headers(marker: Option<&str>) -> Vec<(String, Option<String>)> 
 
 /// Configured, every relayed act carries the edge-proxy marker, so the API project's per-IP
 /// rules can exempt the relay's hops — which all arrive from this function's few addresses.
-/// FAILS IF: the marker is dropped, or replaces any identity header.
+/// FAILS IF: the marker is dropped, or any identity header moves beside it.
 #[tokio::test]
 async fn a_configured_edge_proxy_secret_marks_every_relayed_act() {
     let got = relayed_headers(Some("an-edge-proxy-marker")).await;
-    assert!(got.contains(&(
-        "x-temper-edge-proxy".into(),
-        Some("an-edge-proxy-marker".into())
-    )));
+    let want: Vec<(String, Option<String>)> = vec![
+        ("authorization".into(), Some(format!("Bearer {BEARER}"))),
+        ("x-temper-service-credential".into(), Some(SECRET.into())),
+        ("x-temper-relayed-surface".into(), Some("mcp".into())),
+        ("x-temper-surface".into(), Some("mcp".into())),
+        ("x-temper-device-id".into(), None),
+        (
+            "x-temper-edge-proxy".into(),
+            Some("an-edge-proxy-marker".into()),
+        ),
+    ];
+    assert_eq!(got, want);
+}
+
+/// A marker that cannot be a header value is not sent, and the relay still works: the marker
+/// is never a reason to go dark. FAILS IF: the door darkens or a mangled marker rides the wire.
+#[tokio::test]
+async fn a_marker_that_cannot_be_a_header_value_is_not_sent() {
+    let got = relayed_headers(Some("bad\u{1}marker")).await;
+    assert!(got.contains(&("x-temper-edge-proxy".into(), None)));
     assert!(got.contains(&("x-temper-service-credential".into(), Some(SECRET.into()))));
 }
 

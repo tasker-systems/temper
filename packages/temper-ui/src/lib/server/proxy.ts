@@ -23,6 +23,7 @@ import { randomBytes } from 'node:crypto';
 import { error, type RequestEvent } from '@sveltejs/kit';
 import { activeTraceparent } from '@tasker-systems/temper-telemetry-ts';
 import { env } from '$env/dynamic/private';
+import { EDGE_PROXY_HEADER, edgeProxySecret } from './edge-proxy';
 
 /** Path roots forwarded to the upstream API/MCP host. */
 const PROXIED_ROOTS = ['/mcp', '/oauth', '/.well-known', '/api'];
@@ -117,22 +118,6 @@ export interface ForwardOptions {
 	edgeProxySecret?: string;
 }
 
-/**
- * Header that marks a request as relayed by this proxy, carrying a deployment secret
- * (`TEMPER_EDGE_PROXY_SECRET`).
- *
- * Every request this proxy relays reaches the upstream from the UI function's few egress
- * addresses, so a per-IP rate limit at the upstream's edge would put every user of the UI
- * origin into a handful of shared buckets. The upstream's firewall rules exempt requests
- * carrying this header and its value; those requests already met the UI origin's own per-IP
- * rules, which see the real client address.
- *
- * It is an edge-firewall condition only. Nothing in the API reads it, and it confers no
- * access: a leaked value lets its holder skip the upstream's per-IP limits and nothing else.
- * The proxy always deletes an inbound copy, so a caller cannot pass one through.
- */
-export const EDGE_PROXY_HEADER = 'x-temper-edge-proxy';
-
 /** True for the undici timeout we raise via `AbortController`, so it can map to 504 not 502. */
 function isTimeout(err: unknown): boolean {
 	return (
@@ -199,10 +184,8 @@ async function forwardOnce(
 	traceparent: string,
 	timeoutMs: number,
 	bufferedBody?: ArrayBuffer,
-	edgeProxySecret?: string,
+	marker?: string,
 ): Promise<Response> {
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), timeoutMs);
 	// A request body is a single-use stream: `new Request(target, request)` consumes it, so a second
 	// attempt would send nothing. When the caller buffered the body for replay (a keyed write), build
 	// the outbound request from that buffer instead, so every attempt sends identical bytes. GET/HEAD
@@ -222,9 +205,12 @@ async function forwardOnce(
 	// Deleted unconditionally: a caller's own copy must never reach the upstream, whether or not
 	// this deployment configures the secret.
 	outbound.headers.delete(EDGE_PROXY_HEADER);
-	if (edgeProxySecret) {
-		outbound.headers.set(EDGE_PROXY_HEADER, edgeProxySecret);
+	if (marker) {
+		outbound.headers.set(EDGE_PROXY_HEADER, marker);
 	}
+	// Armed only once the outbound request is fully built, so nothing above can leave it running.
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
 	let upstream: Response;
 	try {
 		upstream = await fetch(outbound, {
@@ -356,6 +342,6 @@ export async function proxyRequest(event: RequestEvent): Promise<Response> {
 		throw error(500, 'Proxy upstream is misconfigured.');
 	}
 	return forwardRequest(upstream, event.url.pathname, event.url.search, event.request, {
-		edgeProxySecret: env.TEMPER_EDGE_PROXY_SECRET?.trim() || undefined,
+		edgeProxySecret: edgeProxySecret(),
 	});
 }

@@ -69,17 +69,20 @@ const RELAY_ALLOWED_CARRIER: &str = "mcp";
 
 /// What a relay-shaped request's trust headers amounted to — the degrade detector (design §D7).
 ///
-/// Recorded as the `relay_trust` field on the request's root span, so production can see it:
-/// the exporter ships spans at `info`, and every request already exports one root span, so the
-/// signal adds no line an internet-reachable caller can multiply. It was a `debug` event, which
-/// kept it out of anyone's reach — including the operator's, since nothing below `info` is
-/// exported. A sustained non-`trusted` value in a deployment whose relay is configured is the
-/// alert: `invalid_credential` is the rotation-skew signature, `no_credential` the spoofing one.
+/// Recorded as the `relay_trust` field on the request's root span: every request already exports
+/// one root span at `info`, so the signal adds no line an internet-reachable caller can multiply.
+///
+/// **Anyone can produce any value but `trusted`** — the headers are public and this runs before
+/// authentication — so a count of non-`trusted` values is not an alert on its own. What the relay
+/// alone can produce is `trusted`, so the alert is the relay's share falling: relayed acts
+/// arriving and `trusted` going quiet while the MCP door is in use. The non-`trusted` values then
+/// say which fault to look for — `invalid_credential` (a rotation skew, or a guessed credential),
+/// `carrier_missing` or `carrier_refused` (a relay sending the wrong headers).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RelayTrust {
     /// Valid credential and the allowlisted carrier: the act attributes `@mcp`.
     Trusted,
-    /// A carrier arrived with no credential — every spoofing attempt's shape.
+    /// A carrier arrived with no credential.
     NoCredential,
     /// A credential arrived and did not match, carrier or not.
     InvalidCredential,
@@ -107,6 +110,9 @@ impl RelayTrust {
 /// not relay-shaped: the API has no secret configured (an unconfigured deployment is a posture,
 /// not an event — design §D2), or neither a credential nor a carrier arrived (all direct traffic,
 /// which must not drown the signal the alert keys on).
+///
+/// A credential that is not valid UTF-8 reads as `""`, which never matches: `configured` is never
+/// empty, because `shared_secret` drops an empty variable as unset.
 fn assess(configured: Option<&str>, headers: &HeaderMap) -> Option<RelayTrust> {
     let expected = configured?;
     let carrier = headers

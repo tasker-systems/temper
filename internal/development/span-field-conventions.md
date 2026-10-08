@@ -11,7 +11,7 @@ so the *reasoning* survives, while the *assertions* live where they can fail a b
 ## The two clauses
 
 **Clause 1 — every request produces a root span carrying the request-level fields.**
-Unconditional. `method`, `path`, `version`, and `profile_id` once the request is authenticated.
+Unconditional. `method`, `path`, `version`, and `profile_id` once the request is authenticated. Two more are deferred and surface-specific: `relay_trust` (the API, on a relay-shaped request) and `auth_failure` (the MCP edge, when it refuses a token).
 Plus, **when the caller sent them**, the inbound trace-context fields (`ROOT_TRACE_FIELDS`).
 
 That last qualifier is the one exception to clause 1's unconditional shape, and it is not a
@@ -48,8 +48,8 @@ requires the carrying span **not** to be the root, identified by the absence of 
 
 | Span | Created by | Fields |
 |---|---|---|
-| `http_request` | `apply_transport_layers`, `crates/temper-api/src/routes/mod.rs` | `method`, `path`, `version`, `profile_id` (deferred), plus `ROOT_TRACE_FIELDS` (deferred) |
-| `mcp_request` | `build_router`, `crates/temper-mcp-server/src/router.rs` | same set; `profile_id` recorded in `service.rs` on profile resolution |
+| `http_request` | `apply_transport_layers`, `crates/temper-api/src/routes/mod.rs` | `method`, `path`, `version`, `profile_id` (deferred), `relay_trust` (deferred, `relay_trust` middleware: `trusted` / `no_credential` / `invalid_credential` / `carrier_missing` / `carrier_refused`), plus `ROOT_TRACE_FIELDS` (deferred) |
+| `mcp_request` | `build_router`, `crates/temper-mcp-server/src/router.rs` | same declared set (one macro); `profile_id` and `relay_trust` stay empty here (the edge resolves no profile and checks no relay credential); `auth_failure` (deferred, `require_mcp_auth`: `missing_bearer` / `unknown_kid` / `expired` / `invalid_audience` / … / `malformed`) |
 | act spans | `#[act_span]` (`temper-macros`) on each write command in `crates/temper-services/src/backend/db_backend.rs` | `ACT_SPAN_FIELDS` — `correlation_id`, `invocation_id` (both deferred) |
 
 Act spans take the **method name** as the span name (`update_resource`, `set_facet`, …) rather than a

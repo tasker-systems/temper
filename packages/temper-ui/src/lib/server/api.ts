@@ -1,5 +1,6 @@
 import { activeTraceparent } from '@tasker-systems/temper-telemetry-ts';
 import { env } from '$env/dynamic/private';
+import { EDGE_PROXY_HEADER, edgeProxySecret } from './edge-proxy';
 import { jsonBody } from './json-body';
 
 // Read at runtime (not build-inlined) so the upstream API origin is configured
@@ -9,15 +10,21 @@ import { jsonBody } from './json-body';
 const API_BASE_URL = env.API_BASE_URL ?? '';
 
 /**
- * Merge the active UI request span's `traceparent` into an outbound header set, so the
- * server-side data loaders propagate the span to temper-api. This is the SSR half of
- * closing the "internal dangle": unlike the reverse proxy, these loader fetches carried
- * no trace context at all. No-op when span export is disabled. See `temper-telemetry-ts`
- * and task `019fbf24`.
+ * The headers every loader request to temper-api carries beyond its own.
+ *
+ * - The active UI request span's `traceparent`, so the loaders propagate the span to the API:
+ *   the SSR half of closing the "internal dangle" (the reverse proxy sets it separately). Absent
+ *   when span export is disabled. See `temper-telemetry-ts` and task `019fbf24`.
+ * - The edge-proxy marker, when configured, so the API's per-IP edge rules exempt these
+ *   requests as they exempt the proxy's (see `edge-proxy.ts`).
  */
-function traced(headers: Record<string, string>): Record<string, string> {
+export function outbound(headers: Record<string, string>): Record<string, string> {
+	const out = { ...headers };
 	const traceparent = activeTraceparent();
-	return traceparent ? { ...headers, traceparent } : headers;
+	if (traceparent) out.traceparent = traceparent;
+	const marker = edgeProxySecret();
+	if (marker) out[EDGE_PROXY_HEADER] = marker;
+	return out;
 }
 
 export class ApiError extends Error {
@@ -34,7 +41,7 @@ export class ApiError extends Error {
 
 export async function apiGet<T>(path: string, accessToken: string): Promise<T> {
 	const res = await fetch(`${API_BASE_URL}${path}`, {
-		headers: traced({ Authorization: `Bearer ${accessToken}` }),
+		headers: outbound({ Authorization: `Bearer ${accessToken}` }),
 	});
 	if (!res.ok) {
 		const body = await res.json().catch(() => ({}));
@@ -50,7 +57,7 @@ export async function apiGet<T>(path: string, accessToken: string): Promise<T> {
 export async function apiPost<T>(path: string, accessToken: string, body: unknown): Promise<T> {
 	const res = await fetch(`${API_BASE_URL}${path}`, {
 		method: 'POST',
-		headers: traced({
+		headers: outbound({
 			Authorization: `Bearer ${accessToken}`,
 			'Content-Type': 'application/json',
 		}),
@@ -70,7 +77,7 @@ export async function apiPost<T>(path: string, accessToken: string, body: unknow
 export async function apiPatch<T>(path: string, accessToken: string, body: unknown): Promise<T> {
 	const res = await fetch(`${API_BASE_URL}${path}`, {
 		method: 'PATCH',
-		headers: traced({
+		headers: outbound({
 			Authorization: `Bearer ${accessToken}`,
 			'Content-Type': 'application/json',
 		}),
@@ -90,7 +97,7 @@ export async function apiPatch<T>(path: string, accessToken: string, body: unkno
 export async function apiDelete(path: string, accessToken: string): Promise<void> {
 	const res = await fetch(`${API_BASE_URL}${path}`, {
 		method: 'DELETE',
-		headers: traced({ Authorization: `Bearer ${accessToken}` }),
+		headers: outbound({ Authorization: `Bearer ${accessToken}` }),
 	});
 	if (!res.ok) {
 		const body = await res.json().catch(() => ({}));

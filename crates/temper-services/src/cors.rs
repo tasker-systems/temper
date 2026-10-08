@@ -12,7 +12,7 @@
 //! so. Two hand-assembled stacks are what let that happen, so there is now one function and the
 //! surfaces call it.
 
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowHeaders, Any, CorsLayer};
 
 /// Read `CORS_ORIGINS` — comma-separated, trimmed, empties dropped. The one parse both surfaces'
 /// boots run, so the allowlist the API applies and the one the MCP server applies cannot differ
@@ -40,7 +40,10 @@ pub fn parse_cors_origins(lookup: impl Fn(&str) -> Option<String>) -> Vec<String
 /// - **no origins configured** — deny all cross-origin requests. Set `CORS_ORIGINS=*` for
 ///   permissive mode in development.
 /// - **exactly `*`** — permissive.
-/// - **an allowlist** — those origins, any method, any header.
+/// - **an allowlist** — those origins, any method, and the request headers the preflight names,
+///   echoed back. Echoed rather than `*`: the Fetch standard never lets the `*` wildcard cover
+///   `Authorization`, so a `*` answer would bar an allowlisted browser client from sending its
+///   bearer.
 ///
 /// An origin that fails to parse is skipped rather than fataled, which means a typo narrows the
 /// allowlist instead of widening it.
@@ -58,6 +61,6 @@ pub fn cors_layer(cors_origins: &[String]) -> CorsLayer {
                     .collect::<Vec<_>>(),
             )
             .allow_methods(Any)
-            .allow_headers(Any)
+            .allow_headers(AllowHeaders::mirror_request())
     }
 }

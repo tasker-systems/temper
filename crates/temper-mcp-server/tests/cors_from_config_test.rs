@@ -125,10 +125,11 @@ fn header_of(response: &axum::response::Response, name: header::HeaderName) -> O
 #[tokio::test]
 async fn an_unconfigured_preflight_is_answered_before_auth_and_grants_nothing() {
     let response = preflight(vec![]).await;
-    assert_ne!(
-        response.status(),
-        StatusCode::UNAUTHORIZED,
-        "the preflight reached require_mcp_auth; the CORS layer must answer it"
+    assert!(
+        response.status().is_success(),
+        "the CORS layer must answer the preflight itself; {} means it reached the stack below \
+         (401 is require_mcp_auth)",
+        response.status()
     );
     assert_eq!(
         header_of(&response, header::ACCESS_CONTROL_ALLOW_ORIGIN),
@@ -137,10 +138,12 @@ async fn an_unconfigured_preflight_is_answered_before_auth_and_grants_nothing() 
     );
 }
 
-/// An allowlisted origin's preflight is granted, including the `authorization` header the real
-/// request carries — without it a browser client could not send its bearer.
+/// An allowlisted origin's preflight is granted, naming the `authorization` header the real
+/// request carries, and allows no credentials.
+/// FAILS IF: the answer is `*`, which the Fetch standard never lets cover `Authorization`, so a
+/// browser client could not send its bearer; or credentials become allowed.
 #[tokio::test]
-async fn an_allowlisted_preflight_grants_the_origin_and_the_bearer_header() {
+async fn an_allowlisted_preflight_grants_the_origin_and_names_the_bearer_header() {
     let response = preflight(vec![PROBE_ORIGIN.to_string()]).await;
     assert_eq!(
         header_of(&response, header::ACCESS_CONTROL_ALLOW_ORIGIN).as_deref(),
@@ -150,8 +153,15 @@ async fn an_allowlisted_preflight_grants_the_origin_and_the_bearer_header() {
         .unwrap_or_default()
         .to_ascii_lowercase();
     assert!(
-        allowed_headers.contains("authorization") || allowed_headers == "*",
-        "the bearer header must be allowed for an allowlisted origin: {allowed_headers:?}"
+        allowed_headers
+            .split(',')
+            .any(|h| h.trim() == "authorization"),
+        "the bearer header must be named for an allowlisted origin: {allowed_headers:?}"
+    );
+    assert_eq!(
+        header_of(&response, header::ACCESS_CONTROL_ALLOW_CREDENTIALS),
+        None,
+        "the allowlist arm must not allow credentials"
     );
 }
 

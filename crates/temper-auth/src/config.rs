@@ -137,10 +137,9 @@ pub enum AuthConfigError {
     AudienceNotUri,
 
     #[error(
-        "{0} is set but weak: it must be at least 16 non-whitespace characters — a human-generated \
-         value short enough to guess or a committed test constant collapses the privilege split \
-         `TEMPER_MCP_SERVICE_SECRET` exists to enforce inside a deployment. Generate it: \
-         `openssl rand -base64 32`."
+        "{0} is set but weak: it must be at least 16 non-whitespace characters. A human-chosen \
+         value short enough to guess, or a committed test constant, hands whoever guesses it the \
+         capability {0} gates. Generate it: `openssl rand -base64 32`."
     )]
     WeakSharedSecret(&'static str),
 }

@@ -2,9 +2,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { gzipSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { EDGE_PROXY_HEADER } from './edge-proxy';
 import {
 	buildUpstreamUrl,
-	EDGE_PROXY_HEADER,
 	forwardRequest,
 	isProxiedPath,
 	isSelfReferentialUpstream,

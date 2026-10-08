@@ -34,7 +34,7 @@ pub async fn require_mcp_auth(
 ) -> Response {
     let token = match extract_bearer(&request) {
         Some(t) => t,
-        None => return unauthorized(&state),
+        None => return refuse(&state, "missing_bearer"),
     };
 
     let vk = match state.jwks_store.get_decoding_key_for_token(&token).await {
@@ -47,7 +47,7 @@ pub async fn require_mcp_auth(
         Err(KeyLookupError::UnknownKid(kid)) => {
             // Unverified-header value: attacker-chosen length. Bounded.
             tracing::debug!(kid = %temper_services::error::bounded(&kid), "token names an unpublished kid");
-            return unauthorized(&state);
+            return refuse(&state, "unknown_kid");
         }
         Err(e) => {
             tracing::error!("JWKS retrieval failed: {e}");
@@ -92,8 +92,35 @@ pub async fn require_mcp_auth(
             // own JWT-failure line is: an exported line anyone can trigger with a garbage bearer
             // under a published `kid` is a log-volume lever (the `UnknownKid` precedent above).
             tracing::debug!(error = %e, "MCP JWT validation failed");
-            unauthorized(&state)
+            refuse(&state, jwt_failure(e.kind()))
         }
+    }
+}
+
+/// Refuse with the 401, recording why on the `mcp_request` root span as `auth_failure`.
+///
+/// The reason is what an operator needs to diagnose a wave of 401s (a misconfigured audience
+/// reads `invalid_audience`, a stale client `expired`), and a span field carries it at no extra
+/// volume: every request already exports its root span, while a log line per failure is a lever
+/// any caller can pull with a garbage bearer. The vocabulary is closed — nothing from the token
+/// is recorded.
+fn refuse(state: &McpEdgeState, reason: &'static str) -> Response {
+    tracing::Span::current().record("auth_failure", reason);
+    unauthorized(state)
+}
+
+/// The closed `auth_failure` value for a token that did not verify.
+fn jwt_failure(kind: &jsonwebtoken::errors::ErrorKind) -> &'static str {
+    use jsonwebtoken::errors::ErrorKind;
+    match kind {
+        ErrorKind::ExpiredSignature => "expired",
+        ErrorKind::ImmatureSignature => "not_yet_valid",
+        ErrorKind::InvalidAudience => "invalid_audience",
+        ErrorKind::InvalidIssuer => "invalid_issuer",
+        ErrorKind::InvalidSignature => "invalid_signature",
+        ErrorKind::InvalidAlgorithm => "invalid_algorithm",
+        ErrorKind::MissingRequiredClaim(_) => "missing_claim",
+        _ => "malformed",
     }
 }
 
@@ -114,4 +141,27 @@ fn extract_bearer(request: &Request<Body>) -> Option<String> {
     let h = request.headers().get(header::AUTHORIZATION)?;
     let v = h.to_str().ok()?;
     v.strip_prefix("Bearer ").map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jsonwebtoken::errors::{Error, ErrorKind};
+
+    /// The reasons an operator acts on each get their own value; everything else is
+    /// `malformed`, never text from the token.
+    /// FAILS IF: an expired or wrong-audience token stops reading as itself.
+    #[test]
+    fn each_actionable_jwt_failure_names_itself() {
+        let cases = [
+            (ErrorKind::ExpiredSignature, "expired"),
+            (ErrorKind::InvalidAudience, "invalid_audience"),
+            (ErrorKind::InvalidIssuer, "invalid_issuer"),
+            (ErrorKind::InvalidSignature, "invalid_signature"),
+            (ErrorKind::InvalidToken, "malformed"),
+        ];
+        for (kind, want) in cases {
+            assert_eq!(jwt_failure(Error::from(kind).kind()), want);
+        }
+    }
 }
