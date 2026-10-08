@@ -23,19 +23,21 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.6.0 — unreleased
-- **A cogmap or context materialize requested through the API recomputes erased members' centroids first**
-  `materialize_on_threshold` (`POST …/materialize` and the MCP materialize tool) now recomputes,
-  over their survivors, the centroid of every live region of the anchor's default lens that still
-  lists an erased resource, before it materializes, as the region drain's tick already did. A
-  materialize in flight while a resource was erased can leave that resource a live member with its
-  share in the centroid. An author's materialize before the next drain tick then folded the region
-  as it stood, and a folded centroid is never recomputed, so the erased resource's vector stayed in
-  the database. The response shape is unchanged. The test-only `temper-api` change is a doc
-  comment. Who observes: nobody through the API (folded centroids are not served); an operator
-  reading the database. User-visible: no. Release relevance: behavioral.
+- **A materialize recomputes erased members' centroids under its anchor lock, before it folds**
+  Both materialize paths (the region drain's and `POST …/materialize` / the MCP materialize tool)
+  now recompute, inside their transaction and after taking the anchor row, the centroid of every
+  live region of their lens that still lists an erased resource, then fold. A materialize in flight
+  while a resource was erased can commit a live region that still lists it with its share in the
+  centroid; a later materialize folded that region as it stood, and folded centroids are never
+  recomputed, so the erased resource's vector stayed in the database. Migration `20261008200000`
+  adds `_region_recompute_centroids` and `_region_recompute_erased_member_centroids`, and
+  `_resource_erasure_recompute_live_centroids` now calls the first (same effect). Response shapes
+  are unchanged. The test-only `temper-api` change is a doc comment. Who observes: nobody through
+  the API (folded centroids are not served); an operator reading the database. User-visible: no.
+  Release relevance: behavioral.
 pr: self
 classes: behavioral
-surfaces: internal
+surfaces: internal, schema
 status: signal-only
 - **`TEMPER_EDGE_PROXY_SECRET`: the web UI and the MCP relay mark the requests they send the API**
   When the new optional variable is set, temper-ui (its reverse proxy and its server-side data

@@ -194,6 +194,7 @@ pub async fn materialize(
     // a full pass folds every prior live region AND component for this lens, then recreates them —
     // EXCEPT the regions whose member set is unchanged, which survive under their own ids and are
     // refreshed in place.
+    recompute_erased_member_centroids(&mut tx, anchor, s.lens_id).await?;
     fold_live_regions(&mut tx, anchor, s.lens_id, ev, &keep).await?;
     fold_live_components(&mut tx, anchor, s.lens_id, ev).await?;
 
@@ -293,6 +294,7 @@ pub async fn incremental_materialize(
 
     // fold the stale components and their regions; leave matched components + their regions live, and
     // leave the reused regions of the STALE components live too — their member sets did not change.
+    recompute_erased_member_centroids(&mut tx, anchor, s.lens_id).await?;
     fold_components(&mut tx, &diff.stale, ev, &keep).await?;
 
     let zero = zero_centroid();
@@ -532,6 +534,29 @@ async fn last_materialize_watermark(
         Some(current_ev.uuid()),
     )
     .await
+}
+
+/// Recompute over its survivors the centroid of every live region of (anchor, lens) that lists an
+/// erased resource. Both materialize paths call it after `fire` and before they fold: a folded
+/// region is never recomputed, so one folded with an erased resource's share would keep it for
+/// good. Here the transaction already holds the anchor row (`_project_region_materialized` updated
+/// it), so every materialize that took it first has committed, and its regions are visible to this
+/// statement. A recompute before the lock could miss a region such a materialize had not yet
+/// committed.
+async fn recompute_erased_member_centroids(
+    tx: &mut PgConnection,
+    anchor: HomeAnchor,
+    lens_id: LensId,
+) -> Result<()> {
+    sqlx::query_scalar!(
+        r#"SELECT _region_recompute_erased_member_centroids($1, $2, $3) AS "recomputed!""#,
+        anchor.table(),
+        anchor.uuid(),
+        lens_id.uuid(),
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    Ok(())
 }
 
 /// Fold every live region for (anchor, lens) EXCEPT those in `keep` — the regions being reused, whose

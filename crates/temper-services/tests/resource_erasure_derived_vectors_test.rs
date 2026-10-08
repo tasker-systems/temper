@@ -1158,11 +1158,12 @@ async fn a_tick_that_finds_an_erased_live_member_recomputes_then_reforms(pool: P
     assert_repaired(&pool, &p, &held_r).await;
 }
 
-/// (k2) The endpoint materialize (`POST …/materialize`, and the MCP tool) recomputes first too.
-/// After the in-flight race, an author who materializes before the drain's next tick reaches the
-/// same fold the tick does, and a folded centroid is never recomputed afterwards.
+/// (k2) The endpoint materialize (`POST …/materialize`, and the MCP tool) recomputes before it folds
+/// too. After the in-flight race, an author who materializes before the drain's next tick reaches
+/// the same fold the tick does, and a folded centroid is never recomputed afterwards.
 ///
-/// FAILS without the endpoint's recompute: the region folds with R's share, for good.
+/// FAILS without the incremental materialize's in-transaction recompute: the region folds with R's
+/// share, for good.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn an_endpoint_materialize_after_the_race_recomputes_then_reforms(pool: PgPool) {
     let p = planted(&pool).await;
@@ -1212,6 +1213,50 @@ async fn an_endpoint_materialize_after_the_race_recomputes_then_reforms(pool: Pg
     );
 
     assert_repaired(&pool, &p, &held_r).await;
+}
+
+/// (k3) A full-pass materialize recomputes before it folds too. It folds every live region of the
+/// lens, so after the race it folds the R-holding region whatever the caller did beforehand; the
+/// recompute runs inside its transaction, under the anchor lock.
+///
+/// FAILS without the full pass's recompute: the region folds with R's share, for good.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_full_materialize_after_the_race_recomputes_then_folds(pool: PgPool) {
+    let p = planted(&pool).await;
+    erase_under_an_inflight_settling(&pool, &p, InFlight::Tick).await;
+
+    let held_r: Vec<Uuid> = live_region_holding(&pool, p.ctx, &[p.r.uuid()])
+        .await
+        .into_iter()
+        .collect();
+    assert!(
+        !held_r.is_empty(),
+        "precondition: R is still a live member after the in-flight tick (the race happened)"
+    );
+    for region in &held_r {
+        sqlx::query("UPDATE kb_cogmap_regions SET centroid = $2::vector WHERE id = $1")
+            .bind(region)
+            .bind(&p.pre_act_centroid)
+            .execute(&pool)
+            .await
+            .expect("plant R's share in the R-holding centroid");
+    }
+
+    let (_, emitter) = principal(&pool).await;
+    materialize(&pool, p.ctx, emitter).await;
+
+    for region in &held_r {
+        assert!(
+            region_is_folded(&pool, *region).await,
+            "a full pass folds every live region of the lens"
+        );
+        let survivors = member_mean(&pool, *region).await;
+        let gap = distance(&pool, &region_centroid(&pool, *region).await, &survivors).await;
+        assert!(
+            gap < SAME,
+            "that region must fold with its survivors' mean (distance {gap})"
+        );
+    }
 }
 
 /// (l) The post-completion requeue: while an erased resource is a live member of an anchor's
