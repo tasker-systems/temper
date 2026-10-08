@@ -46,6 +46,31 @@ use crate::services::{connection_service, delivery_service};
 /// the ledger's subject matter, not an authority act.
 const WEBHOOK_RECEIVED_TYPE: &str = "webhook_received";
 
+/// The `payload_version` of a webhook stored as `{"body": <verbatim>}`. Version 1 rows, written
+/// before this, hold the body itself as the payload.
+///
+/// Wrapped because the ledger reads some top-level payload keys as ids: `kb_events` casts
+/// `resource_id`, `block_id`, `edge_id` and `owner.id` to uuid in expression indexes, and every
+/// trail-shaped read matches a `domain` event by them. A remote body is not temper's to shape, so
+/// stored bare it could refuse to insert (a non-uuid value fails the index's cast) or file itself
+/// under a resource's trail (a uuid one). Under `body`, no key of the remote's reaches the top
+/// level, whatever key a later index reads. Read a stored webhook through [`webhook_body`].
+pub const WEBHOOK_PAYLOAD_VERSION: i32 = 2;
+
+/// The remote's verbatim body from a stored `webhook_received` payload, for either version: the
+/// payload itself at version 1, its `body` at [`WEBHOOK_PAYLOAD_VERSION`]. `None` for a version
+/// this binary does not know, or a version-2 payload without a body.
+pub fn webhook_body(
+    payload: &serde_json::Value,
+    payload_version: i32,
+) -> Option<&serde_json::Value> {
+    match payload_version {
+        1 => Some(payload),
+        WEBHOOK_PAYLOAD_VERSION => payload.get("body"),
+        _ => None,
+    }
+}
+
 /// Where the provider's event name came from — recorded on the event so the ledger row says
 /// where its own routing input originated.
 ///
@@ -123,7 +148,7 @@ pub fn event_type_header(provider: &str) -> Option<&'static str> {
 /// remote's own event name (e.g. GitHub's `pull_request`, Linear's `issue.updated`) and the
 /// provenance of that name ([`EventTypeSource`]) — both ride `metadata`, not `payload`, so the
 /// verbatim payload is preserved untouched. `payload` is the remote's verbatim body, stored
-/// as-is in `kb_events.payload`.
+/// whole under `body` at [`WEBHOOK_PAYLOAD_VERSION`].
 ///
 /// Returns the appended event id. Never performs egress. Never UPDATEs `kb_events`.
 pub async fn receive_webhook(
@@ -156,6 +181,8 @@ pub async fn receive_webhook(
     // The event and its delivery rows move together. A webhook either lands as one event with
     // its full fan of deliveries or lands not at all — there is no window in which the routing
     // exists and the rows that make it readable do not.
+    let stored = serde_json::json!({ "body": payload });
+
     let mut tx = pool.begin().await?;
 
     // One INSERT via the chokepoint writer. `_event_append` looks up the event type's
@@ -173,10 +200,10 @@ pub async fn receive_webhook(
         WEBHOOK_RECEIVED_TYPE,
         conn.emitter_entity_id,
         conn.home_context_id,
-        payload,
+        &stored,
         &references_json,
         None::<Uuid> as Option<Uuid>, // correlation: self-roots inside _event_append
-        1i32,                         // payload_version
+        WEBHOOK_PAYLOAD_VERSION,
         // metadata: the event name AND where it came from. See `EventTypeSource` — the
         // provenance is written even though only one source is reachable today, so events
         // that predate a second rule are not retro-indistinguishable from ones that used it.
@@ -766,13 +793,108 @@ mod tests {
         .await
         .expect("receive");
 
-        let stored: serde_json::Value =
-            sqlx::query_scalar!(r#"SELECT payload FROM kb_events WHERE id = $1"#, event_id,)
-                .fetch_one(&pool)
-                .await
-                .expect("read payload");
+        let stored = sqlx::query!(
+            r#"SELECT payload, payload_version FROM kb_events WHERE id = $1"#,
+            event_id,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read payload");
 
-        assert_eq!(stored, payload, "payload preserved verbatim");
+        assert_eq!(stored.payload_version, WEBHOOK_PAYLOAD_VERSION);
+        assert_eq!(
+            stored.payload,
+            serde_json::json!({ "body": payload }),
+            "the body is stored whole under `body`"
+        );
+        assert_eq!(
+            webhook_body(&stored.payload, stored.payload_version),
+            Some(&payload),
+            "payload preserved verbatim"
+        );
+    }
+
+    /// A version-1 row, written before intake wrapped bodies, is its own body.
+    #[test]
+    fn webhook_body_reads_both_versions() {
+        let body = serde_json::json!({ "action": "opened" });
+        assert_eq!(webhook_body(&body, 1), Some(&body));
+        assert_eq!(
+            webhook_body(
+                &serde_json::json!({ "body": body }),
+                WEBHOOK_PAYLOAD_VERSION
+            ),
+            Some(&body)
+        );
+        assert_eq!(
+            webhook_body(&body, 3),
+            None,
+            "an unknown version is not guessed at"
+        );
+    }
+
+    /// A remote body carrying a top-level key the ledger reads as an id is received and routes.
+    /// Stored bare, a non-uuid value failed the `kb_events` expression index's cast, so intake
+    /// refused the webhook outright.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_body_carrying_an_id_key_is_received_and_routes(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let team = seed_team(&pool, admin).await;
+        let conn = seed_connection(&pool, Some(team), admin).await;
+        grant_reach(&pool, admin, conn, team).await;
+        create_subscription(
+            &pool,
+            admin,
+            "kb_teams",
+            team,
+            team,
+            conn,
+            SubscriptionSelector::GitHubRepository {
+                repo: GITHUB_REPO.into(),
+                event_types: vec!["pull_request".into()],
+            },
+        )
+        .await;
+
+        let cases = [
+            ("resource_id", serde_json::json!("PROJ-123")),
+            ("block_id", serde_json::json!(42)),
+            ("edge_id", serde_json::json!("not-a-uuid")),
+            ("owner", serde_json::json!({ "id": "octocat" })),
+            // Stored bare, a uuid value would file the webhook under that resource's trail.
+            ("resource_id", serde_json::json!(Uuid::now_v7())),
+        ];
+        for (key, value) in cases {
+            let mut payload = github_pr_payload(GITHUB_REPO);
+            payload[key] = value;
+            let event_id = receive_webhook(
+                &pool,
+                conn,
+                ProviderEvent::from_header("pull_request"),
+                &payload,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("a body with top-level {key} is received: {e:?}"));
+
+            let stored: serde_json::Value =
+                sqlx::query_scalar!(r#"SELECT payload FROM kb_events WHERE id = $1"#, event_id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("read event");
+            assert_eq!(
+                stored,
+                serde_json::json!({ "body": payload }),
+                "{key}: the body is stored whole under `body`"
+            );
+            let deliveries: i64 = sqlx::query_scalar!(
+                r#"SELECT count(*) AS "c!" FROM kb_subscription_deliveries WHERE event_id = $1"#,
+                event_id
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("count deliveries");
+            assert_eq!(deliveries, 1, "{key}: routing reads the original body");
+        }
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
