@@ -88,6 +88,16 @@ const POST_COMMIT_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 /// The SQLSTATE Postgres raises when it resolves a deadlock by aborting one transaction.
 pub(super) const DEADLOCK_DETECTED: &str = "40P01";
 
+/// The SQLSTATE of a unique violation, retryable for one constraint only (below).
+const UNIQUE_VIOLATION: &str = "23505";
+
+/// The redaction rows' key. Two acts whose subjects share trail events, the two ends of one edge,
+/// both derive the shared events' paths; the second to commit violates this key on the rows the
+/// first just wrote. A retry re-derives against the rewritten ledger, finds those paths already at
+/// their sentinels, and names them no more. A completion pass folds no edge, so it takes no edge
+/// lock that would have serialized the two first (found by the code review, 2026-10-08).
+const REDACTIONS_KEY: &str = "\"kb_event_field_redactions_pkey\"";
+
 /// The SQLSTATE of a bare `RAISE EXCEPTION` (no ERRCODE), which every raise the classifier
 /// matches by message is.
 pub(super) const RAISE_EXCEPTION: &str = "P0001";
@@ -531,7 +541,9 @@ fn classify_act_error(err: &sqlx::Error) -> ActFailure {
 /// `p_resource is required` and `p_request_ref is required` are `Other`: the service always
 /// supplies both, so either raise is a bug here, not a state of the resource.
 fn classify_act_failure(code: Option<&str>, message: &str) -> ActFailure {
-    if code == Some(DEADLOCK_DETECTED) {
+    if code == Some(DEADLOCK_DETECTED)
+        || (code == Some(UNIQUE_VIOLATION) && message.contains(REDACTIONS_KEY))
+    {
         return ActFailure::Retryable;
     }
     // Every message arm is a bare RAISE: the same text under any other SQLSTATE is not the act's.
@@ -731,7 +743,8 @@ async fn release_struck_bytes(
 /// The [`SystemAdmin`] proof is the gate, as for the act; the survey records nothing (a survey
 /// attempt is not an erasure request). An unknown resource is `NotFound`, and an already-erased
 /// one short-circuits to a minimal survey with no plan: the plan still counts rows on a husk,
-/// which would misstate what an act could reach.
+/// which would misstate what an act could reach. What an act CAN still reach on a husk is its
+/// completion pass (D12), named by `completion_fields` from the derivation the act runs.
 pub async fn survey_resource_erasure(
     pool: &PgPool,
     _admin: &SystemAdmin,
@@ -740,11 +753,21 @@ pub async fn survey_resource_erasure(
     match erased_state(pool, resource).await? {
         None => return Err(ApiError::NotFound(RESOURCE_NOT_FOUND.to_string())),
         Some(true) => {
+            let raw = sqlx::query_scalar!(
+                r#"SELECT resource_erasure_completion_fields($1) AS "fields!: serde_json::Value""#,
+                resource.uuid(),
+            )
+            .fetch_one(pool)
+            .await?;
+            let completion_fields = serde_json::from_value(raw).map_err(|e| {
+                ApiError::Internal(format!("resource erasure completion fields shape: {e}"))
+            })?;
             return Ok(ResourceErasureSurvey {
                 resource,
                 already_erased: true,
                 plan: None,
-            })
+                completion_fields,
+            });
         }
         Some(false) => {}
     }
@@ -784,6 +807,7 @@ pub async fn survey_resource_erasure(
             other_author_edge_properties,
             blob_co_links,
         }),
+        completion_fields: Vec::new(),
     })
 }
 
@@ -1040,6 +1064,26 @@ mod classifier_tests {
         assert_eq!(classify_act_failure(None, &msg), ActFailure::Other);
         assert_eq!(
             classify_act_failure(Some("23505"), "resource_erasure_execute: already erased"),
+            ActFailure::Other
+        );
+    }
+
+    // FAILS IF two acts racing over a shared edge's events answer 500 rather than retry, or if
+    // any other unique violation is retried.
+    #[test]
+    fn a_collision_on_the_redaction_rows_is_retryable_and_no_other_unique_violation_is() {
+        assert_eq!(
+            classify_act_failure(
+                Some("23505"),
+                "duplicate key value violates unique constraint \"kb_event_field_redactions_pkey\""
+            ),
+            ActFailure::Retryable
+        );
+        assert_eq!(
+            classify_act_failure(
+                Some("23505"),
+                "duplicate key value violates unique constraint \"kb_block_provenance_pkey\""
+            ),
             ActFailure::Other
         );
     }
@@ -1813,6 +1857,60 @@ mod tests {
             .expect("answers");
         assert!(survey.already_erased);
         assert_eq!(survey.plan, None, "no plan on a husk");
+        assert_eq!(
+            survey.completion_fields,
+            vec![],
+            "an act under the ledger exception leaves nothing to complete"
+        );
+    }
+
+    /// ── WITNESS 15 at the doors: the completion pass ───────────────────────────────────────
+    /// FAILS IF a husk erased under cut 1 cannot be completed through the doors, or if the
+    /// survey's `completion_fields` is not what the pass then rewrites, or if a completed husk is
+    /// not refused, on the record, as `already_erased`. The cut-1 husk is made as the cut-1 act
+    /// made one: the projection-side body under a record naming no `redacted_fields`.
+    #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+    async fn a_cut1_husk_surveys_its_completion_and_completes_once(pool: PgPool) {
+        let owner = principal(&pool).await;
+        let op = operator(&pool).await;
+        let r = resource(&pool, &owner, "cut-1 husk").await;
+        sqlx::query(
+            "SELECT _resource_erasure_apply_redaction($1, _event_append('resource_erased', $2, NULL, NULL, \
+                 jsonb_build_object('subject_table', 'kb_resources', 'subject_id', $1, \
+                                    'ledger_remainder', resource_erasure_survey_plan($1)->'redacted_fields')))",
+        )
+        .bind(r.uuid())
+        .bind(owner.emitter.uuid())
+        .execute(&pool)
+        .await
+        .expect("a cut-1 husk");
+
+        let survey = survey_resource_erasure(&pool, &op, r)
+            .await
+            .expect("answers");
+        assert!(survey.already_erased);
+        assert_eq!(survey.plan, None);
+        assert!(
+            survey
+                .completion_fields
+                .iter()
+                .any(|f| f.paths.iter().any(|p| p == "title")),
+            "the survey names the title the ledger still carries: {:?}",
+            survey.completion_fields
+        );
+
+        let completion = completed(execute(&pool, &op, r).await.expect("the pass runs"));
+        assert_eq!(completion.redacted_fields, survey.completion_fields);
+        assert!(completion.folded_edges.is_empty() && completion.targets.is_empty());
+        assert_eq!(events_of(&pool, "resource_erased").await, 2);
+
+        let after = survey_resource_erasure(&pool, &op, r)
+            .await
+            .expect("answers");
+        assert_eq!(after.completion_fields, vec![], "nothing is left");
+        let refusal = refused(execute(&pool, &op, r).await.expect("the door answers"));
+        assert_eq!(refusal.reason, ResourceErasureRefusalReason::AlreadyErased);
+        assert_eq!(events_of(&pool, "resource_erased").await, 2);
     }
 
     /// ── WITNESS: another principal's edge is named, with its author ─────────────────────────

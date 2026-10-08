@@ -107,6 +107,10 @@ with `--execute`.
 - An act is sent **once** and never retried by the client. If `--execute` ends in an error rather
   than an answer, whether the act ran is unknown: re-run **without** `--execute`. A resource
   already erased surveys as `already_erased`; re-issue only if the survey shows it did not land.
+- A resource erased before ledger redaction shipped still carries its text on the ledger. Its
+  survey reads `already_erased` with a non-empty `completion_fields`, and running `resource
+  --execute` again completes it: one more record, naming only `redacted_fields`. With
+  `completion_fields` empty, the act is refused `already_erased`.
 - A caller without system-admin standing is answered **404**, like the ledger.
 
 ## Maintenance

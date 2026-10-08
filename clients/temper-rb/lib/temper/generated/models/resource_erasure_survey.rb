@@ -18,6 +18,9 @@ module Temper::Generated
   class ResourceErasureSurvey < ApiModelBase
     attr_accessor :already_erased
 
+    # On an erased resource (the short-circuit), the ledger paths a completion pass would rewrite now (D12): a resource erased before the ledger exception shipped still carries its text there, and running the act again completes it. Empty when nothing is left, and then the act refuses `already_erased`; empty too from a server that predates the completion pass.
+    attr_accessor :completion_fields
+
     attr_accessor :plan
 
     # A `kb_resources.id` value.
@@ -27,6 +30,7 @@ module Temper::Generated
     def self.attribute_map
       {
         :'already_erased' => :'already_erased',
+        :'completion_fields' => :'completion_fields',
         :'plan' => :'plan',
         :'resource' => :'resource'
       }
@@ -46,6 +50,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'already_erased' => :'Boolean',
+        :'completion_fields' => :'Array<RedactedEventFields>',
         :'plan' => :'ResourceErasurePlan',
         :'resource' => :'String'
       }
@@ -78,6 +83,12 @@ module Temper::Generated
         self.already_erased = attributes[:'already_erased']
       else
         self.already_erased = nil
+      end
+
+      if attributes.key?(:'completion_fields')
+        if (value = attributes[:'completion_fields']).is_a?(Array)
+          self.completion_fields = value
+        end
       end
 
       if attributes.key?(:'plan')
@@ -142,6 +153,7 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           already_erased == o.already_erased &&
+          completion_fields == o.completion_fields &&
           plan == o.plan &&
           resource == o.resource
     end
@@ -155,7 +167,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [already_erased, plan, resource].hash
+      [already_erased, completion_fields, plan, resource].hash
     end
 
     # Builds the object from hash
