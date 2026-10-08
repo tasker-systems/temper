@@ -10,7 +10,7 @@
 //!
 //! 1. **The family's acts cross the TRUSTED path.** Driven through the real listener,
 //!    both acts' hops carry the carrier beside the service credential, and
-//!    `relay_trust` honors it (`relayed_surface_trusted`), not degrades it. This is the
+//!    `relay_trust` honors it (`relay_trust = trusted`), not degrades it. This is the
 //!    fact the family's attribution rides; the ledger half of that trusted path (a
 //!    relayed write reads back `<handle>@mcp`) is family-independent and is pinned once,
 //!    in `search_query_attribution_witness_test.rs`.
@@ -30,7 +30,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use uuid::Uuid;
 
-use common::tracing_layer::TestTracingLayer;
+use common::tracing_layer::{relay_trust_values, TestTracingLayer};
 use temper_core::types::workflow_job::{DispatchType, Persona};
 
 /// A cogmap the harness principal can read and author, joined to a team that owns a
@@ -114,7 +114,7 @@ async fn event_count(pool: &PgPool) -> i64 {
 /// With the carrier refused, these acts degrade and this witness reddens.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_familys_acts_cross_the_trusted_path(pool: PgPool) {
-    let (layer, captured) = TestTracingLayer::new();
+    let (layer, _events, spans) = TestTracingLayer::with_spans();
     let _guard = tracing_subscriber::registry().with(layer).set_default();
     let app = common::setup_relay(pool).await;
     let svc = app.mcp_relay_service().await;
@@ -140,28 +140,13 @@ async fn the_familys_acts_cross_the_trusted_path(pool: PgPool) {
     assert!(advance.is_ok(), "the advance crosses the door: {advance:?}");
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let events = captured.lock().unwrap();
-    let counted = |name: &str| {
-        events
-            .iter()
-            .filter(|e| {
-                e.fields
-                    .get("counter")
-                    .map(|c| c.contains(name))
-                    .unwrap_or(false)
-            })
-            .count()
-    };
     // Exactly the two acts' hops, both honored: the harness's own requests carry no
     // carrier, and the relay client makes no extra request, so a retried or degraded hop
     // cannot hide behind a looser count.
     assert_eq!(
-        (
-            counted("relayed_surface_trusted"),
-            counted("relayed_surface_degraded")
-        ),
-        (2, 0),
-        "both acts' carriers were honored and none degraded: (trusted, degraded)"
+        relay_trust_values(&spans.lock().unwrap()),
+        vec!["trusted", "trusted"],
+        "both acts' carriers were honored and none degraded"
     );
 }
 

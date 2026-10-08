@@ -166,6 +166,14 @@ macro_rules! root_span {
             // Filled by the auth middleware once a token resolves to a profile — a validated token
             // is not yet a profile, so this cannot be known at construction.
             profile_id = $crate::tracing::field::Empty,
+            // Filled by temper-api's relay-trust middleware on a relay-shaped request: which trust
+            // face its headers met (`trusted`, or the degrade's cause). The network door's degrade
+            // detector — a span field rather than an event so it is exported at no extra volume.
+            // Stays empty on the MCP surface, which presents the credential rather than checks it.
+            relay_trust = $crate::tracing::field::Empty,
+            // Filled by the MCP edge's JWT check when it refuses: why, from a closed vocabulary
+            // (`expired`, `invalid_audience`, …). Stays empty on success and on the API surface.
+            auth_failure = $crate::tracing::field::Empty,
             // `ROOT_TRACE_FIELDS`, filled just below from whatever headers actually arrived.
             trace_id = $crate::tracing::field::Empty,
             parent_span_id = $crate::tracing::field::Empty,
@@ -541,7 +549,14 @@ mod tests {
 
         // The request-level fields are not in ROOT_TRACE_FIELDS (that constant is inbound trace
         // context only), but a root span without them is not a root span the convention describes.
-        for field in ["method", "path", "version", "profile_id"] {
+        for field in [
+            "method",
+            "path",
+            "version",
+            "profile_id",
+            "relay_trust",
+            "auth_failure",
+        ] {
             assert!(declared.contains(&field), "root span lost `{field}`");
         }
     }

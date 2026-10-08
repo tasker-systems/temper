@@ -92,8 +92,9 @@ pub async fn query(
     // and is measured as `mcp`. Telemetry-only; the credential's documented residual already
     // covers stolen-secret `@mcp` attribution on the thief's own acts.
     // - While the API's `mcp_service_secret` is unset or mid-rotation (and the MCP edge is
-    // configured), the extension is never planted and relayed acts measure as `http` — the
-    // degrade is `debug`-silent by design, so the skew self-heals only at rotation end.
+    // configured), the extension is never planted and relayed acts measure as `http`.
+    // Mid-rotation shows on the root span as `relay_trust = invalid_credential`; unset records
+    // nothing there. Nothing re-labels the measurement; the skew self-heals at rotation end.
     // Labels are this measurement's own vocabulary, not the emitter markers: `relay_trust` plants
     // `Surface::Mcp` alone, and any other relayed surface would need its label decided here.
     let door = match relayed {

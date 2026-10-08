@@ -384,11 +384,16 @@ unset everywhere else). The relay sends the caller's bearer *plus* the service c
 origin on every tool act, and while the pool refuses redirects, the origin it was pointed at is
 trusted by construction — treat the variable as a credential-adjacent value, not a tuning knob.
 
-**Scope the MCP function's env.** The function parses the API's config (`api/mcp.rs` builds an
-`ApiConfig`), so wherever env is declared per-project rather than per-function, the MCP process also
-holds the API's other shared secrets (`INTERNAL_RECONCILE_SECRET`, `SLACK_*`, the blob store token).
-Declare per-function env if your platform supports it (Vercel: per-function environment variables) so
-a compromise of the MCP function yields only the relay credential, not the whole secret set.
+**What the MCP function's environment holds.** The function never reads `DATABASE_URL`. It
+reads its own configuration: the auth identity, `CORS_ORIGINS`, the blob variables (it reads the
+blob token itself, to serve the blob tools), `TEMPER_API_BASE_URL`, `TEMPER_MCP_SERVICE_SECRET`,
+`TEMPER_EDGE_PROXY_SECRET`, the discovery variables, and the telemetry variables. The complete
+lists are `McpServerConfig::from_lookup` and `DiscoveryConfig::from_env` in
+`crates/temper-mcp-server`. Vercel scopes environment variables to a project and an environment,
+not to a function, so the API's other shared secrets (`INTERNAL_RECONCILE_SECRET`, `SLACK_*`, the
+sweep salt) are also in its process environment, and a compromise of the MCP function would
+yield them. If your platform scopes variables per function, give the MCP function only what those
+two readers name.
 
 ### Group provisioning
 

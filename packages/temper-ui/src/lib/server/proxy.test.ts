@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { gzipSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { EDGE_PROXY_HEADER } from './edge-proxy';
 import {
 	buildUpstreamUrl,
 	forwardRequest,
@@ -84,6 +85,7 @@ describe('forwardRequest (passthrough)', () => {
 		body: string;
 		auth: string | undefined;
 		traceparent: string | undefined;
+		edgeProxy: string | undefined;
 	};
 
 	beforeAll(async () => {
@@ -97,6 +99,7 @@ describe('forwardRequest (passthrough)', () => {
 					body: Buffer.concat(chunks).toString('utf-8'),
 					auth: req.headers.authorization,
 					traceparent: req.headers.traceparent as string | undefined,
+					edgeProxy: req.headers[EDGE_PROXY_HEADER] as string | undefined,
 				};
 
 				if (req.url?.startsWith('/redirect')) {
@@ -189,6 +192,36 @@ describe('forwardRequest (passthrough)', () => {
 		await forwardRequest(base, '/api/x', '', new Request('http://ui.local/api/x'));
 		// version 00, 32-hex trace-id, 16-hex span-id, sampled.
 		expect(lastRequest.traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+	});
+
+	it('marks a relayed request with the configured edge-proxy secret', async () => {
+		await forwardRequest(base, '/api/x', '', new Request('http://ui.local/api/x'), {
+			edgeProxySecret: 'deploy-secret',
+		});
+		expect(lastRequest.edgeProxy).toBe('deploy-secret');
+	});
+
+	// A caller's own copy would otherwise ride through the proxy and claim the exemption for a
+	// request that never met this origin's rules — or, unconfigured, reach the upstream at all.
+	it("replaces a caller's edge-proxy header with the configured secret", async () => {
+		await forwardRequest(
+			base,
+			'/api/x',
+			'',
+			new Request('http://ui.local/api/x', { headers: { [EDGE_PROXY_HEADER]: 'forged' } }),
+			{ edgeProxySecret: 'deploy-secret' },
+		);
+		expect(lastRequest.edgeProxy).toBe('deploy-secret');
+	});
+
+	it("drops a caller's edge-proxy header when no secret is configured", async () => {
+		await forwardRequest(
+			base,
+			'/api/x',
+			'',
+			new Request('http://ui.local/api/x', { headers: { [EDGE_PROXY_HEADER]: 'forged' } }),
+		);
+		expect(lastRequest.edgeProxy).toBeUndefined();
 	});
 });
 

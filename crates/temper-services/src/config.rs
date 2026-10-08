@@ -599,7 +599,9 @@ fn parse_slack_link(lookup: impl Fn(&str) -> Option<String>) -> Option<SlackLink
 
 /// Every variable whose plaintext value is a standalone credential: hold the string, exercise the
 /// capability. Five gate a surface; the sixth decrypts what one of them protects; the salt keys the
-/// sensitivity sweep's stored hashes.
+/// sensitivity sweep's stored hashes; the edge-proxy marker exempts a request from the edge
+/// firewall's per-IP rules. The API never reads the marker, but it is in this process's
+/// environment, so it is held here to the same distinctness.
 ///
 /// | Variable                    | Capability it confers                                          |
 /// | --------------------------- | -------------------------------------------------------------- |
@@ -610,6 +612,7 @@ fn parse_slack_link(lookup: impl Fn(&str) -> Option<String>) -> Option<SlackLink
 /// | `BLOB_READ_WRITE_TOKEN`     | write to the provider blob store                                  |
 /// | `SLACK_VAULT_ENC_KEY`       | decrypt **every** vaulted refresh token                           |
 /// | `SENSITIVITY_SWEEP_SALT`    | confirm a guessed value against any stored sensitivity fingerprint |
+/// | `TEMPER_EDGE_PROXY_SECRET`  | skip the edge firewall's per-IP rate limits on the API's host     |
 ///
 /// The order is load-bearing only in that it fixes which pair a multi-way collision reports, so the
 /// error is deterministic rather than dependent on iteration order.
@@ -621,7 +624,7 @@ fn parse_slack_link(lookup: impl Fn(&str) -> Option<String>) -> Option<SlackLink
 /// stored grant. And `openssl rand -base64 32` is the documented generator for the vault key
 /// (`parse_slack_link` above says so), which makes "generate once, paste everywhere" the exact
 /// operator error this guards.
-const SHARED_SECRET_VARS: [&str; 8] = [
+const SHARED_SECRET_VARS: [&str; 9] = [
     "INTERNAL_RECONCILE_SECRET",
     "EMBED_DISPATCH_SECRET",
     "SLACK_LINK_SECRET",
@@ -630,17 +633,19 @@ const SHARED_SECRET_VARS: [&str; 8] = [
     "SLACK_VAULT_ENC_KEY",
     "TEMPER_MCP_SERVICE_SECRET",
     "SENSITIVITY_SWEEP_SALT",
+    "TEMPER_EDGE_PROXY_SECRET",
 ];
 
 /// The gate secrets this process reads, each held to `temper_auth::config`'s strength floor.
 /// Only the secrets in this arc's scope are refused — the e2e harness's `e2e-mcp-relay-service-
 /// credential` constant is excluded from every check by being a *harness* constant, but
 /// a production deployment pasting it would now refuse to boot, as it should.
-const STRENGTH_CHECKED_SECRETS: [&str; 4] = [
+const STRENGTH_CHECKED_SECRETS: [&str; 5] = [
     "TEMPER_MCP_SERVICE_SECRET",
     "INTERNAL_RECONCILE_SECRET",
     "EMBED_DISPATCH_SECRET",
     "SLACK_MINT_SECRET",
+    "TEMPER_EDGE_PROXY_SECRET",
 ];
 
 fn check_shared_secret_strength(
@@ -882,6 +887,44 @@ mod tests {
             check_shared_secret_strength(&lookup_of(&pairs)),
             Err(ConfigError::Auth(
                 crate::auth_config::AuthConfigError::WeakSharedSecret("TEMPER_MCP_SERVICE_SECRET")
+            )),
+        );
+    }
+
+    // FAILS IF: a short edge-proxy marker boots, or the refusal quotes it. The marker is the
+    // value an operator copies into firewall rules by hand, and the one most likely to be pasted
+    // short; the boot must say which variable and never what it holds.
+    #[test]
+    fn a_short_edge_proxy_secret_refuses_to_boot_without_quoting_it() {
+        let pairs = with_secrets(&[("TEMPER_EDGE_PROXY_SECRET", "short-marker".to_string())]);
+        let err = check_shared_secret_strength(&lookup_of(&pairs)).unwrap_err();
+        assert_eq!(
+            err,
+            ConfigError::Auth(crate::auth_config::AuthConfigError::WeakSharedSecret(
+                "TEMPER_EDGE_PROXY_SECRET"
+            ))
+        );
+        let msg = err.to_string();
+        assert!(msg.contains("TEMPER_EDGE_PROXY_SECRET"), "{msg}");
+        assert!(
+            !msg.contains("short-marker"),
+            "must NEVER print a secret: {msg}"
+        );
+    }
+
+    // FAILS IF: the edge-proxy marker may share a value with the relay's service credential.
+    // The marker is copied into firewall configuration, where the credential must never be.
+    #[test]
+    fn an_edge_proxy_secret_equal_to_the_service_secret_refuses_to_boot() {
+        let shared = "a-real-32-char-random-value-here";
+        assert_eq!(
+            check_secret_distinctness(env(&[
+                ("TEMPER_MCP_SERVICE_SECRET", shared),
+                ("TEMPER_EDGE_PROXY_SECRET", shared),
+            ])),
+            Err(ConfigError::SecretCollision(
+                "TEMPER_MCP_SERVICE_SECRET",
+                "TEMPER_EDGE_PROXY_SECRET"
             )),
         );
     }

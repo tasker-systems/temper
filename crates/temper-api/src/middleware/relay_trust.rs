@@ -11,9 +11,11 @@
 //! continues exactly as any direct caller's would (the auth middleware on the caller's bearer
 //! owns authorization — one-trust-domain), and the carrier is simply ignored, degrading the act
 //! to `@web`. There is no wire difference an attacker can probe: the faces are (a) no
-//! credential ⇒ carrier inert, (b) invalid credential ⇒ carrier inert (debug-sampled, never a
-//! warn an internet-reachable line could pull — the repo's `UnknownKid` precedent), (c) valid
-//! credential ⇒ carrier honored if its value is on the relay allowlist.
+//! credential ⇒ carrier inert, (b) invalid credential ⇒ carrier inert, (c) valid credential ⇒
+//! carrier honored if its value is on the relay allowlist. Which face a relay-shaped request
+//! met is recorded on its root span as `relay_trust` (`RelayTrust`) — never as a log line,
+//! which an internet-reachable caller could pull as a volume lever (the repo's `UnknownKid`
+//! precedent).
 //!
 //! **The relay allowlist is exactly `{mcp}`.** A carrier value of anything else — `cli`,
 //! `sdk`, garbage — is ignored even beside a valid credential, so a stolen service secret
@@ -31,7 +33,13 @@
 //! among pre-handler layers; the only semantic requirement is preceding
 //! `RequestSurface` extraction, which every middleware satisfies by construction.
 
-use axum::{body::Body, extract::State, http::Request, middleware::Next, response::Response};
+use axum::{
+    body::Body,
+    extract::State,
+    http::{HeaderMap, Request},
+    middleware::Next,
+    response::Response,
+};
 
 use temper_services::state::AppState;
 use temper_workflow::operations::{
@@ -59,6 +67,70 @@ fn secret_matches(presented: &str, expected: &str) -> bool {
 /// a `const` makes the allowlist a fact of the code rather than a comparison to re-derive.
 const RELAY_ALLOWED_CARRIER: &str = "mcp";
 
+/// What a relay-shaped request's trust headers amounted to — the degrade detector (design §D7).
+///
+/// Recorded as the `relay_trust` field on the request's root span: every request already exports
+/// one root span at `info`, so the signal adds no line an internet-reachable caller can multiply.
+///
+/// **Anyone can produce any value but `trusted`** — the headers are public and this runs before
+/// authentication — so a count of non-`trusted` values is not an alert on its own. What the relay
+/// alone can produce is `trusted`, so the alert is the relay's share falling: relayed acts
+/// arriving and `trusted` going quiet while the MCP door is in use. The non-`trusted` values then
+/// say which fault to look for — `invalid_credential` (a rotation skew, or a guessed credential),
+/// `carrier_missing` or `carrier_refused` (a relay sending the wrong headers).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RelayTrust {
+    /// Valid credential and the allowlisted carrier: the act attributes `@mcp`.
+    Trusted,
+    /// A carrier arrived with no credential.
+    NoCredential,
+    /// A credential arrived and did not match, carrier or not.
+    InvalidCredential,
+    /// A valid credential with no carrier — a relay misbehaving.
+    CarrierMissing,
+    /// A valid credential with a carrier off the allowlist (`cli`, garbage).
+    CarrierRefused,
+}
+
+impl RelayTrust {
+    /// The span value. A closed vocabulary: the carrier's own (attacker-writable) value is never
+    /// recorded.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Trusted => "trusted",
+            Self::NoCredential => "no_credential",
+            Self::InvalidCredential => "invalid_credential",
+            Self::CarrierMissing => "carrier_missing",
+            Self::CarrierRefused => "carrier_refused",
+        }
+    }
+}
+
+/// Classify a request's trust headers against the configured secret. `None` when the request is
+/// not relay-shaped: the API has no secret configured (an unconfigured deployment is a posture,
+/// not an event — design §D2), or neither a credential nor a carrier arrived (all direct traffic,
+/// which must not drown the signal the alert keys on).
+///
+/// A credential that is not valid UTF-8 reads as `""`, which never matches: `configured` is never
+/// empty, because `shared_secret` drops an empty variable as unset.
+fn assess(configured: Option<&str>, headers: &HeaderMap) -> Option<RelayTrust> {
+    let expected = configured?;
+    let carrier = headers
+        .get(RELAYED_SURFACE_HEADER)
+        .map(|v| v.to_str().map(str::trim).unwrap_or(""));
+    let presented = headers
+        .get(SERVICE_CREDENTIAL_HEADER)
+        .map(|v| v.to_str().unwrap_or(""));
+    match (presented, carrier) {
+        (None, None) => None,
+        (None, Some(_)) => Some(RelayTrust::NoCredential),
+        (Some(p), _) if !secret_matches(p, expected) => Some(RelayTrust::InvalidCredential),
+        (Some(_), None) => Some(RelayTrust::CarrierMissing),
+        (Some(_), Some(RELAY_ALLOWED_CARRIER)) => Some(RelayTrust::Trusted),
+        (Some(_), Some(_)) => Some(RelayTrust::CarrierRefused),
+    }
+}
+
 /// Validate the relay credential and, beside it, honor the attribution carrier.
 ///
 /// Never rejects — the return is a plain `Response` because there is no rejection arm to
@@ -68,79 +140,22 @@ const RELAY_ALLOWED_CARRIER: &str = "mcp";
 /// middleware's concern alone.
 pub async fn require_relay_trust(
     State(state): State<AppState>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    let credential_valid = match (
+    if let Some(trust) = assess(
         state.config.mcp_service_secret.as_deref(),
-        request
-            .headers()
-            .get(SERVICE_CREDENTIAL_HEADER)
-            .and_then(|v| v.to_str().ok()),
+        request.headers(),
     ) {
-        // Unset at the API ⇒ the carrier is never trusted; direct traffic is unaffected and
-        // nothing logs — an unconfigured deployment is a posture, not an event (design §D2).
-        (None, _) => false,
-        (Some(_), None) => {
-            // A carrier header without a credential is the shape every spoofing attempt
-            // takes — but also the shape of a misconfigured relay mid-rotation. The degrade
-            // detector (§D7) is the load-bearing signal, not this line; `debug` keeps an
-            // internet-reachable log-volume lever out of reach.
-            //
-            // Counted ONLY when a carrier is actually present. The event's trigger is the
-            // carrier (the §D7 signal is "a relay-shaped claim arrived uncredentialed");
-            // counting every plainly credential-less request — all direct traffic, the
-            // moment the API configures a secret — would drown the signal the alert keys
-            // on. No carrier, no event: a missing credential is inert, per face (a).
-            if request.headers().contains_key(RELAYED_SURFACE_HEADER) {
-                tracing::debug!(
-                    counter = "relayed_surface_degraded",
-                    "carrier present without a service credential; ignoring carrier"
-                );
-            }
-            false
-        }
-        (Some(expected), Some(presented)) => {
-            if secret_matches(presented, expected) {
-                true
-            } else {
-                // Invalid credential: the same degrade, `debug`-sampled (design §D2).
-                tracing::debug!(
-                    counter = "relayed_surface_degraded",
-                    "invalid service credential; ignoring carrier"
-                );
-                false
-            }
-        }
-    };
-
-    let mut request = request;
-    if credential_valid {
-        let claimed = request
-            .headers()
-            .get(RELAYED_SURFACE_HEADER)
-            .and_then(|v| v.to_str().ok())
-            .map(str::trim);
-        match claimed {
-            // Valid credential + the one allowed value: insert the trusted extension.
-            Some(value) if value == RELAY_ALLOWED_CARRIER => {
-                request
-                    .extensions_mut()
-                    .insert(RelayedSurface(Surface::Mcp));
-                tracing::debug!(counter = "relayed_surface_trusted", "carrier honored");
-            }
-            // Valid credential, carrier not on the allowlist: ignored entirely (degrade).
-            // The claim is attacker-writable header content — counted, never logged verbatim.
-            other => {
-                tracing::debug!(
-                    counter = "relayed_surface_degraded",
-                    present = other.is_some(),
-                    "carrier value is not on the relay allowlist; ignoring carrier"
-                );
-            }
+        // The root span, as `require_auth` records `profile_id` onto it: a middleware body runs
+        // inside the root span layer, so `current()` is that span here.
+        tracing::Span::current().record("relay_trust", trust.as_str());
+        if trust == RelayTrust::Trusted {
+            request
+                .extensions_mut()
+                .insert(RelayedSurface(Surface::Mcp));
         }
     }
-
     next.run(request).await
 }
 
@@ -149,8 +164,8 @@ mod tests {
     use super::*;
     use axum::http::HeaderValue;
 
-    fn headers(pairs: &[(&str, &str)]) -> axum::http::HeaderMap {
-        let mut h = axum::http::HeaderMap::new();
+    fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
         for (k, v) in pairs {
             h.insert(
                 axum::http::HeaderName::from_lowercase(k.as_bytes()).expect("lowercase name"),
@@ -160,49 +175,19 @@ mod tests {
         h
     }
 
-    /// The decision the middleware makes, extracted over the parts a request
-    /// carries — the same inputs `require_relay_trust` reads — so the trust
-    /// matrix is assertable without mounting a router.
-    fn resolve(
-        configured: Option<&str>,
-        request_headers: &axum::http::HeaderMap,
-    ) -> Option<Surface> {
-        let credential_valid = match (
-            configured,
-            request_headers
-                .get(SERVICE_CREDENTIAL_HEADER)
-                .and_then(|v| v.to_str().ok()),
-        ) {
-            (None, _) => false,
-            (Some(_), None) => false,
-            (Some(expected), Some(presented)) => secret_matches(presented, expected),
-        };
-        if !credential_valid {
-            return None;
-        }
-        match request_headers
-            .get(RELAYED_SURFACE_HEADER)
-            .and_then(|v| v.to_str().ok())
-            .map(str::trim)
-        {
-            Some(value) if value == RELAY_ALLOWED_CARRIER => Some(Surface::Mcp),
-            _ => None,
-        }
-    }
-
     #[test]
-    fn valid_credential_and_mcp_carrier_honors_the_extension() {
+    fn valid_credential_and_mcp_carrier_is_trusted() {
         let h = headers(&[
             ("x-temper-service-credential", "s3cret"),
             ("x-temper-relayed-surface", "mcp"),
         ]);
-        assert_eq!(resolve(Some("s3cret"), &h), Some(Surface::Mcp));
+        assert_eq!(assess(Some("s3cret"), &h), Some(RelayTrust::Trusted));
     }
 
     #[test]
     fn a_stolen_credential_cannot_generalize_to_cli() {
         // The residual the secret's confidentiality bounds: its holder can claim the one
-        // value the allowlist admits. `cli` — and every other spelling — degrades. Case
+        // value the allowlist admits. `cli` — and every other spelling — is refused. Case
         // matters (`parse_trusted` is case-sensitive; so is this), surrounding whitespace
         // is tolerated exactly as the surface header's convention tolerates it.
         for carrier in ["cli", "sdk", "web", "MCP", "mcp; drop table", ""] {
@@ -211,31 +196,75 @@ mod tests {
                 ("x-temper-relayed-surface", carrier),
             ]);
             assert_eq!(
-                resolve(Some("s3cret"), &h),
-                None,
-                "carrier {carrier:?} must be ignored"
+                assess(Some("s3cret"), &h),
+                Some(RelayTrust::CarrierRefused),
+                "carrier {carrier:?} must be refused"
             );
         }
         let padded = headers(&[
             ("x-temper-service-credential", "s3cret"),
             ("x-temper-relayed-surface", "  mcp "),
         ]);
-        assert_eq!(resolve(Some("s3cret"), &padded), Some(Surface::Mcp));
+        assert_eq!(assess(Some("s3cret"), &padded), Some(RelayTrust::Trusted));
     }
 
+    /// Each degrade face names its own cause, so the span value says which fault it is.
     #[test]
-    fn absent_or_invalid_credential_leaves_the_carrier_inert() {
-        let with_carrier = headers(&[
-            ("x-temper-service-credential", "wrong"),
+    fn each_degrade_face_is_its_own_value() {
+        let cases = [
+            (
+                vec![("x-temper-relayed-surface", "mcp")],
+                RelayTrust::NoCredential,
+            ),
+            (
+                vec![
+                    ("x-temper-service-credential", "wrong"),
+                    ("x-temper-relayed-surface", "mcp"),
+                ],
+                RelayTrust::InvalidCredential,
+            ),
+            (
+                vec![("x-temper-service-credential", "wrong")],
+                RelayTrust::InvalidCredential,
+            ),
+            (
+                vec![("x-temper-service-credential", "s3cret")],
+                RelayTrust::CarrierMissing,
+            ),
+        ];
+        for (pairs, expected) in cases {
+            assert_eq!(
+                assess(Some("s3cret"), &headers(&pairs)),
+                Some(expected),
+                "{pairs:?}"
+            );
+        }
+    }
+
+    /// Not relay-shaped, so no value at all: direct traffic with neither header, and every
+    /// request while the API has no secret configured. Recording these would bury the signal.
+    #[test]
+    fn direct_traffic_and_an_unconfigured_api_record_nothing() {
+        assert_eq!(assess(Some("s3cret"), &HeaderMap::new()), None);
+        let relay_shaped = headers(&[
+            ("x-temper-service-credential", "s3cret"),
             ("x-temper-relayed-surface", "mcp"),
         ]);
-        assert_eq!(resolve(Some("s3cret"), &with_carrier), None);
+        assert_eq!(assess(None, &relay_shaped), None);
+    }
 
-        let carrier_only = headers(&[("x-temper-relayed-surface", "mcp")]);
-        assert_eq!(resolve(Some("s3cret"), &carrier_only), None);
-
-        // Unset at the API: the quiet degrade — never trusted, never an event.
-        assert_eq!(resolve(None, &with_carrier), None);
+    /// The span vocabulary is closed and distinct per face.
+    #[test]
+    fn the_recorded_values_are_distinct() {
+        let all = [
+            RelayTrust::Trusted,
+            RelayTrust::NoCredential,
+            RelayTrust::InvalidCredential,
+            RelayTrust::CarrierMissing,
+            RelayTrust::CarrierRefused,
+        ];
+        let values: std::collections::HashSet<_> = all.iter().map(|t| t.as_str()).collect();
+        assert_eq!(values.len(), all.len());
     }
 
     #[test]

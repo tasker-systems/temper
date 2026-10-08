@@ -23,6 +23,45 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.6.0 — unreleased
+- **`TEMPER_EDGE_PROXY_SECRET`: the web UI and the MCP relay mark the requests they send the API**
+  When the new optional variable is set, temper-ui (its reverse proxy and its server-side data
+  loaders) and the MCP function's relay send it as `x-temper-edge-proxy` on every request they
+  send the API, so per-IP rate limits in the API project's edge firewall can exempt them: all of
+  them reach the API from a few server addresses. The proxy always deletes a caller's own copy of
+  the header. A value that cannot be a header value is not sent by either side, and the relay
+  does not send one equal to `TEMPER_MCP_SERVICE_SECRET`; each logs a fixed sentence instead.
+  The variable joins the boot's shared-secret checks: the API and the MCP function refuse to start
+  when it is set and under 16 characters, and the API when it equals another shared secret it
+  holds. Each refusal names the variable, never the value. The 16-character refusal's sentence is
+  reworded to fit every variable it covers. Nothing in the API reads the header and it confers no access. Unset, nothing
+  changes. Who observes: operators who rate-limit at the edge (new playbook,
+  `docs/playbooks/rate-limit-at-the-edge.md`), and any deployment that set the variable before
+  this release: its value must pass the checks or the functions will not start. User-visible: no.
+  Release relevance: behavioral.
+pr: self
+classes: additive, behavioral
+surfaces: mcp, internal
+status: signal-only
+- **The network door's degrade detector becomes a root-span field, `relay_trust`, and the MCP edge's JWT-failure line drops to `debug`**
+  The API's relay-trust middleware recorded each degraded or trusted relay as a `debug` event
+  (`counter = "relayed_surface_degraded"` / `"relayed_surface_trusted"`), below the `info` filter
+  the span exporter applies, so production never saw it. It now records `relay_trust` on the
+  request's `http_request` root span: `trusted`, `no_credential`, `invalid_credential`,
+  `carrier_missing` or `carrier_refused`, and nothing for direct traffic or while the API has no
+  service secret. Which requests are honored is unchanged; the events are gone. Separately,
+  `require_mcp_auth` logged a failed JWT check at `warn`, a line any caller could trigger with a
+  garbage bearer; it now logs at `debug`, as the API's own check does, and records why on the
+  `mcp_request` root span as `auth_failure` (`missing_bearer`, `unknown_kid`, `expired`,
+  `invalid_audience`, `invalid_issuer`, `invalid_signature`, … or `malformed`). Separately, the
+  CORS allowlist arm (`CORS_ORIGINS` naming origins, on both the API and MCP doors) answers a
+  preflight by echoing the headers it names instead of `*`, which the Fetch standard never lets
+  cover `Authorization`, so an allowlisted browser client can now send its bearer. Who observes:
+  operators, through exported spans (the new fields) and logs (the missing `warn`); browser
+  clients on an allowlisted origin. User-visible: no. Release relevance: behavioral.
+pr: self
+classes: additive, behavioral
+surfaces: internal
+status: signal-only
 - **The SDKs' endpoint refusals no longer repeat the URL they refused, and their token requests follow no redirect**
   `require_endpoint` / `requireEndpoint` / `validate_endpoint` in temper-py, temper-rb, temper-ts
   and `temperkb-client` still refuse the same values with the same error types. The "not a parseable
