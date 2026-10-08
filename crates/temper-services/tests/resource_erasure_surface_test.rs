@@ -1402,39 +1402,6 @@ async fn every_payload_string_path_is_declared(pool: PgPool) {
     );
 }
 
-/// FAILS IF: the manifest's unqualified `redact` lines and the sweep's interim
-/// `sensitivity.ledger_redact_paths` name different paths. The sweep reads that table for a ledger
-/// finding's remediability until cut 2 switches it to the manifest; while both exist they must say
-/// the same thing, or a finding reads `blocked:cut-2` on a path cut 2 will not redact, or
-/// `unremediable` on one it will.
-#[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn the_redact_lines_are_the_sweeps_interim_list(pool: PgPool) {
-    let interim: BTreeSet<(String, String)> = sqlx::query_as::<_, (Option<String>, String)>(
-        "SELECT event_type, path FROM sensitivity.ledger_redact_paths",
-    )
-    .fetch_all(&pool)
-    .await
-    .expect("read the interim list")
-    .into_iter()
-    .map(|(t, p)| (t.unwrap_or_else(|| "metadata".into()), p))
-    .collect();
-    let redact: BTreeSet<(String, String)> = payload_lines()
-        .into_iter()
-        .filter(|l| l.qualifier.is_none() && matches!(l.disposition, PayloadDisposition::Redact(_)))
-        .map(|l| (l.event_type, l.path))
-        .collect();
-    assert_eq!(
-        redact.difference(&interim).collect::<Vec<_>>(),
-        Vec::<&(String, String)>::new(),
-        "manifest redact lines missing from sensitivity.ledger_redact_paths"
-    );
-    assert_eq!(
-        interim.difference(&redact).collect::<Vec<_>>(),
-        Vec::<&(String, String)>::new(),
-        "sensitivity.ledger_redact_paths rows the manifest does not class `redact`"
-    );
-}
-
 /// A manifest JSON pointer in the dotted form `redacted_fields` records: `/blocks/*/x` is
 /// `blocks[*].x`, and a metadata key is `metadata.<key>`.
 fn dotted(event_type: &str, pointer: &str) -> String {

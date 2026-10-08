@@ -67,6 +67,11 @@
 //!   * **25** — the facet regrain cannot re-inflate a husk (goal §8): `_facet_regrain_from_events`
 //!     over the erased resource, over an edge into it, or over every owner raises on the write
 //!     guard and changes nothing, although the ledger still carries the original facet values.
+//!   * **15** — the completion pass (cut 2 PR 3, 20261010100000): a cut-1 husk completes under
+//!     one more `resource_erased` carrying only `redacted_fields`; its remote sources are numbered
+//!     from the ledger as step (9e) numbered them, a URL listed twice in one event included; the
+//!     projection moves only by the body's two stamps; replay is byte-identical; a third run is
+//!     refused. Also the shape arm's cut-1 branch, and a JSON null kept on the ledger.
 //!
 //! The doors (Rust) land in PR 2; this file pins the SQL behavior the doors consume.
 
@@ -4974,29 +4979,59 @@ async fn replay_projects_a_lawful_write_that_sorts_after_the_act(pool: sqlx::PgP
     );
 }
 
-/// A husk as cut 1 left it: the act's projection-side body under a `resource_erased` that names
-/// no `redacted_fields`, and the ledger's text untouched. Cut 2's act no longer makes one, but every
+/// A husk as cut 1 left it, in the cut-1 act's own order and transaction: the plan, one
+/// `relationship_folded` per live edge under the act's correlation id, a `resource_erased` that
+/// names no `redacted_fields` and records every ledger path it left in `ledger_remainder`, then the
+/// projection-side body. The ledger's text is untouched. Cut 2's act no longer makes one, but every
 /// resource erased before it shipped is one until the completion pass reaches it.
 async fn simulate_cut1_husk(pool: &PgPool, resource: Uuid) -> Uuid {
     let (operator, emitter) = system_actor(pool).await;
+    let request_ref = Uuid::now_v7();
+    let mut tx = pool.begin().await.unwrap();
+    let plan: serde_json::Value = sqlx::query_scalar("SELECT resource_erasure_survey_plan($1)")
+        .bind(resource)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    for edge in plan["edges"].as_array().unwrap() {
+        let edge: Uuid = edge.as_str().unwrap().parse().unwrap();
+        sqlx::query(
+            "SELECT _project_relationship_folded( \
+                 _event_append('relationship_folded', $2, e.home_anchor_table, e.home_anchor_id, \
+                               jsonb_build_object('edge_id', e.id, 'reason', 'resource_erased'), \
+                               p_correlation => $3), \
+                 jsonb_build_object('edge_id', e.id, 'reason', 'resource_erased')) \
+               FROM kb_edges e WHERE e.id = $1",
+        )
+        .bind(edge)
+        .bind(emitter.uuid())
+        .bind(request_ref)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    }
     let erased: Uuid = sqlx::query_scalar(
         "SELECT _event_append('resource_erased', $2, NULL, NULL, jsonb_build_object( \
              'subject_table', 'kb_resources', 'subject_id', $1, 'actor', $3, \
-             'redacted_fields', '[]'::jsonb, 'targets', '[]'::jsonb, 'remainder', '[]'::jsonb, \
-             'ledger_remainder', '[]'::jsonb))",
+             'folded_edges', $4->'edges', 'targets', $4->'targets', 'remainder', $4->'remainder', \
+             'ledger_remainder', ($4->'redacted_fields') || ($4->'ledger_remainder')), \
+             p_correlation => $5)",
     )
     .bind(resource)
     .bind(emitter.uuid())
     .bind(operator.uuid())
-    .fetch_one(pool)
+    .bind(&plan)
+    .bind(request_ref)
+    .fetch_one(&mut *tx)
     .await
     .unwrap();
     sqlx::query("SELECT _resource_erasure_apply_redaction($1, $2)")
         .bind(resource)
         .bind(erased)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .unwrap();
+    tx.commit().await.unwrap();
     erased
 }
 
@@ -6470,4 +6505,462 @@ async fn a_shared_remote_sources_spelling_is_its_first_remaining_writers_on_repl
         live == "HTTPS://Leak.Example/a" && replayed == "https://leak.example/a"
     })
     .await;
+}
+
+/// The planted strings a completion pass must take off R's trail, by the trail's own scope.
+async fn trail_carrying(pool: &PgPool, resource: Uuid, planted: &str) -> Vec<Uuid> {
+    sqlx::query_scalar(
+        "SELECT ev.id FROM _resource_erasure_trail_scope($1) s \
+           JOIN kb_events ev ON ev.id = s.event_id \
+          WHERE strpos(ev.payload::text || ev.metadata::text, $2) > 0",
+    )
+    .bind(resource)
+    .bind(planted)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+async fn erasure_records_of(pool: &PgPool, resource: Uuid) -> Vec<serde_json::Value> {
+    sqlx::query_scalar(
+        "SELECT e.payload FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'resource_erased' AND e.payload->>'subject_id' = $1::text ORDER BY e.id",
+    )
+    .bind(resource)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// (15) The completion pass (spec D12, ruling 14 of cut 2 PR 2). A resource erased under cut 1
+/// keeps its text on the ledger; running the act on it again mints ONE more `resource_erased`
+/// carrying only `redacted_fields`, the trail no longer carries any planted string, the rest of
+/// the projection does not move, and replay is byte-identical. A third run is refused `already
+/// erased` and changes nothing.
+///
+/// R's block cites remote sources the husk's provenance has already re-pointed (step 9e), one of
+/// them shared with the twin, and one URL listed twice in one event at two seqs, the later
+/// element at the LOWER seq. Provenance keeps the first-listed element's seq (its unique key is
+/// per contributing event, ON CONFLICT DO NOTHING), so (9e) numbers the other URL of that event
+/// first; a ledger numbering by the lowest seq would disagree, and the pass would raise on the
+/// husk forever. The agreement half compares the two numberings on the live resource first.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_cut1_husk_completes_once_and_replays_byte_identical(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    register_block_provenance_annotated(&pool).await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "completion-home").await;
+    let twin_home = make_home(&pool, owner, "completion-twin").await;
+    let leak = seed_leak(&pool, owner, emitter, home, twin_home).await;
+    let r = leak.resource.uuid();
+    writes::annotate_block_sources(
+        &pool,
+        writes::AnnotateParams {
+            resource: leak.twin,
+            sources: vec![Incorporation {
+                source: ProvenanceSource::Remote(URL.to_owned()),
+                seq: 0,
+            }],
+            content_block: None,
+            emitter,
+        },
+    )
+    .await
+    .expect("the twin cites URL too, so its row is shared");
+    let r_block: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id = $1 AND NOT is_folded \
+          ORDER BY seq LIMIT 1",
+    )
+    .bind(r)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    const TWICE: &str = "https://leak.example/twice-cited";
+    const BETWEEN: &str = "https://leak.example/cited-between";
+    writes::annotate_block_sources(
+        &pool,
+        writes::AnnotateParams {
+            resource: leak.resource,
+            sources: vec![
+                Incorporation {
+                    source: ProvenanceSource::Remote(TWICE.to_owned()),
+                    seq: 5,
+                },
+                Incorporation {
+                    source: ProvenanceSource::Remote(BETWEEN.to_owned()),
+                    seq: 2,
+                },
+                Incorporation {
+                    source: ProvenanceSource::Remote(TWICE.to_owned()),
+                    seq: 1,
+                },
+            ],
+            content_block: Some(r_block),
+            emitter,
+        },
+    )
+    .await
+    .expect("one URL listed twice in one event");
+    writes::set_property_with(
+        &pool,
+        leak.resource,
+        "status",
+        &serde_json::json!("under review"),
+        emitter,
+        EventContext {
+            authorship: Some(AgentAuthorship {
+                reasoning: Some("jane smith asked for the review".into()),
+                confidence: ConfidenceBand::Probable,
+                rationale: None,
+                persona: Some("jane's assistant".into()),
+                model: None,
+            }),
+            ..EventContext::default()
+        },
+    )
+    .await
+    .unwrap();
+    writes::assert_keyed_property_with(
+        &pool,
+        PropertyOwner::edge(leak.edge),
+        "evidence",
+        &serde_json::json!("jane's diary, page 4"),
+        1.0,
+        emitter,
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+
+    // The agreement half: on the live resource, the ledger numbering is (9e)'s.
+    let numbering = |sql: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (Uuid, String, i32)>(sql)
+                .bind(r)
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let from_ledger = numbering(
+        "SELECT block_id, uri_normalized, n FROM _resource_erasure_ledger_remote_numbers($1) \
+          ORDER BY block_id, n",
+    )
+    .await;
+    let from_provenance = numbering(
+        "SELECT o.block_id, rs.uri_normalized, o.n FROM _resource_erasure_remote_originals($1) o \
+           JOIN kb_remote_sources rs ON rs.id = o.source_id ORDER BY o.block_id, o.n",
+    )
+    .await;
+    assert_eq!(
+        from_ledger, from_provenance,
+        "the ledger numbers R's remote sources as step (9e) does"
+    );
+    let n_of = |url: &str| {
+        from_provenance
+            .iter()
+            .find(|(b, u, _)| *b == r_block && u.contains(&url[8..]))
+            .map(|(_, _, n)| *n)
+            .unwrap_or_else(|| panic!("{url} is numbered on R's block: {from_provenance:?}"))
+    };
+    assert!(
+        n_of(BETWEEN) < n_of(TWICE),
+        "precondition: (9e) orders the twice-listed URL by its first-listed seq, so the case bites"
+    );
+
+    let first = simulate_cut1_husk(&pool, r).await;
+    for planted in [
+        "M&A notes (leaked)",
+        URL,
+        TWICE,
+        "jane smith spoke to us",
+        "jane's diary",
+    ] {
+        assert!(
+            !trail_carrying(&pool, r, planted).await.is_empty(),
+            "precondition: the cut-1 husk's trail still carries {planted:?}"
+        );
+    }
+    let first_record = &erasure_records_of(&pool, r).await[0];
+    assert!(
+        first_record.get("redacted_fields").is_none()
+            && first_record["ledger_remainder"]
+                .as_array()
+                .is_some_and(|a| !a.is_empty()),
+        "precondition: the husk is cut 1's, naming its ledger remainder: {first_record}"
+    );
+
+    // The survey door's list (D10) is what the pass will name.
+    let pending: serde_json::Value =
+        sqlx::query_scalar("SELECT resource_erasure_completion_fields($1)")
+            .bind(r)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(pending.as_array().is_some_and(|a| !a.is_empty()));
+
+    let projection_before = replay::dump_projections(&pool).await.unwrap();
+    let completion = execute_act(&pool, r).await;
+    assert_ne!(completion, first);
+
+    let records = erasure_records_of(&pool, r).await;
+    assert_eq!(records.len(), 2, "the pass mints exactly one more record");
+    let keys: std::collections::BTreeSet<&str> = records[1]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        ["actor", "redacted_fields", "subject_id", "subject_table"]
+            .into_iter()
+            .collect(),
+        "the completion record carries only redacted_fields"
+    );
+    assert_eq!(records[1]["redacted_fields"], pending);
+    for planted in [
+        "M&A notes (leaked)",
+        "test://seed-leak",
+        URL,
+        TWICE,
+        BETWEEN,
+        "jane smith spoke to us",
+        "transient",
+        "jane smith asked for the review",
+        "jane's assistant",
+        "under review",
+        "jane's diary",
+    ] {
+        let still = trail_carrying(&pool, r, planted).await;
+        assert!(
+            still.is_empty(),
+            "the trail still carries {planted:?} in {still:?}"
+        );
+    }
+
+    // The body changed nothing but its two stamps: only the redaction rows (and the ledger,
+    // which is not a projection) moved, plus the two columns the body stamps from the erasing
+    // event, as replay's arm does at the record's position: `kb_resources.updated` (its
+    // occurred_at, asserted below) and `kb_properties.last_event_id` (its id).
+    let projection_after = replay::dump_projections(&pool).await.unwrap();
+    for ((table, a), (_, b)) in projection_before.iter().zip(projection_after.iter()) {
+        if table != "kb_event_field_redactions" && a != b {
+            let (ra, rb) = (a.as_array().unwrap(), b.as_array().unwrap());
+            let moved: Vec<String> = ra
+                .iter()
+                .zip(rb.iter())
+                .flat_map(|(x, y)| {
+                    x.as_object()
+                        .unwrap()
+                        .iter()
+                        .filter(|(k, v)| y.get(k.as_str()) != Some(*v))
+                        .filter(|(k, v)| {
+                            !(table == "kb_resources" && k.as_str() == "updated")
+                                && !(table == "kb_properties"
+                                    && k.as_str() == "last_event_id"
+                                    && y[k.as_str()] == serde_json::json!(completion)
+                                    && **v != y[k.as_str()])
+                        })
+                        .map(|(k, v)| format!("{k}: {v} -> {}", y[k.as_str()]))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            assert!(
+                moved.is_empty() && ra.len() == rb.len(),
+                "the completion pass moved projection table {table} ({} rows -> {}): {moved:?}",
+                ra.len(),
+                rb.len()
+            );
+        }
+    }
+
+    let stamped: bool = sqlx::query_scalar(
+        "SELECT r.updated = e.occurred_at FROM kb_resources r, kb_events e \
+          WHERE r.id = $1 AND e.id = $2",
+    )
+    .bind(r)
+    .bind(completion)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        stamped,
+        "the husk's updated is the completion record's occurred_at"
+    );
+
+    // A third run has nothing left: refused, nothing changes.
+    let ledger_before: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let (_, operator_entity) = system_actor(&pool).await;
+    let third = sqlx::query("SELECT resource_erasure_execute($1, $2, $2, $3)")
+        .bind(r)
+        .bind(operator_entity)
+        .bind(Uuid::now_v7())
+        .execute(&pool)
+        .await
+        .expect_err("a completed husk is refused");
+    assert!(
+        third.to_string().contains("already erased"),
+        "refused as already erased: {third}"
+    );
+    let ledger_after: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(ledger_before, ledger_after);
+    let empty: serde_json::Value =
+        sqlx::query_scalar("SELECT resource_erasure_completion_fields($1)")
+            .bind(r)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(empty, serde_json::json!([]));
+
+    assert_replay_byte_identical(&pool, "after a cut-1 husk's completion pass").await;
+}
+
+/// The shape arm's cut-1 branch (ruling 8 of cut 2 PR 2). On a husk erased under cut 1, step (9f)
+/// has rewritten the artifact rows' family but the ledger's `data_artifact_committed` still
+/// carries it, so a plan on that husk still names the home's shape for the family, through the
+/// ledger. The completion pass redacts that family, and the plan names the shape no more. This
+/// branch needed the survey to run on a cut-1 husk, which raised on remote sources until the
+/// completion pass numbered them from the ledger.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_cut1_husks_plan_names_its_shape_through_the_ledger_until_completed(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "cut1-shape-home").await;
+    let twin_home = make_home(&pool, owner, "cut1-shape-twin").await;
+    let leak = seed_leak(&pool, owner, emitter, home, twin_home).await;
+    let mut shapes = Vec::new();
+    for kind in ["notes", "unrelated"] {
+        shapes.push(
+            writes::declare_shape(
+                &pool,
+                writes::DeclareShapeParams {
+                    home: AnchorRef::context(home),
+                    kind,
+                    kind_owner: Some(KindOwner::Profile(owner.uuid())),
+                    schema: &serde_json::json!({"type": "object"}),
+                    enforcement: payloads::EnforcementMode::Advisory,
+                    emitter,
+                },
+            )
+            .await
+            .unwrap()
+            .uuid(),
+        );
+    }
+    let (notes_shape, unrelated_shape) = (shapes[0], shapes[1]);
+    let named_shapes = || {
+        let pool = pool.clone();
+        let resource = leak.resource.uuid();
+        async move {
+            let plan: serde_json::Value =
+                sqlx::query_scalar("SELECT resource_erasure_survey_plan($1)")
+                    .bind(resource)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("the plan runs on the husk");
+            plan["remainder"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|e| e["target"] == "kb_data_artifact_shapes")
+                .map(|e| e["outcome"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        }
+    };
+
+    simulate_cut1_husk(&pool, leak.resource.uuid()).await;
+    let family_on_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_data_artifacts WHERE resource_id = $1 AND artifact_kind = 'notes'",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        family_on_rows, 0,
+        "precondition: step (9f) rewrote the rows' family"
+    );
+    let on_husk = named_shapes().await;
+    assert_eq!(
+        on_husk.len(),
+        1,
+        "the ledger family names one shape: {on_husk:?}"
+    );
+    assert!(
+        on_husk[0].contains(&notes_shape.to_string())
+            && !on_husk[0].contains(&unrelated_shape.to_string()),
+        "the shape for the family R used, by id: {on_husk:?}"
+    );
+
+    execute_act(&pool, leak.resource.uuid()).await;
+    assert_eq!(
+        named_shapes().await,
+        Vec::<String>::new(),
+        "after the completion pass the ledger no longer carries the family"
+    );
+}
+
+/// A JSON `null` at an allowlisted path carries no text, and the redaction keeps it (ruling 13 of
+/// cut 2 PR 2, which had no witness). Rewritten to a sentinel, replay of the redacted ledger would
+/// project a value live never held, and every key number after it would move.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_null_on_the_ledger_is_kept_and_replays(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "null-keep-home").await;
+    let twin_home = make_home(&pool, owner, "null-keep-twin").await;
+    let leak = seed_leak(&pool, owner, emitter, home, twin_home).await;
+    writes::set_property(
+        &pool,
+        leak.resource,
+        "cleared",
+        &serde_json::Value::Null,
+        emitter,
+    )
+    .await
+    .expect("a property set to null through the real path");
+    let null_event: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name IN ('property_set', 'property_asserted') \
+            AND e.payload->>'property_key' = 'cleared'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let before: serde_json::Value = payload_of(&pool, null_event).await;
+    assert_eq!(
+        before["value"],
+        serde_json::Value::Null,
+        "precondition: {before}"
+    );
+
+    execute_act(&pool, leak.resource.uuid()).await;
+    let after = payload_of(&pool, null_event).await;
+    assert_eq!(
+        after["value"],
+        serde_json::Value::Null,
+        "the null is kept: {after}"
+    );
+    assert_ne!(
+        after["property_key"], "cleared",
+        "the key is still redacted: {after}"
+    );
+    assert_replay_byte_identical(&pool, "with a null value on R's trail").await;
 }
