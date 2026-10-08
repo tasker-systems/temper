@@ -20,8 +20,9 @@
 //! The trust-matrix probes (§D7's faces, driven DIRECTLY at the listener with raw
 //! headers — the real relay cannot drop its own headers) close the file: positive
 //! control, drop-carrier, drop-credential, and the one-trust-domain differential
-//! (a valid credential cannot forge `cli` attribution). The §D7 counters are tracing
-//! events, so each face asserts on the captured events.
+//! (a valid credential cannot forge `cli` attribution). The §D7 detector is the
+//! `relay_trust` field on the API's root span, so each face asserts on the value the
+//! closed span carried — exactly one, since each probe is one relay-shaped request.
 
 mod common;
 
@@ -33,7 +34,7 @@ use temper_mcp::service::TemperMcpService;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use common::tracing_layer::TestTracingLayer;
+use common::tracing_layer::{relay_trust_values, TestTracingLayer};
 
 const ISSUER: &str = "test-issuer";
 
@@ -614,36 +615,11 @@ async fn raw_ingest(
     (status, text)
 }
 
-fn degraded_events(events: &[common::tracing_layer::CapturedEvent]) -> Vec<Option<String>> {
-    events
-        .iter()
-        .filter(|e| {
-            e.fields
-                .get("counter")
-                .map(|c| c.contains("relayed_surface_degraded"))
-                .unwrap_or(false)
-        })
-        .map(|e| e.fields.get("present").cloned())
-        .collect()
-}
-
-fn trusted_count(events: &[common::tracing_layer::CapturedEvent]) -> usize {
-    events
-        .iter()
-        .filter(|e| {
-            e.fields
-                .get("counter")
-                .map(|c| c.contains("relayed_surface_trusted"))
-                .unwrap_or(false)
-        })
-        .count()
-}
-
-/// Positive control: valid credential + the one allowed carrier → the trusted event,
+/// Positive control: valid credential + the one allowed carrier → `trusted`,
 /// and the act lands. Without this arm the others prove only absence.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_positive_control_is_trusted_and_lands(pool: PgPool) {
-    let (layer, captured) = TestTracingLayer::new();
+    let (layer, _events, spans) = TestTracingLayer::with_spans();
     let _guard = tracing_subscriber::registry().with(layer).set_default();
     let app = common::setup_relay(pool).await;
 
@@ -652,20 +628,20 @@ async fn the_positive_control_is_trusted_and_lands(pool: PgPool) {
     assert_eq!(status, 200, "the trusted act lands: {_body}");
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let events = captured.lock().unwrap();
-    assert!(
-        trusted_count(&events) >= 1,
-        "the carrier is honored: {events:?}"
+    assert_eq!(
+        relay_trust_values(&spans.lock().unwrap()),
+        vec!["trusted"],
+        "the carrier is honored"
     );
 }
 
 /// Drop the carrier, keep the credential: the relay-shaped credential holder that
-/// sends no carrier is a degrade (present=false) — the relay misbehaving mid-deploy —
-/// and the act lands unattributed. No trusted event: dropping the carrier cannot keep
+/// sends no carrier is the `carrier_missing` degrade — the relay misbehaving mid-deploy —
+/// and the act lands unattributed. Never `trusted`: dropping the carrier cannot keep
 /// MCP attribution (the bite: honor-on-credential-alone reddens here).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn dropping_the_carrier_degrades_and_never_trusts(pool: PgPool) {
-    let (layer, captured) = TestTracingLayer::new();
+    let (layer, _events, spans) = TestTracingLayer::with_spans();
     let _guard = tracing_subscriber::registry().with(layer).set_default();
     let app = common::setup_relay(pool).await;
 
@@ -673,26 +649,20 @@ async fn dropping_the_carrier_degrades_and_never_trusts(pool: PgPool) {
     assert_eq!(status, 200, "the act lands regardless: {_body}");
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let events = captured.lock().unwrap();
     assert_eq!(
-        trusted_count(&events),
-        0,
-        "no carrier, no trust: {events:?}"
-    );
-    assert_eq!(
-        degraded_events(&events),
-        vec![Some("false".to_string())],
-        "the credential-bearing carrier-less request is the present=false degrade: {events:?}"
+        relay_trust_values(&spans.lock().unwrap()),
+        vec!["carrier_missing"],
+        "no carrier, no trust: the credential-bearing carrier-less request is its own face"
     );
 }
 
 /// Drop the credential, keep the carrier — every spoofing attempt's shape: the
 /// degrade fires (the §D7 load-bearing signal), the act lands authenticated on the
 /// bearer alone, and nothing is trusted. The bite: any honor-on-carrier-alone
-/// mutation reddens the trusted_count assertion.
+/// mutation reddens the face assertion (it would read `trusted`).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn dropping_the_credential_degrades_and_never_trusts(pool: PgPool) {
-    let (layer, captured) = TestTracingLayer::new();
+    let (layer, _events, spans) = TestTracingLayer::with_spans();
     let _guard = tracing_subscriber::registry().with(layer).set_default();
     let app = common::setup_relay(pool).await;
 
@@ -700,16 +670,10 @@ async fn dropping_the_credential_degrades_and_never_trusts(pool: PgPool) {
     assert_eq!(status, 200, "auth rides the bearer alone: {_body}");
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let events = captured.lock().unwrap();
     assert_eq!(
-        trusted_count(&events),
-        0,
-        "no credential, no trust: {events:?}"
-    );
-    assert_eq!(
-        degraded_events(&events),
-        vec![None],
-        "the uncredentialed carrier is the degrade without a `present` field: {events:?}"
+        relay_trust_values(&spans.lock().unwrap()),
+        vec!["no_credential"],
+        "no credential, no trust: the uncredentialed carrier is the spoofing face"
     );
 }
 
@@ -719,7 +683,7 @@ async fn dropping_the_credential_degrades_and_never_trusts(pool: PgPool) {
 /// attribution.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_valid_credential_cannot_forge_cli_attribution(pool: PgPool) {
-    let (layer, captured) = TestTracingLayer::new();
+    let (layer, _events, spans) = TestTracingLayer::with_spans();
     let _guard = tracing_subscriber::registry().with(layer).set_default();
     let app = common::setup_relay(pool).await;
 
@@ -728,16 +692,10 @@ async fn a_valid_credential_cannot_forge_cli_attribution(pool: PgPool) {
     assert_eq!(status, 200, "the act still lands: {_body}");
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let events = captured.lock().unwrap();
     assert_eq!(
-        trusted_count(&events),
-        0,
-        "the allowlist admits exactly one value: {events:?}"
-    );
-    assert_eq!(
-        degraded_events(&events),
-        vec![Some("true".to_string())],
-        "the off-allowlist carrier is the present=true degrade: {events:?}"
+        relay_trust_values(&spans.lock().unwrap()),
+        vec!["carrier_refused"],
+        "the allowlist admits exactly one value: the off-allowlist carrier is refused"
     );
 }
 

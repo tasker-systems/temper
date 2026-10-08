@@ -8,8 +8,8 @@
 //!
 //! - the auth identity (`temper_auth::config::parse_auth_config`): a token the API accepts must
 //!   verify here, and the reverse;
-//! - the shared-secret floor on `TEMPER_MCP_SERVICE_SECRET`, the one secret this process presents
-//!   (`temper_auth::config::check_shared_secret_strength`);
+//! - the shared-secret floor on the secrets this process presents, `TEMPER_MCP_SERVICE_SECRET`
+//!   and `TEMPER_EDGE_PROXY_SECRET` (`temper_auth::config::check_shared_secret_strength`);
 //! - the CORS origins (`temper_services::cors::parse_cors_origins`);
 //! - the blob posture (`temper_services::config::parse_blob`), handed to the tool layer as a plain
 //!   [`BlobDoor`] with the refusal chosen by `blob_service::blob_refusal`.
@@ -25,8 +25,13 @@
 //! sentence — the deployment-misconfiguration wording is this shell's, never the tool layer's.
 //!
 //! What the API's boot checks and this one does not: the cross-secret distinctness check and the
-//! strength floor on secrets this process never holds. The API function boots from the same
-//! project environment and still refuses on them.
+//! strength floor on secrets this process never holds. Distinctness is a property of the
+//! VALIDATOR's environment, and the API is the only thing that validates
+//! `TEMPER_MCP_SERVICE_SECRET` — so the check that matters is the API's, which refuses an
+//! overlap in its own environment. A refusal here would protect no secret the API's check
+//! misses, and would add a fail-closed boot condition to the agent-facing door: a boot refusal
+//! fires at cold start, after a deployment is promoted, so it takes the door dark rather than
+//! failing the deploy.
 
 use std::time::Duration;
 use temper_auth::config::{
@@ -47,8 +52,8 @@ use crate::seam::DeployedDoorSeam;
 /// for a CLI that must observe what the server did — and is exactly inverted here.
 pub const RELAY_REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 
-/// The one shared secret this process presents (on every relayed act), held to the floor.
-const PRESENTED_SECRETS: [&str; 1] = ["TEMPER_MCP_SERVICE_SECRET"];
+/// The shared secrets this process presents on relayed acts, held to the floor.
+const PRESENTED_SECRETS: [&str; 2] = ["TEMPER_MCP_SERVICE_SECRET", "TEMPER_EDGE_PROXY_SECRET"];
 
 /// The MCP server's boot configuration.
 #[derive(Clone, Debug)]
@@ -96,12 +101,45 @@ pub fn deployed_relay(lookup: &impl Fn(&str) -> Option<String>) -> DeployedRelay
     let Some(secret) = shared_secret(lookup, "TEMPER_MCP_SERVICE_SECRET") else {
         return DeployedRelay::Unavailable(SECRET_UNSET);
     };
-    match DeployedDoorSeam::new(&secret) {
-        Ok(seam) => DeployedRelay::Ready {
-            config: RelayConfig::new(api_base_url, RELAY_REQUEST_TIMEOUT),
-            seam,
-        },
-        Err(_) => DeployedRelay::Unavailable(SECRET_NOT_A_HEADER),
+    let Ok(seam) = DeployedDoorSeam::new(&secret) else {
+        return DeployedRelay::Unavailable(SECRET_NOT_A_HEADER);
+    };
+    DeployedRelay::Ready {
+        config: RelayConfig::new(api_base_url, RELAY_REQUEST_TIMEOUT),
+        seam: with_edge_proxy_marker(seam, lookup, &secret),
+    }
+}
+
+/// Add the edge-proxy marker when `TEMPER_EDGE_PROXY_SECRET` is set. Past the boot's strength
+/// floor (`PRESENTED_SECRETS`), never a refusal: the marker only exempts relayed acts from the
+/// API edge's per-IP limits, so a value that cannot be sent leaves the relay working and logs
+/// why. A value equal to the service secret is not
+/// sent, because the marker's value is copied into firewall configuration, where the service
+/// credential must never be.
+fn with_edge_proxy_marker(
+    seam: DeployedDoorSeam,
+    lookup: &impl Fn(&str) -> Option<String>,
+    service_secret: &str,
+) -> DeployedDoorSeam {
+    let Some(marker) = shared_secret(lookup, "TEMPER_EDGE_PROXY_SECRET") else {
+        return seam;
+    };
+    if marker == service_secret {
+        tracing::error!(
+            "TEMPER_EDGE_PROXY_SECRET equals TEMPER_MCP_SERVICE_SECRET; not sending the \
+             edge-proxy marker. Generate a separate value."
+        );
+        return seam;
+    }
+    match seam.clone().with_edge_proxy_secret(&marker) {
+        Ok(marked) => marked,
+        Err(_) => {
+            tracing::error!(
+                "TEMPER_EDGE_PROXY_SECRET is not a valid header value; not sending the \
+                 edge-proxy marker"
+            );
+            seam
+        }
     }
 }
 
@@ -194,6 +232,21 @@ mod tests {
             McpServerConfig::from_lookup(env(&pairs)).unwrap_err(),
             AuthConfigError::WeakSharedSecret("TEMPER_MCP_SERVICE_SECRET")
         );
+    }
+
+    /// The edge-proxy marker is presented too, so it is held to the same floor; the refusal
+    /// names the variable and never its value.
+    /// FAILS IF: a weak marker boots, or the refusal quotes the value.
+    #[test]
+    fn a_weak_edge_proxy_secret_refuses_the_boot_without_quoting_it() {
+        let mut pairs = AUTH.to_vec();
+        pairs.push(("TEMPER_EDGE_PROXY_SECRET", "shortmarker"));
+        let err = McpServerConfig::from_lookup(env(&pairs)).unwrap_err();
+        assert_eq!(
+            err,
+            AuthConfigError::WeakSharedSecret("TEMPER_EDGE_PROXY_SECRET")
+        );
+        assert!(!err.to_string().contains("shortmarker"));
     }
 
     /// The closed door speaks the API's vocabulary for the posture that closed it — the same

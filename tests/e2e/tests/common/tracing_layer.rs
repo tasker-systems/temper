@@ -162,3 +162,14 @@ where
         });
     }
 }
+
+/// The `relay_trust` value each closed API root span carried, in close order — the network
+/// door's degrade detector as production exports it. Spans that recorded none (direct traffic)
+/// are skipped, so the result is exactly the relay-shaped requests the listener saw.
+pub fn relay_trust_values(spans: &[CapturedSpan]) -> Vec<String> {
+    spans
+        .iter()
+        .filter(|s| s.name == "http_request")
+        .filter_map(|s| s.fields.get("relay_trust").cloned())
+        .collect()
+}

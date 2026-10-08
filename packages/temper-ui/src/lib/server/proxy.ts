@@ -23,6 +23,7 @@ import { randomBytes } from 'node:crypto';
 import { error, type RequestEvent } from '@sveltejs/kit';
 import { activeTraceparent } from '@tasker-systems/temper-telemetry-ts';
 import { env } from '$env/dynamic/private';
+import { EDGE_PROXY_HEADER, edgeProxySecret } from './edge-proxy';
 
 /** Path roots forwarded to the upstream API/MCP host. */
 const PROXIED_ROOTS = ['/mcp', '/oauth', '/.well-known', '/api'];
@@ -113,6 +114,8 @@ export interface ForwardOptions {
 	connectTimeoutMs?: number;
 	/** Retries beyond the first attempt, applied only to {@link RETRYABLE_METHODS}. Default 1. */
 	maxRetries?: number;
+	/** The value to send as {@link EDGE_PROXY_HEADER}; absent sends no such header. */
+	edgeProxySecret?: string;
 }
 
 /** True for the undici timeout we raise via `AbortController`, so it can map to 504 not 502. */
@@ -181,9 +184,8 @@ async function forwardOnce(
 	traceparent: string,
 	timeoutMs: number,
 	bufferedBody?: ArrayBuffer,
+	marker?: string,
 ): Promise<Response> {
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), timeoutMs);
 	// A request body is a single-use stream: `new Request(target, request)` consumes it, so a second
 	// attempt would send nothing. When the caller buffered the body for replay (a keyed write), build
 	// the outbound request from that buffer instead, so every attempt sends identical bytes. GET/HEAD
@@ -200,6 +202,15 @@ async function forwardOnce(
 	// Set (not append) so a forwarded inbound value is not duplicated, and a
 	// generated one is present exactly once.
 	outbound.headers.set(TRACEPARENT, traceparent);
+	// Deleted unconditionally: a caller's own copy must never reach the upstream, whether or not
+	// this deployment configures the secret.
+	outbound.headers.delete(EDGE_PROXY_HEADER);
+	if (marker) {
+		outbound.headers.set(EDGE_PROXY_HEADER, marker);
+	}
+	// Armed only once the outbound request is fully built, so nothing above can leave it running.
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
 	let upstream: Response;
 	try {
 		upstream = await fetch(outbound, {
@@ -254,7 +265,14 @@ export async function forwardRequest(
 	let lastErr: unknown;
 	for (let attempt = 0; attempt <= retries; attempt++) {
 		try {
-			const response = await forwardOnce(target, request, traceparent, timeoutMs, bufferedBody);
+			const response = await forwardOnce(
+				target,
+				request,
+				traceparent,
+				timeoutMs,
+				bufferedBody,
+				options.edgeProxySecret,
+			);
 			// An upstream that answered with a server error is a different failure
 			// from an unreachable one — it is relayed as-is (not rewritten), but the
 			// join key is logged so it can be lined up against the upstream's own
@@ -323,5 +341,7 @@ export async function proxyRequest(event: RequestEvent): Promise<Response> {
 		);
 		throw error(500, 'Proxy upstream is misconfigured.');
 	}
-	return forwardRequest(upstream, event.url.pathname, event.url.search, event.request);
+	return forwardRequest(upstream, event.url.pathname, event.url.search, event.request, {
+		edgeProxySecret: edgeProxySecret(),
+	});
 }

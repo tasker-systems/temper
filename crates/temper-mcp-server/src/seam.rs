@@ -39,8 +39,17 @@ impl std::fmt::Debug for BearerToken {
     }
 }
 
+/// Header that marks a request as relayed from inside the deployment, carrying
+/// `TEMPER_EDGE_PROXY_SECRET`. The API project's edge firewall exempts requests that carry it
+/// from its per-IP rate limits: every relayed act reaches the API from this function's few
+/// egress addresses, so a per-IP limit would put every MCP user into one bucket. The callers
+/// already met per-IP limits where their own address is visible. Nothing in the API reads it,
+/// and it confers no access. temper-ui's reverse proxy sends the same header.
+pub const EDGE_PROXY_HEADER: &str = "x-temper-edge-proxy";
+
 /// The deployed door's seam: the edge-verified bearer, `Surface::Mcp`, and the service
-/// credential plus `mcp` carrier as opaque extra headers.
+/// credential plus `mcp` carrier (and, when configured, the edge-proxy marker) as opaque extra
+/// headers.
 #[derive(Clone)]
 pub struct DeployedDoorSeam {
     headers: http::HeaderMap,
@@ -62,6 +71,18 @@ impl DeployedDoorSeam {
             http::HeaderValue::from_static("mcp"),
         );
         Ok(Self { headers })
+    }
+
+    /// Also send [`EDGE_PROXY_HEADER`] with this value on every relayed act.
+    pub fn with_edge_proxy_secret(
+        mut self,
+        secret: &str,
+    ) -> Result<Self, http::header::InvalidHeaderValue> {
+        self.headers.insert(
+            http::HeaderName::from_static(EDGE_PROXY_HEADER),
+            http::HeaderValue::from_str(secret)?,
+        );
+        Ok(self)
     }
 }
 
