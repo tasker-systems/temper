@@ -40,7 +40,7 @@ impl<'a> QueryClient<'a> {
     pub async fn run<P: serde::Serialize + ?Sized>(&self, plan: &P) -> Result<QueryResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::QUERY;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(plan);
         let resp = self
             .http

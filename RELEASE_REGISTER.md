@@ -23,6 +23,37 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.6.0 — unreleased
+- **Every client refuses a path value of `.` or `..`; temper-rb and temper-py also escape `.` in path values**
+  temperkb-client, temper-ts, temper-rb and temper-py now refuse, before any request is sent, a
+  path value that is exactly `.` or `..`. The v0.6.0 row on temperkb-client said temperkb-client's encoding
+  kept a doc-type name from reaching a different route. That did not hold for those two values:
+  reqwest parses the URL with the `url` crate, which follows the WHATWG standard and reads `%2E%2E`
+  as a dot segment, so `..` still addressed the parent route. Node's `fetch` behaves the same way,
+  so for those two clients no encoding can carry the value and it is refused instead. temper-rb and
+  temper-py did not escape `.` at all; both now encode it as `%2E` (their transports keep the
+  encoded form literal) as well as refusing. temperkb-client answers `ClientError::Other`; temper-ts
+  throws a `TypeError`; temper-rb raises `ArgumentError`; temper-py raises `ValueError`. Only two
+  published path parameters are free strings (`GET /api/schema/doc-types/{name}` and
+  `GET /api/graph/elements/{kind}/{id}/trail`), and neither accepts `.` or `..` as a real value.
+  Who observes: SDK and temperkb-client callers passing such a value. User-visible: an error in
+  place of a request to the wrong route. Release relevance: behavioral.
+pr: self
+classes: behavioral
+surfaces: clients
+status: signal-only
+- **`DELETE /api/relationships/{edge_handle}/facets/{property_id}` documents its authorship fields as query parameters**
+  `openapi.json` declared `ActInput`'s seven fields (`invocation_id`, `correlation_id`, `reasoning`,
+  `confidence`, `rationale`, `persona`, `model`) on this route as path parameters, so the generated
+  SDKs had no placeholder to put them in and dropped them without error. They are now query
+  parameters, which is what the handler always read. On the other three `ActInput` routes the
+  fields were already query parameters; their schemas now drop the explicit `null` branch, so the
+  generated Python types are `UUID`/`ConfidenceBand` rather than `Any`. Server behavior is
+  unchanged. Who observes: SDK callers retracting a facet with authorship, whose fields now arrive.
+  User-visible: no. Release relevance: behavioral (clients), additive (spec).
+pr: self
+classes: additive, behavioral
+surfaces: http, clients
+status: signal-only
 - **Resource erasure rewrites the erased resource's own ledger events, and the survey and execute answers gain `redacted_fields`**
   An erasure run from now on rewrites the free text in the erased resource's own trail events in
   `kb_events` (titles, origin URIs, doc types, remote-source URLs, property keys and values, facet

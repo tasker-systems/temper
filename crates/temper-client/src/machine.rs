@@ -31,7 +31,7 @@ impl<'a> MachineClientsClient<'a> {
     pub async fn provision(&self, body: &ProvisionMachineRequest) -> Result<MachineClient> {
         let token = self.http.resolve_token()?;
         let op = &ops::PROVISION_MACHINE_CLIENT;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -42,7 +42,7 @@ impl<'a> MachineClientsClient<'a> {
     pub async fn rebind(&self, id: Uuid, body: &RebindMachineRequest) -> Result<MachineClient> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_REBIND_MACHINE_CLIENT;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -53,7 +53,7 @@ impl<'a> MachineClientsClient<'a> {
     pub async fn list(&self, include_revoked: bool) -> Result<Vec<MachineClient>> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_MACHINE_CLIENTS;
-        let path = format!("{}?include_revoked={include_revoked}", op.path(&[]));
+        let path = format!("{}?include_revoked={include_revoked}", op.path(&[])?);
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -64,7 +64,7 @@ impl<'a> MachineClientsClient<'a> {
     pub async fn get(&self, id: Uuid) -> Result<MachineClient> {
         let token = self.http.resolve_token()?;
         let op = &ops::GET_MACHINE_CLIENT;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -75,7 +75,7 @@ impl<'a> MachineClientsClient<'a> {
     pub async fn revoke(&self, id: Uuid) -> Result<MachineClient> {
         let token = self.http.resolve_token()?;
         let op = &ops::REVOKE_MACHINE_CLIENT;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -86,7 +86,7 @@ impl<'a> MachineClientsClient<'a> {
     pub async fn issue(&self, body: &IssueMachineRequest) -> Result<IssuedMachineCredential> {
         let token = self.http.resolve_token()?;
         let op = &ops::ISSUE_MACHINE_CREDENTIAL;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -101,7 +101,7 @@ impl<'a> MachineClientsClient<'a> {
     ) -> Result<IssuedMachineCredential> {
         let token = self.http.resolve_token()?;
         let op = &ops::ROTATE_MACHINE_CLIENT_SECRET;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))

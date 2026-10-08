@@ -47,7 +47,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/cognitive-maps/{id}/analytics'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/cognitive-maps/{id}/analytics'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -121,7 +121,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/cognitive-maps/{id}/teams'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/cognitive-maps/{id}/teams'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -267,7 +267,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/cognitive-maps/{id}'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/cognitive-maps/{id}'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -341,7 +341,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/cognitive-maps/{id}/grants'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/cognitive-maps/{id}/grants'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -482,7 +482,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/cognitive-maps/{id}/materialize'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/cognitive-maps/{id}/materialize'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -557,7 +557,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/cognitive-maps/{id}/materialize-delta'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/cognitive-maps/{id}/materialize-delta'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -646,7 +646,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/cognitive-maps/{id}'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/cognitive-maps/{id}'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -728,7 +728,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/cognitive-maps/{id}/region-metrics'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/cognitive-maps/{id}/region-metrics'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -803,7 +803,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/cognitive-maps/{id}/grants'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/cognitive-maps/{id}/grants'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -878,7 +878,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/cognitive-maps/{id}/shape'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/cognitive-maps/{id}/shape'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -953,7 +953,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/cognitive-maps/{id}/teams/{team_id}'.sub('{id}', CGI.escape(id.to_s)).sub('{team_id}', CGI.escape(team_id.to_s))
+      local_var_path = '/api/cognitive-maps/{id}/teams/{team_id}'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E')).sub('{team_id}', CGI.escape(team_id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}

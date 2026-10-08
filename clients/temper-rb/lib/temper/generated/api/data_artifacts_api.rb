@@ -55,7 +55,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/resources/{id}/artifacts'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/resources/{id}/artifacts'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -136,7 +136,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/resources/{id}/artifacts/{artifact_id}'.sub('{id}', CGI.escape(id.to_s)).sub('{artifact_id}', CGI.escape(artifact_id.to_s))
+      local_var_path = '/api/resources/{id}/artifacts/{artifact_id}'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E')).sub('{artifact_id}', CGI.escape(artifact_id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -206,7 +206,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/data-artifacts/{artifact_id}'.sub('{artifact_id}', CGI.escape(artifact_id.to_s))
+      local_var_path = '/api/data-artifacts/{artifact_id}'.sub('{artifact_id}', CGI.escape(artifact_id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -284,7 +284,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/resources/{id}/artifacts'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/resources/{id}/artifacts'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}

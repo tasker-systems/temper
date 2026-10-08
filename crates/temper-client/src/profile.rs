@@ -32,7 +32,7 @@ impl<'a> ProfileClient<'a> {
     pub async fn get(&self) -> Result<Profile> {
         let token = self.http.resolve_token()?;
         let op = &ops::GET_PROFILE;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -50,7 +50,7 @@ impl<'a> ProfileClient<'a> {
     pub async fn get_with_entitlements(&self) -> Result<ProfileWithEntitlements> {
         let token = self.http.resolve_token()?;
         let op = &ops::GET_PROFILE;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -61,7 +61,7 @@ impl<'a> ProfileClient<'a> {
     pub async fn update(&self, request: &ProfileUpdateRequest) -> Result<Profile> {
         let token = self.http.resolve_token()?;
         let op = &ops::UPDATE_PROFILE;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -72,7 +72,7 @@ impl<'a> ProfileClient<'a> {
     pub async fn auth_links(&self) -> Result<Vec<ProfileAuthLink>> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_AUTH_LINKS;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))

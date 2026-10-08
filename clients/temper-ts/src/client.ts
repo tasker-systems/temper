@@ -1,4 +1,4 @@
-import createClient, { type Client } from "openapi-fetch";
+import createClient, { type Client, defaultPathSerializer } from "openapi-fetch";
 
 import { createAuthedFetch, type FetchLike } from "./auth-fetch.js";
 import type { Credentials } from "./credentials.js";
@@ -41,12 +41,32 @@ export interface TemperClientOptions {
  * which is exactly the thing that has no per-status entry in the spec. Wrap the call in a `try`;
  * `if (error)` alone will not see them.
  */
+/**
+ * openapi-fetch's own path serializer, refusing a value of `.` or `..`.
+ *
+ * `encodeURIComponent` leaves `.` alone, and encoding it would not help: the WHATWG URL parser
+ * behind `fetch` reads `%2E%2E` as a dot segment too, so a `name` of `..` would reach the parent
+ * route with the caller's token. No encoding survives the parse, so the value is refused before a
+ * request exists. Every other value is serialized exactly as the default does.
+ */
+function refusingDotSegments(pathname: string, pathParams: Record<string, unknown>): string {
+  for (const [name, value] of Object.entries(pathParams ?? {})) {
+    if (value === "." || value === "..") {
+      throw new TypeError(
+        `path parameter \`${name}\` is \`${value}\`, which would address the parent route`,
+      );
+    }
+  }
+  return defaultPathSerializer(pathname, pathParams);
+}
+
 export function createTemperClient(opts: TemperClientOptions): Client<paths> {
   // Checked here, once, before any request exists to carry the token — a
   // plaintext origin refused at creation rather than flagged per request.
   requireEndpoint(opts.baseUrl, "baseUrl", { allowInsecureHttp: opts.allowInsecureHttp });
   return createClient<paths>({
     baseUrl: opts.baseUrl,
+    pathSerializer: refusingDotSegments,
     fetch: createAuthedFetch({
       credentials: opts.credentials,
       fetch: opts.fetch,

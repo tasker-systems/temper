@@ -49,7 +49,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/relationships/{edge_handle}/facets'.sub('{edge_handle}', CGI.escape(edge_handle.to_s))
+      local_var_path = '/api/relationships/{edge_handle}/facets'.sub('{edge_handle}', CGI.escape(edge_handle.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -119,7 +119,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/resources/{id}/facets'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/resources/{id}/facets'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -209,7 +209,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/relationships/{edge_handle}/facets/{property_id}'.sub('{edge_handle}', CGI.escape(edge_handle.to_s)).sub('{property_id}', CGI.escape(property_id.to_s))
+      local_var_path = '/api/relationships/{edge_handle}/facets/{property_id}'.sub('{edge_handle}', CGI.escape(edge_handle.to_s).gsub('.', '%2E')).sub('{property_id}', CGI.escape(property_id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -292,7 +292,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/relationships/{edge_handle}/facets'.sub('{edge_handle}', CGI.escape(edge_handle.to_s))
+      local_var_path = '/api/relationships/{edge_handle}/facets'.sub('{edge_handle}', CGI.escape(edge_handle.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}

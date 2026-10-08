@@ -32,7 +32,7 @@ fn join_ids(ids: &[Uuid]) -> String {
 
 /// `GET /api/graph/entry` — both params optional. Empty anchors means the whole
 /// visible corpus, which is the read's headline case (a reader who asked nothing).
-pub(crate) fn entry_path(anchors: &[Uuid], k: Option<i32>) -> String {
+pub(crate) fn entry_path(anchors: &[Uuid], k: Option<i32>) -> Result<String> {
     let mut params: Vec<String> = Vec::new();
     if !anchors.is_empty() {
         params.push(format!("in={}", join_ids(anchors)));
@@ -40,22 +40,22 @@ pub(crate) fn entry_path(anchors: &[Uuid], k: Option<i32>) -> String {
     if let Some(k) = k {
         params.push(format!("k={k}"));
     }
-    let base = ops::ENTRY.path(&[]);
-    if params.is_empty() {
+    let base = ops::ENTRY.path(&[])?;
+    Ok(if params.is_empty() {
         base
     } else {
         format!("{base}?{}", params.join("&"))
-    }
+    })
 }
 
 /// `GET /api/graph/traverse` — `from` is required, `depth` is omitted when the caller
 /// names none so the default stays in one place (the handler's `unwrap_or(1)`).
-pub(crate) fn traverse_path(seeds: &[Uuid], depth: Option<i32>) -> String {
-    let mut path = format!("{}?from={}", ops::TRAVERSE.path(&[]), join_ids(seeds));
+pub(crate) fn traverse_path(seeds: &[Uuid], depth: Option<i32>) -> Result<String> {
+    let mut path = format!("{}?from={}", ops::TRAVERSE.path(&[])?, join_ids(seeds));
     if let Some(depth) = depth {
         path.push_str(&format!("&depth={depth}"));
     }
-    path
+    Ok(path)
 }
 
 /// Sub-client for the graph read surface.
@@ -82,7 +82,7 @@ impl<'a> GraphClient<'a> {
     pub async fn entry(&self, anchors: &[Uuid], k: Option<i32>) -> Result<AtlasEntry> {
         let token = self.http.resolve_token()?;
         let op = &ops::ENTRY;
-        let path = entry_path(anchors, k);
+        let path = entry_path(anchors, k)?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -96,7 +96,7 @@ impl<'a> GraphClient<'a> {
     pub async fn traverse(&self, seeds: &[Uuid], depth: Option<i32>) -> Result<AtlasSubgraph> {
         let token = self.http.resolve_token()?;
         let op = &ops::TRAVERSE;
-        let path = traverse_path(seeds, depth);
+        let path = traverse_path(seeds, depth)?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -108,7 +108,7 @@ impl<'a> GraphClient<'a> {
     pub async fn home(&self) -> Result<AtlasHome> {
         let token = self.http.resolve_token()?;
         let op = &ops::ATLAS_HOME;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -157,7 +157,7 @@ impl<'a> GraphClient<'a> {
     ) -> Result<AtlasSubgraph> {
         let token = self.http.resolve_token()?;
         let op = &ops::COGMAP_NEIGHBORHOOD_SLICE;
-        let path = op.path(&[&cogmap_id]);
+        let path = op.path(&[&cogmap_id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -176,7 +176,7 @@ impl<'a> GraphClient<'a> {
         T: serde::de::DeserializeOwned,
     {
         let token = self.http.resolve_token()?;
-        let path = op.path(args);
+        let path = op.path(args)?;
         let req = self.http.request(op, &path).query(query);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn entry_path_is_bare_when_nothing_is_named() {
-        assert_eq!(entry_path(&[], None), "/api/graph/entry");
+        assert_eq!(entry_path(&[], None).unwrap(), "/api/graph/entry");
     }
 
     #[test]
@@ -198,21 +198,21 @@ mod tests {
         let a = Uuid::from_u128(1);
         let b = Uuid::from_u128(2);
         assert_eq!(
-            entry_path(&[a, b], None),
+            entry_path(&[a, b], None).unwrap(),
             format!("/api/graph/entry?in={a},{b}")
         );
     }
 
     #[test]
     fn entry_path_carries_k_alone() {
-        assert_eq!(entry_path(&[], Some(40)), "/api/graph/entry?k=40");
+        assert_eq!(entry_path(&[], Some(40)).unwrap(), "/api/graph/entry?k=40");
     }
 
     #[test]
     fn entry_path_carries_both_params() {
         let a = Uuid::from_u128(3);
         assert_eq!(
-            entry_path(&[a], Some(7)),
+            entry_path(&[a], Some(7)).unwrap(),
             format!("/api/graph/entry?in={a}&k=7")
         );
     }
@@ -224,7 +224,7 @@ mod tests {
     fn traverse_path_joins_seeds_with_commas_not_repeated_params() {
         let a = Uuid::from_u128(4);
         let b = Uuid::from_u128(5);
-        let path = traverse_path(&[a, b], None);
+        let path = traverse_path(&[a, b], None).unwrap();
         assert_eq!(path, format!("/api/graph/traverse?from={a},{b}"));
         assert!(
             !path.contains(&format!("from={a}&from={b}")),
@@ -236,7 +236,7 @@ mod tests {
     fn traverse_path_omits_depth_when_unnamed_so_the_default_lives_in_one_place() {
         let a = Uuid::from_u128(6);
         assert_eq!(
-            traverse_path(&[a], None),
+            traverse_path(&[a], None).unwrap(),
             format!("/api/graph/traverse?from={a}")
         );
     }
@@ -245,7 +245,7 @@ mod tests {
     fn traverse_path_carries_depth_when_named() {
         let a = Uuid::from_u128(8);
         assert_eq!(
-            traverse_path(&[a], Some(3)),
+            traverse_path(&[a], Some(3)).unwrap(),
             format!("/api/graph/traverse?from={a}&depth=3")
         );
     }

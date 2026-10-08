@@ -344,6 +344,9 @@ module Temper::Generated
     def build_request_url(path, opts = {})
       # Add leading and trailing slashes to path
       path = "/#{path}".gsub(/\/+/, '/')
+      if path.split('/').any? { |segment| ['.', '..'].include?(CGI.unescape(segment)) }
+        raise ArgumentError, "a path value of `.` or `..` would address the parent route: #{path}"
+      end
       @config.base_url(opts[:operation]) + path
     end
 

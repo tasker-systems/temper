@@ -38,7 +38,7 @@ impl<'a> TeamsClient<'a> {
     pub async fn list(&self) -> Result<Vec<TeamRow>> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_TEAMS;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -49,7 +49,7 @@ impl<'a> TeamsClient<'a> {
     pub async fn create(&self, body: &TeamCreateRequest) -> Result<TeamRow> {
         let token = self.http.resolve_token()?;
         let op = &ops::CREATE_TEAM;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -64,7 +64,7 @@ impl<'a> TeamsClient<'a> {
     ) -> Result<TeamMemberRow> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADD_MEMBER;
-        let path = op.path(&[&team_id]);
+        let path = op.path(&[&team_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -75,7 +75,7 @@ impl<'a> TeamsClient<'a> {
     pub async fn get(&self, team_id: Uuid) -> Result<TeamDetail> {
         let token = self.http.resolve_token()?;
         let op = &ops::DETAIL;
-        let path = op.path(&[&team_id]);
+        let path = op.path(&[&team_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -86,7 +86,7 @@ impl<'a> TeamsClient<'a> {
     pub async fn update(&self, team_id: Uuid, body: &TeamUpdateRequest) -> Result<TeamRow> {
         let token = self.http.resolve_token()?;
         let op = &ops::UPDATE_TEAM;
-        let path = op.path(&[&team_id]);
+        let path = op.path(&[&team_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -100,7 +100,7 @@ impl<'a> TeamsClient<'a> {
     pub async fn delete(&self, team_id: Uuid) -> Result<()> {
         let token = self.http.resolve_token()?;
         let op = &ops::DELETE_TEAM;
-        let path = op.path(&[&team_id]);
+        let path = op.path(&[&team_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send(&op.method(), &path, req, Some(&token))
@@ -117,7 +117,7 @@ impl<'a> TeamsClient<'a> {
     ) -> Result<TeamMemberRow> {
         let token = self.http.resolve_token()?;
         let op = &ops::CHANGE_ROLE;
-        let path = op.path(&[&team_id, &profile_id]);
+        let path = op.path(&[&team_id, &profile_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -142,7 +142,7 @@ impl<'a> TeamsClient<'a> {
     ) -> Result<RemoveMemberOutcome> {
         let token = self.http.resolve_token()?;
         let op = &ops::REMOVE_MEMBER;
-        let path = op.path(&[&team_id, &profile_id]);
+        let path = op.path(&[&team_id, &profile_id])?;
         let req = self.http.request(op, &path);
         let resp = self
             .http
@@ -168,7 +168,7 @@ impl<'a> TeamsClient<'a> {
     ) -> Result<TeamInvitation> {
         let token = self.http.resolve_token()?;
         let op = &ops::CREATE_TEAM_INVITATION;
-        let path = op.path(&[&team_id]);
+        let path = op.path(&[&team_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -183,7 +183,7 @@ impl<'a> TeamsClient<'a> {
     ) -> Result<BulkReassignAck> {
         let token = self.http.resolve_token()?;
         let op = &ops::REASSIGN_TEAM;
-        let path = op.path(&[&team_id]);
+        let path = op.path(&[&team_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -194,7 +194,7 @@ impl<'a> TeamsClient<'a> {
     pub async fn list_invitations(&self, team_id: Uuid) -> Result<Vec<TeamInvitation>> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_TEAM_INVITATIONS;
-        let path = op.path(&[&team_id]);
+        let path = op.path(&[&team_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -206,7 +206,7 @@ impl<'a> TeamsClient<'a> {
     pub async fn revoke_invitation(&self, team_id: Uuid, invitation_id: Uuid) -> Result<()> {
         let token = self.http.resolve_token()?;
         let op = &ops::REVOKE_TEAM_INVITATION;
-        let path = op.path(&[&team_id, &invitation_id]);
+        let path = op.path(&[&team_id, &invitation_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send(&op.method(), &path, req, Some(&token))
@@ -218,7 +218,7 @@ impl<'a> TeamsClient<'a> {
     pub async fn list_my_invitations(&self) -> Result<Vec<InviteeInvitation>> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_MINE;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -239,7 +239,7 @@ impl<'a> TeamsClient<'a> {
     ) -> Result<PendingInvitationCounts> {
         let token = self.http.resolve_token()?;
         let op = &ops::COUNT_MINE;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let mut req = self.http.request(op, &path);
         if let Some(slug) = team_slug {
             req = req.query(&[("team_slug", slug)]);
@@ -257,7 +257,7 @@ impl<'a> TeamsClient<'a> {
     pub async fn accept_invitation(&self, invite_token: &str) -> Result<AcceptInvitationResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::ACCEPT;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let body = InvitationTokenRequest {
             token: invite_token.to_string(),
         };
@@ -274,7 +274,7 @@ impl<'a> TeamsClient<'a> {
     pub async fn decline_invitation(&self, invite_token: &str) -> Result<()> {
         let token = self.http.resolve_token()?;
         let op = &ops::DECLINE;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let body = InvitationTokenRequest {
             token: invite_token.to_string(),
         };

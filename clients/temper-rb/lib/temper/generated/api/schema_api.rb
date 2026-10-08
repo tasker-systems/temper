@@ -49,7 +49,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/schema/doc-types/{name}'.sub('{name}', CGI.escape(name.to_s))
+      local_var_path = '/api/schema/doc-types/{name}'.sub('{name}', CGI.escape(name.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}

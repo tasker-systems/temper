@@ -50,6 +50,33 @@ describe("createTemperClient", () => {
     expect(api.bearers[0]).not.toBe(api.bearers[1]);
   });
 
+  it("refuses a `.` or `..` path value before any request is sent", async () => {
+    issuer = await startTemperAs();
+    const seen: string[] = [];
+    const client = createTemperClient({
+      baseUrl: "https://temper.example",
+      credentials: machineCredentials(issuer.url),
+      fetch: async (input) => {
+        seen.push(input.url);
+        return new Response("{}", { headers: { "content-type": "application/json" } });
+      },
+    });
+
+    // Encoding cannot carry these: the WHATWG URL parser behind fetch reads `%2E%2E` as a dot
+    // segment as well, so the request would reach the parent route. This pins that premise.
+    expect(new URL("https://h/api/schema/doc-types/%2E%2E").pathname).toBe("/api/schema/");
+
+    for (const name of [".", ".."]) {
+      await expect(
+        client.GET("/api/schema/doc-types/{name}", { params: { path: { name } } }),
+      ).rejects.toThrow(/parent route/);
+    }
+    expect(seen).toEqual([]);
+
+    await client.GET("/api/schema/doc-types/{name}", { params: { path: { name: "a.b" } } });
+    expect(seen).toEqual(["https://temper.example/api/schema/doc-types/a.b"]);
+  });
+
   it("THROWS a mint failure — it does not arrive as a typed `error`", async () => {
     api = await startMockApi();
     issuer = await startTemperAs();

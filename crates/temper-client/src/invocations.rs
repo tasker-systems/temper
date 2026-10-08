@@ -36,7 +36,7 @@ impl<'a> InvocationsClient<'a> {
     pub async fn open(&self, req: &OpenInvocationRequest) -> Result<InvocationAck> {
         let token = self.http.resolve_token()?;
         let op = &ops::OPEN;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req_builder = self.http.request(op, &path).json(req);
         self.http
             .send_json(&op.method(), &path, req_builder, Some(&token))
@@ -48,7 +48,7 @@ impl<'a> InvocationsClient<'a> {
     pub async fn close(&self, invocation_id: Uuid, req: &CloseInvocationRequest) -> Result<()> {
         let token = self.http.resolve_token()?;
         let op = &ops::CLOSE;
-        let path = op.path(&[&invocation_id]);
+        let path = op.path(&[&invocation_id])?;
         let req_builder = self.http.request(op, &path).json(req);
         self.http
             .send(&op.method(), &path, req_builder, Some(&token))
@@ -60,7 +60,7 @@ impl<'a> InvocationsClient<'a> {
     pub async fn show(&self, invocation_id: Uuid) -> Result<InvocationView> {
         let token = self.http.resolve_token()?;
         let op = &ops::SHOW;
-        let path = op.path(&[&invocation_id]);
+        let path = op.path(&[&invocation_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -76,7 +76,7 @@ impl<'a> InvocationsClient<'a> {
     ) -> Result<Vec<InvocationSummary>> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_INVOCATIONS;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self
             .http
             .request(op, &path)

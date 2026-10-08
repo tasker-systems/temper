@@ -90,7 +90,7 @@ impl<'a> SearchClient<'a> {
     pub async fn search_with_params(&self, params: &SearchParams) -> Result<SearchResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::SEARCH;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(params);
         let resp = self
             .http

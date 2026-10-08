@@ -126,7 +126,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/relationships/{edge_handle}/fold'.sub('{edge_handle}', CGI.escape(edge_handle.to_s))
+      local_var_path = '/api/relationships/{edge_handle}/fold'.sub('{edge_handle}', CGI.escape(edge_handle.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -205,7 +205,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/relationships/{edge_handle}/retype'.sub('{edge_handle}', CGI.escape(edge_handle.to_s))
+      local_var_path = '/api/relationships/{edge_handle}/retype'.sub('{edge_handle}', CGI.escape(edge_handle.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -284,7 +284,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/relationships/{edge_handle}/reweight'.sub('{edge_handle}', CGI.escape(edge_handle.to_s))
+      local_var_path = '/api/relationships/{edge_handle}/reweight'.sub('{edge_handle}', CGI.escape(edge_handle.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}

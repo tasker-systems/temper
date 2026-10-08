@@ -29,7 +29,7 @@ impl<'a> FacetClient<'a> {
     pub async fn set(&self, request: &FacetSetRequest) -> Result<FacetAck> {
         let token = self.http.resolve_token()?;
         let op = &ops::SET_FACET;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -48,7 +48,7 @@ impl<'a> FacetClient<'a> {
     ) -> Result<FacetAck> {
         let token = self.http.resolve_token()?;
         let op = &ops::SET_EDGE_FACET;
-        let path = op.path(&[&edge_handle]);
+        let path = op.path(&[&edge_handle])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -59,7 +59,7 @@ impl<'a> FacetClient<'a> {
     pub async fn list_for_edge(&self, edge_handle: Uuid) -> Result<EdgeFacetsResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_EDGE_FACETS;
-        let path = op.path(&[&edge_handle]);
+        let path = op.path(&[&edge_handle])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -79,7 +79,7 @@ impl<'a> FacetClient<'a> {
     ) -> Result<FacetRetractAck> {
         let token = self.http.resolve_token()?;
         let op = &ops::RETRACT_EDGE_FACET;
-        let path = op.path(&[&edge_handle, &property_id]);
+        let path = op.path(&[&edge_handle, &property_id])?;
         let req = self.http.request(op, &path).query(act);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -93,7 +93,7 @@ impl<'a> FacetClient<'a> {
     pub async fn list_for_resource(&self, resource: Uuid) -> Result<ResourceFacetsResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_RESOURCE_FACETS;
-        let path = op.path(&[&resource]);
+        let path = op.path(&[&resource])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))

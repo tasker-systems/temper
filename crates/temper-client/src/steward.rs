@@ -38,7 +38,7 @@ impl<'a> StewardClient<'a> {
     pub async fn delta(&self, cogmap: Uuid, threshold: Option<i64>) -> Result<IngestDelta> {
         let token = self.http.resolve_token()?;
         let op = &ops::DELTA;
-        let path = delta_path(cogmap, threshold);
+        let path = delta_path(cogmap, threshold)?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -57,7 +57,7 @@ impl<'a> StewardClient<'a> {
     ) -> Result<AdvanceWatermarkAck> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADVANCE;
-        let path = op.path(&[&cogmap]);
+        let path = op.path(&[&cogmap])?;
         let body = AdvanceWatermarkRequest {
             event_id,
             boundary_fingerprint,
@@ -73,7 +73,7 @@ impl<'a> StewardClient<'a> {
     pub async fn sweep(&self, query: &DeltaQuery) -> Result<Vec<DriftSweepRow>> {
         let token = self.http.resolve_token()?;
         let op = &ops::STEWARD_SWEEP;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).query(query);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -84,7 +84,7 @@ impl<'a> StewardClient<'a> {
     pub async fn candidates(&self) -> Result<Vec<Uuid>> {
         let token = self.http.resolve_token()?;
         let op = &ops::CANDIDATES;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -101,7 +101,7 @@ impl<'a> StewardClient<'a> {
     ) -> Result<DispatchTickResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::STEWARD_DISPATCH;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let mut req = self.http.request(op, &path).json(request);
         if let Some(id) = correlation_id {
             req = req.header(STEWARD_CORRELATION_HEADER, id.to_string());
@@ -114,12 +114,12 @@ impl<'a> StewardClient<'a> {
 
 /// `/api/steward/{cogmap}/delta` with an optional `threshold` query param — omitted when absent.
 /// Shared by the method and its test.
-fn delta_path(cogmap: Uuid, threshold: Option<i64>) -> String {
-    let base = ops::DELTA.path(&[&cogmap]);
-    match threshold {
+fn delta_path(cogmap: Uuid, threshold: Option<i64>) -> Result<String> {
+    let base = ops::DELTA.path(&[&cogmap])?;
+    Ok(match threshold {
         Some(t) => format!("{base}?threshold={t}"),
         None => base,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -129,14 +129,14 @@ mod tests {
     #[test]
     fn delta_path_omits_threshold_when_none() {
         let id = Uuid::from_u128(7);
-        assert_eq!(delta_path(id, None), format!("/api/steward/{id}/delta"));
+        assert_eq!(delta_path(id, None).unwrap(), format!("/api/steward/{id}/delta"));
     }
 
     #[test]
     fn delta_path_includes_threshold() {
         let id = Uuid::from_u128(7);
         assert_eq!(
-            delta_path(id, Some(5)),
+            delta_path(id, Some(5)).unwrap(),
             format!("/api/steward/{id}/delta?threshold=5")
         );
     }

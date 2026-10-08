@@ -26,7 +26,7 @@ impl<'a> HealthClient<'a> {
     /// probe must not fail because the caller is logged out.
     pub async fn get_health(&self) -> Result<HealthResponse> {
         let op = &ops::HEALTH_CHECK;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http.send_json(&op.method(), &path, req, None).await
     }

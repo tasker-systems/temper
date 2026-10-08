@@ -49,7 +49,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/access/admin/principals/{id}/approve'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/access/admin/principals/{id}/approve'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -125,7 +125,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/access/admin/reviews/{id}'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/access/admin/reviews/{id}'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -328,7 +328,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/access/admin/principals/{id}/deactivate'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/access/admin/principals/{id}/deactivate'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -972,7 +972,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/access/admin/principals/{id}/reactivate'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/access/admin/principals/{id}/reactivate'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -1048,7 +1048,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/machine-clients/{id}/rebind'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/machine-clients/{id}/rebind'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -1268,7 +1268,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/access/admin/requests/{id}'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/access/admin/requests/{id}'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -1349,7 +1349,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/access/admin/principals/{id}/revoke'.sub('{id}', CGI.escape(id.to_s))
+      local_var_path = '/api/access/admin/principals/{id}/revoke'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}
@@ -1499,7 +1499,7 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/access/admin/profiles/{profile_id}'.sub('{profile_id}', CGI.escape(profile_id.to_s))
+      local_var_path = '/api/access/admin/profiles/{profile_id}'.sub('{profile_id}', CGI.escape(profile_id.to_s).gsub('.', '%2E'))
 
       # query parameters
       query_params = opts[:query_params] || {}

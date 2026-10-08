@@ -26,6 +26,30 @@ RSpec.describe Temper::Generated do
     expect(Temper::Generated::IngestPayload.instance_methods).to include(*act_keys)
   end
 
+  # A path value of `.` or `..` would climb to the parent route. The generate script escapes `.`
+  # at every substitution site and refuses the two dot segments in the one URL builder; both are
+  # post-generation patches, so these fail if a regeneration drops either.
+  describe 'path values' do
+    let(:api_client) { Temper::Generated::ApiClient.new }
+
+    it 'escapes `.` so a dotted value stays one literal segment' do
+      seen = nil
+      allow(api_client).to receive(:call_api) do |_verb, path, _opts|
+        seen = path
+        [nil, 200, {}]
+      end
+      Temper::Generated::SchemaApi.new(api_client).describe_doc_type_with_http_info('a.b')
+      expect(seen).to eq('/api/schema/doc-types/a%2Eb')
+    end
+
+    ['.', '..', '%2E', '%2E%2E'].each do |segment|
+      it "refuses a `#{segment}` segment before a request exists" do
+        expect { api_client.build_request_url("/api/schema/doc-types/#{segment}") }
+          .to raise_error(ArgumentError, /parent route/)
+      end
+    end
+  end
+
   it 'exposes the seams the skin depends on' do
     config = Temper::Generated::Configuration.new
     expect(config).to respond_to(:access_token_getter=, :configure_connection)

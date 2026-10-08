@@ -30,7 +30,7 @@ impl<'a> ConnectionsClient<'a> {
     pub async fn provision(&self, body: &ProvisionConnectionRequest) -> Result<Connection> {
         let token = self.http.resolve_token()?;
         let op = &ops::PROVISION_CONNECTION;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -41,7 +41,7 @@ impl<'a> ConnectionsClient<'a> {
     pub async fn list(&self, include_revoked: bool) -> Result<Vec<Connection>> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_CONNECTIONS;
-        let path = format!("{}?include_revoked={include_revoked}", op.path(&[]));
+        let path = format!("{}?include_revoked={include_revoked}", op.path(&[])?);
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -52,7 +52,7 @@ impl<'a> ConnectionsClient<'a> {
     pub async fn get(&self, id: Uuid) -> Result<Connection> {
         let token = self.http.resolve_token()?;
         let op = &ops::GET_CONNECTION;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -64,7 +64,7 @@ impl<'a> ConnectionsClient<'a> {
     pub async fn revoke(&self, id: Uuid) -> Result<Connection> {
         let token = self.http.resolve_token()?;
         let op = &ops::REVOKE_CONNECTION;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -79,7 +79,7 @@ impl<'a> ConnectionsClient<'a> {
     ) -> Result<AttachCredentialResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::ATTACH_CONNECTION_CREDENTIAL;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -90,7 +90,7 @@ impl<'a> ConnectionsClient<'a> {
     pub async fn set_webhook_events(&self, id: Uuid, events: Vec<String>) -> Result<Connection> {
         let token = self.http.resolve_token()?;
         let op = &ops::SET_CONNECTION_WEBHOOK_EVENTS;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self
             .http
             .request(op, &path)
@@ -104,7 +104,7 @@ impl<'a> ConnectionsClient<'a> {
     pub async fn set_tool_manifest(&self, id: Uuid, tools: Vec<String>) -> Result<Connection> {
         let token = self.http.resolve_token()?;
         let op = &ops::SET_CONNECTION_TOOL_MANIFEST;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self
             .http
             .request(op, &path)
@@ -128,7 +128,7 @@ impl<'a> ConnectionsClient<'a> {
     ) -> Result<Connection> {
         let token = self.http.resolve_token()?;
         let op = &ops::GRANT_CONNECTION_REACH;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self
             .http
             .request(op, &path)
@@ -142,7 +142,7 @@ impl<'a> ConnectionsClient<'a> {
     pub async fn revoke_reach(&self, id: Uuid, team: Uuid) -> Result<Connection> {
         let token = self.http.resolve_token()?;
         let op = &ops::REVOKE_CONNECTION_REACH;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self
             .http
             .request(op, &path)
