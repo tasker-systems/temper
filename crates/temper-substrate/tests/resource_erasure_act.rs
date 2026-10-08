@@ -4992,9 +4992,10 @@ async fn the_facet_regrain_cannot_reinflate_an_erased_resource(pool: sqlx::PgPoo
 }
 
 /// (Task 01a0fedb item 2) Properties owned by R's blocks go with R: every block-owned row ends
-/// folded with an `erased-key-<n>` key and the `"erased"` value, numbered per block, the survey's
-/// `kb_properties` target counts them, and replay reproduces the result. The block's role is
-/// written through the real append path, so the row has an event replay can walk.
+/// folded with an `erased-key-<n>` key and the `"erased"` value, numbered per block (two blocks
+/// each get `erased-key-1`), the survey's `kb_properties` target counts them, and replay
+/// reproduces the result. The roles are written through the real append path, so each row has an
+/// event replay can walk.
 ///
 /// FAILS IF: the act leaves a block-owned row its key or value, or a live one; or the survey does
 /// not count it; or replay diverges.
@@ -5015,22 +5016,31 @@ async fn a_blocks_own_properties_are_erased_with_it(pool: sqlx::PgPool) {
         make_home(&pool, owner, "block-props-twin").await,
     )
     .await;
-    let block = temper_substrate::content::prepare_block_from_chunks(
-        50,
-        Some(ROLE),
-        vec![chunk("a second block with a role", "")],
-    );
-    let block_id = writes::append_block(
-        &pool,
-        writes::AppendParams {
-            resource: leak.resource,
-            block: &block,
-            sources: vec![],
-            emitter,
-        },
-    )
-    .await
-    .expect("append a block carrying a role");
+    let mut block_ids = Vec::new();
+    for (seq, prose) in [
+        (50, "a second block with a role"),
+        (51, "a third block with a role"),
+    ] {
+        let block = temper_substrate::content::prepare_block_from_chunks(
+            seq,
+            Some(ROLE),
+            vec![chunk(prose, "")],
+        );
+        block_ids.push(
+            writes::append_block(
+                &pool,
+                writes::AppendParams {
+                    resource: leak.resource,
+                    block: &block,
+                    sources: vec![],
+                    emitter,
+                },
+            )
+            .await
+            .expect("append a block carrying a role"),
+        );
+    }
+    let block_id = block_ids[0];
 
     let before: Vec<(String, serde_json::Value)> = sqlx::query_as(
         "SELECT property_key, property_value FROM kb_properties \
@@ -5061,7 +5071,7 @@ async fn a_blocks_own_properties_are_erased_with_it(pool: sqlx::PgPool) {
         props_target["outcome"]
             .as_str()
             .unwrap()
-            .contains(" and 1 block-owned rows"),
+            .contains(" and 2 block-owned rows"),
         "the survey counts the block-owned row: {props_target}"
     );
 
@@ -5078,12 +5088,19 @@ async fn a_blocks_own_properties_are_erased_with_it(pool: sqlx::PgPool) {
     .unwrap();
     assert_eq!(
         after,
-        vec![(
-            "erased-key-1".to_string(),
-            serde_json::json!("erased"),
-            true
-        )],
-        "every block-owned row of R is sentineled and folded"
+        vec![
+            (
+                "erased-key-1".to_string(),
+                serde_json::json!("erased"),
+                true
+            ),
+            (
+                "erased-key-1".to_string(),
+                serde_json::json!("erased"),
+                true
+            ),
+        ],
+        "every block-owned row of R is sentineled and folded, numbered within its own block"
     );
 
     assert_replay_byte_identical(

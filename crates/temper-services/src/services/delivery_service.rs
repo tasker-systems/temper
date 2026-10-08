@@ -732,9 +732,10 @@ mod tests {
     // ── what a resource erasure names ──────────────────────────────────────
 
     /// (Task 01a0fedb item 1) The erasure survey names, by delivery id, every delivery that may
-    /// quote the resource: one whose `scope_reason` or `rationale` carries R's id, and one whose
-    /// event is in R's trail scope (an older webhook stored before intake wrapped such bodies).
-    /// A delivery that names nothing of R is not listed.
+    /// quote the resource, in any case and with or without hyphens: through its `scope_reason`,
+    /// its `rationale`, or its webhook's body, wrapped (version 2) or bare (version 1). A
+    /// delivery that names nothing of R is not listed. A bare body naming R at a top-level id key
+    /// is in neither R's element trail nor its erasure trail scope.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn the_erasure_survey_names_the_deliveries_that_may_quote_the_resource(pool: PgPool) {
         let (admin, _team, ctx, conn, sub) = seed_world(&pool).await;
@@ -766,14 +767,20 @@ mod tests {
         .expect("create the resource")
         .uuid();
 
-        // Four deliveries of four webhooks, one per subscription-event pair.
+        // Four deliveries of four webhooks, one per subscription-event pair. The fourth body
+        // quotes R, upper-cased.
         let mut ids = Vec::new();
-        for _ in 0..4 {
+        for i in 0..4 {
+            let mut payload = github_pr_payload(GITHUB_REPO);
+            if i == 3 {
+                payload["comment"] =
+                    serde_json::json!(format!("see {}", resource.to_string().to_uppercase()));
+            }
             intake_service::receive_webhook(
                 &pool,
                 conn,
                 ProviderEvent::from_header("pull_request"),
-                &github_pr_payload(GITHUB_REPO),
+                &payload,
             )
             .await
             .expect("receive webhook");
@@ -785,7 +792,7 @@ mod tests {
             ids.push(d.id);
         }
         ids.sort();
-        let [scoped, judged, untouched, _] = ids[..] else {
+        let [scoped, judged, untouched, quoted_body] = ids[..] else {
             panic!("expected four deliveries, got {ids:?}");
         };
 
@@ -795,7 +802,10 @@ mod tests {
             scoped,
             &RecordScopeRequest {
                 status: DeliveryStatus::Undetermined,
-                reason: Some(format!("enrichment stalled reading {resource}")),
+                reason: Some(format!(
+                    "enrichment stalled reading {}",
+                    resource.to_string().to_uppercase()
+                )),
             },
         )
         .await
@@ -817,7 +827,7 @@ mod tests {
             judged,
             &RecordDispositionRequest {
                 disposition: Disposition::Acted,
-                rationale: format!("filed as {resource}"),
+                rationale: format!("filed as {}", resource.simple()),
                 confidence: 0.9,
                 invocation_id: None,
             },
@@ -826,19 +836,21 @@ mod tests {
         .expect("dispose");
 
         // A version-1 webhook, stored bare before intake wrapped every body, whose body named the
-        // resource at a top-level id key: its event is in R's trail scope. Written directly, as
-        // intake no longer can.
+        // resource at a top-level id key. Written directly, as intake no longer can.
         let older: Uuid = sqlx::query_scalar(
-            "INSERT INTO kb_events (event_type_id, emitter_entity_id, payload) \
-             SELECT id, $1, jsonb_build_object('resource_id', $2::text) \
-               FROM kb_event_types WHERE name = 'webhook_received' RETURNING id",
+            "INSERT INTO kb_events (event_type_id, emitter_entity_id, payload, \
+                                    producing_anchor_table, producing_anchor_id) \
+             SELECT t.id, c.emitter_entity_id, jsonb_build_object('resource_id', $2::text), \
+                    'kb_contexts', c.home_context_id \
+               FROM kb_event_types t, kb_connections c \
+              WHERE t.name = 'webhook_received' AND c.id = $1 RETURNING id",
         )
-        .bind(emitter)
+        .bind(conn)
         .bind(resource)
         .fetch_one(&pool)
         .await
         .expect("an older webhook naming the resource");
-        let in_trail: Uuid = sqlx::query_scalar(
+        let bare: Uuid = sqlx::query_scalar(
             "INSERT INTO kb_subscription_deliveries (subscription_id, event_id) \
              VALUES ($1, $2) RETURNING id",
         )
@@ -861,13 +873,9 @@ mod tests {
             .map(|r| r["outcome"].as_str().unwrap().to_owned())
             .collect();
         named.sort();
-        let mut expected: Vec<Uuid> = vec![scoped, judged, in_trail];
+        let mut expected: Vec<Uuid> = vec![scoped, judged, quoted_body, bare];
         expected.sort();
-        assert_eq!(
-            named.len(),
-            3,
-            "three deliveries named, not four: {named:?}"
-        );
+        assert_eq!(named.len(), 4, "four deliveries named, not five: {named:?}");
         for (outcome, id) in named.iter().zip(&expected) {
             assert!(
                 outcome.starts_with(&format!("delivery {id} ")),
@@ -877,6 +885,104 @@ mod tests {
         assert!(
             !named.iter().any(|o| o.contains(&untouched.to_string())),
             "a delivery naming nothing of the resource is not listed"
+        );
+
+        let in_scope: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM _resource_erasure_trail_scope($1) WHERE event_id = $2",
+        )
+        .bind(resource)
+        .bind(older)
+        .fetch_one(&pool)
+        .await
+        .expect("trail scope");
+        assert_eq!(
+            in_scope, 0,
+            "a webhook is in no resource's erasure trail scope"
+        );
+        let in_trail: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM element_trail_node($1, $2) WHERE event_id = $3",
+        )
+        .bind(admin.uuid())
+        .bind(resource)
+        .bind(older)
+        .fetch_one(&pool)
+        .await
+        .expect("element trail");
+        assert_eq!(in_trail, 0, "a webhook is in no resource's element trail");
+        let trail_len: i64 = sqlx::query_scalar("SELECT count(*) FROM element_trail_node($1, $2)")
+            .bind(admin.uuid())
+            .bind(resource)
+            .fetch_one(&pool)
+            .await
+            .expect("element trail");
+        assert!(
+            trail_len > 0,
+            "the resource's own trail is readable to this profile"
+        );
+
+        // The same for an edge: a bare body naming an edge at `edge_id` is not in its trail.
+        let other = temper_substrate::writes::create_resource(
+            &pool,
+            temper_substrate::writes::CreateParams {
+                idempotency_key: None,
+                title: "the other end",
+                origin_uri: "test://other-end",
+                body: "prose",
+                doc_type: "research",
+                home: temper_substrate::payloads::AnchorRef::context(ctx.into()),
+                owner: admin,
+                originator: admin,
+                emitter: emitter.into(),
+                properties: &[],
+                chunks: None,
+                sources: vec![],
+            },
+        )
+        .await
+        .expect("create the other resource");
+        let edge = temper_substrate::writes::assert_relationship(
+            &pool,
+            temper_substrate::writes::AssertParams {
+                src: resource.into(),
+                tgt: other,
+                kind: temper_substrate::affinity::EdgeKind::LeadsTo,
+                polarity: temper_substrate::payloads::EdgePolarity::Forward,
+                label: None,
+                weight: 1.0,
+                home: ctx.into(),
+                emitter: emitter.into(),
+            },
+        )
+        .await
+        .expect("assert an edge")
+        .uuid();
+        let on_edge: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_events (event_type_id, emitter_entity_id, payload, \
+                                    producing_anchor_table, producing_anchor_id) \
+             SELECT t.id, c.emitter_entity_id, jsonb_build_object('edge_id', $2::text), \
+                    'kb_contexts', c.home_context_id \
+               FROM kb_event_types t, kb_connections c \
+              WHERE t.name = 'webhook_received' AND c.id = $1 RETURNING id",
+        )
+        .bind(conn)
+        .bind(edge)
+        .fetch_one(&pool)
+        .await
+        .expect("an older webhook naming the edge");
+        let edge_trail: Vec<Uuid> =
+            sqlx::query_scalar("SELECT event_id FROM element_trail_edge($1, $2)")
+                .bind(admin.uuid())
+                .bind(edge)
+                .fetch_all(&pool)
+                .await
+                .expect("edge trail");
+        assert!(
+            !edge_trail.is_empty(),
+            "the edge's own trail is readable to this profile"
+        );
+        assert!(
+            !edge_trail.contains(&on_edge),
+            "a webhook is in no edge's element trail"
         );
     }
 

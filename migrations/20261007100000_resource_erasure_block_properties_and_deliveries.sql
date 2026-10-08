@@ -9,9 +9,29 @@
 --            remainder gains arm 5: subscription deliveries whose rationale or scope_reason quotes
 --            R's id, or whose event is in R's trail scope, named by delivery id (Q1: listed only).
 -- Section 3. _resource_erasure_key_numbers' comment names its third caller.
+-- Section 4. webhook_received leaves the element trails and the erasure trail scope. Intake stores
+--            new bodies under `body` (payload_version 2), but a version-1 body that carried a
+--            resource's id at a top-level key still matched that resource's trail, showing the
+--            remote's text to its readers. The sensitivity sweep already excludes the type
+--            (sensitivity.event_resource). The registry's schema_version follows to 2.
 --
--- Both bodies are their live definitions (20261004130000, 20261004150000) verbatim except for the
--- added statements and their comments. Signatures and return types are unchanged.
+-- Arms 3 and 5 match R's id through _resource_erasure_quotes (Section 0): any case, with or
+-- without hyphens. Both bodies are their live definitions (20261004130000, 20261004150000)
+-- verbatim except for the added statements, those matches, and their comments. Signatures and
+-- return types are unchanged.
+
+-- ---------------------------------------------------------------------------
+-- Section 0. Whether a text quotes a resource's id.
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION _resource_erasure_quotes(p_text text, p_resource uuid)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+    SELECT position(replace(p_resource::text, '-', '') IN replace(lower(p_text), '-', '')) > 0;
+$$;
+COMMENT ON FUNCTION _resource_erasure_quotes(text, uuid) IS
+'Whether p_text carries p_resource''s id in any case, with or without hyphens (hyphens are dropped
+from both sides, so a split in another place also matches; for a remainder over-listing is the
+safe direction). The erasure survey''s cross-resource arms (3 and 5) read quotes through this.
+NULL text quotes nothing.';
 
 -- ---------------------------------------------------------------------------
 -- Section 1. The act.
@@ -323,10 +343,13 @@ BEGIN
     -- (9d′) Block-owned properties: the (9b) pass applied per block of R, live and folded
     --      (ruled 2026-10-07). kb_properties_owner_table_check admits kb_content_blocks, and the
     --      only writer today is _project_blocks' block_role, which only charter blocks carry
-    --      and the act refuses charters (D5). The pass reaches the class, not that one key, so a
-    --      later producer of block-owned rows is erased without anyone remembering this step.
-    --      Keys numbered WITHIN EACH BLOCK by _resource_erasure_key_numbers, values
-    --      '"erased"'::jsonb, every row folded, last_event_id the erasure event.
+    --      and the act refuses charters (D5). The pass reaches every block-owned ROW, whatever
+    --      its key. It does not reach a ledger copy: _resource_erasure_trail_scope has no arm for
+    --      property events owned by a block, so a future block-owned property event needs one.
+    --      Keys numbered WITHIN EACH BLOCK by _resource_erasure_key_numbers, which orders keys by
+    --      their asserting event and is total only while one event asserts one key per owner
+    --      (true of _project_blocks, which writes block_role alone). Values '"erased"'::jsonb,
+    --      every row folded, last_event_id the erasure event.
     UPDATE kb_properties p
        SET property_key   = 'erased-key-' || k.n::text,
            property_value = '"erased"'::jsonb,
@@ -781,7 +804,7 @@ BEGIN
           JOIN kb_event_types et ON et.id = ev.event_type_id
          WHERE et.name IN ('citation_audited', 'subscription_delivery_disposed',
                            'invocation_closed')
-           AND ev.payload::text LIKE '%' || p_resource::text || '%'
+           AND _resource_erasure_quotes(ev.payload::text, p_resource)
            AND NOT EXISTS (
                SELECT 1 FROM kb_content_blocks b
                 WHERE b.resource_id = p_resource
@@ -818,24 +841,24 @@ BEGIN
     END LOOP;
 
     -- 5. Subscription deliveries that may quote R (Q1, listed only; ruled 2026-10-07). A delivery
-    --    is projected only by webhook intake, so its event is a remote's body, and that body is
-    --    in R's trail scope only if it carried R's id at a top-level id key. Intake now stores
-    --    every body under `body` (payload_version 2), so only a version-1 row can match. Its
-    --    free text is the real tie: `rationale` (copied onto subscription_delivery_disposed,
-    --    which arm 3 lists by event when it quotes R's id) and `scope_reason` (a caller's text,
-    --    never on the ledger, so no event id can name it). Named by delivery id, never redacted.
+    --    is projected only by webhook intake, so it carries three texts: the remote's body (its
+    --    event's payload, bare at version 1, under `body` at 2), `rationale` (copied onto
+    --    subscription_delivery_disposed, which arm 3 lists by event) and `scope_reason` (a
+    --    caller's text, never on the ledger, so no event id can name it). A delivery is named,
+    --    by its id, when any of the three quotes R's id. Never redacted.
     FOR v_row IN
         SELECT d.id
           FROM kb_subscription_deliveries d
-         WHERE d.rationale LIKE '%' || p_resource::text || '%'
-            OR d.scope_reason LIKE '%' || p_resource::text || '%'
-            OR d.event_id IN (SELECT t.event_id FROM _resource_erasure_trail_scope(p_resource) t)
+          JOIN kb_events ev ON ev.id = d.event_id
+         WHERE _resource_erasure_quotes(d.rationale, p_resource)
+            OR _resource_erasure_quotes(d.scope_reason, p_resource)
+            OR _resource_erasure_quotes(ev.payload::text, p_resource)
          ORDER BY d.id
     LOOP
         v_remainder := v_remainder || jsonb_build_object(
             'target', 'kb_subscription_deliveries',
             'outcome', 'delivery ' || v_row.id::text
-                       || ' may quote the resource in its rationale or scope_reason; listed only (Q1), never redacted');
+                       || ' may quote the resource in its webhook body, rationale or scope_reason; listed only (Q1), never redacted');
     END LOOP;
 
     -- R's home context, whether R was ever a goal, and R's genesis — inputs to the telos arm
@@ -968,8 +991,123 @@ first appearance (the first-asserting event''s occurred_at, then its id; never t
 ONE definition: the redaction body''s step (9b) numbers the resource with it, step (9d) each edge
 touching the resource, and step (9d′) each block of the resource (20261007100000).';
 
+-- ---------------------------------------------------------------------------
+-- Section 4. A received webhook is in no resource's or edge's trail.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.element_trail_node(p_profile uuid, p_resource uuid)
+ RETURNS TABLE(event_id uuid, kind text, actor_entity_id uuid, occurred_at timestamp with time zone, metadata jsonb, payload jsonb, actor_name text, correlation_id uuid)
+ LANGUAGE sql
+ STABLE
+AS $function$
+    WITH ev_ids AS (
+        -- `producing_anchor_table IS NOT NULL` on every arm, not once at the end: it prunes inside
+        -- the index scans rather than after the UNION.
+        SELECT ev.id FROM kb_events ev
+         WHERE (ev.payload ->> 'resource_id')::uuid = p_resource
+           AND ev.producing_anchor_table IS NOT NULL
+        UNION
+        SELECT ev.id FROM kb_events ev
+         WHERE ev.payload -> 'owner' ->> 'table' = 'kb_resources'
+           AND (ev.payload -> 'owner' ->> 'id')::uuid = p_resource
+           AND ev.producing_anchor_table IS NOT NULL
+        UNION
+        SELECT ev.id FROM kb_events ev
+         JOIN kb_content_blocks b ON b.id = (ev.payload ->> 'block_id')::uuid
+        WHERE b.resource_id = p_resource
+          AND ev.producing_anchor_table IS NOT NULL
+    )
+    SELECT ev.id, et.name, ev.emitter_entity_id, ev.occurred_at, ev.metadata, ev.payload, en.name,
+           ev.correlation_id
+    FROM ev_ids
+    JOIN kb_events ev ON ev.id = ev_ids.id
+    JOIN kb_event_types et ON et.id = ev.event_type_id
+    JOIN kb_entities en ON en.id = ev.emitter_entity_id
+    WHERE et.category = 'domain'
+      AND et.name <> 'webhook_received'
+      AND EXISTS (
+        SELECT 1 FROM resources_visible_to(p_profile) v WHERE v.resource_id = p_resource
+    )
+    ORDER BY ev.id;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.element_trail_edge(p_profile uuid, p_edge uuid)
+ RETURNS TABLE(event_id uuid, kind text, actor_entity_id uuid, occurred_at timestamp with time zone, metadata jsonb, payload jsonb, actor_name text, correlation_id uuid)
+ LANGUAGE sql
+ STABLE
+AS $function$
+    WITH ev_ids AS (
+        SELECT ev.id FROM kb_events ev
+         WHERE (ev.payload ->> 'edge_id')::uuid = p_edge
+           AND ev.producing_anchor_table IS NOT NULL
+        UNION
+        SELECT ev.id FROM kb_events ev
+         WHERE ev.payload -> 'owner' ->> 'table' = 'kb_edges'
+           AND (ev.payload -> 'owner' ->> 'id')::uuid = p_edge
+           AND ev.producing_anchor_table IS NOT NULL
+    )
+    SELECT ev.id, et.name, ev.emitter_entity_id, ev.occurred_at, ev.metadata, ev.payload, en.name,
+           ev.correlation_id
+    FROM kb_edges edg
+    JOIN ev_ids ON TRUE
+    JOIN kb_events ev ON ev.id = ev_ids.id
+    JOIN kb_event_types et ON et.id = ev.event_type_id
+    JOIN kb_entities en ON en.id = ev.emitter_entity_id
+    WHERE edg.id = p_edge
+      AND et.category = 'domain'
+      AND et.name <> 'webhook_received'
+      AND anchor_readable_by_profile(p_profile, edg.home_anchor_table, edg.home_anchor_id)
+      AND endpoint_readable_by_profile(p_profile, edg.source_table, edg.source_id)
+      AND endpoint_readable_by_profile(p_profile, edg.target_table, edg.target_id)
+    ORDER BY ev.id;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public._resource_erasure_trail_scope(p_resource uuid)
+ RETURNS TABLE(event_id uuid, event_type text)
+ LANGUAGE sql
+ STABLE
+AS $function$
+    SELECT ev.id, et.name
+      FROM kb_events ev
+      JOIN kb_event_types et ON et.id = ev.event_type_id
+     WHERE et.category = 'domain'
+       AND et.name <> 'webhook_received'
+       AND (
+            (ev.payload ->> 'resource_id')::uuid = p_resource
+         OR ((ev.payload #>> '{owner,table}') = 'kb_resources'
+             AND (ev.payload #>> '{owner,id}')::uuid = p_resource)
+         OR EXISTS (SELECT 1 FROM kb_content_blocks b
+                     WHERE b.id = (ev.payload ->> 'block_id')::uuid
+                       AND b.resource_id = p_resource)
+         OR EXISTS (SELECT 1 FROM kb_edges ee
+                     WHERE ee.id = (ev.payload ->> 'edge_id')::uuid
+                       AND ((ee.source_table = 'kb_resources' AND ee.source_id = p_resource)
+                         OR (ee.target_table = 'kb_resources' AND ee.target_id = p_resource)))
+         OR ((ev.payload #>> '{owner,table}') = 'kb_edges'
+             AND (ev.payload #>> '{owner,id}')::uuid IN (
+                 SELECT ee2.id FROM kb_edges ee2
+                  WHERE (ee2.source_table = 'kb_resources' AND ee2.source_id = p_resource)
+                     OR (ee2.target_table = 'kb_resources' AND ee2.target_id = p_resource)))
+       );
+$function$
+;
+
+COMMENT ON FUNCTION _resource_erasure_trail_scope(uuid) IS
+'the ONE scope predicate for "a resource''s own ledger events" (spec 2026-09-28 F2): the
+element-trail read''s own predicate (payload->>''resource_id''; property events owner-keyed to the
+resource; block events through the block join; events carrying a touched edge''s edge_id) PLUS
+property events whose owner IS an edge touching the resource (edge-owned properties ride the
+20260727000030 edge-facet shape). element_trail_edge reads that same owner arm for one edge since
+20260930000010; element_trail_node has no edge arms, so over a resource this predicate is still the
+only union of them. A received webhook is never one of them, whatever its body carries
+(20261007100000). Every consumer — the survey''s ledger remainder, cut 2''s completion pass, any
+operator audit — walks THIS predicate, never a second derivation.';
+
+UPDATE kb_event_types SET schema_version = 2 WHERE name = 'webhook_received';
+
 SELECT declare_migration(
     20261007100000,
     'additive',
-    'CREATE OR REPLACE of _resource_erasure_apply_redaction and resource_erasure_survey_plan with unchanged signatures and return types, plus a COMMENT. The act also sentinels and folds properties owned by the erased resource''s blocks (today only charter block_role rows exist, and the act refuses charters, so no live row changes). The plan''s kb_properties target text gains a block-owned count, and its remainder gains kb_subscription_deliveries entries. ErasureTargetOutcome is open-textured, so no payload schema changes, and a binary that predates this reads both lists unchanged. No table, column, constraint or grant changes.'
+    'CREATE OR REPLACE of _resource_erasure_apply_redaction and resource_erasure_survey_plan with unchanged signatures and return types, plus a COMMENT. The act also sentinels and folds properties owned by the erased resource''s blocks (today only charter block_role rows exist, and the act refuses charters, so no live row changes). The plan''s kb_properties target text gains a block-owned count, and its remainder gains kb_subscription_deliveries entries; arm 3 matches ids in any case. element_trail_node, element_trail_edge and _resource_erasure_trail_scope (unchanged signatures) stop returning webhook_received events, which no reader is meant to see there; the webhook_received registry row''s schema_version becomes 2, read by nothing. A new helper function _resource_erasure_quotes is added. ErasureTargetOutcome is open-textured, so no payload schema changes, and a binary that predates this reads both lists unchanged. No table, column, constraint or grant changes.'
 );
