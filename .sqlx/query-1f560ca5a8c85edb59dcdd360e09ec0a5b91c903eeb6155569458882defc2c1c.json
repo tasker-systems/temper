@@ -1,16 +1,18 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT 1 AS \"one!\" FROM (SELECT _resource_erasure_recompute_live_centroids($1)) s",
+  "query": "SELECT _region_recompute_erased_member_centroids($1, $2, $3) AS \"recomputed!\"",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "one!",
+        "name": "recomputed!",
         "type_info": "Int4"
       }
     ],
     "parameters": {
       "Left": [
+        "Text",
+        "Uuid",
         "Uuid"
       ]
     },
@@ -18,5 +20,5 @@
       null
     ]
   },
-  "hash": "9ba007a786d7a76391bfd7fcf6aa5964962bbaf204b01f6a1d34559c09e3c866"
+  "hash": "1f560ca5a8c85edb59dcdd360e09ec0a5b91c903eeb6155569458882defc2c1c"
 }

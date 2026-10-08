@@ -2,7 +2,8 @@
 //! The read of an ERASED resource (a husk: `kb_resources.erased_at` set) answers `410` under
 //! `RESOURCE_ERASED`, but only to a caller who holds standing on it (resource erasure spec D6/D7;
 //! `resource_husk_held_by`, migration `20260930000060`). Every other caller keeps the `404` an
-//! unknown id gets, so the `410` never becomes an erasure oracle.
+//! unknown id gets, so the `410` tells a caller without standing nothing. Standing is decided at
+//! read time (D6), so who holds it can grow after the act; that is ruled, not witnessed here.
 //!
 //! Witnessed on the three doors that read a resource, `GET /api/resources/{id}`,
 //! `GET /api/resources/{id}/content` and `GET /api/resources/{id}/meta`, and on the block read

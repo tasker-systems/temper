@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::materialize::default_lens_for;
-use temper_services::backend::region_clocks;
+use temper_services::backend::{region_clocks, DbBackend};
 use temper_services::services::region_service;
 use temper_services::services::resource_erasure_service::{
     execute_resource_erasure, ResourceErasureCompletion, ResourceErasureOutcome,
@@ -41,7 +41,7 @@ use temper_substrate::ids::{ContextId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::{AnchorRef, EdgePolarity};
 use temper_substrate::writes::{self, CreateParams};
 use temper_substrate::{substrate, write};
-use temper_workflow::operations::Surface;
+use temper_workflow::operations::{Backend, MaterializeOnThreshold, Surface};
 
 /// Distances below this are "the same vector" (pgvector stores float4).
 const SAME: f64 = 1e-5;
@@ -424,6 +424,8 @@ async fn drain(pool: &PgPool) {
 /// R planted everywhere its embedding can be derived into, materialized for real.
 struct Planted {
     ctx: ContextId,
+    /// C's owner: authors C, so it may materialize C through the endpoint.
+    owner: ProfileId,
     /// The goal under erasure: axis 0.
     r: ResourceId,
     /// The surviving non-goal member that shares R's live region.
@@ -490,6 +492,7 @@ async fn planted(pool: &PgPool) -> Planted {
 
     Planted {
         ctx,
+        owner: who.0,
         r,
         s,
         r_genesis,
@@ -1153,6 +1156,117 @@ async fn a_tick_that_finds_an_erased_live_member_recomputes_then_reforms(pool: P
         .expect("the repairing tick runs");
 
     assert_repaired(&pool, &p, &held_r).await;
+}
+
+/// (k2) The endpoint materialize (`POST …/materialize`, and the MCP tool) recomputes before it folds
+/// too. After the in-flight race, an author who materializes before the drain's next tick reaches
+/// the same fold the tick does, and a folded centroid is never recomputed afterwards.
+///
+/// FAILS without the incremental materialize's in-transaction recompute: the region folds with R's
+/// share, for good.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_endpoint_materialize_after_the_race_recomputes_then_reforms(pool: PgPool) {
+    let p = planted(&pool).await;
+    erase_under_an_inflight_settling(&pool, &p, InFlight::Tick).await;
+
+    assert_eq!(
+        erased_live_members(&pool, p.ctx).await,
+        vec![p.r.uuid()],
+        "precondition: R is still a live member after the in-flight tick (the race happened)"
+    );
+    let held_r: Vec<Uuid> = live_region_holding(&pool, p.ctx, &[p.r.uuid()])
+        .await
+        .into_iter()
+        .collect();
+    for region in &held_r {
+        sqlx::query("UPDATE kb_cogmap_regions SET centroid = $2::vector WHERE id = $1")
+            .bind(region)
+            .bind(&p.pre_act_centroid)
+            .execute(&pool)
+            .await
+            .expect("plant R's share in the R-holding centroid");
+        assert!(
+            distance(
+                &pool,
+                &p.pre_act_centroid,
+                &member_mean(&pool, *region).await
+            )
+            .await
+                > MOVED,
+            "vacuity guard: the survivors' mean must differ from the planted R-inclusive centroid"
+        );
+    }
+
+    // Threshold 0: the in-flight materialize stamped a fresh watermark, and an author may ask for
+    // a materialize regardless of how many writes have arrived since.
+    let ack = DbBackend::new(pool.clone(), p.owner)
+        .materialize_on_threshold(MaterializeOnThreshold {
+            anchor: anchor_of(p.ctx),
+            threshold: Some(0),
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .expect("the owner materializes C");
+    assert!(
+        ack.value.materialized,
+        "precondition: the endpoint materialized"
+    );
+
+    assert_repaired(&pool, &p, &held_r).await;
+}
+
+/// (k3) A full-pass materialize recomputes before it folds too. It folds every live region of the
+/// lens, so after the race it folds the R-holding region whatever the caller did beforehand; the
+/// recompute runs inside its transaction, under the anchor lock.
+///
+/// FAILS without the full pass's recompute: the region folds with R's share, for good.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_full_materialize_after_the_race_recomputes_then_folds(pool: PgPool) {
+    let p = planted(&pool).await;
+    erase_under_an_inflight_settling(&pool, &p, InFlight::Tick).await;
+
+    let held_r: Vec<Uuid> = live_region_holding(&pool, p.ctx, &[p.r.uuid()])
+        .await
+        .into_iter()
+        .collect();
+    assert!(
+        !held_r.is_empty(),
+        "precondition: R is still a live member after the in-flight tick (the race happened)"
+    );
+    for region in &held_r {
+        sqlx::query("UPDATE kb_cogmap_regions SET centroid = $2::vector WHERE id = $1")
+            .bind(region)
+            .bind(&p.pre_act_centroid)
+            .execute(&pool)
+            .await
+            .expect("plant R's share in the R-holding centroid");
+        assert!(
+            distance(
+                &pool,
+                &p.pre_act_centroid,
+                &member_mean(&pool, *region).await
+            )
+            .await
+                > MOVED,
+            "vacuity guard: the survivors' mean must differ from the planted R-inclusive centroid"
+        );
+    }
+
+    let (_, emitter) = principal(&pool).await;
+    materialize(&pool, p.ctx, emitter).await;
+
+    for region in &held_r {
+        assert!(
+            region_is_folded(&pool, *region).await,
+            "a full pass folds every live region of the lens"
+        );
+        let survivors = member_mean(&pool, *region).await;
+        let gap = distance(&pool, &region_centroid(&pool, *region).await, &survivors).await;
+        assert!(
+            gap < SAME,
+            "that region must fold with its survivors' mean (distance {gap})"
+        );
+    }
 }
 
 /// (l) The post-completion requeue: while an erased resource is a live member of an anchor's
