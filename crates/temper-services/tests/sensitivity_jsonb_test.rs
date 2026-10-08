@@ -263,6 +263,41 @@ async fn a_webhook_document_is_scanned_at_hidden_paths_and_tallied(pool: PgPool)
     );
 }
 
+/// The shape intake writes from payload_version 2: the remote's body under temper's `body` key.
+/// It is scanned one level deeper, keeps every key hidden, and still belongs to no resource.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_wrapped_webhook_document_is_scanned_and_belongs_to_no_resource(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
+    let e = event(
+        &pool,
+        "webhook_received",
+        serde_json::json!({ "body": {
+            "issue": { "body": format!("my ssn is {SSN_A}"), "number": 7 },
+            "resource_id": Uuid::now_v7().to_string(),
+        } }),
+        serde_json::json!({ "provider_event_type": "issues", "provider_event_type_source": "header" }),
+    )
+    .await;
+
+    tick(&pool, "kb_events.payload").await;
+
+    assert_eq!(
+        findings_at(&pool, e).await,
+        vec![("/?/?/?".to_string(), "us_ssn_delimited".to_string())],
+        "found under the wrap, with no key written"
+    );
+    let resource: Option<Uuid> =
+        sqlx::query_scalar("SELECT resource_id FROM sensitivity.findings WHERE target_id = $1")
+            .bind(e)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        resource, None,
+        "a wrapped webhook belongs to no resource either"
+    );
+}
+
 // ── The C1 design review's trap: a row is never scanned in half ───────────────────────────────
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -937,8 +972,8 @@ async fn a_resource_erasure_closes_its_title_and_property_findings_and_not_its_l
     );
     assert_eq!(
         closed_by(&pool, on_block).await,
-        vec![None],
-        "a block-owned property the act never reaches stays open, though its resource is erased"
+        vec![Some("sentinel".to_string())],
+        "a property owned by one of the resource's blocks is a sentinel too (step 9d′)"
     );
     let ledger: Vec<Option<String>> = sqlx::query_scalar(
         "SELECT c.closed_by FROM sensitivity.findings f \
