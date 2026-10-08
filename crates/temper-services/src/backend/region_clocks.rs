@@ -97,21 +97,13 @@ pub async fn tick(
     // `OR erased` — an erased resource still a member of a live region under THIS lens. The erasure
     // act recomputes the live centroids it can see and queues a settling, but a materialize already
     // in flight when the act commits loaded the resource before the act: it keeps it a live member
-    // under a fresh watermark (and may carry its share), and absorbs the act's queued job. Its
-    // centroid is recomputed over the survivors FIRST, because the materialize below folds the
-    // region as it stands; that materialize loads after the act, so the husk (inactive) leaves
-    // every region of this lens and the telos snapshot is re-armed. Lens-scoped because the
-    // materialize folds only this lens's regions: an erased member of another lens's live region
-    // would trip the gate forever. Those regions' centroids were recomputed by the act itself.
+    // under a fresh watermark (and may carry its share), and absorbs the act's queued job. The
+    // materialize below loads after the act, so the husk (inactive) leaves every region of this lens
+    // and the telos snapshot is re-armed; it recomputes the region's centroid over the survivors
+    // before it folds it. Lens-scoped because the materialize folds only this lens's regions: an
+    // erased member of another lens's live region would trip the gate forever. Those regions'
+    // centroids were recomputed by the act itself.
     let erased = erased_live_members(pool, anchor, lens_id).await?;
-    for resource in &erased {
-        sqlx::query_scalar!(
-            r#"SELECT 1 AS "one!" FROM (SELECT _resource_erasure_recompute_live_centroids($1)) s"#,
-            resource,
-        )
-        .fetch_one(pool)
-        .await?;
-    }
     if events >= threshold || deleted || !erased.is_empty() {
         write::incremental_materialize(pool, anchor, lens_name, emitter).await?;
         tick.materialized = true;

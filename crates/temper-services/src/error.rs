@@ -28,7 +28,8 @@ pub enum ApiError {
     /// 410 under [`temper_core::error::RESOURCE_ERASED_CODE`] — the addressed resource was
     /// erased, and the caller holds standing on the husk (`resource_husk_held_by`). Produced only
     /// where the read would otherwise be [`Self::NotFound`], so a caller without standing keeps
-    /// the uniform 404 and the 410 is never an erasure oracle.
+    /// the uniform 404. Standing is decided at read time, not frozen at the act (spec D6; see
+    /// `substrate_read::erased_or`).
     ///
     /// Carries the id and nothing else. The message is fixed: no title (a sentinel anyway), no
     /// `body_hash`, no `ingest_state`, no `erased_at`. The sentence is core's

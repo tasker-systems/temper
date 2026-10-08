@@ -42,6 +42,22 @@ pr: self
 classes: additive, behavioral
 surfaces: http, cli-stdout, clients, schema
 status: signal-only
+- **A materialize recomputes erased members' centroids under its anchor lock, before it folds**
+  Both materialize paths (the region drain's and `POST …/materialize` / the MCP materialize tool)
+  now recompute, inside their transaction and after taking the anchor row, the centroid of every
+  live region of their lens that still lists an erased resource, then fold. A materialize in flight
+  while a resource was erased can commit a live region that still lists it with its share in the
+  centroid; a later materialize folded that region as it stood, and folded centroids are never
+  recomputed, so the erased resource's vector stayed in the database. Migration `20261008200000`
+  adds `_region_recompute_centroids` and `_region_recompute_erased_member_centroids`, and
+  `_resource_erasure_recompute_live_centroids` now calls the first (same effect). Response shapes
+  are unchanged. The test-only `temper-api` change is a doc comment. Who observes: nobody through
+  the API (folded centroids are not served); an operator reading the database. User-visible: no.
+  Release relevance: behavioral.
+pr: self
+classes: behavioral
+surfaces: internal, schema
+status: signal-only
 - **`TEMPER_EDGE_PROXY_SECRET`: the web UI and the MCP relay mark the requests they send the API**
   When the new optional variable is set, temper-ui (its reverse proxy and its server-side data
   loaders) and the MCP function's relay send it as `x-temper-edge-proxy` on every request they
