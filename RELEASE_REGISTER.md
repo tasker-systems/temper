@@ -10,7 +10,7 @@ before any release: a release whose surface class has an open gated entry waits.
 Each row reads: citation · what changed behind which unchanged shape · who observes it ·
 user-visibility · release relevance. Beneath the citation line, machine fields, one per line:
 `pr:` the PR number, `pre-policy`, or `goal` · `classes:` a subset of `additive`,
-`shape-breaking`, `behavioral` · `surfaces:` a subset of `http`, `mcp`, `cli-stdout`, `clients`,
+`shape-breaking`, `behavioral`, `spec-correction` · `surfaces:` a subset of `http`, `mcp`, `cli-stdout`, `clients`,
 `schema`, `internal` · `status:` one of `open`, `signal-only`, `blocked:<release-class>`,
 `satisfied`.
 
@@ -21,6 +21,12 @@ or waits for the retirement release train. A bare `shape-breaking` row fails the
 gate on a main-bound PR. Deprecation rows (the D-C3 records) carry the retirement horizon — the
 era release the record names. Historical and pre-policy rows read as history: only new rows carry
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
+
+`spec-correction` declares that `openapi.json` described a request or answer the server never made,
+and that the movement brings the contract to what the server always did. The crosscheck passes it
+on a moved shape with a note, because CI cannot check the claim: like `behavioral`, it is
+review-owned, and the row must name what the server always did and why both skew directions hold.
+It never rides with `shape-breaking`, and it does not answer growth, which is still `additive`'s.
 
 ## Since v0.6.0 — unreleased
 - **Every client refuses a path value of `.` or `..`; temper-rb and temper-py also escape `.` in path values**
@@ -45,13 +51,17 @@ status: signal-only
   `openapi.json` declared `ActInput`'s seven fields (`invocation_id`, `correlation_id`, `reasoning`,
   `confidence`, `rationale`, `persona`, `model`) on this route as path parameters, so the generated
   SDKs had no placeholder to put them in and dropped them without error. They are now query
-  parameters, which is what the handler always read. On the other three `ActInput` routes the
-  fields were already query parameters; their schemas now drop the explicit `null` branch, so the
-  generated Python types are `UUID`/`ConfidenceBand` rather than `Any`. Server behavior is
-  unchanged. Who observes: SDK callers retracting a facet with authorship, whose fields now arrive.
-  User-visible: no. Release relevance: behavioral (clients), additive (spec).
+  parameters. The handler has always read them from the query string (`Query<ActInput>`), and no
+  handler changes here. On the other three `ActInput` routes the fields were already query
+  parameters; their schemas now drop the explicit `null` branch, so the generated Python types are
+  `UUID`/`ConfidenceBand` rather than `Any`. A query parameter has no null to send, so that only
+  narrows what a caller can pass, and the server reads absent and null alike. Both skew directions
+  hold: an older SDK keeps dropping the fields, which the server never received anyway; a newer SDK
+  sends them in the query string, which an older server already reads. Who observes: SDK callers
+  retracting a facet with authorship, whose fields now arrive. User-visible: no. Release
+  relevance: behavioral, declared as a spec correction (the contract moves; the server does not).
 pr: self
-classes: additive, behavioral
+classes: behavioral, spec-correction
 surfaces: http, clients
 status: signal-only
 - **Resource erasure rewrites the erased resource's own ledger events, and the survey and execute answers gain `redacted_fields`**
