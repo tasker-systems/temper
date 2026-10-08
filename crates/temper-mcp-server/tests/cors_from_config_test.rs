@@ -86,3 +86,90 @@ async fn configured_origin_is_echoed_rather_than_wildcarded_on_mcp() {
          never reached the layer that acts"
     );
 }
+
+/// Send a browser preflight for an authenticated POST to `/mcp` and return the response.
+///
+/// A preflight carries no credentials by specification, and `cors_layer` is the outermost layer,
+/// above `require_mcp_auth`: tower-http answers the preflight itself and the inner stack never
+/// runs. That ordering is required — a preflight that met the JWT check would 401 and no browser
+/// could ever call the door — so these probes pin what it means rather than move it.
+async fn preflight(cors_origins: Vec<String>) -> axum::response::Response {
+    common::build_router(
+        common::state_with_cors_origins(cors_origins),
+        common::discovery_config(),
+    )
+    .oneshot(
+        Request::builder()
+            .method("OPTIONS")
+            .uri("/mcp")
+            .header(header::ORIGIN, PROBE_ORIGIN)
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+            .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "authorization")
+            .body(Body::empty())
+            .expect("request builds"),
+    )
+    .await
+    .expect("router answers")
+}
+
+fn header_of(response: &axum::response::Response, name: header::HeaderName) -> Option<String> {
+    response
+        .headers()
+        .get(name)
+        .map(|v| v.to_str().expect("header is ASCII").to_string())
+}
+
+/// Unconfigured, a preflight is answered before authentication and grants nothing: no origin, so
+/// the browser refuses the real request.
+/// FAILS IF: the preflight reaches the JWT check (401), or deny-all starts granting an origin.
+#[tokio::test]
+async fn an_unconfigured_preflight_is_answered_before_auth_and_grants_nothing() {
+    let response = preflight(vec![]).await;
+    assert_ne!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "the preflight reached require_mcp_auth; the CORS layer must answer it"
+    );
+    assert_eq!(
+        header_of(&response, header::ACCESS_CONTROL_ALLOW_ORIGIN),
+        None,
+        "deny-all granted an origin to a preflight"
+    );
+}
+
+/// An allowlisted origin's preflight is granted, including the `authorization` header the real
+/// request carries — without it a browser client could not send its bearer.
+#[tokio::test]
+async fn an_allowlisted_preflight_grants_the_origin_and_the_bearer_header() {
+    let response = preflight(vec![PROBE_ORIGIN.to_string()]).await;
+    assert_eq!(
+        header_of(&response, header::ACCESS_CONTROL_ALLOW_ORIGIN).as_deref(),
+        Some(PROBE_ORIGIN)
+    );
+    let allowed_headers = header_of(&response, header::ACCESS_CONTROL_ALLOW_HEADERS)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    assert!(
+        allowed_headers.contains("authorization") || allowed_headers == "*",
+        "the bearer header must be allowed for an allowlisted origin: {allowed_headers:?}"
+    );
+}
+
+/// The permissive arm (`CORS_ORIGINS=*`, development only) answers any origin but never allows
+/// credentials. That is what keeps it harmless: no door authenticates by cookie, and a browser
+/// will not attach a bearer it does not hold, so a cross-origin page gains nothing.
+/// FAILS IF: the permissive arm starts sending `access-control-allow-credentials: true`.
+#[tokio::test]
+async fn the_permissive_preflight_never_allows_credentials() {
+    let response = preflight(vec!["*".to_string()]).await;
+    assert_eq!(
+        header_of(&response, header::ACCESS_CONTROL_ALLOW_ORIGIN).as_deref(),
+        Some("*"),
+        "the probe must reach the permissive arm to mean anything"
+    );
+    assert_eq!(
+        header_of(&response, header::ACCESS_CONTROL_ALLOW_CREDENTIALS),
+        None,
+        "the permissive arm must never allow credentials"
+    );
+}

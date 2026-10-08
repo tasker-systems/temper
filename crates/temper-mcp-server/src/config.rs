@@ -25,8 +25,13 @@
 //! sentence — the deployment-misconfiguration wording is this shell's, never the tool layer's.
 //!
 //! What the API's boot checks and this one does not: the cross-secret distinctness check and the
-//! strength floor on secrets this process never holds. The API function boots from the same
-//! project environment and still refuses on them.
+//! strength floor on secrets this process never holds. Distinctness is a property of the
+//! VALIDATOR's environment, and the API is the only thing that validates
+//! `TEMPER_MCP_SERVICE_SECRET` — so the check that matters is the API's, which refuses an
+//! overlap in its own environment. A refusal here would protect no secret the API's check
+//! misses, and would add a fail-closed boot condition to the agent-facing door: a boot refusal
+//! fires at cold start, after a deployment is promoted, so it takes the door dark rather than
+//! failing the deploy.
 
 use std::time::Duration;
 use temper_auth::config::{

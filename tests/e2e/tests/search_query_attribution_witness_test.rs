@@ -7,7 +7,7 @@
 //! witness pins is the chain the family's attribution rides:
 //!
 //! 1. The family's acts cross the TRUSTED path — driven through the real
-//!    listener, the relay's carrier is honored (`relayed_surface_trusted`), not
+//!    listener, the relay's carrier is honored (`relay_trust = trusted`), not
 //!    degraded. This is the fact the family consumes.
 //! 2. That same trusted path is what lands `@mcp` at the ledger: a relayed write
 //!    (the relay's exact wire shape at the listener) reads back
@@ -24,7 +24,7 @@ use sqlx::PgPool;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use common::tracing_layer::TestTracingLayer;
+use common::tracing_layer::{relay_trust_values, TestTracingLayer};
 
 /// The emitter entity name on the most recent event for `handle` — the ledger
 /// read (`kb_events.id` is UUIDv7, so newest-first needs no clock).
@@ -117,7 +117,7 @@ async fn a_relayed_write_through_the_real_listener_lands_at_mcp_in_the_ledger(po
 /// `@web` and this witness reddens with the ledger one.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_familys_acts_cross_the_trusted_path(pool: PgPool) {
-    let (layer, captured) = TestTracingLayer::new();
+    let (layer, _events, spans) = TestTracingLayer::with_spans();
     let _guard = tracing_subscriber::registry().with(layer).set_default();
     let app = common::setup_relay(pool).await;
     let svc = app.mcp_relay_service().await;
@@ -150,18 +150,9 @@ async fn the_familys_acts_cross_the_trusted_path(pool: PgPool) {
     );
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let events = captured.lock().unwrap();
-    let trusted_count = events
-        .iter()
-        .filter(|e| {
-            e.fields
-                .get("counter")
-                .map(|c| c.contains("relayed_surface_trusted"))
-                .unwrap_or(false)
-        })
-        .count();
+    let faces = relay_trust_values(&spans.lock().unwrap());
     assert!(
-        trusted_count >= 2,
-        "both acts' carriers were honored, not degraded: {trusted_count} trusted events in {events:?}"
+        faces.len() >= 2 && faces.iter().all(|f| f == "trusted"),
+        "both acts' carriers were honored, not degraded: {faces:?}"
     );
 }

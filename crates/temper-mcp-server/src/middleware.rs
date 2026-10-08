@@ -88,8 +88,10 @@ pub async fn require_mcp_auth(
             // Deliberately does NOT log the expected issuer/audience. Anyone can trigger this line
             // by sending a garbage bearer, and these are precisely the two config values the boot
             // gate's errors go out of their way never to print. `error` names which check failed,
-            // which is what an operator debugging a 401 actually needs.
-            tracing::warn!(error = %e, "MCP JWT validation failed");
+            // which is what an operator debugging a 401 actually needs. `debug`, as the API's
+            // own JWT-failure line is: an exported line anyone can trigger with a garbage bearer
+            // under a published `kid` is a log-volume lever (the `UnknownKid` precedent above).
+            tracing::debug!(error = %e, "MCP JWT validation failed");
             unauthorized(&state)
         }
     }

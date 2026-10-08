@@ -23,6 +23,21 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.6.0 — unreleased
+- **The network door's degrade detector becomes a root-span field, `relay_trust`, and the MCP edge's JWT-failure line drops to `debug`**
+  The API's relay-trust middleware recorded each degraded or trusted relay as a `debug` event
+  (`counter = "relayed_surface_degraded"` / `"relayed_surface_trusted"`), below the `info` filter
+  the span exporter applies, so production never saw it. It now records `relay_trust` on the
+  request's `http_request` root span: `trusted`, `no_credential`, `invalid_credential`,
+  `carrier_missing` or `carrier_refused`, and nothing for direct traffic or while the API has no
+  service secret. Which requests are honored is unchanged; the events are gone. Separately,
+  `require_mcp_auth` logged a failed JWT check at `warn`, a line any caller could trigger with a
+  garbage bearer; it now logs at `debug`, as the API's own check does. Who observes: operators,
+  through exported spans (the new field) and logs (the missing `warn`). No request or response
+  changes. User-visible: no. Release relevance: additive.
+pr: self
+classes: additive, behavioral
+surfaces: internal
+status: signal-only
 - **The SDKs' endpoint refusals no longer repeat the URL they refused, and their token requests follow no redirect**
   `require_endpoint` / `requireEndpoint` / `validate_endpoint` in temper-py, temper-rb, temper-ts
   and `temperkb-client` still refuse the same values with the same error types. The "not a parseable
