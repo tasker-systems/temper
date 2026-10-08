@@ -163,18 +163,18 @@ module Temper::Generated
     # Folds one facet row owned by the edge, addressed by the `property_id` the facets read returned. The row persists as history and the read stops returning it; asserting the same address again mints a fresh row. Authorizes through the same clauses as the other edge writes. A property id naming another edge, an unknown one, and an already-retracted one all answer the same 404.
     # @param edge_handle [String] Relationship edge handle
     # @param property_id [String] Facet row id to retract
-    # @param invocation_id [String] The invocation this act is correlated under (&#x60;kb_events.invocation_id&#x60;). Optional — a correlation aid, never a substitute for authn/authz.
-    # @param correlation_id [String] The act-grain thread this write belongs to (&#x60;kb_events.correlation_id&#x60;). Optional, caller- minted, provenance-only. Rides independently of &#x60;invocation_id&#x60; and of authorship.
-    # @param reasoning [String] Free-text reasoning for the act. Authorship field — requires &#x60;confidence&#x60;. At most 16384 bytes.
-    # @param confidence [ConfidenceBand] Graded self-assessed confidence band. Required whenever any other authorship field is set.
-    # @param rationale [String] Structured rationale for the act. Authorship field — requires &#x60;confidence&#x60;. At most 16384 bytes.
-    # @param persona [String] The persona/role the author acted as. Authorship field — requires &#x60;confidence&#x60;. At most 256 bytes.
-    # @param model [String] The model that authored the act. Authorship field — requires &#x60;confidence&#x60;. At most 256 bytes.
     # @param [Hash] opts the optional parameters
+    # @option opts [String] :invocation_id The invocation this act is correlated under (&#x60;kb_events.invocation_id&#x60;). Optional — a correlation aid, never a substitute for authn/authz.
+    # @option opts [String] :correlation_id The act-grain thread this write belongs to (&#x60;kb_events.correlation_id&#x60;). Optional, caller- minted, provenance-only. Rides independently of &#x60;invocation_id&#x60; and of authorship.
+    # @option opts [String] :reasoning Free-text reasoning for the act. Authorship field — requires &#x60;confidence&#x60;. At most 16384 bytes.
+    # @option opts [ConfidenceBand] :confidence Graded self-assessed confidence band. Required whenever any other authorship field is set.
+    # @option opts [String] :rationale Structured rationale for the act. Authorship field — requires &#x60;confidence&#x60;. At most 16384 bytes.
+    # @option opts [String] :persona The persona/role the author acted as. Authorship field — requires &#x60;confidence&#x60;. At most 256 bytes.
+    # @option opts [String] :model The model that authored the act. Authorship field — requires &#x60;confidence&#x60;. At most 256 bytes.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [FacetRetractAck]
-    def retract_edge_facet(edge_handle, property_id, invocation_id, correlation_id, reasoning, confidence, rationale, persona, model, opts = {})
-      data, _status_code, _headers = retract_edge_facet_with_http_info(edge_handle, property_id, invocation_id, correlation_id, reasoning, confidence, rationale, persona, model, opts)
+    def retract_edge_facet(edge_handle, property_id, opts = {})
+      data, _status_code, _headers = retract_edge_facet_with_http_info(edge_handle, property_id, opts)
       data
     end
 
@@ -182,17 +182,17 @@ module Temper::Generated
     # Folds one facet row owned by the edge, addressed by the &#x60;property_id&#x60; the facets read returned. The row persists as history and the read stops returning it; asserting the same address again mints a fresh row. Authorizes through the same clauses as the other edge writes. A property id naming another edge, an unknown one, and an already-retracted one all answer the same 404.
     # @param edge_handle [String] Relationship edge handle
     # @param property_id [String] Facet row id to retract
-    # @param invocation_id [String] The invocation this act is correlated under (&#x60;kb_events.invocation_id&#x60;). Optional — a correlation aid, never a substitute for authn/authz.
-    # @param correlation_id [String] The act-grain thread this write belongs to (&#x60;kb_events.correlation_id&#x60;). Optional, caller- minted, provenance-only. Rides independently of &#x60;invocation_id&#x60; and of authorship.
-    # @param reasoning [String] Free-text reasoning for the act. Authorship field — requires &#x60;confidence&#x60;. At most 16384 bytes.
-    # @param confidence [ConfidenceBand] Graded self-assessed confidence band. Required whenever any other authorship field is set.
-    # @param rationale [String] Structured rationale for the act. Authorship field — requires &#x60;confidence&#x60;. At most 16384 bytes.
-    # @param persona [String] The persona/role the author acted as. Authorship field — requires &#x60;confidence&#x60;. At most 256 bytes.
-    # @param model [String] The model that authored the act. Authorship field — requires &#x60;confidence&#x60;. At most 256 bytes.
     # @param [Hash] opts the optional parameters
+    # @option opts [String] :invocation_id The invocation this act is correlated under (&#x60;kb_events.invocation_id&#x60;). Optional — a correlation aid, never a substitute for authn/authz.
+    # @option opts [String] :correlation_id The act-grain thread this write belongs to (&#x60;kb_events.correlation_id&#x60;). Optional, caller- minted, provenance-only. Rides independently of &#x60;invocation_id&#x60; and of authorship.
+    # @option opts [String] :reasoning Free-text reasoning for the act. Authorship field — requires &#x60;confidence&#x60;. At most 16384 bytes.
+    # @option opts [ConfidenceBand] :confidence Graded self-assessed confidence band. Required whenever any other authorship field is set.
+    # @option opts [String] :rationale Structured rationale for the act. Authorship field — requires &#x60;confidence&#x60;. At most 16384 bytes.
+    # @option opts [String] :persona The persona/role the author acted as. Authorship field — requires &#x60;confidence&#x60;. At most 256 bytes.
+    # @option opts [String] :model The model that authored the act. Authorship field — requires &#x60;confidence&#x60;. At most 256 bytes.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(FacetRetractAck, Integer, Hash)>] FacetRetractAck data, response status code and response headers
-    def retract_edge_facet_with_http_info(edge_handle, property_id, invocation_id, correlation_id, reasoning, confidence, rationale, persona, model, opts = {})
+    def retract_edge_facet_with_http_info(edge_handle, property_id, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: FacetsApi.retract_edge_facet ...'
       end
@@ -209,10 +209,17 @@ module Temper::Generated
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
       end
       # resource path
-      local_var_path = '/api/relationships/{edge_handle}/facets/{property_id}'.sub('{edge_handle}', CGI.escape(edge_handle.to_s)).sub('{property_id}', CGI.escape(property_id.to_s)).sub('{invocation_id}', CGI.escape(invocation_id.to_s)).sub('{correlation_id}', CGI.escape(correlation_id.to_s)).sub('{reasoning}', CGI.escape(reasoning.to_s)).sub('{confidence}', CGI.escape(confidence.to_s)).sub('{rationale}', CGI.escape(rationale.to_s)).sub('{persona}', CGI.escape(persona.to_s)).sub('{model}', CGI.escape(model.to_s))
+      local_var_path = '/api/relationships/{edge_handle}/facets/{property_id}'.sub('{edge_handle}', CGI.escape(edge_handle.to_s)).sub('{property_id}', CGI.escape(property_id.to_s))
 
       # query parameters
       query_params = opts[:query_params] || {}
+      query_params[:'invocation_id'] = opts[:'invocation_id'] if !opts[:'invocation_id'].nil?
+      query_params[:'correlation_id'] = opts[:'correlation_id'] if !opts[:'correlation_id'].nil?
+      query_params[:'reasoning'] = opts[:'reasoning'] if !opts[:'reasoning'].nil?
+      query_params[:'confidence'] = opts[:'confidence'] if !opts[:'confidence'].nil?
+      query_params[:'rationale'] = opts[:'rationale'] if !opts[:'rationale'].nil?
+      query_params[:'persona'] = opts[:'persona'] if !opts[:'persona'].nil?
+      query_params[:'model'] = opts[:'model'] if !opts[:'model'].nil?
 
       # header parameters
       header_params = opts[:header_params] || {}

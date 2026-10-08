@@ -699,6 +699,51 @@ mod tests {
         }
     }
 
+    /// A parameter declared `in: path` must name a `{placeholder}` in its route. One that does
+    /// not is unreachable: every generated SDK substitutes path parameters into the template, so
+    /// a field with no placeholder to fill is dropped without error. That is how the facet
+    /// retract's authorship fields, flattened in from `ActInput`, once went missing.
+    #[test]
+    fn every_path_parameter_names_a_placeholder_in_its_route() {
+        use utoipa::openapi::path::ParameterIn;
+
+        let spec = crate::routes::openapi_spec();
+        let mut checked = 0usize;
+
+        for (path, item) in &spec.paths.paths {
+            let operations = [
+                &item.get,
+                &item.put,
+                &item.post,
+                &item.delete,
+                &item.options,
+                &item.head,
+                &item.patch,
+                &item.trace,
+            ];
+            let path_params = item.parameters.iter().flatten();
+            let op_params = operations
+                .into_iter()
+                .flatten()
+                .filter_map(|op| op.parameters.as_ref())
+                .flatten();
+            for param in path_params.chain(op_params) {
+                if param.parameter_in != ParameterIn::Path {
+                    continue;
+                }
+                checked += 1;
+                assert!(
+                    path.contains(&format!("{{{}}}", param.name)),
+                    "{path} declares `{}` in: path, but the route has no `{{{}}}` placeholder; \
+                     a query-string struct needs `#[into_params(parameter_in = Query)]`",
+                    param.name,
+                    param.name
+                );
+            }
+        }
+        assert!(checked > 0, "no path parameters found — this guard would pass vacuously");
+    }
+
     /// The header is optional and never required: a browser omits it, and the server degrades.
     /// A `required: true` here would make every generated client demand it.
     #[test]

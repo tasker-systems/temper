@@ -3335,14 +3335,7 @@
             "description": "The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a\ncorrelation aid, never a substitute for authn/authz.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/InvocationId"
-                }
-              ]
+              "$ref": "#/components/schemas/InvocationId"
             }
           },
           {
@@ -3351,14 +3344,7 @@
             "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/CorrelationId"
-                }
-              ]
+              "$ref": "#/components/schemas/CorrelationId"
             }
           },
           {
@@ -3367,10 +3353,7 @@
             "description": "Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -3379,14 +3362,7 @@
             "description": "Graded self-assessed confidence band. Required whenever any other authorship field is set.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/ConfidenceBand"
-                }
-              ]
+              "$ref": "#/components/schemas/ConfidenceBand"
             }
           },
           {
@@ -3395,10 +3371,7 @@
             "description": "Structured rationale for the act. Authorship field — requires `confidence`. At most 16384\nbytes.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -3407,10 +3380,7 @@
             "description": "The persona/role the author acted as. Authorship field — requires `confidence`. At most 256\nbytes.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -3419,10 +3389,7 @@
             "description": "The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -3981,14 +3948,7 @@
             "description": "The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a\ncorrelation aid, never a substitute for authn/authz.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/InvocationId"
-                }
-              ]
+              "$ref": "#/components/schemas/InvocationId"
             }
           },
           {
@@ -3997,14 +3957,7 @@
             "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/CorrelationId"
-                }
-              ]
+              "$ref": "#/components/schemas/CorrelationId"
             }
           },
           {
@@ -4013,10 +3966,7 @@
             "description": "Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -4025,14 +3975,7 @@
             "description": "Graded self-assessed confidence band. Required whenever any other authorship field is set.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/ConfidenceBand"
-                }
-              ]
+              "$ref": "#/components/schemas/ConfidenceBand"
             }
           },
           {
@@ -4041,10 +3984,7 @@
             "description": "Structured rationale for the act. Authorship field — requires `confidence`. At most 16384\nbytes.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -4053,10 +3993,7 @@
             "description": "The persona/role the author acted as. Authorship field — requires `confidence`. At most 256\nbytes.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -4065,10 +4002,7 @@
             "description": "The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -9686,98 +9620,65 @@
           },
           {
             "name": "invocation_id",
-            "in": "path",
+            "in": "query",
             "description": "The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a\ncorrelation aid, never a substitute for authn/authz.",
-            "required": true,
+            "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/InvocationId"
-                }
-              ]
+              "$ref": "#/components/schemas/InvocationId"
             }
           },
           {
             "name": "correlation_id",
-            "in": "path",
+            "in": "query",
             "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship.",
-            "required": true,
+            "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/CorrelationId"
-                }
-              ]
+              "$ref": "#/components/schemas/CorrelationId"
             }
           },
           {
             "name": "reasoning",
-            "in": "path",
+            "in": "query",
             "description": "Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
             "name": "confidence",
-            "in": "path",
+            "in": "query",
             "description": "Graded self-assessed confidence band. Required whenever any other authorship field is set.",
-            "required": true,
+            "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/ConfidenceBand"
-                }
-              ]
+              "$ref": "#/components/schemas/ConfidenceBand"
             }
           },
           {
             "name": "rationale",
-            "in": "path",
+            "in": "query",
             "description": "Structured rationale for the act. Authorship field — requires `confidence`. At most 16384\nbytes.",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
             "name": "persona",
-            "in": "path",
+            "in": "query",
             "description": "The persona/role the author acted as. Authorship field — requires `confidence`. At most 256\nbytes.",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
             "name": "model",
-            "in": "path",
+            "in": "query",
             "description": "The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -10766,14 +10667,7 @@
             "description": "The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a\ncorrelation aid, never a substitute for authn/authz.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/InvocationId"
-                }
-              ]
+              "$ref": "#/components/schemas/InvocationId"
             }
           },
           {
@@ -10782,14 +10676,7 @@
             "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/CorrelationId"
-                }
-              ]
+              "$ref": "#/components/schemas/CorrelationId"
             }
           },
           {
@@ -10798,10 +10685,7 @@
             "description": "Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -10810,14 +10694,7 @@
             "description": "Graded self-assessed confidence band. Required whenever any other authorship field is set.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/ConfidenceBand"
-                }
-              ]
+              "$ref": "#/components/schemas/ConfidenceBand"
             }
           },
           {
@@ -10826,10 +10703,7 @@
             "description": "Structured rationale for the act. Authorship field — requires `confidence`. At most 16384\nbytes.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -10838,10 +10712,7 @@
             "description": "The persona/role the author acted as. Authorship field — requires `confidence`. At most 256\nbytes.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -10850,10 +10721,7 @@
             "description": "The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],

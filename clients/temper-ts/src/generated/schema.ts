@@ -12874,28 +12874,28 @@ export interface operations {
                  * @description The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
                  *     correlation aid, never a substitute for authn/authz.
                  */
-                invocation_id?: null | components["schemas"]["InvocationId"];
+                invocation_id?: components["schemas"]["InvocationId"];
                 /**
                  * @description The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
                  *     minted, provenance-only. Rides independently of `invocation_id` and of authorship.
                  */
-                correlation_id?: null | components["schemas"]["CorrelationId"];
+                correlation_id?: components["schemas"]["CorrelationId"];
                 /** @description Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes. */
-                reasoning?: string | null;
+                reasoning?: string;
                 /** @description Graded self-assessed confidence band. Required whenever any other authorship field is set. */
-                confidence?: null | components["schemas"]["ConfidenceBand"];
+                confidence?: components["schemas"]["ConfidenceBand"];
                 /**
                  * @description Structured rationale for the act. Authorship field — requires `confidence`. At most 16384
                  *     bytes.
                  */
-                rationale?: string | null;
+                rationale?: string;
                 /**
                  * @description The persona/role the author acted as. Authorship field — requires `confidence`. At most 256
                  *     bytes.
                  */
-                persona?: string | null;
+                persona?: string;
                 /** @description The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes. */
-                model?: string | null;
+                model?: string;
             };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
@@ -13277,28 +13277,28 @@ export interface operations {
                  * @description The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
                  *     correlation aid, never a substitute for authn/authz.
                  */
-                invocation_id?: null | components["schemas"]["InvocationId"];
+                invocation_id?: components["schemas"]["InvocationId"];
                 /**
                  * @description The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
                  *     minted, provenance-only. Rides independently of `invocation_id` and of authorship.
                  */
-                correlation_id?: null | components["schemas"]["CorrelationId"];
+                correlation_id?: components["schemas"]["CorrelationId"];
                 /** @description Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes. */
-                reasoning?: string | null;
+                reasoning?: string;
                 /** @description Graded self-assessed confidence band. Required whenever any other authorship field is set. */
-                confidence?: null | components["schemas"]["ConfidenceBand"];
+                confidence?: components["schemas"]["ConfidenceBand"];
                 /**
                  * @description Structured rationale for the act. Authorship field — requires `confidence`. At most 16384
                  *     bytes.
                  */
-                rationale?: string | null;
+                rationale?: string;
                 /**
                  * @description The persona/role the author acted as. Authorship field — requires `confidence`. At most 256
                  *     bytes.
                  */
-                persona?: string | null;
+                persona?: string;
                 /** @description The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes. */
-                model?: string | null;
+                model?: string;
             };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
@@ -16824,7 +16824,34 @@ export interface operations {
     };
     retract_edge_facet: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
+                 *     correlation aid, never a substitute for authn/authz.
+                 */
+                invocation_id?: components["schemas"]["InvocationId"];
+                /**
+                 * @description The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
+                 *     minted, provenance-only. Rides independently of `invocation_id` and of authorship.
+                 */
+                correlation_id?: components["schemas"]["CorrelationId"];
+                /** @description Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes. */
+                reasoning?: string;
+                /** @description Graded self-assessed confidence band. Required whenever any other authorship field is set. */
+                confidence?: components["schemas"]["ConfidenceBand"];
+                /**
+                 * @description Structured rationale for the act. Authorship field — requires `confidence`. At most 16384
+                 *     bytes.
+                 */
+                rationale?: string;
+                /**
+                 * @description The persona/role the author acted as. Authorship field — requires `confidence`. At most 256
+                 *     bytes.
+                 */
+                persona?: string;
+                /** @description The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes. */
+                model?: string;
+            };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
                 "X-Temper-Surface"?: "cli" | "sdk";
@@ -16834,32 +16861,6 @@ export interface operations {
                 edge_handle: string;
                 /** @description Facet row id to retract */
                 property_id: string;
-                /**
-                 * @description The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
-                 *     correlation aid, never a substitute for authn/authz.
-                 */
-                invocation_id: null | components["schemas"]["InvocationId"];
-                /**
-                 * @description The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
-                 *     minted, provenance-only. Rides independently of `invocation_id` and of authorship.
-                 */
-                correlation_id: null | components["schemas"]["CorrelationId"];
-                /** @description Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes. */
-                reasoning: string | null;
-                /** @description Graded self-assessed confidence band. Required whenever any other authorship field is set. */
-                confidence: null | components["schemas"]["ConfidenceBand"];
-                /**
-                 * @description Structured rationale for the act. Authorship field — requires `confidence`. At most 16384
-                 *     bytes.
-                 */
-                rationale: string | null;
-                /**
-                 * @description The persona/role the author acted as. Authorship field — requires `confidence`. At most 256
-                 *     bytes.
-                 */
-                persona: string | null;
-                /** @description The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes. */
-                model: string | null;
             };
             cookie?: never;
         };
@@ -17506,28 +17507,28 @@ export interface operations {
                  * @description The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
                  *     correlation aid, never a substitute for authn/authz.
                  */
-                invocation_id?: null | components["schemas"]["InvocationId"];
+                invocation_id?: components["schemas"]["InvocationId"];
                 /**
                  * @description The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
                  *     minted, provenance-only. Rides independently of `invocation_id` and of authorship.
                  */
-                correlation_id?: null | components["schemas"]["CorrelationId"];
+                correlation_id?: components["schemas"]["CorrelationId"];
                 /** @description Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes. */
-                reasoning?: string | null;
+                reasoning?: string;
                 /** @description Graded self-assessed confidence band. Required whenever any other authorship field is set. */
-                confidence?: null | components["schemas"]["ConfidenceBand"];
+                confidence?: components["schemas"]["ConfidenceBand"];
                 /**
                  * @description Structured rationale for the act. Authorship field — requires `confidence`. At most 16384
                  *     bytes.
                  */
-                rationale?: string | null;
+                rationale?: string;
                 /**
                  * @description The persona/role the author acted as. Authorship field — requires `confidence`. At most 256
                  *     bytes.
                  */
-                persona?: string | null;
+                persona?: string;
                 /** @description The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes. */
-                model?: string | null;
+                model?: string;
             };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */

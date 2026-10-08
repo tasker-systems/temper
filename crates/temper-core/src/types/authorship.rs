@@ -107,6 +107,9 @@ impl ActContext {
 /// authorship field is supplied" — in a single place, so MCP/API/CLI can never drift on it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema, utoipa::IntoParams))]
+// Always the query string. Left to inference, utoipa reads the location off the handler's
+// extractors, and a handler that also takes a tuple `Path<(…)>` gets every field declared `in: path`.
+#[cfg_attr(feature = "web-api", into_params(parameter_in = Query))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(
     any(feature = "mcp", feature = "scenario-schema"),
