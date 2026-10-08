@@ -138,8 +138,8 @@ kb_workflow_jobs.status                      | structural   | job state
 kb_workflow_jobs.dispatch_type               | structural   | dispatch vocabulary
 kb_workflow_jobs.persona                     | structural   | persona vocabulary
 kb_cogmap_lenses.selection_kind              | structural   | lens vocabulary
-kb_data_artifact_shapes.artifact_kind        | structural   | family name, a schema identifier
-kb_data_artifacts.artifact_kind              | structural   | family name, a schema identifier
+kb_data_artifact_shapes.artifact_kind        | scan         | a family name is free text: no family table, and the doors accept any name (erasure F3, corrected 2026-10-03)
+kb_data_artifacts.artifact_kind              | scan         | a family name is free text: no family table, and the doors accept any name (erasure F3, corrected 2026-10-03)
 kb_migration_ledger.recorded_by              | structural   | provenance vocabulary
 kb_rate_counters.route                       | structural   | route name, the counter key
 kb_system_settings.terms_version             | structural   | version string

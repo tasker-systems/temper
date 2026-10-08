@@ -628,11 +628,64 @@ async fn replay_of_a_resource_erasure_is_byte_identical(pool: sqlx::PgPool) {
     for path in [
         "title",
         "origin_uri",
+        "doc_type",
         "blocks[*].incorporated[*].source.value",
     ] {
         assert!(
             created_paths.iter().any(|p| p == path),
             "R's resource_created is named with {path}; got {created_paths:?}"
+        );
+    }
+    // The two paths F3's correction (2026-10-03) and the payload manifest (20261008100000) added:
+    // an artifact's family, and a citation audit's source, which a remote source carries as a URL.
+    let named_by_type = |ty: &'static str| {
+        let pool = pool.clone();
+        let resource = leak.resource.uuid();
+        async move {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT s.event_id FROM _resource_erasure_trail_scope($1) s WHERE s.event_type = $2",
+            )
+            .bind(resource)
+            .bind(ty)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    for (ty, want) in [
+        ("data_artifact_committed", &["artifact_kind"][..]),
+        ("citation_audited", &["reason", "source.value"][..]),
+    ] {
+        let events = named_by_type(ty).await;
+        assert!(!events.is_empty(), "the witness needs R's {ty} events");
+        for event in events {
+            let paths = paths_named_for(event);
+            for path in want {
+                assert!(
+                    paths.iter().any(|p| p == path),
+                    "{ty} {event} is named with {path}; got {paths:?}"
+                );
+            }
+        }
+    }
+    // Step (9f), Witness 10 amended: every artifact of R, whatever its intent or fold state, has
+    // the per-event family sentinel. Replay reproduces it below: its arm runs the same body.
+    let families: Vec<(String, Uuid)> = sqlx::query_as(
+        "SELECT artifact_kind, asserted_by_event_id FROM kb_data_artifacts WHERE resource_id = $1",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        families.len() >= 4,
+        "the witness needs every intent's artifact; got {families:?}"
+    );
+    for (family, asserted_by) in &families {
+        assert_eq!(
+            family,
+            &format!("erased:{asserted_by}"),
+            "an erased resource's artifact keeps no family"
         );
     }
     let property_set_events: Vec<Uuid> = sqlx::query_scalar(
@@ -5108,4 +5161,110 @@ async fn a_blocks_own_properties_are_erased_with_it(pool: sqlx::PgPool) {
         "after erasing a resource whose block owns a property",
     )
     .await;
+}
+
+/// The remainder names a shape in R's home for a family R's artifacts used, by shape id (D4,
+/// ruled 2026-10-03, ruling 5), and the trail scope reaches a property event owned by one of R's
+/// blocks (20261008100000), so `ledger_remainder` names its key and value for cut 2.
+///
+/// No write path emits a block-owned property event today (`block_role` rows come from the block
+/// projector), so the event here is appended directly, as a future writer would. A shape for a
+/// family R never used is not named: the arm matches on the family, not on the home alone.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_remainder_names_the_homes_shapes_and_block_owned_property_events(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "shape-remainder-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "shape-remainder-twin").await,
+    )
+    .await;
+
+    let declare = |kind: &'static str| {
+        let pool = pool.clone();
+        async move {
+            writes::declare_shape(
+                &pool,
+                writes::DeclareShapeParams {
+                    home: AnchorRef::context(home),
+                    kind,
+                    kind_owner: Some(KindOwner::Profile(owner.uuid())),
+                    schema: &serde_json::json!({"type": "object"}),
+                    enforcement: payloads::EnforcementMode::Advisory,
+                    emitter,
+                },
+            )
+            .await
+            .unwrap()
+            .uuid()
+        }
+    };
+    // seed_leak's artifact is family "notes"; "unrelated" is a family R never used.
+    let notes_shape = declare("notes").await;
+    let unrelated_shape = declare("unrelated").await;
+
+    let block: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id = $1 ORDER BY seq LIMIT 1",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let block_property_event: Uuid = sqlx::query_scalar(
+        "SELECT _event_append('property_set', $1, 'kb_contexts', $3,
+                jsonb_build_object('property_id', gen_random_uuid(),
+                                   'owner', jsonb_build_object('table', 'kb_content_blocks', 'id', $2),
+                                   'property_key', 'intake_note', 'value', 'jane smith', 'weight', 1.0))",
+    )
+    .bind(emitter.uuid())
+    .bind(block)
+    .bind(home.uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("append a block-owned property event");
+
+    let plan: serde_json::Value = sqlx::query_scalar("SELECT resource_erasure_survey_plan($1)")
+        .bind(leak.resource.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let shapes: Vec<String> = plan["remainder"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["target"] == "kb_data_artifact_shapes")
+        .map(|e| e["outcome"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        shapes.len(),
+        1,
+        "exactly the shape for a family R used is named; got {shapes:?}"
+    );
+    assert!(
+        shapes[0].contains(&notes_shape.to_string()) && !shapes[0].contains("notes"),
+        "named by shape id, never by family: {shapes:?}"
+    );
+    assert!(!plan["remainder"]
+        .to_string()
+        .contains(&unrelated_shape.to_string()));
+
+    let entry = plan["ledger_remainder"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["event"] == serde_json::json!(block_property_event))
+        .unwrap_or_else(|| panic!("the block-owned property event is named: {plan}"));
+    for path in ["property_key", "value"] {
+        assert!(
+            entry["paths"].as_array().unwrap().iter().any(|p| p == path),
+            "named with {path}: {entry}"
+        );
+    }
 }

@@ -681,12 +681,13 @@ async fn remediability_is_read_per_event_type_and_path(pool: PgPool) {
     assert_eq!(
         remediability_at(&pool, created).await,
         vec![
-            ("/doc_type".to_string(), never.clone()),
+            ("/doc_type".to_string(), blocked.clone()),
             ("/persona".to_string(), never.clone()),
             ("/reasoning".to_string(), blocked.clone()),
             ("/title".to_string(), blocked.clone()),
         ],
-        "a ledger_remainder path waits on cut 2; one outside it never has a remedy"
+        "a ledger_remainder path waits on cut 2; one outside it never has a remedy. doc_type \
+         is free text since F3 was corrected (2026-10-03), so it waits on cut 2 too"
     );
     assert_eq!(
         remediability_at(&pool, renamed).await,

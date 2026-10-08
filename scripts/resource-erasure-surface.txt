@@ -75,7 +75,7 @@
 #     data R held, stay as the record of what was found. The act itself never names the schema.
 #
 # FORMAT (line-oriented; `#` comments and blank lines ignored)
-#   [tables]                                  section marker; cut 2 adds [payload] (D9's payload half)
+#   [tables]                                  section marker; [payload], D9's payload half, is below
 #   <table>.<column> | <disposition> | <note>
 #
 # disposition
@@ -103,6 +103,7 @@ kb_workflow_jobs.payload                | handled:D2.7  | jobs whose resource_id
 kb_workflow_jobs.last_error             | handled:D2.7  | jobs whose resource_id is R, in every status. Context-, cogmap- and system-scoped jobs whose error text quotes R are left
 kb_ingestion_records.source_uri         | handled:D2.7a | the origin_uri class sentinel 'erased:<resource_id>'
 kb_data_artifact_verdicts.detail        | handled:D2.7a | every verdict on an artifact of the resource
+kb_data_artifacts.artifact_kind         | handled:D2.9f | D4 artifact family: 'erased:<asserted_by_event_id>', every artifact of the resource whatever its intent or fold state; husks erased before (9f) existed got it once (20261008100000)
 kb_citation_audits.reason               | handled:D2.8  | joint-read fix: audits whose block is R's. Audits by other findings that cite R are left, and named in the remainder only when their payload carries R's id
 
 # ── handled: projection-side sentinels (D2 step 9, D4 classes) ──────────────────────────────
@@ -129,7 +130,7 @@ kb_cogmap_regions.label                 | out-of-scope  | reached through kb_cog
 kb_invocations.outcome                  | out-of-scope  | reached incidentally, through its cogmap and its telos (a charter, refused by D5). An invocation over a map where R is only a region member is NOT refused, and its outcome may quote R. Its ledger copy, invocation_closed.outcome, is named in the remainder only when its payload carries R's id
 
 # ── out of scope: deliveries ────────────────────────────────────────────────────────────────
-kb_subscription_deliveries.rationale    | out-of-scope  | another principal's judgment of a webhook, never redacted across the resource boundary (Q1). A delivery whose rationale or scope_reason quotes R's id, or whose event is in R's trail scope, is named in the remainder by delivery id (D8)
+kb_subscription_deliveries.rationale    | out-of-scope  | another principal's judgment of a webhook, never redacted across the resource boundary (Q1). A delivery whose webhook body, rationale or scope_reason quotes R's id is named in the remainder by delivery id (D8)
 kb_subscription_deliveries.scope_reason | out-of-scope  | a caller's reason for a scope verdict, off the ledger. Listed only, on the same remainder line as rationale (D8)
 
 # ── out of scope: containers and connections, reached only through an event key ────────────
@@ -139,4 +140,186 @@ kb_connections.credential               | out-of-scope  | reached only through a
 kb_connections.observed_reach           | out-of-scope  | reached only through an event key, via kb_contexts. What the connection's credential could see: configuration, not resource content
 
 # ── out of scope: blobs ─────────────────────────────────────────────────────────────────────
+kb_data_artifact_shapes.artifact_kind   | out-of-scope  | the home's declaration of a family, not the resource's instance; the exception never crosses the resource boundary (Q1). The remainder names, by shape id, a shape in force in R's home for a family R's artifacts used
 kb_blob_upload_segments.bytes           | out-of-scope  | staged upload bytes, reached through a cogmap-homed upload. Blobs are homed in a context or cogmap, not the resource; the act strikes a blob only when the operator lists it (D8)
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+# [payload] — D9's payload half: what the act does with every free-text path on the ledger.
+#
+# Cut 1 writes nothing to the ledger, so today every `redact` line is NAMED, not reached: the act's
+# record lists those paths of R's own trail events in `ledger_remainder`. Cut 2 (D3) generates the
+# verifier's allowlist from the `redact` lines, so a path the verifier admits is a reviewed line here.
+#
+# WHAT IS NOMINATED. resource_erasure_surface_test walks every registered payload_schema
+# (kb_event_types) and nominates each path that holds a string or an open value. Arrays read as
+# `*`, a map's keys as `?`. Three kinds of string are classed by the walk itself and never appear
+# here: a `format: uuid` or `format: date-time` string (an id or a time), and a string confined by
+# `enum` or `const` (vocabulary). A number or boolean is never nominated.
+#
+# PERMISSIVE TYPES. A type registered with no payload_schema cannot be walked. Each has a
+# `<type>:* | permissive | <note>` line, and its string paths are declared by hand below it (ids
+# and vocabulary left out, as the walk would leave them). The test checks that every schema-less
+# type has that line and that no walked type does; it cannot check a hand list is complete, so the
+# note says where the list came from.
+#
+# FORMAT
+#   <event_type>:<path>[<qualifier>] | <disposition> | <note>
+#   metadata:<path>                  | <disposition> | <note>      (authorship keys, on any event)
+#   <event_type>:*                   | permissive    | <note>      (a schema-less type)
+#
+# A path is a JSON pointer from the payload's root. A qualifier narrows a path by its own event's
+# fields: `[key=doc_type,owner=kb_resources]` matches a property event of that key and owner table.
+# A qualified line refines its unqualified line, which must exist; the most specific line wins.
+#
+# disposition
+#   redact:<class>   cut 2 redacts it to the D4 sentinel of <class>; named in ledger_remainder now.
+#                    Classes: title, origin-uri, remote-source-url, property-key, property-value,
+#                    facet-value, doc-type, artifact-family, edge-label, reason, scar, authorship.
+#   structural       a hash, a vocabulary word or a record's own fixed text; kept (F3)
+#   out-of-scope     not R's text, or not reachable by D3's exception; the reason is REQUIRED
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+
+[payload]
+
+# ── the resource and its blocks ─────────────────────────────────────────────────────────────
+resource_created:/title                                   | redact:title             | F3; the commonest PII carrier
+resource_created:/origin_uri                              | redact:origin-uri        | F3; a local path names its user
+resource_created:/doc_type                                | redact:doc-type          | free text, F3 corrected 2026-10-03; the literal key doc_type is kept on property events
+resource_created:/blocks/*/incorporated/*/source/value    | redact:remote-source-url | a remote source's URL; resource and event sources are uuids
+resource_created:/blocks/*/role                           | structural               | F3: a block's role is structural on the ledger (ruled 2026-10-07; step 9d′ erases its projected row)
+resource_created:/blocks/*/chunks/*/content_hash          | structural               | a hash
+resource_updated:*                                        | permissive               | fields from payloads.rs ResourceUpdated
+resource_updated:/title                                   | redact:title             | F3
+resource_updated:/origin_uri                              | redact:origin-uri        | F3
+resource_finalized:*                                      | permissive               | fields from payloads.rs ResourceFinalized
+resource_finalized:/expected_body_hash                    | structural               | a hash
+resource_finalized:/expected_content_hash                 | structural               | a hash
+resource_deleted:*                                        | permissive               | ResourceDeleted carries only resource_id
+resource_reassigned:*                                     | permissive               | ResourceReassigned carries only ids
+resource_rehomed:*                                        | permissive               | fields from payloads.rs ResourceRehomed
+resource_rehomed:/home/table                              | structural               | an anchor table name
+block_created:/block/incorporated/*/source/value          | redact:remote-source-url | a remote source's URL
+block_created:/block/role                                 | structural               | F3, as resource_created's
+block_created:/block/chunks/*/content_hash                | structural               | a hash
+block_mutated:/incorporated/*/source/value                | redact:remote-source-url | a remote source's URL
+block_mutated:/chunks/*/content_hash                      | structural               | a hash
+block_folded:/reason                                      | redact:reason            | F3
+block_provenance_annotated:*                              | permissive               | fields from payloads.rs BlockProvenanceAnnotated; production shapes checked 2026-10-08
+block_provenance_annotated:/incorporated/*/source/kind    | structural               | provenance kind vocabulary
+block_provenance_annotated:/incorporated/*/source/value   | redact:remote-source-url | a remote source's URL
+block_provenance_corrected:/scar                          | redact:scar              | F3
+block_provenance_corrected:/source/value                  | redact:remote-source-url | a remote source's URL
+resource_reblocked:/created/*/attribution/*/source/value  | redact:remote-source-url | carried forward with its original seq (D4)
+resource_reblocked:/kept/*/attribution/*/source/value     | redact:remote-source-url | carried forward with its original seq (D4)
+resource_reblocked:/created/*/chunks/*/content_hash       | structural               | a hash
+citation_audited:*                                        | permissive               | fields from payloads.rs CitationAudited; production shapes checked 2026-10-08
+citation_audited:/reason                                  | redact:reason            | the auditor's free text
+citation_audited:/source/kind                             | structural               | provenance kind vocabulary
+citation_audited:/source/value                            | redact:remote-source-url | ProvenanceSource::Remote carries the URL as supplied; found 2026-10-08, missing from the remainder until 20261008100000
+data_artifact_committed:/artifact_kind                    | redact:artifact-family   | free text, F3 corrected 2026-10-03; step 9f writes the same sentinel to the projection
+data_artifact_committed:/content_hash                     | structural               | a hash
+
+# ── properties: the key decides the class (D3, D4) ──────────────────────────────────────────
+property_set:*                                            | permissive               | fields from payloads.rs PropertySet; production shapes checked 2026-10-08
+property_set:/owner/table                                 | structural               | an anchor table name
+property_set:/property_key                                | redact:property-key      | erased-key-<n>, the n of the row it asserted
+property_set:/property_key[key=doc_type,owner=kb_resources] | structural             | the literal key stays, so R's doc_type family stays one key (ruled 2026-10-03)
+property_set:/property_key[key=facet]                     | structural               | the literal key stays (ruled 2026-10-03)
+property_set:/value                                       | redact:property-value    | erased:<event_id>
+property_set:/value[key=doc_type,owner=kb_resources]      | redact:doc-type          | erased:<event_id>
+property_set:/value[key=facet]                            | redact:facet-value       | one erased-facet-<m> per original mark
+property_asserted:/property_key                           | redact:property-key      | as property_set's
+property_asserted:/property_key[key=doc_type,owner=kb_resources] | structural        | as property_set's
+property_asserted:/property_key[key=facet]                | structural               | as property_set's
+property_asserted:/value                                  | redact:property-value    | as property_set's
+property_asserted:/value[key=doc_type,owner=kb_resources] | redact:doc-type          | as property_set's
+property_asserted:/value[key=facet]                       | redact:facet-value       | as property_set's
+property_unset:*                                          | permissive               | fields from payloads.rs PropertyUnset; production shapes checked 2026-10-08
+property_unset:/owner/table                               | structural               | an anchor table name
+property_unset:/property_key                              | redact:property-key      | the n of a sibling assertion, or above the asserted range when only ever unset (D4)
+property_unset:/property_key[key=doc_type,owner=kb_resources] | structural           | as property_set's
+property_unset:/property_key[key=facet]                   | structural               | as property_set's
+property_retracted:*                                      | permissive               | fields from payloads.rs PropertyRetracted
+property_retracted:/owner/table                           | structural               | an anchor table name
+property_folded:*                                         | permissive               | registered with no write path (canonical_seed); nothing emits one
+property_reweighted:*                                     | permissive               | registered with no write path (canonical_seed); nothing emits one
+
+# ── edges ───────────────────────────────────────────────────────────────────────────────────
+relationship_asserted:/label                              | redact:edge-label        | D4: JSON null
+relationship_folded:/reason                               | redact:reason            | D4: JSON null
+relationship_corrected:/scar                              | redact:scar              | D4: "erased"
+relationship_retracted:*                                  | permissive               | registered with no write path (canonical_seed); nothing emits one
+
+# ── authorship, on any event ────────────────────────────────────────────────────────────────
+metadata:/reasoning                                       | redact:authorship        | D4: "erased"
+metadata:/rationale                                       | redact:authorship        | D4: "erased"
+
+# ── records: an act's own record, written from fixed strings and ids ────────────────────────
+resource_erased:/targets/*/target                         | structural               | the record never repeats what it erased (goal §8)
+resource_erased:/targets/*/outcome                        | structural               | fixed strings and counts
+resource_erased:/remainder/*/target                       | structural               | fixed strings
+resource_erased:/remainder/*/outcome                      | structural               | fixed strings, ids and hashes
+resource_erased:/redacted_fields/*/paths/*                | structural               | paths, never values
+resource_erased:/ledger_remainder/*/paths/*               | structural               | paths, never values
+resource_erasure_refused:/detail                          | structural               | fixed text
+block_history_scrubbed:/targets/*/target                  | structural               | fixed strings
+block_history_scrubbed:/targets/*/outcome                 | structural               | fixed strings and counts
+principal_erased:/targets/*/target                        | structural               | the principal act's record
+principal_erased:/targets/*/outcome                       | structural               | the principal act's record
+principal_erased:/redacted_hashes/*                       | structural               | hashes
+principal_erasure_refused:/detail                         | structural               | fixed text
+
+# ── out of scope: not the resource's text ───────────────────────────────────────────────────
+admin_ledger_opened:/note                                 | out-of-scope             | an admin's note on the admin ledger, anchored on no resource
+blob_committed:/blob_pathname                             | out-of-scope             | a blob is homed in a context or cogmap; the act strikes one only when the operator lists it, per row through blob_delete (D8)
+blob_committed:/content_hash                              | structural               | a hash
+blob_committed:/content_type                              | structural               | a media type
+cogmap_seeded:/name                                       | out-of-scope             | the map's text; a charter is refused (D5), map-grain erasure is its own task
+cogmap_seeded:/telos/title                                | out-of-scope             | the charter's; refused (D5)
+cogmap_seeded:/telos/origin_uri                           | out-of-scope             | the charter's; refused (D5)
+cogmap_seeded:/telos/blocks/*/incorporated/*/source/value | out-of-scope             | the charter's; refused (D5)
+cogmap_seeded:/telos/blocks/*/role                        | structural               | F3
+cogmap_seeded:/telos/blocks/*/chunks/*/content_hash       | structural               | a hash
+charter_set:*                                             | permissive               | fields from payloads.rs CharterSet; production shapes checked 2026-10-08
+charter_set:/blocks/*/incorporated/*/source/value         | out-of-scope             | the charter's; refused (D5)
+charter_set:/blocks/*/role                                | structural               | F3
+charter_set:/blocks/*/chunks/*/content_hash               | structural               | a hash
+lens_created:/name                                        | out-of-scope             | the map author's name for a lens
+lens_created:/selection_kind                              | structural               | lens vocabulary
+region_materialized:/membership_fingerprint               | structural               | a hash
+region_materialized:/telos_centroid                       | out-of-scope             | anchored on the context, so outside D3's exception; named in ledger_remainder when R was a goal (ruled 2026-10-04)
+salience_refreshed:*                                      | permissive               | fields from payloads.rs SalienceRefreshed
+salience_refreshed:/home_anchor_table                     | structural               | an anchor table name
+salience_refreshed:/telos_centroid                        | out-of-scope             | as region_materialized's
+shape_declared:/artifact_kind                             | out-of-scope             | the home's declaration; named in the remainder by shape id (D4)
+shape_declared:/schema                                    | out-of-scope             | the home's schema for a family
+principal_governance_changed:/change                      | structural               | governance vocabulary
+principal_governance_changed:/reason                      | out-of-scope             | principal grain, anchored on no resource; the principal act's
+principal_standing_changed:/act                           | structural               | standing vocabulary
+principal_standing_changed:/prior                         | structural               | standing vocabulary
+principal_standing_changed:/resulting                     | structural               | standing vocabulary
+principal_standing_changed:/reason                        | out-of-scope             | principal grain, anchored on no resource; the principal act's
+slack_principal_disconnected:/slack_principal_id          | structural               | an external id
+subscription_delivery_disposed:/disposition               | structural               | disposition vocabulary
+subscription_delivery_disposed:/rationale                 | out-of-scope             | another principal's judgment of a webhook (Q1); listed by event (arm 3) and by delivery (arm 5)
+context_renamed:*                                         | permissive               | fields from payloads.rs ContextRenamed
+context_renamed:/from_name                                | out-of-scope             | a context's name, its owner's; not R's text
+context_renamed:/to_name                                  | out-of-scope             | a context's name, its owner's; not R's text
+context_renamed:/from_slug                                | out-of-scope             | a context's slug, its owner's; not R's text
+context_renamed:/to_slug                                  | out-of-scope             | a context's slug, its owner's; not R's text
+context_retired:*                                         | permissive               | fields from payloads.rs ContextRetired
+context_retired:/from_slug                                | out-of-scope             | a context's slug, its owner's; not R's text
+context_retired:/to_slug                                  | out-of-scope             | a context's slug, its owner's; not R's text
+context_restored:*                                        | permissive               | fields from payloads.rs ContextRestored
+context_restored:/from_slug                               | out-of-scope             | a context's slug, its owner's; not R's text
+context_restored:/to_slug                                 | out-of-scope             | a context's slug, its owner's; not R's text
+context_reassigned:*                                      | permissive               | fields from payloads.rs ContextReassigned
+context_reassigned:/from_owner_table                      | structural               | an owner table name
+context_reassigned:/to_owner_table                        | structural               | an owner table name
+delegated_launch:*                                        | permissive               | fields from payloads.rs DelegatedLaunch
+delegated_launch:/trigger_kind                            | structural               | trigger vocabulary
+invocation_closed:*                                       | permissive               | fields from payloads.rs InvocationClosed; production shapes checked 2026-10-08
+invocation_closed:/disposition                            | structural               | disposition vocabulary
+invocation_closed:/outcome                                | out-of-scope             | an agent's free-form account of a run, anchored on the invocation, not R; it may quote R, and arm 3 lists it when it carries R's id (Q1)
+webhook_received:*                                        | permissive               | a remote's body, stored under `body` since version 2
+webhook_received:/body                                    | out-of-scope             | foreign text in no trail (20261007100000); a delivery that quotes R is named (D8, arm 5)

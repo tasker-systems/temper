@@ -53,8 +53,8 @@ const CARRIER_CLASSES: &[&str] = &["content", "incidental", "derived"];
 /// The D2 function: the one home of the content shape (spec D2).
 const REDACTION_FN: &str = "_resource_erasure_apply_redaction";
 
-/// The numbered D2 steps a line may cite (spec D2, steps 1–9 and 7a).
-const D2_STEPS: &[&str] = &["1", "2", "3", "4", "5", "6", "7", "7a", "8", "9"];
+/// The numbered D2 steps a line may cite (spec D2, steps 1–9, 7a and 9f).
+const D2_STEPS: &[&str] = &["1", "2", "3", "4", "5", "6", "7", "7a", "8", "9", "9f"];
 
 /// The parent→child edges of the walk: every foreign key, and every single-column CHECK on a
 /// `*_table` discriminator, read as an edge to each public table it names.
@@ -160,11 +160,12 @@ fn parse_disposition(raw: &str, lineno: usize) -> Disposition {
     Disposition::OutOfScope
 }
 
-/// `table.column` → (disposition, note), from the manifest's `[tables]` section. Panics with the
-/// offending line: a malformed line would otherwise drop a declaration and read as uncovered.
-fn declarations() -> BTreeMap<String, (Disposition, String)> {
-    let mut out = BTreeMap::new();
-    let mut section: Option<&str> = None;
+/// The manifest's declaration lines, each with its section and 1-based line number. Panics on an
+/// unknown section or a line outside one: a malformed line would otherwise drop a declaration and
+/// read as uncovered.
+fn section_lines() -> Vec<(&'static str, usize, &'static str)> {
+    let mut out = Vec::new();
+    let mut section: Option<&'static str> = None;
     for (i, raw) in MANIFEST.lines().enumerate() {
         let lineno = i + 1;
         let line = raw.trim();
@@ -173,17 +174,35 @@ fn declarations() -> BTreeMap<String, (Disposition, String)> {
         }
         if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
             assert!(
-                name == "tables",
-                "resource-erasure-surface.txt:{lineno}: unknown section [{name}] (cut 1 knows only \
-                 [tables]; the [payload] section lands with cut 2 and extends this parser)"
+                matches!(name, "tables" | "payload"),
+                "resource-erasure-surface.txt:{lineno}: unknown section [{name}] (known: [tables], \
+                 [payload])"
             );
-            section = Some(name);
+            section = Some(if name == "tables" {
+                "tables"
+            } else {
+                "payload"
+            });
             continue;
         }
-        assert!(
-            section == Some("tables"),
-            "resource-erasure-surface.txt:{lineno}: a declaration outside any section: {raw:?}"
-        );
+        let section = section.unwrap_or_else(|| {
+            panic!(
+                "resource-erasure-surface.txt:{lineno}: a declaration outside any section: {raw:?}"
+            )
+        });
+        out.push((section, lineno, line));
+    }
+    out
+}
+
+/// `table.column` → (disposition, note), from the manifest's `[tables]` section.
+fn declarations() -> BTreeMap<String, (Disposition, String)> {
+    let mut out = BTreeMap::new();
+    for (section, lineno, line) in section_lines() {
+        if section != "tables" {
+            continue;
+        }
+        let raw = line;
         let cols: Vec<&str> = line.split('|').map(str::trim).collect();
         assert!(
             cols.len() == 3,
@@ -326,13 +345,15 @@ fn is_ident(s: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
-/// Whether `token` names the row's own identity or the act's resource: `p_resource`, `<alias>.id`
-/// or a key number `<alias>.n`. These are what a sentinel may carry.
+/// Whether `token` names the row's own identity or the act's resource: `p_resource`, `<alias>.id`,
+/// a key number `<alias>.n`, or the event that asserted the row, `<alias>.asserted_by_event_id`
+/// (the per-event sentinel, D4: an artifact family's `erased:<event_id>`). These are what a
+/// sentinel may carry.
 fn is_identity(token: &str) -> bool {
     token == "p_resource"
-        || token
-            .split_once('.')
-            .is_some_and(|(alias, col)| is_ident(alias) && matches!(col, "id" | "n"))
+        || token.split_once('.').is_some_and(|(alias, col)| {
+            is_ident(alias) && matches!(col, "id" | "n" | "asserted_by_event_id")
+        })
 }
 
 /// Whether a whole SET value expression erases. Three shapes only:
@@ -973,5 +994,466 @@ fn the_binding_is_not_fooled_by_spacing_restoring_or_parking() {
             &repointed
         ),
         "the park pass alone (a bare identity) leaves provenance on its own ids: no place pass"
+    );
+}
+
+// ── D9's payload half: every free-text path on the ledger has a disposition ─────────────────────
+//
+// The `[payload]` section declares, per (event type, JSON path), what the act does with a string
+// the ledger holds: `redact:<class>` (cut 2 rewrites it to the D4 sentinel; today the record names
+// it in `ledger_remainder`), `structural`, or `out-of-scope` with its reason. Cut 2's verifier
+// takes its allowlist from the `redact` lines, so this is where widening the ledger exception is
+// reviewed. The candidates come from the registered payload schemas; a type registered without
+// one is declared `permissive` and its paths are listed by hand, which this test cannot check for
+// completeness (the manifest's header says so).
+
+/// The redaction classes of D4, one per sentinel shape.
+const REDACT_CLASSES: &[&str] = &[
+    "title",
+    "origin-uri",
+    "remote-source-url",
+    "property-key",
+    "property-value",
+    "facet-value",
+    "doc-type",
+    "artifact-family",
+    "edge-label",
+    "reason",
+    "scar",
+    "authorship",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PayloadDisposition {
+    Redact(String),
+    Structural,
+    OutOfScope,
+    Permissive,
+}
+
+/// One `[payload]` line: `<event_type>:<path>[<qualifier>]`, its disposition and its note.
+/// `event_type` is `metadata` for an authorship key.
+#[derive(Debug, Clone)]
+struct PayloadLine {
+    lineno: usize,
+    event_type: String,
+    path: String,
+    qualifier: Option<String>,
+    disposition: PayloadDisposition,
+    note: String,
+}
+
+fn payload_lines() -> Vec<PayloadLine> {
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (section, lineno, line) in section_lines() {
+        if section != "payload" {
+            continue;
+        }
+        let cols: Vec<&str> = line.split('|').map(str::trim).collect();
+        assert!(
+            cols.len() == 3,
+            "resource-erasure-surface.txt:{lineno}: expected `<type>:<path> | disposition | note`, got {line:?}"
+        );
+        let (event_type, rest) = cols[0].split_once(':').unwrap_or_else(|| {
+            panic!(
+                "resource-erasure-surface.txt:{lineno}: {:?} is not `<type>:<path>`",
+                cols[0]
+            )
+        });
+        let (path, qualifier) = match rest.split_once('[') {
+            Some((p, q)) => (
+                p,
+                Some(
+                    q.strip_suffix(']')
+                        .unwrap_or_else(|| {
+                            panic!("resource-erasure-surface.txt:{lineno}: unclosed qualifier")
+                        })
+                        .to_string(),
+                ),
+            ),
+            None => (rest, None),
+        };
+        assert!(
+            path == "*" || path.starts_with('/'),
+            "resource-erasure-surface.txt:{lineno}: a path is a JSON pointer or `*`, got {path:?}"
+        );
+        let disposition = match cols[1] {
+            "structural" => PayloadDisposition::Structural,
+            "out-of-scope" => PayloadDisposition::OutOfScope,
+            "permissive" => PayloadDisposition::Permissive,
+            d => {
+                let class = d.strip_prefix("redact:").unwrap_or_else(|| {
+                    panic!(
+                        "resource-erasure-surface.txt:{lineno}: unknown disposition {d:?} (known: \
+                         `redact:<class>`, `structural`, `out-of-scope`, `permissive`)"
+                    )
+                });
+                assert!(
+                    REDACT_CLASSES.contains(&class),
+                    "resource-erasure-surface.txt:{lineno}: no D4 class {class:?} (known: {REDACT_CLASSES:?})"
+                );
+                PayloadDisposition::Redact(class.to_string())
+            }
+        };
+        assert!(
+            (path == "*") == (disposition == PayloadDisposition::Permissive),
+            "resource-erasure-surface.txt:{lineno}: `<type>:*` and `permissive` go together"
+        );
+        assert!(
+            seen.insert(cols[0].to_string()),
+            "resource-erasure-surface.txt:{lineno}: {} declared twice",
+            cols[0]
+        );
+        out.push(PayloadLine {
+            lineno,
+            event_type: event_type.to_string(),
+            path: path.to_string(),
+            qualifier,
+            disposition,
+            note: cols[2].to_string(),
+        });
+    }
+    assert!(
+        !out.is_empty(),
+        "the manifest parse found no [payload] lines"
+    );
+    out
+}
+
+/// The paths of `schema` that hold a string or an open value, as JSON pointers (`*` for an array's
+/// items, `?` for a map's keys). A `format: uuid` or `date-time` string, and a string confined by
+/// `enum` or `const`, are classed by the walk itself and not returned (the manifest's header).
+fn string_paths(schema: &serde_json::Value) -> BTreeSet<String> {
+    fn walk(
+        node: &serde_json::Value,
+        root: &serde_json::Value,
+        path: &str,
+        depth: usize,
+        out: &mut BTreeSet<String>,
+    ) {
+        assert!(depth < 32, "payload schema recursion at {path}");
+        let obj = match node {
+            serde_json::Value::Bool(true) => {
+                out.insert(path.to_string());
+                return;
+            }
+            serde_json::Value::Object(o) => o,
+            _ => return,
+        };
+        if let Some(r) = obj.get("$ref").and_then(|v| v.as_str()) {
+            let name = r.rsplit('/').next().unwrap();
+            let target = root
+                .get("$defs")
+                .and_then(|d| d.get(name))
+                .unwrap_or_else(|| panic!("unresolved $ref {r} at {path}"));
+            return walk(target, root, path, depth + 1, out);
+        }
+        for key in ["anyOf", "oneOf", "allOf"] {
+            if let Some(arms) = obj.get(key).and_then(|v| v.as_array()) {
+                for arm in arms {
+                    walk(arm, root, path, depth + 1, out);
+                }
+                return;
+            }
+        }
+        if obj.contains_key("enum") || obj.contains_key("const") {
+            return;
+        }
+        let types: Vec<&str> = match obj.get("type") {
+            Some(serde_json::Value::String(s)) => vec![s.as_str()],
+            Some(serde_json::Value::Array(a)) => a.iter().filter_map(|v| v.as_str()).collect(),
+            _ => vec![],
+        };
+        if types.contains(&"object") || obj.contains_key("properties") {
+            if let Some(props) = obj.get("properties").and_then(|v| v.as_object()) {
+                for (k, v) in props {
+                    walk(v, root, &format!("{path}/{k}"), depth + 1, out);
+                }
+            }
+            match obj.get("additionalProperties") {
+                None | Some(serde_json::Value::Bool(false)) => {}
+                Some(ap) => walk(ap, root, &format!("{path}/?"), depth + 1, out),
+            }
+            return;
+        }
+        if types.contains(&"array") {
+            if let Some(items) = obj.get("items") {
+                walk(items, root, &format!("{path}/*"), depth + 1, out);
+            }
+            return;
+        }
+        if types.contains(&"string") {
+            let format = obj.get("format").and_then(|v| v.as_str());
+            if !matches!(format, Some("uuid" | "date-time")) {
+                out.insert(path.to_string());
+            }
+            return;
+        }
+        if types.is_empty() {
+            out.insert(path.to_string());
+        }
+    }
+    let mut out = BTreeSet::new();
+    walk(schema, schema, "", 0, &mut out);
+    out
+}
+
+/// The committed payload-schema snapshots, emitted from the structs `fire()` serializes
+/// (temper-substrate `tests/payload_schema.rs`), keyed by event type at their latest version.
+const SCHEMA_SNAPSHOTS: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../temper-substrate/tests/fixtures/payloads"
+);
+
+fn schema_snapshots() -> BTreeMap<String, serde_json::Value> {
+    let mut by_type: BTreeMap<String, (u32, serde_json::Value)> = BTreeMap::new();
+    for entry in std::fs::read_dir(SCHEMA_SNAPSHOTS).expect("read the payload schema snapshots") {
+        let path = entry.unwrap().path();
+        let file = path.file_name().unwrap().to_string_lossy().into_owned();
+        let Some(stem) = file.strip_suffix(".schema.json") else {
+            continue;
+        };
+        let (name, version) = stem.rsplit_once(".v").expect("<type>.v<n>.schema.json");
+        let version: u32 = version.parse().expect("a numeric schema version");
+        let schema = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        if by_type.get(name).is_none_or(|(v, _)| *v < version) {
+            by_type.insert(name.to_string(), (version, schema));
+        }
+    }
+    by_type.into_iter().map(|(k, (_, s))| (k, s)).collect()
+}
+
+/// Each registered event type with the schema the walk reads: its committed snapshot when it has
+/// one, else its registered `payload_schema`, else `None` (a permissive type).
+///
+/// **The snapshot wins over the registry.** A migrated database's `payload_schema` is stamped by
+/// the migration that registered the type and lags the code: on 2026-10-08 it had no
+/// `incorporated` on the block events and no `role` on `block_created`, all of which the code
+/// writes. The snapshots are emitted from the structs the code serializes, so they are what the
+/// ledger actually carries. A type with a schema and no snapshot is still walked, from the
+/// registry.
+async fn registry(pool: &PgPool) -> BTreeMap<String, Option<serde_json::Value>> {
+    let snapshots = schema_snapshots();
+    sqlx::query_as::<_, (String, Option<serde_json::Value>)>(
+        "SELECT name, payload_schema FROM kb_event_types",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("read the event registry")
+    .into_iter()
+    .map(|(name, registered)| {
+        let schema = snapshots.get(&name).cloned().or(registered);
+        (name, schema)
+    })
+    .collect()
+}
+
+/// `(event_type, path)` of every string path the registered schemas nominate.
+fn walked(registry: &BTreeMap<String, Option<serde_json::Value>>) -> BTreeSet<(String, String)> {
+    registry
+        .iter()
+        .filter_map(|(name, schema)| schema.as_ref().map(|s| (name, s)))
+        .flat_map(|(name, schema)| {
+            string_paths(schema)
+                .into_iter()
+                .map(move |p| (name.clone(), p))
+        })
+        .collect()
+}
+
+/// The `[payload]` problems against `registry`: undeclared walked paths, lines naming a walked
+/// type's path the schema does not have, permissive declarations that disagree with the registry,
+/// and qualified lines with no unqualified line to refine.
+fn payload_problems(registry: &BTreeMap<String, Option<serde_json::Value>>) -> Vec<String> {
+    let lines = payload_lines();
+    let walked = walked(registry);
+    let declared: BTreeSet<(String, String)> = lines
+        .iter()
+        .filter(|l| l.qualifier.is_none() && l.path != "*")
+        .map(|l| (l.event_type.clone(), l.path.clone()))
+        .collect();
+    let permissive: BTreeSet<&str> = lines
+        .iter()
+        .filter(|l| l.disposition == PayloadDisposition::Permissive)
+        .map(|l| l.event_type.as_str())
+        .collect();
+    let mut problems = Vec::new();
+    for (ty, path) in walked.difference(&declared) {
+        problems.push(format!(
+            "undeclared: {ty}:{path} (its payload schema holds a string there)"
+        ));
+    }
+    for l in &lines {
+        if l.event_type == "metadata" {
+            continue;
+        }
+        match registry.get(&l.event_type) {
+            None => problems.push(format!(
+                "line {}: {} is not a registered event type",
+                l.lineno, l.event_type
+            )),
+            Some(Some(_)) if l.path == "*" => problems.push(format!(
+                "line {}: {} has a payload schema, so the walk reads it; drop `permissive`",
+                l.lineno, l.event_type
+            )),
+            Some(Some(_))
+                if l.qualifier.is_none()
+                    && !walked.contains(&(l.event_type.clone(), l.path.clone())) =>
+            {
+                problems.push(format!(
+                    "line {}: stale: {}:{} is not a string path of its schema",
+                    l.lineno, l.event_type, l.path
+                ))
+            }
+            Some(None) if !permissive.contains(l.event_type.as_str()) => problems.push(format!(
+                "line {}: {} has no payload schema; declare `{}:* | permissive | <where its fields came from>`",
+                l.lineno, l.event_type, l.event_type
+            )),
+            _ => {}
+        }
+        if l.qualifier.is_some() && !declared.contains(&(l.event_type.clone(), l.path.clone())) {
+            problems.push(format!(
+                "line {}: {}:{}[…] refines no unqualified line",
+                l.lineno, l.event_type, l.path
+            ));
+        }
+        if l.disposition == PayloadDisposition::OutOfScope && l.note.is_empty() {
+            problems.push(format!(
+                "line {}: `out-of-scope` needs its reason",
+                l.lineno
+            ));
+        }
+    }
+    for (name, schema) in registry {
+        if schema.is_none() && !permissive.contains(name.as_str()) {
+            problems.push(format!(
+                "undeclared: {name} is registered with no payload schema; declare `{name}:* | permissive | …` and its string paths"
+            ));
+        }
+    }
+    problems
+}
+
+/// FAILS IF: a string a registered payload schema holds has no `[payload]` line, a line names a
+/// path or type the registry does not have, or a schema-less type is not declared permissive.
+/// This is D9's payload half: a new free-text field cannot ship without a disposition (goal §8).
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn every_payload_string_path_is_declared(pool: PgPool) {
+    let problems = payload_problems(&registry(&pool).await);
+    assert!(
+        problems.is_empty(),
+        "scripts/resource-erasure-surface.txt [payload] disagrees with the registered payload \
+         schemas (kb_event_types). Declare each new string path `redact:<class>`, `structural` or \
+         `out-of-scope` with its reason, and delete a line whose path is gone.\n\
+         Problems: {problems:#?}"
+    );
+}
+
+/// FAILS IF: the manifest's unqualified `redact` lines and the sweep's interim
+/// `sensitivity.ledger_redact_paths` name different paths. The sweep reads that table for a ledger
+/// finding's remediability until cut 2 switches it to the manifest; while both exist they must say
+/// the same thing, or a finding reads `blocked:cut-2` on a path cut 2 will not redact, or
+/// `unremediable` on one it will.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_redact_lines_are_the_sweeps_interim_list(pool: PgPool) {
+    let interim: BTreeSet<(String, String)> = sqlx::query_as::<_, (Option<String>, String)>(
+        "SELECT event_type, path FROM sensitivity.ledger_redact_paths",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("read the interim list")
+    .into_iter()
+    .map(|(t, p)| (t.unwrap_or_else(|| "metadata".into()), p))
+    .collect();
+    let redact: BTreeSet<(String, String)> = payload_lines()
+        .into_iter()
+        .filter(|l| l.qualifier.is_none() && matches!(l.disposition, PayloadDisposition::Redact(_)))
+        .map(|l| (l.event_type, l.path))
+        .collect();
+    assert_eq!(
+        redact.difference(&interim).collect::<Vec<_>>(),
+        Vec::<&(String, String)>::new(),
+        "manifest redact lines missing from sensitivity.ledger_redact_paths"
+    );
+    assert_eq!(
+        interim.difference(&redact).collect::<Vec<_>>(),
+        Vec::<&(String, String)>::new(),
+        "sensitivity.ledger_redact_paths rows the manifest does not class `redact`"
+    );
+}
+
+/// FAILS IF: a string field in a newly registered schema, or a type registered without one, is
+/// not reported. The bite for `every_payload_string_path_is_declared`: both probes are the ways a
+/// new free-text field reaches the ledger (a field added to an existing struct changes its
+/// committed snapshot, which `string_paths` reads the same way). Each `sqlx::test` runs in its own
+/// database.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_added_payload_string_is_reported(pool: PgPool) {
+    assert!(
+        payload_problems(&registry(&pool).await).is_empty(),
+        "precondition: the payload fence holds before the probes are added"
+    );
+    sqlx::query(
+        "INSERT INTO kb_event_types (name, payload_schema, schema_version, category)
+         SELECT p.name, p.schema, 1, t.category
+           FROM kb_event_types t,
+                (VALUES ('erasure_fence_probe_typed',
+                         '{\"type\": \"object\", \"properties\": {\"note\": {\"type\": \"string\"}}}'::jsonb),
+                        ('erasure_fence_probe_permissive', NULL::jsonb)) AS p(name, schema)
+          WHERE t.name = 'relationship_folded'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let problems = payload_problems(&registry(&pool).await);
+    for want in [
+        "undeclared: erasure_fence_probe_typed:/note",
+        "undeclared: erasure_fence_probe_permissive is registered with no payload schema",
+    ] {
+        assert!(
+            problems.iter().any(|p| p.starts_with(want)),
+            "the fence missed {want:?}; it reported {problems:#?}"
+        );
+    }
+}
+
+/// FAILS IF: the walk stops nominating what it must, or nominates an id or a vocabulary word. A
+/// walk that returned nothing would make every payload line read stale rather than uncovered, so
+/// its own shape is pinned here, against a schema written for the purpose.
+#[test]
+fn the_walk_nominates_strings_and_open_values_only() {
+    let schema = serde_json::json!({
+        "$defs": {
+            "Id": {"type": "string", "format": "uuid"},
+            "Src": {"type": "object", "properties": {
+                "kind": {"type": "string", "enum": ["remote", "resource"]},
+                "value": {"type": "string"}}}
+        },
+        "type": "object",
+        "properties": {
+            "title": {"type": ["string", "null"]},
+            "id": {"$ref": "#/$defs/Id"},
+            "at": {"type": "string", "format": "date-time"},
+            "n": {"type": "integer"},
+            "value": {},
+            "tags": {"type": "array", "items": {"type": "string"}},
+            "srcs": {"type": "array", "items": {"$ref": "#/$defs/Src"}},
+            "map": {"type": "object", "additionalProperties": {"type": "string"}},
+            "either": {"anyOf": [{"type": "null"}, {"type": "string"}]},
+            "mode": {"const": "x"}
+        }
+    });
+    let got: Vec<String> = string_paths(&schema).into_iter().collect();
+    assert_eq!(
+        got,
+        [
+            "/either",
+            "/map/?",
+            "/srcs/*/value",
+            "/tags/*",
+            "/title",
+            "/value"
+        ]
     );
 }
