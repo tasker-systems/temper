@@ -118,7 +118,10 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
     ),
     (
         "kb_properties",
-        "SELECT coalesce(jsonb_agg((to_jsonb(t) - 'id') ORDER BY t.owner_table, t.owner_id, t.property_key, t.property_value), '[]'::jsonb) FROM kb_properties t",
+        // `asserted_by_event_id` (an event id, which replay restores) breaks the tie a resource
+        // erasure makes: every row of one sentinel key carries the same `"erased"` value, so
+        // (owner, key, value) alone orders them however jsonb_agg meets them (spec D4, Witness 1).
+        "SELECT coalesce(jsonb_agg((to_jsonb(t) - 'id') ORDER BY t.owner_table, t.owner_id, t.property_key, t.property_value, t.asserted_by_event_id), '[]'::jsonb) FROM kb_properties t",
     ),
     (
         "kb_edges",

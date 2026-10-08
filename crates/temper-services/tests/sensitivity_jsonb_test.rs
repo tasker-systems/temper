@@ -647,7 +647,7 @@ async fn remediability_is_read_per_event_type_and_path(pool: PgPool) {
     let created = event(
         &pool,
         "resource_created",
-        serde_json::json!({ "resource_id": r, "title": format!("Payroll for {SSN_A}"), "doc_type": format!("t {SSN_B}") }),
+        serde_json::json!({ "resource_id": r, "title": format!("Payroll for {SSN_A}"), "doc_type": format!("t {SSN_B}"), "unlisted": format!("u {SSN_A}") }),
         serde_json::json!({ "reasoning": format!("saw {SSN_A}"), "persona": format!("p {SSN_B}") }),
     )
     .await;
@@ -681,12 +681,15 @@ async fn remediability_is_read_per_event_type_and_path(pool: PgPool) {
     assert_eq!(
         remediability_at(&pool, created).await,
         vec![
-            ("/doc_type".to_string(), never.clone()),
-            ("/persona".to_string(), never.clone()),
+            ("/doc_type".to_string(), blocked.clone()),
+            ("/persona".to_string(), blocked.clone()),
             ("/reasoning".to_string(), blocked.clone()),
             ("/title".to_string(), blocked.clone()),
+            ("/unlisted".to_string(), never.clone()),
         ],
-        "a ledger_remainder path waits on cut 2; one outside it never has a remedy"
+        "a ledger_remainder path waits on cut 2; one outside it never has a remedy. doc_type \
+         is free text since F3 was corrected (2026-10-03), and persona is caller-supplied \
+         authorship (20261008100000), so both wait on cut 2 too"
     );
     assert_eq!(
         remediability_at(&pool, renamed).await,
