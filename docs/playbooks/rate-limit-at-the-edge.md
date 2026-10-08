@@ -250,6 +250,10 @@ exemption for marked requests:
 { "type": "header", "key": "x-temper-edge-proxy", "op": "eq", "value": "<TEMPER_EDGE_PROXY_SECRET>", "neg": true }
 ```
 
+The heavy-read rule has two groups, so the two rules carry three marker conditions, not two. A
+group without the real value does not fail: it quietly counts the UI's and the MCP relay's
+traffic per address for that group's paths, and the log week shows false hits there.
+
 Before publishing these, generate the secret (`openssl rand -base64 32`). The API and MCP
 functions refuse to boot when it is under 16 characters or, on the API, equal to another shared
 secret; the refusal names the variable and never its value. Then set `TEMPER_EDGE_PROXY_SECRET`
@@ -258,10 +262,22 @@ function's environment is fixed when it is deployed. Without the marker, the UI'
 shared addresses. A value that cannot be a header value is never sent; the function logs a fixed
 sentence saying so.
 
-To rotate it: set the new value on both projects and redeploy both, then update the value in
-both API-project rules and publish. Between the redeploy and the publish, marked requests carry
+To rotate it: set the new value on both projects and redeploy both, then update every marker
+condition (all three, across both API-project rules) and publish. Between the redeploy and the publish, marked requests carry
 a value the rules do not know and count per address — harmless while the rules only log; while
 they enforce, do it in a quiet hour.
+
+After either publish, check the conditions without printing the secret. Expect three
+`marker_lens` entries in all, every one the length of your secret, and `placeholder` false:
+
+```bash
+vercel firewall rules list --project <api-project> --json 2>/dev/null | jq -c '
+  [.. | objects | select(has("conditionGroup"))][]
+  | { name,
+      placeholder: ([.. | objects | select(.key? == "x-temper-edge-proxy") | .value | tostring
+                     | test("^<|REPLACE")] | any),
+      marker_lens: [.. | objects | select(.key? == "x-temper-edge-proxy") | (.value | tostring | length)] }'
+```
 
 ## 7. Read a week, then enforce
 
