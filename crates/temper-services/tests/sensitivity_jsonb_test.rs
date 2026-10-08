@@ -937,8 +937,8 @@ async fn a_resource_erasure_closes_its_title_and_property_findings_and_not_its_l
     );
     assert_eq!(
         closed_by(&pool, on_block).await,
-        vec![None],
-        "a block-owned property the act never reaches stays open, though its resource is erased"
+        vec![Some("sentinel".to_string())],
+        "a property owned by one of the resource's blocks is a sentinel too (step 9d′)"
     );
     let ledger: Vec<Option<String>> = sqlx::query_scalar(
         "SELECT c.closed_by FROM sensitivity.findings f \

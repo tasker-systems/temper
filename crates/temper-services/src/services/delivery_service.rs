@@ -729,6 +729,157 @@ mod tests {
         (event_id, rows.into_iter().next().unwrap())
     }
 
+    // ── what a resource erasure names ──────────────────────────────────────
+
+    /// (Task 01a0fedb item 1) The erasure survey names, by delivery id, every delivery that may
+    /// quote the resource: one whose `scope_reason` or `rationale` carries R's id, and one whose
+    /// event is in R's trail scope (an older webhook stored before intake wrapped such bodies).
+    /// A delivery that names nothing of R is not listed.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn the_erasure_survey_names_the_deliveries_that_may_quote_the_resource(pool: PgPool) {
+        let (admin, _team, ctx, conn, sub) = seed_world(&pool).await;
+        let authed = crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await;
+        let emitter: Uuid =
+            sqlx::query_scalar("SELECT emitter_entity_id FROM kb_connections WHERE id = $1")
+                .bind(conn)
+                .fetch_one(&pool)
+                .await
+                .expect("the connection's emitter");
+        let resource = temper_substrate::writes::create_resource(
+            &pool,
+            temper_substrate::writes::CreateParams {
+                idempotency_key: None,
+                title: "a resource a steward wrote about",
+                origin_uri: "test://quoted",
+                body: "prose",
+                doc_type: "research",
+                home: temper_substrate::payloads::AnchorRef::context(ctx.into()),
+                owner: admin,
+                originator: admin,
+                emitter: emitter.into(),
+                properties: &[],
+                chunks: None,
+                sources: vec![],
+            },
+        )
+        .await
+        .expect("create the resource")
+        .uuid();
+
+        // Four deliveries of four webhooks, one per subscription-event pair.
+        let mut ids = Vec::new();
+        for _ in 0..4 {
+            intake_service::receive_webhook(
+                &pool,
+                conn,
+                ProviderEvent::from_header("pull_request"),
+                &github_pr_payload(GITHUB_REPO),
+            )
+            .await
+            .expect("receive webhook");
+        }
+        for d in list_for_subscription(&pool, &authed, sub, 50, 0)
+            .await
+            .expect("list deliveries")
+        {
+            ids.push(d.id);
+        }
+        ids.sort();
+        let [scoped, judged, untouched, _] = ids[..] else {
+            panic!("expected four deliveries, got {ids:?}");
+        };
+
+        record_scope(
+            &pool,
+            &authed,
+            scoped,
+            &RecordScopeRequest {
+                status: DeliveryStatus::Undetermined,
+                reason: Some(format!("enrichment stalled reading {resource}")),
+            },
+        )
+        .await
+        .expect("record scope");
+        record_scope(
+            &pool,
+            &authed,
+            judged,
+            &RecordScopeRequest {
+                status: DeliveryStatus::InScope,
+                reason: None,
+            },
+        )
+        .await
+        .expect("record scope");
+        record_disposition(
+            &pool,
+            &authed,
+            judged,
+            &RecordDispositionRequest {
+                disposition: Disposition::Acted,
+                rationale: format!("filed as {resource}"),
+                confidence: 0.9,
+                invocation_id: None,
+            },
+        )
+        .await
+        .expect("dispose");
+
+        // A version-1 webhook, stored bare before intake wrapped every body, whose body named the
+        // resource at a top-level id key: its event is in R's trail scope. Written directly, as
+        // intake no longer can.
+        let older: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_events (event_type_id, emitter_entity_id, payload) \
+             SELECT id, $1, jsonb_build_object('resource_id', $2::text) \
+               FROM kb_event_types WHERE name = 'webhook_received' RETURNING id",
+        )
+        .bind(emitter)
+        .bind(resource)
+        .fetch_one(&pool)
+        .await
+        .expect("an older webhook naming the resource");
+        let in_trail: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_subscription_deliveries (subscription_id, event_id) \
+             VALUES ($1, $2) RETURNING id",
+        )
+        .bind(sub)
+        .bind(older)
+        .fetch_one(&pool)
+        .await
+        .expect("its delivery");
+
+        let plan: serde_json::Value = sqlx::query_scalar("SELECT resource_erasure_survey_plan($1)")
+            .bind(resource)
+            .fetch_one(&pool)
+            .await
+            .expect("survey");
+        let mut named: Vec<String> = plan["remainder"]
+            .as_array()
+            .expect("remainder")
+            .iter()
+            .filter(|r| r["target"] == "kb_subscription_deliveries")
+            .map(|r| r["outcome"].as_str().unwrap().to_owned())
+            .collect();
+        named.sort();
+        let mut expected: Vec<Uuid> = vec![scoped, judged, in_trail];
+        expected.sort();
+        assert_eq!(
+            named.len(),
+            3,
+            "three deliveries named, not four: {named:?}"
+        );
+        for (outcome, id) in named.iter().zip(&expected) {
+            assert!(
+                outcome.starts_with(&format!("delivery {id} ")),
+                "named by delivery id: {outcome}"
+            );
+        }
+        assert!(
+            !named.iter().any(|o| o.contains(&untouched.to_string())),
+            "a delivery naming nothing of the resource is not listed"
+        );
+    }
+
     // ── the projection ──────────────────────────────────────────────────────
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]

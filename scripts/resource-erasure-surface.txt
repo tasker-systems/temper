@@ -108,7 +108,7 @@ kb_citation_audits.reason               | handled:D2.8  | joint-read fix: audits
 # ── handled: projection-side sentinels (D2 step 9, D4 classes) ──────────────────────────────
 kb_resources.title                      | handled:D2.9  | D4 title: 'erased-<resource_id>'
 kb_resources.origin_uri                 | handled:D2.9  | D4 origin_uri: 'erased:<resource_id>'
-kb_properties.property_key              | handled:D2.9  | D4 'erased-key-<n>', for properties of R and of every edge touching it. Properties owned by R's blocks (today only the fixed-vocabulary block_role) are left: filed under the erasure goal
+kb_properties.property_key              | handled:D2.9  | D4 'erased-key-<n>', for properties of R, of every edge touching it, and of every block of R (step 9d′)
 kb_properties.property_value            | handled:D2.9  | D4 '"erased"', on the same rows as property_key
 kb_edges.label                          | handled:D2.9  | D4 edge label: NULL, on every edge touching the resource
 kb_remote_sources.uri                   | repointed:D2.9:kb_block_provenance.source_id | outside the walk (see header). The original row is deleted only when nothing else cites it; a URL another resource still cites stays, named by id in the remainder (D8)
@@ -129,8 +129,8 @@ kb_cogmap_regions.label                 | out-of-scope  | reached through kb_cog
 kb_invocations.outcome                  | out-of-scope  | reached incidentally, through its cogmap and its telos (a charter, refused by D5). An invocation over a map where R is only a region member is NOT refused, and its outcome may quote R. Its ledger copy, invocation_closed.outcome, is named in the remainder only when its payload carries R's id
 
 # ── out of scope: deliveries ────────────────────────────────────────────────────────────────
-kb_subscription_deliveries.rationale    | out-of-scope  | reached incidentally, through its invocation and subscription. Its real tie to R is the delivered event (event_id), when that event is one of R's. Neither this column nor its ledger copy (subscription_delivery_disposed) is named in the remainder in that case: filed under the erasure goal
-kb_subscription_deliveries.scope_reason | out-of-scope  | a caller's reason for a scope verdict, tied to R the same way as rationale. Not named anywhere, and not on D8's list: filed under the erasure goal
+kb_subscription_deliveries.rationale    | out-of-scope  | another principal's judgment of a webhook, never redacted across the resource boundary (Q1). A delivery whose rationale or scope_reason quotes R's id, or whose event is in R's trail scope, is named in the remainder by delivery id (D8)
+kb_subscription_deliveries.scope_reason | out-of-scope  | a caller's reason for a scope verdict, off the ledger. Listed only, on the same remainder line as rationale (D8)
 
 # ── out of scope: containers and connections, reached only through an event key ────────────
 kb_contexts.name                        | out-of-scope  | reached only through an event key (shape_materialized_event_id). The name of R's home, chosen by its owner; not R's text
