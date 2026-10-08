@@ -23,6 +23,19 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.6.0 — unreleased
+- **`TEMPER_EDGE_PROXY_SECRET`: the web UI's proxy and the MCP relay mark the requests they forward to the API**
+  When the new optional variable is set, temper-ui's reverse proxy and the MCP function's relay
+  send it as `x-temper-edge-proxy` on every request they forward to the API, so per-IP rate limits
+  in the API project's edge firewall can exempt them: both reach the API from a few server
+  addresses. The proxy always deletes a caller's own copy of the header. The relay does not send a
+  value equal to `TEMPER_MCP_SERVICE_SECRET`, and logs an error instead; neither side refuses to
+  start over it. Nothing in the API reads the header and it confers no access. Unset, nothing
+  changes. Who observes: operators who rate-limit at the edge (new playbook,
+  `docs/playbooks/rate-limit-at-the-edge.md`). User-visible: no. Release relevance: additive.
+pr: self
+classes: additive
+surfaces: mcp, internal
+status: signal-only
 - **The network door's degrade detector becomes a root-span field, `relay_trust`, and the MCP edge's JWT-failure line drops to `debug`**
   The API's relay-trust middleware recorded each degraded or trusted relay as a `debug` event
   (`counter = "relayed_surface_degraded"` / `"relayed_surface_trusted"`), below the `info` filter

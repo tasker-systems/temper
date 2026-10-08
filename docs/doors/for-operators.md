@@ -74,6 +74,9 @@ auth-identity contract — whose tokens this instance trusts and which it accept
   an execution budget.
 - **[Compose queries that stay fast](../playbooks/compose-queries-that-stay-fast.md)** — the
   operator knobs in order of leverage, and the four numbers worth checking.
+- **[Rate-limit an instance at the edge](../playbooks/rate-limit-at-the-edge.md)** — measuring
+  your own traffic, database cost and capacity, and turning them into firewall rules that start
+  in log mode.
 
 ## Verifying releases
 

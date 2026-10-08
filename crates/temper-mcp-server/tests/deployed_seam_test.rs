@@ -5,6 +5,9 @@
 //! captures the request a relayed act actually sends and compares its identity headers to that
 //! exact set.
 //!
+//! The optional edge-proxy marker (`TEMPER_EDGE_PROXY_SECRET`) is captured too: absent unless
+//! configured, never equal to the service credential.
+//!
 //! The shell's configuration postures are pinned beside it: either variable unset (or a secret
 //! that cannot ride a header) leaves the tool door dark with the deployment's own sentence, and
 //! a request the edge never verified (no bearer) answers the tool layer's not-connected refusal.
@@ -25,11 +28,17 @@ fn closed() -> BlobDoor {
 }
 
 fn relay(base: Option<&str>, secret: Option<&str>) -> DeployedRelay {
+    relay_marked(base, secret, None)
+}
+
+fn relay_marked(base: Option<&str>, secret: Option<&str>, marker: Option<&str>) -> DeployedRelay {
     let base = base.map(str::to_string);
     let secret = secret.map(str::to_string);
+    let marker = marker.map(str::to_string);
     deployed_relay(&move |key: &str| match key {
         "TEMPER_API_BASE_URL" => base.clone(),
         "TEMPER_MCP_SERVICE_SECRET" => secret.clone(),
+        "TEMPER_EDGE_PROXY_SECRET" => marker.clone(),
         _ => None,
     })
 }
@@ -45,12 +54,13 @@ fn parts(bearer: Option<&str>) -> http::request::Parts {
 /// The identity headers the API reads, as one relayed request carried them.
 type Captured = Arc<Mutex<Vec<(String, Option<String>)>>>;
 
-const IDENTITY_HEADERS: [&str; 5] = [
+const IDENTITY_HEADERS: [&str; 6] = [
     "authorization",
     "x-temper-service-credential",
     "x-temper-relayed-surface",
     "x-temper-surface",
     "x-temper-device-id",
+    "x-temper-edge-proxy",
 ];
 
 /// A listener that records the identity headers of every request and answers 500 (the relayed
@@ -101,8 +111,47 @@ async fn the_deployed_seam_sends_exactly_the_relay_identity() {
         ("x-temper-relayed-surface".into(), Some("mcp".into())),
         ("x-temper-surface".into(), Some("mcp".into())),
         ("x-temper-device-id".into(), None),
+        ("x-temper-edge-proxy".into(), None),
     ];
     assert_eq!(got, want, "the deployed door's outgoing identity moved");
+}
+
+/// One relayed act's captured headers, under a given relay configuration.
+async fn relayed_headers(marker: Option<&str>) -> Vec<(String, Option<String>)> {
+    let (base, seen) = capture().await;
+    let service =
+        temper_mcp_server::tool_service(closed(), relay_marked(Some(&base), Some(SECRET), marker));
+    let _ = service
+        .relay_client(&parts(Some(BEARER)))
+        .expect("relay client")
+        .profile()
+        .get()
+        .await;
+    let got = seen.lock().unwrap().clone();
+    got
+}
+
+/// Configured, every relayed act carries the edge-proxy marker, so the API project's per-IP
+/// rules can exempt the relay's hops — which all arrive from this function's few addresses.
+/// FAILS IF: the marker is dropped, or replaces any identity header.
+#[tokio::test]
+async fn a_configured_edge_proxy_secret_marks_every_relayed_act() {
+    let got = relayed_headers(Some("an-edge-proxy-marker")).await;
+    assert!(got.contains(&(
+        "x-temper-edge-proxy".into(),
+        Some("an-edge-proxy-marker".into())
+    )));
+    assert!(got.contains(&("x-temper-service-credential".into(), Some(SECRET.into()))));
+}
+
+/// The marker's value is copied into firewall configuration, so a marker equal to the service
+/// secret is not sent — and the relay still works, because the marker is never a reason to go
+/// dark. FAILS IF: the service credential rides the marker header, or the door darkens.
+#[tokio::test]
+async fn a_marker_equal_to_the_service_secret_is_not_sent() {
+    let got = relayed_headers(Some(SECRET)).await;
+    assert!(got.contains(&("x-temper-edge-proxy".into(), None)));
+    assert!(got.contains(&("x-temper-service-credential".into(), Some(SECRET.into()))));
 }
 
 /// The secret is trimmed exactly as the API trims the same variable (`shared_secret`), so the

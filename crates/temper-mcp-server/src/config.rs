@@ -101,12 +101,44 @@ pub fn deployed_relay(lookup: &impl Fn(&str) -> Option<String>) -> DeployedRelay
     let Some(secret) = shared_secret(lookup, "TEMPER_MCP_SERVICE_SECRET") else {
         return DeployedRelay::Unavailable(SECRET_UNSET);
     };
-    match DeployedDoorSeam::new(&secret) {
-        Ok(seam) => DeployedRelay::Ready {
-            config: RelayConfig::new(api_base_url, RELAY_REQUEST_TIMEOUT),
-            seam,
-        },
-        Err(_) => DeployedRelay::Unavailable(SECRET_NOT_A_HEADER),
+    let Ok(seam) = DeployedDoorSeam::new(&secret) else {
+        return DeployedRelay::Unavailable(SECRET_NOT_A_HEADER);
+    };
+    DeployedRelay::Ready {
+        config: RelayConfig::new(api_base_url, RELAY_REQUEST_TIMEOUT),
+        seam: with_edge_proxy_marker(seam, lookup, &secret),
+    }
+}
+
+/// Add the edge-proxy marker when `TEMPER_EDGE_PROXY_SECRET` is set. Never a refusal: the
+/// marker only exempts relayed acts from the API edge's per-IP limits, so a value that cannot
+/// be sent leaves the relay working and logs why. A value equal to the service secret is not
+/// sent, because the marker's value is copied into firewall configuration, where the service
+/// credential must never be.
+fn with_edge_proxy_marker(
+    seam: DeployedDoorSeam,
+    lookup: &impl Fn(&str) -> Option<String>,
+    service_secret: &str,
+) -> DeployedDoorSeam {
+    let Some(marker) = shared_secret(lookup, "TEMPER_EDGE_PROXY_SECRET") else {
+        return seam;
+    };
+    if marker == service_secret {
+        tracing::error!(
+            "TEMPER_EDGE_PROXY_SECRET equals TEMPER_MCP_SERVICE_SECRET; not sending the \
+             edge-proxy marker. Generate a separate value."
+        );
+        return seam;
+    }
+    match seam.clone().with_edge_proxy_secret(&marker) {
+        Ok(marked) => marked,
+        Err(_) => {
+            tracing::error!(
+                "TEMPER_EDGE_PROXY_SECRET is not a valid header value; not sending the \
+                 edge-proxy marker"
+            );
+            seam
+        }
     }
 }
 

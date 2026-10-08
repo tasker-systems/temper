@@ -113,7 +113,25 @@ export interface ForwardOptions {
 	connectTimeoutMs?: number;
 	/** Retries beyond the first attempt, applied only to {@link RETRYABLE_METHODS}. Default 1. */
 	maxRetries?: number;
+	/** The value to send as {@link EDGE_PROXY_HEADER}; absent sends no such header. */
+	edgeProxySecret?: string;
 }
+
+/**
+ * Header that marks a request as relayed by this proxy, carrying a deployment secret
+ * (`TEMPER_EDGE_PROXY_SECRET`).
+ *
+ * Every request this proxy relays reaches the upstream from the UI function's few egress
+ * addresses, so a per-IP rate limit at the upstream's edge would put every user of the UI
+ * origin into a handful of shared buckets. The upstream's firewall rules exempt requests
+ * carrying this header and its value; those requests already met the UI origin's own per-IP
+ * rules, which see the real client address.
+ *
+ * It is an edge-firewall condition only. Nothing in the API reads it, and it confers no
+ * access: a leaked value lets its holder skip the upstream's per-IP limits and nothing else.
+ * The proxy always deletes an inbound copy, so a caller cannot pass one through.
+ */
+export const EDGE_PROXY_HEADER = 'x-temper-edge-proxy';
 
 /** True for the undici timeout we raise via `AbortController`, so it can map to 504 not 502. */
 function isTimeout(err: unknown): boolean {
@@ -181,6 +199,7 @@ async function forwardOnce(
 	traceparent: string,
 	timeoutMs: number,
 	bufferedBody?: ArrayBuffer,
+	edgeProxySecret?: string,
 ): Promise<Response> {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -200,6 +219,12 @@ async function forwardOnce(
 	// Set (not append) so a forwarded inbound value is not duplicated, and a
 	// generated one is present exactly once.
 	outbound.headers.set(TRACEPARENT, traceparent);
+	// Deleted unconditionally: a caller's own copy must never reach the upstream, whether or not
+	// this deployment configures the secret.
+	outbound.headers.delete(EDGE_PROXY_HEADER);
+	if (edgeProxySecret) {
+		outbound.headers.set(EDGE_PROXY_HEADER, edgeProxySecret);
+	}
 	let upstream: Response;
 	try {
 		upstream = await fetch(outbound, {
@@ -254,7 +279,14 @@ export async function forwardRequest(
 	let lastErr: unknown;
 	for (let attempt = 0; attempt <= retries; attempt++) {
 		try {
-			const response = await forwardOnce(target, request, traceparent, timeoutMs, bufferedBody);
+			const response = await forwardOnce(
+				target,
+				request,
+				traceparent,
+				timeoutMs,
+				bufferedBody,
+				options.edgeProxySecret,
+			);
 			// An upstream that answered with a server error is a different failure
 			// from an unreachable one — it is relayed as-is (not rewritten), but the
 			// join key is logged so it can be lined up against the upstream's own
@@ -323,5 +355,7 @@ export async function proxyRequest(event: RequestEvent): Promise<Response> {
 		);
 		throw error(500, 'Proxy upstream is misconfigured.');
 	}
-	return forwardRequest(upstream, event.url.pathname, event.url.search, event.request);
+	return forwardRequest(upstream, event.url.pathname, event.url.search, event.request, {
+		edgeProxySecret: env.TEMPER_EDGE_PROXY_SECRET?.trim() || undefined,
+	});
 }
