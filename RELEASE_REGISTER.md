@@ -32,6 +32,23 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 (`schemas/versions/<M.m>/`); the pin gate checks the record names a `spec-correction` row.
 
 ## Since v0.6.0 — unreleased
+- **`POST /api/teams` refuses the `personal-` slug prefix; a personal team is identified by `kb_teams.personal_of`**
+  The personal-team trigger joined every new profile as owner of whatever team held
+  `personal-<handle>`, and `team_service::create_team` reserved no prefix, so anyone could create
+  that team first and be a co-owner of someone's personal team from their first moment. `create_team`
+  now refuses a slug starting `personal-` (any case, admins included) with `400 Bad Request`; the
+  OpenAPI operation grows the 400 response. The trigger never joins a team someone else holds: a
+  held slug sends the new profile's personal team to the next free `personal-<handle>-N`, so sign-up
+  never fails. A new nullable column, `kb_teams.personal_of`, records whose personal team a team is
+  (backfilled from the slug where that profile owns the team), and erasure finds the personal team
+  by it rather than by recomputing the slug. Request and success shapes are unchanged. Who observes:
+  API, SDK and `temper team create` callers choosing a `personal-` slug; operators reading
+  `kb_teams`. User-visible: a 400 where such a team used to be created. Release relevance: additive
+  (the 400 response, the column), behavioral (the refused prefix, genesis that never joins).
+pr: self
+classes: additive, behavioral
+surfaces: http, clients, schema
+status: signal-only
 - **`POST /api/teams/{id}/members` adds only; a profile already on the team is a 409**
   `team_service::add_member` was an upsert: posting a profile already on the team overwrote its
   role, skipping every guard `change_role` enforces. A maintainer could re-add a team's sole owner

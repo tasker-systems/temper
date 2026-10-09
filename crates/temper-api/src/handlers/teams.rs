@@ -45,6 +45,7 @@ pub async fn list(State(state): State<AppState>, auth: AuthUser) -> ApiResult<Js
     request_body = TeamCreateRequest,
     responses(
         (status = 201, description = "Team created", body = TeamRow),
+        (status = 400, description = "The `personal-` slug prefix is reserved for personal teams"),
         (status = 403, description = "Forbidden (child requires owner/maintainer; auto_join_role requires admin)"),
         (status = 409, description = "Team slug already exists"),
     )

@@ -19484,6 +19484,13 @@ export interface operations {
                     "application/json": components["schemas"]["TeamRow"];
                 };
             };
+            /** @description The `personal-` slug prefix is reserved for personal teams */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Forbidden (child requires owner/maintainer; auto_join_role requires admin) */
             403: {
                 headers: {

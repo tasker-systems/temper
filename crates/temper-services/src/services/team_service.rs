@@ -25,6 +25,10 @@ use temper_core::types::team::{
     TeamMemberSource, TeamRole, TeamRow, TeamUpdateRequest,
 };
 
+/// The slug prefix of every personal team (`personal-<handle>`), which `sync_personal_team`
+/// alone may create.
+pub const PERSONAL_TEAM_SLUG_PREFIX: &str = "personal-";
+
 /// Map a sqlx error to `Conflict` when it is a unique-constraint violation
 /// (the globally-UNIQUE `kb_teams.slug`), else pass it through.
 fn map_unique_violation(err: sqlx::Error, message: &str) -> ApiError {
@@ -125,6 +129,11 @@ pub(crate) async fn require_team_exists(pool: &PgPool, team_id: Uuid) -> ApiResu
 
 /// Create a team. The caller becomes its `owner`.
 ///
+/// The [`PERSONAL_TEAM_SLUG_PREFIX`] is refused for every caller, admins included: only the
+/// `sync_personal_team` trigger creates a personal team, and it joins a new profile as owner of
+/// the team holding `personal-<handle>`. A team created ahead of the profile under that slug
+/// would make its creator a co-owner of someone else's personal team.
+///
 /// Auth before writes:
 /// - **child** (`parent` set): caller must be `owner`/`maintainer` on the parent.
 /// - **root** (`parent` None): any authenticated profile may create.
@@ -141,6 +150,16 @@ pub async fn create_team(
     req: &TeamCreateRequest,
 ) -> ApiResult<TeamRow> {
     let creator = ProfileId::from(authed.profile().id);
+    if req
+        .slug
+        .to_ascii_lowercase()
+        .starts_with(PERSONAL_TEAM_SLUG_PREFIX)
+    {
+        return Err(ApiError::BadRequest(format!(
+            "the `{PERSONAL_TEAM_SLUG_PREFIX}` slug prefix is reserved for personal teams"
+        )));
+    }
+
     // --- Auth before writes ---
 
     // Child team: resolve the parent and require owner/maintainer on it.
@@ -1353,5 +1372,165 @@ mod lifecycle_tests {
 
         let (role, _) = stored_member(&pool, team, member).await;
         assert!(matches!(role, TeamRole::Member), "got {role:?}");
+    }
+
+    // --- Personal-team slug squatting (spec review L1) ---
+
+    /// Insert a profile and return the database's answer, so a refused insert can be asserted.
+    async fn try_mk_profile(pool: &PgPool, handle: &str) -> Result<Uuid, sqlx::Error> {
+        sqlx::query_scalar(
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
+        )
+        .bind(handle)
+        .fetch_one(pool)
+        .await
+    }
+
+    /// Nobody may create a team under the personal prefix, admins included, in any case.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn create_team_refuses_the_personal_slug_prefix(pool: PgPool) {
+        let squatter = mk_profile(&pool, "squatter").await;
+        let authed = crate::test_support::authenticated_profile_for(&pool, squatter).await;
+        for slug in ["personal-victim", "Personal-Victim"] {
+            let req = TeamCreateRequest {
+                slug: slug.to_string(),
+                name: None,
+                parent: None,
+                auto_join_role: None,
+            };
+            let refused = create_team(&pool, &authed, &req).await;
+            assert!(
+                matches!(refused, Err(ApiError::BadRequest(_))),
+                "{slug}: got {refused:?}"
+            );
+        }
+        let held: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM kb_teams WHERE lower(slug) = 'personal-victim')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!held, "a refused create must write no team");
+    }
+
+    /// The profile's own personal team, found by identity.
+    async fn personal_team_of(pool: &PgPool, profile: Uuid) -> (Uuid, String) {
+        sqlx::query_as("SELECT id, slug FROM kb_teams WHERE personal_of = $1")
+            .bind(profile)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn member_count(pool: &PgPool, team: Uuid) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM kb_team_members WHERE team_id = $1")
+            .bind(team)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// A team already holding `personal-<handle>` with a member is someone else's: the new
+    /// profile is not joined to it, and still gets a personal team, at the next free suffix.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_new_profile_does_not_join_a_member_held_personal_slug(pool: PgPool) {
+        let squatter = mk_profile(&pool, "squatter").await;
+        let squat = mk_team(&pool, "personal-victim").await;
+        add(&pool, squat, squatter, "owner", "native").await;
+
+        let victim = try_mk_profile(&pool, "victim")
+            .await
+            .expect("a held personal slug never blocks a profile");
+
+        assert_eq!(
+            member_count(&pool, squat).await,
+            1,
+            "the squatted team gains no member"
+        );
+        let (own, slug) = personal_team_of(&pool, victim).await;
+        assert_eq!(slug, "personal-victim-2");
+        let (role, _) = stored_member(&pool, own, victim).await;
+        assert!(matches!(role, TeamRole::Owner), "got {role:?}");
+        assert_eq!(member_count(&pool, own).await, 1);
+    }
+
+    /// The parent-held arm, isolated: no members, but a parent other than `temper-system` is a
+    /// team someone else built, not a restored personal team. The suffix also skips a held `-2`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_new_profile_does_not_adopt_a_parent_held_personal_slug(pool: PgPool) {
+        let parent = mk_team(&pool, "acme").await;
+        let squat = mk_team(&pool, "personal-victim").await;
+        sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
+            .bind(squat)
+            .bind(parent)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let squatter = mk_profile(&pool, "squatter").await;
+        let next = mk_team(&pool, "personal-victim-2").await;
+        add(&pool, next, squatter, "owner", "native").await;
+
+        let victim = try_mk_profile(&pool, "victim").await.unwrap();
+
+        assert_eq!(member_count(&pool, squat).await, 0);
+        let (_, slug) = personal_team_of(&pool, victim).await;
+        assert_eq!(slug, "personal-victim-3");
+    }
+
+    /// Replay of a snapshot older than `personal_of` restores each personal team before its
+    /// profile, memberless and under at most `temper-system`, with no identity yet. The profile
+    /// must adopt that same team, as before, and now stamp it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_restored_personal_team_is_adopted_by_its_profile(pool: PgPool) {
+        let restored = mk_team(&pool, "personal-ghost").await;
+        if let Ok(root) =
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM kb_teams WHERE slug = 'temper-system'")
+                .fetch_one(&pool)
+                .await
+        {
+            sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
+                .bind(restored)
+                .bind(root)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let ghost = try_mk_profile(&pool, "ghost").await.unwrap();
+        assert_eq!(
+            personal_team_of(&pool, ghost).await,
+            (restored, "personal-ghost".to_string())
+        );
+        let (role, _) = stored_member(&pool, restored, ghost).await;
+        assert!(matches!(role, TeamRole::Owner), "got {role:?}");
+    }
+
+    /// Replay of a snapshot that carries `personal_of` restores the team under whatever slug
+    /// genesis gave it, suffixed or renamed by erasure; the profile adopts it by identity and
+    /// creates nothing.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_restored_personal_team_is_adopted_by_identity_whatever_its_slug(pool: PgPool) {
+        let id = Uuid::now_v7();
+        let restored: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_teams (slug, name, personal_of) \
+             VALUES ('personal-ghost-2', 'g', $1) RETURNING id",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, 'ghost', 'g')")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(personal_team_of(&pool, id).await.0, restored);
+        let teams: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM kb_teams WHERE slug LIKE 'personal-ghost%'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(teams, 1, "no second personal team is created");
     }
 }

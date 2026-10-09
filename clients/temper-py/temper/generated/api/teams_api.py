@@ -744,6 +744,7 @@ class TeamsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '201': "TeamRow",
+            '400': None,
             '403': None,
             '409': None,
         }
@@ -816,6 +817,7 @@ class TeamsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '201': "TeamRow",
+            '400': None,
             '403': None,
             '409': None,
         }
@@ -888,6 +890,7 @@ class TeamsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '201': "TeamRow",
+            '400': None,
             '403': None,
             '409': None,
         }

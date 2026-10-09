@@ -1223,6 +1223,81 @@ mod tests {
         }
     }
 
+    /// ── WITNESS: erasure finds the personal team by identity, not by slug ───────────────
+    /// FAILS IF erasure recomputes `'personal-' || handle`: when the bare slug was held at
+    /// genesis, the subject's own team carries a `-N` suffix, and a slug lookup would scrub the
+    /// holder's team while leaving the subject's handle in their own team's slug and name.
+    #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+    async fn erasure_scrubs_the_subjects_suffixed_personal_team_not_the_slug_holder(
+        pool: sqlx::PgPool,
+    ) {
+        let (holder, _) = insert_profile(&pool).await;
+        let subject = Uuid::now_v7();
+        let handle = format!("user-{subject}");
+        let held: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_teams (slug, name) VALUES ($1, 'Held') RETURNING id",
+        )
+        .bind(format!("personal-{handle}"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner')",
+        )
+        .bind(held)
+        .bind(holder)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, $2, $2)")
+            .bind(subject)
+            .bind(&handle)
+            .execute(&pool)
+            .await
+            .expect("a held personal slug never blocks a profile");
+        sqlx::query("INSERT INTO kb_entities (profile_id, name) VALUES ($1, $2)")
+            .bind(subject)
+            .bind(format!("{handle}@web"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (operator, _) = insert_profile(&pool).await;
+        test_support::grant_governance(&pool, operator).await;
+        let admin = test_support::system_admin_proof_for(&pool, operator).await;
+
+        execute_erasure(
+            &pool,
+            &admin,
+            ProfileId::from(subject),
+            Uuid::now_v7(),
+            Surface::ApiHttp,
+        )
+        .await
+        .expect("completes");
+
+        let (slug, name): (String, String) =
+            sqlx::query_as("SELECT slug, name FROM kb_teams WHERE id = $1")
+                .bind(held)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            slug,
+            format!("personal-{handle}"),
+            "the holder's slug is untouched"
+        );
+        assert_eq!(name, "Held", "the holder's name is untouched");
+
+        let (own_slug, own_name): (String, String) =
+            sqlx::query_as("SELECT slug, name FROM kb_teams WHERE personal_of = $1")
+                .bind(subject)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(own_slug, format!("personal-erased-{subject}"));
+        assert_eq!(own_name, format!("erased-{subject} (personal)"));
+    }
+
     /// ── WITNESS: the profile tombstone ──────────────────────────────────────────────────
     /// FAILS IF the pseudonym break is incomplete: identifiers gone with the UUID kept, the
     /// tombstone timestamped by the EVENT (replay-stable), the personal-team denormalization
