@@ -583,6 +583,10 @@ fn classify_execute_raise(rest: &str) -> ActFailure {
         ActFailure::BlobNotInRemainder(Uuid::parse_str(id).ok())
     } else if between(rest, "edge ", " missing or already folded").is_some() {
         ActFailure::Retryable
+    } else if between(rest, "remote source ", " gained a citer during the act").is_some() {
+        // The plan read the source as exclusive; a write elsewhere cited it before step (9e)
+        // locked it (20261013100020). The retry's plan names it shared.
+        ActFailure::Retryable
     } else if between(rest, "resource ", " not found").is_some() {
         ActFailure::NotFound
     } else {
@@ -1151,6 +1155,17 @@ mod classifier_tests {
     fn a_raced_edge_fold_is_retryable() {
         let msg = format!(
             "resource_erasure_execute: edge {} missing or already folded",
+            id()
+        );
+        assert_eq!(classify_act_failure(P0001, &msg), ActFailure::Retryable);
+    }
+
+    // The plan read a remote source as exclusive and a write elsewhere cited it before step (9e)
+    // locked it (20261013100020): retried, so the next plan names it shared.
+    #[test]
+    fn a_remote_source_that_gained_a_citer_is_retryable() {
+        let msg = format!(
+            "resource_erasure_execute: remote source {} gained a citer during the act",
             id()
         );
         assert_eq!(classify_act_failure(P0001, &msg), ActFailure::Retryable);

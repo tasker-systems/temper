@@ -4001,11 +4001,14 @@ async fn a_pre_minted_look_alike_sentinel_does_not_stop_the_re_point(pool: sqlx:
 
 /// (22, concurrent-citer half, citer first) R exclusively cites URL. Another resource's annotate
 /// of URL holds its transaction — its `_upsert_remote_source` holds URL's row lock — while the act
-/// runs; the act locks R's captured originals before it computes the plan, so it waits there, and
-/// the plan, the record and the delete decision all see the committed citer: the row is kept,
-/// and the record's `targets` says it was kept as shared, not deleted. The other resource's
-/// provenance stays readable: its whole-body update reads attributions (`read_attributions`),
-/// which fails on a remote row with no `kb_remote_sources` uri.
+/// runs. Since 20261013100020 the act does not lock R's remote sources before its plan (a lock held
+/// from there made writes citing the same URL in any tenant wait out the act), so its plan reads
+/// URL as exclusive, and step (9e) waits on the citer's lock. Once the citer commits, (9e) sees its
+/// citation and keeps the row; the act raises `remote source <id> gained a citer during the act`
+/// rather than commit a record calling a kept source deleted. The retry (the service's) plans with
+/// the citer visible: the row is kept, and the record's `targets` says it was kept as shared, not
+/// deleted. The other resource's provenance stays readable: its whole-body update reads
+/// attributions (`read_attributions`), which fails on a remote row with no `kb_remote_sources` uri.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_concurrent_citer_keeps_its_remote_source(pool: sqlx::PgPool) {
     common::reset_schema(&pool).await;
@@ -4050,16 +4053,38 @@ async fn a_concurrent_citer_keeps_its_remote_source(pool: sqlx::PgPool) {
 
     let pool_for_act = pool.clone();
     let resource = leak.resource.uuid();
-    let mut act = tokio::spawn(async move { execute_act(&pool_for_act, resource).await });
+    let mut act = tokio::spawn(async move {
+        let (_, operator) = system_actor(&pool_for_act).await;
+        sqlx::query("SELECT resource_erasure_execute($1,$2,$3,$4)")
+            .bind(resource)
+            .bind(operator)
+            .bind(operator)
+            .bind(Uuid::now_v7())
+            .execute(&pool_for_act)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    });
     let finished_within_window =
         tokio::time::timeout(std::time::Duration::from_secs(2), &mut act).await;
     assert!(
         finished_within_window.is_err(),
-        "the act completed while a citer held URL's row — its FOR UPDATE did not wait"
+        "the act completed while a citer held URL's row — step (9e)'s lock did not wait"
     );
 
     citer.commit().await.unwrap();
-    let event_id = act.await.expect("the act task must not panic");
+    let raced = act
+        .await
+        .expect("the act task must not panic")
+        .expect_err("the plan read URL as exclusive; the act must not record it deleted");
+    assert!(
+        raced.contains(&format!(
+            "remote source {url_id} gained a citer during the act"
+        )),
+        "the act raises the retryable race, got {raced}"
+    );
+    // The service's retry.
+    let event_id = execute_act(&pool, resource).await;
 
     // The record matches what the act did: the source it kept is counted shared, not deleted,
     // and the remainder names it by id.
@@ -7066,4 +7091,154 @@ async fn a_husk_whose_provenance_permutes_its_sentinels_is_refused_not_completed
         .await
         .unwrap();
     assert_eq!(ledger_before, ledger_after, "nothing was written");
+}
+
+/// (22, late lock) **A citer of R's remote source in another home does not wait on the act.** R
+/// cites URL; the act is held at its edge folds (a side transaction holds R's edge row). Meanwhile
+/// a resource in another home cites the same URL, which upserts the same shared
+/// `kb_remote_sources` row. It must commit promptly: the act locks R's remote sources only at step
+/// (9e), at its tail, so a write elsewhere never waits out the act, and a write cut off at the
+/// write-side lock bound can never tell another tenant that something citing a URL is being
+/// erased (found by the security review of the lock-bound branch).
+///
+/// The source the plan read as exclusive is now shared. Step (9e) keeps it, and the act raises
+/// `remote source <id> gained a citer during the act`, which the service retries. The retry plans
+/// with the citer visible and records the source as shared, named in the remainder.
+///
+/// FAILS IF the act locks R's remote sources before its plan (the citer waits for the act), or if
+/// the act commits a record that calls a kept source deleted.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_citer_of_the_same_url_in_another_home_does_not_wait_on_the_act(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "late-lock-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "late-lock-twin").await,
+    )
+    .await;
+    let elsewhere = make_home(&pool, owner, "late-lock-elsewhere").await;
+    let source: Uuid = sqlx::query_scalar("SELECT id FROM kb_remote_sources WHERE uri = $1")
+        .bind(URL)
+        .fetch_one(&pool)
+        .await
+        .expect("R's remote source");
+
+    // Hold R's edge, so the act stops at its edge folds, after its plan.
+    let mut edge_hold = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM kb_edges WHERE id = $1 FOR UPDATE")
+        .bind(leak.edge.uuid())
+        .execute(&mut *edge_hold)
+        .await
+        .unwrap();
+
+    let act_pool = pool.clone();
+    let resource = leak.resource.uuid();
+    let (pid_tx, pid_rx) = tokio::sync::oneshot::channel();
+    let act = tokio::spawn(async move {
+        let mut conn = act_pool.acquire().await.unwrap();
+        let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        pid_tx.send(pid).unwrap();
+        let (_, operator) = system_actor(&act_pool).await;
+        sqlx::query_scalar::<_, String>(
+            "SELECT (resource_erasure_execute($1,$2,$3,$4)->>'event_id')::text",
+        )
+        .bind(resource)
+        .bind(operator)
+        .bind(operator)
+        .bind(Uuid::now_v7())
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|e| e.to_string())
+    });
+    let act_pid = pid_rx.await.unwrap();
+    for _ in 0..200 {
+        let waiting: Option<String> =
+            sqlx::query_scalar("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1")
+                .bind(act_pid)
+                .fetch_optional(&pool)
+                .await
+                .unwrap()
+                .flatten();
+        if waiting.as_deref() == Some("Lock") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
+    // The citer, elsewhere, while the act waits.
+    let citer_pool = pool.clone();
+    let citer = tokio::spawn(async move {
+        writes::create_resource_with(
+            &citer_pool,
+            CreateParams {
+                idempotency_key: None,
+                title: "an independent citation",
+                origin_uri: "test://late-lock-citer",
+                body: CLEAN,
+                doc_type: "research",
+                home: AnchorRef::context(elsewhere),
+                owner,
+                originator: owner,
+                emitter,
+                properties: &[],
+                chunks: Some(vec![chunk(CLEAN, "")]),
+                sources: vec![Incorporation {
+                    source: ProvenanceSource::Remote(URL.to_owned()),
+                    seq: 1,
+                }],
+            },
+            EventContext::default(),
+        )
+        .await
+        .map_err(|e| e.to_string())
+    });
+    let cited = tokio::time::timeout(std::time::Duration::from_secs(2), citer).await;
+    assert!(
+        matches!(cited, Ok(Ok(Ok(_)))),
+        "the citer elsewhere committed while the act waited, not after it: {cited:?}"
+    );
+
+    edge_hold.commit().await.unwrap();
+    let first = act.await.unwrap();
+    let raced = first
+        .as_ref()
+        .expect_err("the plan's exclusive source gained a citer");
+    assert!(
+        raced.contains(&format!(
+            "remote source {source} gained a citer during the act"
+        )),
+        "the act raises the retryable race, got {raced}"
+    );
+
+    // The retry plans with the citer visible.
+    let event_id = execute_act(&pool, resource).await;
+    let remainder: serde_json::Value =
+        sqlx::query_scalar("SELECT payload->'remainder' FROM kb_events WHERE id = $1")
+            .bind(event_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        remainder
+            .to_string()
+            .contains(&format!("shared remote source {source}")),
+        "the record names the kept source as shared: {remainder}"
+    );
+    let kept: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM kb_remote_sources WHERE id = $1)")
+            .bind(source)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(kept, "the shared source is kept for its other citer");
 }
