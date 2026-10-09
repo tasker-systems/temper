@@ -86,6 +86,20 @@ pub const RESOURCE_ERASED_CODE: &str = "RESOURCE_ERASED";
 /// constant rather than two literals nothing checks.
 pub const INGEST_ENDED_CODE: &str = "INGEST_ENDED";
 
+/// The wire `error.code` a write travels under when it waited on a row lock past the write-side
+/// bound (SQLSTATE `55P03`, `lock_not_available`): a `503` with `Retry-After`.
+///
+/// **What it promises.** The transaction rolled back, so nothing the request asked for was
+/// applied, and the same request sent again is not a double-apply. That is the difference from an
+/// `INTERNAL_ERROR` `500`, which carries no such promise.
+///
+/// **Why `503`.** Every shipped client classifies any 5xx as transient, so this changes no
+/// client's behaviour (`409` would collide with "already exists"). None of them auto-retries an
+/// unkeyed write: the caller decides.
+///
+/// Spelled here for the same reason as [`FORBIDDEN_DETAIL_CODE`].
+pub const RESOURCE_BUSY_CODE: &str = "RESOURCE_BUSY";
+
 /// Details from a system access gate rejection (CLI error rendering).
 ///
 /// Distinct from `types::access_gate::SystemAccessDetails` which carries
@@ -178,6 +192,11 @@ pub enum TemperError {
     #[error("{0}")]
     ContentIntegrity(String),
 
+    /// A write that waited on a row lock past the write-side bound and was rolled back, having
+    /// applied nothing. `503` with `Retry-After` under [`RESOURCE_BUSY_CODE`].
+    #[error("the resource is busy; nothing was applied, retry the request")]
+    ResourceBusy,
+
     /// A data-artifact write the system declined for reasons the caller can act on — the
     /// SQL wrapper's refusal vocabulary or the enforcing-shape verdict's per-violation
     /// detail. Travels the wire under [`DATA_ARTIFACT_REFUSAL_CODE`] so a client
@@ -253,6 +272,7 @@ impl TemperError {
             Self::Conflict(_) => "conflict",
             Self::IngestEnded(_) => INGEST_ENDED_CODE,
             Self::ContentIntegrity(_) => "content-integrity",
+            Self::ResourceBusy => RESOURCE_BUSY_CODE,
             Self::DataArtifactRefusal(_) => DATA_ARTIFACT_REFUSAL_CODE,
             Self::Forbidden => "forbidden",
             Self::ForbiddenDetail(_) => FORBIDDEN_DETAIL_CODE,

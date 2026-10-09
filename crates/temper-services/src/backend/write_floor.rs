@@ -57,8 +57,16 @@
 //!
 //! **A transaction that lost a race is the incumbent `500`.** A deadlock (`40P01`) or
 //! serialization failure (`40001`) inside a floored write answers as every database fault does:
-//! `500 INTERNAL_ERROR`, logged at error level, which every client already treats as transient and
-//! retries. A `409` would collide with "already exists" in the shipped clients (ruled 2026-10-01).
+//! `500 INTERNAL_ERROR`, logged at error level. A `409` would collide with "already exists" in the
+//! shipped clients (ruled 2026-10-01). Every shipped client classifies a 5xx as transient, but
+//! none of them (Rust, TypeScript, Python, Ruby) auto-retries an unkeyed write, so the caller sees
+//! it. Two updates of one resource no longer deadlock: they serialize on its row (the head of
+//! `update_resource_in_tx`).
+//!
+//! **A write that waited past the lock bound is `503 RESOURCE_BUSY`** (ruled 2026-10-09): the floor
+//! sets [`WRITE_LOCK_TIMEOUT_MS`] for the rest of the transaction (`bound_lock_waits`), and a
+//! `55P03` from any statement after it answers [`TemperError::ResourceBusy`] with `Retry-After`. It
+//! rolled back having applied nothing, so unlike a `500` it is always safe to send again.
 //!
 //! **A refusal rolls back before it is answered.** `rollback_with` ends the transaction a floor
 //! (or any in-transaction gate) refused, so the row lock is released before the door answers
@@ -161,6 +169,7 @@ async fn lock_resource_row(
     conn: &mut PgConnection,
     resource: ResourceId,
 ) -> Result<Option<bool>, TemperError> {
+    bound_lock_waits(conn).await?;
     sqlx::query_scalar!(
         "SELECT is_active FROM kb_resources WHERE id = $1 FOR KEY SHARE",
         resource.uuid(),
@@ -184,9 +193,60 @@ async fn erased_or_forbidden(
     }
 }
 
-/// Bridge a database error into `TemperError`: the `500` `db_backend`'s `api_err` gives.
+/// The write-side lock bound: how long any one statement of a floored write may wait on a lock
+/// before Postgres cancels it (`55P03`) and the write answers `503 RESOURCE_BUSY`, having applied
+/// nothing. Chosen from measurement (task 01a0fd12-f4b7-7bd2-81d0-13c0814650d5, harness
+/// `temper-substrate/tests/write_lock_measure.rs`).
+pub const WRITE_LOCK_TIMEOUT_MS: u64 = 5_000;
+
+/// Set [`WRITE_LOCK_TIMEOUT_MS`] for the rest of `conn`'s transaction. `SET LOCAL`, so it ends with
+/// the transaction and never reaches another request on the pooled connection. Every floor takes
+/// its row lock through [`lock_resource_row`], which calls this first, so the bound covers every
+/// floored write's waits from its floor to its commit: behind the erasure act, behind a block
+/// history scrub, behind another update of the same resource.
+///
+/// **Per transaction, never per pool or per role.** The erasure act and the scrub run on the same
+/// pool and take no floor, so they stay unbounded: an act that timed out under write load would
+/// roll back every time and never complete, a denial of erasure. Their functions also pin
+/// `lock_timeout = 0` themselves (migration `20261013100000`), so a default set later on the pool
+/// or the role cannot reach them.
+///
+/// Outside a transaction `SET LOCAL` does nothing (Postgres warns), so a floor run on a bare
+/// connection is unbounded; `DbBackend`'s fast-fail opens a
+/// transaction for this reason.
+async fn bound_lock_waits(conn: &mut PgConnection) -> Result<(), TemperError> {
+    // `set_config(.., is_local => true)` is `SET LOCAL`, with the value bound.
+    sqlx::query_scalar!(
+        "SELECT set_config('lock_timeout', $1, true)",
+        format!("{WRITE_LOCK_TIMEOUT_MS}ms"),
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .map(|_| ())
+    .map_err(floor_err)
+}
+
+/// True when `e`'s chain holds the database error a lock wait past the bound raises (`55P03`).
+pub(crate) fn hit_lock_bound(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<sqlx::Error>()
+            .and_then(|s| s.as_database_error())
+            .and_then(|d| d.code())
+            .as_deref()
+            == Some(crate::error::LOCK_NOT_AVAILABLE)
+    })
+}
+
+/// Bridge a database error into `TemperError`: [`TemperError::ResourceBusy`] when it is a lock
+/// wait past the bound, else the `500` `db_backend`'s `api_err` gives.
 fn floor_err(e: sqlx::Error) -> TemperError {
-    TemperError::Api(e.to_string())
+    let e = anyhow::Error::from(e);
+    if hit_lock_bound(&e) {
+        TemperError::ResourceBusy
+    } else {
+        TemperError::Api(e.to_string())
+    }
 }
 
 /// End `tx` — refused by a floor or another in-transaction gate — with an explicit `ROLLBACK`,

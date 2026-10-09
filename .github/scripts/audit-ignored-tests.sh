@@ -84,6 +84,7 @@ current_counts() {
 read -r -d '' BASELINE <<'EOF' || true
 1 crates/temper-substrate/src/cluster.rs
 1 crates/temper-substrate/tests/context_formation_cost.rs
+1 crates/temper-substrate/tests/write_lock_measure.rs
 2 tests/e2e/tests/cloud_session_link_e2e_test.rs
 1 tests/e2e/tests/cloud_warmup_e2e_test.rs
 3 tests/e2e/tests/cloud_writes_test.rs

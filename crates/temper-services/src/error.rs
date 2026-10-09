@@ -106,9 +106,23 @@ pub enum ApiError {
         message: String,
         retry_after_secs: i64,
     },
+    /// A write that waited on a row lock past the write-side bound (SQLSTATE `55P03`), rolled back
+    /// with nothing applied. `503` under [`temper_core::error::RESOURCE_BUSY_CODE`] with
+    /// [`RESOURCE_BUSY_RETRY_AFTER_SECS`] as `Retry-After`: the system is working as bounded, not
+    /// failing, so it logs at info like a `429`, never as an internal error.
+    #[error("{}", temper_core::error::TemperError::ResourceBusy)]
+    ResourceBusy,
     #[error("Internal error: {0}")]
     Internal(String),
 }
+
+/// The `Retry-After` a [`ApiError::ResourceBusy`] carries, in seconds. The longest lock a write
+/// queues behind is the erasure act on a large resource, measured at about a second for 10k block
+/// revisions (task 01a0fd12-f4b7-7bd2-81d0-13c0814650d5); a retry sooner would mostly meet it again.
+pub const RESOURCE_BUSY_RETRY_AFTER_SECS: u64 = 2;
+
+/// SQLSTATE `55P03`, `lock_not_available`: the statement waited on a lock past `lock_timeout`.
+pub const LOCK_NOT_AVAILABLE: &str = "55P03";
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
@@ -204,6 +218,10 @@ impl IntoResponse for ApiError {
             ApiError::TooManyRequests { .. } => {
                 (StatusCode::TOO_MANY_REQUESTS, "TOO_MANY_REQUESTS")
             }
+            ApiError::ResourceBusy => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                temper_core::error::RESOURCE_BUSY_CODE,
+            ),
             ApiError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
         };
 
@@ -240,6 +258,14 @@ impl IntoResponse for ApiError {
                     retry_after_secs,
                     message = %bounded(&message),
                     "rate limited"
+                );
+            }
+            // Info, not error: the write-side bound cut a lock wait off, as configured.
+            ApiError::ResourceBusy => {
+                tracing::info!(
+                    status_code,
+                    error_code = code,
+                    "resource busy (lock wait bound)"
                 );
             }
             ApiError::Unauthorized(_) | ApiError::Forbidden | ApiError::ForbiddenDetail(_) => {
@@ -336,6 +362,12 @@ impl IntoResponse for ApiError {
                 response.headers_mut().insert(header::RETRY_AFTER, value);
             }
         }
+        if let ApiError::ResourceBusy = &self {
+            response.headers_mut().insert(
+                header::RETRY_AFTER,
+                axum::http::HeaderValue::from(RESOURCE_BUSY_RETRY_AFTER_SECS),
+            );
+        }
 
         response
     }
@@ -347,6 +379,11 @@ impl From<sqlx::Error> for ApiError {
             sqlx::Error::RowNotFound => ApiError::NotFound("not found".to_string()),
             sqlx::Error::Database(db_err) if db_err.code().as_deref() == Some("23505") => {
                 ApiError::Conflict("Resource already exists".to_string())
+            }
+            sqlx::Error::Database(db_err)
+                if db_err.code().as_deref() == Some(LOCK_NOT_AVAILABLE) =>
+            {
+                ApiError::ResourceBusy
             }
             _ => {
                 // Postgres embeds the offending value in several error classes
@@ -398,6 +435,7 @@ impl From<ApiError> for temper_core::error::TemperError {
             ApiError::IngestEnded(s) => TemperError::IngestEnded(s),
             ApiError::ContentIntegrity(s) => TemperError::ContentIntegrity(s),
             ApiError::DataArtifactRefusal(s) => TemperError::DataArtifactRefusal(s),
+            ApiError::ResourceBusy => TemperError::ResourceBusy,
             // Degrades to BadRequest text rather than earning a `TemperError` arm of its
             // own — the CLI renders errors as text, has no status to preserve, and the
             // retry value is exactly what the caller needs next, so it rides along. Same
@@ -438,6 +476,7 @@ impl From<temper_core::error::TemperError> for ApiError {
             TemperError::IngestEnded(s) => ApiError::IngestEnded(s),
             TemperError::ContentIntegrity(s) => ApiError::ContentIntegrity(s),
             TemperError::DataArtifactRefusal(s) => ApiError::DataArtifactRefusal(s),
+            TemperError::ResourceBusy => ApiError::ResourceBusy,
             TemperError::Api(s) => ApiError::Internal(s),
             TemperError::SystemAccessRequired(details) => {
                 ApiError::SystemAccessRequired {
@@ -489,6 +528,35 @@ mod tests {
             status,
             serde_json::from_slice(&bytes).expect("body is JSON"),
         )
+    }
+
+    /// A write cut off by the lock bound reaches the wire as a `503` under `RESOURCE_BUSY` with
+    /// `Retry-After`, from both the substrate's `55P03` and the core variant a backend returns.
+    /// FAILS IF it renders the `500` `INTERNAL_ERROR` class, or drops the header.
+    #[tokio::test]
+    async fn a_lock_wait_past_the_bound_renders_503_resource_busy_with_retry_after() {
+        for err in [
+            ApiError::from(TemperError::ResourceBusy),
+            ApiError::ResourceBusy,
+        ] {
+            let response = err.into_response();
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::RETRY_AFTER)
+                    .map(|v| v.to_str().unwrap()),
+                Some(RESOURCE_BUSY_RETRY_AFTER_SECS.to_string().as_str())
+            );
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body collects");
+            let body: serde_json::Value = serde_json::from_slice(&bytes).expect("body is JSON");
+            assert_eq!(
+                body["error"]["code"],
+                temper_core::error::RESOURCE_BUSY_CODE
+            );
+        }
     }
 
     fn refusal(detail: &str) -> PlanRefusal {

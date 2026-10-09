@@ -71,9 +71,17 @@ fn api_err(e: impl std::fmt::Display) -> TemperError {
 /// Bridge an error raised inside a floored write transaction, or by a substrate write mapper's
 /// fallback ([`write_err`], [`conflict_if_unique_violation`], [`finalize_err`], [`append_err`]):
 /// [`api_err`]'s `500`. A statement that lost a race (a deadlock or a serialization failure) is a
-/// fault like any other database error — every client already retries a `500` (ruled 2026-10-01).
+/// fault like any other database error (ruled 2026-10-01; no shipped client auto-retries it on an
+/// unkeyed write, see `write_floor`'s module note).
+///
+/// The one exception is a lock wait past the write-side bound (`55P03`): the transaction rolled
+/// back with nothing applied, and that answers [`TemperError::ResourceBusy`] (`503`), never a fault.
 fn tx_err<E: Into<anyhow::Error>>(e: E) -> TemperError {
-    api_err(e.into())
+    let e = e.into();
+    if write_floor::hit_lock_bound(&e) {
+        return TemperError::ResourceBusy;
+    }
+    api_err(e)
 }
 
 /// Map a substrate write error, TYPING the addressable refusals before the generic
@@ -834,9 +842,13 @@ impl DbBackend {
     /// `NotFound`). It IS the floor — same lock, same admission, same classification — so the door
     /// gives one answer, never two. On a bare connection its lock is released at once, so it binds
     /// nothing: the door re-floors inside its transaction, and that call is the one that holds.
+    ///
+    /// It runs in a transaction it then rolls back, only so the floor's `SET LOCAL lock_timeout`
+    /// applies: on a bare connection the wait behind an erasure act would be unbounded.
     async fn modify_floor_fast_fail(&self, resource: ResourceId) -> Result<(), TemperError> {
-        let mut conn = self.pool.acquire().await.map_err(api_err)?;
-        write_floor::modify_floor_in_tx(&mut conn, self.profile_id, resource).await
+        let mut tx = self.pool.begin().await.map_err(tx_err)?;
+        let answer = write_floor::modify_floor_in_tx(&mut tx, self.profile_id, resource).await;
+        write_floor::rollback_with(tx, answer).await
     }
 
     /// Open a write transaction with the modify floor ([`write_floor::modify_floor_in_tx`]) at its

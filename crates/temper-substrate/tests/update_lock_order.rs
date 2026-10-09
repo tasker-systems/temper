@@ -177,10 +177,7 @@ async fn await_lock_wait(pool: &PgPool, pid: i32) {
 }
 
 /// Both transactions must finish, and neither may be the deadlock victim.
-async fn assert_both_commit(
-    a: Result<(), String>,
-    b: tokio::task::JoinHandle<Result<(), String>>,
-) {
+async fn assert_both_commit(a: Result<(), String>, b: tokio::task::JoinHandle<Result<(), String>>) {
     let b = tokio::time::timeout(Duration::from_secs(30), b)
         .await
         .expect("transaction B never finished")
