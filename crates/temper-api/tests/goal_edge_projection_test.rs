@@ -269,7 +269,7 @@ fn update_goal(resource: ResourceId, goal: Option<GoalPatch>) -> UpdateResource 
 /// A `--goal` naming a resource that does not exist creates NOTHING.
 ///
 /// Filed as "the goal ref is silently dropped and the create succeeds". That half closed as a
-/// side effect of the F-1 audit, which gave `assert_edge_from_source_home` an endpoint gate — so
+/// side effect of the F-1 audit, which gave `assert_edge_from_source_home_in_tx` an endpoint gate — so
 /// the call now fails. What it did NOT fix is that the resource is committed before the edge is
 /// attempted (no transaction spans both), leaving the caller with a 404 over a resource that
 /// exists.

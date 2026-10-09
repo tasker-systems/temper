@@ -124,3 +124,90 @@ async fn sdk_client_sends_sdk_marker() {
     let req = client.get("/api/health");
     let _ = client.send(&Method::GET, "/api/health", req, None).await;
 }
+
+/// The body a write cut off by the server's lock bound answers with.
+fn resource_busy() -> ResponseTemplate {
+    ResponseTemplate::new(503).set_body_string(
+        serde_json::json!({
+            "error": {
+                "code": temper_core::error::RESOURCE_BUSY_CODE,
+                "message": "the resource is busy; nothing was applied, retry the request"
+            }
+        })
+        .to_string(),
+    )
+}
+
+/// An unkeyed write the server answered `RESOURCE_BUSY` is sent again, because the server applied
+/// nothing, and lands on the retry.
+///
+/// FAILS IF a `RESOURCE_BUSY` is mapped as an ordinary `Server` error (a write never retries one),
+/// or if `may_retry` keeps the write budget of 1 for it.
+#[tokio::test]
+async fn patch_retries_resource_busy_then_succeeds() {
+    let server = MockServer::start().await;
+    Mock::given(method("PATCH"))
+        .and(path("/api/resources/r"))
+        .respond_with(resource_busy())
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path("/api/resources/r"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = HttpClient::new(&server.uri(), None, Surface::CliCloud, None)
+        .expect("test server URL (loopback) validates");
+    let req = client.patch("/api/resources/r");
+    let resp = client
+        .send(&Method::PATCH, "/api/resources/r", req, None)
+        .await
+        .expect("a RESOURCE_BUSY write is retried and lands");
+    assert!(resp.status().is_success());
+}
+
+/// A persistent `RESOURCE_BUSY` is retried a bounded number of times, then surfaces typed.
+#[tokio::test]
+async fn patch_exhausts_resource_busy_retries_and_surfaces_it() {
+    let server = MockServer::start().await;
+    Mock::given(method("PATCH"))
+        .and(path("/api/resources/r"))
+        .respond_with(resource_busy())
+        .expect(3)
+        .mount(&server)
+        .await;
+
+    let client = HttpClient::new(&server.uri(), None, Surface::CliCloud, None)
+        .expect("test server URL (loopback) validates");
+    let req = client.patch("/api/resources/r");
+    let err = client
+        .send(&Method::PATCH, "/api/resources/r", req, None)
+        .await
+        .expect_err("a persistent RESOURCE_BUSY surfaces after the attempts run out");
+    assert!(matches!(err, ClientError::ResourceBusy { .. }), "{err:?}");
+}
+
+/// A 503 that is NOT `RESOURCE_BUSY` is still an ordinary server error: a write sends it once.
+#[tokio::test]
+async fn patch_does_not_retry_a_plain_503() {
+    let server = MockServer::start().await;
+    Mock::given(method("PATCH"))
+        .and(path("/api/resources/r"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("Service Unavailable"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = HttpClient::new(&server.uri(), None, Surface::CliCloud, None)
+        .expect("test server URL (loopback) validates");
+    let req = client.patch("/api/resources/r");
+    let err = client
+        .send(&Method::PATCH, "/api/resources/r", req, None)
+        .await
+        .expect_err("a plain 503 write propagates without retrying");
+    assert!(matches!(err, ClientError::Server { status: 503, .. }));
+}

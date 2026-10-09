@@ -63,6 +63,12 @@ const RETRY_BASE_DELAY_MS: u64 = 200;
 /// result, whereas this is a slower failure on a connection that is already dead.
 const HTTP_REQUEST_TIMEOUT_SECS: u64 = 75;
 
+/// How long to wait before re-sending a request the server answered `RESOURCE_BUSY`: the
+/// server's `Retry-After` for that answer (`temper_services::error::RESOURCE_BUSY_RETRY_AFTER_SECS`,
+/// which this crate cannot depend on). The status mapper sees only the body, so the header is
+/// not read; the two values move together.
+const RESOURCE_BUSY_RETRY_DELAY: Duration = Duration::from_secs(2);
+
 /// Backoff to wait after `after_attempt` (1-indexed) has failed, before the
 /// next attempt. Doubles each retry. Pure so the schedule is unit-testable.
 fn retry_delay(after_attempt: u32) -> Duration {
@@ -125,6 +131,10 @@ impl HttpClient {
     /// cold-DB-resume 500, or the apex proxy's synthetic 502 when it could not
     /// reach the upstream). Every 4xx, auth, conflict, and rate-limit error is
     /// permanent and propagates immediately.
+    ///
+    /// The one exception to the write budget is [`ClientError::ResourceBusy`]: the server
+    /// rolled the write back having applied nothing, so a replay cannot double-apply, and it
+    /// gets [`MAX_ATTEMPTS`] for every method.
     fn may_retry(
         &self,
         method: &reqwest::Method,
@@ -132,6 +142,9 @@ impl HttpClient {
         idempotent: bool,
         attempt: u32,
     ) -> bool {
+        if matches!(err, ClientError::ResourceBusy { .. }) {
+            return attempt < MAX_ATTEMPTS;
+        }
         let budget =
             if matches!(*method, reqwest::Method::GET | reqwest::Method::HEAD) || idempotent {
                 MAX_ATTEMPTS
@@ -644,7 +657,10 @@ impl HttpClient {
                     Ok(resp) => return Ok(resp),
                     Err(err) => {
                         if self.may_retry(method, &err, idempotent, attempt) {
-                            let delay = retry_delay(attempt);
+                            let delay = match err {
+                                ClientError::ResourceBusy { .. } => RESOURCE_BUSY_RETRY_DELAY,
+                                _ => retry_delay(attempt),
+                            };
                             tracing::warn!(
                                 attempt,
                                 max_attempts = MAX_ATTEMPTS,
@@ -998,6 +1014,15 @@ pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
             ClientError::RateLimited {
                 retry_after: Duration::from_secs(secs),
             }
+        }
+        // Keyed on the CODE: a 503 is otherwise an ordinary server error, which a write never
+        // retries; this one applied nothing, which is what lets `may_retry` replay it.
+        503 if parse_error_field(body, "code").as_deref()
+            == Some(temper_core::error::RESOURCE_BUSY_CODE) =>
+        {
+            let message = parse_error_field(body, "message")
+                .unwrap_or_else(|| "the resource is busy; nothing was applied".to_owned());
+            ClientError::ResourceBusy { message }
         }
         s if s >= 500 => {
             let message = parse_error_message(body).unwrap_or_else(|| {

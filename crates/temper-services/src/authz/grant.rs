@@ -92,8 +92,12 @@ async fn admin_subject_is_live(
     if subject.kind != AnchorTable::Resources {
         return Ok(true);
     }
-    let mut conn = pool.acquire().await?;
-    match write_floor::liveness_floor_in_tx(&mut conn, caller, ResourceId::from(subject.id)).await {
+    // In a transaction it rolls back, only so the floor's `SET LOCAL lock_timeout` applies: on a
+    // bare connection the wait behind an erasure act would be unbounded.
+    let mut tx = pool.begin().await?;
+    let answer =
+        write_floor::liveness_floor_in_tx(&mut tx, caller, ResourceId::from(subject.id)).await;
+    match write_floor::rollback_with(tx, answer).await {
         Ok(()) => Ok(true),
         Err(TemperError::Forbidden | TemperError::ResourceErased(_)) => Ok(false),
         Err(e) => Err(e.into()),
