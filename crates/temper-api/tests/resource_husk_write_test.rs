@@ -2611,17 +2611,21 @@ async fn a_goal_patch_waits_on_another_goal_patch_of_the_same_resource(pool: PgP
     );
 }
 
-/// The lock that serializes goal patches is never part of a deadlock with an ordinary update of
-/// the same resource. The other update (held here) has folded a property row the goal patch also
-/// sets, and then writes the resource's own row — the order a title-and-meta update's projectors
-/// take. The goal patch, waiting on the property row, must hold nothing that resource-row write
-/// needs: both complete, neither answers a deadlock (`40P01`). (Ordinary updates' own property
-/// and resource-row order is a separate matter, not pinned here.)
+/// A goal patch and an ordinary update of the same resource both complete; neither answers a
+/// deadlock (`40P01`). The other update (held here) takes the resource row `FOR NO KEY UPDATE`
+/// first, then folds a property row the goal patch also sets, then writes the resource row: the
+/// order every update takes since the head of `update_resource_in_tx` locks the row first (task
+/// 01a0fd62-bb17-7442-8b01-11b2c6e01319). The goal patch waits on the row, holding only the
+/// goal-patch advisory lock and the goal rows' `FOR KEY SHARE`, none of which the update needs.
 ///
-/// FAILS IF goal patches serialize on a lock the resource-row write conflicts with. The bite: in
-/// `DbBackend::lock_goal_rows`, take the source `FOR NO KEY UPDATE` instead of the advisory lock.
-/// The goal patch then holds that row lock while waiting on the property row, the held update's
-/// resource-row write waits on it, and Postgres aborts one of the two.
+/// This test first held the property row and THEN wrote the resource row, the order a
+/// title-and-meta update took before that fix. That order is gone from every update, and a
+/// transaction that still took it would now deadlock with ANY update of the resource, goal patch
+/// or not; `temper-substrate/tests/update_lock_order.rs` pins that. Its old bite (taking the
+/// source `FOR NO KEY UPDATE` in `DbBackend::lock_goal_rows` instead of the advisory lock) no
+/// longer fires: with every update taking the row first, a goal patch holding it early only waits.
+/// The advisory lock is kept for its other job, serializing goal patches before they read the
+/// current goal edges (`lock_goal_rows`, step 1).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_goal_patch_does_not_deadlock_with_an_update_of_the_same_resource(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
@@ -2639,6 +2643,11 @@ async fn a_goal_patch_does_not_deadlock_with_an_update_of_the_same_resource(pool
     assert_eq!(status, 200, "precondition: a live `note`; body: {body}");
 
     let mut held = app.pool.begin().await.expect("begin the other update");
+    sqlx::query("SELECT id FROM kb_resources WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(resource)
+        .execute(&mut *held)
+        .await
+        .expect("the other update takes the resource row first");
     sqlx::query(
         "SELECT id FROM kb_properties \
           WHERE owner_table = 'kb_resources' AND owner_id = $1 \

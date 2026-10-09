@@ -1070,7 +1070,14 @@ pub async fn relate_blob(
     // connection, and a second acquire while it is open is how concurrent writers stall the pool.
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller, surface.marker())
         .await
-        .map_err(|e| ApiError::internal_scrubbed("blob emitter resolve failed", e))?;
+        .map_err(|e| {
+            // On the peer check's bounded transaction: a lock wait past the bound is busy.
+            if crate::backend::write_floor::hit_lock_bound(&e) {
+                ApiError::ResourceBusy
+            } else {
+                ApiError::internal_scrubbed("blob emitter resolve failed", e)
+            }
+        })?;
     let label = (!req.label.is_empty()).then_some(req.label.as_str());
 
     let edge = temper_substrate::writes::assert_anchored_edge_in_tx(
@@ -1092,7 +1099,13 @@ pub async fn relate_blob(
         },
     )
     .await
-    .map_err(|e| ApiError::internal_scrubbed("blob relation assert failed", e))?;
+    .map_err(|e| {
+        if crate::backend::write_floor::hit_lock_bound(&e) {
+            ApiError::ResourceBusy
+        } else {
+            ApiError::internal_scrubbed("blob relation assert failed", e)
+        }
+    })?;
     tx.commit().await?;
 
     Ok(WireRelationAck {

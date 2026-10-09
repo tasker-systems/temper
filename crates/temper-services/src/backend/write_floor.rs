@@ -57,8 +57,31 @@
 //!
 //! **A transaction that lost a race is the incumbent `500`.** A deadlock (`40P01`) or
 //! serialization failure (`40001`) inside a floored write answers as every database fault does:
-//! `500 INTERNAL_ERROR`, logged at error level, which every client already treats as transient and
-//! retries. A `409` would collide with "already exists" in the shipped clients (ruled 2026-10-01).
+//! `500 INTERNAL_ERROR`, logged at error level. A `409` would collide with "already exists" in the
+//! shipped clients (ruled 2026-10-01). Every shipped client classifies a 5xx as transient, but
+//! none of them (Rust, TypeScript, Python, Ruby) auto-retries an unkeyed write, so the caller sees
+//! it. Two updates of one resource no longer deadlock: they serialize on its row (the head of
+//! `update_resource_in_tx`).
+//!
+//! **A write that waited past the lock bound is `503 RESOURCE_BUSY`** (ruled 2026-10-09): the floor
+//! sets [`WRITE_LOCK_TIMEOUT_MS`] for the rest of the transaction (`bound_lock_waits`), and a
+//! `55P03` from any statement after it answers [`TemperError::ResourceBusy`] with `Retry-After`. It
+//! rolled back having applied nothing, so unlike a `500` it is always safe to send again, and
+//! `temper-client` does (`ClientError::ResourceBusy`).
+//!
+//! **That promise is per request, so a door keeps it only if no transaction of the request has
+//! committed a write before the one that hit the bound.** `db_backend`'s `api_err` classifies a
+//! `55P03` wherever it surfaces, so a door that commits a write and then opens a floored
+//! transaction would answer `RESOURCE_BUSY` over a committed write, and `temper-client` would
+//! re-send it. The create door did exactly that (its goal edge, and segmented begin's ingestion
+//! record, ran in a second transaction) until both moved into the create's own. A door that must
+//! commit before a later bounded step maps that step's [`TemperError::ResourceBusy`] to the `500`
+//! class. Audited 2026-10-09: no door or surface does; the pool writes ahead of a floored
+//! transaction are emitter resolves (idempotent upserts), and post-commit steps log, never answer.
+//!
+//! **Writers queue behind an erasure act** (`queue_behind_acts`, migration `20261015100010`): a
+//! shared advisory lock on R that the acts take exclusive, so writers that arrive while an act
+//! waits for R cannot keep it waiting.
 //!
 //! **A refusal rolls back before it is answered.** `rollback_with` ends the transaction a floor
 //! (or any in-transaction gate) refused, so the row lock is released before the door answers
@@ -133,7 +156,38 @@ pub async fn liveness_floor_in_tx(
     profile: ProfileId,
     resource: ResourceId,
 ) -> Result<(), TemperError> {
-    match lock_resource_row(conn, resource).await? {
+    liveness_floor(conn, profile, resource, ActQueue::Join).await
+}
+
+/// [`liveness_floor_in_tx`] for a run that floors MANY resources in one transaction (bulk team
+/// reassignment): the same lock bound, row lock and classification, without joining each
+/// resource's act queue. The queue is an advisory lock, which lives in Postgres's shared lock
+/// table (`max_locks_per_transaction` × connections); thousands in one transaction can exhaust it
+/// ("out of shared memory") for every session. Without the queue such a run can pass an erasure
+/// act waiting on one of its resources, but it never waits on the queue, so it cannot deadlock
+/// with one. Ruled 2026-10-09: bulk reassign skips the queue.
+pub async fn liveness_floor_bulk_in_tx(
+    conn: &mut PgConnection,
+    profile: ProfileId,
+    resource: ResourceId,
+) -> Result<(), TemperError> {
+    liveness_floor(conn, profile, resource, ActQueue::Skip).await
+}
+
+/// Whether a floor joins the resource's act queue before its row lock ([`queue_behind_acts`]).
+#[derive(Clone, Copy)]
+enum ActQueue {
+    Join,
+    Skip,
+}
+
+async fn liveness_floor(
+    conn: &mut PgConnection,
+    profile: ProfileId,
+    resource: ResourceId,
+    queue: ActQueue,
+) -> Result<(), TemperError> {
+    match lock_resource_row_with(conn, resource, queue).await? {
         Some(true) => Ok(()),
         Some(false) | None => Err(erased_or_forbidden(conn, profile, resource).await),
     }
@@ -161,6 +215,18 @@ async fn lock_resource_row(
     conn: &mut PgConnection,
     resource: ResourceId,
 ) -> Result<Option<bool>, TemperError> {
+    lock_resource_row_with(conn, resource, ActQueue::Join).await
+}
+
+async fn lock_resource_row_with(
+    conn: &mut PgConnection,
+    resource: ResourceId,
+    queue: ActQueue,
+) -> Result<Option<bool>, TemperError> {
+    bound_lock_waits(conn).await?;
+    if let ActQueue::Join = queue {
+        queue_behind_acts(conn, resource).await?;
+    }
     sqlx::query_scalar!(
         "SELECT is_active FROM kb_resources WHERE id = $1 FOR KEY SHARE",
         resource.uuid(),
@@ -184,9 +250,88 @@ async fn erased_or_forbidden(
     }
 }
 
-/// Bridge a database error into `TemperError`: the `500` `db_backend`'s `api_err` gives.
+/// The write-side lock bound: how long any one statement of a floored write may wait on a lock
+/// before Postgres cancels it (`55P03`) and the write answers `503 RESOURCE_BUSY`, having applied
+/// nothing. Chosen from measurement (task 01a0fd12-f4b7-7bd2-81d0-13c0814650d5, harness
+/// `temper-substrate/tests/write_lock_measure.rs`).
+pub const WRITE_LOCK_TIMEOUT_MS: u64 = 5_000;
+
+/// Set [`WRITE_LOCK_TIMEOUT_MS`] for the rest of `conn`'s transaction. `SET LOCAL`, so it ends with
+/// the transaction and never reaches another request on the pooled connection. Every floor takes
+/// its row lock through [`lock_resource_row`], which calls this first, so the bound covers every
+/// floored write's waits from its floor to its commit: behind the erasure act, behind a block
+/// history scrub, behind another update of the same resource.
+///
+/// **Per transaction, never per pool or per role.** The erasure act and the scrub run on the same
+/// pool and take no floor, so they stay unbounded: an act that timed out under write load would
+/// roll back every time and never complete, a denial of erasure. Their functions also pin
+/// `lock_timeout = 0` themselves (migration `20261015100000`), so a default set later on the pool
+/// or the role cannot reach them.
+///
+/// Outside a transaction `SET LOCAL` does nothing (Postgres warns), so a floor run on a bare
+/// connection is unbounded; `DbBackend`'s fast-fail opens a
+/// transaction for this reason.
+pub(crate) async fn bound_lock_waits(conn: &mut PgConnection) -> Result<(), TemperError> {
+    // `set_config(.., is_local => true)` is `SET LOCAL`, with the value bound.
+    sqlx::query_scalar!(
+        "SELECT set_config('lock_timeout', $1, true)",
+        format!("{WRITE_LOCK_TIMEOUT_MS}ms"),
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .map(|_| ())
+    .map_err(floor_err)
+}
+
+/// Join R's act queue, shared, for the rest of `conn`'s transaction: the advisory lock the
+/// erasure act and the block history scrub take exclusive just before their `FOR UPDATE` on R
+/// (`_resource_act_queue_key`, migration `20261015100010`).
+///
+/// Without it a writer's `FOR KEY SHARE` is granted past an act that is waiting for the row,
+/// because it conflicts with no current holder, and overlapping writers can hold an act off
+/// indefinitely. With it a writer arriving after the act waits for the act (under the lock bound),
+/// and the act waits only for writers already in. Shared against shared, writers never wait on
+/// each other here.
+///
+/// **It must come before the transaction's first row lock on R.** A writer holding R's row while
+/// waiting here would deadlock with an act waiting on that row. [`lock_resource_row`] calls it
+/// first; a door that locks R before its floor (the delete door's `FOR UPDATE`) calls it before
+/// that lock. Re-entrant: a second call in one transaction is granted at once.
+pub(crate) async fn queue_behind_acts(
+    conn: &mut PgConnection,
+    resource: ResourceId,
+) -> Result<(), TemperError> {
+    sqlx::query!(
+        "SELECT pg_advisory_xact_lock_shared(_resource_act_queue_key($1))",
+        resource.uuid(),
+    )
+    .execute(&mut *conn)
+    .await
+    .map(|_| ())
+    .map_err(floor_err)
+}
+
+/// True when `e`'s chain holds the database error a lock wait past the bound raises (`55P03`).
+pub(crate) fn hit_lock_bound(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<sqlx::Error>()
+            .and_then(|s| s.as_database_error())
+            .and_then(|d| d.code())
+            .as_deref()
+            == Some(crate::error::LOCK_NOT_AVAILABLE)
+    })
+}
+
+/// Bridge a database error into `TemperError`: [`TemperError::ResourceBusy`] when it is a lock
+/// wait past the bound, else the `500` `db_backend`'s `api_err` gives.
 fn floor_err(e: sqlx::Error) -> TemperError {
-    TemperError::Api(e.to_string())
+    let e = anyhow::Error::from(e);
+    if hit_lock_bound(&e) {
+        TemperError::ResourceBusy
+    } else {
+        TemperError::Api(e.to_string())
+    }
 }
 
 /// End `tx` — refused by a floor or another in-transaction gate — with an explicit `ROLLBACK`,
