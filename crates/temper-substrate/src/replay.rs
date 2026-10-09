@@ -1058,11 +1058,29 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 );
                 apply_block_history_scrub(&mut tx, id).await?;
             }
-            // The field scrub (field-grain scrub spec S8). Replay has no projection for it yet, and
-            // a walk that skipped it would leave its redaction rows unprojected while reporting
-            // success, so it refuses instead.
+            // The field scrub (field-grain scrub spec S8; migration 20261018100020). The arm projects
+            // only its redaction rows, at this event's position, through the one projector the live
+            // act calls (`_project_resource_scrubbed_redactions`). It applies no body and defers
+            // nothing: the events it redacted replay through their ordinary projectors from the
+            // ledger as it now stands, which is what the act's projection rewrite wrote (S4 step
+            // 6), and the act's own clearing events are ordinary events too, so their order inside
+            // the act's transaction does not matter.
             EventKind::ResourceScrubbed => {
-                anyhow::bail!("replay: resource_scrubbed event {id} has no replay projection yet")
+                let subject_table = payload["subject_table"]
+                    .as_str()
+                    .context("resource_scrubbed payload missing subject_table")?;
+                anyhow::ensure!(
+                    subject_table == "kb_resources",
+                    "resource_scrubbed event {id} names subject_table {subject_table:?}, not \
+                     kb_resources"
+                );
+                sqlx::query!(
+                    "SELECT _project_resource_scrubbed_redactions($1, $2)",
+                    id,
+                    payload
+                )
+                .fetch_one(&mut *tx)
+                .await?;
             }
             // A received webhook (S2 chunk B) touches no _project_* cognition half: intake appends
             // the event and projects delivery rows in Rust, in the same transaction. Without this

@@ -7,6 +7,11 @@
 //! reach it through `events::project_property_unset`; a SQL act clearing a property family
 //! (S4 step 3) can call it directly. These witnesses call it directly, against a world built
 //! through the real write paths.
+//!
+//! Then the verifier's second authority (migration 20261018100010, spec witness 3), and the act
+//! itself (migration 20261018100020, spec witnesses 1, 2 and 7, review focus 1-4): each act runs
+//! through `resource_field_scrub_execute` against a world built through the real write paths, and
+//! each witness of the act ends with replay byte-identical over `PROJECTION_DUMPS`.
 
 mod common;
 
@@ -17,7 +22,11 @@ use temper_core::types::property_owner::PropertyOwner;
 use temper_substrate::content::IncomingChunk;
 use temper_substrate::events::{fire, EdgeHome, EventContext, SeedAction};
 use temper_substrate::ids::{ContextId, ProfileId, ResourceId};
-use temper_substrate::payloads::{self, AnchorRef, EdgePolarity};
+use temper_substrate::payloads::{
+    self, AnchorRef, EdgePolarity, ErasureAct, RecordedRefusalReason, ResourceErasureRefused,
+    ResourceScrubbed, ScrubFieldKind,
+};
+use temper_substrate::replay;
 use temper_substrate::writes::{self, CreateParams};
 use uuid::Uuid;
 
@@ -958,5 +967,1382 @@ async fn an_erasure_row_lands_beside_a_scrub_row_for_the_same_path(pool: PgPool)
         authorities,
         ["erasure", "scrub"],
         "one row per authority for the same (event, path)"
+    );
+}
+
+// ── The act (migration 20261018100020): spec witnesses 1 and 7, review focus 1-4 ───────────────
+//
+// Every witness below calls `resource_field_scrub_execute`, `resource_field_scrub_plan`,
+// `resource_field_scrub_survey` or `resource_field_scrub_families`, none of which exists before
+// migration 20261018100020, so each fails there with an unknown function. The witnesses of the act
+// end with replay byte-identical, which before the replay arm (Task 5) fails on the walk's refusal
+// of `resource_scrubbed`.
+
+/// The text of a database error: the raise's own message.
+fn db_message(err: sqlx::Error) -> String {
+    err.as_database_error()
+        .map(|db| db.message().to_owned())
+        .unwrap_or_else(|| err.to_string())
+}
+
+/// `resource_field_scrub_execute` as the system operator, under a fresh request reference, on its
+/// own connection: a raise rolls the whole act back.
+async fn try_act(
+    pool: &PgPool,
+    resource: ResourceId,
+    field: &str,
+    family: Option<Uuid>,
+    clear: bool,
+) -> Result<serde_json::Value, String> {
+    let (operator, emitter) = system_actor(pool).await;
+    sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT resource_field_scrub_execute($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(resource.uuid())
+    .bind(field)
+    .bind(family)
+    .bind(clear)
+    .bind(operator.uuid())
+    .bind(emitter)
+    .bind(Uuid::now_v7())
+    .fetch_one(pool)
+    .await
+    .map_err(db_message)
+}
+
+async fn act(
+    pool: &PgPool,
+    resource: ResourceId,
+    field: &str,
+    family: Option<Uuid>,
+    clear: bool,
+) -> serde_json::Value {
+    try_act(pool, resource, field, family, clear)
+        .await
+        .unwrap_or_else(|e| panic!("the scrub of {field} completes: {e}"))
+}
+
+async fn plan(
+    pool: &PgPool,
+    resource: ResourceId,
+    field: &str,
+    family: Option<Uuid>,
+    clear: bool,
+) -> serde_json::Value {
+    sqlx::query_scalar("SELECT resource_field_scrub_plan($1, $2, $3, $4)")
+        .bind(resource.uuid())
+        .bind(field)
+        .bind(family)
+        .bind(clear)
+        .fetch_one(pool)
+        .await
+        .expect("the plan computes")
+}
+
+async fn survey(
+    pool: &PgPool,
+    resource: ResourceId,
+    field: &str,
+    family: Option<Uuid>,
+    clear: bool,
+) -> serde_json::Value {
+    sqlx::query_scalar("SELECT resource_field_scrub_survey($1, $2, $3, $4)")
+        .bind(resource.uuid())
+        .bind(field)
+        .bind(family)
+        .bind(clear)
+        .fetch_one(pool)
+        .await
+        .expect("the survey computes")
+}
+
+async fn listing(pool: &PgPool, resource: ResourceId) -> Vec<serde_json::Value> {
+    sqlx::query_scalar("SELECT to_jsonb(f) FROM resource_field_scrub_families($1) f")
+        .bind(resource.uuid())
+        .fetch_all(pool)
+        .await
+        .expect("the listing reads")
+}
+
+/// The handle the listing gives the family whose handle event carries `key` as its key text.
+async fn handle_of(pool: &PgPool, resource: ResourceId, key: &str) -> Uuid {
+    sqlx::query_scalar(
+        "SELECT f.family FROM resource_field_scrub_families($1) f \
+           JOIN kb_events e ON e.id = f.family WHERE e.payload->>'property_key' = $2",
+    )
+    .bind(resource.uuid())
+    .bind(key)
+    .fetch_one(pool)
+    .await
+    .expect("the listing names the family")
+}
+
+async fn payload_of(pool: &PgPool, event: Uuid) -> serde_json::Value {
+    sqlx::query_scalar("SELECT payload FROM kb_events WHERE id = $1")
+        .bind(event)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// The `kb_properties` rows `event` asserted: key, value, folded.
+async fn rows_of(pool: &PgPool, event: Uuid) -> Vec<(String, serde_json::Value, bool)> {
+    sqlx::query_as(
+        "SELECT property_key, property_value, is_folded FROM kb_properties \
+          WHERE asserted_by_event_id = $1 ORDER BY property_value::text",
+    )
+    .bind(event)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// R's resource-owned `event_type` events of any key, in walk order.
+async fn owned_events(pool: &PgPool, event_type: &str, resource: ResourceId) -> Vec<Uuid> {
+    sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = $1 AND e.payload#>>'{owner,table}' = 'kb_resources' \
+            AND e.payload#>>'{owner,id}' = $2 ORDER BY e.id",
+    )
+    .bind(event_type)
+    .bind(resource.uuid().to_string())
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+async fn event_count(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM kb_events")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn title_and_origin(pool: &PgPool, resource: ResourceId) -> (String, Option<String>) {
+    sqlx::query_as("SELECT title, origin_uri FROM kb_resources WHERE id = $1")
+        .bind(resource.uuid())
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+fn event_id(out: &serde_json::Value) -> Uuid {
+    out["event_id"]
+        .as_str()
+        .expect("the act returns its event id")
+        .parse()
+        .unwrap()
+}
+
+/// A `redacted_fields` list as `(event, paths)` pairs.
+fn pairs(fields: &serde_json::Value) -> Vec<(Uuid, Vec<String>)> {
+    fields
+        .as_array()
+        .expect("redacted_fields is a list")
+        .iter()
+        .map(|entry| {
+            (
+                entry["event"].as_str().unwrap().parse().unwrap(),
+                entry["paths"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|p| p.as_str().unwrap().to_string())
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn pair(event: Uuid, paths: &[&str]) -> (Uuid, Vec<String>) {
+    (event, paths.iter().map(|p| p.to_string()).collect())
+}
+
+/// A `kept` or `unreachable` entry of the plan.
+fn held(event: Uuid, paths: &[&str], why: &str) -> serde_json::Value {
+    serde_json::json!({"event": event, "paths": paths, "why": why})
+}
+
+fn value_sentinel(event: Uuid) -> serde_json::Value {
+    serde_json::json!(format!("erased:{event}"))
+}
+
+fn key_sentinel(handle: Uuid) -> String {
+    format!("scrubbed-key-{handle}")
+}
+
+async fn reorigin(pool: &PgPool, emitter: EntityId, resource: ResourceId, uri: &str) {
+    write(
+        pool,
+        SeedAction::ResourceUpdate {
+            resource,
+            title: None,
+            origin_uri: Some(uri),
+            emitter,
+        },
+    )
+    .await;
+}
+
+async fn set_value(
+    pool: &PgPool,
+    emitter: EntityId,
+    resource: ResourceId,
+    key: &str,
+    value: serde_json::Value,
+) {
+    write(
+        pool,
+        SeedAction::PropertySet {
+            resource,
+            key,
+            value: &value,
+            weight: 1.0,
+            emitter,
+        },
+    )
+    .await;
+}
+
+/// A `property_asserted` of `facet` with `values`, the facet write path.
+async fn facet(pool: &PgPool, emitter: EntityId, resource: ResourceId, values: serde_json::Value) {
+    write(
+        pool,
+        SeedAction::FacetSet {
+            owner: PropertyOwner::Resource { id: resource },
+            values: &values,
+            weight: 1.0,
+            emitter,
+        },
+    )
+    .await;
+}
+
+/// Copied from `resource_erasure_act.rs`: dump every projection, replay the ledger into a reset
+/// schema, and require every dump equal.
+async fn assert_replay_byte_identical(pool: &PgPool, after_what: &str) {
+    let before = replay::dump_projections(pool).await.unwrap();
+    let snap = replay::snapshot(pool).await.unwrap();
+    common::reset_schema(pool).await;
+    replay::replay(pool, &snap).await.unwrap();
+    let after = replay::dump_projections(pool).await.unwrap();
+    for ((ta, a), (tb, b)) in before.iter().zip(after.iter()) {
+        assert_eq!(ta, tb);
+        assert_eq!(
+            a, b,
+            "projection table {ta} diverged under replay {after_what}"
+        );
+    }
+}
+
+/// Spec witness 1, keep mode, the title with the revert (S3): created, then a leaking update, then
+/// a revert to the original. The revert produces today's title and is kept; the create and the
+/// leak are prior and take the title sentinel; the record names the field and nothing else.
+///
+/// FAILS IF: the act redacts the event producing today's title, misses a prior one, changes
+/// `kb_resources.title`, or replay of the redacted ledger lands elsewhere.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn keep_mode_redacts_every_prior_title_and_keeps_the_revert(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-title", &[]).await;
+    retitle(&pool, emitter, r, "a leaked title").await;
+    retitle(&pool, emitter, r, "scrub-title").await;
+    let created = resource_events(&pool, "resource_created", r).await[0];
+    let updates = resource_events(&pool, "resource_updated", r).await;
+    let (leak, revert) = (updates[0], updates[1]);
+
+    let out = act(&pool, r, "title", None, false).await;
+
+    assert_eq!(
+        pairs(&out["redacted_fields"]),
+        vec![pair(created, &["title"]), pair(leak, &["title"])]
+    );
+    let sentinel = serde_json::json!(format!("erased-{}", r.uuid()));
+    assert_eq!(payload_of(&pool, created).await["title"], sentinel);
+    assert_eq!(payload_of(&pool, leak).await["title"], sentinel);
+    assert_eq!(payload_of(&pool, revert).await["title"], "scrub-title");
+    assert_eq!(title_and_origin(&pool, r).await.0, "scrub-title");
+    assert_eq!(out["cleared"], false);
+    let record: ResourceScrubbed = serde_json::from_value(payload_of(&pool, event_id(&out)).await)
+        .expect("the record is a ResourceScrubbed");
+    assert_eq!(record.field.kind, ScrubFieldKind::Title);
+    assert!(record.field.family.is_none());
+    assert!(!record.cleared);
+    assert_eq!(record.subject_id, r.uuid());
+    assert_eq!(record.redacted_fields.len(), 2);
+
+    assert_replay_byte_identical(&pool, "after a keep-mode title scrub").await;
+}
+
+/// Spec witness 1, keep mode, the origin URI: every origin URI before the last takes the origin
+/// sentinel, and today's is kept.
+///
+/// FAILS IF: the act misses a prior origin URI, touches today's, or replay diverges.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn keep_mode_redacts_every_prior_origin_uri(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-origin", &[]).await;
+    reorigin(&pool, emitter, r, "test://a-leaked-origin").await;
+    reorigin(&pool, emitter, r, "test://scrub-origin-today").await;
+    let created = resource_events(&pool, "resource_created", r).await[0];
+    let updates = resource_events(&pool, "resource_updated", r).await;
+
+    let out = act(&pool, r, "origin_uri", None, false).await;
+
+    assert_eq!(
+        pairs(&out["redacted_fields"]),
+        vec![
+            pair(created, &["origin_uri"]),
+            pair(updates[0], &["origin_uri"])
+        ]
+    );
+    let sentinel = serde_json::json!(format!("erased:{}", r.uuid()));
+    assert_eq!(payload_of(&pool, created).await["origin_uri"], sentinel);
+    assert_eq!(payload_of(&pool, updates[0]).await["origin_uri"], sentinel);
+    assert_eq!(
+        payload_of(&pool, updates[1]).await["origin_uri"],
+        "test://scrub-origin-today"
+    );
+    assert_eq!(
+        title_and_origin(&pool, r).await.1.as_deref(),
+        Some("test://scrub-origin-today")
+    );
+
+    assert_replay_byte_identical(&pool, "after a keep-mode origin URI scrub").await;
+}
+
+/// Spec witness 1, keep mode, a family's values: the two folded values take their event's value
+/// sentinel in the payload and in their folded rows; today's value is kept, and the key text of a
+/// family never unset is unreachable (S3, S5). The act's record is the plan's `redacted_fields`.
+///
+/// FAILS IF: the plan and the act disagree, a live value is redacted, a key is renamed with no
+/// unset, a folded row keeps its original value, or replay diverges.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn keep_mode_redacts_a_familys_prior_values_and_keeps_todays(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-values", &[]).await;
+    set(&pool, emitter, r, "colour", "blue").await;
+    set(&pool, emitter, r, "colour", "red").await;
+    set(&pool, emitter, r, "colour", "green").await;
+    let sets = property_events(&pool, "property_set", r, "colour").await;
+    let (blue, red, green) = (sets[0], sets[1], sets[2]);
+    let handle = handle_of(&pool, r, "colour").await;
+    assert_eq!(handle, blue, "the handle is the family's first event");
+
+    let p = plan(&pool, r, "property", Some(handle), false).await;
+    assert!(p["refusal"].is_null(), "{p}");
+    assert_eq!(
+        pairs(&p["redacted_fields"]),
+        vec![pair(blue, &["value"]), pair(red, &["value"])]
+    );
+    assert_eq!(
+        p["kept"],
+        serde_json::json!([held(green, &["value"], "current")])
+    );
+    assert_eq!(
+        p["unreachable"],
+        serde_json::json!([
+            held(blue, &["property_key"], "after_latest_unset"),
+            held(red, &["property_key"], "after_latest_unset"),
+            held(green, &["property_key"], "after_latest_unset"),
+        ])
+    );
+
+    let out = act(&pool, r, "property", Some(handle), false).await;
+
+    assert_eq!(out["redacted_fields"], p["redacted_fields"]);
+    for e in [blue, red] {
+        let payload = payload_of(&pool, e).await;
+        assert_eq!(payload["value"], value_sentinel(e));
+        assert_eq!(payload["property_key"], "colour");
+        assert_eq!(
+            rows_of(&pool, e).await,
+            vec![("colour".to_string(), value_sentinel(e), true)]
+        );
+    }
+    assert_eq!(payload_of(&pool, green).await["value"], "green");
+    assert_eq!(
+        rows_of(&pool, green).await,
+        vec![("colour".to_string(), serde_json::json!("green"), false)]
+    );
+
+    assert_replay_byte_identical(&pool, "after a keep-mode value scrub").await;
+}
+
+/// Review focus 2: `_property_value_normalized` wraps a string `tags` value in an array, and only
+/// under the literal key. A string value redacted under the kept key `tags` projects as
+/// `["erased:<id>"]`; once the family's key text is renamed past its unset, the same folded row
+/// projects the plain string, as replay of the renamed event does.
+///
+/// FAILS IF: the projection rewrite writes the sentinel without the projector's normalisation, or
+/// normalises by the original key rather than the key as rewritten.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_tags_sentinel_is_an_array_under_the_kept_key_and_a_string_once_renamed(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-tags", &[]).await;
+    set(&pool, emitter, r, "tags", "first").await;
+    set(&pool, emitter, r, "tags", "second").await;
+    let sets = property_events(&pool, "property_set", r, "tags").await;
+    let (first, second) = (sets[0], sets[1]);
+    let handle = handle_of(&pool, r, "tags").await;
+
+    act(&pool, r, "property", Some(handle), false).await;
+
+    assert_eq!(
+        payload_of(&pool, first).await["value"],
+        value_sentinel(first)
+    );
+    assert_eq!(
+        rows_of(&pool, first).await,
+        vec![(
+            "tags".to_string(),
+            serde_json::json!([format!("erased:{first}")]),
+            true
+        )]
+    );
+
+    unset(&pool, emitter, r, "tags").await;
+    act(&pool, r, "property", Some(handle), false).await;
+
+    let renamed = key_sentinel(handle);
+    for e in [first, second] {
+        assert_eq!(payload_of(&pool, e).await["property_key"], renamed.as_str());
+        assert_eq!(
+            rows_of(&pool, e).await,
+            vec![(renamed.clone(), value_sentinel(e), true)],
+            "under the renamed key the sentinel stays a string"
+        );
+    }
+
+    assert_replay_byte_identical(&pool, "after scrubbing tags under a kept and a renamed key")
+        .await;
+}
+
+/// Spec witness 1, clear mode, the title (S2): the act appends the placeholder title through
+/// `resource_update` under the request's correlation, after which every earlier title is prior.
+///
+/// FAILS IF: the placeholder is not today's title, an earlier title survives, the clearing event
+/// is redacted, the record omits `cleared`, or replay diverges.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn clear_mode_sets_the_placeholder_title_and_redacts_every_earlier_one(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-clear-title", &[]).await;
+    retitle(&pool, emitter, r, "a leaked title").await;
+    let created = resource_events(&pool, "resource_created", r).await[0];
+    let leak = resource_events(&pool, "resource_updated", r).await[0];
+
+    let out = act(&pool, r, "title", None, true).await;
+
+    let placeholder = format!("scrubbed-{}", r.uuid());
+    assert_eq!(title_and_origin(&pool, r).await.0, placeholder);
+    let updates = resource_events(&pool, "resource_updated", r).await;
+    assert_eq!(updates.len(), 2, "the leak and the clearing event");
+    let clearing = updates[1];
+    assert_eq!(
+        payload_of(&pool, clearing).await["title"],
+        placeholder.as_str()
+    );
+    let correlations: Vec<Uuid> =
+        sqlx::query_scalar("SELECT correlation_id FROM kb_events WHERE id = ANY($1) ORDER BY id")
+            .bind(vec![clearing, event_id(&out)])
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        correlations[0], correlations[1],
+        "one request, one correlation"
+    );
+    assert_eq!(
+        pairs(&out["redacted_fields"]),
+        vec![pair(created, &["title"]), pair(leak, &["title"])]
+    );
+    assert_eq!(out["cleared"], true);
+    let record: ResourceScrubbed =
+        serde_json::from_value(payload_of(&pool, event_id(&out)).await).unwrap();
+    assert!(record.cleared);
+
+    assert_replay_byte_identical(&pool, "after a clear-mode title scrub").await;
+}
+
+/// Spec witness 1, clear mode, a live key's text (S2, S3 "unset first"), and the survey's reading of
+/// clear mode (S5): the act appends one `property_unset` of the family, after which every event of
+/// the family, the unset included, is prior; the key text is renamed everywhere and no event of R
+/// still carries it. The survey, which cannot append, names the same paths, minus the act's own
+/// clearing event.
+///
+/// FAILS IF: a live row survives, any of R's events still carries the key text, a folded row keeps
+/// the real key, the survey and the act disagree, or replay diverges.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn clear_mode_unsets_a_live_key_and_renames_its_text_everywhere(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-clear-key", &[]).await;
+    set(&pool, emitter, r, "secretkey", "one").await;
+    set(&pool, emitter, r, "secretkey", "two").await;
+    let sets = property_events(&pool, "property_set", r, "secretkey").await;
+    let handle = handle_of(&pool, r, "secretkey").await;
+    assert_eq!(handle, sets[0]);
+
+    let surveyed = survey(&pool, r, "property", Some(handle), true).await;
+    assert_eq!(
+        surveyed["plan"]["clears"],
+        serde_json::json!([{"event_type": "property_unset", "path": "property_key"}])
+    );
+    assert!(surveyed["plan"]["refusal"].is_null(), "{surveyed}");
+    assert!(
+        !surveyed["families"].as_array().unwrap().is_empty(),
+        "the survey renders the listing"
+    );
+
+    let out = act(&pool, r, "property", Some(handle), true).await;
+
+    let unsets = owned_events(&pool, "property_unset", r).await;
+    assert_eq!(unsets.len(), 1, "the act's clearing unset");
+    let clearing = unsets[0];
+    let renamed = key_sentinel(handle);
+    assert_eq!(
+        live_rows(&pool, "kb_resources", r.uuid(), "secretkey").await,
+        0
+    );
+    assert_eq!(
+        live_rows(&pool, "kb_resources", r.uuid(), &renamed).await,
+        0
+    );
+    for e in [sets[0], sets[1]] {
+        assert_eq!(
+            rows_of(&pool, e).await,
+            vec![(renamed.clone(), value_sentinel(e), true)]
+        );
+    }
+    assert_eq!(
+        payload_of(&pool, clearing).await["property_key"],
+        renamed.as_str()
+    );
+    let carrying: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events \
+          WHERE payload#>>'{owner,id}' = $1 AND payload::text LIKE '%secretkey%'",
+    )
+    .bind(r.uuid().to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(carrying, 0, "no event of R still carries the key text");
+
+    let act_without_clearing: Vec<_> = pairs(&out["redacted_fields"])
+        .into_iter()
+        .filter(|(e, _)| *e != clearing)
+        .collect();
+    assert_eq!(
+        act_without_clearing,
+        pairs(&surveyed["plan"]["redacted_fields"]),
+        "the survey names what the act redacts, minus the act's own clearing event"
+    );
+    assert!(
+        pairs(&out["redacted_fields"]).contains(&pair(clearing, &["property_key"])),
+        "the clearing unset's key text is redacted with the family"
+    );
+
+    assert_replay_byte_identical(&pool, "after a clear-mode scrub of a live key").await;
+}
+
+/// Spec witness 1, clear mode, `doc_type` (S2): the placeholder type `scrubbed` is set, which folds
+/// the live type row, so `resource_created.doc_type` and the retype become prior and take their
+/// event's doc-type sentinel; the key stays the structural literal. The family's handle is
+/// `resource_created`, the row the listing gives it (erasure D4).
+///
+/// FAILS IF: the listing does not hand out `resource_created` as the doc_type family's handle, the
+/// act refuses it, the key is renamed, a prior type survives, or replay diverges.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn clear_mode_sets_the_placeholder_type_and_keeps_the_doc_type_key(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-clear-type", &[]).await;
+    set(&pool, emitter, r, "doc_type", "a-leaked-type").await;
+    let created = resource_events(&pool, "resource_created", r).await[0];
+    let retype = property_events(&pool, "property_set", r, "doc_type").await[0];
+    assert!(
+        listing(&pool, r)
+            .await
+            .iter()
+            .any(|row| row["field"] == "property" && row["family"] == created.to_string()),
+        "the doc_type family's handle is resource_created"
+    );
+
+    let out = act(&pool, r, "property", Some(created), true).await;
+
+    let live: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT property_value FROM kb_properties \
+          WHERE owner_id = $1 AND property_key = 'doc_type' AND NOT is_folded",
+    )
+    .bind(r.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(live, vec![serde_json::json!("scrubbed")]);
+    assert_eq!(
+        pairs(&out["redacted_fields"]),
+        vec![pair(created, &["doc_type"]), pair(retype, &["value"])]
+    );
+    assert_eq!(
+        payload_of(&pool, created).await["doc_type"],
+        value_sentinel(created)
+    );
+    let retyped = payload_of(&pool, retype).await;
+    assert_eq!(retyped["value"], value_sentinel(retype));
+    assert_eq!(retyped["property_key"], "doc_type");
+    assert_eq!(
+        rows_of(&pool, created).await,
+        vec![("doc_type".to_string(), value_sentinel(created), true)]
+    );
+    assert_eq!(
+        rows_of(&pool, retype).await,
+        vec![("doc_type".to_string(), value_sentinel(retype), true)]
+    );
+
+    assert_replay_byte_identical(&pool, "after a clear-mode doc_type scrub").await;
+}
+
+/// Spec witness 1, key text across an unset boundary, with a later lifecycle of the same key (S3):
+/// A and U take the renamed key; B, after the unset and folded by C, has its value redacted and its
+/// key kept; C, today's value, is untouched; the `size` family is untouched.
+///
+/// FAILS IF: a key is renamed past the latest unset, a prior value is missed, the later lifecycle
+/// is touched, another family is reached, or replay diverges.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn keep_mode_renames_key_text_up_to_the_unset_and_keeps_the_later_lifecycle(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let f = families(&pool, owner, emitter, home).await;
+    let c = property_events(&pool, "property_set", f.r, "colour").await[2];
+
+    let out = act(&pool, f.r, "property", Some(f.a), false).await;
+
+    assert_eq!(
+        pairs(&out["redacted_fields"]),
+        vec![
+            pair(f.a, &["property_key", "value"]),
+            pair(f.u, &["property_key"]),
+            pair(f.b, &["value"]),
+        ]
+    );
+    let renamed = key_sentinel(f.a);
+    assert_eq!(
+        payload_of(&pool, f.a).await["property_key"],
+        renamed.as_str()
+    );
+    assert_eq!(
+        payload_of(&pool, f.u).await["property_key"],
+        renamed.as_str()
+    );
+    assert_eq!(payload_of(&pool, f.b).await["property_key"], "colour");
+    assert_eq!(payload_of(&pool, c).await["value"], "green");
+    assert_eq!(payload_of(&pool, f.s1).await["value"], "one");
+    assert_eq!(
+        rows_of(&pool, f.a).await,
+        vec![(renamed, value_sentinel(f.a), true)]
+    );
+    assert_eq!(
+        rows_of(&pool, f.b).await,
+        vec![("colour".to_string(), value_sentinel(f.b), true)]
+    );
+
+    assert_replay_byte_identical(&pool, "after a key-text scrub across an unset").await;
+}
+
+/// Spec witness 1, facets (S3, S7). E1 {status, owner} is partly folded by E2 {status} and fully by
+/// the whole-facet set S; E3 {a, b} is folded by S. Those three are prior: one mark per original,
+/// each inner key renamed by the first event naming it and its position there, so E2's status mark
+/// takes E1's status sentinel. S and E4, fully folded but not before the latest whole-facet fold,
+/// are unreachable; E6 {c, d}, partly live, and the live E5 and E7 are kept.
+///
+/// FAILS IF: an event at or after the latest whole-facet fold is rewritten, a partly-live event is
+/// rewritten, an inner key is renamed inconsistently across events, a mark row keeps its inner key,
+/// or replay diverges.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn facets_are_scrubbed_before_the_latest_whole_fold_and_named_unreachable_after(
+    pool: PgPool,
+) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-facets", &[]).await;
+    facet(
+        &pool,
+        emitter,
+        r,
+        serde_json::json!({"status": "open", "owner": "x"}),
+    )
+    .await;
+    facet(&pool, emitter, r, serde_json::json!({"status": "closed"})).await;
+    facet(&pool, emitter, r, serde_json::json!({"a": 1, "b": 2})).await;
+    set_value(
+        &pool,
+        emitter,
+        r,
+        "facet",
+        serde_json::json!({"phase": "one"}),
+    )
+    .await;
+    facet(&pool, emitter, r, serde_json::json!({"phase": "two"})).await;
+    facet(&pool, emitter, r, serde_json::json!({"phase": "three"})).await;
+    facet(&pool, emitter, r, serde_json::json!({"c": 1, "d": 2})).await;
+    facet(&pool, emitter, r, serde_json::json!({"c": 3})).await;
+    let asserted = property_events(&pool, "property_asserted", r, "facet").await;
+    assert_eq!(asserted.len(), 7);
+    let (e1, e2, e3, e4, e5, e6, e7) = (
+        asserted[0],
+        asserted[1],
+        asserted[2],
+        asserted[3],
+        asserted[4],
+        asserted[5],
+        asserted[6],
+    );
+    let s = property_events(&pool, "property_set", r, "facet").await[0];
+    let handle = handle_of(&pool, r, "facet").await;
+    assert_eq!(handle, e1);
+
+    let p = plan(&pool, r, "property", Some(handle), false).await;
+    assert_eq!(
+        p["unreachable"],
+        serde_json::json!([
+            held(s, &["value"], "after_whole_facet_fold"),
+            held(e4, &["value"], "after_whole_facet_fold"),
+        ])
+    );
+    assert_eq!(
+        p["kept"],
+        serde_json::json!([
+            held(e5, &["value"], "current"),
+            held(e6, &["value"], "current"),
+            held(e7, &["value"], "current"),
+        ])
+    );
+
+    let out = act(&pool, r, "property", Some(handle), false).await;
+
+    assert_eq!(
+        pairs(&out["redacted_fields"]),
+        vec![
+            pair(e1, &["value"]),
+            pair(e2, &["value"]),
+            pair(e3, &["value"])
+        ]
+    );
+    // jsonb stores object keys by length, then bytes: E1 holds "owner" at 1 and "status" at 2.
+    let mark = |event: Uuid, pos: u32| format!("scrubbed-facet-{event}-{pos}");
+    assert_eq!(
+        payload_of(&pool, e1).await["value"],
+        serde_json::json!({mark(e1, 1): "erased", mark(e1, 2): "erased"})
+    );
+    assert_eq!(
+        payload_of(&pool, e2).await["value"],
+        serde_json::json!({mark(e1, 2): "erased"}),
+        "E2's status mark takes the sentinel of status's first appearance"
+    );
+    assert_eq!(
+        payload_of(&pool, e3).await["value"],
+        serde_json::json!({mark(e3, 1): "erased", mark(e3, 2): "erased"})
+    );
+    for (event, value) in [
+        (s, serde_json::json!({"phase": "one"})),
+        (e4, serde_json::json!({"phase": "two"})),
+        (e6, serde_json::json!({"c": 1, "d": 2})),
+    ] {
+        assert_eq!(payload_of(&pool, event).await["value"], value);
+    }
+    assert_eq!(
+        rows_of(&pool, e2).await,
+        vec![(
+            "facet".to_string(),
+            serde_json::json!({mark(e1, 2): "erased"}),
+            true
+        )]
+    );
+    assert_eq!(
+        rows_of(&pool, e1).await.len(),
+        2,
+        "one mark row per original mark"
+    );
+
+    assert_replay_byte_identical(&pool, "after a facet scrub").await;
+}
+
+/// Review focus 1: a family scrubbed twice across lifecycles. The first scrub renames A and U to
+/// `scrubbed-key-<A>`. The owner sets the key again and unsets it; the family's handle is now B,
+/// the first event still carrying the text, so the second scrub's sentinel differs from the
+/// first's, and the first scrub's events are untouched.
+///
+/// FAILS IF: the handle is not recomputed from the events still carrying the text, the second scrub
+/// rewrites the first one's events, the two lifecycles share a sentinel, or replay diverges.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_family_scrubbed_twice_across_lifecycles_takes_two_sentinels(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-twice", &[]).await;
+    set(&pool, emitter, r, "colour", "blue").await;
+    unset(&pool, emitter, r, "colour").await;
+    let a = property_events(&pool, "property_set", r, "colour").await[0];
+    let u1 = property_events(&pool, "property_unset", r, "colour").await[0];
+    let first = handle_of(&pool, r, "colour").await;
+    assert_eq!(first, a);
+    act(&pool, r, "property", Some(first), false).await;
+    let (a_after, u1_after) = (payload_of(&pool, a).await, payload_of(&pool, u1).await);
+
+    set(&pool, emitter, r, "colour", "red").await;
+    unset(&pool, emitter, r, "colour").await;
+    let b = property_events(&pool, "property_set", r, "colour").await[0];
+    let u2 = property_events(&pool, "property_unset", r, "colour").await[0];
+    let second = handle_of(&pool, r, "colour").await;
+    assert_eq!(
+        second, b,
+        "the handle is the first event still carrying the text"
+    );
+    act(&pool, r, "property", Some(second), false).await;
+
+    assert_ne!(key_sentinel(first), key_sentinel(second));
+    assert_eq!(
+        payload_of(&pool, a).await,
+        a_after,
+        "the first scrub's events are untouched"
+    );
+    assert_eq!(payload_of(&pool, u1).await, u1_after);
+    for e in [b, u2] {
+        assert_eq!(
+            payload_of(&pool, e).await["property_key"],
+            key_sentinel(second).as_str()
+        );
+    }
+
+    assert_replay_byte_identical(&pool, "after scrubbing a family across two lifecycles").await;
+}
+
+/// Review focus 3: a key never set on R, nulled in `open_meta`, fires a lone `property_unset`. It
+/// is a family in the listing, unset and never live, with no value type, and the listing carries
+/// no key text. Its key text is scrubbable, and the scrub leaves no row.
+///
+/// FAILS IF: the lone unset is not a family, the listing carries key text, the scrub refuses it,
+/// or replay diverges.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_family_whose_only_event_is_an_unset_is_listed_and_scrubbable(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-lone-unset", &[]).await;
+    unset(&pool, emitter, r, "ghostkey").await;
+    let u = property_events(&pool, "property_unset", r, "ghostkey").await[0];
+
+    let rows = listing(&pool, r).await;
+    let row = rows
+        .iter()
+        .find(|row| row["family"] == u.to_string())
+        .expect("the lone unset is a family");
+    assert_eq!(row["events"], 1);
+    assert_eq!(row["live"], false);
+    assert_eq!(row["unset"], true);
+    assert!(row["value_type"].is_null());
+    assert!(
+        !serde_json::to_string(&rows).unwrap().contains("ghostkey"),
+        "the listing carries no key text"
+    );
+
+    let out = act(&pool, r, "property", Some(u), false).await;
+
+    assert_eq!(
+        pairs(&out["redacted_fields"]),
+        vec![pair(u, &["property_key"])]
+    );
+    assert_eq!(
+        payload_of(&pool, u).await["property_key"],
+        key_sentinel(u).as_str()
+    );
+    assert!(rows_of(&pool, u).await.is_empty());
+
+    assert_replay_byte_identical(&pool, "after scrubbing a lone unset").await;
+}
+
+/// Review focus 4: an edge-owned property event with the family's key text never joins R's family.
+/// It is refused as a handle, and a scrub of R's family leaves its payload and row byte-identical.
+///
+/// FAILS IF: the family reaches past `kb_resources`-owned events, or an edge-owned event is
+/// accepted as a handle.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_edge_owned_event_with_the_same_key_text_is_not_in_the_family(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-edge-r", &[]).await;
+    let twin = create(&pool, owner, emitter, home, "scrub-edge-twin", &[]).await;
+    set(&pool, emitter, r, "colour", "blue").await;
+    unset(&pool, emitter, r, "colour").await;
+    let edge = writes::assert_anchored_edge_with(
+        &pool,
+        writes::AssertAnchoredEdgeParams {
+            source: AnchorRef::resource(r),
+            target: AnchorRef::resource(twin),
+            kind: temper_substrate::affinity::EdgeKind::LeadsTo,
+            polarity: EdgePolarity::Forward,
+            label: Some("derived_from"),
+            weight: 1.0,
+            home: EdgeHome::Context(home),
+            emitter,
+        },
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+    writes::assert_keyed_property_with(
+        &pool,
+        PropertyOwner::Edge { id: edge },
+        "colour",
+        &serde_json::json!("edge-blue"),
+        1.0,
+        emitter,
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+    let edge_event: Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_events WHERE payload#>>'{owner,id}' = $1")
+            .bind(edge.uuid().to_string())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let (payload_before, rows_before) = (
+        payload_of(&pool, edge_event).await,
+        rows_of(&pool, edge_event).await,
+    );
+
+    let err = try_act(&pool, r, "property", Some(edge_event), false)
+        .await
+        .expect_err("an edge-owned event is not a handle");
+    assert!(
+        err.contains(&format!(
+            "resource_field_scrub_execute: family {edge_event} is not a property family handle of resource {}",
+            r.uuid()
+        )),
+        "got {err}"
+    );
+    let handle = handle_of(&pool, r, "colour").await;
+    act(&pool, r, "property", Some(handle), false).await;
+
+    assert_eq!(payload_of(&pool, edge_event).await, payload_before);
+    assert_eq!(rows_of(&pool, edge_event).await, rows_before);
+
+    assert_replay_byte_identical(&pool, "after a scrub beside an edge-owned key").await;
+}
+
+/// Spec witness 7, the title guard (S3): a title-carrying event inserted, in one transaction, with
+/// an explicit id lower than the last one's and projected, so the walk's last title is not the
+/// projection's. Keep mode refuses with `projection disagrees`; the same request just before the
+/// inversion is admitted by the plan.
+///
+/// FAILS IF: the act redacts under an inverted order instead of refusing.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn keep_mode_refuses_when_the_last_title_disagrees_with_the_projection(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-guard", &[]).await;
+    retitle(&pool, emitter, r, "a later title").await;
+    let last = resource_events(&pool, "resource_updated", r).await[0];
+    let inverted = Uuid::from_u128(last.as_u128() - 1);
+    let payload = serde_json::json!({"resource_id": r.uuid(), "title": "an inverted title"});
+    let (operator, _) = system_actor(&pool).await;
+
+    let mut tx = pool.begin().await.unwrap();
+    let before: serde_json::Value =
+        sqlx::query_scalar("SELECT resource_field_scrub_plan($1, 'title', NULL, false)")
+            .bind(r.uuid())
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+    assert!(before["refusal"].is_null(), "{before}");
+    sqlx::query(
+        "INSERT INTO kb_events (id, event_type_id, emitter_entity_id, producing_anchor_table, \
+                                producing_anchor_id, payload, category) \
+         SELECT $1, et.id, $2, h.anchor_table, h.anchor_id, $3, 'domain' \
+           FROM kb_event_types et, kb_resource_homes h \
+          WHERE et.name = 'resource_updated' AND h.resource_id = $4",
+    )
+    .bind(inverted)
+    .bind(emitter)
+    .bind(&payload)
+    .bind(r.uuid())
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query("SELECT _project_resource_updated($1, $2)")
+        .bind(inverted)
+        .bind(&payload)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let err =
+        sqlx::query("SELECT resource_field_scrub_execute($1, 'title', NULL, false, $2, $3, $4)")
+            .bind(r.uuid())
+            .bind(operator.uuid())
+            .bind(emitter)
+            .bind(Uuid::now_v7())
+            .execute(&mut *tx)
+            .await
+            .map(|_| ())
+            .map_err(db_message)
+            .expect_err("an inverted title order refuses");
+    tx.rollback().await.unwrap();
+
+    assert_eq!(err, "resource_field_scrub_execute: projection disagrees");
+}
+
+/// Assert that the act on `resource` raises `expected` and that the ledger gained no event.
+async fn refused_with(
+    pool: &PgPool,
+    resource: ResourceId,
+    field: &str,
+    family: Option<Uuid>,
+    clear: bool,
+    expected: &str,
+) {
+    let before = event_count(pool).await;
+    let err = try_act(pool, resource, field, family, clear)
+        .await
+        .expect_err(expected);
+    assert!(err.contains(expected), "expected {expected:?}, got {err}");
+    assert_eq!(
+        event_count(pool).await,
+        before,
+        "{expected}: nothing recorded"
+    );
+}
+
+/// The act's refusals RAISE, each with its own stable text, and change nothing (S4). The recorded
+/// ones (a charter, an erased resource) and the 400s (a foreign or malformed handle, a malformed
+/// request, keep mode with nothing prior) are told apart by the service from these texts.
+///
+/// FAILS IF: any refusal completes, records an event, or raises a different text.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_act_refuses_by_raising_and_changes_nothing(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let f = families(&pool, owner, emitter, home).await;
+    let other = create(&pool, owner, emitter, home, "scrub-refuse-other", &[]).await;
+    let other_created = resource_events(&pool, "resource_created", other).await[0];
+    let untouched = create(&pool, owner, emitter, home, "scrub-refuse-fresh", &[]).await;
+    retitle(&pool, emitter, f.r, "a later title").await;
+    let r_update = resource_events(&pool, "resource_updated", f.r).await[0];
+    let foreign = |id: Uuid| {
+        format!(
+            "resource_field_scrub_execute: family {id} is not a property family handle of resource {}",
+            f.r.uuid()
+        )
+    };
+
+    refused_with(
+        &pool,
+        f.r,
+        "property",
+        Some(other_created),
+        false,
+        &foreign(other_created),
+    )
+    .await;
+    refused_with(
+        &pool,
+        f.r,
+        "property",
+        Some(r_update),
+        false,
+        &foreign(r_update),
+    )
+    .await;
+    refused_with(&pool, f.r, "property", Some(f.u), false, &foreign(f.u)).await;
+    refused_with(
+        &pool,
+        f.r,
+        "title",
+        Some(f.a),
+        false,
+        "resource_field_scrub_execute: field title takes no family handle",
+    )
+    .await;
+    refused_with(
+        &pool,
+        f.r,
+        "property",
+        None,
+        false,
+        "resource_field_scrub_execute: field property needs a family handle",
+    )
+    .await;
+    refused_with(
+        &pool,
+        f.r,
+        "properties",
+        None,
+        true,
+        "resource_field_scrub_execute: properties cannot be cleared",
+    )
+    .await;
+    refused_with(
+        &pool,
+        f.r,
+        "body",
+        None,
+        false,
+        "resource_field_scrub_execute: unknown field kind",
+    )
+    .await;
+    refused_with(
+        &pool,
+        untouched,
+        "title",
+        None,
+        false,
+        "resource_field_scrub_execute: nothing prior to scrub",
+    )
+    .await;
+
+    let telos = {
+        let mut conn = pool.acquire().await.unwrap();
+        fire(
+            &mut conn,
+            SeedAction::CogmapGenesis {
+                name: "field-scrub-refusal-map",
+                telos_title: "telos-for-field-scrub-refusal",
+                charter: &[],
+                cogmap_id: None,
+                telos_resource_id: None,
+                owner,
+                emitter,
+            },
+        )
+        .await
+        .unwrap()
+        .cogmap_genesis()
+        .unwrap()
+        .1
+    };
+    refused_with(
+        &pool,
+        telos,
+        "title",
+        None,
+        false,
+        "resource_field_scrub_execute: charter resource (map-grain erasure is filed task",
+    )
+    .await;
+
+    erase(&pool, other).await;
+    refused_with(
+        &pool,
+        other,
+        "title",
+        None,
+        false,
+        "resource_field_scrub_execute: already erased",
+    )
+    .await;
+    let surveyed = survey(&pool, other, "title", None, false).await;
+    assert_eq!(surveyed["plan"]["refusal"], "already_erased");
+    assert!(
+        surveyed["families"].is_null(),
+        "no listing for an erased resource"
+    );
+}
+
+/// A sentinel the act would write that R's ledger already names as key text refuses (S7,
+/// `sentinel_collision`), and the refusal records through `resource_erasure_refuse` as a field
+/// scrub's, typed `ResourceErasureRefused { act: FieldScrub, reason: SentinelCollision }`. The
+/// reason is refused beside any other act.
+///
+/// FAILS IF: the act renames a family onto key text R already uses, the refusal record does not
+/// admit the field scrub's act and reason, or admits the reason for another act.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_sentinel_already_on_the_owners_ledger_refuses_and_records_as_a_field_scrub(
+    pool: PgPool,
+) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let f = families(&pool, owner, emitter, home).await;
+    set(
+        &pool,
+        emitter,
+        f.r,
+        &key_sentinel(f.a),
+        "typed in the sentinel's shape",
+    )
+    .await;
+
+    assert_eq!(
+        plan(&pool, f.r, "property", Some(f.a), false).await["refusal"],
+        "sentinel_collision"
+    );
+    refused_with(
+        &pool,
+        f.r,
+        "property",
+        Some(f.a),
+        false,
+        "resource_field_scrub_execute: sentinel collision",
+    )
+    .await;
+
+    let refusal: Uuid = sqlx::query_scalar(
+        "SELECT resource_erasure_refuse($1, $2, $3, $4, 'sentinel_collision', NULL, 'field_scrub')",
+    )
+    .bind(f.r.uuid())
+    .bind(owner.uuid())
+    .bind(emitter)
+    .bind(Uuid::now_v7())
+    .fetch_one(&pool)
+    .await
+    .expect("the field scrub's refusal records");
+    let recorded: ResourceErasureRefused =
+        serde_json::from_value(payload_of(&pool, refusal).await).expect("a ResourceErasureRefused");
+    assert_eq!(recorded.act, Some(ErasureAct::FieldScrub));
+    assert_eq!(recorded.reason, RecordedRefusalReason::SentinelCollision);
+    assert_eq!(recorded.subject_id, f.r.uuid());
+    assert!(recorded.blocks.is_empty());
+
+    let err = sqlx::query_scalar::<_, Uuid>(
+        "SELECT resource_erasure_refuse($1, $2, $3, $4, 'sentinel_collision', NULL, 'erasure')",
+    )
+    .bind(f.r.uuid())
+    .bind(owner.uuid())
+    .bind(emitter)
+    .bind(Uuid::now_v7())
+    .fetch_one(&pool)
+    .await
+    .map_err(db_message)
+    .expect_err("the reason is the field scrub's alone");
+    assert_eq!(
+        err,
+        "resource_erasure_refuse: sentinel_collision is recorded only for a field_scrub refusal"
+    );
+}
+
+/// The bite of spec witness 1 (S3, "a `property_set` cannot be the boundary"): rename one event's
+/// key past a `property_set` boundary, as a derivation without S3's unset rule would, and rewrite
+/// its folded row to match, as the projection rewrite would. Replay of that ledger leaves the
+/// renamed row live, because the later set folds by its own key text, while the live projection
+/// holds it folded: the dumps differ. The verifier refuses this rename outright
+/// (`a_scrub_renames_key_text_only_up_to_the_latest_unset`), so the forgery bypasses the ledger's
+/// triggers, which the test role may do on its own schema.
+///
+/// FAILS IF: replay of a key renamed past a set boundary lands where live is, which would mean
+/// S3's unset rule guards nothing and the witnesses above could not catch its loss.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_key_renamed_past_a_set_boundary_makes_replay_diverge(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-bite", &[]).await;
+    set(&pool, emitter, r, "colour", "blue").await;
+    set(&pool, emitter, r, "colour", "red").await;
+    let a = property_events(&pool, "property_set", r, "colour").await[0];
+    let renamed = key_sentinel(a);
+
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::raw_sql(
+        "ALTER TABLE kb_events DISABLE TRIGGER kb_events_append_only, \
+                               DISABLE TRIGGER kb_events_redaction_in_trail",
+    )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE kb_events SET payload = jsonb_set(payload, '{property_key}', to_jsonb($2::text)) WHERE id = $1")
+        .bind(a)
+        .bind(&renamed)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE kb_properties SET property_key = $2 WHERE asserted_by_event_id = $1")
+        .bind(a)
+        .bind(&renamed)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "ALTER TABLE kb_events ENABLE TRIGGER kb_events_append_only, \
+                               ENABLE TRIGGER kb_events_redaction_in_trail",
+    )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        rows_of(&pool, a).await,
+        vec![(renamed.clone(), serde_json::json!("blue"), true)],
+        "live: the renamed row is folded"
+    );
+
+    let before = replay::dump_projections(&pool).await.unwrap();
+    let snap = replay::snapshot(&pool).await.unwrap();
+    common::reset_schema(&pool).await;
+    replay::replay(&pool, &snap).await.unwrap();
+    let after = replay::dump_projections(&pool).await.unwrap();
+
+    let table = |dumps: &[(String, serde_json::Value)]| {
+        dumps
+            .iter()
+            .find(|(t, _)| t == "kb_properties")
+            .map(|(_, d)| d.clone())
+            .unwrap()
+    };
+    assert_ne!(
+        table(&before),
+        table(&after),
+        "replay of a key renamed past a set boundary must diverge"
+    );
+    assert_eq!(
+        rows_of(&pool, a).await,
+        vec![(renamed, serde_json::json!("blue"), false)],
+        "replay: the later set folds by its own key text and leaves the renamed row live"
+    );
+}
+
+// ── Replay (Task 5): the resource_scrubbed arm ─────────────────────────────────────────────────
+
+/// Spec witness 2: scrub (keep, a family's key text), then erase, then replay byte-identical. The
+/// erasure completes unchanged over the scrubbed ledger: its rows for the paths the scrub rewrote
+/// land beside the scrub's (S6.1), and the walk projects both records at their positions.
+///
+/// FAILS IF: replay has no arm for `resource_scrubbed` (it refused the walk before Task 5), the
+/// erasure collides with the scrub's rows, or replay diverges.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_erasure_after_a_scrub_completes_and_replays_identically(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let f = families(&pool, owner, emitter, home).await;
+    act(&pool, f.r, "property", Some(f.a), false).await;
+
+    erase(&pool, f.r).await;
+
+    let authorities: Vec<String> = sqlx::query_scalar(
+        "SELECT authority FROM kb_event_field_redactions \
+          WHERE event_id = $1 AND path = 'property_key' ORDER BY authority",
+    )
+    .bind(f.a)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(authorities, ["erasure", "scrub"]);
+
+    assert_replay_byte_identical(&pool, "after a scrub, then an erasure").await;
+}
+
+/// The replay arm refuses a `resource_scrubbed` whose payload names another table, planted by a
+/// raw ledger append (the act never writes it).
+///
+/// FAILS IF: replay succeeds, or the refusal does not name the offending table.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn replay_refuses_a_resource_scrubbed_naming_another_table(pool: PgPool) {
+    let (_, emitter, _) = setup(&pool).await;
+    sqlx::query(
+        "SELECT _event_append('resource_scrubbed', $1, NULL, NULL, \
+                jsonb_build_object('subject_table', 'kb_content_blocks', \
+                                   'subject_id', $2::uuid, \
+                                   'field', jsonb_build_object('kind', 'title')), \
+                p_correlation => $3)",
+    )
+    .bind(emitter)
+    .bind(Uuid::now_v7())
+    .bind(Uuid::now_v7())
+    .execute(&pool)
+    .await
+    .expect("the raw append lands");
+
+    let snap = replay::snapshot(&pool).await.unwrap();
+    common::reset_schema(&pool).await;
+    let err = replay::replay(&pool, &snap)
+        .await
+        .expect_err("replay must refuse a resource_scrubbed naming another table");
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("names subject_table \"kb_content_blocks\", not kb_resources"),
+        "{chain}"
     );
 }
