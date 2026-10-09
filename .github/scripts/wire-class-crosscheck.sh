@@ -64,6 +64,30 @@
 #        neither `additive` nor `shape-breaking` while openapi.json changed: FAIL —
 #            `behavioral` does not answer the shape question, and the P floor is owed.
 #
+# DEPENDENCY-ONLY CHANGES ARE NOT WIRE MOVEMENT
+# ---------------------------------------------
+# A wire tree's dependency manifests change on every version bump — a Dependabot PR, or a human
+# one — and before this carve-out each such PR owed a register row whose only honest content was
+# "no class: nothing on the wire moved". A wire-touched path is set aside (reported, never
+# silently dropped) when its change is dependency-only, judged on CONTENT, never on who
+# authored the PR — so a human bump passes the same way, and a bot PR that also edits code
+# does not:
+#   * a lockfile (package-lock.json, bun.lock, bun.lockb, yarn.lock, pnpm-lock.yaml,
+#     Cargo.lock) — never published, never a contract;
+#   * a package.json whose base and head agree once dependencies, devDependencies,
+#     optionalDependencies, overrides, and resolutions are deleted (jq-compared).
+#     peerDependencies is deliberately NOT stripped: it is what a consumer of a published client
+#     must install alongside it — a consumer-facing contract a review should see declared;
+#   * a Cargo.toml whose base and head agree once every [*dependencies*] table is dropped
+#     ([dependencies], [dev-dependencies], [build-dependencies], [target.<cfg>.dependencies],
+#     [dependencies.<name>], ...). A changed [features] table, version, or anything else keeps
+#     the file on the wire.
+# A file new in this diff, deleted by it, or unreadable is NOT dependency-only (fail closed).
+# When every wire path is dependency-only the check PASSES without a row and says so; when
+# any other wire path changed, the row is owed exactly as before. A dependency upgrade CAN
+# change behavior behind an unchanged shape — that is the behavioral class, which this gate is
+# barred from certifying either way (above); review owns it, and the pass message says so.
+#
 # THE pr: self SENTINEL
 # ---------------------
 # The row describing the PR that carries it is written `pr: self` — the number is unknowable
@@ -92,6 +116,8 @@
 #   --wire-touched FILE      file of changed paths, one per line
 #   --added-register FILE    file of added register machine lines, verbatim (`pr: self`, ...)
 #   --shape-verdict moved|unchanged|undeterminable
+#   --dependency-only FILE   file of wire paths whose change is dependency-only (else, in
+#                            fixture mode, none are; in git mode the classifier decides)
 #   --register FILE          parse target (default: RELEASE_REGISTER.md at the repo root;
 #                            the diff/presence half always reads the repo's own register)
 #   --pr N                   this PR's number (else GITHUB_PR_NUMBER; else `self` only)
@@ -112,6 +138,7 @@ BASE_ARG=""
 WIRE_TOUCHED_FILE=""
 ADDED_REGISTER_FILE=""
 SHAPE_VERDICT_ARG=""
+DEPENDENCY_ONLY_FILE=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -121,6 +148,7 @@ while [ $# -gt 0 ]; do
         --wire-touched)   WIRE_TOUCHED_FILE="${2:-}"; shift 2 ;;
         --added-register) ADDED_REGISTER_FILE="${2:-}"; shift 2 ;;
         --shape-verdict)  SHAPE_VERDICT_ARG="${2:-}"; shift 2 ;;
+        --dependency-only) DEPENDENCY_ONLY_FILE="${2:-}"; shift 2 ;;
         *) echo "wire-class-crosscheck: unknown argument: $1" >&2; exit 1 ;;
     esac
 done
@@ -150,7 +178,8 @@ derive_base() {
 CHANGED_FILE="$(mktemp)"
 WIRE_FILES="$(mktemp)"
 ADDED_LINES="$(mktemp)"
-trap 'rm -f "$CHANGED_FILE" "$WIRE_FILES" "$ADDED_LINES"' EXIT
+DEP_FILES="$(mktemp)"
+trap 'rm -f "$CHANGED_FILE" "$WIRE_FILES" "$ADDED_LINES" "$DEP_FILES"' EXIT
 
 if [ -n "$WIRE_TOUCHED_FILE" ]; then
     cp "$WIRE_TOUCHED_FILE" "$CHANGED_FILE"
@@ -175,6 +204,84 @@ while IFS= read -r p; do
         case "$p" in "$pre"*) printf '%s\n' "$p" >> "$WIRE_FILES"; break ;; esac
     done
 done < "$CHANGED_FILE"
+
+# ── Dependency-only wire paths are set aside (see DEPENDENCY-ONLY CHANGES above) ─────────────
+# Each classifier answers 0 only when it could read BOTH sides and they agree once the
+# dependency sections are gone; every other outcome (new file, deleted file, unreadable,
+# jq missing, invalid JSON) keeps the path on the wire.
+manifest_both_sides() { # $1 = path, $2 = base out, $3 = head out
+    git cat-file -e "${BASE}:$1" 2>/dev/null || return 1
+    [ -f "$1" ] || return 1
+    git show "${BASE}:$1" > "$2" 2>/dev/null || return 1
+    cp "$1" "$3" 2>/dev/null || return 1
+}
+
+package_json_dependency_only() { # $1 = path
+    command -v jq >/dev/null 2>&1 || return 1
+    local b h rc=1
+    b="$(mktemp)"; h="$(mktemp)"
+    if manifest_both_sides "$1" "$b" "$h"; then
+        local strip='del(.dependencies, .devDependencies, .optionalDependencies, .overrides, .resolutions)'
+        if jq -S "$strip" "$b" > "${b}.s" 2>/dev/null && jq -S "$strip" "$h" > "${h}.s" 2>/dev/null \
+            && [ -s "${b}.s" ] && cmp -s "${b}.s" "${h}.s"; then
+            rc=0
+        fi
+    fi
+    rm -f "$b" "$h" "${b}.s" "${h}.s"
+    return "$rc"
+}
+
+# Drop every dependency table's header and body; keep everything else verbatim. A table header
+# is any line opening with `[`; a dependency table is one whose dotted name has a
+# `dependencies`, `dev-dependencies`, or `build-dependencies` segment.
+cargo_strip_dependency_tables() {
+    awk '
+        /^[[:space:]]*\[/ {
+            h = $0; sub(/#.*/, "", h); gsub(/[[:space:]]/, "", h)
+            in_dep = (h ~ /^\[\[?([^]]*\.)?(dev-|build-)?dependencies(\.[^]]*)?\]\]?$/)
+        }
+        !in_dep { print }
+    ' "$1"
+}
+
+cargo_toml_dependency_only() { # $1 = path
+    local b h rc=1
+    b="$(mktemp)"; h="$(mktemp)"
+    if manifest_both_sides "$1" "$b" "$h"; then
+        cargo_strip_dependency_tables "$b" > "${b}.s"
+        cargo_strip_dependency_tables "$h" > "${h}.s"
+        cmp -s "${b}.s" "${h}.s" && rc=0
+    fi
+    rm -f "$b" "$h" "${b}.s" "${h}.s"
+    return "$rc"
+}
+
+is_dependency_only() { # $1 = path
+    case "${1##*/}" in
+        package-lock.json|bun.lock|bun.lockb|yarn.lock|pnpm-lock.yaml|Cargo.lock) return 0 ;;
+        package.json) package_json_dependency_only "$1" ;;
+        Cargo.toml)   cargo_toml_dependency_only "$1" ;;
+        *) return 1 ;;
+    esac
+}
+
+if [ -n "$DEPENDENCY_ONLY_FILE" ] || [ -z "$WIRE_TOUCHED_FILE" ]; then
+    KEPT_FILES="$(mktemp)"
+    while IFS= read -r p; do
+        [ -z "$p" ] && continue
+        if [ -n "$DEPENDENCY_ONLY_FILE" ]; then
+            if grep -qxF "$p" "$DEPENDENCY_ONLY_FILE"; then dep=1; else dep=0; fi
+        elif is_dependency_only "$p"; then dep=1; else dep=0; fi
+        if [ "$dep" -eq 1 ]; then printf '%s\n' "$p" >> "$DEP_FILES"; else printf '%s\n' "$p" >> "$KEPT_FILES"; fi
+    done < "$WIRE_FILES"
+    mv "$KEPT_FILES" "$WIRE_FILES"
+fi
+DEP_COUNT="$(grep -c . "$DEP_FILES" || true)"
+DEP_COUNT="${DEP_COUNT:-0}"
+if [ "$DEP_COUNT" -gt 0 ]; then
+    echo "── dependency-only wire paths (set aside: not wire movement) ──"
+    sed 's/^/  /' "$DEP_FILES"
+fi
 
 REGISTER_IN_DIFF=0
 if [ -z "$WIRE_TOUCHED_FILE" ] && grep -qx "RELEASE_REGISTER.md" "$CHANGED_FILE"; then
@@ -245,10 +352,16 @@ fi
 WIRE_COUNT="$(grep -c . "$WIRE_FILES" || true)"
 WIRE_COUNT="${WIRE_COUNT:-0}"
 if [ "$WIRE_COUNT" -eq 0 ]; then
-    if [ "$REGISTER_IN_DIFF" -eq 1 ] || [ "$REGISTER_EXPLICIT" -eq 1 ]; then
+    if [ "$DEP_COUNT" -gt 0 ]; then
+        echo "wire-class-crosscheck: PASS — every wire-tree change is dependency-only; no register row is owed."
+    elif [ "$REGISTER_IN_DIFF" -eq 1 ] || [ "$REGISTER_EXPLICIT" -eq 1 ]; then
         echo "wire-class-crosscheck: PASS — no wire paths changed; the register edit validated."
     else
         echo "wire-class-crosscheck: PASS — no wire paths changed and the register is untouched; nothing to check."
+    fi
+    if [ "$DEP_COUNT" -gt 0 ]; then
+        echo "Whether an upgrade changed behavior behind an unchanged shape is the behavioral class —"
+        echo "owned by review and the merge decision, never certified here (spec §4)."
     fi
     exit 0
 fi
