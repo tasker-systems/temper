@@ -23,6 +23,23 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.6.0 — unreleased
+- **A sensitivity finding in the event ledger closes once a resource erasure rewrites its path, and its digests expire 30 days later**
+  A finding the sweep made in `kb_events.payload` or `kb_events.metadata` stayed open forever: closure
+  (`sensitivity.place_closure`) answered nothing for the ledger, and the sweep reads each ledger row
+  once per detector version. A resource erasure now rewrites the allowlisted paths of its trail's
+  events and records each in `kb_event_field_redactions`, so a finding at or under such a path now
+  closes as `sentinel`, whichever erasure wrote the row: an edge's assertion closes when either end
+  is erased. A finding on a path the erasure did not rewrite stays open, on the same event too.
+  Erasure's digest expiry then treats a closed ledger finding as it treats any other erased place:
+  its fingerprints and keyed hash go 30 days after the sweep first sees it closed. `place_closure`
+  takes the finding's path as a fourth argument, and every caller in the `sensitivity` schema passes
+  it. Who observes: operators reading the `sensitivity` schema (`finding_closure`, `findings`, the
+  expiry count `/api/sensitivity/sweep` already reports). User-visible: no. Release relevance:
+  behavioral (ledger findings close, and their digests expire, that stayed open and kept them).
+pr: self
+classes: behavioral
+surfaces: internal, schema
+status: signal-only
 - **Running resource erasure again completes an earlier erasure, and the survey of an erased resource gains `completion_fields`**
   A resource erased before ledger redaction shipped still carries its text in its own trail events.
   Running the execute door on it again is now the completion pass: it appends one more

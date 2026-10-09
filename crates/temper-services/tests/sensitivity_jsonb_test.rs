@@ -883,7 +883,7 @@ async fn closure_reads_emptied_content_and_a_changed_title_never_a_missing_hash(
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn every_enabled_surface_has_a_closure_rule(pool: PgPool) {
     let rows: Vec<(String, Option<String>)> = sqlx::query_as(
-        "SELECT surface, sensitivity.place_closure(surface, gen_random_uuid(), repeat('0', 64)) \
+        "SELECT surface, sensitivity.place_closure(surface, gen_random_uuid(), repeat('0', 64), '/title') \
            FROM sensitivity.surfaces WHERE enabled ORDER BY 1",
     )
     .fetch_all(&pool)
@@ -897,7 +897,7 @@ async fn every_enabled_surface_has_a_closure_rule(pool: PgPool) {
         };
         assert_eq!(
             closed, expected,
-            "{surface}: a missing place closes, and the ledger never closes here (Q38)"
+            "{surface}: a missing place closes, and a ledger place closes only on a redaction row"
         );
     }
 }
@@ -919,9 +919,7 @@ async fn system_actor(pool: &PgPool) -> (ProfileId, EntityId) {
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn a_resource_erasure_closes_its_title_and_property_findings_and_not_its_ledger(
-    pool: PgPool,
-) {
+async fn a_resource_erasure_closes_its_title_property_and_redacted_ledger_findings(pool: PgPool) {
     enable_seeded_detectors(&pool).await;
     bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
@@ -986,6 +984,16 @@ async fn a_resource_erasure_closes_its_title_and_property_findings_and_not_its_l
     .fetch_one(&pool)
     .await
     .unwrap();
+    // One event of R's trail with a path the act lists (title) and one it does not (note), both
+    // carrying the value: a raw row, since no write path puts free text on an unlisted path.
+    let renamed = event(
+        &pool,
+        "resource_updated",
+        serde_json::json!({ "resource_id": resource, "title": format!("ssn {SSN_A}"),
+                            "note": format!("ssn {SSN_A}") }),
+        serde_json::json!({}),
+    )
+    .await;
     for surface in [
         "kb_resources.title",
         "kb_properties.property_key",
@@ -994,6 +1002,22 @@ async fn a_resource_erasure_closes_its_title_and_property_findings_and_not_its_l
     ] {
         assert!(!tick(&pool, surface).await.failed, "{surface}");
     }
+    let set: Uuid = sqlx::query_scalar(
+        "SELECT f.target_id FROM sensitivity.findings f WHERE f.surface = 'kb_events.payload' \
+            AND f.path = '/value' AND f.resource_id = $1",
+    )
+    .bind(resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("the ledger's copy of the property value is found");
+    assert_eq!(
+        findings_at(&pool, renamed).await,
+        vec![
+            ("/note".to_string(), "us_ssn_delimited".to_string()),
+            ("/title".to_string(), "us_ssn_delimited".to_string())
+        ],
+        "both paths of the planted event are found"
+    );
     let created: Uuid = sqlx::query_scalar(
         "SELECT f.target_id FROM sensitivity.findings f WHERE f.surface = 'kb_events.payload' \
             AND f.path = '/title' AND f.resource_id = $1",
@@ -1037,8 +1061,18 @@ async fn a_resource_erasure_closes_its_title_and_property_findings_and_not_its_l
     .unwrap();
     assert_eq!(
         ledger,
-        vec![None],
-        "cut 1 leaves the title in the trail, so its finding stays open (Q38, a guard on the view)"
+        vec![Some("sentinel".to_string())],
+        "the act rewrote the ledger's copy of the title, so its finding closes"
+    );
+    assert_eq!(
+        closed_by(&pool, set).await,
+        vec![Some("sentinel".to_string()), Some("sentinel".to_string())],
+        "the ledger's copies of the property key and value close"
+    );
+    assert_eq!(
+        closed_by(&pool, renamed).await,
+        vec![None, Some("sentinel".to_string())],
+        "on one redacted event, the listed path closes and the unlisted one stays open"
     );
 }
 
@@ -1212,9 +1246,11 @@ async fn created_resource(
 /// A closed finding on any place the act reached gives up its fingerprints and its keyed hash 30
 /// days after the sweep first sees it so; the row stays, closed. The places include those the scan
 /// does not attribute to R: the label of an edge INTO R (attributed to its source), a property on
-/// that edge (attributed to nothing), and R's remote source, which the act deletes. Each conjunct
+/// that edge (attributed to nothing), and R's remote source, which the act deletes. The ledger's
+/// copies are places too: R's title in its creation event, and the edge's label in its assertion,
+/// which the scan attributes to the live source and R's erasure redacts (ruling 1). Each conjunct
 /// has a case that keeps its digests: a closed finding on a resource never erased, the erased
-/// places at 29 days, and the ledger's copy of R's title, which stays open until cut 2.
+/// places at 29 days, and the ledger's copy of the live edge's label, which no erasure reached.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn every_place_the_act_reached_gives_up_its_digests_after_thirty_days(pool: PgPool) {
     enable_seeded_detectors(&pool).await;
@@ -1322,12 +1358,31 @@ async fn every_place_the_act_reached_gives_up_its_digests_after_thirty_days(pool
     .fetch_one(&pool)
     .await
     .expect("the ledger's copy of the title is found");
+    let asserted = |edge: Uuid| {
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT f.target_id FROM sensitivity.findings f \
+               JOIN kb_events e ON e.id = f.target_id \
+              WHERE f.surface = 'kb_events.payload' AND f.path = '/label' \
+                AND e.payload ->> 'edge_id' = $1::text AND f.resource_id = $2",
+        )
+        .bind(edge)
+        .bind(neighbour.uuid())
+        .fetch_one(&pool)
+    };
+    let edge_asserted = asserted(edge)
+        .await
+        .expect("the ledger's copy of the label is found, attributed to the live source");
+    let live_edge_asserted = asserted(live_edge)
+        .await
+        .expect("the ledger's copy of the live edge's label is found");
 
     let places = [
         ("kb_resources.title", erased.uuid()),
         ("kb_edges.label", edge),
         ("kb_properties.property_value", on_edge),
         ("kb_remote_sources.uri", remote),
+        ("kb_events.payload", ledger),
+        ("kb_events.payload", edge_asserted),
     ];
     let mut before = Vec::new();
     for (surface, target) in places {
@@ -1338,7 +1393,7 @@ async fn every_place_the_act_reached_gives_up_its_digests_after_thirty_days(pool
         );
         before.push(d);
     }
-    let ledger_before = digests_at(&pool, "kb_events.payload", ledger).await;
+    let live_ledger_before = digests_at(&pool, "kb_events.payload", live_edge_asserted).await;
     let live_before = digests_at(&pool, "kb_resources.title", live).await;
     let live_edge_places = [
         ("kb_edges.label", live_edge),
@@ -1447,9 +1502,14 @@ async fn every_place_the_act_reached_gives_up_its_digests_after_thirty_days(pool
         "the salt no longer confirms the erased title anywhere the sweep stores a hash"
     );
     assert_eq!(
-        digests_at(&pool, "kb_events.payload", ledger).await,
-        ledger_before,
-        "an open finding keeps its digests: the ledger still holds the title until cut 2"
+        closed_by(&pool, live_edge_asserted).await,
+        vec![None],
+        "the live edge's assertion was redacted by no erasure, so its finding stays open"
+    );
+    assert_eq!(
+        digests_at(&pool, "kb_events.payload", live_edge_asserted).await,
+        live_ledger_before,
+        "an open ledger finding keeps its digests"
     );
     assert_eq!(
         digests_at(&pool, "kb_resources.title", live).await,
