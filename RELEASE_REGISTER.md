@@ -53,6 +53,23 @@ pr: self
 classes: additive, behavioral
 surfaces: http, clients, cli-stdout
 status: signal-only
+- **A machine principal is never enrolled in a team nobody chose for it**
+  Machine registration (`admin machine provision` / `issue`) no longer adds the machine to the
+  gating team as `watcher`; approving a machine's join request no longer does either; and auto-join
+  teams (`temper-system` among them) never enroll a machine, at approval, at team creation, or by
+  `POST /api/access/admin/auto-join/reconcile`. A machine holds the memberships its registrar gave
+  it and its own personal team. Read reach is unchanged: the personal team sits under
+  `temper-system`, and every content gate walks up from a profile's teams. What a newly registered
+  machine no longer sees is anything keyed on DIRECT membership: `temper-system` drops out of
+  `GET /api/teams`, `GET /api/teams/{id}` for it is a 404, and a `+temper-system/<slug>` context ref
+  is refused. Machines registered earlier keep their existing rows. The reconcile operation's OpenAPI
+  description now says "approved person"; shapes are unchanged. Who observes: machine credentials,
+  operators reading rosters. User-visible: the three direct-membership answers above, for new
+  machines. Release relevance: additive (description text), behavioral (enrollment).
+pr: self
+classes: additive, behavioral
+surfaces: http, clients
+status: signal-only
 - **`POST /api/teams` refuses the `personal-` slug prefix; a personal team is identified by `kb_teams.personal_of`**
   The personal-team trigger joined every new profile as owner of whatever team held
   `personal-<handle>`, and `team_service::create_team` reserved no prefix, so anyone could create

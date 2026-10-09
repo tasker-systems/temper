@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id",
+  "query": "INSERT INTO kb_teams (slug, name, auto_join_role) VALUES ('everyone', 'Everyone', 'member'::team_role) RETURNING id",
   "describe": {
     "columns": [
       {
@@ -10,13 +10,11 @@
       }
     ],
     "parameters": {
-      "Left": [
-        "Text"
-      ]
+      "Left": []
     },
     "nullable": [
       false
     ]
   },
-  "hash": "43bade213801385a12e9c35a41820092d2a6838c2c54a9a93f54cd7630562be8"
+  "hash": "59b30c9ea6827de255a0ab088b61f6e96213a5b0bfc35d5c4d805067458d97c8"
 }

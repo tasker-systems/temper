@@ -104,7 +104,7 @@ Commands:
   revoke               Revoke a principal's admission (legal only from approved)
   deactivate           Deactivate a principal (legal from any live state)
   reactivate           Reactivate a deactivated principal, restoring its prior standing
-  reconcile-auto-join  Converge every auto-join team's roster to the standing-approved population
+  reconcile-auto-join  Converge every auto-join team's roster to the standing-approved humans (never machines)
   help                 Print this message or the help of the given subcommand(s)
 
 Options:
@@ -191,7 +191,7 @@ Options:
 #### `temper admin access reconcile-auto-join`
 
 ```text
-Converge every auto-join team's roster to the standing-approved population
+Converge every auto-join team's roster to the standing-approved humans (never machines)
 
 Repairs an instance that drifted while enrollment lived only on the request-review door: profiles approved out-of-band were absent from the `everyone` pool. Prints one line per (team, profile) pair added; a converged instance adds nothing and still prints a line. Approved machine principals enroll like any other profile, so on a drifted instance a reconcile widens machine read reach — the report is the review artifact. On a team that also carries a SAML group mapping, the native rows this writes pre-empt later IdP role assertions for that pair (native-wins-skip); the verb warns when its report touches such teams.
 
@@ -669,7 +669,7 @@ Register and rotate machine (client_credentials) principals
 Usage: temper admin machine [OPTIONS] <COMMAND>
 
 Commands:
-  provision      Register a machine principal: creates its agent profile, emitters, gating-team membership, and the reach you specify. Run this BEFORE the machine's first call
+  provision      Register a machine principal: creates its agent profile, emitters, and the reach you specify — no other team membership. Run this BEFORE the machine's first call
   rebind         Point a fresh client id at an existing agent profile, preserving its authorship history. Revokes the old client unless --no-revoke-old
   issue          Issue a temper-minted machine credential (client_credentials on temper's own AS). temper mints the client id and a secret; the secret is printed once
   rotate-secret  Rotate a temper-issued secret. The previous secret stays valid for a grace window
@@ -689,7 +689,7 @@ Options:
 #### `temper admin machine provision`
 
 ```text
-Register a machine principal: creates its agent profile, emitters, gating-team membership, and the reach you specify. Run this BEFORE the machine's first call
+Register a machine principal: creates its agent profile, emitters, and the reach you specify — no other team membership. Run this BEFORE the machine's first call
 
 Usage: temper admin machine provision [OPTIONS] --client-id <CLIENT_ID> --label <LABEL>
 

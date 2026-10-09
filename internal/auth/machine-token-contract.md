@@ -216,7 +216,7 @@ sum removed the routing drift (#384) and the shared ladder removed the construct
       (`20260720000110_repoint_predicates.sql`) those rails are ONE authoritative state in
       one table: `has_system_access` reads `kb_principal_standing`. No access_mode, no
       gating-team membership. Every mint door BIRTHS THE PRINCIPAL `denied`
-      (`machine_registration_service.rs:270-280`) — including a machine minted by an admin —
+      (`machine_registration_service::{provision, issue}`) — including a machine minted by an admin —
       so registration alone never clears this gate. Admission is a separate operator act:
       `temper admin access approve <profile-id>`. Authoring into a cogmap still needs an
       explicit write grant.

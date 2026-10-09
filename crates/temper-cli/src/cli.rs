@@ -1774,8 +1774,8 @@ pub enum AdminErasureAction {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum AdminMachineAction {
-    /// Register a machine principal: creates its agent profile, emitters, gating-team
-    /// membership, and the reach you specify. Run this BEFORE the machine's first call.
+    /// Register a machine principal: creates its agent profile, emitters, and the reach you
+    /// specify — no other team membership. Run this BEFORE the machine's first call.
     Provision {
         /// The IdP client id (Auth0 M2M application client id)
         #[arg(long = "client-id")]
@@ -2191,7 +2191,7 @@ pub enum AdminAccessAction {
         /// Profile ID (UUID) to reactivate
         profile: String,
     },
-    /// Converge every auto-join team's roster to the standing-approved population
+    /// Converge every auto-join team's roster to the standing-approved humans (never machines)
     ///
     /// Repairs an instance that drifted while enrollment lived only on the request-review
     /// door: profiles approved out-of-band were absent from the `everyone` pool. Prints one
