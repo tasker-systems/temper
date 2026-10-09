@@ -1,9 +1,9 @@
-//! The erasure family's wire shapes — principal erasure, resource erasure, and the block-history
-//! scrub: the doors' requests and answers, and the ledger fragments both carry.
+//! The erasure family's wire shapes — principal erasure, resource erasure, the block-history
+//! scrub and the field scrub: the doors' requests and answers, and the ledger fragments they carry.
 //!
 //! These are temper-core's because they are wire types (every wire type lives here, so every
 //! client can name them without depending on the server crates). `temper_substrate::payloads`
-//! re-exports the four the ledger's event payloads embed, the way `temper_substrate::ids`
+//! re-exports the ones the ledger's event payloads embed, the way `temper_substrate::ids`
 //! re-exports the id newtypes.
 
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,8 @@ pub struct RedactedEventFields {
     pub paths: Vec<String>,
 }
 
+// The erasure and block history scrub doors answer in this enum. The ledger records refusals in
+// `RecordedRefusalReason`, which carries every value here and the field scrub's.
 /// The closed refusal vocabulary for `resource_erasure_refused` (resource erasure spec D5, D11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
@@ -61,6 +63,73 @@ pub enum ResourceErasureRefusalReason {
     AlreadyErased,
 }
 
+/// The refusal vocabulary the field scrub's doors answer with (field-grain scrub spec S4). Its own
+/// type, not new values of [`ResourceErasureRefusalReason`]: those doors' clients parse that enum,
+/// and a value they never saw would strand them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum FieldScrubRefusalReason {
+    /// A cogmap's telos/charter resource, as for the erasure.
+    CharterResource,
+    /// The resource is already erased: there is nothing left to scrub.
+    AlreadyErased,
+    /// The owner's ledger already names the text of one of the field scrub's sentinels. Writing
+    /// it could only make replay diverge, so the field scrub records this and changes nothing.
+    SentinelCollision,
+    /// In keep mode, the latest event carrying the title or origin URI disagrees with the
+    /// resource's projected value: an inversion inside a transaction, which the field scrub
+    /// refuses rather than resolves. Nothing changes.
+    ProjectionDisagrees,
+}
+
+/// The closed refusal vocabulary `resource_erasure_refused` records (resource erasure spec D5,
+/// D11; field-grain scrub spec S4): every value either act family's doors answer with. A ledger
+/// vocabulary only; no door answers in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum RecordedRefusalReason {
+    /// Retired: no path raises it. The value stays registered because removing one from a closed
+    /// vocabulary is not additive.
+    Unauthorized,
+    /// A cogmap's telos/charter resource: map-grain erasure is its own act, named in `detail`.
+    CharterResource,
+    /// Retired: no path raises it. The value stays registered because removing one from a closed
+    /// vocabulary is not additive.
+    IngestInFlight,
+    /// The resource is already erased. Nothing in the projection changes and no second
+    /// `resource_erased` is minted.
+    AlreadyErased,
+    /// The field scrub's sentinel text is already on the owner's ledger.
+    SentinelCollision,
+    /// The field scrub found the latest title or origin URI event disagreeing with the projection.
+    ProjectionDisagrees,
+}
+
+impl From<ResourceErasureRefusalReason> for RecordedRefusalReason {
+    fn from(reason: ResourceErasureRefusalReason) -> Self {
+        match reason {
+            ResourceErasureRefusalReason::Unauthorized => Self::Unauthorized,
+            ResourceErasureRefusalReason::CharterResource => Self::CharterResource,
+            ResourceErasureRefusalReason::IngestInFlight => Self::IngestInFlight,
+            ResourceErasureRefusalReason::AlreadyErased => Self::AlreadyErased,
+        }
+    }
+}
+
+impl From<FieldScrubRefusalReason> for RecordedRefusalReason {
+    fn from(reason: FieldScrubRefusalReason) -> Self {
+        match reason {
+            FieldScrubRefusalReason::CharterResource => Self::CharterResource,
+            FieldScrubRefusalReason::AlreadyErased => Self::AlreadyErased,
+            FieldScrubRefusalReason::SentinelCollision => Self::SentinelCollision,
+            FieldScrubRefusalReason::ProjectionDisagrees => Self::ProjectionDisagrees,
+        }
+    }
+}
+
 /// Which act a `resource_erasure_refused` event refuses. Absent on the payload reads as
 /// [`ErasureAct::Erasure`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +141,39 @@ pub enum ErasureAct {
     Erasure,
     /// The block history scrub.
     BlockHistoryScrub,
+    /// The field scrub: a resource's title, origin URI or property history redacted while the
+    /// resource survives.
+    FieldScrub,
+}
+
+/// The field a field scrub names. A field, never a value: no request or record carries the text
+/// being scrubbed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ScrubFieldKind {
+    /// The resource's title.
+    Title,
+    /// The resource's origin URI.
+    OriginUri,
+    /// One resource-owned property family, named by its handle.
+    Property,
+    /// Every resource-owned property family's prior history. Never cleared.
+    Properties,
+}
+
+/// The field a field scrub acted on. `family` is the handle of a property family: the id of the
+/// first event that still carries the family's key text on the resource. It is present only for
+/// [`ScrubFieldKind::Property`]. Keyed `family`, never `event_id`: no trail join-key shape rides
+/// an admin payload (resource erasure D1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct ScrubbedField {
+    pub kind: ScrubFieldKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<EventId>,
 }
 
 /// An edge touching the resource whose asserting principal is not the resource's owner.

@@ -45,7 +45,7 @@ use temper_substrate::content::{prepare_block_from_chunks, IncomingChunk};
 use temper_substrate::events::{fire, EventContext, SeedAction};
 use temper_substrate::ids::{BlockId, ContextId, ProfileId, ResourceId};
 use temper_substrate::payloads::{
-    self, AnchorRef, AnchorTable, BlockHistoryScrubbed, ErasureAct, ResourceErasureRefusalReason,
+    self, AnchorRef, AnchorTable, BlockHistoryScrubbed, ErasureAct, RecordedRefusalReason,
     ResourceErasureRefused,
 };
 use temper_substrate::replay;
@@ -1309,7 +1309,7 @@ async fn the_refusals_raise_and_the_refusal_names_the_act(pool: PgPool) {
         serde_json::from_value(payload_of(&pool, refused).await).expect("a ResourceErasureRefused");
     assert_eq!(payload.act, Some(ErasureAct::BlockHistoryScrub));
     assert_eq!(payload.blocks, vec![erased_block, block]);
-    assert_eq!(payload.reason, ResourceErasureRefusalReason::AlreadyErased);
+    assert_eq!(payload.reason, RecordedRefusalReason::AlreadyErased);
     assert_eq!(payload.subject_id, erased.uuid());
 
     // The six-argument call a deployed binary makes still resolves, and writes no act.

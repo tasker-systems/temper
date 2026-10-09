@@ -67,6 +67,7 @@ fn payload_schemas_match_snapshots() {
     check::<p::ResourceErased>("resource_erased");
     check::<p::ResourceErasureRefused>("resource_erasure_refused");
     check::<p::BlockHistoryScrubbed>("block_history_scrubbed");
+    check::<p::ResourceScrubbed>("resource_scrubbed");
 }
 
 /// `EventContext` serializes an act's authorship, and nothing else, into `kb_events.metadata`.
@@ -152,7 +153,7 @@ fn the_migration_literal_matches_the_committed_fixture() {
             "20261003000210_block_history_scrub.sql",
             &[
                 "block_history_scrubbed.v1.schema.json",
-                "resource_erasure_refused.v1.schema.json",
+                SUPERSEDED, // re-registered by the field scrub's v2 migration (Task 3)
             ],
         ),
         (

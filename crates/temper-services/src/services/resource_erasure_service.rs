@@ -627,6 +627,7 @@ pub(super) async fn refuse(
     let recorded_act: Option<&str> = match act {
         ErasureAct::Erasure => None,
         ErasureAct::BlockHistoryScrub => Some("block_history_scrub"),
+        ErasureAct::FieldScrub => Some("field_scrub"),
     };
     let recorded_blocks: Option<&[Uuid]> = (!blocks.is_empty()).then_some(blocks);
 

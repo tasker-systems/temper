@@ -333,6 +333,8 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::ResourceErased
             | EventKind::ResourceErasureRefused
             | EventKind::BlockHistoryScrubbed
+            // The field scrub's record carries paths and a family handle, never content.
+            | EventKind::ResourceScrubbed
             // A delivery disposition (S2 chunk C) carries reasoning and confidence, not content:
             // no blocks, no chunks, no sidecar. A received webhook (S2 chunk B) carries the
             // remote's verbatim body — foreign content temper did not author and does not chunk.
@@ -1053,6 +1055,12 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     "block_history_scrubbed event {id} names no subject_ids"
                 );
                 apply_block_history_scrub(&mut tx, id).await?;
+            }
+            // The field scrub (field-grain scrub spec S8). Replay has no projection for it yet, and
+            // a walk that skipped it would leave its redaction rows unprojected while reporting
+            // success, so it refuses instead.
+            EventKind::ResourceScrubbed => {
+                anyhow::bail!("replay: resource_scrubbed event {id} has no replay projection yet")
             }
             // A received webhook (S2 chunk B) touches no _project_* cognition half: intake appends
             // the event and projects delivery rows in Rust, in the same transaction. Without this

@@ -156,6 +156,10 @@ pub enum EventKind {
     /// The block history scrub (spec 2026-09-28, D11): prior revisions and non-current chunks of
     /// a live resource's blocks emptied. Same `admin` / NULL-anchored posture.
     BlockHistoryScrubbed,
+    /// The field scrub (field-grain scrub spec S4): every prior value of a surviving resource's
+    /// title, origin URI or property family redacted, and today's value too when cleared. Same
+    /// `admin` / NULL-anchored posture.
+    ResourceScrubbed,
     /// An auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.2).
     /// Append-only — fires `citation_audited`, projected by `_project_citation_audited` into
     /// `kb_citation_audits` with no supersession. Registered permissive (NULL `payload_schema`),
@@ -246,6 +250,7 @@ impl EventKind {
             EventKind::ResourceErased => "resource_erased",
             EventKind::ResourceErasureRefused => "resource_erasure_refused",
             EventKind::BlockHistoryScrubbed => "block_history_scrubbed",
+            EventKind::ResourceScrubbed => "resource_scrubbed",
             EventKind::CitationAudited => "citation_audited",
             EventKind::BlobCommitted => "blob_committed",
             EventKind::ResourceReblocked => "resource_reblocked",
@@ -305,6 +310,7 @@ impl EventKind {
             "resource_erased" => EventKind::ResourceErased,
             "resource_erasure_refused" => EventKind::ResourceErasureRefused,
             "block_history_scrubbed" => EventKind::BlockHistoryScrubbed,
+            "resource_scrubbed" => EventKind::ResourceScrubbed,
             "citation_audited" => EventKind::CitationAudited,
             "blob_committed" => EventKind::BlobCommitted,
             "resource_reblocked" => EventKind::ResourceReblocked,
