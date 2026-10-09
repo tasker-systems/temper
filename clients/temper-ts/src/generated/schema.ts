@@ -2103,7 +2103,7 @@ export interface paths {
          * Count the invitations addressed to you
          * @description The counting half of `list_mine`, for callers that want the number and not the rows —
          *     principally `temper warmup`, which runs at every session start. Its sibling returns each
-         *     invitation's redemption `token`; this returns an integer, so no bearer capability moves
+         *     invitation's redemption `token`; this returns an integer, so no redemption token moves
          *     across the wire to answer "how many?".
          *
          *     `team_slug` folds a second question into the same round trip: *of those, how many are to
@@ -7491,7 +7491,7 @@ export interface components {
          *
          *     **This exists so that asking "how many?" does not require being handed them.** The
          *     sibling `GET /api/invitations/mine` returns [`InviteeInvitation`] rows, each carrying a
-         *     redemption `token` — a bearer capability. It is legitimately the caller's to see, but
+         *     redemption `token` — a private capability. It is legitimately the caller's to see, but
          *     `temper warmup` runs from the `SessionStart` hook and needs only `.len()`, so every
          *     session on every machine was moving credential material across the wire to produce an
          *     integer. Reporting how many things await someone does not require transferring them.
@@ -10443,8 +10443,9 @@ export interface components {
         /**
          * @description A pending or resolved invitation to join a team.
          *
-         *     **The flow is not link-based, and never has been.** `invited_email` is a
-         *     *correlator*, matched at sign-in — nothing mails a token-bearing URL, and no
+         *     **The flow is not link-based, and never has been.** `invited_email` is matched
+         *     against the invitee's verified email, and only that account may redeem the
+         *     token — nothing mails a token-bearing URL, and no
          *     UI route redeems one. The invitee authenticates, reads their own pending
          *     invitations from `GET /api/invitations/mine` (which returns `token`, since it
          *     is legitimately theirs), and redeems it through `POST /api/invitations/accept`

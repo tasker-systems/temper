@@ -823,7 +823,7 @@ async fn warmup_hints_the_newcomer_who_has_no_system_access_yet(pool: sqlx::PgPo
 ///
 /// The primer used to obtain `"invitations": n` by calling `GET /api/invitations/mine`, receiving
 /// every row — team, role, expiry, and each invitation's redemption `token` — and keeping only
-/// `.len()`. The token is a bearer capability. It is legitimately the caller's to hold, which is
+/// `.len()`. The token is a private capability. It is legitimately the caller's to hold, which is
 /// exactly why the leak is easy to wave through: nothing is disclosed to a stranger. What is wrong
 /// is that credential material moved at all, on a command the `SessionStart` hook runs at the
 /// start of every session on every machine, to produce an integer.

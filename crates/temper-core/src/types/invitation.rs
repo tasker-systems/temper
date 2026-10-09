@@ -22,8 +22,9 @@ pub enum InvitationStatus {
 
 /// A pending or resolved invitation to join a team.
 ///
-/// **The flow is not link-based, and never has been.** `invited_email` is a
-/// *correlator*, matched at sign-in — nothing mails a token-bearing URL, and no
+/// **The flow is not link-based, and never has been.** `invited_email` is matched
+/// against the invitee's verified email, and only that account may redeem the
+/// token — nothing mails a token-bearing URL, and no
 /// UI route redeems one. The invitee authenticates, reads their own pending
 /// invitations from `GET /api/invitations/mine` (which returns `token`, since it
 /// is legitimately theirs), and redeems it through `POST /api/invitations/accept`
@@ -95,7 +96,7 @@ pub struct InviteeInvitation {
 ///
 /// **This exists so that asking "how many?" does not require being handed them.** The
 /// sibling `GET /api/invitations/mine` returns [`InviteeInvitation`] rows, each carrying a
-/// redemption `token` — a bearer capability. It is legitimately the caller's to see, but
+/// redemption `token` — a private capability. It is legitimately the caller's to see, but
 /// `temper warmup` runs from the `SessionStart` hook and needs only `.len()`, so every
 /// session on every machine was moving credential material across the wire to produce an
 /// integer. Reporting how many things await someone does not require transferring them.

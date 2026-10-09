@@ -111,24 +111,142 @@ pub async fn create_invitation(
 }
 
 /// Redeem an invitation token for `caller`, **only if `caller` is the person invited**: the
-/// invitation must reach them through `addressed_to`, the same predicate that lists it in their
-/// inbox (a verified email exactly one profile owns). The token locates the invitation; it is not
-/// the authority. A forwarded or leaked token redeems for nobody else, and a machine principal,
-/// which holds no verified email, is never an invitee. Idempotent for the member it admitted.
-/// Expiry is checked lazily here and flips the row to `expired`.
+/// invitation must reach them through `vw_invitee_invitations`, the same predicate that lists it in
+/// their inbox (a verified email exactly one profile owns). The token locates the invitation; it is
+/// not the authority. A forwarded or leaked token redeems for nobody else, and a machine principal,
+/// which holds no verified email, is never an invitee.
+///
+/// The claim and the membership are one statement, and every condition is re-checked against the
+/// row it locks, so a revoke, a decline or a second accept racing this one cannot land between the
+/// check and the write. When nothing is claimed, the answer is read from the row as it now stands:
+/// revoked, declined, expired (by the database clock, and flipped to `expired`), a team that no
+/// longer exists, or — for a live pending invitation — not the caller's (403, naming no address).
+/// An already-accepted invitation answers 200 to a caller already on the team, 409 to anyone else.
 pub async fn accept_invitation(
     pool: &PgPool,
     caller: ProfileId,
     token: &str,
 ) -> ApiResult<AcceptInvitationResponse> {
-    let inv = sqlx::query_as!(
-        TeamInvitation,
+    let claimed = sqlx::query!(
         r#"
-        SELECT id, team_id, invited_email, invited_by_profile_id,
-               role AS "role: TeamRole", token,
-               status AS "status: InvitationStatus", expires_at, created, revoked_at
-          FROM kb_team_invitations
-         WHERE token = $1
+        WITH claimed AS (
+            UPDATE kb_team_invitations i
+               SET status = 'accepted'
+             WHERE i.token = $1
+               AND i.status = 'pending'
+               AND i.revoked_at IS NULL
+               AND i.expires_at > now()
+               AND EXISTS (SELECT 1 FROM vw_invitee_invitations v
+                            WHERE v.id = i.id AND v.invitee_profile_id = $2)
+            RETURNING i.team_id, i.role
+        ), joined AS (
+            INSERT INTO kb_team_members (team_id, profile_id, role)
+            SELECT team_id, $2, role FROM claimed
+            ON CONFLICT (team_id, profile_id) DO NOTHING
+        )
+        SELECT c.team_id AS "team_id!", c.role AS "role!: TeamRole", t.slug AS "slug!"
+          FROM claimed c JOIN kb_teams t ON t.id = c.team_id
+        "#,
+        token,
+        *caller,
+    )
+    .fetch_optional(pool)
+    .await?;
+    if let Some(row) = claimed {
+        return Ok(AcceptInvitationResponse {
+            team_id: row.team_id,
+            team_slug: row.slug,
+            role: row.role,
+        });
+    }
+
+    let inv = unclaimed(pool, token).await?;
+    match inv.status {
+        InvitationStatus::Accepted => match role_on_team(pool, inv.team_id, caller).await? {
+            Some(role) => Ok(AcceptInvitationResponse {
+                team_id: inv.team_id,
+                team_slug: inv.slug,
+                role,
+            }),
+            None => Err(ApiError::Conflict(
+                "invitation already redeemed".to_string(),
+            )),
+        },
+        InvitationStatus::Declined => {
+            Err(ApiError::BadRequest("invitation was declined".to_string()))
+        }
+        InvitationStatus::Expired => {
+            Err(ApiError::BadRequest("invitation has expired".to_string()))
+        }
+        InvitationStatus::Pending => {
+            pending_refusal(pool, &inv).await?;
+            Err(ApiError::BadRequest("invitation has expired".to_string()))
+        }
+    }
+}
+
+/// Decline an invitation, **only as the person invited** (`vw_invitee_invitations`, as for
+/// accept): a token holder who is not the invitee cannot spend someone else's invitation. One
+/// guarded statement, as for accept. Idempotent if already declined; declining an accepted
+/// invitation is a `BadRequest`. An expired invitation is already spent, so declining one changes
+/// nothing (a pending row past its expiry is flipped to `expired`, as accept does).
+pub async fn decline_invitation(pool: &PgPool, caller: ProfileId, token: &str) -> ApiResult<()> {
+    let declined = sqlx::query_scalar!(
+        r#"
+        UPDATE kb_team_invitations i
+           SET status = 'declined'
+         WHERE i.token = $1
+           AND i.status = 'pending'
+           AND i.revoked_at IS NULL
+           AND i.expires_at > now()
+           AND EXISTS (SELECT 1 FROM vw_invitee_invitations v
+                        WHERE v.id = i.id AND v.invitee_profile_id = $2)
+        RETURNING i.id
+        "#,
+        token,
+        *caller,
+    )
+    .fetch_optional(pool)
+    .await?;
+    if declined.is_some() {
+        return Ok(());
+    }
+
+    let inv = unclaimed(pool, token).await?;
+    match inv.status {
+        InvitationStatus::Declined | InvitationStatus::Expired => Ok(()),
+        InvitationStatus::Accepted => Err(ApiError::BadRequest(
+            "invitation was already accepted".to_string(),
+        )),
+        InvitationStatus::Pending => pending_refusal(pool, &inv).await,
+    }
+}
+
+/// An invitation the guarded claim did not take, as it stands now.
+struct Unclaimed {
+    id: Uuid,
+    team_id: Uuid,
+    slug: String,
+    status: InvitationStatus,
+    expired: bool,
+    team_active: bool,
+}
+
+/// Read the invitation a claim did not take, answering 404 for an unknown token and 400 for a
+/// revoked one. Revocation is authoritative and orthogonal to status (a revoked invite keeps
+/// status = 'pending'), so it is answered before any status. Expiry is the database's clock, the
+/// one the claim used.
+async fn unclaimed(pool: &PgPool, token: &str) -> ApiResult<Unclaimed> {
+    let row = sqlx::query!(
+        r#"
+        SELECT i.id, i.team_id, t.slug,
+               i.status AS "status: InvitationStatus",
+               i.revoked_at IS NOT NULL AS "revoked!",
+               i.expires_at <= now() AS "expired!",
+               t.is_active AS "team_active!"
+          FROM kb_team_invitations i
+          JOIN kb_teams t ON t.id = i.team_id
+         WHERE i.token = $1
         "#,
         token,
     )
@@ -137,158 +255,43 @@ pub async fn accept_invitation(
     .ok_or_else(|| {
         ApiError::NotFound("invitation not found, already used, or expired".to_string())
     })?;
-
-    // Revocation is authoritative and orthogonal to status (a revoked invite keeps
-    // status = 'pending'), so it is checked before the status match.
-    if inv.revoked_at.is_some() {
+    if row.revoked {
         return Err(ApiError::BadRequest("invitation was revoked".to_string()));
     }
+    Ok(Unclaimed {
+        id: row.id,
+        team_id: row.team_id,
+        slug: row.slug,
+        status: row.status,
+        expired: row.expired,
+        team_active: row.team_active,
+    })
+}
 
-    let team_slug = sqlx::query_scalar!("SELECT slug FROM kb_teams WHERE id = $1", inv.team_id)
-        .fetch_one(pool)
+/// Why a still-pending invitation was not claimed. Past its expiry it is flipped to `expired` and
+/// this returns `Ok` (the caller words the answer: accept refuses, decline is a no-op). A team that
+/// no longer exists is its own answer. Otherwise the caller is not the invitee: 403, naming no
+/// address — the holder learns only that the invitation is not theirs.
+async fn pending_refusal(pool: &PgPool, inv: &Unclaimed) -> ApiResult<()> {
+    if inv.expired {
+        sqlx::query!(
+            "UPDATE kb_team_invitations SET status = 'expired' WHERE id = $1 AND status = 'pending'",
+            inv.id,
+        )
+        .execute(pool)
         .await?;
-
-    match inv.status {
-        InvitationStatus::Accepted => {
-            // Idempotent iff caller is already the member.
-            match role_on_team(pool, inv.team_id, caller).await? {
-                Some(role) => Ok(AcceptInvitationResponse {
-                    team_id: inv.team_id,
-                    team_slug,
-                    role,
-                }),
-                None => Err(ApiError::Conflict(
-                    "invitation already redeemed".to_string(),
-                )),
-            }
-        }
-        InvitationStatus::Declined => {
-            Err(ApiError::BadRequest("invitation was declined".to_string()))
-        }
-        InvitationStatus::Expired => {
-            Err(ApiError::BadRequest("invitation has expired".to_string()))
-        }
-        InvitationStatus::Pending => {
-            if inv.expires_at < chrono::Utc::now() {
-                sqlx::query!(
-                    "UPDATE kb_team_invitations SET status = 'expired' WHERE id = $1",
-                    inv.id,
-                )
-                .execute(pool)
-                .await?;
-                return Err(ApiError::BadRequest("invitation has expired".to_string()));
-            }
-            if !addressed_to(pool, inv.id, caller).await? {
-                return Err(not_the_invitee());
-            }
-
-            let mut tx = pool.begin().await?;
-            sqlx::query!(
-                r#"
-                INSERT INTO kb_team_members (team_id, profile_id, role)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (team_id, profile_id) DO NOTHING
-                "#,
-                inv.team_id,
-                *caller,
-                inv.role as TeamRole,
-            )
-            .execute(&mut *tx)
-            .await?;
-            sqlx::query!(
-                "UPDATE kb_team_invitations SET status = 'accepted' WHERE id = $1",
-                inv.id,
-            )
-            .execute(&mut *tx)
-            .await?;
-            tx.commit().await?;
-
-            Ok(AcceptInvitationResponse {
-                team_id: inv.team_id,
-                team_slug,
-                role: inv.role,
-            })
-        }
+        return Ok(());
     }
-}
-
-/// Decline an invitation, **only as the person invited** (`addressed_to`, as for accept): a
-/// token holder who is not the invitee cannot spend someone else's invitation. Idempotent if
-/// already declined; declining an accepted invitation is a `BadRequest`. An expired invitation is
-/// already spent, so declining one changes nothing (a pending row past its expiry is flipped to
-/// `expired`, as accept does).
-pub async fn decline_invitation(pool: &PgPool, caller: ProfileId, token: &str) -> ApiResult<()> {
-    let row = sqlx::query!(
-        r#"SELECT id, status AS "status: InvitationStatus", expires_at, revoked_at
-             FROM kb_team_invitations WHERE token = $1"#,
-        token,
-    )
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| {
-        ApiError::NotFound("invitation not found, already used, or expired".to_string())
-    })?;
-
-    // Revocation is authoritative and orthogonal to status (a revoked invite keeps
-    // status = 'pending'), so it is checked before the status match.
-    if row.revoked_at.is_some() {
-        return Err(ApiError::BadRequest("invitation was revoked".to_string()));
+    if !inv.team_active {
+        return Err(ApiError::BadRequest(
+            "the team this invitation is for no longer exists".to_string(),
+        ));
     }
-
-    match row.status {
-        InvitationStatus::Declined => Ok(()),
-        InvitationStatus::Accepted => Err(ApiError::BadRequest(
-            "invitation was already accepted".to_string(),
-        )),
-        InvitationStatus::Expired => Ok(()),
-        InvitationStatus::Pending if row.expires_at < chrono::Utc::now() => {
-            sqlx::query!(
-                "UPDATE kb_team_invitations SET status = 'expired' WHERE id = $1",
-                row.id,
-            )
-            .execute(pool)
-            .await?;
-            Ok(())
-        }
-        InvitationStatus::Pending => {
-            if !addressed_to(pool, row.id, caller).await? {
-                return Err(not_the_invitee());
-            }
-            sqlx::query!(
-                "UPDATE kb_team_invitations SET status = 'declined' WHERE id = $1",
-                row.id,
-            )
-            .execute(pool)
-            .await?;
-            Ok(())
-        }
-    }
-}
-
-/// Is this pending, live invitation addressed to `profile`? Read from `vw_invitee_invitations`,
-/// the one statement of "what is waiting on me", so that redeeming an invitation and seeing it in
-/// your inbox cannot disagree about who it is for.
-async fn addressed_to(pool: &PgPool, invitation: Uuid, profile: ProfileId) -> ApiResult<bool> {
-    let addressed = sqlx::query_scalar!(
-        r#"SELECT EXISTS(
-             SELECT 1 FROM vw_invitee_invitations
-              WHERE id = $1 AND invitee_profile_id = $2) AS "addressed!: bool""#,
-        invitation,
-        *profile,
-    )
-    .fetch_one(pool)
-    .await?;
-    Ok(addressed)
-}
-
-/// The refusal for a token held by someone other than the invitee. Names no address: the
-/// holder learns only that the invitation is not theirs.
-fn not_the_invitee() -> ApiError {
-    ApiError::ForbiddenDetail(
+    Err(ApiError::ForbiddenDetail(
         "this invitation is addressed to someone else; it can only be used from the account \
          whose verified email it was sent to"
             .to_string(),
-    )
+    ))
 }
 
 /// Revoke (withdraw) a pending invitation — the inviting team's counterpart to the invitee's
@@ -420,7 +423,7 @@ pub async fn list_for_profile(
 /// The same set [`list_for_profile`] returns, counted in the database instead of in the client.
 /// That is the whole point: `temper warmup` runs from the `SessionStart` hook and wants an
 /// integer, and the rows it was fetching to get one each carry a redemption `token`. Counting
-/// here means no bearer capability crosses the wire to answer "how many?".
+/// here means no redemption token crosses the wire to answer "how many?".
 ///
 /// Both read `vw_invitee_invitations`, so the five clauses that decide what "waiting on me"
 /// means are stated once. A second inline copy would not fail loudly when it drifted — it would
@@ -1333,6 +1336,8 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn accept_by_someone_other_than_the_invitee_is_refused(pool: PgPool) {
         let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("i@e.com")).await;
         let stranger = mk_profile(&pool, "stranger").await;
         add_auth_email(&pool, stranger, "stranger-uid", Some("stranger@e.com")).await;
         let inv = invite(&pool, team_id, owner, "i@e.com").await;
@@ -1388,6 +1393,8 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn decline_by_someone_other_than_the_invitee_is_refused(pool: PgPool) {
         let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("i@e.com")).await;
         let stranger = mk_profile(&pool, "stranger").await;
         add_auth_email(&pool, stranger, "stranger-uid", Some("stranger@e.com")).await;
         let inv = invite(&pool, team_id, owner, "i@e.com").await;
@@ -1423,11 +1430,13 @@ mod tests {
         );
     }
 
-    /// Declining an expired invitation changes nothing: it is already spent.
+    /// Declining an expired invitation changes nothing: it is already spent. The first call meets
+    /// a pending row past its expiry (flipped to `expired`), the second an `expired` row.
     #[sqlx::test(migrations = "../../migrations")]
     async fn declining_an_expired_invitation_leaves_it_expired(pool: PgPool) {
         let (team_id, owner) = seed_team_with_owner(&pool).await;
-        let stranger = mk_profile(&pool, "stranger").await;
+        let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("lapsed@e.com")).await;
         seed_invite(&pool, team_id, "lapsed@e.com", owner, "pending", -1).await;
         let token: String = sqlx::query_scalar(
             "SELECT token FROM kb_team_invitations WHERE invited_email = 'lapsed@e.com'",
@@ -1436,9 +1445,11 @@ mod tests {
         .await
         .unwrap();
 
-        decline_invitation(&pool, stranger, &token)
-            .await
-            .expect("declining a spent invitation is a no-op");
+        for _ in 0..2 {
+            decline_invitation(&pool, invitee, &token)
+                .await
+                .expect("declining a spent invitation is a no-op");
+        }
         let status: String =
             sqlx::query_scalar("SELECT status::text FROM kb_team_invitations WHERE token = $1")
                 .bind(&token)
@@ -1446,5 +1457,29 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(status, "expired");
+    }
+
+    /// The real invitee to a team that has since been deleted is told so, not told the
+    /// invitation belongs to someone else, and joins nothing.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn accepting_for_a_deleted_team_says_so(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("i@e.com")).await;
+        let inv = invite(&pool, team_id, owner, "i@e.com").await;
+        sqlx::query("UPDATE kb_teams SET is_active = false WHERE id = $1")
+            .bind(team_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let err = accept_invitation(&pool, invitee, &inv.token)
+            .await
+            .expect_err("a deleted team admits nobody");
+        assert!(
+            matches!(&err, ApiError::BadRequest(m) if m.contains("no longer exists")),
+            "got {err:?}"
+        );
+        assert_eq!(role_on_team(&pool, team_id, invitee).await.unwrap(), None);
     }
 }

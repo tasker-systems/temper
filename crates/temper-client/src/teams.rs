@@ -230,7 +230,7 @@ impl<'a> TeamsClient<'a> {
     ///
     /// [`Self::list_my_invitations`] returns each invitation's redemption `token`; this returns
     /// integers. Callers that only need the number — `temper warmup`, which runs at every
-    /// session start — take this one so no bearer capability crosses the wire to produce a count.
+    /// session start — take this one so no redemption token crosses the wire to produce a count.
     ///
     /// `team_slug` asks, in the same round trip, how many of them are to that team.
     /// `None` in, `matching: None` out: not asking and being told none are different answers.

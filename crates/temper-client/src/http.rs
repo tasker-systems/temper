@@ -217,7 +217,7 @@ impl fmt::Debug for HttpClient {
 /// Constructed inside [`HttpClient::send`] from method and path parameters.
 ///
 /// **The path is redacted before it is rendered.** This comment used to claim the type "never
-/// contains sensitive data (tokens, bodies)" — it did: `accept_invitation` puts a bearer capability
+/// contains sensitive data (tokens, bodies)" — it did: `accept_invitation` puts a private capability
 /// token in the URL path (`teams.rs`), and this `Display` is a span attribute that now leaves the
 /// process for a telemetry vendor. `temper_core::redact::redact_path` is the one line of defence
 /// until goal `019f99dd-dc9c-79f1-947c-e61bde2148a9` builds the real registry; bodies are still never

@@ -40,14 +40,18 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
   exactly one profile owns, matched case-blind). Anyone else gets `403` with a message that names no
   address, and the invitation stays pending. A machine principal holds no verified email, so it is
   never an invitee. Declining an expired invitation is now a no-op: it stays `expired` rather than
-  becoming `declined`. The OpenAPI operations grow the 403 response; shapes are otherwise unchanged.
-  Who observes: anyone redeeming a token not addressed to them, and invitees whose email is
-  unverified or shared with another verified profile (they cannot redeem until that is resolved).
-  User-visible: a 403 where a forwarded or mistyped invitation used to work. Release relevance:
-  additive (the 403 response), behavioral (who may redeem).
+  becoming `declined`. An invitation to a team since deleted answers `400` ("no longer exists") and
+  joins nothing, where accept used to join the deleted team. The check and the write are now one
+  statement, so a revoke racing an accept can no longer admit the member. The OpenAPI operations
+  grow the 403 response; shapes are otherwise unchanged. Who observes: anyone redeeming a token not
+  addressed to them, including `temper team join` / `temper team decline` callers; invitees whose
+  email is unverified, or verified by more than one profile, cannot redeem (the documented
+  token-sharing fallback no longer works). User-visible: a 403 where a forwarded or mistyped
+  invitation used to work. Release relevance: additive (the 403 response), behavioral (who may
+  redeem, deleted teams).
 pr: self
 classes: additive, behavioral
-surfaces: http, clients
+surfaces: http, clients, cli-stdout
 status: signal-only
 - **`POST /api/teams` refuses the `personal-` slug prefix; a personal team is identified by `kb_teams.personal_of`**
   The personal-team trigger joined every new profile as owner of whatever team held

@@ -70,9 +70,10 @@ temper team invite acme-eng newcomer@acme.com --role member
 This creates a pending invitation and prints it back — **including a `token`**.
 Two things are worth understanding:
 
-- **No email is sent.** Temper doesn't run a mailer. The `invited_email` is a
-  *correlator*, not a delivery address — it's how the invitation finds its way
-  to the right profile once that profile exists.
+- **No email is sent.** Temper doesn't run a mailer. The `invited_email` is not a
+  delivery address — it's how the invitation finds its way to the right profile once
+  that profile exists, and it decides who may redeem: only the account whose verified
+  email it is. The token on its own admits nobody else.
 - **Signing in is self-serve.** With OAuth/SAML, the newcomer just signs in and
   a profile is provisioned automatically. They don't need the token handed to
   them.
@@ -91,8 +92,8 @@ read — as distinct from `0`, which means an admin read an empty queue.
 
 > **This closes the loop only for people who have already signed in.** A brand-new human
 > still has to be told once, out of band — the invitation can only resolve to a profile that
-> exists. That is the same reason the `invited_email` is a correlator: nothing here is
-> outbound delivery.
+> exists. That is the same reason the `invited_email` is matched rather than mailed: nothing
+> here is outbound delivery.
 
 They can also ask directly, at any time:
 

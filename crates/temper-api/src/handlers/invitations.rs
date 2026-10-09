@@ -143,7 +143,7 @@ pub async fn list_mine(
 ///
 /// The counting half of `list_mine`, for callers that want the number and not the rows —
 /// principally `temper warmup`, which runs at every session start. Its sibling returns each
-/// invitation's redemption `token`; this returns an integer, so no bearer capability moves
+/// invitation's redemption `token`; this returns an integer, so no redemption token moves
 /// across the wire to answer "how many?".
 ///
 /// `team_slug` folds a second question into the same round trip: *of those, how many are to
