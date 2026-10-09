@@ -1622,12 +1622,11 @@ impl DbBackend {
     ///
     /// 1. A transaction-scoped advisory lock keyed on `src` (`goal_patch:<src>`), so goal patches on
     ///    one resource SERIALIZE: two concurrent patches would otherwise each read the same current
-    ///    goal edge and each assert their own goal — two live goal edges on one resource. An
-    ///    advisory lock, not a row lock on `src`: an ordinary update of `src` takes `src`'s row
-    ///    `FOR NO KEY UPDATE` at its TAIL (the title projector, the body-hash recompute), after
-    ///    locking child rows a goal patch may also want, so a goal patch holding that row lock up
-    ///    front would deadlock with it. Only goal patches take this lock, and it conflicts with no
-    ///    row lock.
+    ///    goal edge and each assert their own goal — two live goal edges on one resource. The
+    ///    update's own lock on `src`'s row (`FOR NO KEY UPDATE` at the head of
+    ///    `update_resource_in_tx`) comes too late for this: the patch reads the current goal edges
+    ///    in step 2, before the update runs. Only goal patches take this lock, and it conflicts
+    ///    with no row lock.
     /// 2. Then, `FOR KEY SHARE` in id order, the goal rows: the targets of `src`'s current goal
     ///    edges (read now, after step 1, so no other goal patch can change them; another door can
     ///    still assert an edge meanwhile, which the fold's own lock-and-recheck covers), and, for a set,
@@ -2907,9 +2906,8 @@ impl Backend for DbBackend {
         // for the commit, or waits on the act having written nothing and then reads its outcome:
         // the target clause reads a new goal erased and refuses the whole update;
         // `fold_goal_edges` reads the current goal's edge already folded and skips it. The source's
-        // own row is NOT re-locked here: the update's projectors take it `FOR NO KEY UPDATE` at
-        // their tail, after child rows, and an up-front row lock would deadlock with another
-        // update of this resource.
+        // own row comes next: `update_resource_in_tx` takes it `FOR NO KEY UPDATE` at its head,
+        // before any child row, so two updates of this resource serialize there.
         if let Some(patch) = &cmd.goal {
             if let Err(refusal) = self.lock_goal_rows(&mut tx, new_id, patch).await {
                 return Err(write_floor::rollback_with(tx, refusal).await);

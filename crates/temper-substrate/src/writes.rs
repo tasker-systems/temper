@@ -568,6 +568,22 @@ pub async fn update_resource_in_tx(
     ctx: EventContext,
     defer: bool,
 ) -> Result<()> {
+    // R's row FIRST, `FOR NO KEY UPDATE`, before any event locks a row R owns. The projectors
+    // otherwise lock rows in the order the update's events fire, which depends on what it
+    // carries: a body takes R's row (the body-hash recompute) before the property rows, a title
+    // takes the property rows before R's row, and every unset fires before every set. Two updates
+    // of one resource could then each hold a row the other wants next (`40P01`). Taken here, they
+    // serialize on R and never reach a second row out of order. `NO KEY UPDATE` conflicts with
+    // neither the write floor's `FOR KEY SHARE` nor an FK check's, so only another update of R
+    // (and the erasure act's `FOR UPDATE`, which already waits on the floor) waits on it.
+    // Witnesses: tests/update_lock_order.rs.
+    sqlx::query_scalar!(
+        "SELECT id FROM kb_resources WHERE id = $1 FOR NO KEY UPDATE",
+        p.resource.uuid()
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+
     // A whole-body write (body set, no `content_block`) is the CLI/UI default: the new text IS
     // the resource's entire body. On a multi-block resource — the shape every multi-section
     // document lands in under the blocking policy — the whole body REPLACES the partition: the
