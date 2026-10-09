@@ -167,6 +167,8 @@ signed assertion carries as verified, and refreshes the stored address from it a
 That verified address decides who may redeem a team invitation and which existing profile a new
 sign-in joins. If people can edit the attribute themselves in your IdP (some directories allow
 self-service edits to secondary profile fields), they can claim an address that is not theirs.
+Temper also treats addresses differing only in ASCII letter case as one address; if your mail
+host gives `Bob@corp` and `bob@corp` to different people, they will be treated as the same person.
 
 ## Rotate the IdP's signing certificate
 

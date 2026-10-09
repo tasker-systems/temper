@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(DISTINCT profile_id) AS \"n!\"\n             FROM kb_profile_auth_links\n            WHERE lower(email COLLATE \"C\") = lower($1 COLLATE \"C\")\n              AND email_verified",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5338f247bd099541c7ddc9c9beaa3122e697417801915d07369bd62b078fb1ba"
+}

@@ -340,10 +340,14 @@ async fn refresh_link_verification(
 /// and the profile is returned. Returns `None` otherwise (caller falls through to
 /// new-profile creation).
 ///
-/// The address matches **case-blind**, as invitations match it (`vw_invitee_invitations`): an
-/// exact-case match was a second profile for anyone whose providers disagreed on case
-/// (`Alice@x.com` vs `alice@x.com`), and two verified profiles on one address address nobody.
-/// An exact-case link is preferred, then the oldest, so the choice is deterministic.
+/// The address matches **case-blind over ASCII letters only**: an exact-case match was a second
+/// profile for anyone whose providers disagreed on case (`Alice@x.com` vs `alice@x.com`), and two
+/// verified profiles on one address address nobody (`vw_invitee_invitations`). The fold is pinned
+/// to the `C` collation because this match LINKS an identity to an existing profile: the database
+/// collation's `lower()` also folds look-alikes (U+212A KELVIN SIGN to `k`), and a linking match
+/// must never treat a different address as the same one. An exact-case link is preferred, then the
+/// oldest, so the choice is deterministic; if more than one profile holds the address, a warning
+/// says so (no address in it), since an operator has duplicates to merge.
 async fn reconcile_by_email(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Option<Profile>> {
     if claims.email_verified != Some(true) {
         // `external_user_id` — the raw OAuth `sub` on the human path — is deliberately NOT emitted.
@@ -364,7 +368,7 @@ async fn reconcile_by_email(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Opt
             SELECT id, profile_id, auth_provider, auth_provider_user_id, email, email_verified,
                    is_default, linked_at
               FROM kb_profile_auth_links
-             WHERE lower(email) = lower($1)
+             WHERE lower(email COLLATE "C") = lower($1 COLLATE "C")
                AND email_verified
              ORDER BY (email = $1) DESC, linked_at, id
              LIMIT 1
@@ -377,6 +381,23 @@ async fn reconcile_by_email(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Opt
     let Some(existing) = reconciled_link else {
         return Ok(None);
     };
+
+    let holders = sqlx::query_scalar!(
+        r#"SELECT count(DISTINCT profile_id) AS "n!"
+             FROM kb_profile_auth_links
+            WHERE lower(email COLLATE "C") = lower($1 COLLATE "C")
+              AND email_verified"#,
+        &claims.email,
+    )
+    .fetch_one(pool)
+    .await?;
+    if holders > 1 {
+        tracing::warn!(
+            provider = %claims.provider,
+            profiles = holders,
+            "verified email held by more than one profile; linked to the exact-case or oldest holder"
+        );
+    }
 
     create_link_for_existing_profile(pool, existing.profile_id, claims).await?;
 
@@ -906,6 +927,106 @@ mod tests {
         assert_ne!(
             profile_a.id, profile_b.id,
             "a verified sign-in must not attach to a profile whose stored email is unverified"
+        );
+    }
+
+    fn human(provider: &str, uid: &str, email: &str, verified: bool) -> AuthClaims {
+        AuthClaims {
+            principal_kind: PrincipalKind::Human,
+            provider: provider.to_string(),
+            external_user_id: uid.to_string(),
+            email: email.to_string(),
+            email_verified: Some(verified),
+            exp: 9_999_999_999,
+            iat: 1_000_000_000,
+        }
+    }
+
+    /// The case-blind match must not widen the unverified-capture guard: a stored UNVERIFIED link
+    /// at a case variant captures no verified sign-in.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn unverified_case_variant_link_does_not_capture_verified_signin(pool: PgPool) {
+        let a = resolve_from_claims(
+            &pool,
+            &human("provider_a", "cv-a", "Stored-CV@example.com", false),
+        )
+        .await
+        .unwrap();
+        let b = resolve_from_claims(
+            &pool,
+            &human("provider_b", "cv-b", "stored-cv@example.com", true),
+        )
+        .await
+        .unwrap();
+        assert_ne!(a.id, b.id);
+    }
+
+    /// A look-alike is a different address: U+212A KELVIN SIGN, which the database collation's
+    /// `lower()` folds to `k`, must not link to the `k` address.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_look_alike_address_does_not_link(pool: PgPool) {
+        let a = resolve_from_claims(
+            &pool,
+            &human("provider_a", "la-a", "kate@example.com", true),
+        )
+        .await
+        .unwrap();
+        let b = resolve_from_claims(
+            &pool,
+            &human("provider_b", "la-b", "\u{212A}ate@example.com", true),
+        )
+        .await
+        .unwrap();
+        assert_ne!(a.id, b.id, "a look-alike address is not the same address");
+    }
+
+    /// Legacy duplicates: two profiles already hold case variants of one verified address. A
+    /// sign-in links to the exact-case holder when there is one, else to the oldest.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_shared_address_links_to_the_exact_case_then_the_oldest_holder(pool: PgPool) {
+        let older = resolve_from_claims(
+            &pool,
+            &human("provider_a", "dup-a", "Dup@example.com", true),
+        )
+        .await
+        .unwrap();
+        // A second profile on a case variant, as legacy data could hold it: inserted directly,
+        // since sign-in no longer creates one.
+        let newer_id = Uuid::now_v7();
+        sqlx::query(
+            "INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, 'dup-newer', 'n')",
+        )
+        .bind(newer_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO kb_profile_auth_links \
+               (id, profile_id, auth_provider, auth_provider_user_id, email, email_verified, is_default, linked_at) \
+             VALUES ($1, $2, 'provider_b', 'dup-b', 'dup@example.com', true, true, now() + interval '1 minute')",
+        )
+        .bind(Uuid::now_v7())
+        .bind(newer_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let exact = resolve_from_claims(
+            &pool,
+            &human("provider_c", "dup-c", "dup@example.com", true),
+        )
+        .await
+        .unwrap();
+        assert_eq!(exact.id, newer_id, "the exact-case holder wins");
+        let other = resolve_from_claims(
+            &pool,
+            &human("provider_d", "dup-d", "DUP@example.com", true),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            other.id, older.id,
+            "with no exact-case holder, the oldest wins"
         );
     }
 
