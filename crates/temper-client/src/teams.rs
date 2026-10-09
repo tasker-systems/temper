@@ -56,7 +56,8 @@ impl<'a> TeamsClient<'a> {
             .await
     }
 
-    /// Add (or update) a member on a team.
+    /// Add a member to a team. A profile already on the team is a 409; change its role with
+    /// [`Self::change_role`].
     pub async fn add_member(
         &self,
         team_id: Uuid,
