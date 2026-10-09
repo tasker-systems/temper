@@ -827,3 +827,44 @@ async fn a_drifted_candidate_declines_drift(pool: PgPool) {
     );
     assert_eq!(receipt.summary.declined, 1);
 }
+
+/// (i) A candidate held past the write-side lock bound (an erasure act's `FOR UPDATE` on its row)
+/// gets the BUSY receipt sentence, never the internal-error one: its transaction rolled back with
+/// nothing applied, as a `RESOURCE_BUSY` door answer says. The batch continues.
+///
+/// FAILS IF `row_error` misses a bound hit the floor has already typed `TemperError::ResourceBusy`
+/// (it did: it matched only a raw `55P03` in the error chain). Found by the second code review of
+/// the lock-bound branch.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_candidate_busy_past_the_lock_bound_gets_the_busy_receipt(pool: PgPool) {
+    let (owner, context, entity) = seed_profile_with_context(&pool, "owner@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(owner));
+    let held = fire_block_resource(&pool, owner, entity, context, "held", BODY_A_B).await;
+
+    let mut act = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM kb_resources WHERE id = $1 FOR UPDATE")
+        .bind(held)
+        .execute(&mut *act)
+        .await
+        .unwrap();
+    let receipt = backend
+        .reblock_resources(reblock_cmd(ReblockScope::Context(context), false, 10, None))
+        .await
+        .expect("a busy row never aborts the batch")
+        .value;
+    act.rollback().await.unwrap();
+
+    let row = receipt
+        .outcomes
+        .iter()
+        .find(|r| r.resource == held)
+        .expect("the held candidate has a row");
+    assert_eq!(
+        row.outcome,
+        ReblockOutcome::Error {
+            message: "the resource was busy and nothing was applied to it; retry it".to_owned()
+        },
+        "the busy row says so, got {:?}",
+        row.outcome
+    );
+}

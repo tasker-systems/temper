@@ -15,7 +15,16 @@
 -- source the plan read as exclusive (recorded "deleted") can gain a citer before (9e) keeps it.
 -- The act detects exactly that after (9e) and raises 'remote source <id> gained a citer during
 -- the act'; the service classifies it retryable, like a raced edge fold, and the retry's plan
--- names the source shared. The record is never committed with a kept source called deleted.
+-- names the source shared. The inverse is reachable too: two acts on resources that share a URL
+-- each plan it shared, and the second's (9e), after the first commits, finds no citer and deletes
+-- it. That raises 'remote source <id> lost its citers during the act' (witness:
+-- two_acts_sharing_a_url_never_record_a_deleted_source_as_kept). Either way the record is never
+-- committed calling a kept source deleted or a deleted one kept.
+--
+-- Step (9e) also takes those rows together, NOWAIT, retrying the set, so the act never holds
+-- one while it waits for another: locked one at a time, a write citing an earlier URL waited on
+-- an act stalled on a later one (witness:
+-- a_citer_of_one_url_does_not_wait_while_the_act_waits_on_another).
 --
 -- Both bodies are their live definitions (pg_get_functiondef after 20261015100010), changed only
 -- as marked. resource_erasure_execute keeps its SET clauses (search_path, lock_timeout = 0).
@@ -406,26 +415,44 @@ BEGIN
     --      Delete, scoped and locked. A captured original that nothing cites any more is deleted:
     --      replay of the redacted payloads never mints it. One that another resource's block
     --      still cites stays, and the survey names it by id (D8). Only the captured originals
-    --      are considered — the act never deletes a remote source it did not orphan. Each one
-    --      is locked FOR UPDATE in its own statement, and "does anything still cite it?" is
-    --      asked in a SEPARATE, later statement. This is the act's only lock on them
+    --      are considered — the act never deletes a remote source it did not orphan. They are
+    --      locked FOR UPDATE first, and "does anything still cite it?" is asked of each in a
+    --      SEPARATE, later statement. This is the act's only lock on them
     --      (20261015100020: an earlier lock at the act's head made writes citing the same URL in
     --      any tenant wait out the whole act), so a source the plan read as exclusive can gain a
     --      citer before this point; the lock-then-check keeps it, and resource_erasure_execute
     --      raises the race for a retry. Under READ COMMITTED each statement of this VOLATILE
     --      function reads a fresh snapshot, and a concurrent citer's _upsert_remote_source holds
-    --      the row's lock (ON CONFLICT DO UPDATE) until it commits. So the lock waits for that
+    --      the row's lock (ON CONFLICT DO UPDATE) until it commits. So the lock waits (retrying, below) for that
     --      citer, and the existence check that follows sees its committed provenance row and
     --      keeps the source. A single `DELETE … WHERE NOT EXISTS (…)` evaluates its subquery
     --      against the statement's own snapshot, taken before the lock wait, and would delete a
     --      row a citer committed during that wait. A citer that arrives after the lock waits on
-    --      it; if the row is deleted, its upsert inserts the URL as a fresh row. Ids are locked
-    --      in uuid order, so two acts whose resources share originals take those locks in one
-    --      order and cannot deadlock on them.
+    --      it, for the act's remaining steps; if the row is deleted, its upsert inserts the URL
+    --      as a fresh row. NOWAIT never waits while holding, so two acts whose resources share
+    --      originals cannot deadlock on them.
+    --      The lock takes EVERY captured original at once, NOWAIT, in a subtransaction, and
+    --      retries the whole set after a short sleep when any one is held (20261015100020). The
+    --      rows are shared across tenants: locked one at a time, the act held each to commit
+    --      while it waited for the next, so a write citing an earlier URL, in any tenant, waited
+    --      on the act and, past the write-side lock bound, answered 503 (found by the security
+    --      review of that branch). A failed NOWAIT rolls the subtransaction back, releasing what
+    --      it had locked, so the act holds none of these rows while it waits. It still waits for
+    --      as long as a citer holds one, as it always did.
+    LOOP
+        BEGIN
+            PERFORM 1 FROM kb_remote_sources r
+             WHERE r.id = ANY(v_orig_sources)
+             ORDER BY r.id
+               FOR UPDATE NOWAIT;
+            EXIT;
+        EXCEPTION WHEN lock_not_available THEN
+            PERFORM pg_sleep(0.05);
+        END;
+    END LOOP;
     FOR v_source IN
         SELECT DISTINCT s.id FROM unnest(v_orig_sources) AS s(id) ORDER BY s.id
     LOOP
-        PERFORM 1 FROM kb_remote_sources r WHERE r.id = v_source FOR UPDATE;
         IF NOT EXISTS (SELECT 1 FROM kb_block_provenance q
                         WHERE q.source_kind = 'remote' AND q.source_id = v_source) THEN
             DELETE FROM kb_remote_sources r WHERE r.id = v_source;
@@ -474,6 +501,7 @@ DECLARE
     v_fields  jsonb;
     v_payload jsonb;
     v_exclusive uuid[];
+    v_shared    uuid[];
 BEGIN
     IF p_resource IS NULL THEN
         RAISE EXCEPTION 'resource_erasure_execute: p_resource is required';
@@ -619,6 +647,14 @@ BEGIN
                SELECT 1 FROM jsonb_array_elements(v_plan->'remainder') rem
                 WHERE rem->>'target' = 'kb_remote_sources.id'
                   AND rem->>'outcome' LIKE 'shared remote source ' || o1.source_id::text || ';%');
+    -- And the ones the plan's remainder names shared, which the record says are kept.
+    SELECT coalesce(array_agg(DISTINCT o1.source_id), '{}')
+      INTO v_shared
+      FROM _resource_erasure_remote_originals(p_resource) o1
+     WHERE EXISTS (
+               SELECT 1 FROM jsonb_array_elements(v_plan->'remainder') rem
+                WHERE rem->>'target' = 'kb_remote_sources.id'
+                  AND rem->>'outcome' LIKE 'shared remote source ' || o1.source_id::text || ';%');
 
     -- ── The ledger redaction (D3, D4; 20261009100000), derived NOW, before the fold events
     --    below exist and before the body's step 9 rewrites the projection: the same function the
@@ -738,6 +774,16 @@ BEGIN
     IF v_id IS NOT NULL THEN
         RAISE EXCEPTION 'resource_erasure_execute: remote source % gained a citer during the act', v_id;
     END IF;
+    -- The inverse: one the plan named shared that (9e) deleted. Its other citer was a resource
+    -- whose own erasure committed after this plan read it (two acts on resources sharing a URL),
+    -- so the record would call a deleted source kept. Raise; the retry's plan sees it exclusive.
+    SELECT s.id INTO v_id
+      FROM unnest(v_shared) AS s(id)
+     WHERE NOT EXISTS (SELECT 1 FROM kb_remote_sources rs WHERE rs.id = s.id)
+     ORDER BY s.id LIMIT 1;
+    IF v_id IS NOT NULL THEN
+        RAISE EXCEPTION 'resource_erasure_execute: remote source % lost its citers during the act', v_id;
+    END IF;
 
     UPDATE kb_events e
        SET payload  = r->'payload',
@@ -758,5 +804,5 @@ $function$;
 SELECT declare_migration(
     20261015100020,
     'additive',
-    'CREATE OR REPLACE of resource_erasure_execute and _resource_erasure_apply_redaction with the same signatures, return types and SET clauses. The act no longer locks R''s remote sources before its plan; after step (9e) it raises a retryable race when a source its plan recorded as deleted was kept. The redaction body changes only a comment. No table, column, constraint, grant or COMMENT changes.'
+    'CREATE OR REPLACE of resource_erasure_execute and _resource_erasure_apply_redaction with the same signatures, return types and SET clauses. The act no longer locks R''s remote sources before its plan; after step (9e) it raises a retryable race when a source its plan recorded as deleted was kept, or one it recorded as kept was deleted. The redaction body takes step (9e)''s remote-source locks together, NOWAIT, retrying the set, instead of one at a time. No table, column, constraint, grant or COMMENT changes.'
 );

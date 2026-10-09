@@ -583,7 +583,9 @@ fn classify_execute_raise(rest: &str) -> ActFailure {
         ActFailure::BlobNotInRemainder(Uuid::parse_str(id).ok())
     } else if between(rest, "edge ", " missing or already folded").is_some() {
         ActFailure::Retryable
-    } else if between(rest, "remote source ", " gained a citer during the act").is_some() {
+    } else if between(rest, "remote source ", " gained a citer during the act").is_some()
+        || between(rest, "remote source ", " lost its citers during the act").is_some()
+    {
         // The plan read the source as exclusive; a write elsewhere cited it before step (9e)
         // locked it (20261015100020). The retry's plan names it shared.
         ActFailure::Retryable
@@ -1166,6 +1168,11 @@ mod classifier_tests {
     fn a_remote_source_that_gained_a_citer_is_retryable() {
         let msg = format!(
             "resource_erasure_execute: remote source {} gained a citer during the act",
+            id()
+        );
+        assert_eq!(classify_act_failure(P0001, &msg), ActFailure::Retryable);
+        let msg = format!(
+            "resource_erasure_execute: remote source {} lost its citers during the act",
             id()
         );
         assert_eq!(classify_act_failure(P0001, &msg), ActFailure::Retryable);

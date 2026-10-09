@@ -621,3 +621,94 @@ async fn the_scrub_completes_under_a_session_lock_timeout_and_queues_writers(poo
          waited {waited:?}"
     );
 }
+
+/// **A create citing a URL never deadlocks with an erasure of its goal.** The goal G cites URL.
+/// G's erasure act holds G's act queue and row; a create linking G and citing URL (its external
+/// `origin_uri`) arrives; the act then reaches URL's row at its step (9e). The create must be
+/// waiting on G holding nothing the act needs: it locks the goal before it writes, so the act
+/// takes URL, completes, and the create then reads G erased and is refused.
+///
+/// FAILS IF the create writes (upserting URL's row, held to commit) before it locks the goal: the
+/// act then waits on URL while the create waits on G, a `40P01`. Found by the second code review
+/// of this branch.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_create_citing_a_url_does_not_deadlock_with_an_erasure_of_its_goal(pool: PgPool) {
+    // Server-computed chunks, deferred: no ONNX in this suite.
+    std::env::set_var("TEMPER_ASYNC_EMBED", "1");
+    const URL: &str = "https://example.org/shared-citation";
+    let (backend, profile, _) = seed(&pool, "goalact@example.com").await;
+    let context: uuid::Uuid = sqlx::query_scalar("SELECT id FROM kb_contexts WHERE owner_id = $1")
+        .bind(profile)
+        .fetch_one(&pool)
+        .await
+        .expect("context");
+    let create = |slug: &str, doctype: &str, goal: Option<ResourceId>| CreateResource {
+        idempotency_key: None,
+        slug: slug.to_string(),
+        doctype: doctype.to_string(),
+        home: HomeAnchor::Context(ContextId::from(context)),
+        title: slug.to_string(),
+        body: Some(temper_workflow::operations::BodyUpdate::new(
+            "A paragraph that cites the shared URL.",
+        )),
+        managed_meta: ManagedMeta::default(),
+        open_meta: None,
+        goal,
+        origin_uri: Some(URL.to_string()),
+        chunks_packed: None,
+        content_hash: None,
+        act: ActContext::default(),
+        origin: Surface::ApiHttp,
+    };
+    let goal = backend
+        .create_resource(create("the-goal", "goal", None))
+        .await
+        .expect("create the goal, citing URL")
+        .value
+        .id;
+    let url_row: uuid::Uuid = sqlx::query_scalar("SELECT id FROM kb_remote_sources WHERE uri = $1")
+        .bind(URL)
+        .fetch_one(&pool)
+        .await
+        .expect("URL's remote source row");
+
+    // The goal's erasure act, as far as its locks go: queue, then row.
+    let mut act = pool.begin().await.expect("begin");
+    sqlx::query("SELECT pg_advisory_xact_lock(_resource_act_queue_key($1))")
+        .bind(uuid::Uuid::from(goal))
+        .execute(&mut *act)
+        .await
+        .expect("the act's queue");
+    sqlx::query("SELECT 1 FROM kb_resources WHERE id = $1 FOR UPDATE")
+        .bind(uuid::Uuid::from(goal))
+        .execute(&mut *act)
+        .await
+        .expect("the act's row lock");
+
+    let creator = DbBackend::new(pool.clone(), ProfileId::from(profile));
+    let create_linked = create("linked", "research", Some(goal));
+    let created = tokio::spawn(async move { creator.create_resource(create_linked).await });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // The act's step (9e): URL's row. It must not wait on the create.
+    sqlx::query("SELECT set_config('lock_timeout', '3000ms', true)")
+        .execute(&mut *act)
+        .await
+        .expect("bound the probe");
+    let reached = sqlx::query("SELECT 1 FROM kb_remote_sources WHERE id = $1 FOR UPDATE")
+        .bind(url_row)
+        .execute(&mut *act)
+        .await;
+    act.rollback().await.expect("the act ends");
+    let answer = created.await.expect("the create task");
+
+    assert!(
+        reached.is_ok(),
+        "the act took URL's row: the create held nothing it needs: {reached:?}"
+    );
+    assert!(
+        answer.is_ok(),
+        "the create lands once the act's locks are gone, never a deadlock: {:?}",
+        answer.map(|o| o.value.id)
+    );
+}

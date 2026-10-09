@@ -251,7 +251,13 @@ fn row_error<E: Into<anyhow::Error>>(
     e: E,
 ) -> ReblockOutcome {
     let e = e.into();
-    if write_floor::hit_lock_bound(&e) {
+    // A raw `55P03` from the op, or the floor's own answer, which has already typed it.
+    let busy = write_floor::hit_lock_bound(&e)
+        || matches!(
+            e.downcast_ref::<TemperError>(),
+            Some(TemperError::ResourceBusy)
+        );
+    if busy {
         return ReblockOutcome::Error {
             message: ROW_BUSY_MESSAGE.to_owned(),
         };
@@ -2561,7 +2567,7 @@ impl DbBackend {
         let defer = incoming_chunks.is_none()
             && !body.is_empty()
             && crate::services::embed_service::async_embed_enabled();
-        let params = writes::CreateParams {
+        let mut params = writes::CreateParams {
             title: &cmd.title,
             origin_uri: &origin_uri,
             body: &body,
@@ -2595,9 +2601,28 @@ impl DbBackend {
         // back over a resource that had already committed, and a client that re-sent the request
         // minted another (found by this branch's reviews). Now the goal's refusal rolls the create
         // back with it.
+        //
+        // The body is prepared (chunked, embedded inline unless deferred) BEFORE the transaction,
+        // so nothing it locks is held through an embed. Inside it, the GOAL comes first: its act
+        // queue and `FOR KEY SHARE` (the edge's target clause) before the create writes anything.
+        // Taken after, the create would hold rows an erasure of the goal needs (a remote source
+        // it cites, which the act takes at its step (9e)) while waiting on the act's lock on the
+        // goal: a deadlock (found by the second code review). The update door takes its goal
+        // rows first for the same reason (`lock_goal_rows`). The edge's own clauses re-check it
+        // below, under the lock this already holds.
+        let body = writes::prepare_create_body(&mut params, mode).map_err(api_err)?;
         let mut tx = self.pool.begin().await.map_err(tx_err)?;
+        if let Some(goal) = cmd.goal {
+            if let Err(refusal) = self
+                .check_endpoint_readable_in_tx(&mut tx, "kb_resources", goal.into())
+                .await
+            {
+                return Err(write_floor::rollback_with(tx, refusal).await);
+            }
+        }
         let (new_id, replayed) =
-            match writes::create_resource_in_tx(&mut tx, params, act_ctx.clone(), mode).await {
+            match writes::create_resource_in_tx(&mut tx, params, body, act_ctx.clone(), mode).await
+            {
                 Ok(created) => created,
                 Err(e) => return Err(write_floor::rollback_with(tx, api_err(e)).await),
             };
@@ -2923,7 +2948,7 @@ impl Backend for DbBackend {
         let defer = incoming_chunks.is_none()
             && body.as_deref().is_some_and(|b| !b.is_empty())
             && crate::services::embed_service::async_embed_enabled();
-        let params = writes::UpdateParams {
+        let mut params = writes::UpdateParams {
             resource: ResourceId::from(new_id),
             body: body.as_deref(),
             title: title.as_deref(),
@@ -2939,6 +2964,11 @@ impl Backend for DbBackend {
         // One transaction for the update AND its goal-edge patch, floored at its head (resource
         // erasure spec D13): the floor's `FOR KEY SHARE` holds until commit, so the write either
         // lands before an erasure or is refused after it — never separated from its check.
+        // The body is prepared (chunked, embedded inline unless deferred) BEFORE the transaction
+        // opens: an inline embed held under the floor's act-queue entry and lock, the goal-patch
+        // lock and R's row would make other writers and an erasure act wait that long (found by
+        // both second-round reviews).
+        let prepared = writes::prepare_update_body(&mut params, defer).map_err(api_err)?;
         let mut tx = self.begin_floored(ResourceId::from(new_id)).await?;
         // GOAL ROWS FIRST: a goal patch locks the goal rows it touches before the update and the
         // goal-edge folds lock edge, block and remote-source rows — the NEW goal's (a set), whose
@@ -2958,7 +2988,7 @@ impl Backend for DbBackend {
                 return Err(write_floor::rollback_with(tx, refusal).await);
             }
         }
-        writes::update_resource_in_tx(&mut tx, params, act_ctx.clone(), defer)
+        writes::update_resource_in_tx_prepared(&mut tx, params, prepared, act_ctx.clone())
             .await
             .map_err(write_err)?;
 
