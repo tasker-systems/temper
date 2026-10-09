@@ -88,9 +88,11 @@ jobs:
   # build-cli-binaries.yml already takes; `dtolnay/rust-toolchain@stable` is replaced rather than
   # pinned for the reason given there (a branch has no release cadence to bump a pin against).
   # Their checkouts also drop the persisted git credential: none of them pushes.
-  build-cli-binaries:
-    name: Build CLI Binaries
+  build-cli-darwin-arm64:
+    name: Build CLI (darwin-arm64)
     needs: determine-version
+    # The ceiling for the called workflow. Inside it, only its `attest` job takes `id-token` and
+    # `attestations`; the job that compiles holds `contents: read` alone.
     permissions:
       contents: read
       id-token: write
@@ -98,17 +100,48 @@ jobs:
     uses: ./.github/workflows/build-cli-binaries.yml
     with:
       version: ${{ needs.determine-version.outputs.version }}
+      target: darwin-arm64
+
+  build-cli-linux-x64:
+    name: Build CLI (linux-x64)
+    needs: determine-version
+    # The ceiling for the called workflow. Inside it, only its `attest` job takes `id-token` and
+    # `attestations`; the job that compiles holds `contents: read` alone.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/build-cli-binaries.yml
+    with:
+      version: ${{ needs.determine-version.outputs.version }}
+      target: linux-x64
+
+  build-cli-windows-x64:
+    name: Build CLI (windows-x64)
+    needs: determine-version
+    # The ceiling for the called workflow. Inside it, only its `attest` job takes `id-token` and
+    # `attestations`; the job that compiles holds `contents: read` alone.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/build-cli-binaries.yml
+    with:
+      version: ${{ needs.determine-version.outputs.version }}
+      target: windows-x64
 
   # The Agent Skill bundle a user uploads to Claude (Customize > Skills). Deliberately its OWN job
-  # rather than a step in build-cli-binaries: that workflow is a matrix over three target triples,
-  # and this artifact is architecture-independent, so building it there would produce three
-  # identical zips racing for the same name.
+  # rather than a step in build-cli-binaries.yml: that workflow builds one target triple per call,
+  # and this artifact is architecture-independent.
   #
   # It carries a sha256 sidecar and a provenance attestation like every other published artifact.
   # It does NOT carry a per-file manifest, and correctly so: manifests exist so `install.sh` can
   # verify each extracted file before an atomic swap, and nothing installs this — a human uploads
   # it. `package-skill.sh`'s header explains why its FILE NAME is what keeps it out of the
   # manifest guard's glob in create-github-release.sh.
+  #
+  # It compiles temper-cli, so like build-cli-binaries.yml it is two jobs: this one builds and holds
+  # no signing identity, and attest-skill-bundle below verifies its hashes and signs.
   build-skill-bundle:
     name: Build Skill Bundle
     runs-on: ubuntu-22.04
@@ -116,8 +149,8 @@ jobs:
     needs: determine-version
     permissions:
       contents: read
-      id-token: write
-      attestations: write
+    outputs:
+      sums: ${{ steps.sums.outputs.sums }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -135,7 +168,7 @@ jobs:
       # agree on every PR, so this is belt-and-braces — but a release is the wrong place to
       # discover that someone pushed to a release branch without re-emitting.
       - name: Re-emit the skill projection
-        run: cargo run -q -p temper-cli -- skill emit --path skills/temper-knowledge-base
+        run: cargo run -q --locked -p temper-cli -- skill emit --path skills/temper-knowledge-base
 
       # A release must not quietly ship a bundle that differs from what reviewers saw on main.
       - name: Fail if the emitted tree differs from what is committed
@@ -151,38 +184,77 @@ jobs:
           VERSION: ${{ needs.determine-version.outputs.version }}
         run: bash .github/scripts/release/package-skill.sh dist
 
-      - name: Attest build provenance
-        # SHA-pinned for the same reason as build-cli-binaries.yml's copy: this job holds
-        # `attestations: write`, so anything it runs can obtain a genuine Sigstore signature.
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
-        with:
-          subject-path: dist/temper-skill-v${{ needs.determine-version.outputs.version }}.zip
+      # The hashes leave this job as a job output, which no other job can write: the attest job and
+      # release-summary check their downloads against them (tools/scripts/release/artifact-sums.sh).
+      - name: Record the built files' hashes
+        id: sums
+        run: |
+          {
+            echo 'sums<<SUMS_EOF'
+            bash tools/scripts/release/artifact-sums.sh emit dist
+            echo 'SUMS_EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          # Named `cli-v<version>-skill` so it is picked up by release-summary's existing
-          # `pattern: cli-v<version>-*` download. The prefix is about which download step collects
-          # it, not about what it contains.
           name: cli-v${{ needs.determine-version.outputs.version }}-skill
-          path: |
-            dist/temper-skill-v${{ needs.determine-version.outputs.version }}.zip
-            dist/temper-skill-v${{ needs.determine-version.outputs.version }}.zip.sha256
+          path: dist/
           retention-days: 7
           if-no-files-found: error
+
+  # Holds the signing identity and runs nothing from a dependency tree: downloads the bundle,
+  # refuses it unless it matches build-skill-bundle's hashes, attests it.
+  attest-skill-bundle:
+    name: Attest Skill Bundle
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    needs: [determine-version, build-skill-bundle]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the built bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cli-v${{ needs.determine-version.outputs.version }}-skill
+          path: dist/
+
+      - name: Check the download against the build job's hashes
+        env:
+          SUMS: ${{ needs.build-skill-bundle.outputs.sums }}
+        run: bash tools/scripts/release/artifact-sums.sh verify dist
+
+      - name: Attest build provenance
+        # SHA-pinned: this job holds `attestations: write`, so anything it runs can obtain a
+        # genuine Sigstore signature.
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: dist/temper-skill-v${{ needs.determine-version.outputs.version }}.zip
 
   # THE REGISTRY LANES: BUILD, THEN PUBLISH. Each lane is two jobs. The build job
   # holds no `id-token`: it installs, compiles and packs, and so runs third-party
   # code (install scripts, build backends, build scripts). The publish job holds
   # `id-token: write` and runs nothing from the package trees — it downloads the
   # build job's bytes, checks their name and version, and pushes them. Any step in
-  # a job holding `id-token: write` can mint the OIDC token a registry accepts, so
-  # this is what keeps that token away from dependency code.
+  # a job holding `id-token: write` can mint the OIDC token a registry accepts, and
+  # no registry can tell one job's token from another's in this workflow. So the
+  # rule is run-wide, not per lane: NO job in this run that holds `id-token: write`
+  # compiles or installs from a dependency tree. The CLI and skill-bundle builds
+  # follow it too — they build in jobs with no identity and are signed by separate
+  # attest jobs (build-cli-binaries.yml's `attest`, and attest-skill-bundle here).
   #
   # Every job in the run shares one artifact namespace, so a compromised build job
   # could replace ANOTHER lane's artifact by name. Each build job therefore hashes
-  # its files into a job output, which only it can write, and its publish job
-  # refuses a download that differs (tools/scripts/release/artifact-sums.sh).
+  # its files into a job output, which only it can write, and every job that
+  # consumes an artifact — publish, attest, release-summary — downloads it by exact
+  # name and refuses it if it differs (tools/scripts/release/artifact-sums.sh).
   #
   # What the split does NOT stop: a lane's own compromised build tampering with
   # its bytes before it hashes them. Those are then pushed with provenance. The
@@ -194,9 +266,11 @@ jobs:
   # (+ an optional environment, none set here), never on job name, so the job
   # names below are free to change (RELEASING.md, "Publishing-side auth").
   #
-  # The scripts probe the registry in both stages, so a re-cut tag skips loudly:
-  # the build job uploads nothing (`if-no-files-found: ignore`), and the publish
-  # job's download then finds no artifact. That download is `continue-on-error`
+  # The npm, Ruby and Python scripts probe the registry in both stages, so a
+  # re-cut tag skips loudly: the build job uploads nothing (`if-no-files-found:
+  # ignore`), and the publish job's download then finds no artifact. (The crates
+  # build stage verifies and uploads all seven regardless; its publish stage skips
+  # each one already published.) That download is `continue-on-error`
   # because the script, not the download, is the check: it skips a published
   # version, and fails loudly when a version is unpublished and its file absent.
 
@@ -634,7 +708,7 @@ jobs:
     name: Release Summary
     runs-on: ubuntu-22.04
     timeout-minutes: 5
-    needs: [determine-version, build-cli-binaries, build-skill-bundle, publish-npm-clients, publish-ruby-client, publish-py-client, publish-rust-crates]
+    needs: [determine-version, build-cli-darwin-arm64, build-cli-linux-x64, build-cli-windows-x64, build-skill-bundle, attest-skill-bundle, build-npm-clients, publish-npm-clients, build-ruby-client, publish-ruby-client, build-py-client, publish-py-client, build-rust-crates, publish-rust-crates]
     if: always()
     permissions:
       contents: write
@@ -647,53 +721,76 @@ jobs:
         with:
           persist-credentials: false
 
-      # One download, both producers: the skill bundle uploads under the same
-      # `cli-v<version>-*` artifact-name prefix, so this pattern collects it too.
-      - name: Download release artifacts
-        if: needs.build-cli-binaries.result == 'success' && needs.build-skill-bundle.result == 'success'
+      # By EXACT name, one artifact per producer — never a name pattern. A pattern would collect
+      # any artifact anyone in the run uploaded under a matching name, and every file below ends up
+      # on the Release, then in install.sh's and the homebrew tap's hands.
+      - name: Download the darwin-arm64 CLI
+        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: cli-v${{ needs.determine-version.outputs.version }}-*
-          path: cli-artifacts/
-          merge-multiple: true
+          name: cli-v${{ needs.determine-version.outputs.version }}-darwin-arm64
+          path: downloads/darwin-arm64/
 
+      - name: Download the linux-x64 CLI
+        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cli-v${{ needs.determine-version.outputs.version }}-linux-x64
+          path: downloads/linux-x64/
+
+      - name: Download the windows-x64 CLI
+        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cli-v${{ needs.determine-version.outputs.version }}-windows-x64
+          path: downloads/windows-x64/
+
+      - name: Download the skill bundle
+        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cli-v${{ needs.determine-version.outputs.version }}-skill
+          path: downloads/skill/
+
+      # Each producer's files against the hashes it output — the same binding the registry lanes'
+      # publish jobs apply — then into the one directory create-github-release.sh uploads from.
+      - name: Check every download against its producer's hashes
+        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
+        env:
+          SUMS_DARWIN_ARM64: ${{ needs.build-cli-darwin-arm64.outputs.sums }}
+          SUMS_LINUX_X64: ${{ needs.build-cli-linux-x64.outputs.sums }}
+          SUMS_WINDOWS_X64: ${{ needs.build-cli-windows-x64.outputs.sums }}
+          SUMS_SKILL: ${{ needs.build-skill-bundle.outputs.sums }}
+        run: |
+          set -euo pipefail
+          SUMS="$SUMS_DARWIN_ARM64" bash tools/scripts/release/artifact-sums.sh verify downloads/darwin-arm64
+          SUMS="$SUMS_LINUX_X64"    bash tools/scripts/release/artifact-sums.sh verify downloads/linux-x64
+          SUMS="$SUMS_WINDOWS_X64"  bash tools/scripts/release/artifact-sums.sh verify downloads/windows-x64
+          SUMS="$SUMS_SKILL"        bash tools/scripts/release/artifact-sums.sh verify downloads/skill
+          mkdir -p cli-artifacts
+          mv downloads/darwin-arm64/* downloads/linux-x64/* downloads/windows-x64/* downloads/skill/* cli-artifacts/
+
+      # Every job this one needs, build and attest jobs included, so a failed build reads as the
+      # build that failed rather than as its publish job "skipped".
       - name: Write job summary
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
-          BUILD_RESULT: ${{ needs.build-cli-binaries.result }}
-          SKILL_RESULT: ${{ needs.build-skill-bundle.result }}
-          NPM_RESULT: ${{ needs.publish-npm-clients.result }}
-          RUBY_RESULT: ${{ needs.publish-ruby-client.result }}
-          PY_RESULT: ${{ needs.publish-py-client.result }}
-          RUST_CRATES_RESULT: ${{ needs.publish-rust-crates.result }}
+          NEEDS: ${{ toJSON(needs) }}
         run: |
-          icon_for() {
-            case "$1" in
-              success)   echo "✅" ;;
-              failure)   echo "❌" ;;
-              cancelled) echo "⏹️" ;;
-              skipped)   echo "⏭️" ;;
-              *)         echo "❓" ;;
-            esac
-          }
           {
             echo "## Release v${VERSION}"
             echo ""
-            echo "| Artifact | Result |"
+            echo "| Job | Result |"
             echo "|---|---|"
-            echo "| CLI binaries (darwin-arm64 / linux-x64 / windows-x64) | $(icon_for "$BUILD_RESULT") ${BUILD_RESULT} |"
-            echo "| Agent Skill bundle (temper-skill-v${VERSION}.zip) | $(icon_for "$SKILL_RESULT") ${SKILL_RESULT} |"
-            echo "| npm clients (@tasker-systems/temper-ts, @tasker-systems/temper-telemetry-ts) | $(icon_for "$NPM_RESULT") ${NPM_RESULT} |"
-            echo "| Ruby gem (temper-rb on rubygems.org) | $(icon_for "$RUBY_RESULT") ${RUBY_RESULT} |"
-            echo "| Python client (temperkb-py on pypi.org) | $(icon_for "$PY_RESULT") ${PY_RESULT} |"
-            echo "| Rust client closure (temperkb-* on crates.io) | $(icon_for "$RUST_CRATES_RESULT") ${RUST_CRATES_RESULT} |"
+            printf '%s' "$NEEDS" | jq -r 'to_entries[] | select(.key != "determine-version")
+              | "| \(.key) | \({"success":"✅","failure":"❌","cancelled":"⏹️","skipped":"⏭️"}[.value.result] // "❓") \(.value.result) |"'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Gated on BOTH producers. A release missing the skill bundle would publish silently and
-      # look complete — the same "absence is indistinguishable from never-had-it" failure the
-      # manifest guard inside this script exists to prevent, one artifact over.
+      # Gated on EVERY producer. A release missing the skill bundle, or published while a registry
+      # lane failed, would look complete — the same "absence is indistinguishable from
+      # never-had-it" failure the manifest guard inside this script exists to prevent.
       - name: Create GitHub Release
-        if: needs.build-cli-binaries.result == 'success' && needs.build-skill-bundle.result == 'success' && needs.publish-npm-clients.result == 'success' && needs.publish-ruby-client.result == 'success' && needs.publish-py-client.result == 'success' && needs.publish-rust-crates.result == 'success'
+        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.determine-version.outputs.version }}
@@ -701,7 +798,9 @@ jobs:
         run: ./.github/scripts/release/create-github-release.sh
 
       - name: Fail the job if any producer did not succeed
-        if: needs.build-cli-binaries.result != 'success' || needs.build-skill-bundle.result != 'success' || needs.publish-npm-clients.result != 'success' || needs.publish-ruby-client.result != 'success' || needs.publish-py-client.result != 'success' || needs.publish-rust-crates.result != 'success'
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+        env:
+          NEEDS: ${{ toJSON(needs) }}
         run: |
-          echo "::error::build-cli-binaries: ${{ needs.build-cli-binaries.result }}, build-skill-bundle: ${{ needs.build-skill-bundle.result }}, publish-npm-clients: ${{ needs.publish-npm-clients.result }}, publish-ruby-client: ${{ needs.publish-ruby-client.result }}, publish-py-client: ${{ needs.publish-py-client.result }}, publish-rust-crates: ${{ needs.publish-rust-crates.result }} — release not published."
+          echo "::error::$(printf '%s' "$NEEDS" | jq -r '[to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"] | join(", ")') — release not published."
           exit 1

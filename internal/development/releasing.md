@@ -282,15 +282,15 @@ This must match the version used by `ort` in `crates/temper-ingest/Cargo.toml` �
 
 1. Update `ort` and its `api-XX` feature in `crates/temper-ingest/Cargo.toml`.
 2. Update `ONNX_RUNTIME_VERSION` in `build-cli-binaries.yml`.
-3. **Recompute all three `ort_sha256` matrix values** — see the standing obligation below. This is not optional; the build fails closed without it.
+3. **Recompute all three `ort_sha256` target values** — see the standing obligation below. This is not optional; the build fails closed without it.
 4. Replace the checked-in Linux `.so` in `crates/temper-ingest/lib/x86_64-unknown-linux-gnu/` (this is used by the Vercel `temper-api` deploy).
 5. Cut a new release.
 
-The release workflow downloads the runtime from `github.com/microsoft/onnxruntime/releases` per platform. The four per-platform archives differ in packaging (`.tgz` vs `.zip`) and library name (`libonnxruntime.{dylib,so}` vs `onnxruntime.dll`), all handled in the workflow's matrix.
+The release workflow downloads the runtime from `github.com/microsoft/onnxruntime/releases` per platform. The four per-platform archives differ in packaging (`.tgz` vs `.zip`) and library name (`libonnxruntime.{dylib,so}` vs `onnxruntime.dll`), all handled in the workflow's per-target table.
 
 ## Standing obligation: ONNX Runtime digest pinning
 
-Each matrix target in `.github/workflows/build-cli-binaries.yml` carries an
+Each target in `.github/workflows/build-cli-binaries.yml`'s `select` job carries an
 `ort_sha256` beside its `ort_archive`/`ort_archive_ext`, and the "Download ONNX
 Runtime" step verifies the fetched archive against it before extracting
 anything. The reason is the same `EXPECTED_MODEL_SHA256` doctrine
@@ -332,7 +332,7 @@ for n in onnxruntime-osx-arm64:tgz onnxruntime-linux-x64:tgz onnxruntime-win-x64
 done
 ```
 
-Map each line to the matrix entry whose `ort_archive` matches the name printed
+Map each line to the target entry whose `ort_archive` matches the name printed
 beside it. Getting that mapping wrong fails the build rather than weakening
 it — every target checks its own archive against its own pin.
 
@@ -393,12 +393,13 @@ Be careful with this on a release that's been public for any length of time — 
 
 ### Upgrading to a Windows ARM64 runner / adding platforms
 
-The per-platform matrix entries in `build-cli-binaries.yml` are self-documenting. To add a new target:
+The per-platform target definitions in `build-cli-binaries.yml`'s `select` job are self-documenting. `release.yml` calls that workflow once per target (a matrix job's outputs are last-writer-wins, and each target's file hashes leave its build job as an output). To add a new target:
 
-1. Add a new entry to the `matrix.target` list with `name`, `runner`, `triple`, `ort_archive`, `ort_archive_ext`, `lib_name`, `lib_dest_dir`, `archive_ext`.
-2. Update `install.sh` (or `install.ps1` for a Windows variant) with the new OS/arch detection branch.
-3. Update `docs/playbooks/install-temper.md`'s platform list.
-4. Cut a release to test the new target.
+1. Add a new entry to the `select` job's `targets` table with `name`, `runner`, `triple`, `ort_archive`, `ort_archive_ext`, `ort_sha256`, `lib_name`, `lib_dest_dir`, `archive_ext`, and the name to `workflow_dispatch`'s `target` options.
+2. Add a `build-cli-<name>` job to `release.yml` beside the others, and wire it into `release-summary` (its `needs`, its result row, and its artifact's hash check).
+3. Update `install.sh` (or `install.ps1` for a Windows variant) with the new OS/arch detection branch.
+4. Update `docs/playbooks/install-temper.md`'s platform list.
+5. Cut a release to test the new target.
 
 ## Related files
 
@@ -408,4 +409,4 @@ The per-platform matrix entries in `build-cli-binaries.yml` are self-documenting
 - `temper-artifacts:spikes/2026-07-29-sigstore-crate-evaluation.md` — why the trust root is pinned, and which crate/root
 - [`tools/scripts/release/`](../../tools/scripts/release/) — the shell scripts driving `release-prepare`
 - [`.github/workflows/release.yml`](../../.github/workflows/release.yml) — the tag-driven release workflow
-- [`.github/workflows/build-cli-binaries.yml`](../../.github/workflows/build-cli-binaries.yml) — the reusable build matrix
+- [`.github/workflows/build-cli-binaries.yml`](../../.github/workflows/build-cli-binaries.yml) — the reusable per-target build, and the attest job that signs its output

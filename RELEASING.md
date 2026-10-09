@@ -11,7 +11,7 @@ reaches a running site is a separate, per-target concern — see
 
 A `v*` tag invokes [`.github/workflows/release.yml`](.github/workflows/release.yml):
 
-`determine-version` → `build-cli-binaries` (darwin-arm64 / linux-x64 / windows-x64)
+`determine-version` → `build-cli-darwin-arm64` · `build-cli-linux-x64` · `build-cli-windows-x64` (each a call to `build-cli-binaries.yml`)
 · `build-skill-bundle` · four registry lanes, each a build job then a publish job:
 `publish-npm-clients` (@tasker-systems/temper-ts, @tasker-systems/temper-telemetry-ts
 → registry.npmjs.org) · `publish-ruby-client` (temper-rb → rubygems.org) ·
@@ -24,7 +24,12 @@ Each registry lane's build job (`build-npm-clients`, `build-ruby-client`,
 `build-py-client`, `build-rust-crates`) holds no `id-token`: it installs,
 compiles and packs, which runs third-party code. Its publish job holds
 `id-token: write`, downloads those bytes, checks their name and version, and
-pushes them, running nothing from the package trees. The `release.yml` header
+pushes them, running nothing from the package trees. The rule is run-wide: no
+job in the release run that holds `id-token: write` compiles or installs from a
+dependency tree, so the CLI binaries and the skill bundle are likewise built in
+jobs with no identity and signed by separate attest jobs (`build-cli-binaries.yml`'s
+`attest`, and `attest-skill-bundle`). Every consumer of a build's artifact checks it
+against hashes the producing job emitted as a job output. The `release.yml` header
 over the lanes says why and what the split does not cover.
 
 No Vercel deploy, no schema migration, no production side effects. Releasing and

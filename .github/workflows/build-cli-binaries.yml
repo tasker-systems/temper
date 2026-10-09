@@ -1,5 +1,9 @@
 name: Build CLI Binaries
 
+# ONE TARGET PER CALL. release.yml calls this workflow once per target triple rather than running
+# all three as a matrix, because the build job's file hashes leave it as a JOB OUTPUT (see the
+# attest job), and a matrix job's outputs are last-writer-wins across its legs: three legs cannot
+# each hand their own hashes on. One leg per call makes the output unambiguous.
 on:
   workflow_call:
     inputs:
@@ -7,70 +11,98 @@ on:
         description: 'Version string for artifact naming (without leading v)'
         required: true
         type: string
+      target:
+        description: 'One of: darwin-arm64, linux-x64, windows-x64'
+        required: true
+        type: string
+    outputs:
+      sums:
+        description: "`<sha256>  <file>` for each file in this target's cli-v<version>-<target> artifact"
+        value: ${{ jobs.build.outputs.sums }}
   workflow_dispatch:
     inputs:
       version:
         description: 'Version string for artifact naming'
         required: false
         default: 'dev'
+      target:
+        description: 'Target to build'
+        required: true
+        type: choice
+        options: [darwin-arm64, linux-x64, windows-x64]
 
 env:
   ONNX_RUNTIME_VERSION: '1.24.2'
 
 jobs:
+  # The one target this call builds, as a single-element matrix. The three definitions live here
+  # so a caller names a target and never restates its configuration.
+  select:
+    name: Select target
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - name: Pick the target's definition
+        id: pick
+        env:
+          TARGET: ${{ inputs.target }}
+        # sha256 values are of onnxruntime-<archive>-<ONNX_RUNTIME_VERSION>.<ext>. Bumping
+        # ONNX_RUNTIME_VERSION means recomputing all three — see
+        # internal/development/releasing.md#standing-obligation-onnx-runtime-digest-pinning
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, sys
+          targets = {
+              "darwin-arm64": {"name": "darwin-arm64", "runner": "macos-14", "triple": "aarch64-apple-darwin",
+                               "ort_archive": "onnxruntime-osx-arm64", "ort_archive_ext": "tgz",
+                               "ort_sha256": "0af4fa503e8ea285245b47ee42d0a7461b8156a81270857da0c1d4ecf858abde",
+                               "lib_name": "libonnxruntime.dylib", "lib_dest_dir": "lib", "archive_ext": "tar.gz"},
+              "linux-x64": {"name": "linux-x64", "runner": "ubuntu-22.04", "triple": "x86_64-unknown-linux-gnu",
+                            "ort_archive": "onnxruntime-linux-x64", "ort_archive_ext": "tgz",
+                            "ort_sha256": "43725474ba5663642e17684717946693850e2005efbd724ac72da278fead25e6",
+                            "lib_name": "libonnxruntime.so", "lib_dest_dir": "lib", "archive_ext": "tar.gz"},
+              "windows-x64": {"name": "windows-x64", "runner": "windows-2022", "triple": "x86_64-pc-windows-msvc",
+                              "ort_archive": "onnxruntime-win-x64", "ort_archive_ext": "zip",
+                              "ort_sha256": "8e3e9c826375352e29cb2614fe44f3d7a4b0ff7b8028ad7a456af9d949a7e8b0",
+                              "lib_name": "onnxruntime.dll", "lib_dest_dir": ".", "archive_ext": "zip"},
+          }
+          name = os.environ["TARGET"]
+          if name not in targets:
+              sys.exit(f"unknown target {name!r}; expected one of {sorted(targets)}")
+          print("matrix=" + json.dumps([targets[name]]))
+          PY
+
+  # COMPILES, AND SO HOLDS NO SIGNING IDENTITY. `cargo build` runs every dependency's build script
+  # and proc macro, and in a job holding `id-token: write` any of them could mint an OIDC token —
+  # one a registry's trusted publisher would accept, or one Sigstore would sign arbitrary bytes
+  # with. So this job builds, packs, and hashes its files into a job output; the attest job below
+  # holds the identity and runs none of this code.
   build:
     name: ${{ matrix.target.name }}
+    needs: select
     runs-on: ${{ matrix.target.runner }}
     timeout-minutes: 30
     permissions:
       contents: read
-      id-token: write
-      attestations: write
+    outputs:
+      sums: ${{ steps.sums.outputs.sums }}
     env:
       SQLX_OFFLINE: 'true'
     strategy:
-      fail-fast: false
       matrix:
-        target:
-          - name: darwin-arm64
-            runner: macos-14
-            triple: aarch64-apple-darwin
-            ort_archive: onnxruntime-osx-arm64
-            ort_archive_ext: tgz
-            # sha256 of onnxruntime-osx-arm64-<ONNX_RUNTIME_VERSION>.tgz. Bumping
-            # ONNX_RUNTIME_VERSION means recomputing all three of these — see
-            # internal/development/releasing.md#standing-obligation-onnx-runtime-digest-pinning
-            ort_sha256: 0af4fa503e8ea285245b47ee42d0a7461b8156a81270857da0c1d4ecf858abde
-            lib_name: libonnxruntime.dylib
-            lib_dest_dir: lib
-            archive_ext: tar.gz
-          - name: linux-x64
-            runner: ubuntu-22.04
-            triple: x86_64-unknown-linux-gnu
-            ort_archive: onnxruntime-linux-x64
-            ort_archive_ext: tgz
-            ort_sha256: 43725474ba5663642e17684717946693850e2005efbd724ac72da278fead25e6
-            lib_name: libonnxruntime.so
-            lib_dest_dir: lib
-            archive_ext: tar.gz
-          - name: windows-x64
-            runner: windows-2022
-            triple: x86_64-pc-windows-msvc
-            ort_archive: onnxruntime-win-x64
-            ort_archive_ext: zip
-            ort_sha256: 8e3e9c826375352e29cb2614fe44f3d7a4b0ff7b8028ad7a456af9d949a7e8b0
-            lib_name: onnxruntime.dll
-            lib_dest_dir: .
-            archive_ext: zip
+        target: ${{ fromJSON(needs.select.outputs.matrix) }}
 
     steps:
       - name: Checkout code
-        # SHA-pinned, not tag-pinned: this job holds `id-token: write` and
-        # `attestations: write`, so anything it runs can get a genuine Sigstore
-        # signature over its output. A mutable major-version tag is a repo the
-        # signing key trusts and that someone else can move. Pinning is scoped
-        # to THIS workflow on purpose — repo-wide pinning generates ~20
-        # rubber-stamped bump PRs a year, which is net-negative for security.
+        # SHA-pinned, not tag-pinned: what this job produces is what the attest
+        # job signs, so an action that could alter it is one the signature
+        # vouches for. A mutable major-version tag is a repo that someone else
+        # can move. Pinning is scoped to THIS workflow on purpose — repo-wide
+        # pinning generates ~20 rubber-stamped bump PRs a year, which is
+        # net-negative for security.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The release archive ships the embedding model, which is an LFS blob. Without this the
@@ -92,7 +124,7 @@ jobs:
           # rustup is preinstalled on all three runner images (macos-14,
           # ubuntu-22.04, windows-2022). Used directly rather than
           # `dtolnay/rust-toolchain@stable` because that action resolves a
-          # MUTABLE BRANCH ref inside the job that holds `id-token: write` — and
+          # MUTABLE BRANCH ref inside the job whose output gets signed — and
           # unlike the other actions here it cannot simply be SHA-pinned: a
           # branch has no release cadence, so a pin would have to be bumped
           # blind, forever, with no changelog to read. Replacing it is the only
@@ -198,10 +230,10 @@ jobs:
         # `workflow_dispatch` (default 'dev', no `type:`, no pattern), so
         # `actions: write` alone dispatches it directly, with no tag and no
         # release.yml involved. Expanding it into the run body's TEXT would put
-        # arbitrary code inside the job holding `id-token: write` +
-        # `attestations: write` — the signing job itself. An env var is never
+        # arbitrary code inside the job whose output the attest job signs.
+        # An env var is never
         # re-parsed as script text. `matrix.target.triple` stays inline: it is a
-        # repo-controlled literal from the matrix above, not caller input.
+        # repo-controlled literal from the select job's table, not caller input.
         env:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
@@ -301,14 +333,90 @@ jobs:
           sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
           cat "${ARCHIVE}.sha256"
 
+      # Everything the artifact carries, and nothing else, in one directory: the hash list below
+      # is taken over exactly what is uploaded.
+      - name: Collect the release files
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          mkdir -p dist
+          mv "temper-v${INPUT_VERSION}-${{ matrix.target.triple }}".* dist/
+          ls -la dist
+
+      # The hashes leave this job as a job output, which no other job can write: the attest job and
+      # release-summary check their downloads against them (tools/scripts/release/artifact-sums.sh).
+      - name: Record the built files' hashes
+        id: sums
+        shell: bash
+        run: |
+          {
+            echo 'sums<<SUMS_EOF'
+            bash tools/scripts/release/artifact-sums.sh emit dist
+            echo 'SUMS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        # SHA-pinned (see the checkout step).
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-v${{ inputs.version }}-${{ matrix.target.name }}
+          path: dist/
+          retention-days: 7
+          if-no-files-found: error
+
+  # HOLDS THE SIGNING IDENTITY, AND RUNS NOTHING FROM A DEPENDENCY TREE. It downloads the build
+  # job's artifact, refuses it unless it matches the hashes the build job output, and attests it.
+  #
+  # The attestation must be requested from THIS workflow file: installed clients pin the Fulcio
+  # certificate's SAN to `build-cli-binaries.yml@refs/heads/main` and the signed predicate's entry
+  # workflow to `release-tag.yml` (crates/temper-cli/src/attest.rs). Moving this job to the caller
+  # would make every installed `temper update` reject the release. It runs as the same one-element
+  # matrix as the build job so `subject-path` names the files in exactly the emit step's spelling,
+  # which audit-attest-subject-path.sh compares as text.
+  attest:
+    name: Attest ${{ matrix.target.name }}
+    needs: [select, build]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      matrix:
+        target: ${{ fromJSON(needs.select.outputs.matrix) }}
+    steps:
+      - name: Checkout code
+        # SHA-pinned (see the build job's checkout); only artifact-sums.sh runs from it.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the built files
+        # SHA-pinned (see the build job's checkout).
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cli-v${{ inputs.version }}-${{ matrix.target.name }}
+          path: dist/
+
+      - name: Check the download against the build job's hashes
+        env:
+          SUMS: ${{ needs.build.outputs.sums }}
+        run: bash tools/scripts/release/artifact-sums.sh verify dist
+
+      # Into the workspace root, so the subject paths below read exactly as the emit step names them.
+      - name: Place the verified files
+        run: mv dist/* .
+
       - name: Attest build provenance
-        # SHA-pinned (see the checkout step). `v4` is an ANNOTATED tag, so the
+        # SHA-pinned (see the build job's checkout). `v4` is an ANNOTATED tag, so the
         # tag ref resolves to a tag OBJECT, not a commit — this is the
         # dereferenced commit. Pinning the tag-object sha instead is rejected by
         # Actions at runtime, and it would fail on the release path only.
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
-          # Each matrix target produces exactly one of .tar.gz/.zip (per its
+          # Each target produces exactly one of .tar.gz/.zip (per its
           # archive_ext above), never both. subject-path tolerates a
           # non-matching line in the list — @actions/glob resolves each line
           # independently and only errors if the *combined* match set across
@@ -319,16 +427,3 @@ jobs:
             temper-v${{ inputs.version }}-${{ matrix.target.triple }}.tar.gz
             temper-v${{ inputs.version }}-${{ matrix.target.triple }}.zip
             temper-v${{ inputs.version }}-${{ matrix.target.triple }}.manifest.json
-
-      - name: Upload artifact
-        # SHA-pinned (see the checkout step).
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: cli-v${{ inputs.version }}-${{ matrix.target.name }}
-          path: |
-            temper-v${{ inputs.version }}-*.tar.gz
-            temper-v${{ inputs.version }}-*.zip
-            temper-v${{ inputs.version }}-*.sha256
-            temper-v${{ inputs.version }}-*.manifest.json
-          retention-days: 7
-          if-no-files-found: error
