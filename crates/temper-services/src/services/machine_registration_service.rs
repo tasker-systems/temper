@@ -601,18 +601,34 @@ mod tests {
         client.profile_id
     }
 
-    /// Approval makes a machine eligible by standing, and auto-join (`temper-system` carries
-    /// `auto_join_role = 'watcher'`) must still not enroll it.
+    /// Approval makes a machine eligible by standing, and the committer's auto-join arm must still
+    /// not enroll it. The pool is created before approval and is not the gating team, so only that
+    /// arm could put the machine there.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn an_approved_machine_is_not_auto_joined(pool: PgPool) {
         let admin = seed_admin(&pool).await;
+        let pool_team: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_teams (slug, name, auto_join_role) \
+             VALUES ('everyone', 'Everyone', 'member'::team_role) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("auto-join team");
         let machine = approved_machine(&pool, admin, "approved-agent").await;
         let has_access = sqlx::query_scalar!("SELECT has_system_access($1)", machine)
             .fetch_one(&pool)
             .await
             .expect("has_system_access");
         assert_eq!(has_access, Some(true), "precondition: eligible by standing");
-        assert_eq!(gating_memberships(&pool, machine).await, 0);
+        let joined = sqlx::query_scalar!(
+            "SELECT count(*) FROM kb_team_members WHERE team_id = $1 AND profile_id = $2",
+            pool_team,
+            machine,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+        assert_eq!(joined, Some(0));
     }
 
     /// Creating an auto-join team backfills every eligible profile, and a machine is not one.
@@ -715,6 +731,12 @@ mod tests {
         )
         .await
         .expect("a born-Denied machine may request");
+        // Take `temper-system` out of auto-join, so the approval's own `watcher` insert is the only
+        // thing that could put the machine in the gating team.
+        sqlx::query!("UPDATE kb_teams SET auto_join_role = NULL WHERE slug = 'temper-system'")
+            .execute(&pool)
+            .await
+            .expect("no auto-join on the gating team");
         access_service::review_request(
             &pool,
             &crate::test_support::system_admin_proof_for(&pool, admin.uuid()).await,

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_teams SET auto_join_role = NULL WHERE slug = 'temper-system'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "701a12bc668ec238071e14ea898b3a81e8c4bac37ecee6563e657c16b83cae43"
+}
