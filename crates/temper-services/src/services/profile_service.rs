@@ -971,7 +971,10 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert!(db_folds, "test database no longer folds U+212A; this witness has no bite");
+        assert!(
+            db_folds,
+            "test database no longer folds U+212A; this witness has no bite"
+        );
         let a = resolve_from_claims(
             &pool,
             &human("provider_a", "la-a", "kate@example.com", true),
