@@ -382,6 +382,33 @@ async fn never_swept_is_unscanned_and_swept_clean_is_no(pool: PgPool) {
     );
 }
 
+/// FAILS IF a deriver's unrelated capped finding reads `expired` when R holds no value
+/// at all: nothing of R's could have been lost, and the answer would disclose the deriver's finding.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_derivers_own_capped_finding_is_not_expired_for_a_clean_resource(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
+    let w = world(&pool).await;
+    let r = resource(&pool, &w, "plain", "nothing to find here").await;
+    // 65 distinct values: past the 64 fingerprints a finding keeps, so it reads `truncated`.
+    let roster: String = (0..65)
+        .map(|n| format!("219-45-{:04} ", 1000 + n))
+        .collect();
+    let d1 = resource(&pool, &w, "roster", &roster).await;
+    derives(&pool, &w, d1, r).await;
+    sweep(&pool).await;
+    let capped: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sensitivity.findings \
+          WHERE resource_id = $1 AND fingerprint_state = 'truncated'",
+    )
+    .bind(d1)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(capped > 0, "the fixture plants a capped finding");
+
+    assert_eq!(states(&matches(&pool, r, &[d1]).await), vec!["no"]);
+}
+
 /// FAILS IF, with no finding on R, a disabled detector is waited on: it stops reading, so a deriver
 /// written since would read `unscanned` for good on a deployment that has turned one off.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]

@@ -148,7 +148,8 @@ COMMENT ON FUNCTION sensitivity.resource_covered(uuid, text[]) IS
 --       yes        a fingerprint in common;
 --       expired    some of R's fingerprints are gone (Q50's expiry), capped (`truncated`) or never
 --                  minted (`not_fingerprinted`), or the deriver's are, for a detector R's side
---                  holds (R1). This is permanent, so it outranks `unscanned`: no later sweep can
+--                  holds (R1). Only when R holds a finding: with none, nothing of R's was lost, and
+--                  the deriver's own capped finding is not this survey's to disclose. This is permanent, so it outranks `unscanned`: no later sweep can
 --                  make `no` trustworthy;
 --       unscanned  the sweep has not read all of R or all of the deriver, for the detectors R's
 --                  findings came from; with no finding on R, for every enabled fingerprinting
@@ -167,6 +168,7 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_detectors text[];
+    v_r_holds   boolean;
     v_r_lost    boolean;
     v_r_covered boolean;
 BEGIN
@@ -174,7 +176,8 @@ BEGIN
       INTO v_detectors, v_r_lost
       FROM sensitivity.findings f
      WHERE f.resource_id = p_resource AND sensitivity.countable(f.id);
-    IF v_detectors IS NULL THEN
+    v_r_holds := v_detectors IS NOT NULL;
+    IF NOT v_r_holds THEN
         SELECT array_agg(DISTINCT c.detector_id) INTO v_detectors
           FROM sensitivity.cursors c
           JOIN sensitivity.detectors d ON d.id = c.detector_id
@@ -197,13 +200,13 @@ BEGIN
                       AND NOT EXISTS (SELECT 1 FROM sensitivity.finding_closure c
                                        WHERE c.finding_id = df.id))
                    THEN 'yes'
-               WHEN v_r_lost OR EXISTS (
+               WHEN v_r_lost OR (v_r_holds AND EXISTS (
                    SELECT 1
                      FROM sensitivity.findings df
                     WHERE df.resource_id = x.id AND df.detector_id = ANY (v_detectors)
                       AND df.fingerprint_state <> 'complete' AND sensitivity.countable(df.id)
                       AND NOT EXISTS (SELECT 1 FROM sensitivity.finding_closure c
-                                       WHERE c.finding_id = df.id))
+                                       WHERE c.finding_id = df.id)))
                    THEN 'expired'
                WHEN NOT v_r_covered OR NOT sensitivity.resource_covered(x.id, v_detectors)
                    THEN 'unscanned'
@@ -247,10 +250,22 @@ COMMENT ON FUNCTION sensitivity.block_current_revision_flagged(uuid) IS
 -- ---------------------------------------------------------------------------
 -- Section 5. The doors the survey service calls. Survey-only: no act calls them. Without the
 -- sweep's function each answers as a sweep that read nothing would, so a survey always renders.
+--
+-- Each takes the ids to compare from its caller, so each is a pairwise confirmation oracle over
+-- any two resources: do they share a detected value, has the sweep read them. Two fences hold it:
+--   * the grep gate (sensitivity_schema_unreachable_test) names these two functions too, and
+--     allows them only in the two survey services, which sit behind the system-admin gate;
+--   * EXECUTE is revoked from PUBLIC on all six functions (Section 6). One role migrates and serves
+--     today (Q17), so this changes nothing yet. If roles are ever split, the app role is granted
+--     EXECUTE on these two wrappers and nothing in the schema: they are SECURITY DEFINER, so they
+--     reach the sweep without the role holding USAGE on it (D10: "a REVOKE on the app role does
+--     not break the call").
 -- ---------------------------------------------------------------------------
 CREATE FUNCTION resource_erasure_deriver_fingerprints(p_resource uuid, p_derivers uuid[])
 RETURNS TABLE (deriver_id uuid, state text)
-LANGUAGE plpgsql STABLE AS $$
+LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
 BEGIN
     IF to_regproc('sensitivity.deriver_fingerprint_matches') IS NULL THEN
         RETURN QUERY
@@ -270,7 +285,9 @@ COMMENT ON FUNCTION resource_erasure_deriver_fingerprints(uuid, uuid[]) IS
 
 CREATE FUNCTION block_history_scrub_flagged_blocks(p_resource uuid, p_blocks uuid[])
 RETURNS uuid[]
-LANGUAGE plpgsql STABLE AS $$
+LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
 BEGIN
     IF to_regproc('sensitivity.block_current_revision_flagged') IS NULL THEN
         RETURN '{}'::uuid[];
@@ -286,8 +303,18 @@ $$;
 COMMENT ON FUNCTION block_history_scrub_flagged_blocks(uuid, uuid[]) IS
 'The scrub survey''s warning (D11): the named blocks of the resource, in the order named, whose current revision still holds an open finding (sensitivity.block_current_revision_flagged). Empty when that function is absent. Survey only; the act never calls it.';
 
+-- ---------------------------------------------------------------------------
+-- Section 6. No role reaches these by default (PostgreSQL grants EXECUTE to PUBLIC).
+-- ---------------------------------------------------------------------------
+REVOKE EXECUTE ON FUNCTION sensitivity.countable(uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION sensitivity.resource_covered(uuid, text[]) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION sensitivity.deriver_fingerprint_matches(uuid, uuid[]) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION sensitivity.block_current_revision_flagged(uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION resource_erasure_deriver_fingerprints(uuid, uuid[]) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION block_history_scrub_flagged_blocks(uuid, uuid[]) FROM PUBLIC;
+
 SELECT declare_migration(
     20261012100000,
     'additive',
-    'New functions only; no existing signature, body, table or view changes. In the sensitivity schema: countable, resource_covered, deriver_fingerprint_matches and block_current_revision_flagged (the last two SECURITY DEFINER with search_path set). In public: resource_erasure_deriver_fingerprints and block_history_scrub_flagged_blocks, the doors the erasure and block scrub survey services call. They read stored findings, fingerprints, dispositions and cursors, never the salt, and return ids, states and booleans only. No act calls them: resource_erasure_execute and block_history_scrub_execute read the plans, which are unchanged. Additive: no deployed binary names the sensitivity schema (the grep gate holds it).'
+    'New functions only; no existing signature, body, table or view changes. In the sensitivity schema: countable, resource_covered, deriver_fingerprint_matches and block_current_revision_flagged (the last two SECURITY DEFINER with search_path set). In public: resource_erasure_deriver_fingerprints and block_history_scrub_flagged_blocks (SECURITY DEFINER with search_path set), the doors the erasure and block scrub survey services call. EXECUTE on all six is revoked from PUBLIC; the owning role, which also serves, keeps it. They read stored findings, fingerprints, dispositions and cursors, never the salt, and return ids, states and booleans only. No act calls them: resource_erasure_execute and block_history_scrub_execute read the plans, which are unchanged. Additive: no deployed binary names the sensitivity schema (the grep gate holds it).'
 );
