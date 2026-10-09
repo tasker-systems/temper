@@ -971,11 +971,29 @@ async fn deriver_fingerprints(
     )
     .fetch_all(pool)
     .await?;
+    in_deriver_order(
+        resource,
+        derivers,
+        rows.into_iter().map(|r| (r.deriver_id, r.state)).collect(),
+    )
+}
+
+/// The SQL's `(deriver, state)` rows in `derivers`' order. Only the resource itself goes
+/// unanswered, by design; any other deriver missing, or a state outside the vocabulary, is drift
+/// between the function and this caller, and fails loud.
+fn in_deriver_order(
+    resource: ResourceId,
+    derivers: &[Uuid],
+    rows: Vec<(Uuid, String)>,
+) -> ApiResult<Vec<DeriverFingerprint>> {
     derivers
         .iter()
-        .filter_map(|d| rows.iter().find(|r| r.deriver_id == *d))
-        .map(|r| {
-            let fingerprint_match = match r.state.as_str() {
+        .filter(|d| **d != resource.uuid())
+        .map(|d| {
+            let (_, state) = rows.iter().find(|(id, _)| id == d).ok_or_else(|| {
+                ApiError::Internal(format!("the sweep did not answer for deriver {d}"))
+            })?;
+            let fingerprint_match = match state.as_str() {
                 "yes" => FingerprintMatch::Yes,
                 "no" => FingerprintMatch::No,
                 "unscanned" => FingerprintMatch::Unscanned,
@@ -987,7 +1005,7 @@ async fn deriver_fingerprints(
                 }
             };
             Ok(DeriverFingerprint {
-                deriver: ResourceId::from(r.deriver_id),
+                deriver: ResourceId::from(*d),
                 fingerprint_match,
             })
         })
@@ -995,7 +1013,8 @@ async fn deriver_fingerprints(
 }
 
 /// The remainder the resource's first `resource_erased` record named. A completion pass's record
-/// carries none (D12), so the first is the act that named the derivers.
+/// carries none (D12), so the first is the act that named the derivers. Every husk has one: a
+/// husk without is drift, and fails loud.
 async fn first_record_remainder(
     pool: &PgPool,
     resource: ResourceId,
@@ -1004,14 +1023,19 @@ async fn first_record_remainder(
         r#"SELECT coalesce(e.payload -> 'remainder', '[]'::jsonb) AS "remainder!: serde_json::Value"
              FROM kb_events e
              JOIN kb_event_types t ON t.id = e.event_type_id
-            WHERE t.name = 'resource_erased' AND (e.payload ->> 'subject_id')::uuid = $1
+            WHERE t.name = 'resource_erased' AND e.payload ->> 'subject_id' = $1
             ORDER BY e.id
             LIMIT 1"#,
-        resource.uuid(),
+        resource.uuid().to_string(),
     )
     .fetch_optional(pool)
     .await?
-    .unwrap_or_else(|| serde_json::json!([]));
+    .ok_or_else(|| {
+        ApiError::Internal(format!(
+            "the erased resource {} has no resource_erased record",
+            resource.uuid()
+        ))
+    })?;
     serde_json::from_value(raw)
         .map_err(|e| ApiError::Internal(format!("resource erasure record remainder shape: {e}")))
 }
@@ -1330,6 +1354,29 @@ mod classifier_tests {
             outcome: format!("deriver {} named", id()),
         }];
         assert!(deriver_ids(&drifted).is_err());
+    }
+
+    /// FAILS IF a deriver the sweep did not answer is dropped rather than refused, if the resource
+    /// itself is not the one deriver allowed to go unanswered, or if the answer leaves plan order.
+    #[test]
+    fn every_deriver_but_the_resource_is_answered_in_plan_order() {
+        let r = Uuid::now_v7();
+        let (d1, d2) = (Uuid::now_v7(), Uuid::now_v7());
+        let rows = vec![(d2, "no".to_string()), (d1, "yes".to_string())];
+        let answered =
+            in_deriver_order(ResourceId::from(r), &[d1, r, d2], rows.clone()).expect("answers");
+        assert_eq!(
+            answered
+                .iter()
+                .map(|f| (f.deriver.uuid(), f.fingerprint_match))
+                .collect::<Vec<_>>(),
+            vec![(d1, FingerprintMatch::Yes), (d2, FingerprintMatch::No)]
+        );
+
+        let unanswered = Uuid::now_v7();
+        assert!(in_deriver_order(ResourceId::from(r), &[d1, unanswered], rows.clone()).is_err());
+        let drifted = vec![(d1, "maybe".to_string())];
+        assert!(in_deriver_order(ResourceId::from(r), &[d1], drifted).is_err());
     }
 }
 

@@ -73,6 +73,7 @@ DECLARE
     v_hi_at   timestamptz; v_hi_id uuid;
     v_skipped boolean;
     v_det     text;
+    v_trail   uuid[];
 BEGIN
     IF coalesce(cardinality(p_detectors), 0) = 0 THEN
         RETURN false;
@@ -82,28 +83,31 @@ BEGIN
     LOOP
         v_ledger := v_surface.surface IN ('kb_events.payload', 'kb_events.metadata');
         v_view := 'src_' || replace(v_surface.surface, '.', '__');
+        -- One read of the resource's places per surface, and of its trail scope per call: the
+        -- source views are not all indexable by resource, so each read may scan.
         IF v_ledger THEN
+            IF v_trail IS NULL THEN
+                v_trail := ARRAY(SELECT t.event_id
+                                   FROM public._resource_erasure_trail_scope(p_resource) t
+                                  ORDER BY t.event_id);
+            END IF;
             v_lo_at := NULL;
             v_hi_at := NULL;
-            SELECT t.event_id INTO v_lo_id
-              FROM public._resource_erasure_trail_scope(p_resource) t ORDER BY t.event_id LIMIT 1;
-            SELECT t.event_id INTO v_hi_id
-              FROM public._resource_erasure_trail_scope(p_resource) t ORDER BY t.event_id DESC LIMIT 1;
-            SELECT EXISTS (SELECT 1 FROM public._resource_erasure_trail_scope(p_resource) t
-                             JOIN sensitivity.unscanned_places u
-                               ON u.surface = v_surface.surface AND u.target_id = t.event_id)
+            v_lo_id := v_trail[1];
+            v_hi_id := v_trail[cardinality(v_trail)];
+            SELECT EXISTS (SELECT 1 FROM sensitivity.unscanned_places u
+                            WHERE u.surface = v_surface.surface AND u.target_id = ANY (v_trail))
               INTO v_skipped;
         ELSE
-            EXECUTE format('SELECT order_at, target_id FROM sensitivity.%I WHERE resource_id = $1 '
-                           'ORDER BY coalesce(order_at, ''-infinity''), target_id LIMIT 1', v_view)
-               INTO v_lo_at, v_lo_id USING p_resource;
-            EXECUTE format('SELECT order_at, target_id FROM sensitivity.%I WHERE resource_id = $1 '
-                           'ORDER BY coalesce(order_at, ''-infinity'') DESC, target_id DESC LIMIT 1', v_view)
-               INTO v_hi_at, v_hi_id USING p_resource;
-            EXECUTE format('SELECT EXISTS (SELECT 1 FROM sensitivity.%I v '
-                           'JOIN sensitivity.unscanned_places u ON u.surface = $2 AND u.target_id = v.target_id '
-                           'WHERE v.resource_id = $1)', v_view)
-               INTO v_skipped USING p_resource, v_surface.surface;
+            EXECUTE format(
+                'WITH p AS MATERIALIZED (SELECT order_at, target_id FROM sensitivity.%I WHERE resource_id = $1) '
+                'SELECT lo.order_at, lo.target_id, hi.order_at, hi.target_id, '
+                '       EXISTS (SELECT 1 FROM p JOIN sensitivity.unscanned_places u '
+                '                ON u.surface = $2 AND u.target_id = p.target_id) '
+                '  FROM (SELECT * FROM p ORDER BY coalesce(order_at, ''-infinity''), target_id LIMIT 1) lo, '
+                '       (SELECT * FROM p ORDER BY coalesce(order_at, ''-infinity'') DESC, target_id DESC LIMIT 1) hi',
+                v_view)
+               INTO v_lo_at, v_lo_id, v_hi_at, v_hi_id, v_skipped USING p_resource, v_surface.surface;
         END IF;
         CONTINUE WHEN v_lo_id IS NULL;
         IF v_skipped THEN

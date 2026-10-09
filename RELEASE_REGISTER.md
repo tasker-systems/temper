@@ -41,7 +41,9 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
   in the deriver; it never means the deriver is clean. `unscanned` means the sweep has not read
   all of one or the other, so a deployment with the sweep turned off reads `unscanned` for
   content written since. `expired` means a fingerprint the comparison needs is gone (30 days
-  after an erasure act emptied its place), capped, or never minted.
+  after an erasure act emptied its place), capped, or never minted. The plan's existing
+  `fingerprint_available` flips from `false` to `true` on every deployment once this ships, sweep
+  on or off: it says the comparison is installed, and `deriver_fingerprints` says what it found.
   `POST /api/admin/resources/block-history-scrub/survey` gains `current_revision_flagged` on each
   block: the sweep holds an open finding on the block's current revision or its current chunks.
   It is false for a current revision the sweep has not read. Both read stored findings only,

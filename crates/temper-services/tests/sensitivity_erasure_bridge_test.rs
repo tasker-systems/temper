@@ -409,6 +409,38 @@ async fn a_derivers_own_capped_finding_is_not_expired_for_a_clean_resource(pool:
     assert_eq!(states(&matches(&pool, r, &[d1]).await), vec!["no"]);
 }
 
+/// FAILS IF the deriver's own lost fingerprints are not read: R holds a value the deriver's capped
+/// finding came from a detector for, so the value may sit among the fingerprints the cap dropped,
+/// and `no` would claim a negative the sweep cannot know (R1).
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_derivers_capped_finding_is_expired_when_r_holds_that_detector(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
+    let w = world(&pool).await;
+    let r = resource(&pool, &w, "payroll", &format!("the record holds {SSN_A}")).await;
+    let roster: String = (0..65)
+        .map(|n| format!("219-45-{:04} ", 1000 + n))
+        .collect();
+    let d1 = resource(&pool, &w, "roster", &roster).await;
+    derives(&pool, &w, d1, r).await;
+    sweep(&pool).await;
+    let shared: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM sensitivity.findings rf, sensitivity.findings df \
+          WHERE rf.resource_id = $1 AND df.resource_id = $2 \
+            AND df.detector_id = rf.detector_id AND df.fingerprint_state = 'truncated')",
+    )
+    .bind(r)
+    .bind(d1)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        shared,
+        "the fixture caps the deriver's finding on R's own detector"
+    );
+
+    assert_eq!(states(&matches(&pool, r, &[d1]).await), vec!["expired"]);
+}
+
 /// FAILS IF, with no finding on R, a disabled detector is waited on: it stops reading, so a deriver
 /// written since would read `unscanned` for good on a deployment that has turned one off.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -520,6 +552,32 @@ async fn an_oversize_place_is_unscanned(pool: PgPool) {
     assert_eq!(states(&matches(&pool, r, &[d1]).await), vec!["unscanned"]);
 }
 
+/// FAILS IF the ledger's places are not read: an event on the deriver's trail written after the
+/// `kb_events` heads passed is not yet read, whatever the deriver's content says.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_event_past_the_ledger_head_is_unscanned(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
+    let w = world(&pool).await;
+    let r = resource(&pool, &w, "payroll", &format!("the record holds {SSN_A}")).await;
+    let d1 = resource(&pool, &w, "summary", "clean").await;
+    derives(&pool, &w, d1, r).await;
+    sweep(&pool).await;
+    assert_eq!(states(&matches(&pool, r, &[d1]).await), vec!["no"]);
+
+    // An event attributed to the deriver by its payload, and nothing else changed.
+    sqlx::query(
+        "INSERT INTO kb_events (event_type_id, emitter_entity_id, payload, category) \
+         SELECT e.event_type_id, e.emitter_entity_id, jsonb_build_object('resource_id', $1::text), \
+                e.category \
+           FROM kb_events e WHERE e.payload ->> 'resource_id' = $1::text ORDER BY e.id LIMIT 1",
+    )
+    .bind(d1)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(states(&matches(&pool, r, &[d1]).await), vec!["unscanned"]);
+}
+
 /// FAILS IF R is answered as its own deriver, or a deriver named twice is answered twice.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn r_itself_and_a_repeated_deriver_are_answered_once(pool: PgPool) {
@@ -596,6 +654,87 @@ async fn a_folded_block_never_warns(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap();
+
+    assert_eq!(flagged(&pool, r, &[block]).await, Vec::<Uuid>::new());
+}
+
+/// Rule every finding of `resource` on `surface` with `state`; the latest ruling is the one read.
+async fn rule(pool: &PgPool, resource: Uuid, surface: &str, state: &str) {
+    let ruled = sqlx::query(
+        "INSERT INTO sensitivity.dispositions (finding_id, state) \
+         SELECT id, $3 FROM sensitivity.findings WHERE resource_id = $1 AND surface = $2",
+    )
+    .bind(resource)
+    .bind(surface)
+    .bind(state)
+    .execute(pool)
+    .await
+    .unwrap()
+    .rows_affected();
+    assert!(ruled > 0, "the fixture holds a finding on {surface}");
+}
+
+/// FAILS IF the warning reads only the revision, or only the chunks: each holds the finding alone
+/// in turn. Also FAILS IF a `false_positive` ruling still warns.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_warning_reads_each_current_place_and_skips_false_positives(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
+    let w = world(&pool).await;
+    let r = resource(&pool, &w, "payroll", &format!("the record holds {SSN_A}")).await;
+    let block = only_block(&pool, r).await;
+    sweep(&pool).await;
+    const REVISION: &str = "kb_block_content.content";
+    const CHUNK: &str = "kb_chunk_content.content";
+
+    rule(&pool, r, CHUNK, "false_positive").await;
+    assert_eq!(
+        flagged(&pool, r, &[block]).await,
+        vec![block],
+        "the current revision alone holds it"
+    );
+    rule(&pool, r, CHUNK, "acknowledged").await;
+    rule(&pool, r, REVISION, "false_positive").await;
+    assert_eq!(
+        flagged(&pool, r, &[block]).await,
+        vec![block],
+        "the current chunks alone hold it"
+    );
+    rule(&pool, r, CHUNK, "false_positive").await;
+    assert_eq!(flagged(&pool, r, &[block]).await, Vec::<Uuid>::new());
+}
+
+/// FAILS IF a closed finding on the current revision still warns. Revisions are immutable, so the
+/// write path cannot close one; the revision's content is emptied in place, the `content_empty`
+/// closure a scrub records on a prior one.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_closed_finding_on_the_current_revision_does_not_warn(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
+    let w = world(&pool).await;
+    let r = resource(&pool, &w, "payroll", &format!("the record holds {SSN_A}")).await;
+    let block = only_block(&pool, r).await;
+    sweep(&pool).await;
+    for emptied in [
+        "UPDATE kb_block_content SET content = '' \
+          WHERE block_revision_id = (SELECT current_revision_id FROM kb_content_blocks WHERE id = $1)",
+        "UPDATE kb_chunk_content SET content = '' \
+          WHERE chunk_id IN (SELECT id FROM kb_chunks WHERE block_id = $1 AND is_current)",
+    ] {
+        sqlx::query(emptied)
+            .bind(block)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let open: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sensitivity.findings f \
+          WHERE f.resource_id = $1 AND f.surface <> 'kb_chunks.header_path' \
+            AND NOT EXISTS (SELECT 1 FROM sensitivity.finding_closure c WHERE c.finding_id = f.id)",
+    )
+    .bind(r)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(open, 0, "the fixture closes the findings");
 
     assert_eq!(flagged(&pool, r, &[block]).await, Vec::<Uuid>::new());
 }
@@ -832,5 +971,25 @@ async fn a_husks_survey_annotates_the_derivers_its_erasure_named(pool: PgPool) {
     assert_eq!(
         annotated(&husk.deriver_fingerprints),
         vec![(d1, FingerprintMatch::Expired)]
+    );
+}
+
+/// FAILS IF an erased resource with no `resource_erased` record renders an empty annotation rather
+/// than refusing: every husk has one, so its absence is drift, not "no derivers".
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_husk_without_its_record_is_refused(pool: PgPool) {
+    let w = world(&pool).await;
+    let r = resource(&pool, &w, "payroll", "a resource").await;
+    sqlx::query("UPDATE kb_resources SET erased_at = now(), is_active = false WHERE id = $1")
+        .bind(r)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let admin = temper_services::test_support::system_admin_proof(&pool).await;
+
+    let refused = survey_resource_erasure(&pool, &admin, ResourceId::from(r)).await;
+    assert!(
+        matches!(&refused, Err(temper_services::error::ApiError::Internal(m)) if m.contains("no resource_erased record")),
+        "{refused:?}"
     );
 }
