@@ -274,3 +274,82 @@ async fn a_write_queued_behind_another_update_past_the_bound_answers_resource_bu
         "nothing was applied"
     );
 }
+
+/// **Overlapping writers cannot hold the act off.** A chain of floored writers on R, each holding
+/// its floor for 300 ms and the next starting 150 ms after the previous, so some writer always
+/// holds R's row from start to finish. The act arrives just after the first. A writer that arrives
+/// while the act waits must queue behind it, so the act completes once the writers already in have
+/// committed, not once the whole chain ends. Every later writer then reads R erased.
+///
+/// FAILS IF a writer's floor lock jumps the queue ahead of the act's waiting `FOR UPDATE` (a
+/// `FOR KEY SHARE` that conflicts with no current holder is granted without queueing): the act
+/// then waits out the whole chain.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn overlapping_writers_cannot_hold_the_act_off(pool: PgPool) {
+    use temper_services::backend::write_floor::modify_floor_in_tx;
+
+    let (_, profile, resource) = seed(&pool, "starved@example.com").await;
+    let operator: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_entities WHERE profile_id = $1 LIMIT 1")
+            .bind(profile)
+            .fetch_one(&pool)
+            .await
+            .expect("an entity");
+    const WRITERS: u32 = 14;
+    let hold = Duration::from_millis(300);
+    let stagger = Duration::from_millis(150);
+    let chain_ends = stagger * (WRITERS - 1) + hold;
+
+    let started = Instant::now();
+    let mut writers = Vec::new();
+    for n in 0..WRITERS {
+        let pool = pool.clone();
+        writers.push(tokio::spawn(async move {
+            tokio::time::sleep(stagger * n).await;
+            let mut tx = pool.begin().await.expect("begin");
+            let floored = modify_floor_in_tx(&mut tx, ProfileId::from(profile), resource).await;
+            if floored.is_ok() {
+                tokio::time::sleep(hold).await;
+            }
+            tx.rollback().await.expect("end the writer");
+            floored
+        }));
+    }
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    sqlx::query("SELECT resource_erasure_execute($1, $2, $2, $3)")
+        .bind(uuid::Uuid::from(resource))
+        .bind(operator)
+        .bind(uuid::Uuid::now_v7())
+        .execute(&pool)
+        .await
+        .expect("the act completes");
+    let act_done = started.elapsed();
+    // The first writer arrived before the act, so the floor must have admitted it and it must
+    // have held R. A floor that failed for any other reason (a missing function, say) would let
+    // the act through at once and make this witness pass for the wrong reason.
+    let mut outcomes = Vec::new();
+    for w in writers {
+        outcomes.push(w.await.expect("writer"));
+    }
+    assert!(
+        outcomes[0].is_ok(),
+        "the writer ahead of the act was admitted: {:?}",
+        outcomes[0]
+    );
+    for later in &outcomes[1..] {
+        assert!(
+            matches!(
+                later,
+                Ok(()) | Err(TemperError::ResourceErased(_)) | Err(TemperError::Forbidden)
+            ),
+            "a later writer is admitted before the act or reads R erased after it: {later:?}"
+        );
+    }
+
+    assert!(
+        act_done < chain_ends / 2,
+        "the act completed at {act_done:?}, behind writers that arrived after it; the chain ran \
+         to {chain_ends:?}"
+    );
+}

@@ -164,6 +164,14 @@ pub enum ClientError {
     #[error("rate limited — retry after {retry_after:?}")]
     RateLimited { retry_after: Duration },
 
+    /// A write that waited on a row lock past the server's bound and was rolled back having
+    /// applied nothing (HTTP 503, code [`temper_core::error::RESOURCE_BUSY_CODE`]). Distinct from
+    /// [`Self::Server`] because it carries a promise a `500` does not: sending the same request
+    /// again cannot double-apply. So `HttpClient` retries it for every method, unkeyed writes
+    /// included, which it never does for a `Server` error.
+    #[error("{message}")]
+    ResourceBusy { message: String },
+
     #[error("server error ({status}): {message}")]
     Server { status: u16, message: String },
 

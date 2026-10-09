@@ -32,6 +32,25 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 (`schemas/versions/<M.m>/`); the pin gate checks the record names a `spec-correction` row.
 
 ## Since v0.6.0 — unreleased
+- **A write that waits on a row lock past 5 s answers `503 RESOURCE_BUSY`, and temperkb-client re-sends it**
+  Every floored write (each resource, edge, facet, blob-relation, grant and delete door) now
+  bounds how long any of its statements waits on a lock: 5 s, from its floor to its commit. A
+  write cut off there rolls back having applied nothing and answers `503` with code
+  `RESOURCE_BUSY` and `Retry-After: 2`, where before it waited for as long as the holder ran (an
+  erasure act, a block history scrub, or another update of the same resource). Two updates of one
+  resource no longer deadlock into a `500`: they now take turns. A write that arrives while an
+  erasure act waits for the resource now waits behind the act, and so reads the resource erased
+  (`410` to a holder, `404` to anyone else) where it could once land first. temperkb-client maps
+  the code to `ClientError::ResourceBusy` and re-sends the request, unkeyed writes included, up to
+  three attempts, 2 s apart; a plain `503` is unchanged. temper-ts, temper-rb and temper-py classify
+  it as a server error, as every 5xx, and do not re-send writes.
+  Who observes: any writer contending on one resource for longer than the bound; erasure operators
+  (the act can no longer be held off). User-visible: a new error code where a request used to
+  hang or fail with a `500`. Release relevance: behavioral.
+pr: self
+classes: behavioral
+surfaces: http, mcp, clients
+status: signal-only
 - **The erasure surveys say whether the sensitivity sweep confirms a deriver quotes the resource, and whether a block still holds a finding**
   `POST /api/admin/resources/erasure/survey` gains `deriver_fingerprints`, one entry per deriver
   the survey names: `{deriver, fingerprint_match}` with `fingerprint_match` one of `yes`, `no`,

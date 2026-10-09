@@ -3059,7 +3059,18 @@ impl Backend for DbBackend {
         // `FOR KEY SHARE` is already covered by this transaction's stronger lock. The reverse order
         // deadlocks: two concurrent deletes of one resource would each hold `KEY SHARE` and each
         // wait on the other to upgrade to `FOR UPDATE`.
+        //
+        // The lock bound and the act queue come before even that lock, for the reason the floor
+        // takes them before its own: a delete waiting on an erasure act is cut off at the bound,
+        // and one arriving after the act queues behind it instead of holding R's row while the
+        // act waits for it (`write_floor::queue_behind_acts`).
         let mut tx = self.pool.begin().await.map_err(tx_err)?;
+        if let Err(refusal) = write_floor::bound_lock_waits(&mut tx).await {
+            return Err(write_floor::rollback_with(tx, refusal).await);
+        }
+        if let Err(refusal) = write_floor::queue_behind_acts(&mut tx, resource).await {
+            return Err(write_floor::rollback_with(tx, refusal).await);
+        }
         sqlx::query!(
             "SELECT id FROM kb_resources WHERE id = $1 FOR UPDATE",
             resource.uuid(),

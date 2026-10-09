@@ -66,7 +66,12 @@
 //! **A write that waited past the lock bound is `503 RESOURCE_BUSY`** (ruled 2026-10-09): the floor
 //! sets [`WRITE_LOCK_TIMEOUT_MS`] for the rest of the transaction (`bound_lock_waits`), and a
 //! `55P03` from any statement after it answers [`TemperError::ResourceBusy`] with `Retry-After`. It
-//! rolled back having applied nothing, so unlike a `500` it is always safe to send again.
+//! rolled back having applied nothing, so unlike a `500` it is always safe to send again, and
+//! `temper-client` does (`ClientError::ResourceBusy`).
+//!
+//! **Writers queue behind an erasure act** (`queue_behind_acts`, migration `20261013100010`): a
+//! shared advisory lock on R that the acts take exclusive, so writers that arrive while an act
+//! waits for R cannot keep it waiting.
 //!
 //! **A refusal rolls back before it is answered.** `rollback_with` ends the transaction a floor
 //! (or any in-transaction gate) refused, so the row lock is released before the door answers
@@ -170,6 +175,7 @@ async fn lock_resource_row(
     resource: ResourceId,
 ) -> Result<Option<bool>, TemperError> {
     bound_lock_waits(conn).await?;
+    queue_behind_acts(conn, resource).await?;
     sqlx::query_scalar!(
         "SELECT is_active FROM kb_resources WHERE id = $1 FOR KEY SHARE",
         resource.uuid(),
@@ -214,13 +220,41 @@ pub const WRITE_LOCK_TIMEOUT_MS: u64 = 5_000;
 /// Outside a transaction `SET LOCAL` does nothing (Postgres warns), so a floor run on a bare
 /// connection is unbounded; `DbBackend`'s fast-fail opens a
 /// transaction for this reason.
-async fn bound_lock_waits(conn: &mut PgConnection) -> Result<(), TemperError> {
+pub(crate) async fn bound_lock_waits(conn: &mut PgConnection) -> Result<(), TemperError> {
     // `set_config(.., is_local => true)` is `SET LOCAL`, with the value bound.
     sqlx::query_scalar!(
         "SELECT set_config('lock_timeout', $1, true)",
         format!("{WRITE_LOCK_TIMEOUT_MS}ms"),
     )
     .fetch_one(&mut *conn)
+    .await
+    .map(|_| ())
+    .map_err(floor_err)
+}
+
+/// Join R's act queue, shared, for the rest of `conn`'s transaction: the advisory lock the
+/// erasure act and the block history scrub take exclusive just before their `FOR UPDATE` on R
+/// (`_resource_act_queue_key`, migration `20261013100010`).
+///
+/// Without it a writer's `FOR KEY SHARE` is granted past an act that is waiting for the row,
+/// because it conflicts with no current holder, and overlapping writers can hold an act off
+/// indefinitely. With it a writer arriving after the act waits for the act (under the lock bound),
+/// and the act waits only for writers already in. Shared against shared, writers never wait on
+/// each other here.
+///
+/// **It must come before the transaction's first row lock on R.** A writer holding R's row while
+/// waiting here would deadlock with an act waiting on that row. [`lock_resource_row`] calls it
+/// first; a door that locks R before its floor (the delete door's `FOR UPDATE`) calls it before
+/// that lock. Re-entrant: a second call in one transaction is granted at once.
+pub(crate) async fn queue_behind_acts(
+    conn: &mut PgConnection,
+    resource: ResourceId,
+) -> Result<(), TemperError> {
+    sqlx::query!(
+        "SELECT pg_advisory_xact_lock_shared(_resource_act_queue_key($1))",
+        resource.uuid(),
+    )
+    .execute(&mut *conn)
     .await
     .map(|_| ())
     .map_err(floor_err)

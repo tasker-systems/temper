@@ -93,9 +93,10 @@ pub const INGEST_ENDED_CODE: &str = "INGEST_ENDED";
 /// applied, and the same request sent again is not a double-apply. That is the difference from an
 /// `INTERNAL_ERROR` `500`, which carries no such promise.
 ///
-/// **Why `503`.** Every shipped client classifies any 5xx as transient, so this changes no
-/// client's behaviour (`409` would collide with "already exists"). None of them auto-retries an
-/// unkeyed write: the caller decides.
+/// **Why `503`.** Every shipped client classifies any 5xx as transient, so the status changes no
+/// client's class (`409` would collide with "already exists"). `temper-client` keys on this code
+/// to re-send the request, unkeyed writes included, after the `Retry-After`; the TypeScript,
+/// Python and Ruby SDKs leave it to the caller, as they do every write.
 ///
 /// Spelled here for the same reason as [`FORBIDDEN_DETAIL_CODE`].
 pub const RESOURCE_BUSY_CODE: &str = "RESOURCE_BUSY";
