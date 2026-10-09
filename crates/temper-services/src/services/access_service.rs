@@ -915,7 +915,7 @@ pub async fn demote_admin(pool: &PgPool, admin: &SystemAdmin, subject: ProfileId
     Ok(())
 }
 
-/// Converge every auto-join team to the standing-approved population, reporting each
+/// Converge every auto-join team to the standing-approved humans (machines are never enrolled), reporting each
 /// (team, profile) pair added plus the touched teams that also carry SAML group mappings.
 ///
 /// The operator repair for instances that drifted while enrollment lived only on the

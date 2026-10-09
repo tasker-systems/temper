@@ -32,7 +32,7 @@ Consequences worth internalizing before you act:
 | `admin settings` | Instance state: name, terms version/URI, the gating-team slug. Show with no flags; any flag *updates*. |
 | `admin promote` / `admin demote` | Grant / revoke the governance grant (plus approved standing if needed). `promote` adds an `owner` row on a team as a **side effect** — that row is not what confers admin, and `--team` is not where admin comes from. |
 | `admin access` | The standing lifecycle: `approve`, `revoke`, `deactivate`, `reactivate` — legal transitions are narrow (`revoke` only from approved; `deactivate` from any live state; `reactivate` restores prior standing). |
-| `admin requests` | The join queue: `list` pending requests for the gating team, `review` with `--approve`/`--reject`. Approving also enrolls gating-team membership atomically. |
+| `admin requests` | The join queue: `list` pending requests for the gating team, `review` with `--approve`/`--reject`. Approving also enrolls a person (never a machine) in the gating team atomically. |
 | `admin reviews` | Reconsideration requests from revoked principals: `list`, then `close` — which records the decision and **grants nothing**. |
 | `admin profiles` | The operator directory: `list` (default filter `needs-access` — the work queue of everyone who lacks access, including principals with no standing row) and `show` (one principal's state card, by UUID **or exact verified email** — the bridge into the strict-UUID acts). |
 | `admin ledger` | Who granted what, to whom, and when. Every standing and governance act is ledgered — read it after acting, and treat it as the audit trail you are writing into. |
@@ -65,8 +65,8 @@ who signed in and never requested.
 ## Machine principals — which verb answers which failure
 
 - **First credential for a new machine** → `admin machine provision`. Run it *before* the
-  machine's first call: it creates the agent profile, gating-team membership, and the reach you
-  name (`--team`, `--cogmap`). Reach is plural and never inferred from `--owner-team`.
+  machine's first call: it creates the agent profile and the reach you name (`--team`,
+  `--cogmap`), and no other membership: a machine joins no team nobody chose for it. Reach is plural and never inferred from `--owner-team`.
 - **IdP application rotated, profile must survive** → `admin machine rebind`. It binds the new
   client id to the existing profile, preserving authorship history; the old client is revoked
   unless `--no-revoke-old`. (Rotating only the IdP *secret* needs no temper action at all.)

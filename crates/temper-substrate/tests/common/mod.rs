@@ -59,6 +59,9 @@ pub async fn reset_schema(pool: &sqlx::PgPool) {
                 // post-auto-join world — its function bodies reference
                 // `kb_teams.auto_join_role`, which this baseline omits.
                 && !n.contains("auto_join_materialize_at_standing_committer")
+                // Re-states those auto-join functions with machine principals excluded: same
+                // post-auto-join world, same missing column.
+                && !n.contains("machines_never_auto_join")
         })
         .collect();
     migrations.sort();

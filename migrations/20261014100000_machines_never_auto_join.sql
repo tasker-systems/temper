@@ -12,7 +12,14 @@
 -- exclusion; each body is otherwise its latest definition verbatim (ensure_auto_join_memberships and
 -- auto_join_reconcile from 20260923000010, backfill_auto_join_team from 20260722000010).
 --
--- Enrollment only. Existing rows are left alone here; see the end of this file.
+-- Enrollment only: a machine's existing rows are not removed here.
+--
+-- In the same change, and outside this file: registration's gating-team enrollment
+-- (machine_registration_service, D14) is retired, and join-request approval writes its gating-team
+-- `watcher` row for people only. A binary without this migration still runs both, so a machine
+-- registered or approved in the window before the paired binary lands still gets a gating-team row.
+-- principal_standing_apply's comment named D14 among the authorities that own memberships; it is
+-- restated below without it.
 
 CREATE OR REPLACE FUNCTION ensure_auto_join_memberships(p_profile uuid)
 RETURNS void LANGUAGE plpgsql AS $$
@@ -86,8 +93,16 @@ COMMENT ON FUNCTION auto_join_reconcile IS
   'never added. Adds only: an existing row at any role, and IdP-authored rows, '
   'are never rewritten or removed.';
 
+COMMENT ON FUNCTION principal_standing_apply IS
+  'The ONE writer of kb_principal_standing. Commits row + log + ledger event, '
+  'plus the auto-join enrollment (members of the pool while has_system_access, '
+  'machine principals never; never removes — memberships are owned by D17/IdP, '
+  'not by standing), in one transaction (spec §10, D4). Does NOT decide '
+  'legality -- temper-principal does, and duplicating that here would create '
+  'two transition tables in two languages.';
+
 SELECT declare_migration(
     20261014100000,
     'additive',
-    'Three functions replaced with signatures unchanged, each gaining one machine exclusion. A binary without this migration keeps working; it calls the same functions, which now enroll humans only.'
+    'Three functions replaced with signatures unchanged, each gaining one machine exclusion, and one function comment restated. A binary without this migration keeps working: it calls the same functions, which now enroll humans only. A lagging binary still runs its own gating-team enrollments for machines until it is replaced; those rows persist.'
 );
