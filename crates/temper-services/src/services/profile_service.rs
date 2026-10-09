@@ -339,6 +339,11 @@ async fn refresh_link_verification(
 /// email, a new auth link for this provider is created pointing at that profile
 /// and the profile is returned. Returns `None` otherwise (caller falls through to
 /// new-profile creation).
+///
+/// The address matches **case-blind**, as invitations match it (`vw_invitee_invitations`): an
+/// exact-case match was a second profile for anyone whose providers disagreed on case
+/// (`Alice@x.com` vs `alice@x.com`), and two verified profiles on one address address nobody.
+/// An exact-case link is preferred, then the oldest, so the choice is deterministic.
 async fn reconcile_by_email(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Option<Profile>> {
     if claims.email_verified != Some(true) {
         // `external_user_id` — the raw OAuth `sub` on the human path — is deliberately NOT emitted.
@@ -359,8 +364,9 @@ async fn reconcile_by_email(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Opt
             SELECT id, profile_id, auth_provider, auth_provider_user_id, email, email_verified,
                    is_default, linked_at
               FROM kb_profile_auth_links
-             WHERE email = $1
+             WHERE lower(email) = lower($1)
                AND email_verified
+             ORDER BY (email = $1) DESC, linked_at, id
              LIMIT 1
             "#,
         &claims.email,
@@ -773,6 +779,39 @@ mod tests {
         assert_eq!(
             profile_a.id, profile_b.id,
             "verified email should reconcile to same profile"
+        );
+    }
+
+    /// Providers that disagree on case are one person: a verified sign-in whose address differs
+    /// from an existing verified link only in case joins that profile, rather than minting a
+    /// second one that would leave the address addressing nobody.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn verified_email_reconciles_across_case(pool: PgPool) {
+        let claims_a = AuthClaims {
+            principal_kind: PrincipalKind::Human,
+            provider: "provider_a".to_string(),
+            external_user_id: "user-recon-case-a".to_string(),
+            email: "Recon-Case@Example.com".to_string(),
+            email_verified: Some(true),
+            exp: 9_999_999_999,
+            iat: 1_000_000_000,
+        };
+        let profile_a = resolve_from_claims(&pool, &claims_a).await.unwrap();
+
+        let claims_b = AuthClaims {
+            principal_kind: PrincipalKind::Human,
+            provider: "provider_b".to_string(),
+            external_user_id: "user-recon-case-b".to_string(),
+            email: "recon-case@example.com".to_string(),
+            email_verified: Some(true),
+            exp: 9_999_999_999,
+            iat: 1_000_000_000,
+        };
+        let profile_b = resolve_from_claims(&pool, &claims_b).await.unwrap();
+
+        assert_eq!(
+            profile_a.id, profile_b.id,
+            "a case variant of a verified address is the same person"
         );
     }
 
