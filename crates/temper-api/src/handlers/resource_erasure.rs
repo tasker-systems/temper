@@ -125,7 +125,7 @@ pub async fn execute(
     request_body = ResourceErasureSurveyRequest,
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "What the act would do (`plan` is absent when the resource was already erased); nothing is recorded or changed", body = ResourceErasureSurvey),
+        (status = 200, description = "What the act would do (`plan` is absent when the resource was already erased, and `completion_fields` then names what running the act again would still rewrite on the ledger); nothing is recorded or changed", body = ResourceErasureSurvey),
         (status = 401, description = "Authentication required", body = ErrorBody),
         (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
         (status = 404, description = "Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist", body = ErrorBody),

@@ -8,8 +8,9 @@
 //!     not from a hash disappearing. The principal-erasure clause is the act's footprint planted by
 //!     hand (content emptied, hash kept), not the act. Its resource-erasure clause is witness 26's
 //!     sentinels: `erased_at` alone closes nothing (D2 as amended).
-//!   * **25** — the `blocked:cut-2` half, gated on the erasure trail scope (Q41). Its `remediable`
-//!     half needs erasure cut 2 (Q39).
+//!   * **25** — both halves, gated on the erasure trail scope (Q41): a listed path reads
+//!     `remediable` now that erasure cut 2's completion pass reaches a cut-1 husk's ledger
+//!     (20261010100000), and the list is the ledger exception's own allowlist (Q39).
 //!   * **26** — both halves, through the real write path: after `resource_erasure_execute` the title
 //!     and property findings close as sentinels; after `block_history_scrub_execute` (erasure 2e) a
 //!     finding confined to a prior revision closes and the current revision's stays open.
@@ -17,8 +18,8 @@
 //! Also the walk's guards: user-map keys are written `?`, including a resource's `anchored-at`; a row
 //! is scanned whole, or passed whole when oversize (Q40); jsonb units are never memoised (Q43); an
 //! event type off the tally's shape cannot stop the ledger; payment_card v2 ignores hex runs (Q42);
-//! `event_resource` agrees with the erasure trail scope; the interim remediability table is the live
-//! erasure survey. Ledger rows are planted with raw inserts: these are about what the scan reads.
+//! `event_resource` agrees with the erasure trail scope; remediability is the ledger exception's
+//! allowlist, line for line. Ledger rows are planted with raw inserts: these are about what the scan reads.
 
 use sqlx::{PgPool, Row};
 use temper_core::types::ids::{EntityId, ProfileId};
@@ -676,20 +677,20 @@ async fn remediability_is_read_per_event_type_and_path(pool: PgPool) {
     tick(&pool, "kb_events.payload").await;
     tick(&pool, "kb_events.metadata").await;
 
-    let blocked = "blocked:cut-2".to_string();
+    let remediable = "remediable".to_string();
     let never = "unremediable".to_string();
     assert_eq!(
         remediability_at(&pool, created).await,
         vec![
-            ("/doc_type".to_string(), blocked.clone()),
-            ("/persona".to_string(), blocked.clone()),
-            ("/reasoning".to_string(), blocked.clone()),
-            ("/title".to_string(), blocked.clone()),
+            ("/doc_type".to_string(), remediable.clone()),
+            ("/persona".to_string(), remediable.clone()),
+            ("/reasoning".to_string(), remediable.clone()),
+            ("/title".to_string(), remediable.clone()),
             ("/unlisted".to_string(), never.clone()),
         ],
-        "a ledger_remainder path waits on cut 2; one outside it never has a remedy. doc_type \
-         is free text since F3 was corrected (2026-10-03), and persona is caller-supplied \
-         authorship (20261008100000), so both wait on cut 2 too"
+        "an allowlisted path has a remedy, the act or its completion pass; one outside it never \
+         has. doc_type is free text since F3 was corrected (2026-10-03), and persona is \
+         caller-supplied authorship (20261008100000), so both are redacted too"
     );
     assert_eq!(
         remediability_at(&pool, renamed).await,
@@ -698,7 +699,7 @@ async fn remediability_is_read_per_event_type_and_path(pool: PgPool) {
     );
     assert_eq!(
         remediability_at(&pool, set).await,
-        vec![("/value/?".to_string(), blocked)],
+        vec![("/value/?".to_string(), remediable)],
         "a listed path covers its whole subtree"
     );
     assert_eq!(
@@ -708,37 +709,84 @@ async fn remediability_is_read_per_event_type_and_path(pool: PgPool) {
     );
 }
 
-/// The interim table is the ledger exception's allowlist (`_erasure_redact_paths`), path for path:
-/// what the act redacts is what the sweep reads as `blocked:cut-2`. When the allowlist changes,
-/// this fails until the table follows.
+/// Remediability is the ledger exception's allowlist (`_erasure_redact_paths`), line for line
+/// (sweep spec Q39, as carried to erasure cut 2: one relation the verifier and the sweep both read).
+/// Every redact line reads `remediable` on an event in some resource's trail, at its path and under
+/// it, and a path beside it does not: a copy of the list that drifted from the verifier's would
+/// fail one of the two. On a cogmap's charter resource, which the act refuses, a listed path reads
+/// `blocked:map-grain`.
 ///
 /// The `telos_centroid` copies on a goal's home context's `region_materialized` /
-/// `salience_refreshed` events are outside both on purpose: those events sit in no resource's
+/// `salience_refreshed` events are outside the list on purpose: those events sit in no resource's
 /// erasure trail, so under Q41 they read `unremediable` whether listed or not.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn the_interim_remediability_table_is_the_live_erasure_survey(pool: PgPool) {
-    // The survey's redaction reads the ledger exception's allowlist (20261009100000): every
-    // (event type, path) it classes for redaction, metadata keys with no event type.
-    let live: std::collections::BTreeSet<(Option<String>, String)> = sqlx::query_as(
-        "SELECT DISTINCT event_type, path FROM _erasure_redact_paths() WHERE class <> 'keep'",
+async fn remediability_is_the_ledger_exceptions_allowlist(pool: PgPool) {
+    let lines: Vec<(Option<String>, String, String, String)> = sqlx::query_as(
+        "SELECT DISTINCT event_type, path, \
+                CASE WHEN path LIKE 'metadata.%' THEN 'kb_events.metadata' ELSE 'kb_events.payload' END, \
+                '/' || replace(replace(regexp_replace(path, '^metadata\\.', ''), '[*]', '/*'), '.', '/') \
+           FROM _erasure_redact_paths() WHERE class <> 'keep'",
     )
     .fetch_all(&pool)
     .await
-    .unwrap()
-    .into_iter()
-    .collect();
-    let table: std::collections::BTreeSet<(Option<String>, String)> =
-        sqlx::query_as("SELECT event_type, erasure_path FROM sensitivity.ledger_redact_paths")
-            .fetch_all(&pool)
-            .await
-            .unwrap()
-            .into_iter()
-            .collect();
+    .unwrap();
     assert!(
-        live.len() > 20,
-        "the allowlist holds the redact lines: {live:?}"
+        lines.len() > 20,
+        "the allowlist holds the redact lines: {lines:?}"
     );
-    assert_eq!(table, live);
+    let in_trail = Some(Uuid::now_v7());
+    for (event_type, path, surface, finding_path) in &lines {
+        let event_type = event_type.as_deref().unwrap_or("resource_updated");
+        for (at, expect) in [
+            (finding_path.clone(), "remediable"),
+            (format!("{finding_path}/?"), "remediable"),
+            (format!("{finding_path}_beside"), "unremediable"),
+        ] {
+            let got: String =
+                sqlx::query_scalar("SELECT sensitivity.ledger_remediability($1, $2, $3, $4)")
+                    .bind(surface)
+                    .bind(event_type)
+                    .bind(&at)
+                    .bind(in_trail)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(got, expect, "{event_type} {path} read at {at} on {surface}");
+        }
+    }
+    // A charter resource is refused by the act (D5; map-grain erasure is its own task), so a
+    // listed path on its trail has no remedy yet. The L0 kernel's telos resource is a charter by
+    // migration (20260625000001).
+    let charter: Uuid = "00000000-0000-0000-0005-000000000002".parse().unwrap();
+    let (_, _, surface, finding_path) = &lines[0];
+    for (event_type, at, expect) in [
+        (
+            lines[0].0.as_deref().unwrap_or("resource_updated"),
+            finding_path.as_str(),
+            "blocked:map-grain",
+        ),
+        ("resource_updated", "/not_on_the_list", "unremediable"),
+    ] {
+        let got: String =
+            sqlx::query_scalar("SELECT sensitivity.ledger_remediability($1, $2, $3, $4)")
+                .bind(surface)
+                .bind(event_type)
+                .bind(at)
+                .bind(charter)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(got, expect, "on a charter, {event_type} at {at}");
+    }
+    let gone: Option<String> =
+        sqlx::query_scalar("SELECT to_regclass('sensitivity.ledger_redact_paths')::text")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        gone, None,
+        "the interim copy is gone; the allowlist is the one list"
+    );
 }
 
 // ── Witness 9: closure derives, and never from a hash disappearing ────────────────────────────

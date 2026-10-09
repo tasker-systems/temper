@@ -8720,6 +8720,13 @@ export interface components {
          */
         ResourceErasureSurvey: {
             already_erased: boolean;
+            /**
+             * @description On an erased resource (the short-circuit), the ledger paths a completion pass would rewrite
+             *     now (D12): a resource erased before the ledger exception shipped still carries its text
+             *     there, and running the act again completes it. Empty when nothing is left, and then the act
+             *     refuses `already_erased`; empty too from a server that predates the completion pass.
+             */
+            completion_fields?: components["schemas"]["RedactedEventFields"][];
             plan?: null | components["schemas"]["ResourceErasurePlan"];
             resource: components["schemas"]["ResourceId"];
         };
@@ -12241,7 +12248,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description What the act would do (`plan` is absent when the resource was already erased); nothing is recorded or changed */
+            /** @description What the act would do (`plan` is absent when the resource was already erased, and `completion_fields` then names what running the act again would still rewrite on the ledger); nothing is recorded or changed */
             200: {
                 headers: {
                     [name: string]: unknown;

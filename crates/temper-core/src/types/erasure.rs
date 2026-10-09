@@ -146,6 +146,12 @@ pub struct ResourceErasureSurvey {
     pub resource: ResourceId,
     pub already_erased: bool,
     pub plan: Option<ResourceErasurePlan>,
+    /// On an erased resource (the short-circuit), the ledger paths a completion pass would rewrite
+    /// now (D12): a resource erased before the ledger exception shipped still carries its text
+    /// there, and running the act again completes it. Empty when nothing is left, and then the act
+    /// refuses `already_erased`; empty too from a server that predates the completion pass.
+    #[serde(default)]
+    pub completion_fields: Vec<RedactedEventFields>,
 }
 
 /// One named block in the plan: what the scrub would empty.

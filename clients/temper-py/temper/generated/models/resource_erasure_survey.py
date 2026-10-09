@@ -20,6 +20,7 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
+from temper.generated.models.redacted_event_fields import RedactedEventFields
 from temper.generated.models.resource_erasure_plan import ResourceErasurePlan
 from typing import Optional, Set
 from typing_extensions import Self
@@ -30,9 +31,10 @@ class ResourceErasureSurvey(BaseModel):
     The read-only survey. `plan` is `None` exactly when the resource was already erased when the survey began (the short-circuit); `already_erased` also reads true when an act lands between that read and the plan, and then the plan is present.
     """ # noqa: E501
     already_erased: StrictBool
+    completion_fields: Optional[List[RedactedEventFields]] = Field(default=None, description="On an erased resource (the short-circuit), the ledger paths a completion pass would rewrite now (D12): a resource erased before the ledger exception shipped still carries its text there, and running the act again completes it. Empty when nothing is left, and then the act refuses `already_erased`; empty too from a server that predates the completion pass.")
     plan: Optional[ResourceErasurePlan] = None
     resource: UUID = Field(description="A `kb_resources.id` value.")
-    __properties: ClassVar[List[str]] = ["already_erased", "plan", "resource"]
+    __properties: ClassVar[List[str]] = ["already_erased", "completion_fields", "plan", "resource"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -73,6 +75,13 @@ class ResourceErasureSurvey(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of each item in completion_fields (list)
+        _items = []
+        if self.completion_fields:
+            for _item_completion_fields in self.completion_fields:
+                if _item_completion_fields:
+                    _items.append(_item_completion_fields.to_dict())
+            _dict['completion_fields'] = _items
         # override the default output from pydantic by calling `to_dict()` of plan
         if self.plan:
             _dict['plan'] = self.plan.to_dict()
@@ -94,6 +103,7 @@ class ResourceErasureSurvey(BaseModel):
 
         _obj = cls.model_validate({
             "already_erased": obj.get("already_erased"),
+            "completion_fields": [RedactedEventFields.from_dict(_item) for _item in obj["completion_fields"]] if obj.get("completion_fields") is not None else None,
             "plan": ResourceErasurePlan.from_dict(obj["plan"]) if obj.get("plan") is not None else None,
             "resource": obj.get("resource")
         })

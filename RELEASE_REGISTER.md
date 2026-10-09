@@ -78,6 +78,22 @@ pr: self
 classes: behavioral, spec-correction
 surfaces: http, clients
 status: signal-only
+- **Running resource erasure again completes an earlier erasure, and the survey of an erased resource gains `completion_fields`**
+  A resource erased before ledger redaction shipped still carries its text in its own trail events.
+  Running the execute door on it again is now the completion pass: it appends one more
+  `resource_erased` carrying only `redacted_fields`, rewrites those paths to their sentinels, and
+  answers `completed` with empty `edges`, `targets`, `remainder` and `ledger_remainder`. Before,
+  that request was refused `already_erased`; it still is when nothing is left to rewrite, which is
+  every resource erased under ledger redaction. The survey door's answer for an erased resource
+  (`plan` absent) gains `completion_fields`, the paths a completion pass would rewrite now; it
+  defaults to empty, so a client reads an older server's answer unchanged. The sensitivity sweep's
+  ledger findings on those paths read `remediable` instead of `blocked:cut-2`. Who observes:
+  erasure operators (the survey and execute answers, the CLI's rendering of them). User-visible:
+  no. Release relevance: additive (the survey field) and behavioral (a repeat erasure can complete).
+pr: self
+classes: additive, behavioral
+surfaces: http, cli-stdout, clients, schema
+status: signal-only
 - **Resource erasure rewrites the erased resource's own ledger events, and the survey and execute answers gain `redacted_fields`**
   An erasure run from now on rewrites the free text in the erased resource's own trail events in
   `kb_events` (titles, origin URIs, doc types, remote-source URLs, property keys and values, facet
