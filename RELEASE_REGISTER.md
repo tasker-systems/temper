@@ -29,15 +29,19 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   once per detector version. A resource erasure now rewrites the allowlisted paths of its trail's
   events and records each in `kb_event_field_redactions`, so a finding at or under such a path now
   closes as `sentinel`, whichever erasure wrote the row: an edge's assertion closes when either end
-  is erased. A finding on a path the erasure did not rewrite stays open, on the same event too.
+  is erased. A row counts only when the `resource_erased` event it names lists that event and path.
+  A finding on a path the erasure did not list stays open, on the same event too. On an array path
+  (the remote-source URLs) a row means some element was rewritten, so a finding on a non-remote
+  sibling closes with it; those hold uuids, which no seeded detector matches.
   Erasure's digest expiry then treats a closed ledger finding as it treats any other erased place:
   its fingerprints and keyed hash go 30 days after the sweep first sees it closed. `place_closure`
-  takes the finding's path as a fourth argument, and every caller in the `sensitivity` schema passes
-  it. Who observes: operators reading the `sensitivity` schema (`finding_closure`, `findings`, the
-  expiry count `/api/sensitivity/sweep` already reports). User-visible: no. Release relevance:
+  takes the finding's path as a fourth argument, every caller in the `sensitivity` schema passes
+  it, and `sensitivity.ledger_path_covers` is new. Who observes: operators reading the `sensitivity`
+  schema (`finding_closure`, `findings`, and the expiry count on the sweep's spans). User-visible:
+  no. Release relevance: additive (a function, and a widened signature no binary calls) and
   behavioral (ledger findings close, and their digests expire, that stayed open and kept them).
 pr: self
-classes: behavioral
+classes: additive, behavioral
 surfaces: internal, schema
 status: signal-only
 - **Running resource erasure again completes an earlier erasure, and the survey of an erased resource gains `completion_fields`**

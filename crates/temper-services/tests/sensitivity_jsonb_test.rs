@@ -984,13 +984,22 @@ async fn a_resource_erasure_closes_its_title_property_and_redacted_ledger_findin
     .fetch_one(&pool)
     .await
     .unwrap();
-    // One event of R's trail with a path the act lists (title) and one it does not (note), both
-    // carrying the value: a raw row, since no write path puts free text on an unlisted path.
+    // One event of R's trail with a path the act lists (title) and one it does not (rationale),
+    // both carrying the value: a raw row, since no write path puts free text on an unlisted path.
+    // Its metadata's rationale IS listed, so the payload's must not close on that row's surface.
     let renamed = event(
         &pool,
         "resource_updated",
         serde_json::json!({ "resource_id": resource, "title": format!("ssn {SSN_A}"),
-                            "note": format!("ssn {SSN_A}") }),
+                            "rationale": format!("ssn {SSN_A}") }),
+        serde_json::json!({ "rationale": format!("ssn {SSN_A}") }),
+    )
+    .await;
+    // An event in no trail, which no erasure lists: below, a redaction row is forged for it.
+    let stray = event(
+        &pool,
+        "resource_updated",
+        serde_json::json!({ "title": format!("ssn {SSN_A}") }),
         serde_json::json!({}),
     )
     .await;
@@ -999,6 +1008,7 @@ async fn a_resource_erasure_closes_its_title_property_and_redacted_ledger_findin
         "kb_properties.property_key",
         "kb_properties.property_value",
         "kb_events.payload",
+        "kb_events.metadata",
     ] {
         assert!(!tick(&pool, surface).await.failed, "{surface}");
     }
@@ -1010,13 +1020,37 @@ async fn a_resource_erasure_closes_its_title_property_and_redacted_ledger_findin
     .fetch_one(&pool)
     .await
     .expect("the ledger's copy of the property value is found");
+    let on_renamed = |pool: PgPool| async move {
+        sqlx::query_as::<_, (String, String, Option<String>)>(
+            "SELECT f.surface, f.path, c.closed_by FROM sensitivity.findings f \
+               LEFT JOIN sensitivity.finding_closure c ON c.finding_id = f.id \
+              WHERE f.target_id = $1 ORDER BY f.surface, f.path",
+        )
+        .bind(renamed)
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+    };
+    let found = |surface: &str, path: &str, closed: Option<&str>| {
+        (
+            surface.to_string(),
+            path.to_string(),
+            closed.map(str::to_string),
+        )
+    };
     assert_eq!(
-        findings_at(&pool, renamed).await,
+        on_renamed(pool.clone()).await,
         vec![
-            ("/note".to_string(), "us_ssn_delimited".to_string()),
-            ("/title".to_string(), "us_ssn_delimited".to_string())
+            found("kb_events.metadata", "/rationale", None),
+            found("kb_events.payload", "/rationale", None),
+            found("kb_events.payload", "/title", None),
         ],
-        "both paths of the planted event are found"
+        "every path of the planted event is found, and open"
+    );
+    assert_eq!(
+        findings_at(&pool, stray).await.len(),
+        1,
+        "the stray title is found"
     );
     let created: Uuid = sqlx::query_scalar(
         "SELECT f.target_id FROM sensitivity.findings f WHERE f.surface = 'kb_events.payload' \
@@ -1070,9 +1104,32 @@ async fn a_resource_erasure_closes_its_title_property_and_redacted_ledger_findin
         "the ledger's copies of the property key and value close"
     );
     assert_eq!(
-        closed_by(&pool, renamed).await,
-        vec![None, Some("sentinel".to_string())],
-        "on one redacted event, the listed path closes and the unlisted one stays open"
+        on_renamed(pool.clone()).await,
+        vec![
+            found("kb_events.metadata", "/rationale", Some("sentinel")),
+            found("kb_events.payload", "/rationale", None),
+            found("kb_events.payload", "/title", Some("sentinel")),
+        ],
+        "on one redacted event the listed paths close; the payload's rationale, unlisted, stays \
+         open though the metadata's rationale was redacted"
+    );
+
+    // A row the erasure does not list closes nothing, though it names the real erasure event.
+    let forged = sqlx::query(
+        "INSERT INTO kb_event_field_redactions (event_id, path, redacted_by) \
+         SELECT $1, 'title', e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'resource_erased' AND e.payload ->> 'subject_id' = $2::text",
+    )
+    .bind(stray)
+    .bind(resource.uuid())
+    .execute(&pool)
+    .await
+    .expect("the table checks no INSERT");
+    assert_eq!(forged.rows_affected(), 1, "one row is forged");
+    assert_eq!(
+        closed_by(&pool, stray).await,
+        vec![None],
+        "a redaction row its erasure event does not list is not a sentinel"
     );
 }
 

@@ -64,18 +64,42 @@ $$;
 -- ---------------------------------------------------------------------------
 -- 20261003150000's body, with the ledger arm first. A ledger place never reads row_missing: the
 -- ledger deletes nothing. A finding on a path no row covers stays open, on a redacted event too:
--- the act rewrote only what it lists. The signature changes, so the view that reads it is dropped
--- with it and recreated below; the three functions that call it are replaced after it.
+-- the act rewrote only what it lists.
+--
+-- A row counts only as the ledger's verifier (kb_events_append_only, 20261009100000 Section 5)
+-- counts it: its redacted_by is a resource_erased event that lists this event and path, for a
+-- subject that is erased. The verifier's `created = now()` is dropped, since closure is read long
+-- after the act. A row nothing authorized closes nothing, as it rewrites nothing (security review,
+-- 2026-10-08: closure trusted any row, and the table checks no INSERT).
+--
+-- On a `[*]` path a row says the act rewrote some location under it, not every one: it rewrites a
+-- remote-source-url only where the source is remote. A finding on a resource or event source's
+-- value closes on its remote sibling's row. Those values are uuids, which no seeded detector
+-- matches; a detector that can match one makes this a false closure.
+--
+-- search_path is set because the ledger arm reads two more tables by unqualified name. The
+-- signature changes, so the view that reads it is dropped with it and recreated below; the three
+-- functions that call it are replaced after it.
 DROP VIEW sensitivity.finding_closure;
 DROP FUNCTION sensitivity.place_closure(text, uuid, text);
 
 CREATE FUNCTION sensitivity.place_closure(p_surface text, p_target uuid, p_hash text, p_path text) RETURNS text
-LANGUAGE sql STABLE AS $$
+LANGUAGE sql STABLE
+SET search_path = public, pg_temp
+AS $$
     SELECT CASE
         WHEN p_surface IN ('kb_events.payload', 'kb_events.metadata') THEN
             CASE WHEN EXISTS (SELECT 1 FROM kb_event_field_redactions r
+                                JOIN kb_events e ON e.id = r.redacted_by
+                                JOIN kb_event_types t ON t.id = e.event_type_id
                                WHERE r.event_id = p_target
-                                 AND sensitivity.ledger_path_covers(r.path, p_surface, p_path))
+                                 AND sensitivity.ledger_path_covers(r.path, p_surface, p_path)
+                                 AND t.name = 'resource_erased'
+                                 AND e.payload -> 'redacted_fields' @> jsonb_build_array(jsonb_build_object(
+                                         'event', p_target::text, 'paths', jsonb_build_array(r.path)))
+                                 AND EXISTS (SELECT 1 FROM kb_resources s
+                                              WHERE s.id = (e.payload ->> 'subject_id')::uuid
+                                                AND s.erased_at IS NOT NULL))
                  THEN 'sentinel' END
         WHEN p_surface NOT IN ('kb_block_content.content', 'kb_chunk_content.content', 'kb_chunks.header_path',
                                'kb_resources.title', 'kb_resources.origin_uri', 'kb_properties.property_key',
@@ -127,7 +151,7 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 COMMENT ON FUNCTION sensitivity.place_closure(text, uuid, text, text) IS
-'How a finding''s place closes, from what it holds now (sweep D2 as amended): row_missing, sentinel, content_empty, or on a mutable surface changed by the sweep''s own later observation; NULL while it is open, and on a surface this function does not know. A ledger place (kb_events.payload, kb_events.metadata) closes as sentinel when a kb_event_field_redactions row on its event covers p_path, whichever erasure wrote it, and never otherwise. p_path is read only on the ledger.';
+'How a finding''s place closes, from what it holds now (sweep D2 as amended): row_missing, sentinel, content_empty, or on a mutable surface changed by the sweep''s own later observation; NULL while it is open, and on a surface this function does not know. A ledger place (kb_events.payload, kb_events.metadata) closes as sentinel when a kb_event_field_redactions row on its event covers p_path and the resource_erased event that row names lists that event and path for an erased subject, whichever erasure that was, and never otherwise. On a `[*]` path the row means some location under it was rewritten, not every one. p_path is read only on the ledger.';
 
 -- A finding is closed when its place says so. An open finding has no row here.
 CREATE VIEW sensitivity.finding_closure AS
@@ -309,5 +333,5 @@ $$;
 SELECT declare_migration(
     20261011100000,
     'additive',
-    'New: the function sensitivity.ledger_path_covers. sensitivity.place_closure is dropped and recreated with a fourth argument, the finding''s path (sensitivity.finding_closure, the view that reads it, is dropped and recreated around it with the same columns); on kb_events.payload and kb_events.metadata it now answers sentinel where a kb_event_field_redactions row on the event covers the path, and NULL as before otherwise. CREATE OR REPLACE, with unchanged signatures and return types, of sensitivity.ledger_remediability (the same answers, its path conversion now ledger_path_covers), sensitivity.expire_erased_fingerprints and sensitivity.close_cardless_card_findings (each passes the path), and sensitivity.erased_place_findings (passes it, and gains an arm for a ledger finding whose path was redacted). Additive: no deployed binary names the sensitivity schema (the grep gate holds it), and the door reads the same int.'
+    'New: the function sensitivity.ledger_path_covers. sensitivity.place_closure is dropped and recreated with a fourth argument, the finding''s path (sensitivity.finding_closure, the view that reads it, is dropped and recreated around it with the same columns); on kb_events.payload and kb_events.metadata it now answers sentinel where a kb_event_field_redactions row on the event covers the path and its resource_erased event authorizes it, and NULL as before otherwise; it sets search_path. CREATE OR REPLACE, with unchanged signatures and return types, of sensitivity.ledger_remediability (the same answers, its path conversion now ledger_path_covers), sensitivity.expire_erased_fingerprints and sensitivity.close_cardless_card_findings (each passes the path), and sensitivity.erased_place_findings (passes it, and gains an arm for a ledger finding whose path was redacted). Additive: no deployed binary names the sensitivity schema (the grep gate holds it), and the door reads the same int.'
 );
