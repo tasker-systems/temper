@@ -16,12 +16,15 @@
 # - The JavaScript trees: the root bun workspace (temper-cloud, temper-ui), the two published
 #   client packages, and the two agent workflows, each with its own npm lockfile.
 #
-# Every entry groups minor and patch bumps into one weekly PR per tree; a major bump arrives on its
-# own. The question a reviewer asks of a bump set is "do I trust this set of upstream revisions",
-# and splitting it across a PR per package makes each look trivial while the aggregate goes
-# unexamined. A major is a different question (what broke), so it is not folded in.
+# The cargo and JS entries group minor and patch bumps into one weekly PR per tree; a major bump
+# arrives on its own. The github-actions entry groups majors too (see it below). The question a
+# reviewer asks of a bump set is "do I trust this set of upstream revisions", and splitting it
+# across a PR per package makes each look trivial while the aggregate goes unexamined. A major is a
+# different question (what broke), so it is not folded in.
 #
-# A merged bump to `packages/agent-workflows/steward` deploys it: the steward deploys by git.
+# A Dependabot branch never builds a Vercel preview (scripts/vercel-ignore-build.sh): a preview
+# would install the unreviewed versions with Preview environment variables in reach. A merged bump
+# to `packages/agent-workflows/steward` deploys it: the steward deploys by git.
 version: 2
 
 updates:

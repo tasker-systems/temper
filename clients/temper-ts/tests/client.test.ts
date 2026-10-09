@@ -71,6 +71,12 @@ describe("createTemperClient", () => {
         client.GET("/api/schema/doc-types/{name}", { params: { path: { name } } }),
       ).rejects.toThrow(/parent route/);
     }
+    // The serialized segment is what the URL parser sees: a one-element array serializes to `..`.
+    await expect(
+      client.GET("/api/schema/doc-types/{name}", {
+        params: { path: { name: [".."] as unknown as string } },
+      }),
+    ).rejects.toThrow(/parent route/);
     expect(seen).toEqual([]);
 
     await client.GET("/api/schema/doc-types/{name}", { params: { path: { name: "a.b" } } });

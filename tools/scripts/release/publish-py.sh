@@ -76,12 +76,16 @@ PY_DIR="${REPO_ROOT}/clients/temper-py"
 SDIST="temperkb_py-${VERSION}.tar.gz"
 WHEEL="temperkb_py-${VERSION}-py3-none-any.whl"
 
-# The per-version endpoint answers 200 for a published version and 404 for any
-# other, including a version older than the latest — so a re-run of an older
-# tag is still a skip. Any probe failure reads as not published, and the
-# publish itself is then the check.
-if curl -sf -o /dev/null "https://pypi.org/pypi/${DIST_NAME}/${VERSION}/json"; then
-    echo "==> ${DIST_NAME} ${VERSION} is already published — nothing to do."
+# Complete means BOTH distributions are on the index, not merely the version:
+# an upload that lands the sdist and fails on the wheel leaves a version that
+# exists but is incomplete, and a probe on the version alone would skip it on
+# every re-run. The per-version endpoint lists the version's files (and answers
+# 404 for an unknown version, including one older than the latest). Any probe
+# failure reads as not complete, and the publish itself is then the check.
+PUBLISHED_FILES="$(curl -sf "https://pypi.org/pypi/${DIST_NAME}/${VERSION}/json" \
+    | python3 -c 'import json,sys; print("\n".join(u["filename"] for u in json.load(sys.stdin)["urls"]))' 2>/dev/null || true)"
+if printf '%s\n' "$PUBLISHED_FILES" | grep -qxF "$SDIST" && printf '%s\n' "$PUBLISHED_FILES" | grep -qxF "$WHEEL"; then
+    echo "==> ${DIST_NAME} ${VERSION} is already published (sdist and wheel) — nothing to do."
     exit 0
 fi
 
@@ -112,6 +116,10 @@ if [[ -n "$OUT_DIR" ]]; then
 fi
 
 echo "==> publish ${DIST_NAME} ${VERSION} from ${FROM_DIR} (dry-run: ${DRY_RUN})"
+if [[ ! -d "$FROM_DIR" ]]; then
+    echo "ERROR: ${FROM_DIR} does not exist, and ${DIST_NAME} ${VERSION} is not completely published." >&2
+    exit 1
+fi
 # Exactly the two distributions, named for this version: the filenames carry the
 # name and version PyPI checks against the metadata inside, and anything else in
 # the directory would be pushed too.
@@ -131,7 +139,10 @@ fi
 # publish-npm.sh spells out --provenance: the OIDC-only auth story is visible
 # where the publish happens. Outside Actions it fails loudly rather than
 # falling back to anything unauthenticated.
-if uv publish --trusted-publishing automatic "${FROM_DIR}/${SDIST}" "${FROM_DIR}/${WHEEL}"; then
+# --check-url skips a file the index already holds, so a re-run after a partial
+# upload pushes only what is missing instead of failing on the duplicate.
+if uv publish --trusted-publishing automatic --check-url https://pypi.org/simple/ \
+    "${FROM_DIR}/${SDIST}" "${FROM_DIR}/${WHEEL}"; then
     echo "==> Published ${DIST_NAME} ${VERSION}"
     exit 0
 fi

@@ -457,8 +457,9 @@ jobs:
   #
   # Auth is PyPI trusted publishing: `uv publish` exchanges the publish job's
   # OIDC identity token for a short-lived upload token — no registry secret
-  # exists. There is deliberately no actions/attest-build-provenance here: PEP
-  # 740 attestations are minted by uv and ride the PyPI exchange itself. The
+  # exists. No PEP 740 attestation accompanies the upload: `uv publish` uploads
+  # attestation files it is handed but generates none, and nothing here makes
+  # them (PyPI's integrity API returns 404 for temperkb-py 0.6.0's files). The
   # trusted publisher on pypi.org names THIS workflow (release.yml — the claim
   # names the job's own file, not the chain's entry).
   #

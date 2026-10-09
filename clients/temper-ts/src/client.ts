@@ -20,6 +20,34 @@ export interface TemperClientOptions {
 }
 
 /**
+ * openapi-fetch's own path serializer, refusing any result that holds a `.` or `..` segment.
+ *
+ * `encodeURIComponent` leaves `.` alone, and encoding it would not help: the WHATWG URL parser
+ * behind `fetch` reads `%2E%2E` as a dot segment too, so a `name` of `..` would reach the parent
+ * route with the caller's token. No encoding survives the parse, so such a path is refused before a
+ * request exists. The check runs on the SERIALIZED path, segment by segment and percent-decoded,
+ * because that is what the parser sees: an array value `[".."]` serializes to `..` as surely as the
+ * string does. Every other path is exactly what the default serializer produces.
+ */
+function refusingDotSegments(pathname: string, pathParams: Record<string, unknown>): string {
+  const serialized = defaultPathSerializer(pathname, pathParams);
+  for (const segment of serialized.split("/")) {
+    let decoded = segment;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      // Not valid percent-encoding, so not a dot segment in disguise; judge it as written.
+    }
+    if (decoded === "." || decoded === "..") {
+      throw new TypeError(
+        `a path value makes ${pathname} into ${serialized}, whose \`${decoded}\` segment would address the parent route`,
+      );
+    }
+  }
+  return serialized;
+}
+
+/**
  * A fully typed client over every path in the contract.
  *
  * There are deliberately NO per-endpoint methods here. The gem hand-writes `Resources`,
@@ -41,25 +69,6 @@ export interface TemperClientOptions {
  * which is exactly the thing that has no per-status entry in the spec. Wrap the call in a `try`;
  * `if (error)` alone will not see them.
  */
-/**
- * openapi-fetch's own path serializer, refusing a value of `.` or `..`.
- *
- * `encodeURIComponent` leaves `.` alone, and encoding it would not help: the WHATWG URL parser
- * behind `fetch` reads `%2E%2E` as a dot segment too, so a `name` of `..` would reach the parent
- * route with the caller's token. No encoding survives the parse, so the value is refused before a
- * request exists. Every other value is serialized exactly as the default does.
- */
-function refusingDotSegments(pathname: string, pathParams: Record<string, unknown>): string {
-  for (const [name, value] of Object.entries(pathParams ?? {})) {
-    if (value === "." || value === "..") {
-      throw new TypeError(
-        `path parameter \`${name}\` is \`${value}\`, which would address the parent route`,
-      );
-    }
-  }
-  return defaultPathSerializer(pathname, pathParams);
-}
-
 export function createTemperClient(opts: TemperClientOptions): Client<paths> {
   // Checked here, once, before any request exists to carry the token — a
   // plaintext origin refused at creation rather than flagged per request.
