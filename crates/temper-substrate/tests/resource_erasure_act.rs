@@ -4001,7 +4001,7 @@ async fn a_pre_minted_look_alike_sentinel_does_not_stop_the_re_point(pool: sqlx:
 
 /// (22, concurrent-citer half, citer first) R exclusively cites URL. Another resource's annotate
 /// of URL holds its transaction — its `_upsert_remote_source` holds URL's row lock — while the act
-/// runs. Since 20261013100020 the act does not lock R's remote sources before its plan (a lock held
+/// runs. Since 20261015100020 the act does not lock R's remote sources before its plan (a lock held
 /// from there made writes citing the same URL in any tenant wait out the act), so its plan reads
 /// URL as exclusive, and step (9e) waits on the citer's lock. Once the citer commits, (9e) sees its
 /// citation and keeps the row; the act raises `remote source <id> gained a citer during the act`

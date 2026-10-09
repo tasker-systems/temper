@@ -4,7 +4,7 @@
 -- locked R's captured original remote sources FOR UPDATE right after R's row and held them to
 -- commit, so that its plan's shared/exclusive split and step (9e)'s delete decision read the same
 -- citers. A write anywhere that cites one of those URLs (an upsert of the same row) waited out the
--- whole act. Since the write-side lock bound (20261013100000) such a write, cut off at 5 s,
+-- whole act. Since the write-side lock bound (20261015100000) such a write, cut off at 5 s,
 -- answers 503 RESOURCE_BUSY: a tenant could learn that something citing a URL was being erased.
 -- Witness: temper-substrate tests/resource_erasure_act.rs,
 -- a_citer_of_the_same_url_in_another_home_does_not_wait_on_the_act (task
@@ -17,7 +17,7 @@
 -- the act'; the service classifies it retryable, like a raced edge fold, and the retry's plan
 -- names the source shared. The record is never committed with a kept source called deleted.
 --
--- Both bodies are their live definitions (pg_get_functiondef after 20261013100010), changed only
+-- Both bodies are their live definitions (pg_get_functiondef after 20261015100010), changed only
 -- as marked. resource_erasure_execute keeps its SET clauses (search_path, lock_timeout = 0).
 
 CREATE OR REPLACE FUNCTION public._resource_erasure_apply_redaction(p_resource uuid, p_event uuid, p_blocks uuid[] DEFAULT NULL::uuid[])
@@ -409,7 +409,7 @@ BEGIN
     --      are considered — the act never deletes a remote source it did not orphan. Each one
     --      is locked FOR UPDATE in its own statement, and "does anything still cite it?" is
     --      asked in a SEPARATE, later statement. This is the act's only lock on them
-    --      (20261013100020: an earlier lock at the act's head made writes citing the same URL in
+    --      (20261015100020: an earlier lock at the act's head made writes citing the same URL in
     --      any tenant wait out the whole act), so a source the plan read as exclusive can gain a
     --      citer before this point; the lock-then-check keeps it, and resource_erasure_execute
     --      raises the race for a retry. Under READ COMMITTED each statement of this VOLATILE
@@ -504,11 +504,11 @@ BEGIN
     IF NOT v_found THEN
         RAISE EXCEPTION 'resource_erasure_execute: resource % not found', p_resource;
     END IF;
-    -- The act queue, exclusive, before R's row lock (20261013100010): a floored writer arriving
+    -- The act queue, exclusive, before R's row lock (20261015100010): a floored writer arriving
     -- from here on queues behind this act instead of joining the row's KEY SHARE holders.
     PERFORM pg_advisory_xact_lock(_resource_act_queue_key(p_resource));
     PERFORM 1 FROM kb_resources WHERE id = p_resource FOR UPDATE;
-    -- R's remote sources are NOT locked here (20261013100020). kb_remote_sources is shared across
+    -- R's remote sources are NOT locked here (20261015100020). kb_remote_sources is shared across
     -- every tenant, deduplicated by URL, so a lock held from here to commit made any write that
     -- cites the same URL, anywhere, wait out the whole act, and past the write-side lock bound
     -- answer 503: a signal that something citing that URL was being erased. Step (9e) locks each
@@ -756,7 +756,7 @@ END;
 $function$;
 
 SELECT declare_migration(
-    20261013100020,
+    20261015100020,
     'additive',
     'CREATE OR REPLACE of resource_erasure_execute and _resource_erasure_apply_redaction with the same signatures, return types and SET clauses. The act no longer locks R''s remote sources before its plan; after step (9e) it raises a retryable race when a source its plan recorded as deleted was kept. The redaction body changes only a comment. No table, column, constraint, grant or COMMENT changes.'
 );

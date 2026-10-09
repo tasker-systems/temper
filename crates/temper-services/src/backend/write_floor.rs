@@ -79,7 +79,7 @@
 //! class. Audited 2026-10-09: no door or surface does; the pool writes ahead of a floored
 //! transaction are emitter resolves (idempotent upserts), and post-commit steps log, never answer.
 //!
-//! **Writers queue behind an erasure act** (`queue_behind_acts`, migration `20261013100010`): a
+//! **Writers queue behind an erasure act** (`queue_behind_acts`, migration `20261015100010`): a
 //! shared advisory lock on R that the acts take exclusive, so writers that arrive while an act
 //! waits for R cannot keep it waiting.
 //!
@@ -265,7 +265,7 @@ pub const WRITE_LOCK_TIMEOUT_MS: u64 = 5_000;
 /// **Per transaction, never per pool or per role.** The erasure act and the scrub run on the same
 /// pool and take no floor, so they stay unbounded: an act that timed out under write load would
 /// roll back every time and never complete, a denial of erasure. Their functions also pin
-/// `lock_timeout = 0` themselves (migration `20261013100000`), so a default set later on the pool
+/// `lock_timeout = 0` themselves (migration `20261015100000`), so a default set later on the pool
 /// or the role cannot reach them.
 ///
 /// Outside a transaction `SET LOCAL` does nothing (Postgres warns), so a floor run on a bare
@@ -285,7 +285,7 @@ pub(crate) async fn bound_lock_waits(conn: &mut PgConnection) -> Result<(), Temp
 
 /// Join R's act queue, shared, for the rest of `conn`'s transaction: the advisory lock the
 /// erasure act and the block history scrub take exclusive just before their `FOR UPDATE` on R
-/// (`_resource_act_queue_key`, migration `20261013100010`).
+/// (`_resource_act_queue_key`, migration `20261015100010`).
 ///
 /// Without it a writer's `FOR KEY SHARE` is granted past an act that is waiting for the row,
 /// because it conflicts with no current holder, and overlapping writers can hold an act off

@@ -28,7 +28,7 @@ ALTER FUNCTION public.block_history_scrub_execute(uuid, uuid[], uuid, uuid, uuid
     SET lock_timeout = 0;
 
 SELECT declare_migration(
-    20261013100000,
+    20261015100000,
     'additive',
     'ALTER FUNCTION ... SET lock_timeout = 0 on resource_erasure_execute and block_history_scrub_execute. Bodies, signatures, return types, grants and COMMENTs are unchanged. The two acts now run without a lock timeout whatever the session, role or database sets.'
 );

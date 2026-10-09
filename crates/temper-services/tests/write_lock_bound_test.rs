@@ -3,7 +3,7 @@
 //! A floored write's transaction carries `lock_timeout` ([`write_floor::WRITE_LOCK_TIMEOUT_MS`]),
 //! set by the floor before its row lock. A wait past it answers `TemperError::ResourceBusy` (`503
 //! RESOURCE_BUSY` on the wire) with nothing applied. The erasure act takes no floor and pins
-//! `lock_timeout = 0` on its function (migration `20261013100000`), so no bound on the pool, the
+//! `lock_timeout = 0` on its function (migration `20261015100000`), so no bound on the pool, the
 //! role or a session can stop it completing.
 //!
 //! The act's `FOR UPDATE` on the resource row is what a writer meets in practice. These witnesses

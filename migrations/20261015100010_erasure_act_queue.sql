@@ -16,7 +16,7 @@
 -- one queues behind it, so a writer arriving after the act waits for the act, and the act waits
 -- only for writers that were already in. Writers never conflict with each other (shared vs
 -- shared), so ordinary writes are unchanged. The writer's wait falls under the write-side lock
--- bound (503 RESOURCE_BUSY at 5 s); the acts pin lock_timeout = 0 (20261013100000, restated here).
+-- bound (503 RESOURCE_BUSY at 5 s); the acts pin lock_timeout = 0 (20261015100000, restated here).
 --
 -- The order matters. A writer must request the queue before any row lock on R, or it could hold
 -- a KEY SHARE the act waits on while itself waiting on the act's queue entry: a deadlock. Every
@@ -29,7 +29,7 @@
 -- write_floor. Distinct from every other advisory key (hash-keyed blob locks, goal_patch:<id>) by
 -- its prefix.
 --
--- Both bodies are their live definitions (pg_get_functiondef, after 20261013100000), verbatim
+-- Both bodies are their live definitions (pg_get_functiondef, after 20261015100000), verbatim
 -- except for the queue line and its comment, so each restates SET lock_timeout = 0.
 
 CREATE FUNCTION public._resource_act_queue_key(p_resource uuid)
@@ -41,7 +41,7 @@ AS $$ SELECT hashtextextended('resource_act_queue:' || p_resource::text, 0) $$;
 COMMENT ON FUNCTION public._resource_act_queue_key(uuid) IS
 'The advisory key of resource p_resource''s act queue: the erasure act and the block history
 scrub take it exclusive before FOR UPDATE on the kb_resources row; floored writers take it shared
-before their first row lock (20261013100010).';
+before their first row lock (20261015100010).';
 
 CREATE OR REPLACE FUNCTION public.resource_erasure_execute(p_resource uuid, p_operator uuid, p_emitter uuid, p_request_ref uuid, p_also_strike_blobs uuid[] DEFAULT '{}'::uuid[])
  RETURNS jsonb
@@ -98,7 +98,7 @@ BEGIN
     IF NOT v_found THEN
         RAISE EXCEPTION 'resource_erasure_execute: resource % not found', p_resource;
     END IF;
-    -- The act queue, exclusive, before R's row lock (20261013100010): a floored writer arriving
+    -- The act queue, exclusive, before R's row lock (20261015100010): a floored writer arriving
     -- from here on queues behind this act instead of joining the row's KEY SHARE holders.
     PERFORM pg_advisory_xact_lock(_resource_act_queue_key(p_resource));
     PERFORM 1 FROM kb_resources WHERE id = p_resource FOR UPDATE;
@@ -363,7 +363,7 @@ BEGIN
     IF NOT v_found THEN
         RAISE EXCEPTION 'block_history_scrub_execute: resource % not found', p_resource;
     END IF;
-    -- The act queue, exclusive, before R's row lock (20261013100010): a floored writer arriving
+    -- The act queue, exclusive, before R's row lock (20261015100010): a floored writer arriving
     -- from here on queues behind this act instead of joining the row's KEY SHARE holders.
     PERFORM pg_advisory_xact_lock(_resource_act_queue_key(p_resource));
     PERFORM 1 FROM kb_resources WHERE id = p_resource FOR UPDATE;
@@ -453,7 +453,7 @@ END;
 $function$;
 
 SELECT declare_migration(
-    20261013100010,
+    20261015100010,
     'additive',
     'New IMMUTABLE function _resource_act_queue_key(uuid). CREATE OR REPLACE of resource_erasure_execute and block_history_scrub_execute with the same signatures, return types and SET clauses; each body is its live definition plus one pg_advisory_xact_lock on the key before FOR UPDATE on the resource row. No table, column, constraint, grant or COMMENT changes to existing objects.'
 );
