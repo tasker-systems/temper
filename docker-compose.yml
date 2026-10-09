@@ -19,6 +19,9 @@ services:
   temper-postgres:
     image: pgvector/pgvector:0.8.2-pg18-trixie
     container_name: temper-postgres
+    # The substrate suites run every test's migrations in parallel; the default 64 locks per
+    # transaction runs out of shared memory at nextest's default parallelism.
+    command: ["postgres", "-c", "max_locks_per_transaction=256"]
     environment:
       POSTGRES_DB: temper_development
       POSTGRES_USER: temper
