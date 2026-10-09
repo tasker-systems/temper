@@ -632,8 +632,8 @@ mod tests {
 
     /// No invitation route carries a credential in its path.
     ///
-    /// The invitation token is a bearer capability — 128 CSPRNG bits, seven days, and per
-    /// `invitation_service` *"the token IS the authority"*. It used to travel as a path segment
+    /// The invitation token is a private capability — 128 CSPRNG bits, seven days. It redeems only
+    /// for the invitee, but it still names a team and an invitation. It used to travel as a path segment
     /// (`POST /api/invitations/{token}/accept`), which put it in access logs, proxy logs, `Referer`
     /// headers, and — how it was found — an exported span attribute. It now travels in the request
     /// body (`InvitationTokenRequest`).

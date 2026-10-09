@@ -42,7 +42,7 @@ principle, never the scope of it.
 - `memories.md` — Durable memories: the `memory` type, populating the store, this machine's `MEMORY.md`
 - `knowledge-base.md` — MCP resources and tools for cloud knowledge base access
 - `cognitive-maps.md` — Reading from and authoring into cognitive maps (telos-governed graphs)
-- `teams.md` — Teams: create, invite (email as correlator), join, roles, offboarding
+- `teams.md` — Teams: create, invite (the invited email decides who may redeem), join, roles, offboarding
 - `querying.md` — **Which door to ask through** (`search` vs `query`), compositions, reading a trace
 - `project-setup.md` — The `/temper init` flow: fundamentals authoring, and introducing the arc
   to a project

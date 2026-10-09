@@ -1444,9 +1444,10 @@ pub enum SlackAction {
 
 #[derive(Subcommand)]
 pub enum TeamAction {
-    /// Accept a team invitation by its token.
+    /// Accept a team invitation by its token. Only the account whose verified email the
+    /// invitation names can accept it.
     Join {
-        /// Invitation token (from `temper team invite`).
+        /// Invitation token (from `temper invitations`).
         token: String,
     },
     /// Invite an email to a team (owner/maintainer).

@@ -103,6 +103,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AcceptInvitationResponse",
             '400': None,
+            '403': None,
             '404': None,
             '409': None,
         }
@@ -176,6 +177,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AcceptInvitationResponse",
             '400': None,
+            '403': None,
             '404': None,
             '409': None,
         }
@@ -249,6 +251,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AcceptInvitationResponse",
             '400': None,
+            '403': None,
             '404': None,
             '409': None,
         }
@@ -359,7 +362,7 @@ class InvitationsApi:
     ) -> PendingInvitationCounts:
         """Count the invitations addressed to you
 
-        The counting half of `list_mine`, for callers that want the number and not the rows — principally `temper warmup`, which runs at every session start. Its sibling returns each invitation's redemption `token`; this returns an integer, so no bearer capability moves across the wire to answer \"how many?\".  `team_slug` folds a second question into the same round trip: *of those, how many are to this team?* Absent parameter, absent answer — `matching` is `null`, not `0`.
+        The counting half of `list_mine`, for callers that want the number and not the rows — principally `temper warmup`, which runs at every session start. Its sibling returns each invitation's redemption `token`; this returns an integer, so no redemption token moves across the wire to answer \"how many?\".  `team_slug` folds a second question into the same round trip: *of those, how many are to this team?* Absent parameter, absent answer — `matching` is `null`, not `0`.
 
         :param team_slug: Restrict the `matching` half of the answer to invitations to this team.
         :type team_slug: str
@@ -430,7 +433,7 @@ class InvitationsApi:
     ) -> ApiResponse[PendingInvitationCounts]:
         """Count the invitations addressed to you
 
-        The counting half of `list_mine`, for callers that want the number and not the rows — principally `temper warmup`, which runs at every session start. Its sibling returns each invitation's redemption `token`; this returns an integer, so no bearer capability moves across the wire to answer \"how many?\".  `team_slug` folds a second question into the same round trip: *of those, how many are to this team?* Absent parameter, absent answer — `matching` is `null`, not `0`.
+        The counting half of `list_mine`, for callers that want the number and not the rows — principally `temper warmup`, which runs at every session start. Its sibling returns each invitation's redemption `token`; this returns an integer, so no redemption token moves across the wire to answer \"how many?\".  `team_slug` folds a second question into the same round trip: *of those, how many are to this team?* Absent parameter, absent answer — `matching` is `null`, not `0`.
 
         :param team_slug: Restrict the `matching` half of the answer to invitations to this team.
         :type team_slug: str
@@ -501,7 +504,7 @@ class InvitationsApi:
     ) -> RESTResponseType:
         """Count the invitations addressed to you
 
-        The counting half of `list_mine`, for callers that want the number and not the rows — principally `temper warmup`, which runs at every session start. Its sibling returns each invitation's redemption `token`; this returns an integer, so no bearer capability moves across the wire to answer \"how many?\".  `team_slug` folds a second question into the same round trip: *of those, how many are to this team?* Absent parameter, absent answer — `matching` is `null`, not `0`.
+        The counting half of `list_mine`, for callers that want the number and not the rows — principally `temper warmup`, which runs at every session start. Its sibling returns each invitation's redemption `token`; this returns an integer, so no redemption token moves across the wire to answer \"how many?\".  `team_slug` folds a second question into the same round trip: *of those, how many are to this team?* Absent parameter, absent answer — `matching` is `null`, not `0`.
 
         :param team_slug: Restrict the `matching` half of the answer to invitations to this team.
         :type team_slug: str
@@ -986,6 +989,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
+            '403': None,
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -1058,6 +1062,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
+            '403': None,
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -1130,6 +1135,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
+            '403': None,
             '404': None,
         }
         response_data = self.api_client.call_api(

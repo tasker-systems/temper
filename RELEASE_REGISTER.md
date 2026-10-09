@@ -32,6 +32,27 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 (`schemas/versions/<M.m>/`); the pin gate checks the record names a `spec-correction` row.
 
 ## Since v0.6.0 — unreleased
+- **An invitation redeems only for the person invited**
+  `POST /api/invitations/accept` and `POST /api/invitations/decline` used to treat the token as
+  bearer authority: whoever held it joined the team at the invited role (or declined it), whatever
+  their email. Both now act only for the invitee, meaning the account whose verified email the
+  invitation names, by the same rule that lists it in `GET /api/invitations/mine` (a verified address
+  exactly one profile owns, matched case-blind). Anyone else gets `403` with a message that names no
+  address, and the invitation stays pending. A machine principal holds no verified email, so it is
+  never an invitee. Declining an expired invitation is now a no-op: it stays `expired` rather than
+  becoming `declined`. An invitation to a team since deleted answers `400` ("no longer exists") and
+  joins nothing, where accept used to join the deleted team. The check and the write are now one
+  statement, so a revoke racing an accept can no longer admit the member. The OpenAPI operations
+  grow the 403 response; shapes are otherwise unchanged. Who observes: anyone redeeming a token not
+  addressed to them, including `temper team join` / `temper team decline` callers; invitees whose
+  email is unverified, or verified by more than one profile, cannot redeem (the documented
+  token-sharing fallback no longer works). User-visible: a 403 where a forwarded or mistyped
+  invitation used to work. Release relevance: additive (the 403 response), behavioral (who may
+  redeem, deleted teams).
+pr: self
+classes: additive, behavioral
+surfaces: http, clients, cli-stdout
+status: signal-only
 - **A write that waits on a row lock past 5 s answers `503 RESOURCE_BUSY`, and temperkb-client re-sends it**
   Every floored write (each resource, edge, facet, blob-relation, grant and delete door) now
   bounds how long any of its statements waits on a lock: 5 s, from its floor to its commit. A
@@ -50,6 +71,7 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 pr: self
 classes: behavioral
 surfaces: http, mcp, clients
+status: signal-only
 - **A machine principal is never enrolled in a team nobody chose for it**
   Machine registration (`admin machine provision` / `issue`) no longer adds the machine to the
   gating team as `watcher`; approving a machine's join request no longer does either; and auto-join

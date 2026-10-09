@@ -41,8 +41,9 @@ temper team invite <team> <email> --role <role>
 ```
 
 Key facts about invites:
-- **No email is sent.** Temper has no mailer. The `invited_email` is a *correlator*,
-  not a delivery channel.
+- **No email is sent.** Temper has no mailer. The `invited_email` is not a delivery
+  channel; it decides **who may redeem**: only an account whose verified email is that
+  address can accept or decline. A token handed to anyone else does nothing for them.
 - **Sign-in is self-serve** (OAuth/SAML auto-provisions a profile). The invitee does
   not need the token handed to them.
 
@@ -62,8 +63,9 @@ temper team invitations <team>    # owner/maintainer
 
 `temper invitations` resolves an invite to you only when your email maps to exactly
 one profile. An email spread across multiple profiles (possible only via unverified
-sign-ins) is discounted — not shown, never mis-delivered; the fallback there is the
-inviter sharing the printed token directly.
+sign-ins) is discounted — not shown, never mis-delivered, and not redeemable either: only the
+one verified owner of the address can accept or decline, so handing someone the printed token
+does not help. Resolve the duplicate address first.
 
 **Invitations are a CLI capability, not an MCP one.** The MCP surface deliberately carries
 no invitation tools — the absence is a declaration. An agent

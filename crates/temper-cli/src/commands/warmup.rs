@@ -245,7 +245,7 @@ struct CloudState {
 /// the same shape this repo retired when the client-side goal-status filter became a query
 /// predicate (see [`goal_from_row`]).
 /// **All three reads are count-shaped.** They were not: each fetched full rows (handles, emails,
-/// messages, and for invitations the redemption `token` — a bearer capability) so that `.len()`
+/// messages, and for invitations the redemption `token` — a private capability) so that `.len()`
 /// could be taken, on a command wired into the session-start hook. Reporting how many things await
 /// someone does not require transferring them, and it certainly does not require moving their
 /// credentials to do it.

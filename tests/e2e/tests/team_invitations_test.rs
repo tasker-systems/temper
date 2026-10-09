@@ -14,9 +14,10 @@
 //! `provision` helper, same `#[sqlx::test(migrator = "temper_api::MIGRATOR")]`
 //! harness.
 //!
-//! Acceptance is bearer-authority: the 128-bit token is the authority and
-//! `invited_email` need not match the caller's identity, so the test invites an
-//! arbitrary email and accepts as the invitee.
+//! Only the invitee redeems: the token locates the invitation, and the caller must be the
+//! account whose verified email it names. So every invite here is addressed to the second
+//! user's verified address (`second@test.example.com`), and a third user holding the same
+//! token is refused.
 
 mod common;
 
@@ -40,6 +41,10 @@ async fn provision(app: &common::E2eTestApp, token: &str) -> Uuid {
     let body: Value = resp.json().await.expect("json");
     body["id"].as_str().expect("id").parse().expect("uuid")
 }
+
+/// The second e2e user's verified email (`common::generate_second_user_jwt`), the address every
+/// invite here is sent to.
+const INVITEE_EMAIL: &str = "second@test.example.com";
 
 /// `POST /api/invitations/accept` as `token`, with the invite token in the body.
 async fn accept(app: &common::E2eTestApp, token: &str, invite_token: &str) -> reqwest::Response {
@@ -120,7 +125,7 @@ async fn invitation_invite_accept_flow(pool: sqlx::PgPool) {
         .invite(
             team.id,
             &CreateInvitationRequest {
-                invited_email: "invitee@example.com".to_owned(),
+                invited_email: INVITEE_EMAIL.to_owned(),
                 role: TeamRole::Member,
             },
         )
@@ -136,9 +141,19 @@ async fn invitation_invite_accept_flow(pool: sqlx::PgPool) {
         .await
         .expect("list invitations");
     assert_eq!(pending.len(), 1, "one pending invitation");
-    assert_eq!(pending[0].invited_email, "invitee@example.com");
+    assert_eq!(pending[0].invited_email, INVITEE_EMAIL);
 
-    // Invitee accepts (bearer) -> 200 and joins as member.
+    // A third user holding the token is not the invitee -> 403, and the invite stays pending.
+    let stranger_token = common::generate_third_user_jwt();
+    let _stranger_id = provision(&app, &stranger_token).await;
+    let resp = accept(&app, &stranger_token, &inv.token).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "a token in the wrong hands redeems for nobody"
+    );
+
+    // The invitee accepts -> 200 and joins as member.
     let resp = accept(&app, &invitee_token, &inv.token).await;
     assert_eq!(resp.status(), StatusCode::OK, "invitee redeems the token");
     let body: Value = resp.json().await.expect("accept json");
@@ -236,7 +251,7 @@ async fn client_accept_and_decline_drive_the_body_carrying_routes(pool: sqlx::Pg
         .invite(
             team.id,
             &CreateInvitationRequest {
-                invited_email: "declines@example.com".to_owned(),
+                invited_email: INVITEE_EMAIL.to_owned(),
                 role: TeamRole::Member,
             },
         )
@@ -267,7 +282,7 @@ async fn client_accept_and_decline_drive_the_body_carrying_routes(pool: sqlx::Pg
         .invite(
             team.id,
             &CreateInvitationRequest {
-                invited_email: "accepts@example.com".to_owned(),
+                invited_email: INVITEE_EMAIL.to_owned(),
                 role: TeamRole::Member,
             },
         )

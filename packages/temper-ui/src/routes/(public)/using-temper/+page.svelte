@@ -208,7 +208,7 @@ cargo install --path crates/temper-cli --locked --features embed,extract</code><
         <tr><td><code>temper team create &lt;slug&gt;</code></td><td>Create a team — you become its owner. <code>--name</code> sets the display name; <code>--parent &lt;ref&gt;</code> nests it.</td></tr>
         <tr><td><code>temper team list</code></td><td>List the teams you are a member of.</td></tr>
         <tr><td><code>temper team show &lt;slug&gt;</code></td><td>Show a team's detail and member roster.</td></tr>
-        <tr><td><code>temper team invite &lt;team&gt; &lt;email&gt; --role &lt;role&gt;</code></td><td>Invite an email (owner/maintainer). Prints the invitation with its token; no email is sent — the address is a correlator.</td></tr>
+        <tr><td><code>temper team invite &lt;team&gt; &lt;email&gt; --role &lt;role&gt;</code></td><td>Invite an email (owner/maintainer). Prints the invitation with its token; no email is sent — only the account with that verified address can redeem it.</td></tr>
         <tr><td><code>temper team join &lt;token&gt;</code></td><td>Accept a team invitation by its token.</td></tr>
         <tr><td><code>temper team add-member &lt;team-id&gt; &lt;profile-id&gt; --role &lt;role&gt;</code></td><td>Add an existing profile directly (owner/maintainer). Takes UUIDs, not slugs.</td></tr>
         <tr><td><code>temper team set-role &lt;team&gt; &lt;profile-id&gt; --role &lt;role&gt;</code></td><td>Change a member's role (owner/maintainer).</td></tr>

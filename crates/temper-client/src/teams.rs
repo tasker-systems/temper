@@ -230,7 +230,7 @@ impl<'a> TeamsClient<'a> {
     ///
     /// [`Self::list_my_invitations`] returns each invitation's redemption `token`; this returns
     /// integers. Callers that only need the number — `temper warmup`, which runs at every
-    /// session start — take this one so no bearer capability crosses the wire to produce a count.
+    /// session start — take this one so no redemption token crosses the wire to produce a count.
     ///
     /// `team_slug` asks, in the same round trip, how many of them are to that team.
     /// `None` in, `matching: None` out: not asking and being told none are different answers.
@@ -250,9 +250,10 @@ impl<'a> TeamsClient<'a> {
             .await
     }
 
-    /// POST /api/invitations/accept — redeem an invitation token.
+    /// POST /api/invitations/accept — redeem an invitation token. Only the invitee (the
+    /// account whose verified email the invitation names) may; anyone else gets a 403.
     ///
-    /// The invite token rides in the **body**, not the path: it is a bearer
+    /// The invite token rides in the **body**, not the path: it is a private
     /// capability, and this client records `"{method} {path}"` as a span
     /// attribute that is exported. See `InvitationTokenRequest`.
     pub async fn accept_invitation(&self, invite_token: &str) -> Result<AcceptInvitationResponse> {
