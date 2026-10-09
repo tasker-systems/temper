@@ -1,8 +1,15 @@
 //! Transactional registration of machine principals.
 //!
 //! `provision` is the inversion (D3): it creates the agent profile, its auth link, its
-//! emitter entities, its gating-team membership, its explicit reach, and the
-//! `kb_machine_clients` row — all in ONE transaction, ahead of the machine's first call.
+//! emitter entities, its explicit reach, and the `kb_machine_clients` row — all in ONE
+//! transaction, ahead of the machine's first call.
+//!
+//! **A machine joins no team it was not explicitly given.** Registration used to enroll every
+//! machine in the gating team as `watcher` (D14). That enrollment was retired (ruled 2026-10-09):
+//! under D11 gating-team membership confers no system access, and a machine holds membership only
+//! where someone with authority over the team chose it — the explicit `teams` reach, bounded by
+//! `machine_authz`. Its personal team still sits under `temper-system`, so what reaches every
+//! member of the root through ancestry reaches the machine too.
 //!
 //! Authorization happens HERE, not in the handler (B2 D3): `provision` and `issue` resolve the
 //! caller's authority through `machine_authz` before opening the transaction, so a rejected
@@ -23,78 +30,6 @@ use crate::services::access_service::{insert_grant, InsertGrantParams};
 use crate::services::machine_authz::{self, AuthorizedReach};
 use crate::services::machine_client_service;
 use crate::services::profile_service;
-
-/// Enroll `profile_id` in the configured gating team as `watcher` — **but only if `caller`,
-/// the minter, is a member of that gating team themselves.**
-///
-/// This predates the standing cutover. Its original rationale was access-conferring: gating-team
-/// membership WAS system access (the old `has_system_access` read gating-team ownership/membership),
-/// so a machine had to be enrolled to authenticate past `require_system_access`, and the caller
-/// check contained a minter from conferring access they did not hold. That rationale is retired:
-/// under D11 every principal is born `Denied` and `has_system_access` reads **standing** (Task 7's
-/// repoint), so gating-team membership now confers no system access at all — a machine's access
-/// comes from its standing, granted by an admin, never from this enrollment.
-///
-/// What survives is ordinary team hygiene: the gating team keeps its usual membership, the caller
-/// check keeps a non-admin minter from adding rows to a team they are not on, and admins (owners of
-/// the gating team) always enroll. It confers nothing on the access gate; whether machine
-/// enrollment is still wanted at all under the standing model is a question for the machine-principal
-/// follow-up, not this change — which only removes the `access_mode`-based reasoning above.
-async fn enroll_in_gating_team(
-    conn: &mut sqlx::PgConnection,
-    caller: ProfileId,
-    profile_id: Uuid,
-) -> ApiResult<()> {
-    let slug = sqlx::query_scalar!("SELECT gating_team_slug FROM kb_system_settings LIMIT 1")
-        .fetch_optional(&mut *conn)
-        .await?
-        .flatten();
-
-    let Some(slug) = slug else {
-        // No gating team configured ⇒ nothing to enroll into. `update_system_settings`
-        // already rejects `invite_only` with an empty slug, so this is the open-mode case.
-        return Ok(());
-    };
-
-    // Auth before write. Read on the transaction's connection, so the membership we check is the
-    // membership the INSERT below acts under — a concurrent removal cannot slip between them.
-    let caller_is_member = sqlx::query_scalar!(
-        r#"SELECT EXISTS(
-             SELECT 1 FROM kb_team_members m
-               JOIN kb_teams t ON t.id = m.team_id
-              WHERE t.slug = $1 AND m.profile_id = $2 )"#,
-        slug,
-        *caller,
-    )
-    .fetch_one(&mut *conn)
-    .await?
-    .unwrap_or(false);
-
-    if !caller_is_member {
-        // Deliberate — and the only breadcrumb an operator gets. The machine registers cleanly
-        // and then 403s later at `require_system_access`; say why HERE, or that 403 is a mystery.
-        tracing::warn!(
-            gating_team = %slug,
-            caller = %*caller,
-            machine_profile_id = %profile_id,
-            "gating-team enrollment skipped: the minter is not a member of the gating team, so \
-             the machine cannot be conferred system access its minter does not itself hold"
-        );
-        return Ok(());
-    }
-
-    sqlx::query!(
-        r#"INSERT INTO kb_team_members (team_id, profile_id, role)
-           SELECT t.id, $2, 'watcher'::team_role FROM kb_teams t WHERE t.slug = $1
-           ON CONFLICT (team_id, profile_id) DO NOTHING"#,
-        slug,
-        profile_id,
-    )
-    .execute(&mut *conn)
-    .await?;
-
-    Ok(())
-}
 
 /// Apply the explicit reach: team memberships and cogmap grants. Reach is plural and
 /// never inferred from `owner_team_id` (D10, D6).
@@ -250,7 +185,6 @@ pub async fn provision(
             .map_err(|e| map_duplicate_from_conflict(e, &req.client_id))?;
 
     profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
-    enroll_in_gating_team(&mut tx, caller, profile_id).await?;
     apply_reach(&mut tx, caller, profile_id, reach, emitter).await?;
 
     let id = sqlx::query_scalar!(
@@ -297,7 +231,7 @@ pub async fn provision(
 
 /// Issue a temper-minted machine credential (Phase B1). temper generates the `client_id` and
 /// the secret; the SHA-256 hex of the secret is stored, the plaintext is returned once. Creates
-/// the agent profile, auth link, emitters, gating-team membership, and reach — all in one
+/// the agent profile, auth link, emitters, and reach — all in one
 /// transaction, exactly like `provision`, but with `issuer='temper'` and a `secret_hash`.
 pub async fn issue(
     pool: &PgPool,
@@ -341,7 +275,6 @@ pub async fn issue(
         .map_err(|e| map_duplicate_from_conflict(e, &client_id))?;
 
     profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
-    enroll_in_gating_team(&mut tx, caller, profile_id).await?;
     apply_reach(&mut tx, caller, profile_id, reach, emitter).await?;
 
     let id = sqlx::query_scalar!(
@@ -489,10 +422,10 @@ mod tests {
     /// grant (`is_system_admin`) with an `approved` `kb_principal_standing` (`has_system_access`),
     /// not gating-team ownership — so the profile is seeded with both.
     ///
-    /// The gating-team upsert below is retained because `enroll_in_gating_team` reads the minter's
-    /// membership (the machine inherits the minter's gating-team access) — not because it confers
-    /// admin-ness, which it no longer does. `temper-system` already exists in a migrated database
-    /// (the L0 kernel migration creates it), so the team write is an upsert, not an insert.
+    /// The admin is also an owner of the gating team, the shape that used to enroll every machine it
+    /// minted; registration must not, so the fixture keeps the minter inside the team. Being a
+    /// gating-team owner confers no admin-ness. `temper-system` already exists in a migrated
+    /// database (the L0 kernel migration creates it), so the team write is an upsert.
     async fn seed_admin(pool: &PgPool) -> ProfileId {
         let id = Uuid::now_v7();
         sqlx::query!(
@@ -543,74 +476,6 @@ mod tests {
         ProfileId::from(id)
     }
 
-    /// Seed a plain team owner who is NOT a system admin and holds NO gating-team membership,
-    /// with the instance in the `invite_only` shape the containment guard exists for.
-    ///
-    /// Two trigger facts shape this fixture, and they are the reason the hole is latent rather
-    /// than live. `temper-system` carries `auto_join_role = 'watcher'`, and
-    /// `trg_sync_system_membership` fires on profile INSERT — so under the default `open` mode
-    /// EVERY new profile is auto-joined to the gating team, minters included. That is exactly why
-    /// the enrollment is harmless in today's prod, and also why this scenario is **not
-    /// constructible** in open mode: the machine would be auto-joined too, and the assertion
-    /// would be about the trigger rather than about our enrollment.
-    ///
-    /// So we flip to `invite_only` FIRST (the trigger then enrolls nothing, and the explicit
-    /// enrollment is the ONLY path into the gating team — the same premise as the D14 test), and
-    /// then delete any gating membership anyway, so the fixture states its precondition rather
-    /// than leaning on trigger ordering.
-    ///
-    /// Returns the minter and the team they own — which is also the machine's owning team, the
-    /// authority `machine_authz::authorize` admits them under.
-    async fn seed_outsider_team_owner(
-        pool: &PgPool,
-        handle: &str,
-        team_slug: &str,
-    ) -> (ProfileId, Uuid) {
-        sqlx::query!("UPDATE kb_system_settings SET gating_team_slug = 'temper-system'")
-            .execute(pool)
-            .await
-            .expect("invite_only with a configured gating team");
-
-        let id = Uuid::now_v7();
-        sqlx::query!(
-            "INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, $2, $2)",
-            id,
-            handle,
-        )
-        .execute(pool)
-        .await
-        .expect("seed minter");
-
-        let team: Uuid = sqlx::query_scalar!(
-            "INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id",
-            team_slug,
-        )
-        .fetch_one(pool)
-        .await
-        .expect("seed team");
-
-        sqlx::query!(
-            "INSERT INTO kb_team_members (team_id, profile_id, role) \
-             VALUES ($1, $2, 'owner'::team_role)",
-            team,
-            id,
-        )
-        .execute(pool)
-        .await
-        .expect("minter owns their own team");
-
-        sqlx::query!(
-            "DELETE FROM kb_team_members m USING kb_teams t \
-              WHERE m.team_id = t.id AND t.slug = 'temper-system' AND m.profile_id = $1",
-            id,
-        )
-        .execute(pool)
-        .await
-        .expect("the minter holds no gating-team membership");
-
-        (ProfileId::from(id), team)
-    }
-
     /// How many rows the profile holds in the gating team (0 or 1).
     async fn gating_memberships(pool: &PgPool, profile_id: Uuid) -> i64 {
         sqlx::query_scalar!(
@@ -622,111 +487,6 @@ mod tests {
         .await
         .expect("count gating membership")
         .unwrap_or(0)
-    }
-
-    /// B2 containment, applied to the one piece of reach that escaped it. A minter must not be
-    /// able to confer system access they do not themselves hold.
-    #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn provision_does_not_enroll_a_machine_whose_minter_is_not_in_the_gating_team(
-        pool: PgPool,
-    ) {
-        let (alice, team) = seed_outsider_team_owner(&pool, "outsider", "acme-out").await;
-        assert!(
-            !access_service::is_system_admin(&pool, alice)
-                .await
-                .expect("is_system_admin"),
-            "precondition: the minter is a plain team owner, not an admin"
-        );
-        assert_eq!(
-            gating_memberships(&pool, *alice).await,
-            0,
-            "precondition: the minter holds no gating-team membership"
-        );
-
-        let mut request = req("outsider-agent");
-        request.owner_team_id = Some(team);
-        let client = svc::provision(
-            &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
-            &request,
-        )
-        .await
-        .expect("a team owner may provision for their own team");
-
-        assert_eq!(
-            gating_memberships(&pool, client.profile_id).await,
-            0,
-            "a minter outside the gating team must not confer membership in it"
-        );
-        let has_access = sqlx::query_scalar!("SELECT has_system_access($1)", client.profile_id)
-            .fetch_one(&pool)
-            .await
-            .expect("has_system_access");
-        assert_eq!(
-            has_access,
-            Some(false),
-            "the machine must not outrank its minter at the system gate"
-        );
-    }
-
-    /// The same containment on `issue` — the mint path must not be a way around it.
-    #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn issue_does_not_enroll_a_machine_whose_minter_is_not_in_the_gating_team(pool: PgPool) {
-        let (alice, team) = seed_outsider_team_owner(&pool, "outsider-i", "acme-out-i").await;
-
-        let cred = svc::issue(
-            &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
-            &IssueMachineRequest {
-                label: "sidekiq".to_string(),
-                owner_team_id: Some(team),
-                teams: vec![],
-                grants: vec![],
-            },
-        )
-        .await
-        .expect("a team owner may issue for their own team");
-
-        assert_eq!(
-            gating_memberships(&pool, cred.client.profile_id).await,
-            0,
-            "issue must contain gating-team reach exactly as provision does"
-        );
-    }
-
-    /// The guard keys on MEMBERSHIP, not on admin-ness — which is what keeps it a no-op in
-    /// today's prod. The everyday minter there is a plain human whom open-mode auto-join has made
-    /// a gating-team `watcher`; their machines must still enroll, or D14 breaks for everyone but
-    /// admins.
-    #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn provision_enrolls_a_machine_whose_minter_is_a_mere_gating_team_watcher(pool: PgPool) {
-        let (alice, team) = seed_outsider_team_owner(&pool, "watcher-minter", "acme-w").await;
-
-        // Hand back exactly what open-mode auto-join hands every human today: `watcher`.
-        sqlx::query!(
-            "INSERT INTO kb_team_members (team_id, profile_id, role) \
-             SELECT t.id, $1, 'watcher'::team_role FROM kb_teams t WHERE t.slug = 'temper-system'",
-            *alice,
-        )
-        .execute(&pool)
-        .await
-        .expect("join the gating team as watcher");
-
-        let mut request = req("watcher-minted-agent");
-        request.owner_team_id = Some(team);
-        let client = svc::provision(
-            &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
-            &request,
-        )
-        .await
-        .expect("provision");
-
-        assert_eq!(
-            gating_memberships(&pool, client.profile_id).await,
-            1,
-            "a minter INSIDE the gating team still confers membership (D14)"
-        );
     }
 
     fn req(client_id: &str) -> ProvisionMachineRequest {
@@ -775,28 +535,11 @@ mod tests {
         assert_eq!(emitters, Some(4), "one emitter per Surface::ALL variant");
     }
 
-    /// D14: the trigger auto-joins only while access_mode='open'. provision must not depend on it,
-    /// so it enrolls the machine in the gating team explicitly — the behavior this test's name
-    /// guards, still exercised below by asserting the membership directly.
-    ///
-    /// Under D11 that enrollment no longer confers system access: `has_system_access` reads an
-    /// `approved` standing, and the mint door births every machine `Denied`. So provision enrolls
-    /// the machine AND leaves it born-Denied; access is a separate axis, granted only by approval.
-    /// (`enroll_in_gating_team`'s own rationale — "an unenrolled machine 403s at
-    /// require_system_access" — is now stale for the same reason; the function is a candidate to
-    /// retire with the rest of the gating-team access model in the access_mode work.)
+    /// Registration enrolls the machine in no team it was not given, the gating team included,
+    /// even when the minter is inside it. Retired D14 enrollment; the machine stays born Denied.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn provision_enrolls_the_agent_in_the_gating_team(pool: PgPool) {
+    async fn provision_does_not_enroll_the_machine_in_the_gating_team(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        // Mirror prod's real invite_only shape: a configured gating team. A fresh test DB
-        // seeds gating_team_slug NULL, and `update_system_settings` rejects a gate with no slug
-        // precisely because it would lock everyone out — so a configured gating team is the real
-        // invite-only shape (access_mode was retired as a control in Phase 2).
-        sqlx::query!("UPDATE kb_system_settings SET gating_team_slug = 'temper-system'")
-            .execute(&pool)
-            .await
-            .expect("configure the gating team");
-
         let client = svc::provision(
             &pool,
             &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
@@ -805,24 +548,7 @@ mod tests {
         .await
         .expect("provision");
 
-        // D14 behavior preserved: provision enrolled the machine in the gating team explicitly,
-        // not via the (invite_only-inert) auto-join trigger.
-        let enrolled = sqlx::query_scalar!(
-            r#"SELECT EXISTS(
-                 SELECT 1 FROM kb_team_members m JOIN kb_teams t ON t.id = m.team_id
-                  WHERE t.slug = 'temper-system' AND m.profile_id = $1) AS "e!: bool""#,
-            client.profile_id,
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("enrollment");
-        assert!(
-            enrolled,
-            "provision must enroll the machine in the gating team explicitly under invite_only (D14)"
-        );
-
-        // D11: enrollment is not access — the machine is born Denied and holds no system access
-        // until it is approved.
+        assert_eq!(gating_memberships(&pool, client.profile_id).await, 0);
         let has_access = sqlx::query_scalar!("SELECT has_system_access($1)", client.profile_id)
             .fetch_one(&pool)
             .await
@@ -830,8 +556,197 @@ mod tests {
         assert_eq!(
             has_access,
             Some(false),
-            "a freshly provisioned machine is born Denied (D11); gating enrollment confers no access"
+            "a freshly provisioned machine is born Denied (D11)"
         );
+    }
+
+    /// The same on `issue`: the mint path enrolls nothing either.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn issue_does_not_enroll_the_machine_in_the_gating_team(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let cred = svc::issue(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &IssueMachineRequest {
+                label: "sidekiq".to_string(),
+                owner_team_id: None,
+                teams: vec![],
+                grants: vec![],
+            },
+        )
+        .await
+        .expect("issue");
+
+        assert_eq!(gating_memberships(&pool, cred.client.profile_id).await, 0);
+    }
+
+    /// Provision a machine and approve its standing through the one committer, which runs the
+    /// auto-join enrollment arm. Returns the machine's profile.
+    async fn approved_machine(pool: &PgPool, admin: ProfileId, client_id: &str) -> Uuid {
+        let client = svc::provision(
+            pool,
+            &crate::test_support::authenticated_profile_for(pool, admin.uuid()).await,
+            &req(client_id),
+        )
+        .await
+        .expect("provision");
+        sqlx::query_scalar!(
+            "SELECT principal_standing_apply($1, 'approve', 'approved', $2, NULL)",
+            client.profile_id,
+            *admin,
+        )
+        .fetch_one(pool)
+        .await
+        .expect("approve the machine");
+        client.profile_id
+    }
+
+    /// Approval makes a machine eligible by standing, and auto-join (`temper-system` carries
+    /// `auto_join_role = 'watcher'`) must still not enroll it.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn an_approved_machine_is_not_auto_joined(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let machine = approved_machine(&pool, admin, "approved-agent").await;
+        let has_access = sqlx::query_scalar!("SELECT has_system_access($1)", machine)
+            .fetch_one(&pool)
+            .await
+            .expect("has_system_access");
+        assert_eq!(has_access, Some(true), "precondition: eligible by standing");
+        assert_eq!(gating_memberships(&pool, machine).await, 0);
+    }
+
+    /// Creating an auto-join team backfills every eligible profile, and a machine is not one.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn backfilling_an_auto_join_team_skips_machines(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let machine = approved_machine(&pool, admin, "backfill-agent").await;
+        let pool_team: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_teams (slug, name, auto_join_role) \
+             VALUES ('everyone', 'Everyone', 'member'::team_role) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("auto-join team");
+        sqlx::query!("SELECT backfill_auto_join_team($1)", pool_team)
+            .execute(&pool)
+            .await
+            .expect("backfill");
+
+        let joined = sqlx::query_scalar!(
+            "SELECT count(*) FROM kb_team_members WHERE team_id = $1 AND profile_id = $2",
+            pool_team,
+            machine,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+        assert_eq!(joined, Some(0));
+        let admin_joined = sqlx::query_scalar!(
+            "SELECT count(*) FROM kb_team_members WHERE team_id = $1 AND profile_id = $2",
+            pool_team,
+            *admin,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+        assert_eq!(
+            admin_joined,
+            Some(1),
+            "the backfill still enrolls an eligible human"
+        );
+    }
+
+    /// The operator repair path converges auto-join teams to approved humans only. The team is
+    /// created after approval and not backfilled, so reconcile is the only thing that could add
+    /// the machine.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn auto_join_reconcile_skips_machines(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let machine = approved_machine(&pool, admin, "reconcile-agent").await;
+        let pool_team: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_teams (slug, name, auto_join_role) \
+             VALUES ('everyone', 'Everyone', 'member'::team_role) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("auto-join team");
+
+        let added: Vec<Option<String>> =
+            sqlx::query_scalar!("SELECT team_slug FROM auto_join_reconcile()")
+                .fetch_all(&pool)
+                .await
+                .expect("reconcile");
+        assert!(
+            added.iter().flatten().any(|t| t == "everyone"),
+            "precondition: reconcile still adds the eligible human; added {added:?}"
+        );
+        let joined = sqlx::query_scalar!(
+            "SELECT count(*) FROM kb_team_members WHERE team_id = $1 AND profile_id = $2",
+            pool_team,
+            machine,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+        assert_eq!(joined, Some(0));
+    }
+
+    /// Approving a machine's join request admits it by standing and enrolls it nowhere: the
+    /// approval's gating-team `watcher` row is for people.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn approving_a_machines_join_request_does_not_enroll_it(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let client = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("requesting-agent"),
+        )
+        .await
+        .expect("provision");
+        let request = access_service::create_join_request(
+            &pool,
+            access_service::CreateJoinRequestParams {
+                profile_id: ProfileId::from(client.profile_id),
+                message: None,
+                source: "test".to_string(),
+                accepted_terms_version: None,
+            },
+            None,
+        )
+        .await
+        .expect("a born-Denied machine may request");
+        access_service::review_request(
+            &pool,
+            &crate::test_support::system_admin_proof_for(&pool, admin.uuid()).await,
+            access_service::ReviewRequestParams {
+                request_id: request.id,
+                decision: temper_core::types::access_gate::JoinRequestStatus::Approved,
+                decision_note: None,
+            },
+        )
+        .await
+        .expect("approve");
+
+        assert_eq!(gating_memberships(&pool, client.profile_id).await, 0);
+    }
+
+    /// Pin, not a bite: without a direct row, a machine still reaches the root through its
+    /// personal team, the path every content gate walks (`profile_reachable_teams`).
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_machine_reaches_the_root_through_its_personal_team(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let machine = approved_machine(&pool, admin, "reach-agent").await;
+        let reaches = sqlx::query_scalar!(
+            r#"SELECT EXISTS(
+                 SELECT 1 FROM profile_reachable_teams($1) r
+                   JOIN kb_teams t ON t.id = r.team_id
+                  WHERE t.slug = 'temper-system') AS "r!: bool""#,
+            machine,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("reach");
+        assert!(reaches);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
