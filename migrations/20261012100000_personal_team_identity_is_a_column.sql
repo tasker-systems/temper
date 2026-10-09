@@ -10,13 +10,17 @@
 -- held slug never blocks a sign-up (ruled 2026-10-09): genesis takes the next free `-N` suffix.
 --
 --   1. kb_teams.personal_of: the profile whose personal team this is. Unique; no foreign key, because
---      replay restores kb_teams before kb_profiles. Backfilled from the slug, but only where that
---      profile is an owner of the team (production held no squat or orphan when this was written).
---   2. sync_personal_team adopts the team already carrying personal_of = NEW.id (replay of a snapshot
---      that has the column), or a memberless team at the bare slug under at most temper-system
---      (replay of an older snapshot: kb_team_members restores after kb_profiles). Any other holder of
---      the slug is someone else's team, and genesis creates `personal-<handle>-2`, `-3`, … instead.
---      is_active is deliberately not checked: an owner may delete their own personal team.
+--      replay restores kb_teams before kb_profiles. Backfilled from the slug alone, the same match the
+--      old erasure lookup made, so every team erasure scrubbed before still is. A backfilled personal
+--      team with another owner is a squat that already landed (or a promote_admin co-owner); the
+--      migration names each one in a WARNING for the operator and changes no membership.
+--   2. sync_personal_team adopts only the team already carrying personal_of = NEW.id: replay restores
+--      kb_teams before kb_profiles, and replay::snapshot is taken in memory from the live database,
+--      so after the backfill every restored personal team carries its identity. Any other holder of
+--      the slug is someone else's team, however empty, and genesis creates `personal-<handle>-2`,
+--      `-3`, … instead. Adopting a memberless team by slug would hand the new profile whatever still
+--      hangs off it: child teams (reach flows from a child up to its ancestors), pending invitations,
+--      SAML group mappings, contexts.
 --   3. _erasure_apply_redaction and principal_erasure_survey_plan find the subject's personal team by
 --      personal_of. Recomputing `'personal-' || handle` would scrub the squatter's team at the bare
 --      slug and miss the subject's own suffixed one. Each body is its latest definition verbatim
@@ -30,14 +34,31 @@
 ALTER TABLE kb_teams ADD COLUMN personal_of uuid;
 CREATE UNIQUE INDEX kb_teams_personal_of_key ON kb_teams (personal_of) WHERE personal_of IS NOT NULL;
 COMMENT ON COLUMN kb_teams.personal_of IS
-    'The profile whose personal team this is, written only by sync_personal_team. No foreign key: replay restores kb_teams before kb_profiles. Identify a personal team by this column, never by recomputing its slug.';
+    'The profile whose personal team this is. Set by sync_personal_team at genesis (and by this migration''s backfill, and verbatim by replay''s restore); nothing else writes it. No foreign key: replay restores kb_teams before kb_profiles. Identify a personal team by this column, never by recomputing its slug.';
 
 UPDATE kb_teams t
    SET personal_of = pr.id
   FROM kb_profiles pr
- WHERE t.slug = 'personal-' || pr.handle
-   AND EXISTS (SELECT 1 FROM kb_team_members m
-                WHERE m.team_id = t.id AND m.profile_id = pr.id AND m.role = 'owner');
+ WHERE t.slug = 'personal-' || pr.handle;
+
+DO $$
+DECLARE
+    v_row record;
+BEGIN
+    FOR v_row IN
+        SELECT t.slug, m.profile_id
+          FROM kb_teams t
+          JOIN kb_team_members m ON m.team_id = t.id
+         WHERE t.personal_of IS NOT NULL
+           AND m.profile_id <> t.personal_of
+           AND m.role = 'owner'
+         ORDER BY t.slug, m.profile_id
+    LOOP
+        RAISE WARNING 'personal team % has another owner, profile %: review and remove by hand',
+            v_row.slug, v_row.profile_id;
+    END LOOP;
+END;
+$$;
 
 -- ---------------------------------------------------------------------------
 -- Section 2. Genesis.
@@ -53,19 +74,6 @@ BEGIN
     SELECT id INTO v_root FROM kb_teams WHERE slug = 'temper-system';
 
     SELECT id INTO v_team FROM kb_teams WHERE personal_of = NEW.id;
-
-    IF v_team IS NULL THEN
-        SELECT t.id INTO v_team
-          FROM kb_teams t
-         WHERE t.slug = v_base
-           AND t.personal_of IS NULL
-           AND NOT EXISTS (SELECT 1 FROM kb_team_members m WHERE m.team_id = t.id)
-           AND NOT EXISTS (SELECT 1 FROM kb_teams_parents p
-                            WHERE p.child_id = t.id AND p.parent_id IS DISTINCT FROM v_root);
-        IF v_team IS NOT NULL THEN
-            UPDATE kb_teams SET personal_of = NEW.id WHERE id = v_team;
-        END IF;
-    END IF;
 
     WHILE v_team IS NULL LOOP
         INSERT INTO kb_teams (slug, name, personal_of)
@@ -799,5 +807,5 @@ $$;
 SELECT declare_migration(
     20261012100000,
     'additive',
-    'One nullable column with a partial unique index, backfilled; three functions replaced with signatures unchanged. A binary without this migration keeps working: it never reads personal_of, and the trigger fills it on every profile insert.'
+    'One nullable column with a partial unique index, backfilled, and a WARNING per co-owned personal team; three functions replaced with signatures unchanged. A binary without this migration keeps working: it never reads personal_of, and the trigger fills it on every profile insert.'
 );

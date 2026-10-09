@@ -130,9 +130,9 @@ pub(crate) async fn require_team_exists(pool: &PgPool, team_id: Uuid) -> ApiResu
 /// Create a team. The caller becomes its `owner`.
 ///
 /// The [`PERSONAL_TEAM_SLUG_PREFIX`] is refused for every caller, admins included: only the
-/// `sync_personal_team` trigger creates a personal team, and it joins a new profile as owner of
-/// the team holding `personal-<handle>`. A team created ahead of the profile under that slug
-/// would make its creator a co-owner of someone else's personal team.
+/// `sync_personal_team` trigger creates a personal team. The trigger no longer joins a profile to
+/// a team it did not create (a held slug sends it to `personal-<handle>-N`), so the refusal is the
+/// first of two guards against squatting, and keeps `personal-<handle>` meaning that profile's.
 ///
 /// Auth before writes:
 /// - **child** (`parent` set): caller must be `owner`/`maintainer` on the parent.
@@ -1454,10 +1454,10 @@ mod lifecycle_tests {
         assert_eq!(member_count(&pool, own).await, 1);
     }
 
-    /// The parent-held arm, isolated: no members, but a parent other than `temper-system` is a
-    /// team someone else built, not a restored personal team. The suffix also skips a held `-2`.
+    /// A team someone else built under the slug and its `-2` are both passed over: the suffix
+    /// takes the next free one.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn a_new_profile_does_not_adopt_a_parent_held_personal_slug(pool: PgPool) {
+    async fn a_new_profile_skips_every_held_suffix(pool: PgPool) {
         let parent = mk_team(&pool, "acme").await;
         let squat = mk_team(&pool, "personal-victim").await;
         sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
@@ -1477,37 +1477,33 @@ mod lifecycle_tests {
         assert_eq!(slug, "personal-victim-3");
     }
 
-    /// Replay of a snapshot older than `personal_of` restores each personal team before its
-    /// profile, memberless and under at most `temper-system`, with no identity yet. The profile
-    /// must adopt that same team, as before, and now stamp it.
+    /// An empty team at the bare slug is still someone else's: whatever hangs off it (here a
+    /// child team, whose members reach their ancestors) must not become the new profile's.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn a_restored_personal_team_is_adopted_by_its_profile(pool: PgPool) {
-        let restored = mk_team(&pool, "personal-ghost").await;
-        if let Ok(root) =
-            sqlx::query_scalar::<_, Uuid>("SELECT id FROM kb_teams WHERE slug = 'temper-system'")
-                .fetch_one(&pool)
-                .await
-        {
-            sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
-                .bind(restored)
-                .bind(root)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
+    async fn a_new_profile_does_not_adopt_a_memberless_team_at_its_slug(pool: PgPool) {
+        let empty = mk_team(&pool, "personal-victim").await;
+        let child = mk_team(&pool, "foothold").await;
+        sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
+            .bind(child)
+            .bind(empty)
+            .execute(&pool)
+            .await
+            .unwrap();
 
-        let ghost = try_mk_profile(&pool, "ghost").await.unwrap();
+        let victim = try_mk_profile(&pool, "victim").await.unwrap();
+
         assert_eq!(
-            personal_team_of(&pool, ghost).await,
-            (restored, "personal-ghost".to_string())
+            member_count(&pool, empty).await,
+            0,
+            "the empty team gains no member"
         );
-        let (role, _) = stored_member(&pool, restored, ghost).await;
-        assert!(matches!(role, TeamRole::Owner), "got {role:?}");
+        let (_, slug) = personal_team_of(&pool, victim).await;
+        assert_eq!(slug, "personal-victim-2");
     }
 
-    /// Replay of a snapshot that carries `personal_of` restores the team under whatever slug
-    /// genesis gave it, suffixed or renamed by erasure; the profile adopts it by identity and
-    /// creates nothing.
+    /// Replay restores every personal team, carrying `personal_of`, before its profile, under
+    /// whatever slug genesis gave it, suffixed or renamed by erasure; the profile adopts it by
+    /// identity and creates nothing.
     #[sqlx::test(migrations = "../../migrations")]
     async fn a_restored_personal_team_is_adopted_by_identity_whatever_its_slug(pool: PgPool) {
         let id = Uuid::now_v7();
