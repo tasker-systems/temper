@@ -162,6 +162,16 @@ MIIC...
 );
 ```
 
+**Point `email_attr` at an attribute your directory admins control.** Temper treats the email a
+signed assertion carries as verified, and refreshes the stored address from it at every sign-in.
+That verified address decides who may redeem a team invitation and which existing profile a new
+sign-in joins. If people can edit the attribute themselves in your IdP (some directories allow
+self-service edits to secondary profile fields), they can claim an address that is not theirs.
+Temper also treats addresses differing only in ASCII letter case as one address; if your mail
+host gives `Bob@corp` and `bob@corp` to different people, they will be treated as the same person.
+Only ASCII letters are folded: `José@corp` and `josé@corp` stay two different addresses, so an
+invitation must use the exact spelling of any non-ASCII letters in the invitee's address.
+
 ## Rotate the IdP's signing certificate
 
 Your IdP will re-key on its own schedule, and the SAML ACS is the only human authentication door on

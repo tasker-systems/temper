@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT id, profile_id, auth_provider, auth_provider_user_id, email, email_verified,\n                   is_default, linked_at\n              FROM kb_profile_auth_links\n             WHERE email = $1\n               AND email_verified\n             LIMIT 1\n            ",
+  "query": "\n            SELECT id, profile_id, auth_provider, auth_provider_user_id, email, email_verified,\n                   is_default, linked_at\n              FROM kb_profile_auth_links\n             WHERE lower(email COLLATE \"C\") = lower($1 COLLATE \"C\")\n               AND email_verified\n             ORDER BY (email = $1) DESC, linked_at, id\n             LIMIT 1\n            ",
   "describe": {
     "columns": [
       {
@@ -60,5 +60,5 @@
       false
     ]
   },
-  "hash": "ac631cb8673de8c4de83e0316e929aabec440e2fc1a7e1a9a931707fad783558"
+  "hash": "9bd0b53bf6a3d58a892670d0a4dd57af3df97e30c925629f07a3a79e9fe319da"
 }

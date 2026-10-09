@@ -563,7 +563,8 @@ pub async fn profile_card_by_email(
         r#"
         SELECT DISTINCT al.profile_id AS "profile_id!"
         FROM kb_profile_auth_links al
-        WHERE al.email_verified AND al.email IS NOT NULL AND lower(al.email) = lower($1)
+        WHERE al.email_verified AND al.email IS NOT NULL
+          AND lower(al.email COLLATE "C") = lower($1 COLLATE "C")
         "#,
         trimmed,
     )
@@ -1127,6 +1128,18 @@ mod tests {
             .await
             .expect_err("unapproved is the retired name, not a filter");
         assert!(matches!(err, ApiError::BadRequest(_)));
+    }
+
+    /// The exact-email lookup folds ASCII case only: a look-alike (U+212A KELVIN SIGN, which the
+    /// database collation's `lower()` folds to `k`) does not resolve to the `k` address's holder.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn card_by_email_does_not_fold_look_alikes(pool: PgPool) {
+        let admin = admin(&pool).await;
+        let _ = human(&pool, "look-alike", "\u{212A}ate@corp.example", true).await;
+        let err = profile_card_by_email(&pool, &admin, "kate@corp.example")
+            .await
+            .expect_err("a look-alike holder is not the address's holder");
+        assert!(matches!(err, ApiError::NotFound(_)), "got {err:?}");
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
