@@ -129,8 +129,11 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
     ),
     (
         "kb_event_field_redactions",
-        // Projected from `resource_erased.redacted_fields` (spec D3); every column is payload-carried.
-        "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.event_id, t.path), '[]'::jsonb) FROM kb_event_field_redactions t",
+        // Projected from the `redacted_fields` of both authorising events, `resource_erased`
+        // (erasure spec D3) and `resource_scrubbed` (field-grain scrub spec S6.1); every column is
+        // payload-carried. `authority` completes the order: an erasure of a scrubbed path records
+        // a second row for the same `(event_id, path)`.
+        "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.event_id, t.path, t.authority), '[]'::jsonb) FROM kb_event_field_redactions t",
     ),
     (
         "kb_cogmap_lenses",

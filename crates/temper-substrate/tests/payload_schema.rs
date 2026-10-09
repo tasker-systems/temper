@@ -153,12 +153,19 @@ fn the_migration_literal_matches_the_committed_fixture() {
             "20261003000210_block_history_scrub.sql",
             &[
                 "block_history_scrubbed.v1.schema.json",
-                SUPERSEDED, // re-registered by the field scrub's v2 migration (Task 3)
+                SUPERSEDED, // resource_erasure_refused: 20261018100010
             ],
         ),
         (
             "20261004130000_resource_erasure_derived_vectors.sql",
             &["resource_erased.v1.schema.json"],
+        ),
+        (
+            "20261018100010_ledger_exception_second_authority.sql",
+            &[
+                "resource_scrubbed.v1.schema.json",
+                "resource_erasure_refused.v1.schema.json",
+            ],
         ),
     ] {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../migrations/");
