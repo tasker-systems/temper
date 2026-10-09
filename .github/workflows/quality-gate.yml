@@ -50,7 +50,7 @@ jobs:
       # supply-chain review (`cargo install` resolved and compiled it unpinned on every run);
       # cargo-machete follows for that reason and for this gate's own: `cargo install` compiles.
       - name: Install cargo-machete, cargo-audit and cargo-deny
-        uses: taiki-e/install-action@v2.87.18
+        uses: taiki-e/install-action@v2.87.26
         with:
           tool: cargo-machete,cargo-audit,cargo-deny
 
