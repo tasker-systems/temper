@@ -10,7 +10,8 @@
 //! This module shipped in PR #540 as a **stopgap**: `POST /api/invitations/{token}/accept` (and
 //! `/decline`) carried a **bearer capability token as a path segment**, and two recording sites put
 //! that path into an exported span attribute. `invitation_service` mints the token as 128 CSPRNG bits
-//! and its own docs say *"the token IS the authority"* — a credential, valid seven days.
+//! and its docs then said *"the token IS the authority"* — a credential, valid seven days. (Since
+//! then it redeems only for the invitee; it is still kept as private as a credential.)
 //!
 //! Those routes are gone. The token now rides in the request body
 //! (`crate::types::invitation::InvitationTokenRequest`), so no temper route carries a credential

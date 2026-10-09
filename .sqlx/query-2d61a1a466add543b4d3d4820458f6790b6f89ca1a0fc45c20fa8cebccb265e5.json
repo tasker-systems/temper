@@ -1,0 +1,70 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT i.id, i.team_id, t.slug,\n               i.status AS \"status: InvitationStatus\",\n               i.revoked_at IS NOT NULL AS \"revoked!\",\n               i.expires_at <= now() AS \"expired!\",\n               t.is_active AS \"team_active!\"\n          FROM kb_team_invitations i\n          JOIN kb_teams t ON t.id = i.team_id\n         WHERE i.token = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "team_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "status: InvitationStatus",
+        "type_info": {
+          "Custom": {
+            "name": "invitation_status",
+            "kind": {
+              "Enum": [
+                "pending",
+                "accepted",
+                "declined",
+                "expired"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "revoked!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "expired!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "team_active!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      false
+    ]
+  },
+  "hash": "2d61a1a466add543b4d3d4820458f6790b6f89ca1a0fc45c20fa8cebccb265e5"
+}

@@ -432,7 +432,7 @@ async fn email_to_card_to_review_completes_the_queue_bridge(pool: sqlx::PgPool) 
     assert_eq!(reviewed["standing"], "approved");
 }
 
-/// The token-absence clause: a pending invitation's redemption token is a bearer capability
+/// The token-absence clause: a pending invitation's redemption token is a private capability
 /// that ACCEPTS the invitation. The card renders the invitation; it must never render the
 /// token — asserted on the real binary's rendered stdout, in BOTH output formats.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

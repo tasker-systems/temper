@@ -93,7 +93,7 @@ module Temper::Generated
     end
 
     # Count the invitations addressed to you
-    # The counting half of `list_mine`, for callers that want the number and not the rows — principally `temper warmup`, which runs at every session start. Its sibling returns each invitation's redemption `token`; this returns an integer, so no bearer capability moves across the wire to answer \"how many?\".  `team_slug` folds a second question into the same round trip: *of those, how many are to this team?* Absent parameter, absent answer — `matching` is `null`, not `0`.
+    # The counting half of `list_mine`, for callers that want the number and not the rows — principally `temper warmup`, which runs at every session start. Its sibling returns each invitation's redemption `token`; this returns an integer, so no redemption token moves across the wire to answer \"how many?\".  `team_slug` folds a second question into the same round trip: *of those, how many are to this team?* Absent parameter, absent answer — `matching` is `null`, not `0`.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :team_slug Restrict the &#x60;matching&#x60; half of the answer to invitations to this team.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -104,7 +104,7 @@ module Temper::Generated
     end
 
     # Count the invitations addressed to you
-    # The counting half of &#x60;list_mine&#x60;, for callers that want the number and not the rows — principally &#x60;temper warmup&#x60;, which runs at every session start. Its sibling returns each invitation&#39;s redemption &#x60;token&#x60;; this returns an integer, so no bearer capability moves across the wire to answer \&quot;how many?\&quot;.  &#x60;team_slug&#x60; folds a second question into the same round trip: *of those, how many are to this team?* Absent parameter, absent answer — &#x60;matching&#x60; is &#x60;null&#x60;, not &#x60;0&#x60;.
+    # The counting half of &#x60;list_mine&#x60;, for callers that want the number and not the rows — principally &#x60;temper warmup&#x60;, which runs at every session start. Its sibling returns each invitation&#39;s redemption &#x60;token&#x60;; this returns an integer, so no redemption token moves across the wire to answer \&quot;how many?\&quot;.  &#x60;team_slug&#x60; folds a second question into the same round trip: *of those, how many are to this team?* Absent parameter, absent answer — &#x60;matching&#x60; is &#x60;null&#x60;, not &#x60;0&#x60;.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :team_slug Restrict the &#x60;matching&#x60; half of the answer to invitations to this team.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

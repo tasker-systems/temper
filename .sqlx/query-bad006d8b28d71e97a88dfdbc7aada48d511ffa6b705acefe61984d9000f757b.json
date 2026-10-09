@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE kb_team_invitations i\n           SET status = 'declined'\n         WHERE i.token = $1\n           AND i.status = 'pending'\n           AND i.revoked_at IS NULL\n           AND i.expires_at > now()\n           AND EXISTS (SELECT 1 FROM vw_invitee_invitations v\n                        WHERE v.id = i.id AND v.invitee_profile_id = $2)\n        RETURNING i.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bad006d8b28d71e97a88dfdbc7aada48d511ffa6b705acefe61984d9000f757b"
+}

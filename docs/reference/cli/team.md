@@ -10,7 +10,7 @@ Manage team membership and access
 Usage: temper team [OPTIONS] <COMMAND>
 
 Commands:
-  join           Accept a team invitation by its token
+  join           Accept a team invitation by its token. Only the account whose verified email the invitation names can accept it
   invite         Invite an email to a team (owner/maintainer)
   decline        Decline a team invitation by its token
   invitations    List pending invitations for a team (owner/maintainer)
@@ -38,12 +38,12 @@ Options:
 ### `temper team join`
 
 ```text
-Accept a team invitation by its token
+Accept a team invitation by its token. Only the account whose verified email the invitation names can accept it
 
 Usage: temper team join [OPTIONS] <TOKEN>
 
 Arguments:
-  <TOKEN>  Invitation token (from `temper team invite`)
+  <TOKEN>  Invitation token (from `temper invitations`)
 
 Options:
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
