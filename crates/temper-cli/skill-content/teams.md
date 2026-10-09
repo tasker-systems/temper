@@ -2,8 +2,9 @@
 
 A **team** is a named group of profiles that share access — teams own contexts,
 receive read/write grants on resources and cognitive maps, and gate visibility.
-Every profile also has an automatic personal team (`personal-<handle>`), so member
-counts are never zero.
+Every profile also has an automatic personal team (`personal-<handle>`, or
+`personal-<handle>-2` and so on if that slug was already held), so member counts are never
+zero. The `personal-` prefix is reserved: `temper team create` refuses it.
 
 Reach for teams when work needs to be shared across people, or when you're asked
 to invite/onboard/offboard someone or manage who can see a context.

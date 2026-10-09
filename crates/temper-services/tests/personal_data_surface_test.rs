@@ -71,7 +71,7 @@ js AS (
   JOIN information_schema.tables t ON t.table_name=c.table_name
    AND t.table_schema='public' AND t.table_type='BASE TABLE'
   WHERE c.table_schema='public' AND c.data_type='jsonb'),
-denorm AS (VALUES ('kb_teams','slug'),('kb_teams','name')),
+denorm AS (VALUES ('kb_teams','slug'),('kb_teams','name'),('kb_teams','personal_of')),
 bytes AS (
   SELECT c.table_name tbl, c.column_name col FROM information_schema.columns c
   JOIN information_schema.tables t ON t.table_name=c.table_name

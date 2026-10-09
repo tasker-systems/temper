@@ -25,6 +25,10 @@ use temper_core::types::team::{
     TeamMemberSource, TeamRole, TeamRow, TeamUpdateRequest,
 };
 
+/// The slug prefix of every personal team (`personal-<handle>`), which `sync_personal_team`
+/// alone may create.
+pub const PERSONAL_TEAM_SLUG_PREFIX: &str = "personal-";
+
 /// Map a sqlx error to `Conflict` when it is a unique-constraint violation
 /// (the globally-UNIQUE `kb_teams.slug`), else pass it through.
 fn map_unique_violation(err: sqlx::Error, message: &str) -> ApiError {
@@ -125,6 +129,11 @@ pub(crate) async fn require_team_exists(pool: &PgPool, team_id: Uuid) -> ApiResu
 
 /// Create a team. The caller becomes its `owner`.
 ///
+/// The [`PERSONAL_TEAM_SLUG_PREFIX`] is refused for every caller, admins included: only the
+/// `sync_personal_team` trigger creates a personal team. The trigger no longer joins a profile to
+/// a team it did not create (a held slug sends it to `personal-<handle>-N`), so the refusal is the
+/// first of two guards against squatting, and keeps `personal-<handle>` meaning that profile's.
+///
 /// Auth before writes:
 /// - **child** (`parent` set): caller must be `owner`/`maintainer` on the parent.
 /// - **root** (`parent` None): any authenticated profile may create.
@@ -141,6 +150,16 @@ pub async fn create_team(
     req: &TeamCreateRequest,
 ) -> ApiResult<TeamRow> {
     let creator = ProfileId::from(authed.profile().id);
+    if req
+        .slug
+        .to_ascii_lowercase()
+        .starts_with(PERSONAL_TEAM_SLUG_PREFIX)
+    {
+        return Err(ApiError::BadRequest(format!(
+            "the `{PERSONAL_TEAM_SLUG_PREFIX}` slug prefix is reserved for personal teams"
+        )));
+    }
+
     // --- Auth before writes ---
 
     // Child team: resolve the parent and require owner/maintainer on it.
@@ -226,8 +245,13 @@ pub async fn create_team(
     Ok(row)
 }
 
-/// Add (or update) a member on a team. The caller must be `owner`/`maintainer`.
+/// Add a member to a team. The caller must be `owner`/`maintainer`.
 /// Cannot grant `owner` (ownership is transferred, not granted) — see `change_role`.
+///
+/// **Insert-only.** A profile already on the team is a `Conflict`, never a role update: an upsert
+/// here would change an existing member's role while skipping every guard `change_role` carries —
+/// it could demote a team's last owner (orphaning the team) or rewrite a SAML-provisioned row.
+/// Changing a role is `change_role`'s job, and only there are those guards enforced.
 pub async fn add_member(
     pool: &PgPool,
     caller: ProfileId,
@@ -241,31 +265,38 @@ pub async fn add_member(
     }
 
     // Same rule as `change_role`: `owner` is conferred by ownership transfer, never by a
-    // role grant. Without this, the `ON CONFLICT DO UPDATE SET role` below makes
-    // `add_member` a silent bypass of `change_role`'s guard — it would upgrade an
-    // existing member straight to `owner`.
+    // role grant.
     if matches!(req.role, TeamRole::Owner) {
         return Err(ApiError::BadRequest(
             "cannot grant owner via add_member; use ownership transfer".to_string(),
         ));
     }
 
+    // `DO NOTHING` + `RETURNING` yields no row on conflict, so an existing membership is
+    // detected by the same statement that would have written it — no separate existence check
+    // to race against.
     let row = sqlx::query_as!(
         TeamMemberRow,
         r#"
         INSERT INTO kb_team_members (team_id, profile_id, role)
         VALUES ($1, $2, $3)
-        ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role
+        ON CONFLICT (team_id, profile_id) DO NOTHING
         RETURNING team_id, profile_id, role AS "role: TeamRole", created
         "#,
         team_id,
         req.profile_id,
         req.role as TeamRole,
     )
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await?;
 
-    Ok(row)
+    row.ok_or_else(|| {
+        ApiError::Conflict(
+            "already a member of this team; change their role with `temper team set-role` \
+             (PATCH /api/teams/{id}/members/{profile_id})"
+                .to_string(),
+        )
+    })
 }
 
 /// List the teams the caller is a member of.
@@ -1240,5 +1271,262 @@ mod lifecycle_tests {
         .await
         .unwrap();
         assert!(matches!(row.role, TeamRole::Maintainer));
+    }
+
+    /// Read one member's `(role, source)` straight from the table, bypassing the service.
+    async fn stored_member(pool: &PgPool, team: Uuid, profile: Uuid) -> (TeamRole, String) {
+        sqlx::query_as(
+            "SELECT role, source::text FROM kb_team_members WHERE team_id = $1 AND profile_id = $2",
+        )
+        .bind(team)
+        .bind(profile)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// The orphaning path. Under the old upsert a maintainer could "add" the team's SOLE owner
+    /// at `watcher`, overwriting the role with no last-owner guard and leaving the team with no
+    /// owner at all. `change_role` refuses that demotion; `add_member` must not be a way around it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn add_member_cannot_demote_the_last_owner(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let maintainer = mk_profile(&pool, "maintainer").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, maintainer, "maintainer", "native").await;
+
+        let denied = add_member(
+            &pool,
+            ProfileId::from(maintainer),
+            team,
+            &AddMemberRequest {
+                profile_id: owner,
+                role: TeamRole::Watcher,
+            },
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ApiError::Conflict(_))),
+            "got {denied:?}"
+        );
+
+        let (role, _) = stored_member(&pool, team, owner).await;
+        assert!(matches!(role, TeamRole::Owner), "got {role:?}");
+    }
+
+    /// A SAML-provisioned row is changed only by IdP reconciliation; `change_role` refuses it.
+    /// The old upsert rewrote its role and left `source = 'idp'` on a row the IdP never asserted.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn add_member_cannot_rewrite_a_saml_provisioned_row(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let provisioned = mk_profile(&pool, "provisioned").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, provisioned, "member", "idp").await;
+
+        let denied = add_member(
+            &pool,
+            ProfileId::from(owner),
+            team,
+            &AddMemberRequest {
+                profile_id: provisioned,
+                role: TeamRole::Maintainer,
+            },
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ApiError::Conflict(_))),
+            "got {denied:?}"
+        );
+
+        let (role, source) = stored_member(&pool, team, provisioned).await;
+        assert!(matches!(role, TeamRole::Member), "got {role:?}");
+        assert_eq!(source, "idp");
+    }
+
+    /// The ordinary case of the same rule: re-adding an existing native member at a different
+    /// role is refused, not applied — the role changes only through `change_role`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn add_member_does_not_change_an_existing_members_role(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let member = mk_profile(&pool, "member").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, member, "member", "native").await;
+
+        let denied = add_member(
+            &pool,
+            ProfileId::from(owner),
+            team,
+            &AddMemberRequest {
+                profile_id: member,
+                role: TeamRole::Maintainer,
+            },
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ApiError::Conflict(_))),
+            "got {denied:?}"
+        );
+
+        let (role, _) = stored_member(&pool, team, member).await;
+        assert!(matches!(role, TeamRole::Member), "got {role:?}");
+    }
+
+    // --- Personal-team slug squatting (spec review L1) ---
+
+    /// Insert a profile and return the database's answer, so a refused insert can be asserted.
+    async fn try_mk_profile(pool: &PgPool, handle: &str) -> Result<Uuid, sqlx::Error> {
+        sqlx::query_scalar(
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
+        )
+        .bind(handle)
+        .fetch_one(pool)
+        .await
+    }
+
+    /// Nobody may create a team under the personal prefix, admins included, in any case.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn create_team_refuses_the_personal_slug_prefix(pool: PgPool) {
+        let squatter = mk_profile(&pool, "squatter").await;
+        let authed = crate::test_support::authenticated_profile_for(&pool, squatter).await;
+        for slug in ["personal-victim", "Personal-Victim"] {
+            let req = TeamCreateRequest {
+                slug: slug.to_string(),
+                name: None,
+                parent: None,
+                auto_join_role: None,
+            };
+            let refused = create_team(&pool, &authed, &req).await;
+            assert!(
+                matches!(refused, Err(ApiError::BadRequest(_))),
+                "{slug}: got {refused:?}"
+            );
+        }
+        let held: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM kb_teams WHERE lower(slug) = 'personal-victim')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!held, "a refused create must write no team");
+    }
+
+    /// The profile's own personal team, found by identity.
+    async fn personal_team_of(pool: &PgPool, profile: Uuid) -> (Uuid, String) {
+        sqlx::query_as("SELECT id, slug FROM kb_teams WHERE personal_of = $1")
+            .bind(profile)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn member_count(pool: &PgPool, team: Uuid) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM kb_team_members WHERE team_id = $1")
+            .bind(team)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// A team already holding `personal-<handle>` with a member is someone else's: the new
+    /// profile is not joined to it, and still gets a personal team, at the next free suffix.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_new_profile_does_not_join_a_member_held_personal_slug(pool: PgPool) {
+        let squatter = mk_profile(&pool, "squatter").await;
+        let squat = mk_team(&pool, "personal-victim").await;
+        add(&pool, squat, squatter, "owner", "native").await;
+
+        let victim = try_mk_profile(&pool, "victim")
+            .await
+            .expect("a held personal slug never blocks a profile");
+
+        assert_eq!(
+            member_count(&pool, squat).await,
+            1,
+            "the squatted team gains no member"
+        );
+        let (own, slug) = personal_team_of(&pool, victim).await;
+        assert_eq!(slug, "personal-victim-2");
+        let (role, _) = stored_member(&pool, own, victim).await;
+        assert!(matches!(role, TeamRole::Owner), "got {role:?}");
+        assert_eq!(member_count(&pool, own).await, 1);
+    }
+
+    /// A team someone else built under the slug and its `-2` are both passed over: the suffix
+    /// takes the next free one.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_new_profile_skips_every_held_suffix(pool: PgPool) {
+        let parent = mk_team(&pool, "acme").await;
+        let squat = mk_team(&pool, "personal-victim").await;
+        sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
+            .bind(squat)
+            .bind(parent)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let squatter = mk_profile(&pool, "squatter").await;
+        let next = mk_team(&pool, "personal-victim-2").await;
+        add(&pool, next, squatter, "owner", "native").await;
+
+        let victim = try_mk_profile(&pool, "victim").await.unwrap();
+
+        assert_eq!(member_count(&pool, squat).await, 0);
+        let (_, slug) = personal_team_of(&pool, victim).await;
+        assert_eq!(slug, "personal-victim-3");
+    }
+
+    /// An empty team at the bare slug is still someone else's: whatever hangs off it (here a
+    /// child team, whose members reach their ancestors) must not become the new profile's.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_new_profile_does_not_adopt_a_memberless_team_at_its_slug(pool: PgPool) {
+        let empty = mk_team(&pool, "personal-victim").await;
+        let child = mk_team(&pool, "foothold").await;
+        sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
+            .bind(child)
+            .bind(empty)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let victim = try_mk_profile(&pool, "victim").await.unwrap();
+
+        assert_eq!(
+            member_count(&pool, empty).await,
+            0,
+            "the empty team gains no member"
+        );
+        let (_, slug) = personal_team_of(&pool, victim).await;
+        assert_eq!(slug, "personal-victim-2");
+    }
+
+    /// Replay restores every personal team, carrying `personal_of`, before its profile, under
+    /// whatever slug genesis gave it, suffixed or renamed by erasure; the profile adopts it by
+    /// identity and creates nothing.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_restored_personal_team_is_adopted_by_identity_whatever_its_slug(pool: PgPool) {
+        let id = Uuid::now_v7();
+        let restored: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_teams (slug, name, personal_of) \
+             VALUES ('personal-ghost-2', 'g', $1) RETURNING id",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, 'ghost', 'g')")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(personal_team_of(&pool, id).await.0, restored);
+        let teams: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM kb_teams WHERE slug LIKE 'personal-ghost%'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(teams, 1, "no second personal team is created");
     }
 }

@@ -45,6 +45,7 @@ pub async fn list(State(state): State<AppState>, auth: AuthUser) -> ApiResult<Js
     request_body = TeamCreateRequest,
     responses(
         (status = 201, description = "Team created", body = TeamRow),
+        (status = 400, description = "The `personal-` slug prefix is reserved for personal teams"),
         (status = 403, description = "Forbidden (child requires owner/maintainer; auto_join_role requires admin)"),
         (status = 409, description = "Team slug already exists"),
     )
@@ -70,6 +71,7 @@ pub async fn create(
         (status = 201, description = "Member added", body = TeamMemberRow),
         (status = 403, description = "Forbidden (caller is not owner/maintainer)"),
         (status = 400, description = "Cannot grant owner via add_member; use ownership transfer"),
+        (status = 409, description = "Already a member of this team; change the role with PATCH /api/teams/{id}/members/{profile_id}"),
     )
 )]
 pub async fn add_member(
