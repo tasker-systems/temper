@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT DISTINCT al.profile_id AS \"profile_id!\"\n        FROM kb_profile_auth_links al\n        WHERE al.email_verified AND al.email IS NOT NULL\n          AND lower(al.email COLLATE \"C\") = lower($1 COLLATE \"C\")\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "profile_id!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e53a192820b0e297d41b989c840e3acfbc34561a8a76d9c696d54001009dfff0"
+}

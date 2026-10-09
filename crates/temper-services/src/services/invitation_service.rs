@@ -550,6 +550,25 @@ mod tests {
         assert_eq!(got.len(), 1);
     }
 
+    /// A look-alike is not the invited address: an invitation to `kate@x.com` is not addressed to
+    /// the verified holder of the U+212A KELVIN SIGN spelling, which the database collation's
+    /// `lower()` would fold to `k`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn list_for_profile_does_not_fold_look_alikes(pool: PgPool) {
+        let inviter = mk_profile(&pool, "inviter").await;
+        let holder = mk_profile(&pool, "holder").await;
+        add_auth_email(&pool, holder, "holder-uid", Some("\u{212A}ate@x.com")).await;
+        let team = mk_team(&pool, "platform").await;
+        add_member(&pool, team, inviter, "owner").await;
+        seed_invite(&pool, team, "kate@x.com", inviter, "pending", 7).await;
+
+        let got = list_for_profile(&pool, holder).await.unwrap();
+        assert!(
+            got.is_empty(),
+            "a look-alike address is not the invited one"
+        );
+    }
+
     #[sqlx::test(migrations = "../../migrations")]
     async fn list_for_profile_discounts_ambiguous_email(pool: PgPool) {
         // Two profiles both hold dup@x.com — ambiguous, must be discounted for the caller.
