@@ -116,6 +116,13 @@ for DIR in "${PACKAGES[@]}"; do
     # `npm pack` names the tarball after the manifest: scope's `@` dropped, `/` → `-`.
     TARBALL="$(echo "${NAME#@}" | tr '/' '-')-${VERSION}.tgz"
 
+    # The build stage refuses a bad manifest before it calls npm at all; the
+    # publish stage reads the manifest from the tarball, after its own probe.
+    if [[ -n "$OUT_DIR" ]]; then
+        DECLARED=$(grep -m1 '"version"' "${PKG_DIR}/package.json" | sed -E 's/.*"version": "([^"]+)".*/\1/')
+        check_manifest "$DIR" "$NAME" "$DECLARED"
+    fi
+
     if already_published "$NAME"; then
         echo "==> ${NAME}@${VERSION} is already published — nothing to do."
         continue
@@ -123,8 +130,6 @@ for DIR in "${PACKAGES[@]}"; do
 
     if [[ -n "$OUT_DIR" ]]; then
         echo "==> build ${DIR} @ ${VERSION}"
-        DECLARED=$(grep -m1 '"version"' "${PKG_DIR}/package.json" | sed -E 's/.*"version": "([^"]+)".*/\1/')
-        check_manifest "$DIR" "$NAME" "$DECLARED"
         mkdir -p "$OUT_DIR"
         OUT_ABS="$(cd "$OUT_DIR" && pwd)"
         (

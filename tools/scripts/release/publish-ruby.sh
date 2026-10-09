@@ -68,6 +68,17 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 GEM_DIR="${REPO_ROOT}/clients/temper-rb"
 GEM_FILE="${GEM_NAME}-${VERSION}.gem"
 
+# The build stage refuses a version disagreement before it probes or builds; the
+# publish stage checks the version the gem itself declares, after its own probe.
+if [[ -n "$OUT_DIR" ]]; then
+    DECLARED="$(grep -oE "VERSION = '[^']+'" "${GEM_DIR}/lib/temper/version.rb" | cut -d"'" -f2)"
+    if [[ "$DECLARED" != "$VERSION" ]]; then
+        echo "ERROR: Temper::VERSION is ${DECLARED}, but ${VERSION} was requested." >&2
+        echo "       Update clients/temper-rb/lib/temper/version.rb first." >&2
+        exit 1
+    fi
+fi
+
 if curl -sf "$VERSIONS_API" | grep "\"number\":\"${VERSION}\"" > /dev/null; then
     echo "==> ${GEM_NAME} ${VERSION} is already published — nothing to do."
     exit 0
@@ -75,12 +86,6 @@ fi
 
 if [[ -n "$OUT_DIR" ]]; then
     echo "==> build ${GEM_NAME} ${VERSION} into ${OUT_DIR}"
-    DECLARED="$(grep -oE "VERSION = '[^']+'" "${GEM_DIR}/lib/temper/version.rb" | cut -d"'" -f2)"
-    if [[ "$DECLARED" != "$VERSION" ]]; then
-        echo "ERROR: Temper::VERSION is ${DECLARED}, but ${VERSION} was requested." >&2
-        echo "       Update clients/temper-rb/lib/temper/version.rb first." >&2
-        exit 1
-    fi
     mkdir -p "$OUT_DIR"
     OUT_ABS="$(cd "$OUT_DIR" && pwd)"
     (cd "$GEM_DIR" && gem build "${GEM_NAME}.gemspec" --output "${OUT_ABS}/${GEM_FILE}")
