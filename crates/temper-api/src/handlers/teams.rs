@@ -70,6 +70,7 @@ pub async fn create(
         (status = 201, description = "Member added", body = TeamMemberRow),
         (status = 403, description = "Forbidden (caller is not owner/maintainer)"),
         (status = 400, description = "Cannot grant owner via add_member; use ownership transfer"),
+        (status = 409, description = "Already a member of this team; change the role with PATCH /api/teams/{id}/members/{profile_id}"),
     )
 )]
 pub async fn add_member(

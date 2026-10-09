@@ -32,6 +32,19 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 (`schemas/versions/<M.m>/`); the pin gate checks the record names a `spec-correction` row.
 
 ## Since v0.6.0 — unreleased
+- **`POST /api/teams/{id}/members` adds only; a profile already on the team is a 409**
+  `team_service::add_member` was an upsert: posting a profile already on the team overwrote its
+  role, skipping every guard `change_role` enforces. A maintainer could re-add a team's sole owner
+  at `watcher` and leave the team with no owner, or rewrite the role on a SAML-provisioned row. It
+  now inserts only and answers `409 Conflict` naming `temper team set-role` /
+  `PATCH /api/teams/{id}/members/{profile_id}`; the OpenAPI operation grows the 409 response.
+  Request and success shapes are unchanged. Who observes: API, SDK and `temper team add-member`
+  callers re-adding an existing member. User-visible: a 409 where the role used to change silently.
+  Release relevance: additive (the 409 response), behavioral (re-add no longer changes a role).
+pr: self
+classes: additive, behavioral
+surfaces: http, clients
+status: signal-only
 - **Every client refuses a path value of `.` or `..`; temper-rb and temper-py also escape `.` in path values**
   temperkb-client, temper-ts, temper-rb and temper-py now refuse, before any request is sent, a
   path value that is exactly `.` or `..`. The v0.6.0 row on temperkb-client said temperkb-client's encoding

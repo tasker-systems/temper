@@ -112,6 +112,7 @@ class TeamsApi:
             '201': "TeamMemberRow",
             '400': None,
             '403': None,
+            '409': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -188,6 +189,7 @@ class TeamsApi:
             '201': "TeamMemberRow",
             '400': None,
             '403': None,
+            '409': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -264,6 +266,7 @@ class TeamsApi:
             '201': "TeamMemberRow",
             '400': None,
             '403': None,
+            '409': None,
         }
         response_data = self.api_client.call_api(
             *_param,

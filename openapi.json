@@ -14195,6 +14195,9 @@
           },
           "403": {
             "description": "Forbidden (caller is not owner/maintainer)"
+          },
+          "409": {
+            "description": "Already a member of this team; change the role with PATCH /api/teams/{id}/members/{profile_id}"
           }
         },
         "security": [

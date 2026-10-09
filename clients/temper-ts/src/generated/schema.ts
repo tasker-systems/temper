@@ -19795,6 +19795,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Already a member of this team; change the role with PATCH /api/teams/{id}/members/{profile_id} */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     remove_member: {
