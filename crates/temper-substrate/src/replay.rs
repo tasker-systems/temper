@@ -606,8 +606,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
         // guard. `set_config(.., true)` scopes the setting to this transaction, so it ends at the
         // commit below or at the rollback an early `?` return causes when the transaction drops,
         // and the pooled connection never carries it to another user. The multi-statement Rust
-        // projectors (`project_property_unset`, `project_property_retracted`) get their atomicity
-        // from the same transaction.
+        // projector (`project_property_retracted`) gets its atomicity from the same transaction.
         let mut tx = pool.begin().await?;
         sqlx::query_scalar!("SELECT set_config('temper.replaying', 'on', true)")
             .fetch_one(&mut *tx)
@@ -754,11 +753,11 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 crate::events::project_property_retracted(&mut tx, id, &payload).await?;
             }
             // property_unset (the key-grain delete verb): payload-only projector, no sidecar —
-            // the shared `project_property_unset`, fire and replay ONE implementation since this
-            // event has no `_project_*` SQL function. The payload carries (owner, key), so
-            // replay re-folds the SAME key's live set; the `NOT is_folded` floor makes a
-            // re-application a zero-row no-op, never a resurrection. The write guard, the fold and
-            // the FTS rebuild are separate statements; the event's walk transaction holds all three.
+            // the shared `project_property_unset`, which calls `_project_property_unset`, the one
+            // body the fire path also reaches. The payload carries (owner, key), so replay re-folds
+            // the SAME key's live set; the `NOT is_folded` floor makes a re-application a zero-row
+            // no-op, never a resurrection. The write guard, the fold and the FTS rebuild run inside
+            // that one function call.
             EventKind::PropertyUnset => {
                 crate::events::project_property_unset(&mut tx, id, &payload).await?;
             }
