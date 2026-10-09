@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO kb_team_members (team_id, profile_id, role)\n            SELECT $1, $2, 'watcher'\n             WHERE NOT EXISTS (SELECT 1 FROM kb_machine_clients mc WHERE mc.profile_id = $2)\n            ON CONFLICT (team_id, profile_id) DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "845658aaaf2343686d037560629c64c4affe7e07ed7241ea1d17707a1feb5863"
+}

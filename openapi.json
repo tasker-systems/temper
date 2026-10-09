@@ -31,7 +31,7 @@
           "Admin"
         ],
         "summary": "Reconcile auto-join team rosters",
-        "description": "Adds every approved principal missing from an auto-join team and reports each (team, profile) pair added, plus the touched teams that also carry SAML group mappings (whose new native memberships take precedence over IdP role assertions). An empty `added` means nothing needed adding. Requires a system admin.",
+        "description": "Adds every approved person (never a machine principal) missing from an auto-join team and reports each (team, profile) pair added, plus the touched teams that also carry SAML group mappings (whose new native memberships take precedence over IdP role assertions). An empty `added` means nothing needed adding. Requires a system admin.",
         "operationId": "admin_reconcile_auto_join",
         "responses": {
           "200": {
@@ -13772,6 +13772,9 @@
               }
             }
           },
+          "400": {
+            "description": "The `personal-` slug prefix is reserved for personal teams"
+          },
           "403": {
             "description": "Forbidden (child requires owner/maintainer; auto_join_role requires admin)"
           },
@@ -14195,6 +14198,9 @@
           },
           "403": {
             "description": "Forbidden (caller is not owner/maintainer)"
+          },
+          "409": {
+            "description": "Already a member of this team; change the role with PATCH /api/teams/{id}/members/{profile_id}"
           }
         },
         "security": [

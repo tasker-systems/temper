@@ -519,14 +519,14 @@ pub async fn approve_principal(
 }
 
 /// POST /api/access/admin/auto-join/reconcile — converge every auto-join team's roster to the
-/// standing-approved population (admin only). Returns the (team, profile) pairs added plus
+/// standing-approved humans, never machines (admin only). Returns the (team, profile) pairs added plus
 /// the touched teams that also carry SAML group mappings (whose new native rows pre-empt
 /// IdP role assertions); an empty `added` means the instance was already converged.
 #[utoipa::path(
     post,
     operation_id = "admin_reconcile_auto_join",
     summary = "Reconcile auto-join team rosters",
-    description = "Adds every approved principal missing from an auto-join team and reports each (team, profile) pair added, plus the touched teams that also carry SAML group mappings (whose new native memberships take precedence over IdP role assertions). An empty `added` means nothing needed adding. Requires a system admin.",
+    description = "Adds every approved person (never a machine principal) missing from an auto-join team and reports each (team, profile) pair added, plus the touched teams that also carry SAML group mappings (whose new native memberships take precedence over IdP role assertions). An empty `added` means nothing needed adding. Requires a system admin.",
     path = "/api/access/admin/auto-join/reconcile",
     tag = "Admin",
     security(("bearer_auth" = [])),

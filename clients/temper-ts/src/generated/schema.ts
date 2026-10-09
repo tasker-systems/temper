@@ -18,7 +18,7 @@ export interface paths {
         put?: never;
         /**
          * Reconcile auto-join team rosters
-         * @description Adds every approved principal missing from an auto-join team and reports each (team, profile) pair added, plus the touched teams that also carry SAML group mappings (whose new native memberships take precedence over IdP role assertions). An empty `added` means nothing needed adding. Requires a system admin.
+         * @description Adds every approved person (never a machine principal) missing from an auto-join team and reports each (team, profile) pair added, plus the touched teams that also carry SAML group mappings (whose new native memberships take precedence over IdP role assertions). An empty `added` means nothing needed adding. Requires a system admin.
          */
         post: operations["admin_reconcile_auto_join"];
         delete?: never;
@@ -19515,6 +19515,13 @@ export interface operations {
                     "application/json": components["schemas"]["TeamRow"];
                 };
             };
+            /** @description The `personal-` slug prefix is reserved for personal teams */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Forbidden (child requires owner/maintainer; auto_join_role requires admin) */
             403: {
                 headers: {
@@ -19821,6 +19828,13 @@ export interface operations {
             };
             /** @description Forbidden (caller is not owner/maintainer) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Already a member of this team; change the role with PATCH /api/teams/{id}/members/{profile_id} */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

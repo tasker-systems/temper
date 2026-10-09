@@ -154,8 +154,8 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
 /// Non-projected input tables, copied verbatim into the replay namespace. Restore order respects FK
 /// dependencies. `kb_team_cogmaps` restores AFTER the event walk (it references projected cogmaps).
 /// Teams (+ DAG) restore BEFORE profiles: the personal-team trigger fires per restored profile and
-/// must no-op by slug against the restored originals, keeping original team ids intact for the
-/// kb_team_members restore (WS6 §2).
+/// adopts the restored original by `kb_teams.personal_of`, creating nothing, so original team ids
+/// stay intact for the kb_team_members restore (WS6 §2).
 const INPUT_TABLES: &[&str] = &[
     "kb_teams",
     "kb_teams_parents",

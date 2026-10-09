@@ -915,7 +915,7 @@ pub async fn demote_admin(pool: &PgPool, admin: &SystemAdmin, subject: ProfileId
     Ok(())
 }
 
-/// Converge every auto-join team to the standing-approved population, reporting each
+/// Converge every auto-join team to the standing-approved humans (machines are never enrolled), reporting each
 /// (team, profile) pair added plus the touched teams that also carry SAML group mappings.
 ///
 /// The operator repair for instances that drifted while enrollment lived only on the
@@ -1573,11 +1573,13 @@ pub async fn review_request(
         .await?;
 
         // Retain the gating-team membership the pre-D11 model wrote (harmless team-role churn now
-        // that access rides standing, not this row) so team-scoped visibility is unchanged.
+        // that access rides standing, not this row) so team-scoped visibility is unchanged. Never
+        // for a machine principal: a machine joins no team nobody chose for it (ruled 2026-10-09).
         sqlx::query!(
             r#"
             INSERT INTO kb_team_members (team_id, profile_id, role)
-            VALUES ($1, $2, 'watcher')
+            SELECT $1, $2, 'watcher'
+             WHERE NOT EXISTS (SELECT 1 FROM kb_machine_clients mc WHERE mc.profile_id = $2)
             ON CONFLICT (team_id, profile_id) DO NOTHING
             "#,
             row.team_id,

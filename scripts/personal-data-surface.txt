@@ -96,8 +96,9 @@ kb_event_types.payload_schema             | none          | n-a       |
 # ── denormalized by trigger, reachable by NO foreign key ─────────────────────────────────────
 # `sync_personal_team` copies handle and display_name into kb_teams on every profile insert.
 # Found by derivation `denorm`, not by memory. Scrubbing kb_profiles alone leaves these behind.
-kb_teams.slug                             | identifier    | full      | 'personal-' || kb_profiles.handle
+kb_teams.slug                             | identifier    | full      | 'personal-' || kb_profiles.handle, `-N` suffixed when that slug was held
 kb_teams.name                             | identifier    | full      | kb_profiles.display_name || ' (personal)'
+kb_teams.personal_of                      | reference     | pseudonym | the profile whose personal team this is; how erasure finds the two rows above
 
 # ── polymorphic references: a CHECK, not a foreign key ───────────────────────────────────────
 kb_access_grants.principal_table          | discriminator | n-a       |
