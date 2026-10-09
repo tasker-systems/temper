@@ -191,7 +191,7 @@ fi
 #
 # A Dependabot branch changes lockfiles to versions nobody here has reviewed yet, and a
 # preview build installs them (install scripts included) with the project's Preview
-# environment variables in reach — which share records with Production. This step runs
+# environment variables in reach. This step runs
 # before the install, so skipping here means the new upstream code never runs on Vercel
 # until a human has merged it. It covers security-update and version-update PRs alike.
 # Previews only: production builds from main, which a Dependabot branch never is.
