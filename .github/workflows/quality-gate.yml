@@ -50,7 +50,7 @@ jobs:
       # supply-chain review (`cargo install` resolved and compiled it unpinned on every run);
       # cargo-machete follows for that reason and for this gate's own: `cargo install` compiles.
       - name: Install cargo-machete, cargo-audit and cargo-deny
-        uses: taiki-e/install-action@v2.87.18
+        uses: taiki-e/install-action@v2.87.26
         with:
           tool: cargo-machete,cargo-audit,cargo-deny
 
@@ -430,6 +430,9 @@ jobs:
       # wire. And it is MORE barred than that one — behavior is not in any diff, so a green
       # run here can never certify the behavioral class; the script's output says so on every
       # pass. jq is preinstalled on the runner; no toolchain, so it lives in this job.
+      # Dependency-only changes under those trees (lockfiles, package.json dependency maps,
+      # Cargo.toml [*dependencies*] tables) are set aside by content, so a Dependabot bump owes
+      # no row — see the script's DEPENDENCY-ONLY section.
       - name: Wire-touching PRs declare their compat class (register cross-check)
         env:
           GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}

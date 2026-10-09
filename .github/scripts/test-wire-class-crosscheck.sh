@@ -513,6 +513,90 @@ vocab_probe '.components.schemas.Reason.oneOf |= (.[0:2] + [{"type":"string","en
 vocab_probe '.components.schemas.Reason.oneOf |= ([.[0] | .enum = ["alpha_renamed"]] + .[1:2] + [{"type":"string","enum":["gamma"]}] + .[2:])' \
   moved "open-vocabulary growth beside a renamed member computes as moved"
 
+# ── 16. DEPENDENCY-ONLY — manifest/lockfile bumps under wire trees owe no row ───────────────────
+# The fixture seam: paths named by --dependency-only are set aside; a row is owed only for the
+# rest. A mixed PR (a bump plus a code edit) still fails presence, naming only the code file.
+DEPS="${WORK}/deps.txt"
+reset_fixtures
+printf '%s\n' "clients/temper-ts/package.json" "clients/temper-ts/package-lock.json" > "$WIRE"
+cp "$WIRE" "$DEPS"
+out="$(run_check unchanged --dependency-only "$DEPS")"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'every wire-tree change is dependency-only' \
+    && printf '%s' "$out" | grep -q 'behavioral class'; then
+  ok "dependency-only seam: all wire paths set aside passes, naming the behavioral bar"
+else bad "dependency-only seam: all wire paths set aside passes, naming the behavioral bar" "exit=$rc" "$out"; fi
+
+reset_fixtures
+printf '%s\n' "clients/temper-ts/package.json" "clients/temper-ts/src/index.ts" > "$WIRE"
+printf '%s\n' "clients/temper-ts/package.json" > "$DEPS"
+out="$(run_check unchanged --dependency-only "$DEPS")"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'adds no register row for this PR' \
+    && printf '%s' "$out" | grep -q 'clients/ (1 file(s))'; then
+  ok "dependency-only seam: a bump beside a code edit still owes the row for the code"
+else bad "dependency-only seam: a bump beside a code edit still owes the row for the code" "exit=$rc" "$out"; fi
+
+# The classifier itself, in git mode against a throwaway repository: no seams, a real base.
+# Each case commits a base manifest, edits it, and asks the real script.
+classify_probe() { # $1 = path, $2 = base content, $3 = head content ("" = file new in head), $4 = expect pass|fail, $5 = label
+  local repo="${WORK}/repo-$RANDOM$RANDOM"
+  mkdir -p "$repo" && git -C "$repo" init -q && git -C "$repo" config user.email t@t && git -C "$repo" config user.name t
+  mkdir -p "$repo/$(dirname "$1")"
+  if [ -n "$2" ]; then printf '%s\n' "$2" > "$repo/$1"; else : > "$repo/.keep"; fi
+  git -C "$repo" add -A && git -C "$repo" commit -qm base
+  printf '%s\n' "$3" > "$repo/$1"
+  git -C "$repo" add -A
+  local out rc
+  out="$(cd "$repo" && bash "$CHECK" --base HEAD 2>&1)"; rc=$?
+  if { [ "$4" = pass ] && [ "$rc" -eq 0 ]; } || { [ "$4" = fail ] && [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'adds no register row'; }; then
+    ok "$5"
+  else bad "$5" "exit=$rc" "$out"; fi
+}
+
+PJ_BASE='{"name":"@temperkb/client","version":"0.4.0","dependencies":{"a":"^1.0.0"},"devDependencies":{"vitest":"^3.2.7"},"peerDependencies":{"p":"^1"}}'
+classify_probe clients/temper-ts/package.json "$PJ_BASE" \
+  '{"name":"@temperkb/client","version":"0.4.0","dependencies":{"a":"^1.2.0"},"devDependencies":{"vitest":"^5.0.3"},"peerDependencies":{"p":"^1"}}' \
+  pass "classifier: package.json moving only dependencies/devDependencies is dependency-only"
+classify_probe clients/temper-ts/package.json "$PJ_BASE" \
+  '{"name":"@temperkb/client","version":"0.5.0","dependencies":{"a":"^1.0.0"},"devDependencies":{"vitest":"^3.2.7"},"peerDependencies":{"p":"^1"}}' \
+  fail "classifier: a package.json version change stays on the wire"
+classify_probe clients/temper-ts/package.json "$PJ_BASE" \
+  '{"name":"@temperkb/client","version":"0.4.0","dependencies":{"a":"^1.0.0"},"devDependencies":{"vitest":"^3.2.7"},"peerDependencies":{"p":"^2"}}' \
+  fail "classifier: a peerDependencies change stays on the wire (consumer-facing)"
+classify_probe clients/temper-ts/package.json "" "$PJ_BASE" \
+  fail "classifier: a package.json new in this diff stays on the wire (fail closed)"
+classify_probe clients/temper-ts/package.json "$PJ_BASE" '{not json' \
+  fail "classifier: an unparseable package.json stays on the wire (fail closed)"
+classify_probe clients/temper-ts/package-lock.json '{"lockfileVersion":3}' '{"lockfileVersion":3,"x":1}' \
+  pass "classifier: a lockfile is dependency-only"
+
+CT_BASE='[package]
+name = "temper-api"
+version = "0.4.0"
+
+[features]
+default = []
+
+[dependencies]
+jsonwebtoken = { version = "9.3", features = [
+    "rust_crypto",
+] }
+serde = "1"
+
+[target.'"'"'cfg(unix)'"'"'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+rand = "0.8"'
+CT_DEPS="$(printf '%s' "$CT_BASE" | sed 's/"9.3"/"11.1"/; s/rust_crypto/aws_lc_rs/; s/"0.2"/"0.3"/; s/"0.8"/"0.10"/')"
+classify_probe crates/temper-api/Cargo.toml "$CT_BASE" "$CT_DEPS" \
+  pass "classifier: Cargo.toml moving only [*dependencies*] tables (incl. target-cfg, multi-line) is dependency-only"
+classify_probe crates/temper-api/Cargo.toml "$CT_BASE" "$(printf '%s' "$CT_BASE" | sed 's/^default = \[\]/default = ["x"]/')" \
+  fail "classifier: a Cargo.toml [features] change stays on the wire"
+classify_probe crates/temper-api/Cargo.toml "$CT_BASE" "$(printf '%s\n\n[dependencies.extra]\nversion = "1"\n\n[lib]\npath = "x.rs"' "$CT_BASE")" \
+  fail "classifier: a non-dependency table after a [dependencies.<name>] table stays on the wire"
+classify_probe crates/temper-api/src/lib.rs 'fn a() {}' 'fn b() {}' \
+  fail "classifier: source files are never dependency-only"
+
 echo
 echo "  ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
