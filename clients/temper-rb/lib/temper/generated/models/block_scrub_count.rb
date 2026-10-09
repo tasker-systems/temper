@@ -20,6 +20,9 @@ module Temper::Generated
 
     attr_accessor :chunks_to_empty
 
+    # The sensitivity sweep holds an open finding on the block's current revision or its current chunks: the text has not been edited out yet, and the scrub will keep it (D11). False for a current revision the sweep has not read: it confirms a leak, never cleanliness. Absent from a server that predates it.
+    attr_accessor :current_revision_flagged
+
     # A folded block empties entirely; a live block keeps its current revision and chunks.
     attr_accessor :folded
 
@@ -30,6 +33,7 @@ module Temper::Generated
       {
         :'block' => :'block',
         :'chunks_to_empty' => :'chunks_to_empty',
+        :'current_revision_flagged' => :'current_revision_flagged',
         :'folded' => :'folded',
         :'revisions_to_empty' => :'revisions_to_empty'
       }
@@ -50,6 +54,7 @@ module Temper::Generated
       {
         :'block' => :'String',
         :'chunks_to_empty' => :'Integer',
+        :'current_revision_flagged' => :'Boolean',
         :'folded' => :'Boolean',
         :'revisions_to_empty' => :'Integer'
       }
@@ -87,6 +92,10 @@ module Temper::Generated
         self.chunks_to_empty = attributes[:'chunks_to_empty']
       else
         self.chunks_to_empty = nil
+      end
+
+      if attributes.key?(:'current_revision_flagged')
+        self.current_revision_flagged = attributes[:'current_revision_flagged']
       end
 
       if attributes.key?(:'folded')
@@ -184,6 +193,7 @@ module Temper::Generated
       self.class == o.class &&
           block == o.block &&
           chunks_to_empty == o.chunks_to_empty &&
+          current_revision_flagged == o.current_revision_flagged &&
           folded == o.folded &&
           revisions_to_empty == o.revisions_to_empty
     end
@@ -197,7 +207,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [block, chunks_to_empty, folded, revisions_to_empty].hash
+      [block, chunks_to_empty, current_revision_flagged, folded, revisions_to_empty].hash
     end
 
     # Builds the object from hash

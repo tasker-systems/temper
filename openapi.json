@@ -16752,6 +16752,10 @@
             "type": "integer",
             "format": "int64"
           },
+          "current_revision_flagged": {
+            "type": "boolean",
+            "description": "The sensitivity sweep holds an open finding on the block's current revision or its current\nchunks: the text has not been edited out yet, and the scrub will keep it (D11). False for a\ncurrent revision the sweep has not read: it confirms a leak, never cleanliness. Absent from a\nserver that predates it."
+          },
           "folded": {
             "type": "boolean",
             "description": "A folded block empties entirely; a live block keeps its current revision and chunks."
@@ -18064,6 +18068,22 @@
           }
         }
       },
+      "DeriverFingerprint": {
+        "type": "object",
+        "description": "One deriver the survey names (D8), with its [`FingerprintMatch`].",
+        "required": [
+          "deriver",
+          "fingerprint_match"
+        ],
+        "properties": {
+          "deriver": {
+            "$ref": "#/components/schemas/ResourceId"
+          },
+          "fingerprint_match": {
+            "$ref": "#/components/schemas/FingerprintMatch"
+          }
+        }
+      },
       "DeviceOverrides": {
         "type": "object",
         "description": "Per-device configuration overrides keyed by X-Temper-Device-Id.",
@@ -19067,6 +19087,16 @@
             "description": "Bare-hex sha256 of the **full raw body** uploaded — an **integrity** check over the actual bytes\n(distinct from `expected_body_hash`, which is the chunk merkle). When present, `resource_finalize`\nrecomputes `sha256(concat of live block content in seq order)` and RAISEs on mismatch, rolling the\nfinalize back and leaving the resource `in_progress` (resumable, never silently done).\n\n`None` from a caller that does not hold the whole body — **MCP is honestly exempt** (its finalize\ntool never sees the full body, only per-block content) — or one predating this field; the check is\nthen skipped. Bare hex (`sha256_hex`), NOT `compute_body_hash` (which prefixes `\"sha256:\"`); the DB\nstores bare hex, so a prefixed value would mismatch 100% of the time."
           }
         }
+      },
+      "FingerprintMatch": {
+        "type": "string",
+        "description": "Whether the sensitivity sweep has confirmed that a deriver quotes one of the erased resource's\ndetected values (resource erasure spec D10, as amended by the build order 3c rulings). Read\nfrom stored fingerprints, never from content; the act never reads it.",
+        "enum": [
+          "yes",
+          "no",
+          "unscanned",
+          "expired"
+        ]
       },
       "FoldRelationshipRequest": {
         "allOf": [
@@ -23352,6 +23382,13 @@
             "format": "uuid",
             "description": "Set when the resource is a cogmap's charter: the act would refuse."
           },
+          "deriver_fingerprints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeriverFingerprint"
+            },
+            "description": "Each deriver the remainder names, in its order, with whether the sweep confirms it quotes\none of the resource's detected values (D10). Empty from a server that predates it."
+          },
           "edges": {
             "type": "array",
             "items": {
@@ -23453,6 +23490,13 @@
               "$ref": "#/components/schemas/RedactedEventFields"
             },
             "description": "On an erased resource (the short-circuit), the ledger paths a completion pass would rewrite\nnow (D12): a resource erased before the ledger exception shipped still carries its text\nthere, and running the act again completes it. Empty when nothing is left, and then the act\nrefuses `already_erased`; empty too from a server that predates the completion pass."
+          },
+          "deriver_fingerprints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeriverFingerprint"
+            },
+            "description": "On an erased resource, the derivers its erasure named, with whether the sweep confirms each\nquotes one of its detected values (D10, sweep D11): the fingerprints stay comparable for 30\ndays after the act, then read `expired`. Before the act the annotation is on `plan`. Empty\nfrom a server that predates it."
           },
           "plan": {
             "oneOf": [

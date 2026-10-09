@@ -167,6 +167,7 @@ temper/generated/models/deactivated.py
 temper/generated/models/delete_response.py
 temper/generated/models/demote_admin_request.py
 temper/generated/models/denied.py
+temper/generated/models/deriver_fingerprint.py
 temper/generated/models/device_overrides.py
 temper/generated/models/discouraged_open_meta_key.py
 temper/generated/models/dispatch_tick_request.py
@@ -208,6 +209,7 @@ temper/generated/models/facet_predicate.py
 temper/generated/models/facet_retract_ack.py
 temper/generated/models/facet_set_request.py
 temper/generated/models/finalize_payload.py
+temper/generated/models/fingerprint_match.py
 temper/generated/models/fold_relationship_request.py
 temper/generated/models/grant_connection_reach_request.py
 temper/generated/models/grant_outcome.py

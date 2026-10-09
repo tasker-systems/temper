@@ -107,6 +107,34 @@ pub struct BlobCoLinks {
     pub holders: Vec<ResourceId>,
 }
 
+/// Whether the sensitivity sweep has confirmed that a deriver quotes one of the erased resource's
+/// detected values (resource erasure spec D10, as amended by the build order 3c rulings). Read
+/// from stored fingerprints, never from content; the act never reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum FingerprintMatch {
+    /// The deriver still holds a value the sweep found in the resource.
+    Yes,
+    /// The sweep has read all of both, and the deriver holds none of the resource's detected
+    /// values. Never a claim that the deriver is clean: only what the detectors recognise.
+    No,
+    /// The sweep has not read all of the resource or the deriver: it is off, a detector is
+    /// disabled, or it has not reached them yet.
+    Unscanned,
+    /// A fingerprint the comparison needs is gone (30 days after an erasure act emptied its
+    /// place), capped, or never minted. No later sweep can make `no` trustworthy: read the deriver.
+    Expired,
+}
+
+/// One deriver the survey names (D8), with its [`FingerprintMatch`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct DeriverFingerprint {
+    pub deriver: ResourceId,
+    pub fingerprint_match: FingerprintMatch,
+}
+
 /// The plan `resource_erasure_survey` renders, plus the display-only annotations. The act never
 /// consumes the annotations (D10's fingerprint posture): they are read after the plan, in Rust.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -126,6 +154,10 @@ pub struct ResourceErasurePlan {
     pub fingerprint_available: bool,
     /// Derivers, related blobs, cross-resource ledger text and shared remote sources (D8).
     pub remainder: Vec<ErasureTargetOutcome>,
+    /// Each deriver the remainder names, in its order, with whether the sweep confirms it quotes
+    /// one of the resource's detected values (D10). Empty from a server that predates it.
+    #[serde(default)]
+    pub deriver_fingerprints: Vec<DeriverFingerprint>,
     /// The resource's own ledger paths the act would rewrite to their sentinels (D3). Empty from a
     /// server that predates the ledger exception.
     #[serde(default)]
@@ -152,6 +184,12 @@ pub struct ResourceErasureSurvey {
     /// refuses `already_erased`; empty too from a server that predates the completion pass.
     #[serde(default)]
     pub completion_fields: Vec<RedactedEventFields>,
+    /// On an erased resource, the derivers its erasure named, with whether the sweep confirms each
+    /// quotes one of its detected values (D10, sweep D11): the fingerprints stay comparable for 30
+    /// days after the act, then read `expired`. Before the act the annotation is on `plan`. Empty
+    /// from a server that predates it.
+    #[serde(default)]
+    pub deriver_fingerprints: Vec<DeriverFingerprint>,
 }
 
 /// One named block in the plan: what the scrub would empty.
@@ -163,6 +201,12 @@ pub struct BlockScrubCount {
     pub folded: bool,
     pub revisions_to_empty: i64,
     pub chunks_to_empty: i64,
+    /// The sensitivity sweep holds an open finding on the block's current revision or its current
+    /// chunks: the text has not been edited out yet, and the scrub will keep it (D11). False for a
+    /// current revision the sweep has not read: it confirms a leak, never cleanliness. Absent from a
+    /// server that predates it.
+    #[serde(default)]
+    pub current_revision_flagged: bool,
 }
 
 /// The plan `block_history_scrub_survey` renders (D10: the act consumes the same computation).

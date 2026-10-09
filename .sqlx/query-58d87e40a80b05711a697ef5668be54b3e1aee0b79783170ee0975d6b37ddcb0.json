@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT coalesce(e.payload -> 'remainder', '[]'::jsonb) AS \"remainder!: serde_json::Value\"\n             FROM kb_events e\n             JOIN kb_event_types t ON t.id = e.event_type_id\n            WHERE t.name = 'resource_erased' AND (e.payload ->> 'subject_id')::uuid = $1\n            ORDER BY e.id\n            LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "remainder!: serde_json::Value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "58d87e40a80b05711a697ef5668be54b3e1aee0b79783170ee0975d6b37ddcb0"
+}
