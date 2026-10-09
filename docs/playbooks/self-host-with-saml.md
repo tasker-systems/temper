@@ -169,6 +169,8 @@ sign-in joins. If people can edit the attribute themselves in your IdP (some dir
 self-service edits to secondary profile fields), they can claim an address that is not theirs.
 Temper also treats addresses differing only in ASCII letter case as one address; if your mail
 host gives `Bob@corp` and `bob@corp` to different people, they will be treated as the same person.
+Only ASCII letters are folded: `José@corp` and `josé@corp` stay two different addresses, so an
+invitation must use the exact spelling of any non-ASCII letters in the invitee's address.
 
 ## Rotate the IdP's signing certificate
 

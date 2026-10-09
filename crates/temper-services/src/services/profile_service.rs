@@ -965,6 +965,13 @@ mod tests {
     /// `lower()` folds to `k`, must not link to the `k` address.
     #[sqlx::test(migrations = "../../migrations")]
     async fn a_look_alike_address_does_not_link(pool: PgPool) {
+        // Precondition: the test database's own fold maps the Kelvin sign to `k`, so this
+        // test fails if the ASCII-only fold is dropped. Under a C-locale database it would not.
+        let db_folds: bool = sqlx::query_scalar("SELECT lower(E'\\u212A') = 'k'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(db_folds, "test database no longer folds U+212A; this witness has no bite");
         let a = resolve_from_claims(
             &pool,
             &human("provider_a", "la-a", "kate@example.com", true),
