@@ -200,10 +200,12 @@ async fn expire_erased_digests(pool: &PgPool) {
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query("UPDATE sensitivity.erased_closures SET closed_seen_at = now() - interval '31 days'")
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE sensitivity.erased_closures SET closed_seen_at = now() - interval '31 days'",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
     sqlx::query("SELECT sensitivity_expire_erased_fingerprints()")
         .execute(pool)
         .await
@@ -229,7 +231,11 @@ async fn matches(pool: &PgPool, r: Uuid, derivers: &[Uuid]) -> Vec<(Uuid, String
             }
         }
     }
-    assert_eq!(ordered.len(), rows.len(), "every row answers a deriver asked about");
+    assert_eq!(
+        ordered.len(),
+        rows.len(),
+        "every row answers a deriver asked about"
+    );
     ordered
 }
 
@@ -388,7 +394,13 @@ async fn a_disabled_detector_does_not_hold_a_clean_resource_open(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap();
-    let d1 = resource(&pool, &w, "later", "written after the card detector was turned off").await;
+    let d1 = resource(
+        &pool,
+        &w,
+        "later",
+        "written after the card detector was turned off",
+    )
+    .await;
     derives(&pool, &w, d1, r).await;
     sweep(&pool).await;
 
@@ -512,7 +524,11 @@ async fn the_scrub_warning_follows_the_current_revision(pool: PgPool) {
     let r = resource(&pool, &w, "payroll", &format!("the record holds {SSN_A}")).await;
     let block = only_block(&pool, r).await;
     sweep(&pool).await;
-    assert_eq!(flagged(&pool, r, &[block]).await, vec![block], "not edited out yet");
+    assert_eq!(
+        flagged(&pool, r, &[block]).await,
+        vec![block],
+        "not edited out yet"
+    );
 
     revise(&pool, &w, r, "the record is clean now").await;
     assert_eq!(
@@ -533,7 +549,11 @@ async fn the_scrub_warning_follows_the_current_revision(pool: PgPool) {
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(closed, vec![Some("content_empty".to_string())], "the scrub closes it");
+    assert_eq!(
+        closed,
+        vec![Some("content_empty".to_string())],
+        "the scrub closes it"
+    );
 }
 
 /// FAILS IF a folded block, which has no current revision to keep, can warn (P6).
@@ -564,7 +584,13 @@ async fn the_act_never_consumes_the_annotation(pool: PgPool) {
     let w = world(&pool).await;
     let mut estates = Vec::new();
     for n in 0..2 {
-        let r = resource(&pool, &w, &format!("payroll {n}"), &format!("holds {SSN_A}")).await;
+        let r = resource(
+            &pool,
+            &w,
+            &format!("payroll {n}"),
+            &format!("holds {SSN_A}"),
+        )
+        .await;
         let yes = resource(&pool, &w, &format!("quote {n}"), &format!("quotes {SSN_A}")).await;
         let no = resource(&pool, &w, &format!("summary {n}"), "clean").await;
         derives(&pool, &w, yes, r).await;
@@ -597,7 +623,10 @@ async fn the_act_never_consumes_the_annotation(pool: PgPool) {
             let block = only_block(&pool, r).await;
             assert_eq!(flagged(&pool, r, &[block]).await, Vec::<Uuid>::new());
         } else {
-            assert_eq!(states(&matches(&pool, r, &[yes, no]).await), vec!["yes", "no"]);
+            assert_eq!(
+                states(&matches(&pool, r, &[yes, no]).await),
+                vec!["yes", "no"]
+            );
         }
         sqlx::query("SELECT resource_erasure_execute($1, $2, $2, $3)")
             .bind(r)
@@ -618,7 +647,10 @@ async fn the_act_never_consumes_the_annotation(pool: PgPool) {
         .unwrap();
         records.push(record);
     }
-    assert_eq!(records[0], records[1], "the act's record does not depend on the annotation");
+    assert_eq!(
+        records[0], records[1],
+        "the act's record does not depend on the annotation"
+    );
 }
 
 // ── Through the survey doors (the services the admin routes call) ───────────────────────────
@@ -687,7 +719,12 @@ async fn the_erasure_survey_annotates_each_deriver(pool: PgPool) {
         .remainder
         .iter()
         .filter(|e| e.target == "deriver")
-        .filter_map(|e| e.outcome.split(' ').nth(1).and_then(|id| Uuid::parse_str(id).ok()))
+        .filter_map(|e| {
+            e.outcome
+                .split(' ')
+                .nth(1)
+                .and_then(|id| Uuid::parse_str(id).ok())
+        })
         .collect();
     let mut named = order.clone();
     named.sort();
