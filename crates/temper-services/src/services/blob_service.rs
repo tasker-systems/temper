@@ -1092,7 +1092,13 @@ pub async fn relate_blob(
         },
     )
     .await
-    .map_err(|e| ApiError::internal_scrubbed("blob relation assert failed", e))?;
+    .map_err(|e| {
+        if crate::backend::write_floor::hit_lock_bound(&e) {
+            ApiError::ResourceBusy
+        } else {
+            ApiError::internal_scrubbed("blob relation assert failed", e)
+        }
+    })?;
     tx.commit().await?;
 
     Ok(WireRelationAck {

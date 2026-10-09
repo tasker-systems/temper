@@ -134,6 +134,17 @@ impl ApiError {
     /// `anyhow` chain concatenates whatever sits underneath it. None of it belongs on
     /// the wire: the caller sees the generic internal-error message, and the context
     /// string is log-only — the log line's prefix that routes the failure to an operator.
+    /// A write's failure inside its transaction: [`ApiError::ResourceBusy`] when it is a lock wait
+    /// past the write-side bound (`55P03` anywhere in the chain), else [`ApiError::Internal`]
+    /// carrying the message. For a service that bridges a substrate `anyhow` error itself.
+    pub fn from_write(err: anyhow::Error) -> Self {
+        if crate::backend::write_floor::hit_lock_bound(&err) {
+            ApiError::ResourceBusy
+        } else {
+            ApiError::Internal(err.to_string())
+        }
+    }
+
     pub fn internal_scrubbed(context: &str, err: impl std::fmt::Display) -> Self {
         tracing::error!(context, error = %err, "internal error (scrubbed from the response)");
         ApiError::Internal(context.to_string())

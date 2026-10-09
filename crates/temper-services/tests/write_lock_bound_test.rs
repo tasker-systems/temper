@@ -353,3 +353,271 @@ async fn overlapping_writers_cannot_hold_the_act_off(pool: PgPool) {
          to {chain_ends:?}"
     );
 }
+
+/// **A bound hit outside the floor's own lock still answers `ResourceBusy`.** Another goal patch
+/// holds this resource's goal-patch advisory lock past the bound. A goal clear waits on it inside
+/// its floored transaction, is cancelled, and answers `ResourceBusy`, never the generic `500`.
+///
+/// FAILS IF a door maps that statement's error with a bridge that flattens a `55P03` to
+/// `TemperError::Api` (it did: `lock_goal_rows` used `api_err`, which did not classify). Found by
+/// the code review of this branch.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_goal_patch_waiting_past_the_bound_answers_resource_busy(pool: PgPool) {
+    use temper_workflow::operations::GoalPatch;
+
+    let (backend, _, resource) = seed(&pool, "goalbusy@example.com").await;
+    let bound = Duration::from_millis(WRITE_LOCK_TIMEOUT_MS);
+    let mut other_patch = pool.begin().await.expect("begin");
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("goal_patch:{}", uuid::Uuid::from(resource)))
+        .execute(&mut *other_patch)
+        .await
+        .expect("another goal patch holds the lock");
+
+    let mut clear = retitle(resource, "after");
+    clear.title = None;
+    clear.goal = Some(GoalPatch::Clear);
+    let asked = Instant::now();
+    let answer = backend.update_resource(clear).await;
+    let waited = asked.elapsed();
+    other_patch.rollback().await.expect("release");
+
+    assert!(
+        matches!(answer, Err(TemperError::ResourceBusy)),
+        "a goal patch held past the bound answers ResourceBusy, got {answer:?}"
+    );
+    assert!(waited >= bound, "it waited out the bound: {waited:?}");
+}
+
+/// **A bulk run's floor takes no act-queue entry per resource.** Flooring three resources in one
+/// transaction through the bulk liveness floor leaves this backend holding no advisory lock; the
+/// ordinary liveness floor holds one per resource. The queue lives in Postgres's shared lock table,
+/// and a team reassignment floors every resource it moves in one transaction.
+///
+/// FAILS IF `liveness_floor_bulk_in_tx` joins the act queue.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_bulk_floor_holds_no_queue_entry_per_resource(pool: PgPool) {
+    use temper_services::backend::write_floor::{liveness_floor_bulk_in_tx, liveness_floor_in_tx};
+
+    let (backend, profile, first) = seed(&pool, "bulk@example.com").await;
+    let mut resources = vec![first];
+    for n in 0..2 {
+        let created = backend
+            .create_resource(CreateResource {
+                idempotency_key: None,
+                slug: format!("bulk-{n}"),
+                doctype: "research".to_string(),
+                home: HomeAnchor::Context(ContextId::from(
+                    sqlx::query_scalar::<_, uuid::Uuid>(
+                        "SELECT id FROM kb_contexts WHERE owner_id = $1",
+                    )
+                    .bind(profile)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("context"),
+                )),
+                title: format!("bulk {n}"),
+                body: None,
+                managed_meta: ManagedMeta::default(),
+                open_meta: None,
+                goal: None,
+                origin_uri: Some(format!("test://bulk/{n}")),
+                chunks_packed: None,
+                content_hash: None,
+                act: ActContext::default(),
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .expect("create")
+            .value;
+        resources.push(created.id);
+    }
+
+    async fn advisory_held(tx: &mut sqlx::PgConnection) -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM pg_locks WHERE pid = pg_backend_pid() AND locktype = 'advisory'",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .expect("count")
+    }
+
+    let mut bulk = pool.begin().await.expect("begin");
+    for &r in &resources {
+        liveness_floor_bulk_in_tx(&mut bulk, ProfileId::from(profile), r)
+            .await
+            .expect("bulk floor admits");
+    }
+    assert_eq!(
+        advisory_held(&mut bulk).await,
+        0,
+        "the bulk floor joins no queue"
+    );
+    bulk.rollback().await.expect("end");
+
+    let mut single = pool.begin().await.expect("begin");
+    for &r in &resources {
+        liveness_floor_in_tx(&mut single, ProfileId::from(profile), r)
+            .await
+            .expect("floor admits");
+    }
+    assert_eq!(
+        advisory_held(&mut single).await,
+        3,
+        "the ordinary floor joins each resource's queue"
+    );
+    single.rollback().await.expect("end");
+}
+
+/// **A create whose goal is busy leaves nothing behind.** The goal's row is held `FOR UPDATE` (an
+/// erasure act, a scrub or a delete) past the bound. A create linking to it answers
+/// `ResourceBusy`, and no resource was committed, so re-sending the request (which temperkb-client
+/// does for `RESOURCE_BUSY`) cannot mint a second one.
+///
+/// FAILS IF the create commits before its goal edge is asserted (it did: the edge ran in a second
+/// transaction, so the `503` came back over a committed resource). Found by both reviews of this
+/// branch.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_create_whose_goal_is_busy_answers_resource_busy_and_creates_nothing(pool: PgPool) {
+    let (backend, profile, _) = seed(&pool, "creategoal@example.com").await;
+    let context: uuid::Uuid = sqlx::query_scalar("SELECT id FROM kb_contexts WHERE owner_id = $1")
+        .bind(profile)
+        .fetch_one(&pool)
+        .await
+        .expect("context");
+    let create = |slug: &str, doctype: &str, goal: Option<ResourceId>| CreateResource {
+        idempotency_key: None,
+        slug: slug.to_string(),
+        doctype: doctype.to_string(),
+        home: HomeAnchor::Context(ContextId::from(context)),
+        title: slug.to_string(),
+        body: None,
+        managed_meta: ManagedMeta::default(),
+        open_meta: None,
+        goal,
+        origin_uri: Some(format!("test://{slug}")),
+        chunks_packed: None,
+        content_hash: None,
+        act: ActContext::default(),
+        origin: Surface::ApiHttp,
+    };
+    let goal = backend
+        .create_resource(create("the-goal", "goal", None))
+        .await
+        .expect("create the goal")
+        .value
+        .id;
+    let count = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM kb_resources WHERE origin_uri = $1")
+            .bind("test://linked")
+            .fetch_one(&pool)
+            .await
+            .expect("count")
+    };
+
+    let mut held = pool.begin().await.expect("begin");
+    sqlx::query("SELECT 1 FROM kb_resources WHERE id = $1 FOR UPDATE")
+        .bind(uuid::Uuid::from(goal))
+        .execute(&mut *held)
+        .await
+        .expect("hold the goal");
+    let answer = backend
+        .create_resource(create("linked", "research", Some(goal)))
+        .await;
+    held.rollback().await.expect("release");
+
+    assert!(
+        matches!(answer, Err(TemperError::ResourceBusy)),
+        "a create whose goal is held past the bound answers ResourceBusy, got {:?}",
+        answer.map(|o| o.value.id)
+    );
+    assert_eq!(count().await, 0, "nothing was committed");
+
+    // Released, the same create lands, goal edge and all.
+    backend
+        .create_resource(create("linked", "research", Some(goal)))
+        .await
+        .expect("the create lands once the goal is free");
+    assert_eq!(count().await, 1);
+}
+
+/// **The block history scrub completes under any session bound, and writers queue behind it.** The
+/// scrub is the erasure act at block grain and takes the same two guarantees: it pins
+/// `lock_timeout = 0`, and it takes R's act queue exclusive. A writer holds R `FOR KEY SHARE` past
+/// a tight bound on the scrub's own session; the scrub waits it out and completes. Meanwhile a
+/// second writer arriving after the scrub must queue behind it.
+///
+/// FAILS IF `block_history_scrub_execute` loses its `SET lock_timeout = 0` (cancelled with
+/// `55P03`) or its queue line (the second writer's floor is granted while the scrub waits).
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_scrub_completes_under_a_session_lock_timeout_and_queues_writers(pool: PgPool) {
+    use temper_services::backend::write_floor::modify_floor_in_tx;
+
+    let (_, profile, resource) = seed(&pool, "scrubbed@example.com").await;
+    let operator: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_entities WHERE profile_id = $1 LIMIT 1")
+            .bind(profile)
+            .fetch_one(&pool)
+            .await
+            .expect("an entity");
+    let blocks: Vec<uuid::Uuid> =
+        sqlx::query_scalar("SELECT id FROM kb_content_blocks WHERE resource_id = $1")
+            .bind(uuid::Uuid::from(resource))
+            .fetch_all(&pool)
+            .await
+            .expect("blocks");
+
+    let mut first = pool.begin().await.expect("begin");
+    modify_floor_in_tx(&mut first, ProfileId::from(profile), resource)
+        .await
+        .expect("the first writer is admitted");
+
+    let scrub_pool = pool.clone();
+    let scrub = tokio::spawn(async move {
+        let mut conn = scrub_pool.acquire().await.expect("acquire");
+        sqlx::query("SET lock_timeout = '100ms'")
+            .execute(&mut *conn)
+            .await
+            .expect("a tight session bound");
+        let done = sqlx::query("SELECT block_history_scrub_execute($1, $2, $3, $3, $4)")
+            .bind(uuid::Uuid::from(resource))
+            .bind(&blocks)
+            .bind(operator)
+            .bind(uuid::Uuid::now_v7())
+            .execute(&mut *conn)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string());
+        let _ = sqlx::query("RESET lock_timeout").execute(&mut *conn).await;
+        done
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // A second writer arrives while the scrub waits: it must queue, not join the first.
+    let second_pool = pool.clone();
+    let second = tokio::spawn(async move {
+        let mut tx = second_pool.begin().await.expect("begin");
+        let asked = Instant::now();
+        let floored = modify_floor_in_tx(&mut tx, ProfileId::from(profile), resource).await;
+        let waited = asked.elapsed();
+        tx.rollback().await.expect("end");
+        (floored, waited)
+    });
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    first.rollback().await.expect("the first writer ends");
+
+    scrub
+        .await
+        .expect("scrub task")
+        .expect("the scrub completes whatever lock_timeout its session carries");
+    let (floored, waited) = second.await.expect("second writer");
+    assert!(
+        floored.is_ok(),
+        "the second writer is admitted after the scrub: {floored:?}"
+    );
+    assert!(
+        waited >= Duration::from_millis(600),
+        "the second writer queued behind the waiting scrub rather than joining the first writer: \
+         waited {waited:?}"
+    );
+}

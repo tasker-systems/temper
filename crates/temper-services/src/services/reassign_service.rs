@@ -155,7 +155,7 @@ pub async fn reassign_resource(
 
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller, "web")
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(ApiError::from_write)?;
     temper_substrate::writes::reassign_resource_in_tx(
         &mut tx,
         temper_substrate::ids::ResourceId::from(resource_id),
@@ -165,7 +165,7 @@ pub async fn reassign_resource(
         temper_substrate::events::EventContext::default(),
     )
     .await
-    .map_err(|e| ApiError::Internal(e.to_string()))?;
+    .map_err(ApiError::from_write)?;
     tx.commit().await?;
     Ok(())
 }
@@ -284,7 +284,7 @@ pub async fn reassign_team_resources(
 
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(ApiError::from_write)?;
 
     let mut tx = pool.begin().await?;
     let mut reassigned = Vec::with_capacity(targets.len());
@@ -295,7 +295,7 @@ pub async fn reassign_team_resources(
         // one erased or deleted after the scope read. It is SKIPPED — left with its owner and
         // absent from the returned ids — never a whole-run failure. Only the floor's two refusals
         // skip; a fault aborts the run as before.
-        match write_floor::liveness_floor_in_tx(&mut tx, caller, resource).await {
+        match write_floor::liveness_floor_bulk_in_tx(&mut tx, caller, resource).await {
             Ok(()) => {}
             Err(TemperError::Forbidden | TemperError::ResourceErased(_)) => continue,
             Err(e) => return Err(e.into()),
@@ -309,7 +309,7 @@ pub async fn reassign_team_resources(
             temper_substrate::events::EventContext::default(),
         )
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(ApiError::from_write)?;
         reassigned.push(rid);
     }
     tx.commit().await?;

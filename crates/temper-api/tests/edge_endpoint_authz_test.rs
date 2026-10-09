@@ -9,7 +9,7 @@
 //! The rule, decided 2026-07-25: **creating an edge requires write on the source side and read on
 //! the target**, and because an edge is *homed* in a context or cogmap — the source side's home —
 //! it requires write on that container too. Three clauses, all in
-//! `assert_edge_from_source_home`:
+//! `assert_edge_from_source_home_in_tx`:
 //!
 //!   1. `can_modify_resource(source)` — retained for the soft-delete floor it carries
 //!   2. container-write on the edge's home

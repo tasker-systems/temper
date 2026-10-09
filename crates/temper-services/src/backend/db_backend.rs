@@ -62,9 +62,16 @@ use temper_substrate::keys::{key_fate, KeyFate};
 use temper_substrate::readback;
 use temper_substrate::writes;
 
-/// Bridge a temper-substrate (`anyhow`) error into `TemperError` without naming `anyhow` (temper-api does not
-/// depend on it) — `anyhow::Error: Display`, so `to_string()` carries the message.
-fn api_err(e: impl std::fmt::Display) -> TemperError {
+/// Bridge a temper-substrate (`anyhow`) or database error into `TemperError` without naming
+/// `anyhow` (temper-api does not depend on it): the `500` class, carrying the message. The one
+/// exception is a lock wait past the write-side bound (`55P03`, `write_floor::hit_lock_bound`):
+/// that statement's transaction rolls back, and it answers [`TemperError::ResourceBusy`] (`503`).
+/// Classified HERE, at the bridge every door uses, so no door's mapping can flatten it to a `500`.
+fn api_err<E: Into<anyhow::Error>>(e: E) -> TemperError {
+    let e = e.into();
+    if write_floor::hit_lock_bound(&e) {
+        return TemperError::ResourceBusy;
+    }
     TemperError::Api(e.to_string())
 }
 
@@ -74,13 +81,8 @@ fn api_err(e: impl std::fmt::Display) -> TemperError {
 /// fault like any other database error (ruled 2026-10-01; no shipped client auto-retries it on an
 /// unkeyed write, see `write_floor`'s module note).
 ///
-/// The one exception is a lock wait past the write-side bound (`55P03`): the transaction rolled
-/// back with nothing applied, and that answers [`TemperError::ResourceBusy`] (`503`), never a fault.
+/// A lock wait past the write-side bound is [`TemperError::ResourceBusy`], as [`api_err`] says.
 fn tx_err<E: Into<anyhow::Error>>(e: E) -> TemperError {
-    let e = e.into();
-    if write_floor::hit_lock_bound(&e) {
-        return TemperError::ResourceBusy;
-    }
     api_err(e)
 }
 
@@ -164,7 +166,7 @@ fn map_edge_kind(k: graph::EdgeKind) -> temper_substrate::affinity::EdgeKind {
 pub(crate) const GOAL_EDGE_LABEL: &str = "advances";
 
 /// The endpoints + shape of an edge to assert from a source resource's home anchor
-/// (see `DbBackend::assert_edge_from_source_home`). A params struct so the helper stays
+/// (see `DbBackend::assert_edge_from_source_home_in_tx`). A params struct so the helper stays
 /// within the argument-count budget (preferred over `#[expect(too_many_arguments)]`).
 struct SourceHomedEdge<'a> {
     src: uuid::Uuid,
@@ -220,22 +222,40 @@ fn map_decline(r: writes::ReblockDecline) -> ReblockOutcome {
 }
 
 /// The one bounded sentence a receipt row carries when the op itself errors on a candidate.
+/// A segmented create's source provenance, written on the create's own transaction
+/// (`DbBackend::record_ingestion_source_in_tx`).
+#[derive(Clone, Copy)]
+struct IngestionSource<'a> {
+    source_uri: &'a str,
+    source_hash: Option<&'a str>,
+}
+
 /// Client-facing receipt text — the house disclosure invariant (`TemperError::internal_scrubbed`
 /// holds the same posture for the 500 path): a 200 body never carries raw internal error text
 /// (SQL/PG messages, upstream detail). The real diagnostic is log-only, joinable by the batch
 /// correlation id the receipt already echoes.
 const ROW_ERROR_MESSAGE: &str = "internal error while processing this candidate; retry it alone";
 
+/// Receipt text for a candidate whose write waited on a lock past the write-side bound (`55P03`):
+/// its transaction rolled back with nothing applied, as a `RESOURCE_BUSY` door answer does.
+const ROW_BUSY_MESSAGE: &str = "the resource was busy and nothing was applied to it; retry it";
+
 /// One candidate's op error → a bounded receipt row, with the real error logged at warn under
 /// the batch correlation id and the resource id. Deliberately NOT a decline classification —
 /// data-state errors are not typed here (a future pass may); the batch declines-and-continues
 /// either way. Both receipt arms (survey and act) route through this one helper so the two
 /// cannot drift.
-fn row_error(
+fn row_error<E: Into<anyhow::Error>>(
     correlation: temper_core::types::ids::CorrelationId,
     resource: uuid::Uuid,
-    e: impl std::fmt::Display,
+    e: E,
 ) -> ReblockOutcome {
+    let e = e.into();
+    if write_floor::hit_lock_bound(&e) {
+        return ReblockOutcome::Error {
+            message: ROW_BUSY_MESSAGE.to_owned(),
+        };
+    }
     tracing::warn!(
         correlation = %correlation,
         resource = %resource,
@@ -977,34 +997,32 @@ impl DbBackend {
     /// markdown (the CLI extracts and chunks client-side; MCP sends prose it composed), so there is
     /// no server-side kreuzberg conversion on this path.
     ///
-    /// Its own transaction, floored at its head (resource erasure spec D13): the record cannot land
-    /// on a resource the caller may no longer modify. The create's transaction cannot be shared —
-    /// `writes::create_resource_with_mode_idempotent` opens and commits its own, around inline
-    /// block preparation, and the backend runs the goal edge and the post-create ticks after that
-    /// commit. On a fresh create the floor admits (the caller owns the home it was just placed in);
-    /// on an idempotent replay the id is a PRIOR create's, which may since have been tombstoned,
-    /// erased or reassigned, and there the floor is the door's answer.
-    async fn record_ingestion_source(
+    /// On the create's own transaction, floored (resource erasure spec D13): the record cannot land
+    /// on a resource the caller may no longer modify, and a refusal or a lock-bound hit here rolls
+    /// the create back with it, so a `RESOURCE_BUSY` never comes back over a committed resource.
+    /// On a fresh create the floor admits (the caller owns the home it was just placed in, visible
+    /// to this transaction); on an idempotent replay the id is a PRIOR create's, which may since
+    /// have been tombstoned, erased or reassigned, and there the floor is the door's answer.
+    async fn record_ingestion_source_in_tx(
         &self,
+        tx: &mut sqlx::PgConnection,
         resource: ResourceId,
-        source_uri: &str,
-        source_hash: Option<&str>,
+        source: IngestionSource<'_>,
     ) -> Result<(), TemperError> {
-        let mut tx = self.begin_floored(resource).await?;
+        write_floor::modify_floor_in_tx(&mut *tx, self.profile_id, resource).await?;
         writes::upsert_ingestion_record_in_tx(
-            &mut tx,
+            &mut *tx,
             writes::IngestionRecord {
                 resource,
-                source_uri,
+                source_uri: source.source_uri,
                 source_mimetype: None,
                 conversion_tool: "passthrough",
                 conversion_version: "1",
-                source_hash,
+                source_hash: source.source_hash,
             },
         )
         .await
-        .map_err(tx_err)?;
-        tx.commit().await.map_err(tx_err)
+        .map_err(tx_err)
     }
 
     /// Auth-before-writes gate for authoring INTO a cognitive map: the acting profile must hold an
@@ -1140,7 +1158,7 @@ impl DbBackend {
     /// resource→resource edges, so the source is always a `kb_resources` endpoint.
     ///
     /// Gates the source resource (the tombstone floor + baseline authority) and container-write on
-    /// the edge's home, mirroring the clauses [`Self::assert_edge_from_source_home`] applies when the
+    /// the edge's home, mirroring the clauses [`Self::assert_edge_from_source_home_in_tx`] applies when the
     /// edge is created. Without this, mutating an edge would be *easier* than creating the identical
     /// one — a caller with a direct resource grant but no container authority could not assert an
     /// edge, yet could retype one that already exists, silently changing its meaning in a container
@@ -1175,7 +1193,7 @@ impl DbBackend {
     /// axis."* Folding an already-folded edge is now `NotFound` rather than a silent second fold.
     ///
     /// **Clause ORDER is load-bearing, not cosmetic.** Target-read runs last, exactly as it does in
-    /// [`Self::assert_edge_from_source_home`], because it is the only clause that renders
+    /// [`Self::assert_edge_from_source_home_in_tx`], because it is the only clause that renders
     /// `NotFound` instead of `Forbidden` (see [`Self::check_endpoint_readable_in_tx`] — a caller who
     /// cannot read an endpoint must not learn it exists). Running it first would convert every
     /// container-write refusal into a 404 and destroy the distinction `Forbidden` carries for a
@@ -1471,45 +1489,22 @@ impl DbBackend {
     /// widening that to blob endpoints would drag the kb_cogmaps-homed fold/mutability corners
     /// into scope for no current need. The refusal names the constraint, so it is a declared
     /// boundary, not a silent hole.
-    async fn assert_edge_from_source_home(
-        &self,
-        edge: SourceHomedEdge<'_>,
-        act_ctx: EventContext,
-    ) -> Result<EdgeId, TemperError> {
-        // Clause 1 leads, and its refusal is the point of the order: `can_modify_resource`
-        // answers false for an ABSENT source and an unauthorized one alike, so bare
-        // `Forbidden` discloses neither — a probe cannot read the source's existence off
-        // the status code. Reading the home before this clause rendered an absent source
-        // as a 500 beside this 403, an existence oracle in the status code (the 2026-09-05
-        // review's finding, task 01a06f5c). Auth before any write (F-1). See this
-        // function's doc for why all three clauses exist and why clause 1 is not redundant
-        // despite clause 2 subsuming its non-tombstone arms.
-        //
-        // Clause 1 is the write floor at the head of the edge write's own transaction (resource
-        // erasure spec D13): its `FOR KEY SHARE` on the source holds to commit, so the source
-        // cannot be erased or tombstoned between the check and the edge. Its deny is classified:
-        // 410 to a holder of an erased source, 403 to everyone else — the same bare refusal for an
-        // absent source and an unauthorized one, so the order's oracle argument is unchanged.
-        let mut tx = self.begin_floored(ResourceId::from(edge.src)).await?;
-        // Clauses 2 and 3 and the write, on the same transaction.
-        let edge_id = match self
-            .assert_edge_from_source_home_in_tx(&mut tx, edge, act_ctx)
-            .await
-        {
-            Ok(edge_id) => edge_id,
-            Err(refusal) => return Err(write_floor::rollback_with(tx, refusal).await),
-        };
-        tx.commit().await.map_err(tx_err)?;
-        Ok(edge_id)
-    }
-
-    /// [`Self::assert_edge_from_source_home`] after clause 1, on a caller-supplied transaction:
+    ///
+    /// **Clause 1 leads, and its refusal is the point of the order:** `can_modify_resource` answers
+    /// false for an ABSENT source and an unauthorized one alike, so the bare `Forbidden` discloses
+    /// neither, and a probe cannot read the source's existence off the status code (the 2026-09-05
+    /// review's finding, task 01a06f5c). It is the write floor at the head of the edge write's own
+    /// transaction (resource erasure spec D13), so the source cannot be erased or tombstoned between
+    /// the check and the edge.
+    ///
+    /// Clauses 2 and 3 and the edge write, after clause 1, on a caller-supplied transaction:
     /// clause 2 (container-write on the source's resolved home), clause 3 (the target is readable)
     /// and the edge write, all on `conn`.
     ///
     /// **The caller owns clause 1** and must have run it on the same source, on the same
     /// transaction, before calling this. Every caller runs it as [`write_floor::modify_floor_in_tx`]
-    /// at the head of its transaction: the pool form above; `Backend::assert_relationship`, which
+    /// at the head of its transaction: the create door, which floors the resource it has just
+    /// created in the same transaction; `Backend::assert_relationship`, which
     /// opens its own transaction so the emitter resolves only after the floor admits; and
     /// `update_resource`'s goal-set, which floors the resource it updates — the same id this
     /// edge's source is. That floor's `FOR KEY SHARE` is held until the transaction ends, so the
@@ -2417,30 +2412,31 @@ impl DbBackend {
     async fn create_resource_inner(
         &self,
         cmd: CreateResource,
-        segmented: bool,
     ) -> Result<CommandOutput<ResourceView>, TemperError> {
-        let new_id = self.create_resource_unread(cmd, segmented).await?;
+        let new_id = self.create_resource_unread(cmd, None).await?;
         let view = native_resource_view(&self.pool, self.profile_id, new_id).await?;
         Ok(CommandOutput::new(view))
     }
 
     /// The create, without its readback — shared by [`Backend::create_resource`] (through
-    /// [`Self::create_resource_inner`], `segmented = false`) and [`Backend::begin_segmented_ingest`]
-    /// (`segmented = true`) — the only caller that needs a resource born
+    /// [`Self::create_resource_inner`], `ingestion = None`) and [`Backend::begin_segmented_ingest`]
+    /// (`ingestion = Some`) — the only caller that needs a resource born
     /// `ingest_state = 'in_progress'`, because its body arrives across many acts and only
     /// `resource_finalize` can say the last one landed. Returns the created id, or on an idempotent
     /// replay the prior create's id.
     ///
-    /// The readback is the caller's: segmented begin writes its ingestion record (floored) BEFORE
-    /// any read of the resource, and reads back only the landed-block set.
+    /// The create, its goal edge and a segmented create's ingestion record (floored) are one
+    /// transaction, committed before any read of the resource; segmented begin reads back only the
+    /// landed-block set.
     ///
     /// Carries no act span of its own: both callers do (`act_context` below records onto the
     /// current span).
     async fn create_resource_unread(
         &self,
         cmd: CreateResource,
-        segmented: bool,
+        ingestion: Option<IngestionSource<'_>>,
     ) -> Result<ResourceId, TemperError> {
+        let segmented = ingestion.is_some();
         // Resolve the caller's synthesized identity (natural-key).
         // `cmd.home` is a pre-resolved HomeAnchor — surfaces parse+resolve the ref
         // before building the command, so no `writes::resolve_context` call is needed here.
@@ -2594,16 +2590,32 @@ impl DbBackend {
         }
 
         let mode = writes::CreateMode { defer, segmented };
+        // The create and its goal edge are ONE transaction. Asserted in a second one, a refusal or
+        // a lock-bound hit on the goal (`RESOURCE_BUSY`, which promises nothing was applied) came
+        // back over a resource that had already committed, and a client that re-sent the request
+        // minted another (found by this branch's reviews). Now the goal's refusal rolls the create
+        // back with it.
+        let mut tx = self.pool.begin().await.map_err(tx_err)?;
         let (new_id, replayed) =
-            writes::create_resource_with_mode_idempotent(&self.pool, params, act_ctx.clone(), mode)
-                .await
-                .map_err(api_err)?;
+            match writes::create_resource_in_tx(&mut tx, params, act_ctx.clone(), mode).await {
+                Ok(created) => created,
+                Err(e) => return Err(write_floor::rollback_with(tx, api_err(e)).await),
+            };
 
         // Idempotent replay (issue #581): the `(owner, idempotency_key)` slot was already claimed, so
         // the resource already exists and every post-create step below (goal edge, region clocks,
         // standing memo, embed enqueue) already ran on the original create. Return it as-is — re-running
         // any of that on a replay is at best wasted work and at worst a double-assert.
         if replayed {
+            if let Some(source) = ingestion {
+                if let Err(refusal) = self
+                    .record_ingestion_source_in_tx(&mut tx, new_id, source)
+                    .await
+                {
+                    return Err(write_floor::rollback_with(tx, refusal).await);
+                }
+            }
+            tx.commit().await.map_err(tx_err)?;
             return Ok(new_id);
         }
 
@@ -2611,23 +2623,44 @@ impl DbBackend {
         // new resource is the source and the edge homes on its anchor. The shared helper authorizes
         // all three F-1 clauses itself — which is what gives this path a check on the GOAL: a caller
         // may only link to a goal they can read, and `--goal` takes a bare id that nothing else here
-        // would have gated.
+        // would have gated. Clause 1, the write floor on the source, runs on this transaction too,
+        // where the new resource is visible.
         if let Some(goal) = cmd.goal {
-            self.assert_edge_from_source_home(
-                SourceHomedEdge {
-                    src: new_id.uuid(),
-                    tgt: goal.into(),
-                    tgt_table: RelationshipTarget::Resource,
-                    edge_kind: graph::EdgeKind::LeadsTo,
-                    polarity: graph::Polarity::Forward,
-                    label: GOAL_EDGE_LABEL,
-                    weight: 1.0,
-                    emitter,
-                },
-                act_ctx,
-            )
-            .await?;
+            let floored = write_floor::modify_floor_in_tx(&mut tx, self.profile_id, new_id).await;
+            let asserted = match floored {
+                Ok(()) => {
+                    self.assert_edge_from_source_home_in_tx(
+                        &mut tx,
+                        SourceHomedEdge {
+                            src: new_id.uuid(),
+                            tgt: goal.into(),
+                            tgt_table: RelationshipTarget::Resource,
+                            edge_kind: graph::EdgeKind::LeadsTo,
+                            polarity: graph::Polarity::Forward,
+                            label: GOAL_EDGE_LABEL,
+                            weight: 1.0,
+                            emitter,
+                        },
+                        act_ctx,
+                    )
+                    .await
+                }
+                Err(refusal) => Err(refusal),
+            };
+            if let Err(refusal) = asserted {
+                return Err(write_floor::rollback_with(tx, refusal).await);
+            }
         }
+        // A segmented create's ingestion record, on the same transaction for the same reason.
+        if let Some(source) = ingestion {
+            if let Err(refusal) = self
+                .record_ingestion_source_in_tx(&mut tx, new_id, source)
+                .await
+            {
+                return Err(write_floor::rollback_with(tx, refusal).await);
+            }
+        }
+        tx.commit().await.map_err(tx_err)?;
 
         if defer {
             // Enqueue the off-request embed backfill. A failed enqueue must NOT fail the create — the
@@ -2671,7 +2704,7 @@ impl Backend for DbBackend {
     ) -> Result<CommandOutput<ResourceView>, TemperError> {
         // An ordinary create is ATOMIC — the whole body lands in one act, so there is no interruption
         // window and nothing to finalize. It is born `ingest_state = 'complete'`.
-        self.create_resource_inner(cmd, false).await
+        self.create_resource_inner(cmd).await
     }
 
     async fn show_resource(
@@ -3229,7 +3262,7 @@ impl Backend for DbBackend {
         let src_next = uuid::Uuid::from(cmd.source);
         // Auth before any write (WS2) is the three edge-creation clauses (source modify + container
         // write + target read, F-1), below: clause 1 is the write floor this door runs at the head
-        // of its transaction (the same call `assert_edge_from_source_home` makes), clauses 2 and 3
+        // of its transaction (the same call `assert_edge_from_source_home_in_tx` makes), clauses 2 and 3
         // live in `assert_edge_from_source_home_in_tx`, shared with the goal-edge projections. They
         // are not restated here.
         //
@@ -3241,7 +3274,7 @@ impl Backend for DbBackend {
         let act_ctx = act_context(&cmd.act);
 
         // Clause 1 — the write floor on the SOURCE — at the head of the edge write's own
-        // transaction (resource erasure spec D13), exactly as `assert_edge_from_source_home` runs
+        // transaction (resource erasure spec D13), exactly as `assert_edge_from_source_home_in_tx` runs
         // it. This door opens the transaction itself rather than calling that pool form because
         // the edge carries the caller's emitter, and the emitter is resolved only after the floor
         // admits: a principal the floor refuses (a read-only machine client has no emitter to
@@ -4864,11 +4897,16 @@ impl Backend for DbBackend {
         // `create_resource_unread`, not `create_resource_inner`: nothing reads the resource back
         // until the ingestion record below has passed its floor and landed (resource erasure spec
         // D13). The only read this door answers with is the landed-block set.
-        let resource_id = self.create_resource_unread(cmd, true).await?;
-
-        // The per-resource source-provenance row, written at begin (design §4 point 4), floored
-        // inside its own transaction — see `record_ingestion_source`.
-        self.record_ingestion_source(resource_id, &origin_uri, seg.source_hash.as_deref())
+        // The per-resource source-provenance row is written at begin (design §4 point 4), floored,
+        // on the create's own transaction — see `record_ingestion_source_in_tx`.
+        let resource_id = self
+            .create_resource_unread(
+                cmd,
+                Some(IngestionSource {
+                    source_uri: &origin_uri,
+                    source_hash: seg.source_hash.as_deref(),
+                }),
+            )
             .await?;
 
         let landed = Self::landed_blocks(&self.pool, resource_id).await?;

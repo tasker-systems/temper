@@ -1559,7 +1559,7 @@ async fn a_derivation_source_edge_names_the_file_a_resource_came_from(pool: PgPo
 /// see the resource — gets no trace of the derivation edge: the row is absent, not
 /// redacted. That is structural today because blob-relate is the ONLY writer of blob-ended
 /// edges (the generic assert path fixes its endpoint table at `kb_resources`,
-/// db_backend `assert_edge_from_source_home`); if a future surface ever homes
+/// db_backend `assert_edge_from_source_home_in_tx`); if a future surface ever homes
 /// resource→blob edges on the resource, this face rides `edges_visible_to`'s
 /// both-endpoints arms instead — the equivalence oracle pins those independently.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

@@ -279,3 +279,114 @@ async fn an_unset_and_a_set_of_two_keys_in_opposite_orders_both_commit(pool: PgP
     .await;
     assert_both_commit(a_result, b).await;
 }
+
+/// A resource whose ONE block holds two heading sections, so the reblock op has work to do: it
+/// splits the block in two. Fired as a direct `ResourceCreate`, because the create path itself
+/// applies the blocking policy (reblock.rs's own fixture note).
+async fn seed_single_block_two_sections(pool: &PgPool) -> (ResourceId, EntityId) {
+    use temper_substrate::content::prepare_block_from_chunks;
+    use temper_substrate::events::{fire, SeedAction};
+
+    bootseed::seed_system(pool).await.unwrap();
+    let (owner, emitter) = system_actor(pool).await;
+    let home = ContextId::from(
+        common::insert_context(pool, "kb_profiles", owner.uuid(), "reblock", "reblock")
+            .await
+            .unwrap(),
+    );
+    let body = "# Alpha\n\nAlpha paragraph.\n## Beta\n\nBeta paragraph.\n";
+    let mut alpha = chunk("Alpha paragraph.");
+    alpha.header_path = "Alpha".to_owned();
+    alpha.heading_depth = 1;
+    let mut beta = chunk("Beta paragraph.");
+    beta.chunk_index = 1;
+    beta.header_path = "Alpha > Beta".to_owned();
+    beta.heading_depth = 2;
+    let mut block = prepare_block_from_chunks(0, None, vec![alpha, beta]);
+    block.raw_text = Some(body.to_owned());
+    let mut conn = pool.acquire().await.unwrap();
+    let resource = fire(
+        &mut conn,
+        SeedAction::ResourceCreate {
+            title: "reblock race",
+            origin_uri: "test://reblock-race",
+            resource_id: None,
+            home: AnchorRef::context(home),
+            owner,
+            originator: Some(owner),
+            blocks: &[block],
+            doc_type: Some("research"),
+            emitter,
+            segmented: false,
+        },
+    )
+    .await
+    .unwrap()
+    .resource()
+    .unwrap();
+    (resource, emitter)
+}
+
+/// **The reblock door against a body update.** A holds R's row as every update's head lock does
+/// (a retitle, uncommitted). B, the reblock door, runs while A holds it. A then rewrites the body,
+/// which writes R's block rows. Both must commit.
+///
+/// FAILS IF the reblock op writes R's block rows before it takes R's row (it took `FOR KEY SHARE`
+/// first and `FOR NO KEY UPDATE` only in the body-hash recompute at its tail): B then holds the
+/// block A's rewrite needs while it waits on R's row A holds, and Postgres aborts one with
+/// `40P01`. Found by the code review of this branch.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_reblock_door_and_a_body_update_of_one_resource_both_commit(pool: PgPool) {
+    let (resource, emitter) = seed_single_block_two_sections(&pool).await;
+
+    let mut a = pool.begin().await.unwrap();
+    writes::update_resource_in_tx(
+        &mut a,
+        params(resource, emitter, None, Some("retitled by A"), &[], &[]),
+        EventContext::default(),
+        false,
+    )
+    .await
+    .expect("A's retitle");
+
+    let b_pool = pool.clone();
+    let (pid_tx, pid_rx) = tokio::sync::oneshot::channel();
+    let b = tokio::spawn(async move {
+        let mut tx = b_pool.begin().await.map_err(|e| e.to_string())?;
+        let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        pid_tx.send(pid).unwrap();
+        writes::reblock_resource_in_tx(
+            &mut tx,
+            writes::ReblockParams { resource, emitter },
+            EventContext::default(),
+        )
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+        tx.commit().await.map_err(|e| e.to_string())
+    });
+    await_lock_wait(&pool, pid_rx.await.unwrap()).await;
+
+    let a_result = async {
+        writes::update_resource_in_tx(
+            &mut a,
+            params(
+                resource,
+                emitter,
+                Some("# Alpha\n\nRewritten by A.\n"),
+                None,
+                &[],
+                &[],
+            ),
+            EventContext::default(),
+            false,
+        )
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+        a.commit().await.map_err(|e| e.to_string())
+    }
+    .await;
+    assert_both_commit(a_result, b).await;
+}

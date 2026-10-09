@@ -244,7 +244,22 @@ async fn create_resource_impl(
     mode: CreateMode,
 ) -> Result<(ResourceId, bool)> {
     let mut tx = begin_scoped(pool).await?;
+    let created = create_resource_in_tx(&mut tx, p, ctx, mode).await?;
+    tx.commit().await?;
+    Ok(created)
+}
 
+/// [`create_resource_with_mode_idempotent`] in the caller's transaction, which the caller commits.
+/// Returns the resource and whether the idempotency slot was already claimed (`true`: a replay,
+/// nothing was written). For a door whose create must commit or roll back together with a later
+/// write: the create door's goal edge, so that a refusal or a lock-bound hit on the goal leaves no
+/// resource behind (a `RESOURCE_BUSY` must mean nothing was applied).
+pub async fn create_resource_in_tx(
+    tx: &mut sqlx::PgConnection,
+    p: CreateParams<'_>,
+    ctx: EventContext,
+    mode: CreateMode,
+) -> Result<(ResourceId, bool)> {
     // Owner-scoped idempotency claim (issue #581, spike rung 3) — atomic with the create below. When a
     // key is supplied, claim the `(owner, key)` slot under a server-minted candidate id; a conflict
     // means a prior committed create already took it, so return THAT resource without minting a twin —
@@ -280,7 +295,6 @@ async fn create_resource_impl(
                     )
                     .fetch_one(&mut *tx)
                     .await?;
-                    tx.commit().await?;
                     return Ok((ResourceId::from(existing), true));
                 }
             }
@@ -300,7 +314,7 @@ async fn create_resource_impl(
     block.raw_text = raw_body(p.body);
     let blocks = [block];
     let new_id = fire_with(
-        &mut tx,
+        &mut *tx,
         SeedAction::ResourceCreate {
             title: p.title,
             origin_uri: p.origin_uri,
@@ -321,7 +335,7 @@ async fn create_resource_impl(
     .resource()?;
     for (key, value) in p.properties {
         fire(
-            &mut tx,
+            &mut *tx,
             SeedAction::PropertySet {
                 resource: new_id,
                 key,
@@ -339,9 +353,8 @@ async fn create_resource_impl(
     // op refuses a partition decision over a still-arriving body — `finalize_ingest` applies
     // policy when the body lands complete.
     if !p.body.is_empty() && !mode.segmented {
-        apply_blocking_policy_in_tx(&mut tx, new_id, p.emitter, ctx, Decline::Fatal).await?;
+        apply_blocking_policy_in_tx(&mut *tx, new_id, p.emitter, ctx, Decline::Fatal).await?;
     }
-    tx.commit().await?;
     Ok((new_id, false))
 }
 
@@ -562,27 +575,51 @@ async fn resolve_target_block(
     }
 }
 
+/// Take R's row `FOR NO KEY UPDATE`: the first lock every write that will write R's row takes on
+/// anything R owns. Writes otherwise lock rows in the order their events fire, and that order
+/// differs by write: a body takes R's block rows and then R's row (the body-hash recompute), a
+/// title takes property rows and then R's row, the reblock op folds R's blocks and then recomputes
+/// R's hash. Two writes of one resource could then each hold a row the other wants next (`40P01`).
+/// Taken first by all of them, they serialize on R and never reach a second row out of order.
+///
+/// `NO KEY UPDATE` conflicts with neither the write floor's `FOR KEY SHARE` nor an FK check's, so
+/// only another write of R (and the erasure act's `FOR UPDATE`, which already waits on the floor)
+/// waits on it. Taken by [`update_resource_in_tx`], [`reblock_resource_in_tx`],
+/// [`append_block_in_tx`] and [`finalize_ingest_in_tx`], every entry point whose events write R's
+/// row; re-entrant within one transaction. Witnesses: tests/update_lock_order.rs.
+pub async fn lock_resource_for_write(
+    conn: &mut sqlx::PgConnection,
+    resource: ResourceId,
+) -> Result<()> {
+    sqlx::query_scalar!(
+        "SELECT id FROM kb_resources WHERE id = $1 FOR NO KEY UPDATE",
+        resource.uuid()
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 pub async fn update_resource_in_tx(
     conn: &mut sqlx::PgConnection,
     mut p: UpdateParams<'_>,
     ctx: EventContext,
     defer: bool,
 ) -> Result<()> {
-    // R's row FIRST, `FOR NO KEY UPDATE`, before any event locks a row R owns. The projectors
-    // otherwise lock rows in the order the update's events fire, which depends on what it
-    // carries: a body takes R's row (the body-hash recompute) before the property rows, a title
-    // takes the property rows before R's row, and every unset fires before every set. Two updates
-    // of one resource could then each hold a row the other wants next (`40P01`). Taken here, they
-    // serialize on R and never reach a second row out of order. `NO KEY UPDATE` conflicts with
-    // neither the write floor's `FOR KEY SHARE` nor an FK check's, so only another update of R
-    // (and the erasure act's `FOR UPDATE`, which already waits on the floor) waits on it.
-    // Witnesses: tests/update_lock_order.rs.
-    sqlx::query_scalar!(
-        "SELECT id FROM kb_resources WHERE id = $1 FOR NO KEY UPDATE",
-        p.resource.uuid()
-    )
-    .fetch_optional(&mut *conn)
-    .await?;
+    // The body's chunks, and their embeddings when they are computed inline, are a function of
+    // the body alone, so they are prepared BEFORE R's row is taken: an inline embed can run for
+    // seconds, and another write of R would wait that long behind the lock (and past the write
+    // floor's lock bound). The cost: an identical whole-body rewrite, which the short-circuit
+    // below turns into a no-op, still pays for the embed.
+    let mut prepared_body = match p.body {
+        Some(body) => Some(match (std::mem::take(&mut p.chunks), defer) {
+            (Some(chunks), _) => prepare_block_from_chunks(0, None, chunks),
+            (None, false) => prepare_block(0, None, body)?,
+            (None, true) => crate::content::prepare_block_deferred(0, None, body),
+        }),
+        None => None,
+    };
+    lock_resource_for_write(conn, p.resource).await?;
 
     // A whole-body write (body set, no `content_block`) is the CLI/UI default: the new text IS
     // the resource's entire body. On a multi-block resource — the shape every multi-section
@@ -647,7 +684,6 @@ pub async fn update_resource_in_tx(
         // Taken here — AFTER the short-circuit decision above (which reads `p.sources`) and
         // before the two exclusive body-write branches, each of which owns them; the tail moves
         // `p` whole into `finish_update`.
-        let update_chunks = std::mem::take(&mut p.chunks);
         let update_sources = std::mem::take(&mut p.sources);
         if replaces_body {
             // ── The whole-body replace arm (spec 2026-09-08, the replace-shaped redistribution) ──
@@ -677,11 +713,9 @@ pub async fn update_resource_in_tx(
                     p.resource
                 );
             }
-            let base = match (update_chunks, defer) {
-                (Some(chunks), _) => prepare_block_from_chunks(0, None, chunks),
-                (None, false) => prepare_block(0, None, body)?,
-                (None, true) => crate::content::prepare_block_deferred(0, None, body),
-            };
+            let base = prepared_body
+                .take()
+                .expect("prepared above whenever p.body is Some");
             if base.chunks.is_empty() {
                 anyhow::bail!(
                     "update_resource: body produces no chunks (empty, whitespace, or headings \
@@ -716,11 +750,9 @@ pub async fn update_resource_in_tx(
             }
             return finish_update(conn, p, ctx).await;
         }
-        let mut prepared = match (update_chunks, defer) {
-            (Some(chunks), _) => prepare_block_from_chunks(0, None, chunks),
-            (None, false) => prepare_block(0, None, body)?,
-            (None, true) => crate::content::prepare_block_deferred(0, None, body),
-        };
+        let mut prepared = prepared_body
+            .take()
+            .expect("prepared above whenever p.body is Some");
         if prepared.chunks.is_empty() {
             anyhow::bail!(
                 "update_resource: body produces no chunks (empty, whitespace, or headings only) — \
@@ -1896,6 +1928,8 @@ pub async fn reblock_resource_in_tx(
     p: ReblockParams,
     ctx: EventContext,
 ) -> Result<ReblockOutcome> {
+    // R's row before the partition is read or any block is folded ([`lock_resource_for_write`]).
+    lock_resource_for_write(conn, p.resource).await?;
     let plan = match reblock_partition_in_tx(conn, p.resource).await? {
         Partition::NoOp => return Ok(ReblockOutcome::NoOp),
         Partition::Declined(reason) => return Ok(ReblockOutcome::Declined { reason }),
@@ -3153,6 +3187,9 @@ pub async fn append_block_in_tx(
     p: AppendParams<'_>,
     ctx: EventContext,
 ) -> Result<BlockId> {
+    // R's row first: the append's projector ends by recomputing R's body hash
+    // ([`lock_resource_for_write`]).
+    lock_resource_for_write(conn, p.resource).await?;
     // Carry resource-level sources onto the block manifest → kb_block_provenance.
     let mut block = p.block.clone();
     block.incorporated = p.sources;
@@ -3201,6 +3238,9 @@ pub async fn finalize_ingest_in_tx(
     conn: &mut sqlx::PgConnection,
     p: FinalizeParams,
 ) -> Result<EventId> {
+    // R's row first: finalize writes R's row and then re-partitions its blocks
+    // ([`lock_resource_for_write`]).
+    lock_resource_for_write(conn, p.resource).await?;
     let payload = payloads::ResourceFinalized {
         resource_id: p.resource,
         expected_blocks: p.expected_blocks,

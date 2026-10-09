@@ -69,6 +69,16 @@
 //! rolled back having applied nothing, so unlike a `500` it is always safe to send again, and
 //! `temper-client` does (`ClientError::ResourceBusy`).
 //!
+//! **That promise is per request, so a door keeps it only if no transaction of the request has
+//! committed a write before the one that hit the bound.** `db_backend`'s `api_err` classifies a
+//! `55P03` wherever it surfaces, so a door that commits a write and then opens a floored
+//! transaction would answer `RESOURCE_BUSY` over a committed write, and `temper-client` would
+//! re-send it. The create door did exactly that (its goal edge, and segmented begin's ingestion
+//! record, ran in a second transaction) until both moved into the create's own. A door that must
+//! commit before a later bounded step maps that step's [`TemperError::ResourceBusy`] to the `500`
+//! class. Audited 2026-10-09: no door or surface does; the pool writes ahead of a floored
+//! transaction are emitter resolves (idempotent upserts), and post-commit steps log, never answer.
+//!
 //! **Writers queue behind an erasure act** (`queue_behind_acts`, migration `20261013100010`): a
 //! shared advisory lock on R that the acts take exclusive, so writers that arrive while an act
 //! waits for R cannot keep it waiting.
@@ -146,7 +156,38 @@ pub async fn liveness_floor_in_tx(
     profile: ProfileId,
     resource: ResourceId,
 ) -> Result<(), TemperError> {
-    match lock_resource_row(conn, resource).await? {
+    liveness_floor(conn, profile, resource, ActQueue::Join).await
+}
+
+/// [`liveness_floor_in_tx`] for a run that floors MANY resources in one transaction (bulk team
+/// reassignment): the same lock bound, row lock and classification, without joining each
+/// resource's act queue. The queue is an advisory lock, which lives in Postgres's shared lock
+/// table (`max_locks_per_transaction` × connections); thousands in one transaction can exhaust it
+/// ("out of shared memory") for every session. Without the queue such a run can pass an erasure
+/// act waiting on one of its resources, but it never waits on the queue, so it cannot deadlock
+/// with one. Ruled 2026-10-09: bulk reassign skips the queue.
+pub async fn liveness_floor_bulk_in_tx(
+    conn: &mut PgConnection,
+    profile: ProfileId,
+    resource: ResourceId,
+) -> Result<(), TemperError> {
+    liveness_floor(conn, profile, resource, ActQueue::Skip).await
+}
+
+/// Whether a floor joins the resource's act queue before its row lock ([`queue_behind_acts`]).
+#[derive(Clone, Copy)]
+enum ActQueue {
+    Join,
+    Skip,
+}
+
+async fn liveness_floor(
+    conn: &mut PgConnection,
+    profile: ProfileId,
+    resource: ResourceId,
+    queue: ActQueue,
+) -> Result<(), TemperError> {
+    match lock_resource_row_with(conn, resource, queue).await? {
         Some(true) => Ok(()),
         Some(false) | None => Err(erased_or_forbidden(conn, profile, resource).await),
     }
@@ -174,8 +215,18 @@ async fn lock_resource_row(
     conn: &mut PgConnection,
     resource: ResourceId,
 ) -> Result<Option<bool>, TemperError> {
+    lock_resource_row_with(conn, resource, ActQueue::Join).await
+}
+
+async fn lock_resource_row_with(
+    conn: &mut PgConnection,
+    resource: ResourceId,
+    queue: ActQueue,
+) -> Result<Option<bool>, TemperError> {
     bound_lock_waits(conn).await?;
-    queue_behind_acts(conn, resource).await?;
+    if let ActQueue::Join = queue {
+        queue_behind_acts(conn, resource).await?;
+    }
     sqlx::query_scalar!(
         "SELECT is_active FROM kb_resources WHERE id = $1 FOR KEY SHARE",
         resource.uuid(),
