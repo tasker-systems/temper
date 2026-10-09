@@ -50,19 +50,30 @@ pr: self
 classes: behavioral
 surfaces: clients
 status: signal-only
-- **`DELETE /api/relationships/{edge_handle}/facets/{property_id}` documents its authorship fields as query parameters**
-  `openapi.json` declared `ActInput`'s seven fields (`invocation_id`, `correlation_id`, `reasoning`,
-  `confidence`, `rationale`, `persona`, `model`) on this route as path parameters, so the generated
-  SDKs had no placeholder to put them in and dropped them without error. They are now query
-  parameters. The handler has always read them from the query string (`Query<ActInput>`), and no
-  handler changes here. On the other three `ActInput` routes the fields were already query
-  parameters; their schemas now drop the explicit `null` branch, so the generated Python types are
-  `UUID`/`ConfidenceBand` rather than `Any`. A query parameter has no null to send, so that only
-  narrows what a caller can pass, and the server reads absent and null alike. Both skew directions
-  hold: an older SDK keeps dropping the fields, which the server never received anyway; a newer SDK
-  sends them in the query string, which an older server already reads. Who observes: SDK callers
-  retracting a facet with authorship, whose fields now arrive. User-visible: no. Release
-  relevance: behavioral, declared as a spec correction (the contract moves; the server does not).
+- **`ActInput`'s authorship fields are documented as query parameters on all four routes that take them**
+  The routes are `DELETE /api/relationships/{edge_handle}/facets/{property_id}`,
+  `DELETE /api/resources/{id}`, `PUT /api/cognitive-maps/{id}` and `DELETE /api/blobs/{id}`. On the
+  facet route, `openapi.json` declared `ActInput`'s seven fields (`invocation_id`, `correlation_id`,
+  `reasoning`, `confidence`, `rationale`, `persona`, `model`) as path parameters with no placeholder,
+  so the generated SDKs had nowhere to put them and dropped them without error. They are now query
+  parameters, which is what every handler has always read (`Query<ActInput>`). On the other three
+  routes they were already query parameters; their schemas lose the explicit `null` branch, since a
+  query parameter has no null to send and the server reads absent and null alike. Server behavior is
+  unchanged, and the wire is compatible in both skew directions: an older SDK keeps dropping the
+  fields, which the server never received; a newer SDK sends them where an older server already reads
+  them. The SDKs' own call shapes change:
+  temper-rb's `FacetsApi#retract_edge_facet` (and `…_with_http_info`) take the fields in `opts`
+  rather than as seven required positionals; a hand-written shim (`Temper::Compat`) still accepts the
+  released nine-argument form and now sends what it is given. temper-ts callers of the facet route
+  move the fields from `params.path` to `params.query` (a compile error until they do), and on the
+  other three routes the fields' types narrow from `T | null` to `T` (a compile error for a caller
+  passing `null`; at runtime openapi-fetch already skipped null query values). temper-py keeps its
+  parameter names and order, and the fields become typed (`UUID`, `ConfidenceBand`) where they were
+  `Any`. A caller whose authorship fields were being dropped and that passed them without
+  `confidence` now gets the server's 400. Who observes: SDK callers of these four operations.
+  User-visible: yes, for TS callers (source change) and for Ruby callers relying on the dropped fields
+  never arriving. Release relevance: behavioral, declared as a spec correction (the contract moves;
+  the server does not).
 pr: self
 classes: behavioral, spec-correction
 surfaces: http, clients

@@ -156,7 +156,7 @@
       },
       "path": "/api/relationships/{edge_handle}/facets/{property_id}",
       "reason": "The pin declared ActInput's seven fields in: path with no placeholder to fill; the handler has always read them from the query string (Query<ActInput>), so no client could send them as pinned.",
-      "register_row": "`DELETE /api/relationships/{edge_handle}/facets/{property_id}` documents its authorship fields as query parameters"
+      "register_row": "`ActInput`'s authorship fields are documented as query parameters on all four routes that take them"
     },
     {
       "method": "delete",
@@ -293,7 +293,7 @@
       },
       "path": "/api/blobs/{id}",
       "reason": "ActInput's query parameters lose the explicit null branch. A query parameter has no null to send; the server reads absent and null alike.",
-      "register_row": "`DELETE /api/relationships/{edge_handle}/facets/{property_id}` documents its authorship fields as query parameters"
+      "register_row": "`ActInput`'s authorship fields are documented as query parameters on all four routes that take them"
     },
     {
       "method": "put",
@@ -442,7 +442,7 @@
       },
       "path": "/api/cognitive-maps/{id}",
       "reason": "ActInput's query parameters lose the explicit null branch. A query parameter has no null to send; the server reads absent and null alike.",
-      "register_row": "`DELETE /api/relationships/{edge_handle}/facets/{property_id}` documents its authorship fields as query parameters"
+      "register_row": "`ActInput`'s authorship fields are documented as query parameters on all four routes that take them"
     },
     {
       "method": "delete",
@@ -588,7 +588,7 @@
       },
       "path": "/api/resources/{id}",
       "reason": "ActInput's query parameters lose the explicit null branch. A query parameter has no null to send; the server reads absent and null alike.",
-      "register_row": "`DELETE /api/relationships/{edge_handle}/facets/{property_id}` documents its authorship fields as query parameters"
+      "register_row": "`ActInput`'s authorship fields are documented as query parameters on all four routes that take them"
     }
   ]
 }

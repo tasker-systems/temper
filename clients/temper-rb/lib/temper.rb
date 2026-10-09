@@ -28,6 +28,7 @@ end
 # `module Temper` must exist before anything generated is required: every
 # generated file opens with the compact form `module Temper::Generated`.
 require 'temper/generated'
+require 'temper/compat'
 require 'temper/version'
 require 'temper/errors'
 require 'temper/validate'
