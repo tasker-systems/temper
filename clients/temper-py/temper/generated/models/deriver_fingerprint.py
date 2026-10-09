@@ -17,23 +17,21 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
-from typing import Any, ClassVar, Dict, List, Optional
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, ClassVar, Dict, List
 from uuid import UUID
+from temper.generated.models.fingerprint_match import FingerprintMatch
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
 
-class BlockScrubCount(BaseModel):
+class DeriverFingerprint(BaseModel):
     """
-    One named block in the plan: what the scrub would empty.
+    One deriver the survey names (D8), with its [`FingerprintMatch`].
     """ # noqa: E501
-    block: UUID
-    chunks_to_empty: StrictInt
-    current_revision_flagged: Optional[StrictBool] = Field(default=None, description="The sensitivity sweep holds an open finding on the block's current revision or its current chunks: the text has not been edited out yet, and the scrub will keep it (D11). False for a current revision the sweep has not read: it confirms a leak, never cleanliness. Absent from a server that predates it.")
-    folded: StrictBool = Field(description="A folded block empties entirely; a live block keeps its current revision and chunks.")
-    revisions_to_empty: StrictInt
-    __properties: ClassVar[List[str]] = ["block", "chunks_to_empty", "current_revision_flagged", "folded", "revisions_to_empty"]
+    deriver: UUID = Field(description="A `kb_resources.id` value.")
+    fingerprint_match: FingerprintMatch
+    __properties: ClassVar[List[str]] = ["deriver", "fingerprint_match"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -53,7 +51,7 @@ class BlockScrubCount(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of BlockScrubCount from a JSON string"""
+        """Create an instance of DeriverFingerprint from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -78,7 +76,7 @@ class BlockScrubCount(BaseModel):
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of BlockScrubCount from a dict"""
+        """Create an instance of DeriverFingerprint from a dict"""
         if obj is None:
             return None
 
@@ -86,11 +84,8 @@ class BlockScrubCount(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "block": obj.get("block"),
-            "chunks_to_empty": obj.get("chunks_to_empty"),
-            "current_revision_flagged": obj.get("current_revision_flagged"),
-            "folded": obj.get("folded"),
-            "revisions_to_empty": obj.get("revisions_to_empty")
+            "deriver": obj.get("deriver"),
+            "fingerprint_match": obj.get("fingerprint_match")
         })
         return _obj
 

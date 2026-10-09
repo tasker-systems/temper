@@ -14,29 +14,40 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # The read-only survey. `plan` is `None` exactly when the resource was already erased when the survey began (the short-circuit); `already_erased` also reads true when an act lands between that read and the plan, and then the plan is present.
-  class ResourceErasureSurvey < ApiModelBase
-    attr_accessor :already_erased
-
-    # On an erased resource (the short-circuit), the ledger paths a completion pass would rewrite now (D12): a resource erased before the ledger exception shipped still carries its text there, and running the act again completes it. Empty when nothing is left, and then the act refuses `already_erased`; empty too from a server that predates the completion pass.
-    attr_accessor :completion_fields
-
-    # On an erased resource, the derivers its erasure named, with whether the sweep confirms each quotes one of its detected values (D10, sweep D11): the fingerprints stay comparable for 30 days after the act, then read `expired`. Before the act the annotation is on `plan`. Empty from a server that predates it.
-    attr_accessor :deriver_fingerprints
-
-    attr_accessor :plan
-
+  # One deriver the survey names (D8), with its [`FingerprintMatch`].
+  class DeriverFingerprint < ApiModelBase
     # A `kb_resources.id` value.
-    attr_accessor :resource
+    attr_accessor :deriver
+
+    attr_accessor :fingerprint_match
+
+    class EnumAttributeValidator
+      attr_reader :datatype
+      attr_reader :allowable_values
+
+      def initialize(datatype, allowable_values)
+        @allowable_values = allowable_values.map do |value|
+          case datatype.to_s
+          when /Integer/i
+            value.to_i
+          when /Float/i
+            value.to_f
+          else
+            value
+          end
+        end
+      end
+
+      def valid?(value)
+        !value || allowable_values.include?(value)
+      end
+    end
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'already_erased' => :'already_erased',
-        :'completion_fields' => :'completion_fields',
-        :'deriver_fingerprints' => :'deriver_fingerprints',
-        :'plan' => :'plan',
-        :'resource' => :'resource'
+        :'deriver' => :'deriver',
+        :'fingerprint_match' => :'fingerprint_match'
       }
     end
 
@@ -53,18 +64,14 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'already_erased' => :'Boolean',
-        :'completion_fields' => :'Array<RedactedEventFields>',
-        :'deriver_fingerprints' => :'Array<DeriverFingerprint>',
-        :'plan' => :'ResourceErasurePlan',
-        :'resource' => :'String'
+        :'deriver' => :'String',
+        :'fingerprint_match' => :'FingerprintMatch'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
-        :'plan',
       ])
     end
 
@@ -72,44 +79,28 @@ module Temper::Generated
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::ResourceErasureSurvey` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::DeriverFingerprint` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::ResourceErasureSurvey`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::DeriverFingerprint`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'already_erased')
-        self.already_erased = attributes[:'already_erased']
+      if attributes.key?(:'deriver')
+        self.deriver = attributes[:'deriver']
       else
-        self.already_erased = nil
+        self.deriver = nil
       end
 
-      if attributes.key?(:'completion_fields')
-        if (value = attributes[:'completion_fields']).is_a?(Array)
-          self.completion_fields = value
-        end
-      end
-
-      if attributes.key?(:'deriver_fingerprints')
-        if (value = attributes[:'deriver_fingerprints']).is_a?(Array)
-          self.deriver_fingerprints = value
-        end
-      end
-
-      if attributes.key?(:'plan')
-        self.plan = attributes[:'plan']
-      end
-
-      if attributes.key?(:'resource')
-        self.resource = attributes[:'resource']
+      if attributes.key?(:'fingerprint_match')
+        self.fingerprint_match = attributes[:'fingerprint_match']
       else
-        self.resource = nil
+        self.fingerprint_match = nil
       end
     end
 
@@ -118,12 +109,12 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @already_erased.nil?
-        invalid_properties.push('invalid value for "already_erased", already_erased cannot be nil.')
+      if @deriver.nil?
+        invalid_properties.push('invalid value for "deriver", deriver cannot be nil.')
       end
 
-      if @resource.nil?
-        invalid_properties.push('invalid value for "resource", resource cannot be nil.')
+      if @fingerprint_match.nil?
+        invalid_properties.push('invalid value for "fingerprint_match", fingerprint_match cannot be nil.')
       end
 
       invalid_properties
@@ -133,29 +124,29 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @already_erased.nil?
-      return false if @resource.nil?
+      return false if @deriver.nil?
+      return false if @fingerprint_match.nil?
       true
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] already_erased Value to be assigned
-    def already_erased=(already_erased)
-      if already_erased.nil?
-        fail ArgumentError, 'already_erased cannot be nil'
+    # @param [Object] deriver Value to be assigned
+    def deriver=(deriver)
+      if deriver.nil?
+        fail ArgumentError, 'deriver cannot be nil'
       end
 
-      @already_erased = already_erased
+      @deriver = deriver
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] resource Value to be assigned
-    def resource=(resource)
-      if resource.nil?
-        fail ArgumentError, 'resource cannot be nil'
+    # @param [Object] fingerprint_match Value to be assigned
+    def fingerprint_match=(fingerprint_match)
+      if fingerprint_match.nil?
+        fail ArgumentError, 'fingerprint_match cannot be nil'
       end
 
-      @resource = resource
+      @fingerprint_match = fingerprint_match
     end
 
     # Checks equality by comparing each attribute.
@@ -163,11 +154,8 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          already_erased == o.already_erased &&
-          completion_fields == o.completion_fields &&
-          deriver_fingerprints == o.deriver_fingerprints &&
-          plan == o.plan &&
-          resource == o.resource
+          deriver == o.deriver &&
+          fingerprint_match == o.fingerprint_match
     end
 
     # @see the `==` method
@@ -179,7 +167,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [already_erased, completion_fields, deriver_fingerprints, plan, resource].hash
+      [deriver, fingerprint_match].hash
     end
 
     # Builds the object from hash

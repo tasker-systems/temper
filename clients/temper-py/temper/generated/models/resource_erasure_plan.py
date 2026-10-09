@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, Strict
 from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from temper.generated.models.blob_co_links import BlobCoLinks
+from temper.generated.models.deriver_fingerprint import DeriverFingerprint
 from temper.generated.models.erasure_target_outcome import ErasureTargetOutcome
 from temper.generated.models.other_author_edge import OtherAuthorEdge
 from temper.generated.models.other_author_edge_property import OtherAuthorEdgeProperty
@@ -35,6 +36,7 @@ class ResourceErasurePlan(BaseModel):
     """ # noqa: E501
     blob_co_links: List[BlobCoLinks]
     charter_of: Optional[UUID] = Field(default=None, description="Set when the resource is a cogmap's charter: the act would refuse.")
+    deriver_fingerprints: Optional[List[DeriverFingerprint]] = Field(default=None, description="Each deriver the remainder names, in its order, with whether the sweep confirms it quotes one of the resource's detected values (D10). Empty from a server that predates it.")
     edges: List[UUID] = Field(description="The live edges the act would fold.")
     fingerprint_available: StrictBool
     ingest_state: StrictStr
@@ -49,7 +51,7 @@ class ResourceErasurePlan(BaseModel):
     redacted_fields: Optional[List[RedactedEventFields]] = Field(default=None, description="The resource's own ledger paths the act would rewrite to their sentinels (D3). Empty from a server that predates the ledger exception.")
     remainder: List[ErasureTargetOutcome] = Field(description="Derivers, related blobs, cross-resource ledger text and shared remote sources (D8).")
     targets: List[ErasureTargetOutcome]
-    __properties: ClassVar[List[str]] = ["blob_co_links", "charter_of", "edges", "fingerprint_available", "ingest_state", "ledger_remainder", "n_artifacts", "n_blocks", "n_chunks", "n_edges", "n_revisions", "other_author_edge_properties", "other_author_edges", "redacted_fields", "remainder", "targets"]
+    __properties: ClassVar[List[str]] = ["blob_co_links", "charter_of", "deriver_fingerprints", "edges", "fingerprint_available", "ingest_state", "ledger_remainder", "n_artifacts", "n_blocks", "n_chunks", "n_edges", "n_revisions", "other_author_edge_properties", "other_author_edges", "redacted_fields", "remainder", "targets"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -97,6 +99,13 @@ class ResourceErasurePlan(BaseModel):
                 if _item_blob_co_links:
                     _items.append(_item_blob_co_links.to_dict())
             _dict['blob_co_links'] = _items
+        # override the default output from pydantic by calling `to_dict()` of each item in deriver_fingerprints (list)
+        _items = []
+        if self.deriver_fingerprints:
+            for _item_deriver_fingerprints in self.deriver_fingerprints:
+                if _item_deriver_fingerprints:
+                    _items.append(_item_deriver_fingerprints.to_dict())
+            _dict['deriver_fingerprints'] = _items
         # override the default output from pydantic by calling `to_dict()` of each item in ledger_remainder (list)
         _items = []
         if self.ledger_remainder:
@@ -158,6 +167,7 @@ class ResourceErasurePlan(BaseModel):
         _obj = cls.model_validate({
             "blob_co_links": [BlobCoLinks.from_dict(_item) for _item in obj["blob_co_links"]] if obj.get("blob_co_links") is not None else None,
             "charter_of": obj.get("charter_of"),
+            "deriver_fingerprints": [DeriverFingerprint.from_dict(_item) for _item in obj["deriver_fingerprints"]] if obj.get("deriver_fingerprints") is not None else None,
             "edges": obj.get("edges"),
             "fingerprint_available": obj.get("fingerprint_available"),
             "ingest_state": obj.get("ingest_state"),
