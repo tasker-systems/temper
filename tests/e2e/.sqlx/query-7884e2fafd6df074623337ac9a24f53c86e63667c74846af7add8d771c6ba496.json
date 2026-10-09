@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT i.id                   AS \"id!\",\n               i.team_slug            AS \"team_slug!\",\n               i.role::text           AS \"role!\",\n               i.invited_by_profile_id AS \"invited_by_profile_id!\",\n               i.created              AS \"created!\",\n               i.expires_at           AS \"expires_at!\"\n        FROM vw_invitee_invitations i\n        WHERE i.invitee_profile_id = $1\n        ORDER BY i.created DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "team_slug!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "role!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "invited_by_profile_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "created!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "expires_at!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      null,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "7884e2fafd6df074623337ac9a24f53c86e63667c74846af7add8d771c6ba496"
+}

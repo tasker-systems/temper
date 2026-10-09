@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT b.seq AS \"seq!\", r.block_body_hash AS \"block_body_hash!\"\n              FROM kb_content_blocks b\n              JOIN LATERAL (\n                     SELECT block_body_hash FROM kb_block_revisions\n                      WHERE block_id = b.id ORDER BY created DESC LIMIT 1\n                   ) r ON true\n             WHERE b.resource_id = $1 AND NOT b.is_folded\n             ORDER BY b.seq\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "seq!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "block_body_hash!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "1bd623d02be52ff36b0f14fa4dbcf11f86ce460000d5763d2c88bb939b68d9cf"
+}

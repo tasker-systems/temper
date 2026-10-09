@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_saml_principal_reconcile (profile_id, idp_key, last_reconciled_at)\n           VALUES ($1, $2, now())\n           ON CONFLICT (profile_id, idp_key) DO UPDATE SET last_reconciled_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fd49633521c49d1c86eacb9de0bdb1f12a89213769edac6f7e300ef27a6081c9"
+}

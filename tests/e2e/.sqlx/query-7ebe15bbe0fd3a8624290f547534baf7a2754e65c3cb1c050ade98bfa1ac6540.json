@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tm.profile_id,\n                  p.handle,\n                  tm.role AS \"role: TeamRole\",\n                  tm.source AS \"source: TeamMemberSource\"\n             FROM kb_team_members tm\n             JOIN kb_profiles p ON p.id = tm.profile_id\n            WHERE tm.team_id = $1\n            ORDER BY tm.role, p.handle",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "profile_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "handle",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "role: TeamRole",
+        "type_info": {
+          "Custom": {
+            "name": "team_role",
+            "kind": {
+              "Enum": [
+                "owner",
+                "maintainer",
+                "member",
+                "watcher"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "source: TeamMemberSource",
+        "type_info": {
+          "Custom": {
+            "name": "team_member_source",
+            "kind": {
+              "Enum": [
+                "native",
+                "idp"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7ebe15bbe0fd3a8624290f547534baf7a2754e65c3cb1c050ade98bfa1ac6540"
+}

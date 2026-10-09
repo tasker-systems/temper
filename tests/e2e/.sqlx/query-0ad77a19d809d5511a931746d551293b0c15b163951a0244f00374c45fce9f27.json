@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"readable!\" FROM kb_cogmap_regions reg\n         WHERE reg.id = ANY($1) AND NOT reg.is_folded\n           AND cogmap_readable_by_profile($2, reg.cogmap_id)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "readable!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0ad77a19d809d5511a931746d551293b0c15b163951a0244f00374c45fce9f27"
+}

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*)::int4 as \"count!\",\n               (COUNT(*) FILTER (WHERE team_slug = $2))::int4 as \"matching!\"\n          FROM vw_invitee_invitations\n         WHERE invitee_profile_id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "matching!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "b74d08b38659d726d8534f75cfa8fae5ce49da9ff492f0e49321ba69877858db"
+}

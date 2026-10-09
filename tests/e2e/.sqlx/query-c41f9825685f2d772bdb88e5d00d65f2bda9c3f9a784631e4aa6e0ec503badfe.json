@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_cogmap_regions r SET telos_alignment = nullif(1 - (r.centroid <=> ($4::text)::vector), 'NaN'::double precision) WHERE r.home_anchor_table = $1 AND r.home_anchor_id = $2 AND r.lens_id = $3 AND NOT r.is_folded",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c41f9825685f2d772bdb88e5d00d65f2bda9c3f9a784631e4aa6e0ec503badfe"
+}

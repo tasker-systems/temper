@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO kb_slack_grant_vault\n            (id, profile_id, slack_principal_id, key_version,\n             rt_nonce, rt_ciphertext, at_nonce, at_ciphertext, access_expires_at, revoked_at)\n        VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8, NULL)\n        ON CONFLICT (slack_principal_id) DO UPDATE\n            SET profile_id        = EXCLUDED.profile_id,\n                key_version       = EXCLUDED.key_version,\n                rt_nonce          = EXCLUDED.rt_nonce,\n                rt_ciphertext     = EXCLUDED.rt_ciphertext,\n                at_nonce          = EXCLUDED.at_nonce,\n                at_ciphertext     = EXCLUDED.at_ciphertext,\n                access_expires_at = EXCLUDED.access_expires_at,\n                revoked_at        = NULL,\n                updated_at        = now()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Bytea",
+        "Bytea",
+        "Bytea",
+        "Bytea",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "65cc177e35e090f28c3a01516227672b46e6cfa30b79ed33bad574b96d0fff24"
+}

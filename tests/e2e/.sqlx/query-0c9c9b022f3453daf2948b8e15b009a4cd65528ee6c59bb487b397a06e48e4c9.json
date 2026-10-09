@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM kb_saml_replay\n             WHERE ctid IN (\n                   SELECT ctid\n                     FROM kb_saml_replay\n                    WHERE expires_at < now() - make_interval(secs => $1::double precision)\n                    LIMIT $2\n             )\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Float8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0c9c9b022f3453daf2948b8e15b009a4cd65528ee6c59bb487b397a06e48e4c9"
+}

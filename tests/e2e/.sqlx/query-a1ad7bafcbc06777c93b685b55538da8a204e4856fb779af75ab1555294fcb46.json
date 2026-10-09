@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT _resource_write_guard_owner('kb_edges', ($1::jsonb->'owner'->>'id')::uuid)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "_resource_write_guard_owner",
+        "type_info": "Void"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a1ad7bafcbc06777c93b685b55538da8a204e4856fb779af75ab1555294fcb46"
+}

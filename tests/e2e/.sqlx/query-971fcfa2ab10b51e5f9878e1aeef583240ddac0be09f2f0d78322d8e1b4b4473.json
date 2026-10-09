@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS(\n             SELECT 1 FROM kb_team_members m\n               JOIN kb_teams t ON t.id = m.team_id\n              WHERE t.slug = $1 AND m.profile_id = $2 )",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "971fcfa2ab10b51e5f9878e1aeef583240ddac0be09f2f0d78322d8e1b4b4473"
+}

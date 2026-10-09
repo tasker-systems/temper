@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO kb_profile_auth_links\n            (id, profile_id, auth_provider, auth_provider_user_id)\n        VALUES ($1, $2, $3, $4)\n        ON CONFLICT (auth_provider, auth_provider_user_id)\n        DO UPDATE SET linked_at = now()\n        WHERE kb_profile_auth_links.profile_id = EXCLUDED.profile_id\n        RETURNING profile_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "profile_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Varchar",
+        "Varchar"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c6eb4e4867e0bfe5fc46d2772311c23e2fb70b3e1e5ed252ab79a2a8205af697"
+}

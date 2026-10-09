@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT e.payload->>'from_slug' AS from_slug\n             FROM kb_events e\n             JOIN kb_event_types t ON t.id = e.event_type_id\n            WHERE t.name = 'context_retired'\n              AND e.producing_anchor_table = 'kb_contexts'\n              AND e.producing_anchor_id = $1\n            ORDER BY e.occurred_at DESC, e.id DESC\n            LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "from_slug",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "edce43d092c0349ba999ac825c11f1c1c740b884cdaff35297fdb585352bbd10"
+}

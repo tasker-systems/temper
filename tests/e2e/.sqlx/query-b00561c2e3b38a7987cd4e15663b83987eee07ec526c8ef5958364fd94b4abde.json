@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT citation_is_live($1, 'resource'::provenance_source_kind, $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "citation_is_live",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b00561c2e3b38a7987cd4e15663b83987eee07ec526c8ef5958364fd94b4abde"
+}

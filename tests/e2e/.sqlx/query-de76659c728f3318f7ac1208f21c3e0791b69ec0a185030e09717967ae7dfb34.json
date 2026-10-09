@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH locked AS (\n            SELECT * FROM kb_slack_grant_vault WHERE slack_principal_id = $1 FOR UPDATE\n        )\n        SELECT v.rt_nonce          AS \"rt_nonce?\",\n               v.rt_ciphertext     AS \"rt_ciphertext?\",\n               v.at_nonce          AS \"at_nonce?\",\n               v.at_ciphertext     AS \"at_ciphertext?\",\n               v.access_expires_at AS \"access_expires_at?\",\n               (v.id IS NOT NULL)  AS \"vaulted!\",\n               s.state             AS \"standing?\"\n          FROM kb_profile_auth_links l\n          LEFT JOIN locked v                ON v.profile_id = l.profile_id\n          LEFT JOIN kb_principal_standing s ON s.profile_id = l.profile_id\n         WHERE l.auth_provider = 'slack' AND l.auth_provider_user_id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "rt_nonce?",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "rt_ciphertext?",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "at_nonce?",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 3,
+        "name": "at_ciphertext?",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 4,
+        "name": "access_expires_at?",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "vaulted!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "standing?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      null,
+      false
+    ]
+  },
+  "hash": "de76659c728f3318f7ac1208f21c3e0791b69ec0a185030e09717967ae7dfb34"
+}

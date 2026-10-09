@@ -110,9 +110,12 @@ pub async fn create_invitation(
     Ok(row)
 }
 
-/// Redeem an invitation token (bearer authority — the token IS the authority;
-/// membership is created for `caller`). Idempotent. Expiry is checked lazily
-/// here and flips the row to `expired`.
+/// Redeem an invitation token for `caller`, **only if `caller` is the person invited**: the
+/// invitation must reach them through `addressed_to`, the same predicate that lists it in their
+/// inbox (a verified email exactly one profile owns). The token locates the invitation; it is not
+/// the authority. A forwarded or leaked token redeems for nobody else, and a machine principal,
+/// which holds no verified email, is never an invitee. Idempotent for the member it admitted.
+/// Expiry is checked lazily here and flips the row to `expired`.
 pub async fn accept_invitation(
     pool: &PgPool,
     caller: ProfileId,
@@ -175,6 +178,9 @@ pub async fn accept_invitation(
                 .await?;
                 return Err(ApiError::BadRequest("invitation has expired".to_string()));
             }
+            if !addressed_to(pool, inv.id, caller).await? {
+                return Err(not_the_invitee());
+            }
 
             let mut tx = pool.begin().await?;
             sqlx::query!(
@@ -206,11 +212,14 @@ pub async fn accept_invitation(
     }
 }
 
-/// Decline an invitation (bearer authority). Idempotent if already declined;
-/// declining an accepted invitation is a `BadRequest`.
-pub async fn decline_invitation(pool: &PgPool, _caller: ProfileId, token: &str) -> ApiResult<()> {
+/// Decline an invitation, **only as the person invited** (`addressed_to`, as for accept): a
+/// token holder who is not the invitee cannot spend someone else's invitation. Idempotent if
+/// already declined; declining an accepted invitation is a `BadRequest`. An expired invitation is
+/// already spent, so declining one changes nothing (a pending row past its expiry is flipped to
+/// `expired`, as accept does).
+pub async fn decline_invitation(pool: &PgPool, caller: ProfileId, token: &str) -> ApiResult<()> {
     let row = sqlx::query!(
-        r#"SELECT status AS "status: InvitationStatus", revoked_at
+        r#"SELECT id, status AS "status: InvitationStatus", expires_at, revoked_at
              FROM kb_team_invitations WHERE token = $1"#,
         token,
     )
@@ -231,16 +240,55 @@ pub async fn decline_invitation(pool: &PgPool, _caller: ProfileId, token: &str) 
         InvitationStatus::Accepted => Err(ApiError::BadRequest(
             "invitation was already accepted".to_string(),
         )),
-        InvitationStatus::Pending | InvitationStatus::Expired => {
+        InvitationStatus::Expired => Ok(()),
+        InvitationStatus::Pending if row.expires_at < chrono::Utc::now() => {
             sqlx::query!(
-                "UPDATE kb_team_invitations SET status = 'declined' WHERE token = $1",
-                token,
+                "UPDATE kb_team_invitations SET status = 'expired' WHERE id = $1",
+                row.id,
+            )
+            .execute(pool)
+            .await?;
+            Ok(())
+        }
+        InvitationStatus::Pending => {
+            if !addressed_to(pool, row.id, caller).await? {
+                return Err(not_the_invitee());
+            }
+            sqlx::query!(
+                "UPDATE kb_team_invitations SET status = 'declined' WHERE id = $1",
+                row.id,
             )
             .execute(pool)
             .await?;
             Ok(())
         }
     }
+}
+
+/// Is this pending, live invitation addressed to `profile`? Read from `vw_invitee_invitations`,
+/// the one statement of "what is waiting on me", so that redeeming an invitation and seeing it in
+/// your inbox cannot disagree about who it is for.
+async fn addressed_to(pool: &PgPool, invitation: Uuid, profile: ProfileId) -> ApiResult<bool> {
+    let addressed = sqlx::query_scalar!(
+        r#"SELECT EXISTS(
+             SELECT 1 FROM vw_invitee_invitations
+              WHERE id = $1 AND invitee_profile_id = $2) AS "addressed!: bool""#,
+        invitation,
+        *profile,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(addressed)
+}
+
+/// The refusal for a token held by someone other than the invitee. Names no address: the
+/// holder learns only that the invitation is not theirs.
+fn not_the_invitee() -> ApiError {
+    ApiError::ForbiddenDetail(
+        "this invitation is addressed to someone else; it can only be used from the account \
+         whose verified email it was sent to"
+            .to_string(),
+    )
 }
 
 /// Revoke (withdraw) a pending invitation — the inviting team's counterpart to the invitee's
@@ -715,6 +763,7 @@ mod tests {
     async fn fresh_invite_succeeds_after_decline(pool: PgPool) {
         let (team_id, owner) = seed_team_with_owner(&pool).await;
         let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("again@e.com")).await;
         let inv = create_invitation(
             &pool,
             owner,
@@ -882,6 +931,7 @@ mod tests {
     async fn revoke_non_pending_is_bad_request(pool: PgPool) {
         let (team_id, owner) = seed_team_with_owner(&pool).await;
         let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("acc@e.com")).await;
         let inv = create_invitation(
             &pool,
             owner,
@@ -934,6 +984,7 @@ mod tests {
     async fn accept_revoked_is_bad_request(pool: PgPool) {
         let (team_id, owner) = seed_team_with_owner(&pool).await;
         let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("rev@e.com")).await;
         let inv = create_invitation(
             &pool,
             owner,
@@ -958,6 +1009,7 @@ mod tests {
     async fn accept_creates_membership(pool: PgPool) {
         let (team_id, owner) = seed_team_with_owner(&pool).await;
         let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("i@e.com")).await;
         let inv = create_invitation(
             &pool,
             owner,
@@ -985,6 +1037,7 @@ mod tests {
     async fn accept_is_idempotent(pool: PgPool) {
         let (team_id, owner) = seed_team_with_owner(&pool).await;
         let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("i@e.com")).await;
         let inv = create_invitation(
             &pool,
             owner,
@@ -1016,6 +1069,7 @@ mod tests {
     async fn accept_expired_errors_and_marks_expired(pool: PgPool) {
         let (team_id, owner) = seed_team_with_owner(&pool).await;
         let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("i@e.com")).await;
         let inv = create_invitation(
             &pool,
             owner,
@@ -1053,6 +1107,7 @@ mod tests {
     async fn decline_marks_declined_and_is_idempotent(pool: PgPool) {
         let (team_id, owner) = seed_team_with_owner(&pool).await;
         let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("i@e.com")).await;
         let inv = create_invitation(
             &pool,
             owner,
@@ -1245,5 +1300,151 @@ mod tests {
             1,
             "the list agrees, as it must",
         );
+    }
+
+    // --- Only the invitee redeems ---
+
+    async fn invite(pool: &PgPool, team_id: Uuid, owner: ProfileId, email: &str) -> TeamInvitation {
+        create_invitation(
+            pool,
+            owner,
+            team_id,
+            CreateInvitationParams {
+                invited_email: email.into(),
+                role: TeamRole::Member,
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn status_of(pool: &PgPool, id: Uuid) -> InvitationStatus {
+        sqlx::query_scalar!(
+            r#"SELECT status AS "status: InvitationStatus" FROM kb_team_invitations WHERE id = $1"#,
+            id
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// A token in the wrong hands redeems for nobody: a signed-in stranger with their own
+    /// verified email is refused, joins nothing, and leaves the invitation pending.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn accept_by_someone_other_than_the_invitee_is_refused(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let stranger = mk_profile(&pool, "stranger").await;
+        add_auth_email(&pool, stranger, "stranger-uid", Some("stranger@e.com")).await;
+        let inv = invite(&pool, team_id, owner, "i@e.com").await;
+
+        let err = accept_invitation(&pool, stranger, &inv.token)
+            .await
+            .expect_err("only the invitee may accept");
+        assert!(matches!(err, ApiError::ForbiddenDetail(_)), "got {err:?}");
+        assert!(
+            !err.to_string().contains("i@e.com"),
+            "the refusal names no address"
+        );
+        assert_eq!(role_on_team(&pool, team_id, stranger).await.unwrap(), None);
+        assert_eq!(status_of(&pool, inv.id).await, InvitationStatus::Pending);
+    }
+
+    /// Holding the invited address on an UNVERIFIED link is not being the invitee.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn accept_on_an_unverified_matching_email_is_refused(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let claimant = mk_profile(&pool, "claimant").await;
+        add_auth_email_with_verified(&pool, claimant, "claimant-uid", Some("i@e.com"), false).await;
+        let inv = invite(&pool, team_id, owner, "i@e.com").await;
+
+        let err = accept_invitation(&pool, claimant, &inv.token)
+            .await
+            .expect_err("an unverified address is not the invitee");
+        assert!(matches!(err, ApiError::ForbiddenDetail(_)), "got {err:?}");
+        assert_eq!(role_on_team(&pool, team_id, claimant).await.unwrap(), None);
+    }
+
+    /// An address two profiles have verified addresses nobody (the inbox's rule), so neither
+    /// may redeem it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn accept_on_an_address_two_profiles_verify_is_refused(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let one = mk_profile(&pool, "one").await;
+        let two = mk_profile(&pool, "two").await;
+        add_auth_email(&pool, one, "one-uid", Some("i@e.com")).await;
+        add_auth_email(&pool, two, "two-uid", Some("i@e.com")).await;
+        let inv = invite(&pool, team_id, owner, "i@e.com").await;
+
+        for who in [one, two] {
+            let err = accept_invitation(&pool, who, &inv.token)
+                .await
+                .expect_err("an ambiguous address addresses nobody");
+            assert!(matches!(err, ApiError::ForbiddenDetail(_)), "got {err:?}");
+        }
+        assert_eq!(status_of(&pool, inv.id).await, InvitationStatus::Pending);
+    }
+
+    /// A stranger cannot spend someone else's invitation by declining it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn decline_by_someone_other_than_the_invitee_is_refused(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let stranger = mk_profile(&pool, "stranger").await;
+        add_auth_email(&pool, stranger, "stranger-uid", Some("stranger@e.com")).await;
+        let inv = invite(&pool, team_id, owner, "i@e.com").await;
+
+        let err = decline_invitation(&pool, stranger, &inv.token)
+            .await
+            .expect_err("only the invitee may decline");
+        assert!(matches!(err, ApiError::ForbiddenDetail(_)), "got {err:?}");
+        assert_eq!(status_of(&pool, inv.id).await, InvitationStatus::Pending);
+    }
+
+    /// The invitee still redeems after a refused attempt, and the address matches case-blind,
+    /// as the inbox does.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_invitee_accepts_after_a_strangers_refused_attempt(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let stranger = mk_profile(&pool, "stranger").await;
+        add_auth_email(&pool, stranger, "stranger-uid", Some("stranger@e.com")).await;
+        let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("Invitee@E.com")).await;
+        let inv = invite(&pool, team_id, owner, "invitee@e.com").await;
+
+        accept_invitation(&pool, stranger, &inv.token)
+            .await
+            .expect_err("refused");
+        let resp = accept_invitation(&pool, invitee, &inv.token)
+            .await
+            .expect("the invitee accepts");
+        assert_eq!(resp.team_id, team_id);
+        assert_eq!(
+            role_on_team(&pool, team_id, invitee).await.unwrap(),
+            Some(TeamRole::Member)
+        );
+    }
+
+    /// Declining an expired invitation changes nothing: it is already spent.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn declining_an_expired_invitation_leaves_it_expired(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let stranger = mk_profile(&pool, "stranger").await;
+        seed_invite(&pool, team_id, "lapsed@e.com", owner, "pending", -1).await;
+        let token: String = sqlx::query_scalar(
+            "SELECT token FROM kb_team_invitations WHERE invited_email = 'lapsed@e.com'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        decline_invitation(&pool, stranger, &token)
+            .await
+            .expect("declining a spent invitation is a no-op");
+        let status: String =
+            sqlx::query_scalar("SELECT status::text FROM kb_team_invitations WHERE token = $1")
+                .bind(&token)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(status, "expired");
     }
 }

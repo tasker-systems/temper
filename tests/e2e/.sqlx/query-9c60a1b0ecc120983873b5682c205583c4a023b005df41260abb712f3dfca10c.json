@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n           SELECT 1 FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id\n          WHERE ($3::uuid IS NULL OR e.id > $3)\n            AND e.producing_anchor_table = $1 AND e.producing_anchor_id = $2\n            AND et.name = 'resource_deleted') AS \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9c60a1b0ecc120983873b5682c205583c4a023b005df41260abb712f3dfca10c"
+}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_machine_clients\n              SET secret_hash_previous       = secret_hash,\n                  secret_previous_expires_at = now() + make_interval(secs => $2),\n                  secret_hash                = $3,\n                  secret_rotated_at          = now()\n            WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Float8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "92d5451fee85e19ab0d6ed007af1f30c03d3d42e03c9dbdbb772629ca653fbdb"
+}

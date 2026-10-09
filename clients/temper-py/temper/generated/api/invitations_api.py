@@ -103,6 +103,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AcceptInvitationResponse",
             '400': None,
+            '403': None,
             '404': None,
             '409': None,
         }
@@ -176,6 +177,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AcceptInvitationResponse",
             '400': None,
+            '403': None,
             '404': None,
             '409': None,
         }
@@ -249,6 +251,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AcceptInvitationResponse",
             '400': None,
+            '403': None,
             '404': None,
             '409': None,
         }
@@ -986,6 +989,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
+            '403': None,
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -1058,6 +1062,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
+            '403': None,
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -1130,6 +1135,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
+            '403': None,
             '404': None,
         }
         response_data = self.api_client.call_api(

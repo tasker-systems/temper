@@ -8053,6 +8053,9 @@
           "400": {
             "description": "Invitation expired or already declined"
           },
+          "403": {
+            "description": "The invitation is addressed to someone else: only the account whose verified email it names may redeem it"
+          },
           "404": {
             "description": "Unknown token"
           },
@@ -8106,6 +8109,9 @@
           },
           "400": {
             "description": "Invitation was already accepted"
+          },
+          "403": {
+            "description": "The invitation is addressed to someone else: only the account whose verified email it names may decline it"
           },
           "404": {
             "description": "Unknown token"
@@ -19805,7 +19811,7 @@
       },
       "InvitationTokenRequest": {
         "type": "object",
-        "description": "Request body for `POST /api/invitations/accept` and\n`POST /api/invitations/decline`.\n\n## Why the token is a body field and not a path segment\n\nThe token is a **bearer capability** — `invitation_service` mints 128 CSPRNG\nbits and the authority to join the team *is* the token, for seven days. A URL\npath is the least private part of a request: intermediaries log it as a matter\nof course, it rides in `Referer` headers, it lands in browser history, and it\nis recorded as a span attribute that leaves the building on export. A request\nbody goes to none of those places.\n\n## One type for both routes\n\nAccept and decline differ in what they *do*, and that difference is carried by\nthe route and the verb. What the body means is identical in both — \"which\ninvitation, named by the capability token that authorizes acting on it\" — so\nthis is one intent written once, not two shapes that happen to match.",
+        "description": "Request body for `POST /api/invitations/accept` and\n`POST /api/invitations/decline`.\n\n## Why the token is a body field and not a path segment\n\nThe token is a **capability to locate** an invitation — `invitation_service` mints 128\nCSPRNG bits, valid for seven days. It redeems only for the invitee (the account whose\nverified email the invitation names), so a leaked token admits nobody else, but it still\nnames a team and an invitation, and is kept as private as a credential. A URL\npath is the least private part of a request: intermediaries log it as a matter\nof course, it rides in `Referer` headers, it lands in browser history, and it\nis recorded as a span attribute that leaves the building on export. A request\nbody goes to none of those places.\n\n## One type for both routes\n\nAccept and decline differ in what they *do*, and that difference is carried by\nthe route and the verb. What the body means is identical in both — \"which\ninvitation, named by the capability token that authorizes acting on it\" — so\nthis is one intent written once, not two shapes that happen to match.",
         "required": [
           "token"
         ],

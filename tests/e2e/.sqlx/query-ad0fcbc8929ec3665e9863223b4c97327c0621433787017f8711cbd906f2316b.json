@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT originating_cogmap_id, status FROM kb_invocations WHERE id = $1 AND anchor_readable_by_profile($2, 'kb_cogmaps', originating_cogmap_id)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "originating_cogmap_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "status",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "ad0fcbc8929ec3665e9863223b4c97327c0621433787017f8711cbd906f2316b"
+}

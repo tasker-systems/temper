@@ -1,0 +1,73 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT population      AS \"population!\",\n                  emptiness,\n                  materialized_at,\n                  region_id,\n                  lens_id,\n                  salience,\n                  content_cohesion,\n                  label,\n                  member_count\n             FROM anchor_shape($1, $2, 'profile', $3, $4)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "population!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "emptiness",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "materialized_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "region_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "lens_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "salience",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 6,
+        "name": "content_cohesion",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 7,
+        "name": "label",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "member_count",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "5d7920c1efd69210db18d5027f912355065638c49941e47aacefb7d3415c8779"
+}

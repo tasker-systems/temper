@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT f.cogmap_id   AS \"cogmap_id!: Uuid\",\n               f.finding_id  AS \"finding_id!: Uuid\",\n               ac.block_id   AS \"block_id!: Uuid\",\n               ac.source_id  AS \"source_id!: Uuid\"\n          FROM unnest($1::uuid[], $2::uuid[]) WITH ORDINALITY AS f(cogmap_id, finding_id, ord)\n          CROSS JOIN LATERAL resource_auditable_citations(f.finding_id, $3) ac\n         ORDER BY f.ord, ac.block_id, ac.source_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cogmap_id!: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "finding_id!: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "block_id!: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "source_id!: Uuid",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "UuidArray",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "ada2cf05a17e02f8eda1208fa45f9927960fcdbf835d4d270291b4a9db6e8fad"
+}

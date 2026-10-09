@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT cogmap_id            AS \"id!\",\n               name                 AS \"name!\",\n               owner_ref            AS \"owner_ref!\",\n               team_ids             AS \"team_ids!\",\n               region_count         AS \"region_count!\",\n               resource_count       AS \"resource_count!\",\n               telos_resource_id    AS \"telos_resource_id!\",\n               charter_statement\n          FROM cogmap_list_rows($1, NULL::uuid)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "owner_ref!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "team_ids!",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 4,
+        "name": "region_count!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "resource_count!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "telos_resource_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "charter_statement",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "a299d4ddd1a5f42dddbe1e909eca58d82f21d2409e3c0a2d4e3993bf5a38c8c0"
+}

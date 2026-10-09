@@ -7,7 +7,8 @@
 //! so an invitee to the gating team can redeem *before* they hold system access.
 //!
 //! `accept` / `decline` take the invitation token in the **request body**, never
-//! as a path segment. The token is a bearer capability, and a path is logged by
+//! as a path segment. The token is a private capability (it redeems only for the invitee,
+//! but still names a team and an invitation), and a path is logged by
 //! every intermediary and recorded as a span attribute that leaves the building.
 //! See `InvitationTokenRequest` for the full rationale.
 
@@ -181,6 +182,7 @@ pub async fn count_mine(
     responses(
         (status = 200, description = "Invitation redeemed; caller joined the team", body = AcceptInvitationResponse),
         (status = 400, description = "Invitation expired or already declined"),
+        (status = 403, description = "The invitation is addressed to someone else: only the account whose verified email it names may redeem it"),
         (status = 404, description = "Unknown token"),
         (status = 409, description = "Invitation already redeemed by another profile"),
     )
@@ -209,6 +211,7 @@ pub async fn accept(
     responses(
         (status = 204, description = "Invitation declined"),
         (status = 400, description = "Invitation was already accepted"),
+        (status = 403, description = "The invitation is addressed to someone else: only the account whose verified email it names may decline it"),
         (status = 404, description = "Unknown token"),
     )
 )]

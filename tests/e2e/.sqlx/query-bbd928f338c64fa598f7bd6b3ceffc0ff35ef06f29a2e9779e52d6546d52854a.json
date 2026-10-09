@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE kb_oauth_refresh_tokens\n               SET revoked_at = now()\n             WHERE profile_id = $1\n               AND revoked_at IS NULL\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bbd928f338c64fa598f7bd6b3ceffc0ff35ef06f29a2e9779e52d6546d52854a"
+}

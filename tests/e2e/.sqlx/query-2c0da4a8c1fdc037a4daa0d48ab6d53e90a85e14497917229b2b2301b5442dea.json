@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT channel,\n                  last_success_at      AS \"last_success_at: DateTime<Utc>\",\n                  last_failure_at      AS \"last_failure_at: DateTime<Utc>\",\n                  failing_since        AS \"failing_since: DateTime<Utc>\",\n                  consecutive_failures,\n                  failures_total,\n                  last_failure_cause,\n                  last_failure_detail\n             FROM kb_internal_call_health\n            WHERE channel = ANY($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "channel",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "last_success_at: DateTime<Utc>",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_failure_at: DateTime<Utc>",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "failing_since: DateTime<Utc>",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "consecutive_failures",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "failures_total",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "last_failure_cause",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "last_failure_detail",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "2c0da4a8c1fdc037a4daa0d48ab6d53e90a85e14497917229b2b2301b5442dea"
+}

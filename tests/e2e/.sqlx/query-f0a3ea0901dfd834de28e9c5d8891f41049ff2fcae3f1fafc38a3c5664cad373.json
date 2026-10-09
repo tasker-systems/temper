@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_properties SET is_folded = true, last_event_id = $1 WHERE owner_table = 'kb_resources' AND owner_id = ($2::jsonb->'owner'->>'id')::uuid AND property_key = ($2::jsonb->>'property_key') AND NOT is_folded",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f0a3ea0901dfd834de28e9c5d8891f41049ff2fcae3f1fafc38a3c5664cad373"
+}

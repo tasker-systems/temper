@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT owner_id FROM kb_contexts\n            WHERE id = $1 AND owner_table = 'kb_profiles'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "owner_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a58f7f26f194e63d73c12e8a5f0af54ebef5e688ce5852eb4cba34418bd908e7"
+}

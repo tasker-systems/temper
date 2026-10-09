@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO kb_rate_counters AS c (route, window_started_at, call_count)\n        VALUES ($1, now(), 1)\n        ON CONFLICT (route) DO UPDATE SET\n            call_count = CASE\n                WHEN c.window_started_at < now() - make_interval(secs => $2)\n                    THEN 1\n                    ELSE c.call_count + 1\n            END,\n            window_started_at = CASE\n                WHEN c.window_started_at < now() - make_interval(secs => $2)\n                    THEN now()\n                    ELSE c.window_started_at\n            END\n        RETURNING call_count,\n                  GREATEST(0, extract(epoch FROM\n                      (window_started_at + make_interval(secs => $2)) - now()))::bigint\n                      AS \"retry_after_secs!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "call_count",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "retry_after_secs!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "817610c4dac0ebf484bf83820f4c8e2af50ee44bafa00e774f2642d8ef26991d"
+}

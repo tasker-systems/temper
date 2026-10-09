@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.id FROM kb_resources r\n                          JOIN kb_resource_homes h ON h.resource_id = r.id\n                         WHERE r.is_active\n                           AND r.ingest_state = 'complete'\n                           AND h.anchor_table = 'kb_contexts'\n                           AND h.anchor_id = $1\n                           AND EXISTS (SELECT 1 FROM resources_visible_to($2) v\n                                        WHERE v.resource_id = r.id)\n                           AND ($3::uuid IS NULL OR r.id > $3)\n                         ORDER BY r.id\n                         LIMIT $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1d97e6cbea94d6bb848c9aa6bbad43c9d632e73f9ed1845d54092ac8e96cc14a"
+}

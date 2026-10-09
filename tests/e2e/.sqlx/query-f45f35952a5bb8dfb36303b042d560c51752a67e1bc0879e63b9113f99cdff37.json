@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT c.id FROM kb_contexts c\n                 WHERE c.id = $2\n                   AND context_visible_to($1, c.id)\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f45f35952a5bb8dfb36303b042d560c51752a67e1bc0879e63b9113f99cdff37"
+}

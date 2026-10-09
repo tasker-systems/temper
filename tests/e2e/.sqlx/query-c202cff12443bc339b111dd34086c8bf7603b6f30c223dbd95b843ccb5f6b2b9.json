@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT count(*) AS \"count!\",\n               GREATEST(0, extract(epoch FROM\n                   (COALESCE(min(created), now()) + make_interval(secs => $2)) - now()))::bigint\n                   AS \"retry_after_secs!\"\n          FROM kb_join_requests\n         WHERE requesting_profile_id = $1\n           AND created > now() - make_interval(secs => $2)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "retry_after_secs!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "c202cff12443bc339b111dd34086c8bf7603b6f30c223dbd95b843ccb5f6b2b9"
+}

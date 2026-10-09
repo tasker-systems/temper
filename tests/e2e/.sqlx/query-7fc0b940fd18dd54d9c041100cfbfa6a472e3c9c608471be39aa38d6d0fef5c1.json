@@ -1,0 +1,98 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT artifact_id        AS \"artifact_id!\",\n                  resource_id        AS \"resource_id!\",\n                  kind_owner_table   AS \"kind_owner_table!\",\n                  kind_owner_id      AS \"kind_owner_id!\",\n                  artifact_kind      AS \"artifact_kind!\",\n                  intent             AS \"intent!\",\n                  precedence         AS \"precedence!\",\n                  content_hash       AS \"content_hash!\",\n                  content_bytes      AS \"content_bytes!\",\n                  shape_state        AS \"shape_state!\",\n                  is_folded          AS \"is_folded!\",\n                  created            AS \"created!\",\n                  content\n             FROM artifacts_for_resource($1, $2, $3, $4, $5)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "artifact_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "resource_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "kind_owner_table!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "kind_owner_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "artifact_kind!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "intent!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "precedence!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 7,
+        "name": "content_hash!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "content_bytes!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 9,
+        "name": "shape_state!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "is_folded!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "created!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 12,
+        "name": "content",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "7fc0b940fd18dd54d9c041100cfbfa6a472e3c9c608471be39aa38d6d0fef5c1"
+}

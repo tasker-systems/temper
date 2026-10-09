@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT principal_governance_set($1, true, $2, 'system admin promotion')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "principal_governance_set",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b4c0cf469099339fe29ae2cf97732a528e6aa19917074484a58ac96b510953f6"
+}

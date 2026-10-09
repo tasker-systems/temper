@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO kb_team_members (team_id, profile_id, role)\n                VALUES ($1, $2, $3)\n                ON CONFLICT (team_id, profile_id) DO NOTHING\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        {
+          "Custom": {
+            "name": "team_role",
+            "kind": {
+              "Enum": [
+                "owner",
+                "maintainer",
+                "member",
+                "watcher"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cd3b35e99d0f2072bc7fdf91d1158ffa90dc9932b407892eedb079ca9510cdf1"
+}

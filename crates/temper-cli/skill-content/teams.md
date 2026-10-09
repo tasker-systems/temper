@@ -41,8 +41,9 @@ temper team invite <team> <email> --role <role>
 ```
 
 Key facts about invites:
-- **No email is sent.** Temper has no mailer. The `invited_email` is a *correlator*,
-  not a delivery channel.
+- **No email is sent.** Temper has no mailer. The `invited_email` is not a delivery
+  channel; it decides **who may redeem**: only an account whose verified email is that
+  address can accept or decline. A token handed to anyone else does nothing for them.
 - **Sign-in is self-serve** (OAuth/SAML auto-provisions a profile). The invitee does
   not need the token handed to them.
 

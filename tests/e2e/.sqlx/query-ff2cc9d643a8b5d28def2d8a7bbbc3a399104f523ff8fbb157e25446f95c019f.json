@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_subscription_deliveries (subscription_id, event_id)\n           SELECT s, $2 FROM unnest($1::uuid[]) AS s\n           ON CONFLICT (subscription_id, event_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ff2cc9d643a8b5d28def2d8a7bbbc3a399104f523ff8fbb157e25446f95c019f"
+}

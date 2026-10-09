@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT er.id,\n                  (SELECT s.id FROM kb_events s\n                    WHERE s.correlation_id = er.correlation_id\n                      AND s.occurred_at = er.occurred_at\n                    ORDER BY s.id DESC LIMIT 1) AS \"apply_after!\"\n             FROM kb_events er JOIN kb_event_types et ON et.id = er.event_type_id\n            WHERE et.name = 'resource_erased' AND er.correlation_id IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "apply_after!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "bbcfc7d99b17ae8822abb3582213228b736b0f569637a87174431de3643613be"
+}

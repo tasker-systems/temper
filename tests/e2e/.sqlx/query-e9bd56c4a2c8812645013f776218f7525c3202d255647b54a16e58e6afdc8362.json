@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE kb_team_invitations\n           SET revoked_at = now()\n         WHERE id = $1\n           AND team_id = $2\n           AND status = 'pending'\n           AND revoked_at IS NULL\n        RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e9bd56c4a2c8812645013f776218f7525c3202d255647b54a16e58e6afdc8362"
+}

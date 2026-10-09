@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, subscription_id, event_id, status,\n                  scope_reason, scoped_at,\n                  disposition, decided_by_event_id, decided_by_invocation_id,\n                  decided_by_profile_id, decided_at, rationale, confidence, created\n             FROM kb_subscription_deliveries\n            WHERE subscription_id = $1\n              AND status = 'undetermined'\n              AND disposition IS NULL\n            ORDER BY id DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "subscription_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "event_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "scope_reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "scoped_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "disposition",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "decided_by_event_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 8,
+        "name": "decided_by_invocation_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "decided_by_profile_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 10,
+        "name": "decided_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 11,
+        "name": "rationale",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "confidence",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 13,
+        "name": "created",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "01c104345c1ca459106615ccb192e4f5b9d5217797599bcc5ac836b44f51d4d4"
+}

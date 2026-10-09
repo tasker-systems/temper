@@ -1,0 +1,70 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT base.rows_ever                  AS \"rows_ever!\",\n               base.active                     AS \"active!\",\n               base.active_failed              AS \"active_failed!\",\n               base.failures_total             AS \"failures_total!\",\n               base.oldest_active_first_due    AS \"oldest_active_first_due\",\n               base.last_completed_at          AS \"last_completed_at\",\n               a.status                        AS \"alertable_status\",\n               a.pathname                      AS \"alertable_pathname\",\n               a.first_due_at                  AS \"alertable_first_due\"\n          FROM (\n              SELECT count(*) AS rows_ever,\n                     count(*) FILTER (WHERE status IN ('pending','in_progress','waiting_for_retry')) AS active,\n                     count(*) FILTER (WHERE status IN ('pending','in_progress','waiting_for_retry')\n                                        AND attempts > 0) AS active_failed,\n                     -- Failures, not claims: a done row's last claim succeeded; every other\n                     -- row's claims all ended in the failure path that put it there.\n                     coalesce(sum(CASE WHEN status = 'done' THEN attempts - 1 ELSE attempts END), 0) AS failures_total,\n                     min(first_due_at) FILTER (WHERE status IN ('pending','in_progress','waiting_for_retry')) AS oldest_active_first_due,\n                     max(completed_at) FILTER (WHERE status = 'done') AS last_completed_at\n                FROM kb_erasure_blob_deletes\n          ) AS base\n          LEFT JOIN LATERAL (\n              SELECT status, pathname, first_due_at\n                FROM kb_erasure_blob_deletes\n               WHERE status = 'dead'\n                  OR (status IN ('pending','in_progress','waiting_for_retry')\n                      AND first_due_at < $1)\n               ORDER BY first_due_at, id\n               LIMIT 1\n          ) a ON true\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "rows_ever!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "active!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "active_failed!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "failures_total!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "oldest_active_first_due",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "last_completed_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "alertable_status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "alertable_pathname",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "alertable_first_due",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "fb392139cfce989f51d05c9ff8e96e9c8252dc0fee93f1f1a8621fb21a6f0e2f"
+}

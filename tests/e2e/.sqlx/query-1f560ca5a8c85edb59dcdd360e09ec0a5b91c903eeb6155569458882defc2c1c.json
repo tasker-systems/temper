@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT _region_recompute_erased_member_centroids($1, $2, $3) AS \"recomputed!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "recomputed!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "1f560ca5a8c85edb59dcdd360e09ec0a5b91c903eeb6155569458882defc2c1c"
+}

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tc.team_id AS \"team_id!\", t.slug AS \"slug!\"\n             FROM kb_team_contexts tc\n             JOIN kb_teams t ON t.id = tc.team_id\n            WHERE tc.context_id = $1\n            ORDER BY t.slug",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "slug!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "12cd8d2f277e85b2243553a5294a14f332a5ee989088d944da5dbfd7947ac783"
+}

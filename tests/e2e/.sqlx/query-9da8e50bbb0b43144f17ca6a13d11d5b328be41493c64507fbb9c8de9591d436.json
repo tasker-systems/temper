@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.block_id, p.source_kind::text AS \"source_kind!\",\n                  p.source_id, p.accretion_seq, r.uri AS \"uri: Option<String>\"\n             FROM kb_block_provenance p\n             JOIN kb_content_blocks b ON b.id = p.block_id\n             LEFT JOIN kb_remote_sources r ON p.source_kind = 'remote' AND r.id = p.source_id\n            WHERE b.resource_id = $1 AND NOT b.is_folded AND NOT p.is_corrected",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "block_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "source_kind!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "source_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "accretion_seq",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "uri: Option<String>",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9da8e50bbb0b43144f17ca6a13d11d5b328be41493c64507fbb9c8de9591d436"
+}

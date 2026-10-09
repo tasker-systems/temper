@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE kb_principal_review_requests\n           SET decided_at = now(), decided_by = $2, decision_note = $3\n         WHERE profile_id = $1\n           AND decided_at IS NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e1091b1ade07600c8d5bef8cd454c174d96e163cb7a6a353d422b9d4def222ea"
+}

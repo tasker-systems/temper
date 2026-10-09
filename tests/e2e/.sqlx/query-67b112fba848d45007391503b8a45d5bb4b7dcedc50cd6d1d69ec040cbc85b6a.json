@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT cogmap_readable_by_profile($1, g.id) AS \"ok!\"\n                         FROM kb_cogmaps g\n                        WHERE g.id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ok!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "67b112fba848d45007391503b8a45d5bb4b7dcedc50cd6d1d69ec040cbc85b6a"
+}

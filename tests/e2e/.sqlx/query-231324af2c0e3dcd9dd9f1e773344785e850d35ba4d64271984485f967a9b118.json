@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT r.id FROM kb_cogmap_regions r JOIN kb_cogmap_region_members m ON m.region_id = r.id WHERE r.component_id = ANY($1) AND NOT r.is_folded AND m.member_table = 'kb_resources' AND m.member_id = ANY($2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "231324af2c0e3dcd9dd9f1e773344785e850d35ba4d64271984485f967a9b118"
+}

@@ -28,8 +28,10 @@ export type InvitationStatus = "pending" | "accepted" | "declined" | "expired";
  *
  * ## Why the token is a body field and not a path segment
  *
- * The token is a **bearer capability** — `invitation_service` mints 128 CSPRNG
- * bits and the authority to join the team *is* the token, for seven days. A URL
+ * The token is a **capability to locate** an invitation — `invitation_service` mints 128
+ * CSPRNG bits, valid for seven days. It redeems only for the invitee (the account whose
+ * verified email the invitation names), so a leaked token admits nobody else, but it still
+ * names a team and an invitation, and is kept as private as a credential. A URL
  * path is the least private part of a request: intermediaries log it as a matter
  * of course, it rides in `Referer` headers, it lands in browser history, and it
  * is recorded as a span attribute that leaves the building on export. A request

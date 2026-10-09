@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT _event_append($1, $2, 'kb_contexts', $3, $4, $5, $6, $7, $8, $9)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "_event_append",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Jsonb",
+        "Jsonb",
+        "Uuid",
+        "Int4",
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "35da9165f994cae4b6e28886d5a6ce981e6e570ed042a7bb1c74b4644233c81d"
+}

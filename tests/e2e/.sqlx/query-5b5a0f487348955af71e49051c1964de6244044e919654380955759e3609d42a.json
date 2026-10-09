@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_machine_clients\n                  SET revoked_at = now(), revoked_by_profile_id = $2\n                WHERE id = $1 AND revoked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5b5a0f487348955af71e49051c1964de6244044e919654380955759e3609d42a"
+}

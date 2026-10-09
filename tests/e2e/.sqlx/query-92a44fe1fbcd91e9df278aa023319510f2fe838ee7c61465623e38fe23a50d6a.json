@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT principal_governance_set($1, false, $2, 'system admin demotion')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "principal_governance_set",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "92a44fe1fbcd91e9df278aa023319510f2fe838ee7c61465623e38fe23a50d6a"
+}

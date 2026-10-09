@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT DISTINCT content_hash AS \"content_hash!\"\n          FROM kb_blobs\n         WHERE content_hash = ANY($1) AND content_type IS NOT NULL\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content_hash!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "88389578a563ec111aa43f07ce80446e881ceeb3a4ab435bac1a520f1104176f"
+}

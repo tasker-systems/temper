@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT group_value AS \"group_value!\", member_count AS \"member_count!\"\n             FROM graph_context_residual_counts($1, $2, $3, $4, $5)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group_value!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "member_count!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "TextArray",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "0a0d511a2053842c131db2fc49ab63ce716c598bac289d543046e45d06d4ca98"
+}

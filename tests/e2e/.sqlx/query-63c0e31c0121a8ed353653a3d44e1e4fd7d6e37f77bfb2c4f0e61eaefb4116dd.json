@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE kb_team_invitations\n           SET status = 'expired'\n         WHERE team_id = $1\n           AND invited_email = $2\n           AND status = 'pending'\n           AND expires_at <= now()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "63c0e31c0121a8ed353653a3d44e1e4fd7d6e37f77bfb2c4f0e61eaefb4116dd"
+}

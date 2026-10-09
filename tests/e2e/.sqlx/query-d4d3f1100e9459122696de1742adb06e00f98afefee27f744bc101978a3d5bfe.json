@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT c.header_path\n          FROM kb_content_blocks b\n          JOIN kb_chunks c ON c.block_id = b.id AND c.is_current\n         WHERE b.resource_id = $1 AND NOT b.is_folded\n         ORDER BY b.seq DESC, c.chunk_index DESC\n         LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "header_path",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "d4d3f1100e9459122696de1742adb06e00f98afefee27f744bc101978a3d5bfe"
+}
