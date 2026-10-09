@@ -187,6 +187,21 @@ if [ "${VERCEL_ENV:-}" != "production" ] && [ "${VERCEL_ENV:-}" != "preview" ]; 
   exit 1
 fi
 
+# ── NO PREVIEW FOR A DEPENDABOT BRANCH — a security rule, not a cost one ────────────────
+#
+# A Dependabot branch changes lockfiles to versions nobody here has reviewed yet, and a
+# preview build installs them (install scripts included) with the project's Preview
+# environment variables in reach. This step runs
+# before the install, so skipping here means the new upstream code never runs on Vercel
+# until a human has merged it. It covers security-update and version-update PRs alike.
+# Previews only: production builds from main, which a Dependabot branch never is.
+case "${VERCEL_ENV:-}:${VERCEL_GIT_COMMIT_REF:-}" in
+  preview:dependabot/*)
+    echo "skip: preview of Dependabot branch '${VERCEL_GIT_COMMIT_REF}' — unreviewed dependency code does not build here"
+    exit 0
+    ;;
+esac
+
 # ---------------------------------------------------------------------------------------
 # Determine the changeset.
 # ---------------------------------------------------------------------------------------

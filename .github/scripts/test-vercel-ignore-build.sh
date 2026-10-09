@@ -76,6 +76,18 @@ done
 # #761 violated: six commits under packages/temper-cloud produced six full temper-ui
 # builds, plus steward and mention, because those three had no gate at all.
 # ---------------------------------------------------------------------------------------
+echo "-- Dependabot branches never build a preview"
+for p in $PROJECTS; do
+  expect "$p skips a dependabot preview that touches its triggers" 0 "$p" VERCEL_ENV=preview VERCEL_GIT_COMMIT_REF=dependabot/npm_and_yarn/x CHANGED_PATHS="bun.lock
+clients/temper-ts/package-lock.json
+packages/agent-workflows/steward/package-lock.json
+packages/agent-workflows/mention/package-lock.json
+packages/temper-ui/package.json"
+done
+expect "a human branch with the same lockfile change still builds" 1 temper-ui VERCEL_ENV=preview VERCEL_GIT_COMMIT_REF=jct/bump-deps CHANGED_PATHS="bun.lock"
+expect "'dependabot' not as the ref's prefix still builds"           1 temper-ui VERCEL_ENV=preview VERCEL_GIT_COMMIT_REF=jct/dependabot-notes CHANGED_PATHS="bun.lock"
+expect "the rule is preview-only (production is unaffected)"        1 temper-ui VERCEL_ENV=production VERCEL_GIT_COMMIT_REF=dependabot/npm_and_yarn/x CHANGED_PATHS="bun.lock"
+
 echo "-- per-project isolation"
 expect "cloud builds for a crate"          1 temper-cloud   VERCEL_ENV=preview CHANGED_PATHS="crates/temper-api/src/lib.rs"
 expect "ui SKIPS a crate"                  0 temper-ui      VERCEL_ENV=preview CHANGED_PATHS="crates/temper-api/src/lib.rs"

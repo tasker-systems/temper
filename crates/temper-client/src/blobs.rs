@@ -63,7 +63,7 @@ impl<'a> BlobClient<'a> {
                     })?,
             );
         let op = &ops::COMMIT_BLOB;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).multipart(form);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -76,7 +76,7 @@ impl<'a> BlobClient<'a> {
     pub async fn read_response(&self, blob_id: Uuid) -> Result<reqwest::Response> {
         let token = self.http.resolve_token()?;
         let op = &ops::GET_BLOB;
-        let path = op.path(&[&blob_id]);
+        let path = op.path(&[&blob_id])?;
         let req = self.http.request(op, &path);
         self.http.send(&op.method(), &path, req, Some(&token)).await
     }
@@ -85,7 +85,7 @@ impl<'a> BlobClient<'a> {
     pub async fn begin(&self, request: &BlobUploadBeginRequest) -> Result<BlobUploadBeginResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::BEGIN_BLOB_UPLOAD;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -104,7 +104,7 @@ impl<'a> BlobClient<'a> {
     ) -> Result<BlobUploadProgress> {
         let token = self.http.resolve_token()?;
         let op = &ops::APPEND_BLOB_SEGMENT;
-        let path = format!("{}?seq={seq}", op.path(&[&upload_id]));
+        let path = format!("{}?seq={seq}", op.path(&[&upload_id])?);
         let req = self.http.request(op, &path).body(bytes);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -115,7 +115,7 @@ impl<'a> BlobClient<'a> {
     pub async fn progress(&self, upload_id: Uuid) -> Result<BlobUploadProgress> {
         let token = self.http.resolve_token()?;
         let op = &ops::BLOB_UPLOAD_PROGRESS;
-        let path = op.path(&[&upload_id]);
+        let path = op.path(&[&upload_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -132,7 +132,7 @@ impl<'a> BlobClient<'a> {
     ) -> Result<BlobCommitResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::FINALIZE_BLOB_UPLOAD;
-        let path = op.path(&[&upload_id]);
+        let path = op.path(&[&upload_id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -144,7 +144,7 @@ impl<'a> BlobClient<'a> {
     pub async fn list(&self, home: Option<(&str, Uuid)>) -> Result<Vec<BlobSummary>> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_BLOBS;
-        let mut path = op.path(&[]);
+        let mut path = op.path(&[])?;
         if let Some((table, id)) = home {
             path.push_str(&format!("?home_table={table}&home_id={id}"));
         }
@@ -162,7 +162,7 @@ impl<'a> BlobClient<'a> {
     ) -> Result<BlobRelationAck> {
         let token = self.http.resolve_token()?;
         let op = &ops::RELATE_BLOB;
-        let path = op.path(&[&blob_id]);
+        let path = op.path(&[&blob_id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -175,7 +175,7 @@ impl<'a> BlobClient<'a> {
     pub async fn delete(&self, blob_id: Uuid, act: &ActInput) -> Result<BlobDeleteAck> {
         let token = self.http.resolve_token()?;
         let op = &ops::DELETE_BLOB;
-        let path = op.path(&[&blob_id]);
+        let path = op.path(&[&blob_id])?;
         let req = self.http.request(op, &path).query(act);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -186,7 +186,7 @@ impl<'a> BlobClient<'a> {
     pub async fn relations(&self, blob_id: Uuid) -> Result<Vec<BlobRelationRow>> {
         let token = self.http.resolve_token()?;
         let op = &ops::BLOB_RELATIONS;
-        let path = op.path(&[&blob_id]);
+        let path = op.path(&[&blob_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))

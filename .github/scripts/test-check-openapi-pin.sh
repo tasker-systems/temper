@@ -60,9 +60,11 @@ reset_fixtures() {
   write_version
   write_pin 0.5 "$(base_contract)"
   base_contract > "$EMIT"
+  rm -f "$REGISTER"
 }
 
-run_gate() { bash "$CHECK" --emitted "$EMIT" --pin-dir "$PINDIR" --version-file "$VERFILE" 2>&1; }
+REGISTER="${WORK}/RELEASE_REGISTER.md"
+run_gate() { bash "$CHECK" --emitted "$EMIT" --pin-dir "$PINDIR" --version-file "$VERFILE" --register "$REGISTER" 2>&1; }
 
 echo "test-check-openapi-pin"
 echo
@@ -187,6 +189,81 @@ out="$(run_gate)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'not readable JSON'; then
   ok "unparseable committed contract: fails closed, never renders as a pass"
 else bad "unparseable committed contract: fails closed, never renders as a pass" "exit=$rc" "$out"; fi
+
+# ── 13. CORRECTIONS — the recorded corrected shape is the baseline, not a waiver ────────────────
+# The fixture's correction: the pinned GET answer declared `score` required, and the corrected
+# shape drops that. On its own that is the #906 omit-class (case 4), so without the record it fails.
+SURVIVOR='/api/blobs/{id}'
+ROW='Blob reads document what the server always returned'
+corrected_head() { jq -S '.paths["/api/blobs/{id}"].get.responses["200"].content["application/json"].schema.required = []' "$EMIT"; }
+write_register() { # $1 = classes
+  printf '# Release-verdict register\n\n- **%s**\n  Prose.\npr: self\nclasses: %s\nsurfaces: http\nstatus: signal-only\n- **Another row**\n  Prose.\npr: self\nclasses: spec-correction\nsurfaces: http\nstatus: signal-only\n' "$ROW" "$1" > "$REGISTER"
+}
+write_corrections() { # $1 = register row title, $2 = path, $3 = the head to record from
+  jq -n --arg row "$1" --arg p "$2" --slurpfile h "$3" \
+    '{corrections: [{path: $p, method: "get", register_row: $row, reason: "fixture", operation: $h[0].paths["/api/blobs/{id}"].get}]}' \
+    > "${PINDIR}/0.5/corrections.json"
+}
+corrected_setup() { # $1 = classes for the row
+  reset_fixtures
+  corrected_head > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"
+  write_register "$1"
+  write_corrections "$ROW" "$SURVIVOR" "$EMIT"
+}
+
+corrected_setup "behavioral, spec-correction"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '1 recorded correction(s) applied: GET /api/blobs/{id}'; then
+  ok "corrections: a recorded correction declared spec-correction passes, and the pass names it"
+else bad "corrections: a recorded correction declared spec-correction passes, and the pass names it" "exit=$rc" "$out"; fi
+
+corrected_setup "behavioral, spec-correction"
+rm "${PINDIR}/0.5/corrections.json"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'MOVED'; then
+  ok "corrections: the same movement with no record still fails (the record is what passes it)"
+else bad "corrections: the same movement with no record still fails (the record is what passes it)" "exit=$rc" "$out"; fi
+
+corrected_setup "behavioral, spec-correction"
+jq -S '.paths["/api/blobs/{id}"].get.responses["200"].content["application/json"].schema.properties.score.type = "string"' "$EMIT" > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'MOVED'; then
+  ok "corrections: a corrected operation that moves again fails (not a waiver for its path)"
+else bad "corrections: a corrected operation that moves again fails (not a waiver for its path)" "exit=$rc" "$out"; fi
+
+corrected_setup "behavioral, spec-correction"
+jq -S 'del(.components.schemas.Example)' "$EMIT" > "${EMIT}.tmp" && mv "${EMIT}.tmp" "$EMIT"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'removed'; then
+  ok "corrections: movement elsewhere still fails beside an applied correction"
+else bad "corrections: movement elsewhere still fails beside an applied correction" "exit=$rc" "$out"; fi
+
+corrected_setup "behavioral"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'not spec-correction'; then
+  ok "corrections: a row not declared spec-correction fails"
+else bad "corrections: a row not declared spec-correction fails" "exit=$rc" "$out"; fi
+
+corrected_setup "behavioral, spec-correction"
+write_corrections "A row nobody wrote" "$SURVIVOR" "$EMIT"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'does not carry'; then
+  ok "corrections: a register row that does not exist fails"
+else bad "corrections: a register row that does not exist fails" "exit=$rc" "$out"; fi
+
+corrected_setup "behavioral, spec-correction"
+write_corrections "$ROW" "/api/nowhere" "$EMIT"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'does not have'; then
+  ok "corrections: correcting an operation the pin lacks fails"
+else bad "corrections: correcting an operation the pin lacks fails" "exit=$rc" "$out"; fi
+
+corrected_setup "behavioral, spec-correction"
+jq '.corrections += .corrections' "${PINDIR}/0.5/corrections.json" > "${WORK}/c.tmp" && mv "${WORK}/c.tmp" "${PINDIR}/0.5/corrections.json"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'more than once'; then
+  ok "corrections: correcting one operation twice fails"
+else bad "corrections: correcting one operation twice fails" "exit=$rc" "$out"; fi
 
 echo
 echo "  ${PASS} passed, ${FAIL} failed"

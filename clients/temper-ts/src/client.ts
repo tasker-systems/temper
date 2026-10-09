@@ -1,4 +1,4 @@
-import createClient, { type Client } from "openapi-fetch";
+import createClient, { type Client, defaultPathSerializer } from "openapi-fetch";
 
 import { createAuthedFetch, type FetchLike } from "./auth-fetch.js";
 import type { Credentials } from "./credentials.js";
@@ -17,6 +17,34 @@ export interface TemperClientOptions {
    * the bearer token on this URL; see `requireEndpoint`.
    */
   allowInsecureHttp?: boolean;
+}
+
+/**
+ * openapi-fetch's own path serializer, refusing any result that holds a `.` or `..` segment.
+ *
+ * `encodeURIComponent` leaves `.` alone, and encoding it would not help: the WHATWG URL parser
+ * behind `fetch` reads `%2E%2E` as a dot segment too, so a `name` of `..` would reach the parent
+ * route with the caller's token. No encoding survives the parse, so such a path is refused before a
+ * request exists. The check runs on the SERIALIZED path, segment by segment and percent-decoded,
+ * because that is what the parser sees: an array value `[".."]` serializes to `..` as surely as the
+ * string does. Every other path is exactly what the default serializer produces.
+ */
+function refusingDotSegments(pathname: string, pathParams: Record<string, unknown>): string {
+  const serialized = defaultPathSerializer(pathname, pathParams);
+  for (const segment of serialized.split("/")) {
+    let decoded = segment;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      // Not valid percent-encoding, so not a dot segment in disguise; judge it as written.
+    }
+    if (decoded === "." || decoded === "..") {
+      throw new TypeError(
+        `a path value makes ${pathname} into ${serialized}, whose \`${decoded}\` segment would address the parent route`,
+      );
+    }
+  }
+  return serialized;
 }
 
 /**
@@ -47,6 +75,7 @@ export function createTemperClient(opts: TemperClientOptions): Client<paths> {
   requireEndpoint(opts.baseUrl, "baseUrl", { allowInsecureHttp: opts.allowInsecureHttp });
   return createClient<paths>({
     baseUrl: opts.baseUrl,
+    pathSerializer: refusingDotSegments,
     fetch: createAuthedFetch({
       credentials: opts.credentials,
       fetch: opts.fetch,

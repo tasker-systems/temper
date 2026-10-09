@@ -25,7 +25,7 @@ impl<'a> SlackClient<'a> {
     pub async fn disconnect_me(&self) -> Result<SlackDisconnectResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::DISCONNECT_ME;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -39,7 +39,7 @@ impl<'a> SlackClient<'a> {
     ) -> Result<SlackDisconnectResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_DISCONNECT;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let body = SlackDisconnectRequest {
             slack_principal_id: slack_principal_id.to_string(),
         };

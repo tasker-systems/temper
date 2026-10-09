@@ -52,6 +52,10 @@
 #            `behavioral`) or wait for the retirement release train;
 #        shape moved and `shape-breaking, retirement-train` declared: PASS, noted — the era
 #            release's own movement; this PR moves M and cuts the next pin;
+#        shape moved and `spec-correction` declared: PASS, noted — the contract described a
+#            request or answer the server never made, and the movement brings it to what the
+#            server always did. Review-owned like `behavioral`: the row must name what the
+#            server always did and why both skew directions hold. Never with `shape-breaking`;
 #        no shape movement and `additive` declared: PASS — the D-S3 baseline (a version bump
 #            re-stales the doc and the generated cores; that is what `additive` means);
 #        no shape movement and `shape-breaking` declared: PASS, noted — honest
@@ -203,10 +207,12 @@ if [ "$REGISTER_IN_DIFF" -eq 1 ] || [ "$REGISTER_EXPLICIT" -eq 1 ]; then
                 if (value == "") { flag("classes: is empty — silence is not a classification"); next }
                 n = split(value, toks, /[[:space:],]+/)
                 for (i = 1; i <= n; i++)
-                    if (toks[i] != "" && toks[i] !~ /^(additive|shape-breaking|behavioral|retirement-train)$/)
-                        flag("classes: \x27" toks[i] "\x27 is not one of: additive, shape-breaking, behavioral, retirement-train")
+                    if (toks[i] != "" && toks[i] !~ /^(additive|shape-breaking|behavioral|retirement-train|spec-correction)$/)
+                        flag("classes: \x27" toks[i] "\x27 is not one of: additive, shape-breaking, behavioral, retirement-train, spec-correction")
                 if (value ~ /retirement-train/ && value !~ /shape-breaking/)
                     flag("classes: \x27retirement-train\x27 is a routing, never a class on its own — it rides a shape-breaking row (D-C2)")
+                if (value ~ /spec-correction/ && value ~ /shape-breaking/)
+                    flag("classes: \x27spec-correction\x27 and \x27shape-breaking\x27 contradict — a correction brings the contract to what the server always did; a break changes what it does")
             } else if (field == "surfaces") {
                 if (value == "") { flag("surfaces: is empty — name the surfaces this row speaks for"); next }
                 n = split(value, toks, /[[:space:],]+/)
@@ -403,7 +409,13 @@ if grep -qx "openapi.json" "$WIRE_FILES"; then
     echo "  verdict: ${SHAPE_VERDICT}"
     case "$SHAPE_VERDICT" in
         moved)
-            if classes_contain "$SELF_CLASSES" "shape-breaking"; then
+            if classes_contain "$SELF_CLASSES" "spec-correction"; then
+                SHAPE_NOTE="  shape moved and the row declares spec-correction: PASS, NOTED. The contract described"
+                SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
+                SHAPE_NOTE="${SHAPE_NOTE}  what the server never did; this is review-owned — the row must name what the server"
+                SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
+                SHAPE_NOTE="${SHAPE_NOTE}  always did and why both skew directions hold. CI cannot check that claim."
+            elif classes_contain "$SELF_CLASSES" "shape-breaking"; then
                 if classes_contain "$SELF_CLASSES" "retirement-train"; then
                     SHAPE_NOTE="  shape moved and the row routes to the retirement train — this is the era release's"
                     SHAPE_NOTE="${SHAPE_NOTE}"$'\n'

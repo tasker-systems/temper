@@ -43,7 +43,7 @@ impl<'a> AuditorClient<'a> {
     ) -> Result<AuditorDispatchTickResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::AUDITOR_DISPATCH;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let mut req = self.http.request(op, &path).json(request);
         if let Some(id) = correlation_id {
             req = req.header(AUDITOR_CORRELATION_HEADER, id.to_string());
@@ -58,7 +58,7 @@ impl<'a> AuditorClient<'a> {
     pub async fn sweep(&self, query: &SweepQuery) -> Result<Vec<AuditSweepRow>> {
         let token = self.http.resolve_token()?;
         let op = &ops::AUDITOR_SWEEP;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).query(query);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -71,7 +71,7 @@ impl<'a> AuditorClient<'a> {
     pub async fn complete(&self, cogmap: Uuid) -> Result<AuditorJobCompleteAck> {
         let token = self.http.resolve_token()?;
         let op = &ops::COMPLETE_AUDITOR_JOB;
-        let path = op.path(&[&cogmap]);
+        let path = op.path(&[&cogmap])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))

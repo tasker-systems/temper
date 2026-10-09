@@ -10,7 +10,7 @@ before any release: a release whose surface class has an open gated entry waits.
 Each row reads: citation · what changed behind which unchanged shape · who observes it ·
 user-visibility · release relevance. Beneath the citation line, machine fields, one per line:
 `pr:` the PR number, `pre-policy`, or `goal` · `classes:` a subset of `additive`,
-`shape-breaking`, `behavioral` · `surfaces:` a subset of `http`, `mcp`, `cli-stdout`, `clients`,
+`shape-breaking`, `behavioral`, `spec-correction` · `surfaces:` a subset of `http`, `mcp`, `cli-stdout`, `clients`,
 `schema`, `internal` · `status:` one of `open`, `signal-only`, `blocked:<release-class>`,
 `satisfied`.
 
@@ -22,7 +22,62 @@ gate on a main-bound PR. Deprecation rows (the D-C3 records) carry the retiremen
 era release the record names. Historical and pre-policy rows read as history: only new rows carry
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
+`spec-correction` declares that `openapi.json` described a request or answer the server never made,
+and that the movement brings the contract to what the server always did. The crosscheck passes it
+on a moved shape with a note, because CI cannot check the claim: like `behavioral`, it is
+review-owned, and the row must name what the server always did and why both skew directions hold.
+It never rides with `shape-breaking`, and it does not answer growth, which is still `additive`'s.
+Because the pin gate judges the tree rather than the PR, each corrected operation is also recorded,
+with its corrected shape and this row's title, in `corrections.json` beside the current pin
+(`schemas/versions/<M.m>/`); the pin gate checks the record names a `spec-correction` row.
+
 ## Since v0.6.0 — unreleased
+- **Every client refuses a path value of `.` or `..`; temper-rb and temper-py also escape `.` in path values**
+  temperkb-client, temper-ts, temper-rb and temper-py now refuse, before any request is sent, a
+  path value that is exactly `.` or `..`. The v0.6.0 row on temperkb-client said temperkb-client's encoding
+  kept a doc-type name from reaching a different route. That did not hold for those two values:
+  reqwest parses the URL with the `url` crate, which follows the WHATWG standard and reads `%2E%2E`
+  as a dot segment, so `..` still addressed the parent route. Node's `fetch` behaves the same way,
+  so for those two clients no encoding can carry the value and it is refused instead. temper-rb and
+  temper-py did not escape `.` at all; both now encode it as `%2E` (their transports keep the
+  encoded form literal) as well as refusing. temperkb-client answers `ClientError::Other`; temper-ts
+  throws a `TypeError`; temper-rb raises `ArgumentError`; temper-py raises `ValueError`. Only two
+  published path parameters are free strings (`GET /api/schema/doc-types/{name}` and
+  `GET /api/graph/elements/{kind}/{id}/trail`), and neither accepts `.` or `..` as a real value.
+  Who observes: SDK and temperkb-client callers passing such a value. User-visible: an error in
+  place of a request to the wrong route. Release relevance: behavioral.
+pr: self
+classes: behavioral
+surfaces: clients
+status: signal-only
+- **`ActInput`'s authorship fields are documented as query parameters on all four routes that take them**
+  The routes are `DELETE /api/relationships/{edge_handle}/facets/{property_id}`,
+  `DELETE /api/resources/{id}`, `PUT /api/cognitive-maps/{id}` and `DELETE /api/blobs/{id}`. On the
+  facet route, `openapi.json` declared `ActInput`'s seven fields (`invocation_id`, `correlation_id`,
+  `reasoning`, `confidence`, `rationale`, `persona`, `model`) as path parameters with no placeholder,
+  so the generated SDKs had nowhere to put them and dropped them without error. They are now query
+  parameters, which is what every handler has always read (`Query<ActInput>`). On the other three
+  routes they were already query parameters; their schemas lose the explicit `null` branch, since a
+  query parameter has no null to send and the server reads absent and null alike. Server behavior is
+  unchanged, and the wire is compatible in both skew directions: an older SDK keeps dropping the
+  fields, which the server never received; a newer SDK sends them where an older server already reads
+  them. The SDKs' own call shapes change:
+  temper-rb's `FacetsApi#retract_edge_facet` (and `…_with_http_info`) take the fields in `opts`
+  rather than as seven required positionals; a hand-written shim (`Temper::Compat`) still accepts the
+  released nine-argument form and now sends what it is given. temper-ts callers of the facet route
+  move the fields from `params.path` to `params.query` (a compile error until they do), and on the
+  other three routes the fields' types narrow from `T | null` to `T` (a compile error for a caller
+  passing `null`; at runtime openapi-fetch already skipped null query values). temper-py keeps its
+  parameter names and order, and the fields become typed (`UUID`, `ConfidenceBand`) where they were
+  `Any`. A caller whose authorship fields were being dropped and that passed them without
+  `confidence` now gets the server's 400. Who observes: SDK callers of these four operations.
+  User-visible: yes, for TS callers (source change) and for Ruby callers relying on the dropped fields
+  never arriving. Release relevance: behavioral, declared as a spec correction (the contract moves;
+  the server does not).
+pr: self
+classes: behavioral, spec-correction
+surfaces: http, clients
+status: signal-only
 - **A sensitivity finding in the event ledger closes once a resource erasure rewrites its path, and its digests expire 30 days later**
   A finding the sweep made in `kb_events.payload` or `kb_events.metadata` stayed open forever: closure
   (`sensitivity.place_closure`) answered nothing for the ledger, and the sweep reads each ledger row

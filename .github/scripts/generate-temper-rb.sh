@@ -97,3 +97,45 @@ else
   echo "       openapi-generator ${GENERATOR_VERSION} (both were absent)." >&2
   exit 1
 fi
+
+# Escape `.` in path segments. `CGI.escape` leaves `.` alone, and the transport then resolves a
+# `..` segment, so a path value of `..` climbs to the parent route instead of reaching the server as
+# a literal. temperkb-client (Rust) encodes `.` for the same reason. The generator has no option for
+# it, so every path substitution under api/ is rewritten here (python3, so this path still needs no
+# Ruby). It fails if it finds no site, or if any `CGI.escape(` survives in a shape it did not
+# rewrite: a generator upgrade that changes the shape must be looked at, not silently skipped.
+python3 - "$REPO_ROOT/clients/temper-rb/lib/temper/generated/api" <<'PY'
+import pathlib, re, sys
+site = re.compile(r"CGI\.escape\(([a-z_][a-z0-9_]*)\.to_s\)")
+total = 0
+for path in sorted(pathlib.Path(sys.argv[1]).glob("*.rb")):
+    src = path.read_text(encoding="utf-8")
+    new, n = site.subn(r"CGI.escape(\1.to_s).gsub('.', '%2E')", src)
+    if new.count("CGI.escape(") != n:
+        sys.exit(f"generate-temper-rb: {path} has a `CGI.escape(` this patch does not recognise")
+    total += n
+    if n:
+        path.write_text(new, encoding="utf-8")
+if total == 0:
+    sys.exit("generate-temper-rb: found no `CGI.escape(<param>.to_s)` path site to patch")
+PY
+
+# Refuse a path value of `.` or `..` outright, the same rule the Rust, TS and Python clients apply.
+# The `.` escape above already keeps such a value literal on this transport; the refusal is the
+# second layer, so no client sends a request the others would refuse. It sits in the one URL
+# builder every operation calls, and decodes each segment so the escaped form is caught too.
+# Templates carry no dot segments, so only a substituted value can trip it. Exactly one anchor.
+python3 - "$REPO_ROOT/clients/temper-rb/lib/temper/generated/api_client.rb" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+old = "      path = \"/#{path}\".gsub(/\\/+/, '/')\n"
+new = old + (
+    "      if path.split('/').any? { |segment| ['.', '..'].include?(CGI.unescape(segment)) }\n"
+    "        raise ArgumentError, \"a path value of `.` or `..` would address the parent route: #{path}\"\n"
+    "      end\n"
+)
+if src.count(old) != 1:
+    sys.exit(f"generate-temper-rb: expected exactly one path-normalising line in {path}, found {src.count(old)}")
+open(path, "w", encoding="utf-8").write(src.replace(old, new))
+PY

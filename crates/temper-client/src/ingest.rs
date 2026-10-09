@@ -46,7 +46,7 @@ impl<'a> IngestClient<'a> {
     pub async fn create(&self, payload: &IngestPayload) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let op = &ops::CREATE_INGEST;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(payload);
         match payload.idempotency_key {
             Some(key) => {
@@ -67,7 +67,7 @@ impl<'a> IngestClient<'a> {
     pub async fn update(&self, id: Uuid, payload: &IngestPayload) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let op = &ops::UPDATE_INGEST;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(payload);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -80,7 +80,7 @@ impl<'a> IngestClient<'a> {
     pub async fn begin_segmented(&self, payload: &IngestPayload) -> Result<SegmentedBeginResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::CREATE_INGEST;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(payload);
         // A keyed begin is idempotent-retryable exactly like a keyed one-shot create: block 0 lands
         // through the same `create_resource_impl` claim, so a replayed begin converges on the
@@ -110,7 +110,7 @@ impl<'a> IngestClient<'a> {
     ) -> Result<BlocksResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::APPEND_BLOCK;
-        let path = op.path(&[&resource_id]);
+        let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path).json(payload);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -122,7 +122,7 @@ impl<'a> IngestClient<'a> {
     pub async fn finalize(&self, resource_id: Uuid, payload: &FinalizePayload) -> Result<()> {
         let token = self.http.resolve_token()?;
         let op = &ops::FINALIZE_RESOURCE;
-        let path = op.path(&[&resource_id]);
+        let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path).json(payload);
         self.http
             .send(&op.method(), &path, req, Some(&token))
@@ -134,7 +134,7 @@ impl<'a> IngestClient<'a> {
     pub async fn list_blocks(&self, resource_id: Uuid) -> Result<BlocksResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_BLOCKS;
-        let path = op.path(&[&resource_id]);
+        let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))

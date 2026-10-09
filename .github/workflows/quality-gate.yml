@@ -49,10 +49,10 @@ jobs:
       # Pinned prebuilt binaries. cargo-audit was moved to a prebuilt pin by the 2026-07-29
       # supply-chain review (`cargo install` resolved and compiled it unpinned on every run);
       # cargo-machete follows for that reason and for this gate's own: `cargo install` compiles.
-      - name: Install cargo-machete and cargo-audit
+      - name: Install cargo-machete, cargo-audit and cargo-deny
         uses: taiki-e/install-action@v2.87.18
         with:
-          tool: cargo-machete,cargo-audit
+          tool: cargo-machete,cargo-audit,cargo-deny
 
       # First, so a formatting slip is the first thing reported. Two of the tripwires below
       # (audit-as-entry-points, audit-mcp-route-auth) rely on it: their parsers do not read
@@ -188,6 +188,11 @@ jobs:
       # fresh here.
       - name: Security audit
         run: cargo audit
+
+      # BLOCKING, beside the audit: every crate comes from crates.io, and every license
+      # expression is satisfiable from deny.toml's allowlist. Advisories stay with cargo audit.
+      - name: Dependency sources and licenses
+        run: cargo deny check sources licenses
 
   # The guards' own tests. Every script above is a bash tripwire whose entire value is that it
   # FAILS when the thing it protects is broken — and nothing about a passing tripwire distinguishes
@@ -513,6 +518,12 @@ jobs:
       # being discovered in a release job or by a user's failed upload.
       - name: Guard test — package-skill
         run: bash .github/scripts/test-package-skill.sh
+
+      # The registry lanes' publish jobs push only the bytes their own build job hashed into a job
+      # output (release.yml). The lanes run only on a tag, so this harness is the only place a check
+      # that stopped comparing bytes would show before a release.
+      - name: Guard test — artifact-sums
+        run: bash .github/scripts/test-artifact-sums.sh
 
       # Release-integrity harnesses. emit-manifest produces the per-file manifest the CLI parses;
       # test-install drives install.sh with a locally-built archive. Both are pure bash and belong

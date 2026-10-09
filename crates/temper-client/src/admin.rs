@@ -44,7 +44,7 @@ impl<'a> AdminClient<'a> {
     pub async fn get_settings(&self) -> Result<SystemSettings> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_GET_SETTINGS;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -55,7 +55,7 @@ impl<'a> AdminClient<'a> {
     pub async fn update_settings(&self, body: &UpdateSettingsRequest) -> Result<SystemSettings> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_UPDATE_SETTINGS;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -69,7 +69,7 @@ impl<'a> AdminClient<'a> {
     pub async fn ledger(&self, query: &AdminLedgerQuery) -> Result<AdminLedgerResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_ADMIN_LEDGER;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).query(query);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -87,7 +87,7 @@ impl<'a> AdminClient<'a> {
     ) -> Result<AdminDirectoryListResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_LIST_PROFILES;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).query(query);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -107,7 +107,7 @@ impl<'a> AdminClient<'a> {
     pub async fn profile_card_by_email(&self, email: &str) -> Result<AdminProfileCard> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_LIST_PROFILES;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).query(&AdminProfilesListQuery {
             email: Some(email.to_string()),
             ..Default::default()
@@ -121,7 +121,7 @@ impl<'a> AdminClient<'a> {
     pub async fn show_profile(&self, profile_id: Uuid) -> Result<AdminProfileCard> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_SHOW_PROFILE;
-        let path = op.path(&[&profile_id]);
+        let path = op.path(&[&profile_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -132,7 +132,7 @@ impl<'a> AdminClient<'a> {
     pub async fn promote(&self, body: &PromoteAdminRequest) -> Result<TeamMemberRow> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_PROMOTE;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -146,7 +146,7 @@ impl<'a> AdminClient<'a> {
     pub async fn demote(&self, profile_id: Uuid) -> Result<()> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_DEMOTE;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self
             .http
             .request(op, &path)
@@ -161,7 +161,7 @@ impl<'a> AdminClient<'a> {
     pub async fn list_requests(&self) -> Result<Vec<JoinRequestWithProfile>> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_LIST_JOIN_REQUESTS;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -172,7 +172,7 @@ impl<'a> AdminClient<'a> {
     pub async fn list_reviews(&self) -> Result<Vec<ReviewRequestWithProfile>> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_LIST_REVIEWS;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -187,7 +187,7 @@ impl<'a> AdminClient<'a> {
     pub async fn count_requests(&self) -> Result<i32> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_COUNT_JOIN_REQUESTS;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         let body: QueueCount = self
             .http
@@ -202,7 +202,7 @@ impl<'a> AdminClient<'a> {
     pub async fn count_reviews(&self) -> Result<i32> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_COUNT_REVIEWS;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         let body: QueueCount = self
             .http
@@ -223,7 +223,7 @@ impl<'a> AdminClient<'a> {
     ) -> Result<()> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_CLOSE_REVIEW;
-        let path = op.path(&[&request_id]);
+        let path = op.path(&[&request_id])?;
         let req = self
             .http
             .request(op, &path)
@@ -242,7 +242,7 @@ impl<'a> AdminClient<'a> {
     pub async fn reembed(&self, body: &ReembedRequest) -> Result<ReembedSummary> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_REEMBED;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -260,7 +260,7 @@ impl<'a> AdminClient<'a> {
     pub async fn reblock(&self, body: &ReblockRequest) -> Result<ReblockReceipt> {
         let token = self.http.resolve_token()?;
         let op = &ops::REBLOCK_RESOURCES;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -276,7 +276,7 @@ impl<'a> AdminClient<'a> {
     ) -> Result<JoinRequest> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_REVIEW_JOIN_REQUEST;
-        let path = op.path(&[&request_id]);
+        let path = op.path(&[&request_id])?;
         let body = ReviewRequestBody {
             status: decision,
             decision_note,
@@ -323,7 +323,7 @@ impl<'a> AdminClient<'a> {
     pub async fn reconcile_auto_join(&self) -> Result<ReconcileAutoJoinOutcome> {
         let token = self.http.resolve_token()?;
         let op = &ops::ADMIN_RECONCILE_AUTO_JOIN;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(&serde_json::json!({}));
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -398,7 +398,7 @@ impl<'a> AdminClient<'a> {
         T: serde::de::DeserializeOwned,
     {
         let token = self.http.resolve_token()?;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -413,7 +413,7 @@ impl<'a> AdminClient<'a> {
         body: Option<RevokePrincipalBody>,
     ) -> Result<()> {
         let token = self.http.resolve_token()?;
-        let path = op.path(&[&profile_id]);
+        let path = op.path(&[&profile_id])?;
         let mut req = self.http.request(op, &path);
         if let Some(body) = body {
             req = req.json(&body);

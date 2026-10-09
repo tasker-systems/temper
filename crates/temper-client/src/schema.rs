@@ -46,7 +46,7 @@ impl<'a> SchemaClient<'a> {
         args: &[&dyn std::fmt::Display],
     ) -> Result<T> {
         let token = self.http.resolve_token()?;
-        let path = op.path(args);
+        let path = op.path(args)?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))

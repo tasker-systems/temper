@@ -29,7 +29,7 @@ impl<'a> SubscriptionsClient<'a> {
     pub async fn create(&self, body: &CreateSubscriptionRequest) -> Result<Subscription> {
         let token = self.http.resolve_token()?;
         let op = &ops::CREATE_SUBSCRIPTION;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -44,7 +44,7 @@ impl<'a> SubscriptionsClient<'a> {
     ) -> Result<Vec<Subscription>> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_SUBSCRIPTIONS;
-        let mut path = format!("{}?include_revoked={include_revoked}", op.path(&[]));
+        let mut path = format!("{}?include_revoked={include_revoked}", op.path(&[])?);
         if let Some(cid) = connection_id {
             path.push_str(&format!("&connection_id={cid}"));
         }
@@ -58,7 +58,7 @@ impl<'a> SubscriptionsClient<'a> {
     pub async fn get(&self, id: Uuid) -> Result<Subscription> {
         let token = self.http.resolve_token()?;
         let op = &ops::GET_SUBSCRIPTION;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -70,7 +70,7 @@ impl<'a> SubscriptionsClient<'a> {
     pub async fn revoke(&self, id: Uuid) -> Result<Subscription> {
         let token = self.http.resolve_token()?;
         let op = &ops::REVOKE_SUBSCRIPTION;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))

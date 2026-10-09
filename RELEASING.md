@@ -11,13 +11,26 @@ reaches a running site is a separate, per-target concern — see
 
 A `v*` tag invokes [`.github/workflows/release.yml`](.github/workflows/release.yml):
 
-`determine-version` → `build-cli-binaries` (darwin-arm64 / linux-x64 / windows-x64)
-· `build-skill-bundle` · `publish-npm-clients` (@tasker-systems/temper-ts,
-@tasker-systems/temper-telemetry-ts → registry.npmjs.org) · `publish-ruby-client`
-(temper-rb → rubygems.org) · `publish-py-client` (temperkb-py → pypi.org) →
-`release-summary` (publishes the GitHub Release with the CLI binaries and skill
-bundle attached; the release is created only when every producer succeeded, and
-the summary table reports each lane).
+`determine-version` → `build-cli-darwin-arm64` · `build-cli-linux-x64` · `build-cli-windows-x64` (each a call to `build-cli-binaries.yml`)
+· `build-skill-bundle` · four registry lanes, each a build job then a publish job:
+`publish-npm-clients` (@tasker-systems/temper-ts, @tasker-systems/temper-telemetry-ts
+→ registry.npmjs.org) · `publish-ruby-client` (temper-rb → rubygems.org) ·
+`publish-py-client` (temperkb-py → pypi.org) · `publish-rust-crates` (the seven
+temperkb-* crates → crates.io) → `release-summary` (publishes the GitHub Release
+with the CLI binaries and skill bundle attached; the release is created only when
+every producer succeeded, and the summary table reports each lane).
+
+Each registry lane's build job (`build-npm-clients`, `build-ruby-client`,
+`build-py-client`, `build-rust-crates`) holds no `id-token`: it installs,
+compiles and packs, which runs third-party code. Its publish job holds
+`id-token: write`, downloads those bytes, checks their name and version, and
+pushes them, running nothing from the package trees. The rule is run-wide: no
+job in the release run that holds `id-token: write` compiles or installs from a
+dependency tree, so the CLI binaries and the skill bundle are likewise built in
+jobs with no identity and signed by separate attest jobs (`build-cli-binaries.yml`'s
+`attest`, and `attest-skill-bundle`). Every consumer of a build's artifact checks it
+against hashes the producing job emitted as a job output. The `release.yml` header
+over the lanes says why and what the split does not cover.
 
 No Vercel deploy, no schema migration, no production side effects. Releasing and
 deploying are decoupled by design (see
@@ -66,7 +79,9 @@ the name it checks refuses at the token exchange: crates.io answers "does not
 match the workflow filename … in the JWT", RubyGems "You are not allowed to push
 this gem". `release.yml` alone also covers the tag-push and `workflow_dispatch`
 recovery doors, where it is the top-level workflow. A new package name needs
-both entries. No registry API key exists as a repo secret. The first publish of a NEW package name on npm cannot
+both entries. No host matches on job name (each matches the repository, the
+workflow file and an optional environment, and none is set), so the job that
+pushes can be renamed or split without touching a registry. No registry API key exists as a repo secret. The first publish of a NEW package name on npm cannot
 be OIDC — npmjs.com only attaches trusted publishers to existing packages — so
 a new name is claimed once locally (`npm login`, then `npm publish --access
 public` in the package directory) and the trusted publisher is attached
@@ -127,8 +142,8 @@ first release claims it — no local bootstrap upload.
    seven at the new version. crates.io attaches publishers only to existing
    crates, so each name's first version was published once with an API token:
    the closure at 0.5.3, `temperkb-mcp` at 0.6.0. A new crate joins the same
-   way: publish it once locally, register both workflows, then add it to
-   `CRATES`.
+   way: publish it once locally (`cargo publish -p <crate>` with an API token),
+   register both workflows, then add it to `CRATES`.
 
 A release can also be (re-)run manually via **Actions → Release → Run workflow** with
 an explicit `tag` input — useful to re-cut binaries for an existing tag.

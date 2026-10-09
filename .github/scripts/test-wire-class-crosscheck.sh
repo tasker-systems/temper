@@ -140,6 +140,16 @@ if [ "$rc" -ne 0 ] \
   ok "parse: 'retirement-train' without 'shape-breaking' fails the co-occurrence rule"
 else bad "parse: 'retirement-train' without 'shape-breaking' fails the co-occurrence rule" "exit=$rc" "$out"; fi
 
+# ── 5c. PARSE — spec-correction with shape-breaking contradicts ──────────────────────────────────
+reset_fixtures
+printf '%s\n' "crates/temper-mcp/src/lib.rs" > "$WIRE"
+sed 's/^classes: behavioral$/classes: shape-breaking, spec-correction/' "$REG" > "${REG}.tmp" && mv "${REG}.tmp" "$REG"
+out="$(run_check unchanged)"; rc=$?
+if [ "$rc" -ne 0 ] \
+    && printf '%s' "$out" | grep -q "'spec-correction' and 'shape-breaking' contradict"; then
+  ok "parse: 'spec-correction' with 'shape-breaking' fails the contradiction rule"
+else bad "parse: 'spec-correction' with 'shape-breaking' fails the contradiction rule" "exit=$rc" "$out"; fi
+
 # ── 6. PARSE — a nameless blocker (empty after blocked:) fails ──────────────────────────────────
 reset_fixtures
 printf '%s\n' "crates/temper-mcp/src/lib.rs" > "$WIRE"
@@ -203,6 +213,26 @@ out="$(run_check moved)"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'retirement train'; then
   ok "shape moved + shape-breaking routed to the retirement train: passes (the era release's own movement)"
 else bad "shape moved + shape-breaking routed to the retirement train: passes (the era release's own movement)" "exit=$rc" "$out"; fi
+
+# ── 10c. SHAPE — moved and spec-correction declared: pass, NOTED ─────────────────────────────────
+# The contract described what the server never did; the movement corrects it. Review-owned:
+# CI passes it only with a note saying the claim is the row's to carry.
+reset_fixtures
+printf '%s\n' "openapi.json" > "$WIRE"
+add_own_row self "behavioral, spec-correction"
+out="$(run_check moved)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'declares spec-correction: PASS, NOTED'; then
+  ok "shape moved + spec-correction declared: passes, noted as review-owned"
+else bad "shape moved + spec-correction declared: passes, noted as review-owned" "exit=$rc" "$out"; fi
+
+# ── 10d. SHAPE — spec-correction answers only a move; on growth the additive question stands ─────
+reset_fixtures
+printf '%s\n' "openapi.json" > "$WIRE"
+add_own_row self "behavioral, spec-correction"
+out="$(run_check grew)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'declare neither additive nor'; then
+  ok "shape grew + spec-correction without additive: fails (growth is still additive's question)"
+else bad "shape grew + spec-correction without additive: fails (growth is still additive's question)" "exit=$rc" "$out"; fi
 
 # ── 11. SHAPE — declared shape-breaking, diff shows no movement: pass, NOTED ────────────────────
 # The asymmetry probe: a break can hide from the only shape record CI has, and failing an

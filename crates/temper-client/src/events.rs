@@ -28,7 +28,7 @@ impl<'a> EventClient<'a> {
     pub async fn latest_for_context(&self, kb_context_id: Uuid) -> Result<Option<Uuid>> {
         let token = self.http.resolve_token()?;
         let op = &ops::CURSOR;
-        let path = op.path(&[&kb_context_id]);
+        let path = op.path(&[&kb_context_id])?;
         let req = self.http.request(op, &path);
         let resp: EventCursorResponse = self
             .http
@@ -50,7 +50,7 @@ impl<'a> EventClient<'a> {
             ElementKind::Edge => "edge",
         };
         let op = &ops::ELEMENT_TRAIL;
-        let path = op.path(&[&kind_seg, &element_id]);
+        let path = op.path(&[&kind_seg, &element_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))

@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from typing_extensions import Annotated
 
 from pydantic import Field, StrictStr, field_validator
-from typing import Any, List, Optional
+from typing import List, Optional
 from typing_extensions import Annotated
 from uuid import UUID
 from temper.generated.models.blob_commit_response import BlobCommitResponse
@@ -29,6 +29,7 @@ from temper.generated.models.blob_upload_begin_request import BlobUploadBeginReq
 from temper.generated.models.blob_upload_begin_response import BlobUploadBeginResponse
 from temper.generated.models.blob_upload_finalize_request import BlobUploadFinalizeRequest
 from temper.generated.models.blob_upload_progress import BlobUploadProgress
+from temper.generated.models.confidence_band import ConfidenceBand
 
 from temper.generated.api_client import ApiClient, RequestSerialized
 from temper.generated.api_response import ApiResponse
@@ -1515,10 +1516,10 @@ class BlobsApi:
     def delete_blob(
         self,
         id: Annotated[UUID, Field(description="Blob ID")],
-        invocation_id: Annotated[Optional[Any], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")] = None,
-        correlation_id: Annotated[Optional[Any], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")] = None,
+        invocation_id: Annotated[Optional[UUID], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")] = None,
+        correlation_id: Annotated[Optional[UUID], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")] = None,
         reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.")] = None,
-        confidence: Annotated[Optional[Any], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")] = None,
+        confidence: Annotated[Optional[ConfidenceBand], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")] = None,
         rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.")] = None,
         persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.")] = None,
         model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.")] = None,
@@ -1617,10 +1618,10 @@ class BlobsApi:
     def delete_blob_with_http_info(
         self,
         id: Annotated[UUID, Field(description="Blob ID")],
-        invocation_id: Annotated[Optional[Any], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")] = None,
-        correlation_id: Annotated[Optional[Any], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")] = None,
+        invocation_id: Annotated[Optional[UUID], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")] = None,
+        correlation_id: Annotated[Optional[UUID], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")] = None,
         reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.")] = None,
-        confidence: Annotated[Optional[Any], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")] = None,
+        confidence: Annotated[Optional[ConfidenceBand], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")] = None,
         rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.")] = None,
         persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.")] = None,
         model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.")] = None,
@@ -1719,10 +1720,10 @@ class BlobsApi:
     def delete_blob_without_preload_content(
         self,
         id: Annotated[UUID, Field(description="Blob ID")],
-        invocation_id: Annotated[Optional[Any], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")] = None,
-        correlation_id: Annotated[Optional[Any], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")] = None,
+        invocation_id: Annotated[Optional[UUID], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")] = None,
+        correlation_id: Annotated[Optional[UUID], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")] = None,
         reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.")] = None,
-        confidence: Annotated[Optional[Any], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")] = None,
+        confidence: Annotated[Optional[ConfidenceBand], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")] = None,
         rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.")] = None,
         persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.")] = None,
         model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.")] = None,

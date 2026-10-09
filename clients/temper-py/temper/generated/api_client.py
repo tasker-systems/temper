@@ -197,10 +197,12 @@ class ApiClient:
                 collection_formats
             )
             for k, v in path_params:
+                if str(v) in ('.', '..'):
+                    raise ValueError(f"path parameter `{k}` is `{v}`, which would address the parent route")
                 # specified safe chars, encode everything
                 resource_path = resource_path.replace(
                     '{%s}' % k,
-                    quote(str(v), safe=config.safe_chars_for_path_param)
+                    quote(str(v), safe=config.safe_chars_for_path_param).replace('.', '%2E')
                 )
 
         # post parameters

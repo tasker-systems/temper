@@ -35,7 +35,7 @@ impl<'a> ContextClient<'a> {
     pub async fn list(&self) -> Result<Vec<ContextRowWithCounts>> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_CONTEXTS;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -49,7 +49,7 @@ impl<'a> ContextClient<'a> {
     pub async fn list_retired(&self) -> Result<Vec<ContextRowWithCounts>> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_CONTEXTS;
-        let path = format!("{}?retired=true", op.path(&[]));
+        let path = format!("{}?retired=true", op.path(&[])?);
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -66,7 +66,7 @@ impl<'a> ContextClient<'a> {
     pub async fn resolve(&self, context_ref: &str) -> Result<ContextResolution> {
         let token = self.http.resolve_token()?;
         let op = &ops::RESOLVE_CONTEXT;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = resolve_request(self.http, &path, context_ref);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -77,7 +77,7 @@ impl<'a> ContextClient<'a> {
     pub async fn get(&self, id: Uuid) -> Result<ContextRow> {
         let token = self.http.resolve_token()?;
         let op = &ops::GET_CONTEXT;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -94,7 +94,7 @@ impl<'a> ContextClient<'a> {
             owner,
         };
         let op = &ops::CREATE_CONTEXT;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(&body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -110,7 +110,7 @@ impl<'a> ContextClient<'a> {
     pub async fn delete(&self, context_id: Uuid) -> Result<RetireContextOutcome> {
         let token = self.http.resolve_token()?;
         let op = &ops::DELETE_CONTEXT;
-        let path = op.path(&[&context_id]);
+        let path = op.path(&[&context_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -123,7 +123,7 @@ impl<'a> ContextClient<'a> {
     pub async fn restore(&self, context_id: Uuid) -> Result<RestoreContextOutcome> {
         let token = self.http.resolve_token()?;
         let op = &ops::RESTORE_CONTEXT;
-        let path = op.path(&[&context_id]);
+        let path = op.path(&[&context_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -138,7 +138,7 @@ impl<'a> ContextClient<'a> {
     ) -> Result<ShareContextOutcome> {
         let token = self.http.resolve_token()?;
         let op = &ops::SHARE_TEAM;
-        let path = op.path(&[&context_id]);
+        let path = op.path(&[&context_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -153,7 +153,7 @@ impl<'a> ContextClient<'a> {
     ) -> Result<UnshareContextOutcome> {
         let token = self.http.resolve_token()?;
         let op = &ops::UNSHARE_TEAM;
-        let path = op.path(&[&context_id, &team_id]);
+        let path = op.path(&[&context_id, &team_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -168,7 +168,7 @@ impl<'a> ContextClient<'a> {
     ) -> Result<ReassignContextOutcome> {
         let token = self.http.resolve_token()?;
         let op = &ops::REASSIGN;
-        let path = op.path(&[&context_id]);
+        let path = op.path(&[&context_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -186,7 +186,7 @@ impl<'a> ContextClient<'a> {
     ) -> Result<RenameContextOutcome> {
         let token = self.http.resolve_token()?;
         let op = &ops::RENAME;
-        let path = op.path(&[&context_id]);
+        let path = op.path(&[&context_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -215,7 +215,7 @@ impl ContextClient<'_> {
     pub async fn shape(&self, context_id: Uuid, lens: Option<Uuid>) -> Result<AnchorShape> {
         let token = self.http.resolve_token()?;
         let op = &ops::CONTEXT_SHAPE;
-        let path = context_shape_path(context_id, lens);
+        let path = context_shape_path(context_id, lens)?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -230,7 +230,7 @@ impl ContextClient<'_> {
     ) -> Result<Vec<CogmapRegionMetricsRow>> {
         let token = self.http.resolve_token()?;
         let op = &ops::CONTEXT_REGION_METRICS;
-        let path = context_region_metrics_path(context_id, lens);
+        let path = context_region_metrics_path(context_id, lens)?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -250,7 +250,7 @@ impl ContextClient<'_> {
     pub async fn analytics(&self, context_id: Uuid) -> Result<CogmapStaleness> {
         let token = self.http.resolve_token()?;
         let op = &ops::CONTEXT_ANALYTICS;
-        let path = op.path(&[&context_id]);
+        let path = op.path(&[&context_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -272,7 +272,7 @@ impl ContextClient<'_> {
     ) -> Result<MaterializeDelta> {
         let token = self.http.resolve_token()?;
         let op = &ops::CONTEXT_MATERIALIZE_DELTA;
-        let path = context_materialize_delta_path(context_id, threshold);
+        let path = context_materialize_delta_path(context_id, threshold)?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -289,7 +289,7 @@ impl ContextClient<'_> {
     ) -> Result<MaterializeAck> {
         let token = self.http.resolve_token()?;
         let op = &ops::CONTEXT_MATERIALIZE;
-        let path = op.path(&[&context_id]);
+        let path = op.path(&[&context_id])?;
         let body = MaterializeRequest { threshold };
         let req = self.http.request(op, &path).json(&body);
         self.http
@@ -299,31 +299,31 @@ impl ContextClient<'_> {
 }
 
 /// `/api/contexts/{id}/shape` with an optional `?lens=` query — shared by the method and its test.
-fn context_shape_path(context_id: Uuid, lens: Option<Uuid>) -> String {
-    let base = ops::CONTEXT_SHAPE.path(&[&context_id]);
-    match lens {
+fn context_shape_path(context_id: Uuid, lens: Option<Uuid>) -> Result<String> {
+    let base = ops::CONTEXT_SHAPE.path(&[&context_id])?;
+    Ok(match lens {
         Some(l) => format!("{base}?lens={l}"),
         None => base,
-    }
+    })
 }
 
 /// `/api/contexts/{id}/region-metrics` with an optional `?lens=` query.
-fn context_region_metrics_path(context_id: Uuid, lens: Option<Uuid>) -> String {
-    let base = ops::CONTEXT_REGION_METRICS.path(&[&context_id]);
-    match lens {
+fn context_region_metrics_path(context_id: Uuid, lens: Option<Uuid>) -> Result<String> {
+    let base = ops::CONTEXT_REGION_METRICS.path(&[&context_id])?;
+    Ok(match lens {
         Some(l) => format!("{base}?lens={l}"),
         None => base,
-    }
+    })
 }
 
 /// `/api/contexts/{id}/materialize-delta` with an optional `?threshold=` query — shared by the method
 /// and its test.
-fn context_materialize_delta_path(context_id: Uuid, threshold: Option<i64>) -> String {
-    let base = ops::CONTEXT_MATERIALIZE_DELTA.path(&[&context_id]);
-    match threshold {
+fn context_materialize_delta_path(context_id: Uuid, threshold: Option<i64>) -> Result<String> {
+    let base = ops::CONTEXT_MATERIALIZE_DELTA.path(&[&context_id])?;
+    Ok(match threshold {
         Some(t) => format!("{base}?threshold={t}"),
         None => base,
-    }
+    })
 }
 
 /// The resolve request: the fixed path, with the ref as the `context_ref` query parameter
@@ -386,11 +386,11 @@ mod orientation_path_tests {
     fn shape_path_appends_lens_only_when_present() {
         let ctx = Uuid::nil();
         assert_eq!(
-            context_shape_path(ctx, None),
+            context_shape_path(ctx, None).unwrap(),
             "/api/contexts/00000000-0000-0000-0000-000000000000/shape"
         );
         assert_eq!(
-            context_shape_path(ctx, Some(Uuid::nil())),
+            context_shape_path(ctx, Some(Uuid::nil())).unwrap(),
             "/api/contexts/00000000-0000-0000-0000-000000000000/shape?lens=00000000-0000-0000-0000-000000000000"
         );
     }
@@ -399,21 +399,23 @@ mod orientation_path_tests {
     fn region_metrics_path_appends_lens_only_when_present() {
         let ctx = Uuid::nil();
         assert_eq!(
-            context_region_metrics_path(ctx, None),
+            context_region_metrics_path(ctx, None).unwrap(),
             "/api/contexts/00000000-0000-0000-0000-000000000000/region-metrics"
         );
-        assert!(context_region_metrics_path(ctx, Some(Uuid::nil())).contains("?lens="));
+        assert!(context_region_metrics_path(ctx, Some(Uuid::nil()))
+            .unwrap()
+            .contains("?lens="));
     }
 
     #[test]
     fn materialize_delta_path_appends_threshold_only_when_present() {
         let ctx = Uuid::nil();
         assert_eq!(
-            context_materialize_delta_path(ctx, None),
+            context_materialize_delta_path(ctx, None).unwrap(),
             "/api/contexts/00000000-0000-0000-0000-000000000000/materialize-delta"
         );
         assert_eq!(
-            context_materialize_delta_path(ctx, Some(5)),
+            context_materialize_delta_path(ctx, Some(5)).unwrap(),
             "/api/contexts/00000000-0000-0000-0000-000000000000/materialize-delta?threshold=5"
         );
     }

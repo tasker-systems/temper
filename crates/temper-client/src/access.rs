@@ -37,7 +37,7 @@ impl<'a> AccessClient<'a> {
             accepted_terms_version: accepted_terms_version.map(str::to_string),
         };
         let op = &ops::CREATE_REQUEST;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(&body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -48,7 +48,7 @@ impl<'a> AccessClient<'a> {
     pub async fn get_own_request(&self) -> Result<Option<JoinRequest>> {
         let token = self.http.resolve_token()?;
         let op = &ops::GET_OWN_REQUEST;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -59,7 +59,7 @@ impl<'a> AccessClient<'a> {
     pub async fn withdraw_request(&self) -> Result<()> {
         let token = self.http.resolve_token()?;
         let op = &ops::WITHDRAW_REQUEST;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
             .send(&op.method(), &path, req, Some(&token))
@@ -74,7 +74,7 @@ impl<'a> AccessClient<'a> {
             message: message.map(str::to_string),
         };
         let op = &ops::CREATE_REVIEW_REQUEST;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(&body);
         self.http
             .send(&op.method(), &path, req, Some(&token))
@@ -86,7 +86,7 @@ impl<'a> AccessClient<'a> {
     pub async fn get_settings(&self) -> Result<PublicSystemSettings> {
         let token = self.http.resolve_token()?;
         let op = &ops::GET_SETTINGS;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))

@@ -1,0 +1,52 @@
+# cargo-deny configuration — the dependency-posture gate beside `cargo audit`.
+#
+# Two checks run from here: `cargo deny check sources licenses` (`cargo make deny`, and the
+# quality-gate job). Advisories stay with `cargo audit` and its reviewed ignore list in
+# `.cargo/audit.toml`; bans are not checked. A check left unnamed on the command line does not
+# run, so the defaults of the sections below this file omits are inert.
+#
+# The workspace publishes seven crates (temperkb-*) to crates.io and ships the `temper` binary,
+# so what the tree pulls in is what those artifacts carry.
+
+[graph]
+all-features = true
+
+# Every crate comes from crates.io. A dependency from another registry or a git repository is a
+# source nobody reviewed into this workspace, and it fails here until it is allowed by name.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[licenses]
+# A crate's license expression must be satisfiable from this list: the licenses this project
+# accepts. It is a policy, not an inventory — an entry no current dependency uses is still
+# accepted, so `unused-allowed-license` only warns. Reviewed 2026-10-08.
+# Everything here is permissive except MPL-2.0, a file-level copyleft: its obligation is to keep
+# the MPL'd files' source available, which crates.io does. Its one user is `option-ext`, through
+# `dirs`. A new license, a strong copyleft above all, needs a decision before it is added here.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "MIT-0",
+    "CC0-1.0",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "MPL-2.0",
+    "Unlicense",
+]
+confidence-threshold = 0.9
+unused-allowed-license = "warn"
+
+# `publish = false` crates carry no license field; they ship only inside the binary and the
+# deployment, under the workspace's own license.
+[licenses.private]
+ignore = true

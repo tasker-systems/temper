@@ -29,6 +29,8 @@ use std::fmt::Display;
 
 use reqwest::Method;
 
+use crate::error::ClientError;
+
 /// The HTTP verb of an [`Op`]. Its own `Copy` type rather than [`Method`] so the registry can be
 /// plain `const` items.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +78,9 @@ pub(crate) struct Op {
 }
 
 /// What [`Op::path`] escapes in a substituted value: all but the unreserved alphanumerics and
-/// `-_~`. `.` is escaped too, so a value of `..` is a literal segment, not a parent directory.
+/// `-_~`. `.` is escaped too, which keeps a value *containing* dots inert — but it cannot make a
+/// value of exactly `.` or `..` safe: reqwest parses the URL with the `url` crate, which follows
+/// the WHATWG standard and reads `%2E%2E` as a dot segment as well. Those two values are refused.
 const PATH_SEGMENT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'_')
@@ -90,17 +94,24 @@ impl Op {
     /// Render the template, substituting each `{param}` placeholder in order with the next of
     /// `args`. Each value is percent-encoded as one path segment: everything but ASCII
     /// alphanumerics and `-_~` is escaped, `.` included, so no value — a doc-type name off the
-    /// command line, say — can add a segment (`/`), climb one (`..`), or start a query (`?`) and
-    /// reach a different operation with the caller's token. UUIDs encode to themselves.
+    /// command line, say — can add a segment (`/`) or start a query (`?`) and reach a different
+    /// operation with the caller's token. UUIDs encode to themselves.
+    ///
+    /// A value of exactly `.` or `..` is refused rather than encoded: no encoding of it survives
+    /// URL parsing as a literal (see [`PATH_SEGMENT`]), so it would climb to the parent route.
     ///
     /// A query string, when a method needs one, is appended to the rendered path by the caller;
     /// templates never carry one.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Other`] when a value is `.` or `..`.
     ///
     /// # Panics
     ///
     /// When `args` does not supply exactly one value per placeholder — a bug in the calling
     /// method, which its unit test exercises.
-    pub(crate) fn path(&self, args: &[&dyn Display]) -> String {
+    pub(crate) fn path(&self, args: &[&dyn Display]) -> Result<String, ClientError> {
         let mut out = String::with_capacity(self.template.len() + 16 * args.len());
         let mut args = args.iter();
         let mut rest = self.template;
@@ -113,10 +124,13 @@ impl Op {
             let arg = args
                 .next()
                 .unwrap_or_else(|| panic!("too few path arguments for {}", self.template));
-            out.extend(percent_encoding::utf8_percent_encode(
-                &arg.to_string(),
-                PATH_SEGMENT,
-            ));
+            let value = arg.to_string();
+            if value == "." || value == ".." {
+                return Err(ClientError::Other(format!(
+                    "`{value}` cannot be sent as a path value: it would address the parent route"
+                )));
+            }
+            out.extend(percent_encoding::utf8_percent_encode(&value, PATH_SEGMENT));
             rest = &rest[close + 1..];
         }
         out.push_str(rest);
@@ -125,7 +139,7 @@ impl Op {
             "too many path arguments for {}",
             self.template
         );
-        out
+        Ok(out)
     }
 }
 
@@ -357,11 +371,12 @@ mod tests {
             template: "/api/x/{a}/y/{b}",
             visibility: Visibility::Published("x"),
         };
-        assert_eq!(op.path(&[&1, &"two"]), "/api/x/1/y/two");
+        assert_eq!(op.path(&[&1, &"two"]).unwrap(), "/api/x/1/y/two");
     }
 
     /// FAILS IF a substituted value can reshape the path: a traversal, an extra segment or a
-    /// query string stays inside its one segment, and a UUID is untouched.
+    /// query string stays inside its one segment, and a UUID is untouched. A bare `.`/`..` is the
+    /// refusal test's, below — no encoding of it survives URL parsing.
     #[test]
     fn path_encodes_each_value_as_one_segment() {
         let op = Op {
@@ -370,21 +385,54 @@ mod tests {
             visibility: Visibility::Published("x"),
         };
         assert_eq!(
-            op.path(&[&"../../admin/ledger"]),
+            op.path(&[&"../../admin/ledger"]).unwrap(),
             "/api/schema/doc-types/%2E%2E%2F%2E%2E%2Fadmin%2Fledger"
         );
-        assert_eq!(op.path(&[&".."]), "/api/schema/doc-types/%2E%2E");
         assert_eq!(
-            op.path(&[&"task?x=1#f"]),
+            op.path(&[&"task?x=1#f"]).unwrap(),
             "/api/schema/doc-types/task%3Fx%3D1%23f"
         );
-        assert_eq!(op.path(&[&"%2e%2e"]), "/api/schema/doc-types/%252e%252e");
         assert_eq!(
-            op.path(&[&"data_artifact"]),
+            op.path(&[&"%2e%2e"]).unwrap(),
+            "/api/schema/doc-types/%252e%252e"
+        );
+        assert_eq!(
+            op.path(&[&"data_artifact"]).unwrap(),
             "/api/schema/doc-types/data_artifact"
         );
         let id = uuid::Uuid::now_v7();
-        assert_eq!(op.path(&[&id]), format!("/api/schema/doc-types/{id}"));
+        assert_eq!(
+            op.path(&[&id]).unwrap(),
+            format!("/api/schema/doc-types/{id}")
+        );
+    }
+
+    /// FAILS IF a value of `.` or `..` renders to a path at all. Encoding cannot carry either one:
+    /// reqwest parses the URL with the `url` crate, which reads `%2E%2E` as a dot segment, so the
+    /// request would reach the parent route. The first assertion pins that premise — if it ever
+    /// stops holding, encoding would suffice and this refusal could be revisited.
+    #[test]
+    fn path_refuses_a_dot_segment_value() {
+        let parsed = reqwest::Url::parse("https://h/api/schema/doc-types/%2E%2E").unwrap();
+        assert_eq!(parsed.path(), "/api/schema/");
+
+        let op = Op {
+            verb: Verb::Get,
+            template: "/api/schema/doc-types/{name}",
+            visibility: Visibility::Published("x"),
+        };
+        for value in [".", ".."] {
+            let err = op.path(&[&value]).unwrap_err();
+            assert!(
+                matches!(err, ClientError::Other(ref m) if m.contains("parent route")),
+                "{value:?}: {err}"
+            );
+        }
+        assert_eq!(
+            op.path(&[&"..."]).unwrap(),
+            "/api/schema/doc-types/%2E%2E%2E"
+        );
+        assert_eq!(op.path(&[&"a.b"]).unwrap(), "/api/schema/doc-types/a%2Eb");
     }
 
     #[test]
@@ -394,7 +442,7 @@ mod tests {
             template: "/api/x",
             visibility: Visibility::Published("x"),
         };
-        assert_eq!(op.path(&[]), "/api/x");
+        assert_eq!(op.path(&[]).unwrap(), "/api/x");
     }
 
     #[test]
@@ -405,7 +453,7 @@ mod tests {
             template: "/api/x/{a}",
             visibility: Visibility::Published("x"),
         };
-        op.path(&[]);
+        let _ = op.path(&[]);
     }
 
     #[test]
@@ -416,7 +464,7 @@ mod tests {
             template: "/api/x",
             visibility: Visibility::Published("x"),
         };
-        op.path(&[&1]);
+        let _ = op.path(&[&1]);
     }
 
     /// `(verb, template)` for every operation in the repo-root `openapi.json`, keyed by

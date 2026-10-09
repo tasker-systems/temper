@@ -39,7 +39,7 @@ impl<'a> DataArtifactsClient<'a> {
     ) -> Result<serde_json::Value> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_ARTIFACTS;
-        let path = op.path(&[&resource_id]);
+        let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path).query(params);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -50,7 +50,7 @@ impl<'a> DataArtifactsClient<'a> {
     pub async fn get(&self, resource_id: Uuid, artifact_id: Uuid) -> Result<ArtifactView> {
         let token = self.http.resolve_token()?;
         let op = &ops::GET_ARTIFACT;
-        let path = op.path(&[&resource_id, &artifact_id]);
+        let path = op.path(&[&resource_id, &artifact_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -65,7 +65,7 @@ impl<'a> DataArtifactsClient<'a> {
     pub async fn get_by_id(&self, artifact_id: Uuid) -> Result<ArtifactView> {
         let token = self.http.resolve_token()?;
         let op = &ops::GET_ARTIFACT_BY_ID;
-        let path = op.path(&[&artifact_id]);
+        let path = op.path(&[&artifact_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -80,7 +80,7 @@ impl<'a> DataArtifactsClient<'a> {
     ) -> Result<ArtifactCommitResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::COMMIT_ARTIFACT;
-        let path = op.path(&[&resource_id]);
+        let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -91,7 +91,7 @@ impl<'a> DataArtifactsClient<'a> {
     pub async fn list_shapes(&self, context_id: Uuid) -> Result<Vec<ShapeView>> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_SHAPES;
-        let path = op.path(&[&context_id]);
+        let path = op.path(&[&context_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -102,7 +102,7 @@ impl<'a> DataArtifactsClient<'a> {
     pub async fn get_shape(&self, shape_id: Uuid) -> Result<ShapeView> {
         let token = self.http.resolve_token()?;
         let op = &ops::GET_SHAPE;
-        let path = op.path(&[&shape_id]);
+        let path = op.path(&[&shape_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -117,7 +117,7 @@ impl<'a> DataArtifactsClient<'a> {
     ) -> Result<ShapeView> {
         let token = self.http.resolve_token()?;
         let op = &ops::DECLARE_SHAPE;
-        let path = op.path(&[&context_id]);
+        let path = op.path(&[&context_id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -129,7 +129,7 @@ impl<'a> DataArtifactsClient<'a> {
     pub async fn list_cogmap_shapes(&self, cogmap_id: Uuid) -> Result<Vec<ShapeView>> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_COGMAP_SHAPES;
-        let path = op.path(&[&cogmap_id]);
+        let path = op.path(&[&cogmap_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -145,7 +145,7 @@ impl<'a> DataArtifactsClient<'a> {
     ) -> Result<ShapeView> {
         let token = self.http.resolve_token()?;
         let op = &ops::DECLARE_COGMAP_SHAPE;
-        let path = op.path(&[&cogmap_id]);
+        let path = op.path(&[&cogmap_id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))

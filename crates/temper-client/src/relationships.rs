@@ -30,7 +30,7 @@ impl<'a> RelationshipClient<'a> {
     pub async fn assert(&self, request: &AssertRelationshipRequest) -> Result<RelationshipAck> {
         let token = self.http.resolve_token()?;
         let op = &ops::ASSERT;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -45,7 +45,7 @@ impl<'a> RelationshipClient<'a> {
     ) -> Result<RelationshipAck> {
         let token = self.http.resolve_token()?;
         let op = &ops::RETYPE;
-        let path = op.path(&[&edge_handle]);
+        let path = op.path(&[&edge_handle])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -60,7 +60,7 @@ impl<'a> RelationshipClient<'a> {
     ) -> Result<RelationshipAck> {
         let token = self.http.resolve_token()?;
         let op = &ops::REWEIGHT;
-        let path = op.path(&[&edge_handle]);
+        let path = op.path(&[&edge_handle])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -75,7 +75,7 @@ impl<'a> RelationshipClient<'a> {
     ) -> Result<RelationshipAck> {
         let token = self.http.resolve_token()?;
         let op = &ops::FOLD;
-        let path = op.path(&[&edge_handle]);
+        let path = op.path(&[&edge_handle])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))

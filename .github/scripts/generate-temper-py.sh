@@ -127,3 +127,35 @@ if src.count(old) != 1:
     sys.exit(f"generate-temper-py: expected exactly one `{old}` in {path}, found {src.count(old)}")
 open(path, "w", encoding="utf-8").write(src.replace(old, new))
 PY
+
+# Escape `.` in path segments. `quote(..., safe='')` leaves `.` alone, and urllib3 then resolves a
+# `..` segment, so a path value of `..` climbs to the parent route instead of reaching the server as
+# a literal. temperkb-client (Rust) encodes `.` for the same reason. The generator has no option for
+# it, so the one substitution site is rewritten here. Exactly one occurrence, or this fails.
+python3 - "$REPO_ROOT/clients/temper-py/temper/generated/api_client.py" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+old = "quote(str(v), safe=config.safe_chars_for_path_param)\n"
+new = "quote(str(v), safe=config.safe_chars_for_path_param).replace('.', '%2E')\n"
+if src.count(old) != 1:
+    sys.exit(f"generate-temper-py: expected exactly one path-parameter `quote(...)` in {path}, found {src.count(old)}")
+open(path, "w", encoding="utf-8").write(src.replace(old, new))
+PY
+
+# Refuse a path value of `.` or `..` outright, the same rule the Rust, TS and Ruby clients apply.
+# The `.` escape above already keeps such a value literal on urllib3; the refusal is the second
+# layer, so no client sends a request the others would refuse. Exactly one anchor, or this fails.
+python3 - "$REPO_ROOT/clients/temper-py/temper/generated/api_client.py" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+old = "            for k, v in path_params:\n"
+new = old + (
+    "                if str(v) in ('.', '..'):\n"
+    "                    raise ValueError(f\"path parameter `{k}` is `{v}`, which would address the parent route\")\n"
+)
+if src.count(old) != 1:
+    sys.exit(f"generate-temper-py: expected exactly one path-parameter loop in {path}, found {src.count(old)}")
+open(path, "w", encoding="utf-8").write(src.replace(old, new))
+PY

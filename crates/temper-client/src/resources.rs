@@ -44,7 +44,7 @@ impl<'a> ResourceClient<'a> {
     pub async fn list(&self, params: &ResourceListParams) -> Result<ResourceListResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_RESOURCES;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).query(params);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -62,7 +62,7 @@ impl<'a> ResourceClient<'a> {
         params.sections = Some(ResourceSection::OpenMeta.to_string());
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_RESOURCES;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).query(&params);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -81,7 +81,7 @@ impl<'a> ResourceClient<'a> {
     pub async fn get(&self, id: Uuid, sections: Option<&SectionSet>) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let op = &ops::GET_RESOURCE;
-        let base = op.path(&[&id]);
+        let base = op.path(&[&id])?;
         let path = match sections.and_then(SectionSet::to_csv) {
             Some(csv) => format!("{base}?sections={csv}"),
             None => base,
@@ -96,7 +96,7 @@ impl<'a> ResourceClient<'a> {
     pub async fn create(&self, request: &ResourceCreateRequest) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let op = &ops::CREATE_RESOURCE;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -107,7 +107,7 @@ impl<'a> ResourceClient<'a> {
     pub async fn update(&self, id: Uuid, request: &ResourceUpdateRequest) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let op = &ops::UPDATE_RESOURCE;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -125,7 +125,7 @@ impl<'a> ResourceClient<'a> {
     ) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let op = &ops::ANNOTATE_RESOURCE;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -143,7 +143,7 @@ impl<'a> ResourceClient<'a> {
     ) -> Result<DeleteResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::DELETE_RESOURCE;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).query(act);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -156,7 +156,7 @@ impl<'a> ResourceClient<'a> {
     pub async fn grant(&self, id: Uuid, body: &ResourceGrantBody) -> Result<GrantOutcome> {
         let token = self.http.resolve_token()?;
         let op = &ops::GRANT_RESOURCE_ACCESS;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -168,7 +168,7 @@ impl<'a> ResourceClient<'a> {
     pub async fn revoke(&self, id: Uuid, body: &ResourceRevokeBody) -> Result<RevokeOutcome> {
         let token = self.http.resolve_token()?;
         let op = &ops::REVOKE_RESOURCE_ACCESS;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -179,7 +179,7 @@ impl<'a> ResourceClient<'a> {
     pub async fn reassign(&self, id: Uuid, body: &ReassignResourceRequest) -> Result<ReassignAck> {
         let token = self.http.resolve_token()?;
         let op = &ops::REASSIGN_RESOURCE;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -190,7 +190,7 @@ impl<'a> ResourceClient<'a> {
     pub async fn edges(&self, resource_id: Uuid) -> Result<Vec<GraphEdgeRow>> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_RESOURCE_EDGES;
-        let path = op.path(&[&resource_id]);
+        let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -202,7 +202,7 @@ impl<'a> ResourceClient<'a> {
     pub async fn lineage(&self, resource_id: Uuid, depth: Option<i32>) -> Result<ResourceLineage> {
         let token = self.http.resolve_token()?;
         let op = &ops::RESOURCE_LINEAGE;
-        let base = op.path(&[&resource_id]);
+        let base = op.path(&[&resource_id])?;
         let path = match depth {
             Some(d) => format!("{base}?depth={d}"),
             None => base,
@@ -217,7 +217,7 @@ impl<'a> ResourceClient<'a> {
     pub async fn provenance(&self, resource_id: Uuid) -> Result<Vec<BlockProvenanceRow>> {
         let token = self.http.resolve_token()?;
         let op = &ops::PROVENANCE;
-        let path = op.path(&[&resource_id]);
+        let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -240,7 +240,7 @@ impl<'a> ResourceClient<'a> {
     pub async fn read_block(&self, resource_id: Uuid, block_id: Uuid) -> Result<BlockRead> {
         let token = self.http.resolve_token()?;
         let op = &ops::READ_BLOCK;
-        let path = op.path(&[&resource_id, &block_id]);
+        let path = op.path(&[&resource_id, &block_id])?;
         let req = self.http.request(op, &path);
         match self
             .http
@@ -282,7 +282,7 @@ impl<'a> ResourceClient<'a> {
     pub async fn evidence(&self, resource_id: Uuid) -> Result<StandingShape> {
         let token = self.http.resolve_token()?;
         let op = &ops::RESOURCE_EVIDENCE;
-        let path = op.path(&[&resource_id]);
+        let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -298,7 +298,7 @@ impl<'a> ResourceClient<'a> {
     ) -> Result<ResourceConnections> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_RESOURCE_CONNECTIONS;
-        let path = op.path(&[&resource_id]);
+        let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path).query(query);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -310,7 +310,7 @@ impl<'a> ResourceClient<'a> {
     pub async fn list_citation_audits(&self, resource_id: Uuid) -> Result<Vec<CitationAuditRow>> {
         let token = self.http.resolve_token()?;
         let op = &ops::LIST_CITATION_AUDITS;
-        let path = op.path(&[&resource_id]);
+        let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -331,7 +331,7 @@ impl<'a> ResourceClient<'a> {
     ) -> Result<Uuid> {
         let token = self.http.resolve_token()?;
         let op = &ops::RECORD_CITATION_AUDIT;
-        let path = op.path(&[&resource_id]);
+        let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -352,7 +352,7 @@ impl<'a> ResourceClient<'a> {
     ) -> Result<Uuid> {
         let token = self.http.resolve_token()?;
         let op = &ops::RECORD_CITATION_AUDIT_FOR_BLOCK;
-        let path = op.path(&[]);
+        let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -363,7 +363,7 @@ impl<'a> ResourceClient<'a> {
     pub async fn content(&self, id: Uuid) -> Result<ContentResponse> {
         let token = self.http.resolve_token()?;
         let op = &ops::GET_CONTENT;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -378,7 +378,7 @@ impl<'a> ResourceClient<'a> {
     pub async fn get_meta(&self, id: Uuid) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let op = &ops::GET_META;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
@@ -394,7 +394,7 @@ impl<'a> ResourceClient<'a> {
     pub async fn update_meta(&self, id: Uuid, payload: &MetaUpdatePayload) -> Result<ResourceView> {
         let token = self.http.resolve_token()?;
         let op = &ops::UPDATE_META;
-        let path = op.path(&[&id]);
+        let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(payload);
         self.http
             .send_json(&op.method(), &path, req, Some(&token))
