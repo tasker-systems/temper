@@ -18,7 +18,7 @@ export interface paths {
         put?: never;
         /**
          * Reconcile auto-join team rosters
-         * @description Adds every approved principal missing from an auto-join team and reports each (team, profile) pair added, plus the touched teams that also carry SAML group mappings (whose new native memberships take precedence over IdP role assertions). An empty `added` means nothing needed adding. Requires a system admin.
+         * @description Adds every approved person (never a machine principal) missing from an auto-join team and reports each (team, profile) pair added, plus the touched teams that also carry SAML group mappings (whose new native memberships take precedence over IdP role assertions). An empty `added` means nothing needed adding. Requires a system admin.
          */
         post: operations["admin_reconcile_auto_join"];
         delete?: never;

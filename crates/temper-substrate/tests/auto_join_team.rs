@@ -21,8 +21,7 @@
 //! Enrollment is materialized at the standing committer itself (`20260923000010`), so every
 //! approval door inherits it — the committer is the pin: a door that forgets to enroll is
 //! not representable. The pool is APPEND-ONLY: no standing transition ever removes an
-//! auto-join membership, because post-D11 those rows are owned by other authorities — D14
-//! machine hygiene (`enroll_in_gating_team` enrolls born-`denied` machines), D17/D11
+//! auto-join membership, because post-D11 those rows are owned by other authorities — D17/D11
 //! revocation intent (grants and memberships deliberately survive for the rebind story),
 //! and IdP provenance (`reconcile_idp_memberships` owns `source='idp'` rows). The
 //! invariant is one-directional: every standing-approved profile is a member; the converse
@@ -303,7 +302,7 @@ async fn direct_grant_enrolls_at_committer(pool: PgPool) {
 }
 
 /// Revocation removes NOTHING — the pool is append-only. Post-D11, auto-join memberships
-/// are owned by other authorities: D14 machine hygiene, D17/D11 revocation intent (grants
+/// are owned by other authorities: D17/D11 revocation intent (grants
 /// and memberships deliberately survive for the rebind story), and IdP provenance. A
 /// standing transition that deleted any of them would reintroduce the silent-corruption
 /// class this fix exists to prevent.
