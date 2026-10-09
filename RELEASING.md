@@ -208,6 +208,13 @@ and shape-diff honesty; it is structurally barred from certifying the behavioral
 class — that half is owned by review ("does this change the meaning behind an
 unchanged shape for any existing client?") and the merge decision.
 
+A change that only moves dependencies — a lockfile, a `package.json` whose diff stays
+inside its dependency maps (`peerDependencies` excepted), a `Cargo.toml` whose diff stays
+inside its `[*dependencies*]` tables — is not wire movement and owes no row; Dependabot
+bumps pass on that rule, judged on content rather than author, so a human bump passes the
+same way and a bump that also edits code does not. Whether an upgrade changed behavior is
+still the review's question.
+
 ### The pinned contract (additive-only within the era)
 
 Since 2026-09-16 each released minor also **pins** its contract:
