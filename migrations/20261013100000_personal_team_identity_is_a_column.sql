@@ -110,7 +110,7 @@ BEGIN
     -- (1) The personal-team denormalization (D5 blind-spot row 1 — the only denormalization
     --     carrier Derivation C found). Found by kb_teams.personal_of, never by recomputing the
     --     slug: a personal team whose slug was held at genesis carries a `-N` suffix, and the
-    --     team at the bare slug is someone else's (20261012100000). Scrubbed to the same
+    --     team at the bare slug is someone else's (20261013100000). Scrubbed to the same
     --     derivation applied to the sentinel identity. The trigger is AFTER INSERT only, so
     --     this never re-fires.
     SELECT t.id INTO v_team FROM kb_teams t WHERE t.personal_of = p_subject;
@@ -805,7 +805,7 @@ END;
 $$;
 
 SELECT declare_migration(
-    20261012100000,
+    20261013100000,
     'additive',
     'One nullable column with a partial unique index, backfilled, and a WARNING per co-owned personal team; three functions replaced with signatures unchanged. A binary without this migration keeps working: it never reads personal_of, and the trigger fills it on every profile insert.'
 );

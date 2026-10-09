@@ -21,6 +21,9 @@ module Temper::Generated
     # Set when the resource is a cogmap's charter: the act would refuse.
     attr_accessor :charter_of
 
+    # Each deriver the remainder names, in its order, with whether the sweep confirms it quotes one of the resource's detected values (D10). Empty from a server that predates it.
+    attr_accessor :deriver_fingerprints
+
     # The live edges the act would fold.
     attr_accessor :edges
 
@@ -58,6 +61,7 @@ module Temper::Generated
       {
         :'blob_co_links' => :'blob_co_links',
         :'charter_of' => :'charter_of',
+        :'deriver_fingerprints' => :'deriver_fingerprints',
         :'edges' => :'edges',
         :'fingerprint_available' => :'fingerprint_available',
         :'ingest_state' => :'ingest_state',
@@ -90,6 +94,7 @@ module Temper::Generated
       {
         :'blob_co_links' => :'Array<BlobCoLinks>',
         :'charter_of' => :'String',
+        :'deriver_fingerprints' => :'Array<DeriverFingerprint>',
         :'edges' => :'Array<String>',
         :'fingerprint_available' => :'Boolean',
         :'ingest_state' => :'String',
@@ -140,6 +145,12 @@ module Temper::Generated
 
       if attributes.key?(:'charter_of')
         self.charter_of = attributes[:'charter_of']
+      end
+
+      if attributes.key?(:'deriver_fingerprints')
+        if (value = attributes[:'deriver_fingerprints']).is_a?(Array)
+          self.deriver_fingerprints = value
+        end
       end
 
       if attributes.key?(:'edges')
@@ -471,6 +482,7 @@ module Temper::Generated
       self.class == o.class &&
           blob_co_links == o.blob_co_links &&
           charter_of == o.charter_of &&
+          deriver_fingerprints == o.deriver_fingerprints &&
           edges == o.edges &&
           fingerprint_available == o.fingerprint_available &&
           ingest_state == o.ingest_state &&
@@ -496,7 +508,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [blob_co_links, charter_of, edges, fingerprint_available, ingest_state, ledger_remainder, n_artifacts, n_blocks, n_chunks, n_edges, n_revisions, other_author_edge_properties, other_author_edges, redacted_fields, remainder, targets].hash
+      [blob_co_links, charter_of, deriver_fingerprints, edges, fingerprint_available, ingest_state, ledger_remainder, n_artifacts, n_blocks, n_chunks, n_edges, n_revisions, other_author_edge_properties, other_author_edges, redacted_fields, remainder, targets].hash
     end
 
     # Builds the object from hash

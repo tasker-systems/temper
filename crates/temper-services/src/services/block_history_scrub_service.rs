@@ -362,8 +362,11 @@ fn classify_scrub_raise(rest: &str) -> ScrubFailure {
 /// attempt is not a scrub request). The list is checked exactly as the act checks it, in the
 /// same order: empty or repeated is a 400, an unknown resource is `NotFound`, an id that is not a
 /// block of the resource is a 400 whatever the resource's state, and then a charter or an erased
-/// resource answers the refusal the act would record (with no per-block rows). The current-revision finding warning (D11) is not here: it reads the
-/// sensitivity sweep's stored findings, which arrive with build order 3c.
+/// resource answers the refusal the act would record (with no per-block rows).
+///
+/// Each block also says whether its current revision still holds an open finding of the
+/// sensitivity sweep (D11's warning: the text has not been edited out yet). It is read after the
+/// plan, through `block_history_scrub_flagged_blocks`, and the act never reads it.
 pub async fn survey_block_history_scrub(
     pool: &PgPool,
     _admin: &SystemAdmin,
@@ -403,8 +406,18 @@ pub async fn survey_block_history_scrub(
     .fetch_one(pool)
     .await?
     .ok_or_else(|| ApiError::Internal("block_history_scrub_survey returned no row".to_string()))?;
-    let wire: SurveyPlanWire = serde_json::from_value(raw)
+    let mut wire: SurveyPlanWire = serde_json::from_value(raw)
         .map_err(|e| ApiError::Internal(format!("block history scrub survey shape: {e}")))?;
+    let flagged = sqlx::query_scalar!(
+        r#"SELECT block_history_scrub_flagged_blocks($1, $2) AS "flagged!: Vec<Uuid>""#,
+        resource.uuid(),
+        blocks,
+    )
+    .fetch_one(pool)
+    .await?;
+    for block in &mut wire.blocks {
+        block.current_revision_flagged = flagged.contains(&block.block);
+    }
 
     Ok(BlockHistoryScrubSurvey {
         resource,

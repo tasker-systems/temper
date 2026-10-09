@@ -11,6 +11,9 @@
 //! with a literal `include_str!` is scanned with it. Test trees are outside the set, because these
 //! witnesses read the store directly.
 //!
+//! The two public doors that compare resources the caller names are held the same way: only the
+//! two survey services may name them (`the_pairwise_doors_are_named_only_by_the_surveys`).
+//!
 //! What a grep cannot see, and so is not claimed: a schema name assembled at run time
 //! (`format!("{SCHEMA}.findings")`, `'sensitiv' || 'ity.findings'`), an `include_str!` whose path is
 //! itself computed, and a `search_path` set by a migration rather than by application code.
@@ -160,6 +163,44 @@ fn no_application_code_names_the_sensitivity_schema() {
     assert!(
         offenders.is_empty(),
         "these files name the sensitivity schema; reach it through a SQL function instead: {offenders:#?}"
+    );
+}
+
+/// The public doors into the sweep that take the resources to compare from their caller: each is a
+/// pairwise confirmation oracle over any two resources (resource erasure spec D10, build order 3c
+/// security review), so naming one is reaching the store.
+const PAIRWISE_DOORS: &[&str] = &[
+    "resource_erasure_deriver_fingerprints",
+    "block_history_scrub_flagged_blocks",
+];
+
+/// The only callers allowed, both behind the system-admin gate, each passing its plan's own ids.
+const PAIRWISE_CALLERS: &[&str] = &[
+    "crates/temper-services/src/services/resource_erasure_service.rs",
+    "crates/temper-services/src/services/block_history_scrub_service.rs",
+];
+
+/// FAILS IF a pairwise door is named anywhere but the two survey services, or if the walk stops
+/// reaching either of them (an empty match would pass vacuously).
+#[test]
+fn the_pairwise_doors_are_named_only_by_the_surveys() {
+    let root = workspace_root();
+    let mut callers = Vec::new();
+    for tree in source_trees(&root) {
+        for file in source_files_under(&tree) {
+            let source = std::fs::read_to_string(&file).expect("read source");
+            if PAIRWISE_DOORS.iter().any(|door| source.contains(door)) {
+                let relative = file.strip_prefix(&root).expect("under the root");
+                callers.push(relative.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    callers.sort();
+    let mut allowed: Vec<String> = PAIRWISE_CALLERS.iter().map(|c| c.to_string()).collect();
+    allowed.sort();
+    assert_eq!(
+        callers, allowed,
+        "only the two survey services may name a pairwise door into the sensitivity sweep"
     );
 }
 

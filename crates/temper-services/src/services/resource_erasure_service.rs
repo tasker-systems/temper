@@ -44,8 +44,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::types::erasure::{
-    BlobCoLinks, OtherAuthorEdge, OtherAuthorEdgeProperty, ResourceErasurePlan,
-    ResourceErasureSurvey,
+    BlobCoLinks, DeriverFingerprint, FingerprintMatch, OtherAuthorEdge, OtherAuthorEdgeProperty,
+    ResourceErasurePlan, ResourceErasureSurvey,
 };
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{BlobId, EdgeId, EntityId, ProfileId, PropertyId, ResourceId};
@@ -107,6 +107,12 @@ const EXECUTE_RAISE_PREFIX: &str = "resource_erasure_execute: ";
 
 /// The shape of a related-blob remainder entry the plan writes: `related blob <id>; hash …`.
 const RELATED_BLOB_PREFIX: &str = "related blob ";
+
+/// The shape of a deriver remainder entry the plan writes (D8):
+/// `resource <id> holds a structural lead (…); never touched; discovery-bound`.
+const DERIVER_TARGET: &str = "deriver";
+const DERIVER_PREFIX: &str = "resource ";
+const DERIVER_LEAD: &str = " holds a structural lead";
 
 pub(super) const RESOURCE_NOT_FOUND: &str = "resource not found";
 
@@ -762,11 +768,14 @@ pub async fn survey_resource_erasure(
             let completion_fields = serde_json::from_value(raw).map_err(|e| {
                 ApiError::Internal(format!("resource erasure completion fields shape: {e}"))
             })?;
+            let derivers = deriver_ids(&first_record_remainder(pool, resource).await?)?;
+            let deriver_fingerprints = deriver_fingerprints(pool, resource, &derivers).await?;
             return Ok(ResourceErasureSurvey {
                 resource,
                 already_erased: true,
                 plan: None,
                 completion_fields,
+                deriver_fingerprints,
             });
         }
         Some(false) => {}
@@ -785,6 +794,8 @@ pub async fn survey_resource_erasure(
     let other_author_edges = other_author_edges(pool, resource).await?;
     let other_author_edge_properties = other_author_edge_properties(pool, resource).await?;
     let blob_co_links = blob_co_links(pool, resource, &wire.remainder).await?;
+    let deriver_fingerprints =
+        deriver_fingerprints(pool, resource, &deriver_ids(&wire.remainder)?).await?;
 
     Ok(ResourceErasureSurvey {
         resource,
@@ -801,6 +812,7 @@ pub async fn survey_resource_erasure(
             ingest_state: wire.ingest_state,
             fingerprint_available: wire.fingerprint_available,
             remainder: wire.remainder,
+            deriver_fingerprints,
             redacted_fields: wire.redacted_fields,
             ledger_remainder: wire.ledger_remainder,
             other_author_edges,
@@ -808,6 +820,7 @@ pub async fn survey_resource_erasure(
             blob_co_links,
         }),
         completion_fields: Vec::new(),
+        deriver_fingerprints: Vec::new(),
     })
 }
 
@@ -937,6 +950,117 @@ async fn blob_co_links(
             }
         })
         .collect())
+}
+
+/// Whether the sensitivity sweep confirms each deriver quotes one of the resource's detected values
+/// (D10), in `derivers`' order. The derivers are the plan's own, never re-derived; the answer is
+/// read through `resource_erasure_deriver_fingerprints`, since no Rust names the sweep's schema.
+async fn deriver_fingerprints(
+    pool: &PgPool,
+    resource: ResourceId,
+    derivers: &[Uuid],
+) -> ApiResult<Vec<DeriverFingerprint>> {
+    if derivers.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query!(
+        r#"SELECT deriver_id AS "deriver_id!: Uuid", state AS "state!"
+             FROM resource_erasure_deriver_fingerprints($1, $2)"#,
+        resource.uuid(),
+        derivers,
+    )
+    .fetch_all(pool)
+    .await?;
+    in_deriver_order(
+        resource,
+        derivers,
+        rows.into_iter().map(|r| (r.deriver_id, r.state)).collect(),
+    )
+}
+
+/// The SQL's `(deriver, state)` rows in `derivers`' order. Only the resource itself goes
+/// unanswered, by design; any other deriver missing, or a state outside the vocabulary, is drift
+/// between the function and this caller, and fails loud.
+fn in_deriver_order(
+    resource: ResourceId,
+    derivers: &[Uuid],
+    rows: Vec<(Uuid, String)>,
+) -> ApiResult<Vec<DeriverFingerprint>> {
+    derivers
+        .iter()
+        .filter(|d| **d != resource.uuid())
+        .map(|d| {
+            let (_, state) = rows.iter().find(|(id, _)| id == d).ok_or_else(|| {
+                ApiError::Internal(format!("the sweep did not answer for deriver {d}"))
+            })?;
+            let fingerprint_match = match state.as_str() {
+                "yes" => FingerprintMatch::Yes,
+                "no" => FingerprintMatch::No,
+                "unscanned" => FingerprintMatch::Unscanned,
+                "expired" => FingerprintMatch::Expired,
+                other => {
+                    return Err(ApiError::Internal(format!(
+                        "the deriver fingerprint state {other:?} is not in the vocabulary"
+                    )))
+                }
+            };
+            Ok(DeriverFingerprint {
+                deriver: ResourceId::from(*d),
+                fingerprint_match,
+            })
+        })
+        .collect()
+}
+
+/// The remainder the resource's first `resource_erased` record named. A completion pass's record
+/// carries none (D12), so the first is the act that named the derivers. Every husk has one: a
+/// husk without is drift, and fails loud.
+async fn first_record_remainder(
+    pool: &PgPool,
+    resource: ResourceId,
+) -> ApiResult<Vec<ErasureTargetOutcome>> {
+    let raw = sqlx::query_scalar!(
+        r#"SELECT coalesce(e.payload -> 'remainder', '[]'::jsonb) AS "remainder!: serde_json::Value"
+             FROM kb_events e
+             JOIN kb_event_types t ON t.id = e.event_type_id
+            WHERE t.name = 'resource_erased' AND e.payload ->> 'subject_id' = $1
+            ORDER BY e.id
+            LIMIT 1"#,
+        resource.uuid().to_string(),
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| {
+        ApiError::Internal(format!(
+            "the erased resource {} has no resource_erased record",
+            resource.uuid()
+        ))
+    })?;
+    serde_json::from_value(raw)
+        .map_err(|e| ApiError::Internal(format!("resource erasure record remainder shape: {e}")))
+}
+
+/// The resource ids of the plan's deriver remainder entries (`resource <id> holds a structural
+/// lead …`), each once, in order. An entry in any other shape is drift in the plan's template,
+/// and fails loud.
+fn deriver_ids(remainder: &[ErasureTargetOutcome]) -> ApiResult<Vec<Uuid>> {
+    let mut ids = Vec::new();
+    for r in remainder.iter().filter(|r| r.target == DERIVER_TARGET) {
+        let id = r
+            .outcome
+            .strip_prefix(DERIVER_PREFIX)
+            .and_then(|rest| rest.split_once(DERIVER_LEAD))
+            .and_then(|(id, _)| Uuid::parse_str(id).ok())
+            .ok_or_else(|| {
+                ApiError::Internal(
+                    "the survey's remainder names a deriver in an unrecognized shape".to_string(),
+                )
+            })?;
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
 }
 
 /// The blob ids of the plan's related-blob remainder entries (`related blob <id>; hash …`). An
@@ -1201,6 +1325,58 @@ mod classifier_tests {
             outcome: format!("blob {} related", id()),
         }];
         assert!(related_blob_ids(&drifted).is_err());
+    }
+
+    // FAILS IF the deriver parse loses the plan's `resource <id> holds a structural lead (…)`
+    // shape (20261009100000, the deriver loop), answers a deriver twice, or stops failing loud on
+    // a drifted entry.
+    #[test]
+    fn deriver_ids_parse_the_plans_remainder_shape() {
+        let lead = |kind: &str| ErasureTargetOutcome {
+            target: "deriver".to_string(),
+            outcome: format!(
+                "resource {} holds a structural lead ({kind}); never touched; discovery-bound",
+                id()
+            ),
+        };
+        let remainder = vec![
+            lead("derived_from edge"),
+            ErasureTargetOutcome {
+                target: "kb_blobs".to_string(),
+                outcome: format!("related blob {}; hash abc; already struck", id()),
+            },
+            lead("provenance citation"),
+        ];
+        assert_eq!(deriver_ids(&remainder).expect("parses"), vec![id()]);
+
+        let drifted = vec![ErasureTargetOutcome {
+            target: "deriver".to_string(),
+            outcome: format!("deriver {} named", id()),
+        }];
+        assert!(deriver_ids(&drifted).is_err());
+    }
+
+    /// FAILS IF a deriver the sweep did not answer is dropped rather than refused, if the resource
+    /// itself is not the one deriver allowed to go unanswered, or if the answer leaves plan order.
+    #[test]
+    fn every_deriver_but_the_resource_is_answered_in_plan_order() {
+        let r = Uuid::now_v7();
+        let (d1, d2) = (Uuid::now_v7(), Uuid::now_v7());
+        let rows = vec![(d2, "no".to_string()), (d1, "yes".to_string())];
+        let answered =
+            in_deriver_order(ResourceId::from(r), &[d1, r, d2], rows.clone()).expect("answers");
+        assert_eq!(
+            answered
+                .iter()
+                .map(|f| (f.deriver.uuid(), f.fingerprint_match))
+                .collect::<Vec<_>>(),
+            vec![(d1, FingerprintMatch::Yes), (d2, FingerprintMatch::No)]
+        );
+
+        let unanswered = Uuid::now_v7();
+        assert!(in_deriver_order(ResourceId::from(r), &[d1, unanswered], rows.clone()).is_err());
+        let drifted = vec![(d1, "maybe".to_string())];
+        assert!(in_deriver_order(ResourceId::from(r), &[d1], drifted).is_err());
     }
 }
 

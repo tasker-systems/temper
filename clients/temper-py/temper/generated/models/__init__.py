@@ -145,6 +145,7 @@ from temper.generated.models.deactivated import Deactivated
 from temper.generated.models.delete_response import DeleteResponse
 from temper.generated.models.demote_admin_request import DemoteAdminRequest
 from temper.generated.models.denied import Denied
+from temper.generated.models.deriver_fingerprint import DeriverFingerprint
 from temper.generated.models.device_overrides import DeviceOverrides
 from temper.generated.models.discouraged_open_meta_key import DiscouragedOpenMetaKey
 from temper.generated.models.dispatch_tick_request import DispatchTickRequest
@@ -186,6 +187,7 @@ from temper.generated.models.facet_predicate import FacetPredicate
 from temper.generated.models.facet_retract_ack import FacetRetractAck
 from temper.generated.models.facet_set_request import FacetSetRequest
 from temper.generated.models.finalize_payload import FinalizePayload
+from temper.generated.models.fingerprint_match import FingerprintMatch
 from temper.generated.models.fold_relationship_request import FoldRelationshipRequest
 from temper.generated.models.grant_connection_reach_request import GrantConnectionReachRequest
 from temper.generated.models.grant_outcome import GrantOutcome

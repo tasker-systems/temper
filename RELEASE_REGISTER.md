@@ -62,6 +62,28 @@ pr: self
 classes: additive, behavioral
 surfaces: http, clients
 status: signal-only
+- **The erasure surveys say whether the sensitivity sweep confirms a deriver quotes the resource, and whether a block still holds a finding**
+  `POST /api/admin/resources/erasure/survey` gains `deriver_fingerprints`, one entry per deriver
+  the survey names: `{deriver, fingerprint_match}` with `fingerprint_match` one of `yes`, `no`,
+  `unscanned` or `expired`. It sits on `plan` for a live resource, and at the top level for an
+  erased one, which has no plan. `yes` means the deriver still holds a value the sweep found in
+  the resource. `no` means the sweep has read all of both and found none of the resource's values
+  in the deriver; it never means the deriver is clean. `unscanned` means the sweep has not read
+  all of one or the other, so a deployment with the sweep turned off reads `unscanned` for
+  content written since. `expired` means a fingerprint the comparison needs is gone (30 days
+  after an erasure act emptied its place), capped, or never minted. The plan's existing
+  `fingerprint_available` flips from `false` to `true` on every deployment once this ships, sweep
+  on or off: it says the comparison is installed, and `deriver_fingerprints` says what it found.
+  `POST /api/admin/resources/block-history-scrub/survey` gains `current_revision_flagged` on each
+  block: the sweep holds an open finding on the block's current revision or its current chunks.
+  It is false for a current revision the sweep has not read. Both read stored findings only,
+  through two new public functions, and neither act reads them; the act's record is unchanged.
+  Who observes: system admins surveying an erasure or a scrub, through the CLI (`temper admin
+  erasure`) and the SDKs. User-visible: two new fields. Release relevance: additive.
+pr: self
+classes: additive
+surfaces: http, clients, cli-stdout, schema
+status: signal-only
 - **Every client refuses a path value of `.` or `..`; temper-rb and temper-py also escape `.` in path values**
   temperkb-client, temper-ts, temper-rb and temper-py now refuse, before any request is sent, a
   path value that is exactly `.` or `..`. The v0.6.0 row on temperkb-client said temperkb-client's encoding

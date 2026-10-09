@@ -165,6 +165,7 @@ lib/temper/generated/models/deactivated.rb
 lib/temper/generated/models/delete_response.rb
 lib/temper/generated/models/demote_admin_request.rb
 lib/temper/generated/models/denied.rb
+lib/temper/generated/models/deriver_fingerprint.rb
 lib/temper/generated/models/device_overrides.rb
 lib/temper/generated/models/discouraged_open_meta_key.rb
 lib/temper/generated/models/dispatch_tick_request.rb
@@ -206,6 +207,7 @@ lib/temper/generated/models/facet_predicate.rb
 lib/temper/generated/models/facet_retract_ack.rb
 lib/temper/generated/models/facet_set_request.rb
 lib/temper/generated/models/finalize_payload.rb
+lib/temper/generated/models/fingerprint_match.rb
 lib/temper/generated/models/fold_relationship_request.rb
 lib/temper/generated/models/grant_connection_reach_request.rb
 lib/temper/generated/models/grant_outcome.rb

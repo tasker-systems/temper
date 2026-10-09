@@ -189,6 +189,7 @@ __all__ = [
     "DeleteResponse",
     "DemoteAdminRequest",
     "Denied",
+    "DeriverFingerprint",
     "DeviceOverrides",
     "DiscouragedOpenMetaKey",
     "DispatchTickRequest",
@@ -230,6 +231,7 @@ __all__ = [
     "FacetRetractAck",
     "FacetSetRequest",
     "FinalizePayload",
+    "FingerprintMatch",
     "FoldRelationshipRequest",
     "GrantConnectionReachRequest",
     "GrantOutcome",
@@ -653,6 +655,7 @@ from temper.generated.models.deactivated import Deactivated as Deactivated
 from temper.generated.models.delete_response import DeleteResponse as DeleteResponse
 from temper.generated.models.demote_admin_request import DemoteAdminRequest as DemoteAdminRequest
 from temper.generated.models.denied import Denied as Denied
+from temper.generated.models.deriver_fingerprint import DeriverFingerprint as DeriverFingerprint
 from temper.generated.models.device_overrides import DeviceOverrides as DeviceOverrides
 from temper.generated.models.discouraged_open_meta_key import DiscouragedOpenMetaKey as DiscouragedOpenMetaKey
 from temper.generated.models.dispatch_tick_request import DispatchTickRequest as DispatchTickRequest
@@ -694,6 +697,7 @@ from temper.generated.models.facet_predicate import FacetPredicate as FacetPredi
 from temper.generated.models.facet_retract_ack import FacetRetractAck as FacetRetractAck
 from temper.generated.models.facet_set_request import FacetSetRequest as FacetSetRequest
 from temper.generated.models.finalize_payload import FinalizePayload as FinalizePayload
+from temper.generated.models.fingerprint_match import FingerprintMatch as FingerprintMatch
 from temper.generated.models.fold_relationship_request import FoldRelationshipRequest as FoldRelationshipRequest
 from temper.generated.models.grant_connection_reach_request import GrantConnectionReachRequest as GrantConnectionReachRequest
 from temper.generated.models.grant_outcome import GrantOutcome as GrantOutcome

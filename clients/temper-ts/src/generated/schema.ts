@@ -4675,6 +4675,13 @@ export interface components {
             block: string;
             /** Format: int64 */
             chunks_to_empty: number;
+            /**
+             * @description The sensitivity sweep holds an open finding on the block's current revision or its current
+             *     chunks: the text has not been edited out yet, and the scrub will keep it (D11). False for a
+             *     current revision the sweep has not read: it confirms a leak, never cleanliness. Absent from a
+             *     server that predates it.
+             */
+            current_revision_flagged?: boolean;
             /** @description A folded block empties entirely; a live block keeps its current revision and chunks. */
             folded: boolean;
             /** Format: int64 */
@@ -5600,6 +5607,11 @@ export interface components {
              */
             profile_id: string;
         };
+        /** @description One deriver the survey names (D8), with its [`FingerprintMatch`]. */
+        DeriverFingerprint: {
+            deriver: components["schemas"]["ResourceId"];
+            fingerprint_match: components["schemas"]["FingerprintMatch"];
+        };
         /** @description Per-device configuration overrides keyed by X-Temper-Device-Id. */
         DeviceOverrides: {
             /** @description Subscription-level overrides keyed by context name */
@@ -6313,6 +6325,13 @@ export interface components {
              */
             expected_content_hash?: string | null;
         };
+        /**
+         * @description Whether the sensitivity sweep has confirmed that a deriver quotes one of the erased resource's
+         *     detected values (resource erasure spec D10, as amended by the build order 3c rulings). Read
+         *     from stored fingerprints, never from content; the act never reads it.
+         * @enum {string}
+         */
+        FingerprintMatch: "yes" | "no" | "unscanned" | "expired";
         /** @description Request body for `POST /api/relationships/{edge_handle}/fold`. */
         FoldRelationshipRequest: components["schemas"]["ActInput"] & {
             reason?: string | null;
@@ -8681,6 +8700,11 @@ export interface components {
              * @description Set when the resource is a cogmap's charter: the act would refuse.
              */
             charter_of?: string | null;
+            /**
+             * @description Each deriver the remainder names, in its order, with whether the sweep confirms it quotes
+             *     one of the resource's detected values (D10). Empty from a server that predates it.
+             */
+            deriver_fingerprints?: components["schemas"]["DeriverFingerprint"][];
             /** @description The live edges the act would fold. */
             edges: components["schemas"]["EdgeId"][];
             fingerprint_available: boolean;
@@ -8727,6 +8751,13 @@ export interface components {
              *     refuses `already_erased`; empty too from a server that predates the completion pass.
              */
             completion_fields?: components["schemas"]["RedactedEventFields"][];
+            /**
+             * @description On an erased resource, the derivers its erasure named, with whether the sweep confirms each
+             *     quotes one of its detected values (D10, sweep D11): the fingerprints stay comparable for 30
+             *     days after the act, then read `expired`. Before the act the annotation is on `plan`. Empty
+             *     from a server that predates it.
+             */
+            deriver_fingerprints?: components["schemas"]["DeriverFingerprint"][];
             plan?: null | components["schemas"]["ResourceErasurePlan"];
             resource: components["schemas"]["ResourceId"];
         };
