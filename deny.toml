@@ -20,8 +20,9 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []
 
 [licenses]
-# A crate's license expression must be satisfiable from this list. It is the narrowest list the
-# tree as of 2026-10-08 needs (`unused-allowed-license` reports any entry that stops being used).
+# A crate's license expression must be satisfiable from this list: the licenses this project
+# accepts. It is a policy, not an inventory — an entry no current dependency uses is still
+# accepted, so `unused-allowed-license` only warns. Reviewed 2026-10-08.
 # Everything here is permissive except MPL-2.0, a file-level copyleft: its obligation is to keep
 # the MPL'd files' source available, which crates.io does. Its one user is `option-ext`, through
 # `dirs`. A new license, a strong copyleft above all, needs a decision before it is added here.
@@ -43,7 +44,7 @@ allow = [
     "Unlicense",
 ]
 confidence-threshold = 0.9
-unused-allowed-license = "deny"
+unused-allowed-license = "warn"
 
 # `publish = false` crates carry no license field; they ship only inside the binary and the
 # deployment, under the workspace's own license.
