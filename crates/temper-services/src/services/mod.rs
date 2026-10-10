@@ -21,6 +21,7 @@ pub mod erasure_service;
 pub mod event_service;
 pub mod evidential_standing_service;
 pub mod facet_service;
+pub mod field_scrub_service;
 pub mod grant_crypto;
 pub mod graph_service;
 pub mod intake_service;

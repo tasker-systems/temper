@@ -63,6 +63,31 @@ impl From<CliElementKind> for temper_core::types::element_trail::ElementKind {
     }
 }
 
+/// CLI-local enum mirroring `ScrubFieldKind` for clap `value_enum` parsing — the field a field
+/// scrub names. Kept in `cli.rs` (not `temper-core`) to avoid a `clap` dependency there, mirroring
+/// `CliEdgeKind`. Spelled as the wire spells it (`origin_uri`, not `origin-uri`). Maps to
+/// `temper_core::types::erasure::ScrubFieldKind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum CliScrubField {
+    Title,
+    #[value(name = "origin_uri")]
+    OriginUri,
+    Property,
+    Properties,
+}
+
+impl From<CliScrubField> for temper_core::types::erasure::ScrubFieldKind {
+    fn from(f: CliScrubField) -> Self {
+        use temper_core::types::erasure::ScrubFieldKind;
+        match f {
+            CliScrubField::Title => ScrubFieldKind::Title,
+            CliScrubField::OriginUri => ScrubFieldKind::OriginUri,
+            CliScrubField::Property => ScrubFieldKind::Property,
+            CliScrubField::Properties => ScrubFieldKind::Properties,
+        }
+    }
+}
+
 /// Per-act agent-authorship + invocation-correlation flags shared by every authored-write CLI
 /// command (resource create, edge assert/fold) via `#[command(flatten)]`. All optional and
 /// available to any caller — agent-driven CLI is the *expected* case, not a restricted one.
@@ -1623,8 +1648,8 @@ pub enum AdminAction {
         #[command(subcommand)]
         action: AdminProfilesAction,
     },
-    /// Erase a resource or a principal, or scrub a resource's block history. Surveys by default;
-    /// --execute acts
+    /// Erase a resource or a principal, or scrub a resource's block history or one of its fields.
+    /// Surveys by default; --execute acts
     Erasure {
         #[command(subcommand)]
         action: AdminErasureAction,
@@ -1768,6 +1793,28 @@ pub enum AdminErasureAction {
         blocks: Vec<uuid::Uuid>,
         /// Scrub the history. Without it, the command only surveys
         #[arg(long)]
+        execute: bool,
+    },
+    /// Scrub the history of one field of a resource (its title, its origin URI, or a property
+    /// family) while the resource survives. With no --field, list the fields and property families
+    /// to choose from: handles, counts, dates, profile ids and the sensitivity sweep's flags, never
+    /// a key or a value. Today's value is kept unless --clear says it is part of the leak
+    Field {
+        /// The resource (UUID or decorated ref)
+        resource: String,
+        /// The field: title, origin_uri, property (with --family) or properties (every family's
+        /// prior history; never cleared). Without it, the command lists the families
+        #[arg(long, value_enum)]
+        field: Option<CliScrubField>,
+        /// The property family's handle, from the listing. Only with --field property
+        #[arg(long, requires = "field")]
+        family: Option<uuid::Uuid>,
+        /// Today's value is part of the leak: clear it first, then redact every value the field
+        /// held. Without it, today's value is kept and only earlier values are redacted
+        #[arg(long, requires = "field")]
+        clear: bool,
+        /// Scrub the field. Without it, the command only surveys
+        #[arg(long, requires = "field")]
         execute: bool,
     },
 }

@@ -698,7 +698,7 @@ pub async fn promote_admin(
 
     // A machine principal never governs (ruled 2026-10-09): promotion writes a team `owner` row
     // and a governance grant, and the database refuses both for a machine
-    // (20261017100000_machines_never_govern.sql). Refuse here first, readably.
+    // (20261019100000_machines_never_govern.sql). Refuse here first, readably.
     if crate::services::machine_client_service::is_machine_profile(
         pool,
         ProfileId::from(profile_id),

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT to_jsonb(f) - 'n' AS \"row!: serde_json::Value\"\n             FROM resource_field_scrub_families($1) WITH ORDINALITY AS f(field, family, events, live,\n                  unset, first_seen, first_by, value_type, n)\n            ORDER BY f.n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "row!: serde_json::Value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "23af1ea815756957548e93e9bb9628c4ead9e7488d0dc5899acfde4b7c5aef0e"
+}

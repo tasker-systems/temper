@@ -21,9 +21,10 @@ use crate::ids::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 // The erasure family's wire shapes live in temper-core (every wire type does); the ledger payloads
-// below embed four of them, re-exported here so `payloads::` stays a complete vocabulary.
+// below embed some of them, re-exported here so `payloads::` stays a complete vocabulary.
 pub use temper_core::types::erasure::{
-    ErasureAct, ErasureTargetOutcome, RedactedEventFields, ResourceErasureRefusalReason,
+    ErasureAct, ErasureTargetOutcome, RecordedRefusalReason, RedactedEventFields,
+    ResourceErasureRefusalReason, ScrubFieldKind, ScrubbedField,
 };
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::property_owner::PropertyOwner;
@@ -1654,7 +1655,7 @@ pub struct ResourceErasureRefused {
     /// Who attempted the act.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor: Option<ProfileId>,
-    pub reason: ResourceErasureRefusalReason,
+    pub reason: RecordedRefusalReason,
     /// The reason's evidence, e.g. the task that owns map-grain charter erasure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
@@ -1689,6 +1690,34 @@ pub struct BlockHistoryScrubbed {
     /// `ingest_state = 'cancelled'`; absent means the ingest state was untouched.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cancelled_ingest: bool,
+}
+
+/// `resource_scrubbed` — the field scrub (field-grain scrub spec S1, S4): every prior value of a
+/// resource's title, origin URI or one property family (or every family's prior history) redacted
+/// from the ledger and the projection, on a resource that survives. With `cleared`, today's value
+/// was cleared too, by ordinary events appended before this one in the act's transaction.
+///
+/// Keyed `subject_table` (`kb_resources`) / `subject_id`, never `resource_id`, and the family by
+/// `field.family`, never `event_id` (the D1 join-key rule). It never carries a top-level `owner`:
+/// `_resource_erasure_trail_scope` joins on `payload->'owner'->>'id'`. Paths only, never values or
+/// key text: the record of a redaction must not carry what was redacted.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ResourceScrubbed {
+    /// Always `kb_resources`.
+    pub subject_table: AnchorTable,
+    pub subject_id: Uuid,
+    /// The acting system admin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<ProfileId>,
+    /// The field scrubbed, and the property family's handle when the field is one family.
+    pub field: ScrubbedField,
+    /// True when the act also cleared today's value. Absent means today's value was kept.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cleared: bool,
+    /// The ledger paths this act redacted to their sentinels, in the shape `resource_erased` uses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub redacted_fields: Vec<RedactedEventFields>,
 }
 
 /// `subscription_delivery_disposed` — a steward's judgment on one routed event (S2 chunk C).
@@ -1877,7 +1906,7 @@ impl FoldDisposition {
 }
 
 /// The 30 typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 33] = [
+pub const TYPED_EVENT_NAMES: [&str; 34] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -1911,6 +1940,7 @@ pub const TYPED_EVENT_NAMES: [&str; 33] = [
     "resource_erased",
     "resource_erasure_refused",
     "block_history_scrubbed",
+    "resource_scrubbed",
 ];
 
 /// FOREIGN event names — registered permissive (NULL `payload_schema`) because their body is a
@@ -1930,7 +1960,7 @@ pub const FOREIGN_EVENT_NAMES: [&str; 1] = ["webhook_received"];
 /// `20260718000020`). The migration stamps these on an existing registry; this const is what
 /// re-stamps them on a path that rebuilds the registry from scratch (`bootseed::seed_system` after
 /// a `reset_schema` truncate), so the classification cannot be lost to a reseed.
-pub const ADMIN_EVENT_NAMES: [&str; 11] = [
+pub const ADMIN_EVENT_NAMES: [&str; 12] = [
     "admin_ledger_opened",
     "grant_created",
     "grant_revoked",
@@ -1942,6 +1972,7 @@ pub const ADMIN_EVENT_NAMES: [&str; 11] = [
     "resource_erased",
     "resource_erasure_refused",
     "block_history_scrubbed",
+    "resource_scrubbed",
 ];
 
 /// The event names classified `kb_event_types.category = 'system'` — configuration acts, which are
@@ -2064,6 +2095,11 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 }
                 "block_history_scrubbed" => {
                     serde_json::from_value::<BlockHistoryScrubbed>(r.payload.clone())?;
+                }
+                // The field scrub's record (field-grain scrub spec S4), written by
+                // `resource_field_scrub_execute`.
+                "resource_scrubbed" => {
+                    serde_json::from_value::<ResourceScrubbed>(r.payload.clone())?;
                 }
                 // Unlisted types (e.g. taxonomy entries no write path emits yet) are intentionally
                 // not roundtripped here; add an arm when a write path begins emitting one.
@@ -2263,7 +2299,7 @@ mod tests {
             subject_table: AnchorTable::Resources,
             subject_id: Uuid::now_v7(),
             actor: Some(ProfileId::from(Uuid::now_v7())),
-            reason: ResourceErasureRefusalReason::CharterResource,
+            reason: RecordedRefusalReason::CharterResource,
             detail: Some("map-grain erasure: task 01a0e960-0ca2-7f42-b33e-1ed19b024e6b".into()),
             act: None,
             blocks: vec![],
@@ -2312,7 +2348,7 @@ mod tests {
             subject_table: AnchorTable::Resources,
             subject_id: Uuid::now_v7(),
             actor: Some(ProfileId::from(Uuid::now_v7())),
-            reason: ResourceErasureRefusalReason::AlreadyErased,
+            reason: RecordedRefusalReason::AlreadyErased,
             detail: None,
             act: Some(ErasureAct::BlockHistoryScrub),
             blocks: vec![Uuid::now_v7(), Uuid::now_v7()],
@@ -2325,6 +2361,150 @@ mod tests {
             serde_json::from_value::<ResourceErasureRefused>(v).unwrap(),
             refused
         );
+    }
+
+    /// The field scrub's record (field-grain scrub spec S1, S4): `field` names the field by kind,
+    /// and a property family by its handle under `family`, never by `event_id`; `cleared` is
+    /// present only when the act cleared today's value too.
+    #[test]
+    fn resource_scrubbed_round_trips_with_and_without_cleared_and_family() {
+        let family = EventId::from(Uuid::now_v7());
+        let cleared_family = ResourceScrubbed {
+            subject_table: AnchorTable::Resources,
+            subject_id: Uuid::now_v7(),
+            actor: Some(ProfileId::from(Uuid::now_v7())),
+            field: ScrubbedField {
+                kind: ScrubFieldKind::Property,
+                family: Some(family),
+            },
+            cleared: true,
+            redacted_fields: vec![RedactedEventFields {
+                event: EventId::from(Uuid::now_v7()),
+                paths: vec!["key".into(), "value".into()],
+            }],
+        };
+        let v = serde_json::to_value(&cleared_family).unwrap();
+        assert_eq!(v["subject_table"], "kb_resources");
+        assert_eq!(v["field"]["kind"], "property");
+        assert_eq!(v["field"]["family"], serde_json::to_value(family).unwrap());
+        assert_eq!(v["cleared"], true);
+        assert_eq!(
+            serde_json::from_value::<ResourceScrubbed>(v).unwrap(),
+            cleared_family
+        );
+
+        let kept_title = ResourceScrubbed {
+            subject_table: AnchorTable::Resources,
+            subject_id: Uuid::now_v7(),
+            actor: None,
+            field: ScrubbedField {
+                kind: ScrubFieldKind::Title,
+                family: None,
+            },
+            cleared: false,
+            redacted_fields: vec![RedactedEventFields {
+                event: EventId::from(Uuid::now_v7()),
+                paths: vec!["title".into()],
+            }],
+        };
+        let v = serde_json::to_value(&kept_title).unwrap();
+        assert_eq!(v["field"]["kind"], "title");
+        assert!(
+            v["field"].get("family").is_none(),
+            "a field with no family handle omits it"
+        );
+        assert!(v.get("cleared").is_none(), "keep mode omits `cleared`");
+        let back: ResourceScrubbed = serde_json::from_value(v).unwrap();
+        assert!(!back.cleared, "an absent `cleared` reads as keep mode");
+        assert_eq!(back, kept_title);
+    }
+
+    #[test]
+    fn scrub_field_kinds_serialize_snake_case() {
+        for (kind, name) in [
+            (ScrubFieldKind::Title, "title"),
+            (ScrubFieldKind::OriginUri, "origin_uri"),
+            (ScrubFieldKind::Property, "property"),
+            (ScrubFieldKind::Properties, "properties"),
+        ] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), name);
+            assert_eq!(
+                serde_json::from_value::<ScrubFieldKind>(serde_json::json!(name)).unwrap(),
+                kind
+            );
+        }
+    }
+
+    /// The D1 join-key rule for the field scrub: no trail join key anywhere, and no top-level
+    /// `owner`, because `_resource_erasure_trail_scope` joins on `payload->'owner'->>'id'`.
+    #[test]
+    fn resource_scrubbed_carries_no_trail_join_key_and_no_owner() {
+        let scrubbed = ResourceScrubbed {
+            subject_table: AnchorTable::Resources,
+            subject_id: Uuid::now_v7(),
+            actor: Some(ProfileId::from(Uuid::now_v7())),
+            field: ScrubbedField {
+                kind: ScrubFieldKind::Property,
+                family: Some(EventId::from(Uuid::now_v7())),
+            },
+            cleared: true,
+            redacted_fields: vec![RedactedEventFields {
+                event: EventId::from(Uuid::now_v7()),
+                paths: vec!["key".into()],
+            }],
+        };
+        let v = serde_json::to_value(&scrubbed).unwrap();
+        no_trail_key(&v, "resource_scrubbed");
+        assert!(
+            v.get("owner").is_none(),
+            "resource_scrubbed carries no top-level `owner`"
+        );
+    }
+
+    #[test]
+    fn field_scrub_refusal_round_trips_each_new_reason() {
+        for (reason, name) in [
+            (
+                RecordedRefusalReason::SentinelCollision,
+                "sentinel_collision",
+            ),
+            (
+                RecordedRefusalReason::ProjectionDisagrees,
+                "projection_disagrees",
+            ),
+        ] {
+            let refused = ResourceErasureRefused {
+                subject_table: AnchorTable::Resources,
+                subject_id: Uuid::now_v7(),
+                actor: Some(ProfileId::from(Uuid::now_v7())),
+                reason,
+                detail: None,
+                act: Some(ErasureAct::FieldScrub),
+                blocks: vec![],
+            };
+            let v = serde_json::to_value(&refused).unwrap();
+            assert_eq!(v["act"], "field_scrub");
+            assert_eq!(v["reason"], name);
+            assert!(v.get("blocks").is_none());
+            no_trail_key(&v, "resource_erasure_refused (field scrub)");
+            assert_eq!(
+                serde_json::from_value::<ResourceErasureRefused>(v).unwrap(),
+                refused
+            );
+        }
+    }
+
+    #[test]
+    fn a_refusal_without_act_reads_as_erasure_whatever_its_reason() {
+        for reason in ["sentinel_collision", "projection_disagrees"] {
+            let v = serde_json::json!({
+                "subject_table": "kb_resources",
+                "subject_id": Uuid::now_v7(),
+                "reason": reason,
+            });
+            let refused: ResourceErasureRefused = serde_json::from_value(v).unwrap();
+            assert_eq!(refused.act, None);
+        }
     }
 
     #[test]

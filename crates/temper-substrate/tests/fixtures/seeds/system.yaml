@@ -73,6 +73,10 @@ event_types:
   - resource_erased
   - resource_erasure_refused
   - block_history_scrubbed
+  # The field scrub's record (field-grain scrub spec S4) — the same posture: TYPED, `admin`,
+  # NULL-anchored. A reset+seed_system system MUST register it or the act, and the replay of any
+  # ledger that carries one, fails "event_type resource_scrubbed not seeded".
+  - resource_scrubbed
   # The key-grain property delete verb (2026-09-21), added by migration 20260921000010 — a
   # later migration than the canonical seed, TYPED-struct but permissive (NULL payload_schema,
   # the property_set / property_retracted precedent, so no snapshot fixture); a

@@ -68,8 +68,9 @@ pub enum EventKind {
     /// an explicit `null` value in an update's `open_meta`. Registered permissive (NULL
     /// `payload_schema`) by the `property_unset_event` migration, the `property_set` /
     /// `property_retracted` precedent. Fires from `SeedAction::PropertyUnset`; projected by
-    /// the owner-bound fold in `project_property_unset`, which replay re-runs (the payload
-    /// carries the key, so every replay folds the same key's live set).
+    /// the owner-bound fold in `_project_property_unset` (through `project_property_unset`),
+    /// which replay re-runs (the payload carries the key, so every replay folds the same key's
+    /// live set).
     PropertyUnset,
     /// One data artifact committed to a resource (spec 2026-08-20). The payload carries the
     /// content HASH; the bytes ride a sidecar into `kb_data_artifact_content`.
@@ -156,6 +157,10 @@ pub enum EventKind {
     /// The block history scrub (spec 2026-09-28, D11): prior revisions and non-current chunks of
     /// a live resource's blocks emptied. Same `admin` / NULL-anchored posture.
     BlockHistoryScrubbed,
+    /// The field scrub (field-grain scrub spec S4): every prior value of a surviving resource's
+    /// title, origin URI or property family redacted, and today's value too when cleared. Same
+    /// `admin` / NULL-anchored posture.
+    ResourceScrubbed,
     /// An auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.2).
     /// Append-only — fires `citation_audited`, projected by `_project_citation_audited` into
     /// `kb_citation_audits` with no supersession. Registered permissive (NULL `payload_schema`),
@@ -246,6 +251,7 @@ impl EventKind {
             EventKind::ResourceErased => "resource_erased",
             EventKind::ResourceErasureRefused => "resource_erasure_refused",
             EventKind::BlockHistoryScrubbed => "block_history_scrubbed",
+            EventKind::ResourceScrubbed => "resource_scrubbed",
             EventKind::CitationAudited => "citation_audited",
             EventKind::BlobCommitted => "blob_committed",
             EventKind::ResourceReblocked => "resource_reblocked",
@@ -305,6 +311,7 @@ impl EventKind {
             "resource_erased" => EventKind::ResourceErased,
             "resource_erasure_refused" => EventKind::ResourceErasureRefused,
             "block_history_scrubbed" => EventKind::BlockHistoryScrubbed,
+            "resource_scrubbed" => EventKind::ResourceScrubbed,
             "citation_audited" => EventKind::CitationAudited,
             "blob_committed" => EventKind::BlobCommitted,
             "resource_reblocked" => EventKind::ResourceReblocked,
@@ -442,8 +449,8 @@ pub enum SeedAction<'a> {
         emitter: EntityId,
     },
     /// Unset one property KEY on a resource — the key-grain delete verb. No SQL mutation
-    /// function: the event appends through the shared `_event_append` chokepoint and the
-    /// projection runs in Rust (`project_property_unset`), the `PropertyRetract` shape.
+    /// function: the event appends through the shared `_event_append` chokepoint, then
+    /// `project_property_unset` runs the projection, the SQL function `_project_property_unset`.
     /// Idempotent: zero live rows (absent or already-unset key) folds nothing and succeeds —
     /// delete semantics, and a modify-gated caller can already read the meta, so a silent
     /// no-op discloses nothing a read would not.
@@ -1035,60 +1042,25 @@ pub(crate) async fn project_property_retracted(
     Ok(res.rows_affected())
 }
 
-/// The projection half of `property_unset` — the key-grain delete verb's fold, with no SQL
-/// mutation function (fire and replay share THIS body, the `project_property_retracted`
-/// shape). Folds every live row for `(owner, property_key)` — the same predicate
-/// `_project_property_set` folds under (20260730000010, its newest definition), minus the
-/// insert. The FTS rebuild rides here under the same gate `_project_property_set` applies —
-/// owner table read from the payload, the same keys — because folding the last
-/// `keywords`/`descriptor`/`tags` row must not leave a stale search vector behind, and the
-/// rebuild runs AFTER the fold so it reads the post-fold live set. Idempotent under replay —
-/// a second application folds zero rows and the rebuild is a pure refresh.
-///
-/// The write guard runs first on the same connection (spec 2026-09-28 D13): the owning resource
-/// is locked `FOR KEY SHARE` and an erased one refuses the unset.
+/// The projection of `property_unset` — the key-grain delete verb's fold. The body is the SQL
+/// function `_project_property_unset` (migration 20261018100000); this is its one Rust caller,
+/// which the fire path and replay both reach, so every projection of the event runs that one body.
+/// It runs the write guard first (spec 2026-09-28 D13: the owning resource is locked
+/// `FOR KEY SHARE` and an erased one refuses the unset), then folds every live row for
+/// `(owner, property_key)` — the predicate `_project_property_set` folds under, minus the
+/// insert — then rebuilds the search vector when the key is `keywords`, `descriptor` or `tags`,
+/// so folding the last such row leaves no stale vector. Returns the number of rows folded.
+/// Idempotent under replay — a second application folds zero rows and the rebuild is a refresh.
 pub(crate) async fn project_property_unset(
     conn: &mut sqlx::PgConnection,
     event_id: Uuid,
     payload: &serde_json::Value,
 ) -> Result<u64> {
-    sqlx::query!(
-        "SELECT _resource_write_guard_owner('kb_resources', ($1::jsonb->'owner'->>'id')::uuid)",
-        payload,
-    )
-    .execute(&mut *conn)
-    .await?;
-    let res = sqlx::query!(
-        "UPDATE kb_properties \
-         SET is_folded = true, last_event_id = $1 \
-         WHERE owner_table = 'kb_resources' \
-           AND owner_id = ($2::jsonb->'owner'->>'id')::uuid \
-           AND property_key = ($2::jsonb->>'property_key') \
-           AND NOT is_folded",
-        event_id,
-        payload,
-    )
-    .execute(&mut *conn)
-    .await?;
-    let key = payload
-        .get("property_key")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    let owner_is_resource = payload
-        .pointer("/owner/table")
-        .and_then(|v| v.as_str())
-        .is_some_and(|t| t == "kb_resources");
-    if owner_is_resource && (key == "keywords" || key == "descriptor" || key == "tags") {
-        let owner: Uuid = payload
-            .pointer("/owner/id")
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse().ok())
-            .context("property_unset payload carries no owner id")?;
-        sqlx::query!("SELECT _rebuild_resource_search_vector($1)", owner)
-            .execute(&mut *conn)
-            .await?;
-    }
-    Ok(res.rows_affected())
+    let folded = sqlx::query_scalar!("SELECT _project_property_unset($1, $2)", event_id, payload,)
+        .fetch_one(&mut *conn)
+        .await?
+        .context("_project_property_unset returned null")?;
+    u64::try_from(folded).context("_project_property_unset returned a negative row count")
 }
 
 /// Fire one seeding action: dispatch it to its SQL function (event + projection, one txn) and return the

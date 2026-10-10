@@ -49,7 +49,7 @@ use crate::services::{access_service, team_service};
 /// registration reach, `team_service::add_member` / `change_role`, `access_service::promote_admin`,
 /// and its own personal team, which it holds as `member` like any other (ruled 2026-10-09). The
 /// services refuse through [`refuse_machine_above_ceiling`]; the database refuses the same rows
-/// underneath them (`20261017100000_machines_never_govern.sql`), and caps a profile's existing
+/// underneath them (`20261019100000_machines_never_govern.sql`), and caps a profile's existing
 /// roles the moment it becomes a machine — which is how registration's personal-team `owner` row,
 /// written before the client row exists, comes out as `member`.
 const MAX_MACHINE_TEAM_ROLE: TeamRole = TeamRole::Member;

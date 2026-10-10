@@ -1222,6 +1222,26 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                                 )
                                 .await
                             }
+                            AdminErasureAction::Field {
+                                resource,
+                                field,
+                                family,
+                                clear,
+                                execute,
+                            } => {
+                                temper_cli::commands::admin_erasure::field_remote(
+                                    client,
+                                    &resource,
+                                    temper_cli::commands::admin_erasure::FieldScrubArgs {
+                                        field: field.map(Into::into),
+                                        family,
+                                        clear,
+                                        execute,
+                                    },
+                                    output_format,
+                                )
+                                .await
+                            }
                         }
                     })
                 })

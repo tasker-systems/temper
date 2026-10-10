@@ -206,6 +206,18 @@ lib/temper/generated/models/facet_ack.rb
 lib/temper/generated/models/facet_predicate.rb
 lib/temper/generated/models/facet_retract_ack.rb
 lib/temper/generated/models/facet_set_request.rb
+lib/temper/generated/models/field_scrub_clearing_event.rb
+lib/temper/generated/models/field_scrub_execute_response.rb
+lib/temper/generated/models/field_scrub_execute_response_one_of.rb
+lib/temper/generated/models/field_scrub_execute_response_one_of1.rb
+lib/temper/generated/models/field_scrub_families.rb
+lib/temper/generated/models/field_scrub_families_request.rb
+lib/temper/generated/models/field_scrub_family.rb
+lib/temper/generated/models/field_scrub_held_paths.rb
+lib/temper/generated/models/field_scrub_plan.rb
+lib/temper/generated/models/field_scrub_refusal_reason.rb
+lib/temper/generated/models/field_scrub_request_body.rb
+lib/temper/generated/models/field_scrub_survey.rb
 lib/temper/generated/models/finalize_payload.rb
 lib/temper/generated/models/fingerprint_match.rb
 lib/temper/generated/models/fold_relationship_request.rb
@@ -389,6 +401,8 @@ lib/temper/generated/models/reweight_relationship_request.rb
 lib/temper/generated/models/rotate_secret_request.rb
 lib/temper/generated/models/score_kind.rb
 lib/temper/generated/models/scoring.rb
+lib/temper/generated/models/scrub_field_kind.rb
+lib/temper/generated/models/scrubbed_field.rb
 lib/temper/generated/models/search_params.rb
 lib/temper/generated/models/search_reason.rb
 lib/temper/generated/models/search_response.rb

@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResourceScrubbed",
+  "description": "`resource_scrubbed` — the field scrub (field-grain scrub spec S1, S4): every prior value of a\nresource's title, origin URI or one property family (or every family's prior history) redacted\nfrom the ledger and the projection, on a resource that survives. With `cleared`, today's value\nwas cleared too, by ordinary events appended before this one in the act's transaction.\n\nKeyed `subject_table` (`kb_resources`) / `subject_id`, never `resource_id`, and the family by\n`field.family`, never `event_id` (the D1 join-key rule). It never carries a top-level `owner`:\n`_resource_erasure_trail_scope` joins on `payload->'owner'->>'id'`. Paths only, never values or\nkey text: the record of a redaction must not carry what was redacted.",
+  "type": "object",
+  "properties": {
+    "actor": {
+      "description": "The acting system admin.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cleared": {
+      "description": "True when the act also cleared today's value. Absent means today's value was kept.",
+      "type": "boolean"
+    },
+    "field": {
+      "description": "The field scrubbed, and the property family's handle when the field is one family.",
+      "$ref": "#/$defs/ScrubbedField"
+    },
+    "redacted_fields": {
+      "description": "The ledger paths this act redacted to their sentinels, in the shape `resource_erased` uses.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RedactedEventFields"
+      }
+    },
+    "subject_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "subject_table": {
+      "description": "Always `kb_resources`.",
+      "$ref": "#/$defs/AnchorTable"
+    }
+  },
+  "required": [
+    "subject_table",
+    "subject_id",
+    "field"
+  ],
+  "$defs": {
+    "AnchorTable": {
+      "description": "A polymorphic anchor/endpoint reference. Serializes table names exactly as the DDL spells them.",
+      "type": "string",
+      "enum": [
+        "kb_contexts",
+        "kb_cogmaps",
+        "kb_resources",
+        "kb_edges",
+        "kb_content_blocks",
+        "kb_teams",
+        "kb_profiles",
+        "kb_connections",
+        "kb_machine_clients",
+        "kb_blobs",
+        "kb_events"
+      ]
+    },
+    "EventId": {
+      "description": "A `kb_events.id` value. Always UUIDv7 (time-sortable).",
+      "type": "string",
+      "format": "uuid"
+    },
+    "ProfileId": {
+      "description": "A `kb_profiles.id` value.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "RedactedEventFields": {
+      "description": "The ledger paths of one event: redacted (`redacted_fields`) or named-and-unreached\n(`ledger_remainder`). ONE shape for both, so the cut-2 completion pass derives what it redacts\nfrom what cut 1 recorded without translating (resource erasure spec D12). The event is keyed\n`event`, never `event_id` — no trail join-key shape rides an admin payload (D1). Paths only,\nnever values: the record of a redaction must not carry what was redacted.",
+      "type": "object",
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/EventId"
+        },
+        "paths": {
+          "description": "JSON paths within that event's `payload` (or `metadata`), e.g. `title`, `origin_uri`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "event",
+        "paths"
+      ]
+    },
+    "ScrubFieldKind": {
+      "description": "The field a field scrub names. A field, never a value: no request or record carries the text\nbeing scrubbed.",
+      "oneOf": [
+        {
+          "description": "The resource's title.",
+          "type": "string",
+          "const": "title"
+        },
+        {
+          "description": "The resource's origin URI.",
+          "type": "string",
+          "const": "origin_uri"
+        },
+        {
+          "description": "One resource-owned property family, named by its handle.",
+          "type": "string",
+          "const": "property"
+        },
+        {
+          "description": "Every resource-owned property family's prior history. Never cleared.",
+          "type": "string",
+          "const": "properties"
+        }
+      ]
+    },
+    "ScrubbedField": {
+      "description": "The field a field scrub acted on. `family` is the handle of a property family: the id of the\nfirst event that still carries the family's key text on the resource. It is present only for\n[`ScrubFieldKind::Property`]. Keyed `family`, never `event_id`: no trail join-key shape rides\nan admin payload (resource erasure D1).",
+      "type": "object",
+      "properties": {
+        "family": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/ScrubFieldKind"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  }
+}

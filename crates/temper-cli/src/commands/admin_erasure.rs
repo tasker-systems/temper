@@ -1,5 +1,5 @@
 //! `temper admin erasure` — the erasure family's operator acts: erase a resource, erase a
-//! principal, scrub a resource's block history. System admin only.
+//! principal, scrub a resource's block history, scrub one field of a resource. System admin only.
 //!
 //! Each act surveys by default: it asks the survey door what the act would do and records
 //! nothing. Only `--execute` acts, and then once: the client never replays a write, and an erasure
@@ -14,14 +14,19 @@
 //!
 //! The bearer token comes from the token store, as for every command. Nothing here takes it as an
 //! argument or prints it.
+//!
+//! The field scrub has a third, read-only form: with no `--field` it lists the resource's fields and
+//! property families, so the operator can pick a family by its handle. The listing carries handles,
+//! counts, dates, profile ids and flags, never a key or a value.
 
 use std::io::Write;
 
 use crate::error::{Result, TemperError};
 use temper_core::types::erasure::{
     BlockHistoryScrubExecuteResponse, BlockHistoryScrubRequestBody, ErasureExecuteRequest,
-    ErasureSurveyRequest, ResourceErasureExecuteRequest, ResourceErasureExecuteResponse,
-    ResourceErasureRefusalReason, ResourceErasureSurveyRequest,
+    ErasureSurveyRequest, FieldScrubExecuteResponse, FieldScrubFamiliesRequest,
+    FieldScrubRequestBody, ResourceErasureExecuteRequest, ResourceErasureExecuteResponse,
+    ResourceErasureSurveyRequest, ScrubFieldKind,
 };
 
 fn parse_resource(resource: &str) -> Result<uuid::Uuid> {
@@ -39,9 +44,13 @@ fn emit<T: serde::Serialize>(
     writeln!(out, "{rendered}").map_err(|e| TemperError::Api(format!("write answer: {e}")))
 }
 
-/// The error a refused act exits with, after its answer has been printed.
-fn refused(act: &str, reason: ResourceErasureRefusalReason, detail: Option<&str>) -> TemperError {
-    let reason = serde_json::to_value(reason)
+/// The error a refused act exits with, after its answer has been printed. The reason is either
+/// door vocabulary: the erasure doors' or the field scrub's.
+fn refused<R>(act: &str, reason: R, detail: Option<&str>) -> TemperError
+where
+    R: serde::Serialize + std::fmt::Debug,
+{
+    let reason = serde_json::to_value(&reason)
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_else(|| format!("{reason:?}"));
@@ -211,9 +220,73 @@ async fn block_history_to(
     }
 }
 
+/// The flags of `temper admin erasure field`, past the resource.
+#[derive(Debug, Clone, Copy)]
+pub struct FieldScrubArgs {
+    /// The field; `None` lists the families instead.
+    pub field: Option<ScrubFieldKind>,
+    pub family: Option<uuid::Uuid>,
+    pub clear: bool,
+    pub execute: bool,
+}
+
+/// `temper admin erasure field` — list the resource's fields and families (no `--field`), survey
+/// the scrub of one, or (`--execute`) scrub it.
+pub async fn field_remote(
+    client: &temper_client::TemperClient,
+    resource: &str,
+    args: FieldScrubArgs,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    field_to(client, resource, args, fmt, &mut std::io::stdout()).await
+}
+
+async fn field_to(
+    client: &temper_client::TemperClient,
+    resource: &str,
+    args: FieldScrubArgs,
+    fmt: crate::format::OutputFormat,
+    out: &mut impl Write,
+) -> Result<()> {
+    let resource = parse_resource(resource)?;
+    let admin = client.admin();
+    let Some(field) = args.field else {
+        let listing = admin
+            .list_resource_field_families(&FieldScrubFamiliesRequest { resource })
+            .await
+            .map_err(crate::actions::runtime::client_err_to_temper)?;
+        return emit(&listing, fmt, out);
+    };
+    let body = FieldScrubRequestBody {
+        resource,
+        field,
+        family: args.family,
+        clear: args.clear,
+    };
+    if !args.execute {
+        let survey = admin
+            .survey_resource_field_scrub(&body)
+            .await
+            .map_err(crate::actions::runtime::client_err_to_temper)?;
+        return emit(&survey, fmt, out);
+    }
+    let answer = admin
+        .scrub_resource_field(&body)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    emit(&answer, fmt, out)?;
+    match answer {
+        FieldScrubExecuteResponse::Completed { .. } => Ok(()),
+        FieldScrubExecuteResponse::Refused { reason, detail, .. } => {
+            Err(refused("field scrub", reason, detail.as_deref()))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use temper_core::types::erasure::ResourceErasureRefusalReason;
 
     #[test]
     fn a_refusal_names_the_act_and_the_wire_spelling_of_its_reason() {
@@ -412,6 +485,93 @@ mod tests {
         assert!(matches!(err, TemperError::Conflict(_)));
     }
 
+    fn field_args(field: Option<ScrubFieldKind>, execute: bool) -> FieldScrubArgs {
+        FieldScrubArgs {
+            field,
+            family: None,
+            clear: false,
+            execute,
+        }
+    }
+
+    /// FAILS IF a refused field scrub exits zero, or its reason is not the field scrub's own
+    /// wire spelling.
+    #[tokio::test]
+    async fn a_refused_field_scrub_prints_its_answer_and_exits_as_a_conflict() {
+        let answer = serde_json::json!({
+            "status": "refused",
+            "request_reference": uuid::Uuid::now_v7(),
+            "event_id": uuid::Uuid::now_v7(),
+            "reason": "projection_disagrees",
+            "detail": null,
+            "field": { "kind": "title" },
+        });
+        let client = client_answering_on("/api/admin/resources/field-scrub", answer);
+        let mut out = Vec::new();
+        let err = field_to(
+            &client,
+            &uuid::Uuid::now_v7().to_string(),
+            field_args(Some(ScrubFieldKind::Title), true),
+            crate::format::OutputFormat::Json,
+            &mut out,
+        )
+        .await
+        .expect_err("a refusal is not success");
+        assert!(
+            matches!(err, TemperError::Conflict(ref m) if m.starts_with("field scrub refused (projection_disagrees)"))
+        );
+        assert!(String::from_utf8(out)
+            .expect("utf-8")
+            .contains("projection_disagrees"));
+    }
+
+    /// Without `--field` the command reaches the listing door and nothing else: the stub mounts
+    /// only the listing, so a stray survey or act would 404.
+    #[tokio::test]
+    async fn without_a_field_it_lists_and_never_surveys_or_acts() {
+        let resource = uuid::Uuid::now_v7();
+        let client = client_answering_on(
+            "/api/admin/resources/field-scrub/families",
+            serde_json::json!({ "resource": resource, "families": [] }),
+        );
+        let mut out = Vec::new();
+        field_to(
+            &client,
+            &resource.to_string(),
+            field_args(None, false),
+            crate::format::OutputFormat::Json,
+            &mut out,
+        )
+        .await
+        .expect("the listing answers");
+        assert!(String::from_utf8(out).expect("utf-8").contains("families"));
+    }
+
+    /// With `--field` and no `--execute` the command reaches the survey door and never the act.
+    #[tokio::test]
+    async fn with_a_field_and_no_execute_it_surveys_and_never_acts() {
+        let resource = uuid::Uuid::now_v7();
+        let client = client_answering_on(
+            "/api/admin/resources/field-scrub/survey",
+            serde_json::json!({
+                "resource": resource,
+                "refusal": "already_erased",
+                "detail": null,
+                "families": null,
+                "plan": null,
+            }),
+        );
+        field_to(
+            &client,
+            &resource.to_string(),
+            field_args(Some(ScrubFieldKind::OriginUri), false),
+            crate::format::OutputFormat::Json,
+            &mut Vec::new(),
+        )
+        .await
+        .expect("the survey answers; a survey's refusal is not an error");
+    }
+
     mod argv {
         use clap::{CommandFactory, Parser};
 
@@ -447,13 +607,24 @@ mod tests {
                     "--block",
                     id.as_str(),
                 ],
+                vec!["temper", "admin", "erasure", "field", id.as_str()],
+                vec![
+                    "temper",
+                    "admin",
+                    "erasure",
+                    "field",
+                    id.as_str(),
+                    "--field",
+                    "title",
+                ],
             ];
             for args in bare {
                 use crate::cli::AdminErasureAction as A;
                 let execute = match act(&args).expect("a bare survey parses") {
                     A::Resource { execute, .. }
                     | A::Principal { execute, .. }
-                    | A::BlockHistory { execute, .. } => execute,
+                    | A::BlockHistory { execute, .. }
+                    | A::Field { execute, .. } => execute,
                 };
                 assert!(!execute, "`{}` would act", args.join(" "));
             }
@@ -494,6 +665,29 @@ mod tests {
             ]));
         }
 
+        /// FAILS IF the listing form can carry an act's flags: `--family`, `--clear` and
+        /// `--execute` each need `--field`, and `origin_uri` is spelled as the wire spells it.
+        #[test]
+        fn a_field_scrub_names_its_field_before_any_act_flag() {
+            let family = uuid::Uuid::now_v7().to_string();
+            let base = ["temper", "admin", "erasure", "field", "r"];
+            let with = |extra: &[&str]| parses(&[&base[..], extra].concat());
+            assert!(with(&[]), "the listing");
+            assert!(!with(&["--execute"]));
+            assert!(!with(&["--clear"]));
+            assert!(!with(&["--family", &family]));
+            assert!(with(&["--field", "origin_uri"]));
+            assert!(!with(&["--field", "origin-uri"]));
+            assert!(with(&[
+                "--field",
+                "property",
+                "--family",
+                &family,
+                "--clear",
+                "--execute"
+            ]));
+        }
+
         /// The bearer token rides the token store, never argv: no erasure command takes an
         /// argument that could carry it. FAILS IF a `--token`-like flag is added.
         #[test]
@@ -515,7 +709,7 @@ mod tests {
                     );
                 }
             }
-            assert_eq!(acts, 3, "resource, principal, block-history");
+            assert_eq!(acts, 4, "resource, principal, block-history, field");
         }
     }
 }

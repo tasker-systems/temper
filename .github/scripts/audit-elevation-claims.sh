@@ -227,6 +227,7 @@ claim crates/temper-api/src/handlers/cognitive_maps.rs 4 reconcile_regime,two_si
 claim crates/temper-api/src/handlers/connections.rs 13 connection,machine,require_manage_on_team,can_manage
 claim crates/temper-api/src/handlers/embed.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/erasure.rs 5 is_system_admin
+claim crates/temper-api/src/handlers/field_scrub.rs 8 is_system_admin
 claim crates/temper-api/src/handlers/machine_clients.rs 11 is_system_admin,machine,require_manage_on_team,can_manage
 claim crates/temper-api/src/openapi.rs 5 is_system_admin,machine,connection,subscription,read_gates,grant,ledger_subject
 claim crates/temper-api/src/handlers/resource_erasure.rs 5 is_system_admin

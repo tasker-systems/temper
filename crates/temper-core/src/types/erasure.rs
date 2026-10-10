@@ -1,9 +1,9 @@
-//! The erasure family's wire shapes — principal erasure, resource erasure, and the block-history
-//! scrub: the doors' requests and answers, and the ledger fragments both carry.
+//! The erasure family's wire shapes — principal erasure, resource erasure, the block-history
+//! scrub and the field scrub: the doors' requests and answers, and the ledger fragments they carry.
 //!
 //! These are temper-core's because they are wire types (every wire type lives here, so every
 //! client can name them without depending on the server crates). `temper_substrate::payloads`
-//! re-exports the four the ledger's event payloads embed, the way `temper_substrate::ids`
+//! re-exports the ones the ledger's event payloads embed, the way `temper_substrate::ids`
 //! re-exports the id newtypes.
 
 use serde::{Deserialize, Serialize};
@@ -31,7 +31,7 @@ pub struct ErasureTargetOutcome {
 /// from what cut 1 recorded without translating (resource erasure spec D12). The event is keyed
 /// `event`, never `event_id` — no trail join-key shape rides an admin payload (D1). Paths only,
 /// never values: the record of a redaction must not carry what was redacted.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct RedactedEventFields {
@@ -40,6 +40,8 @@ pub struct RedactedEventFields {
     pub paths: Vec<String>,
 }
 
+// The erasure and block history scrub doors answer in this enum. The ledger records refusals in
+// `RecordedRefusalReason`, which carries every value here and the field scrub's.
 /// The closed refusal vocabulary for `resource_erasure_refused` (resource erasure spec D5, D11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
@@ -61,6 +63,73 @@ pub enum ResourceErasureRefusalReason {
     AlreadyErased,
 }
 
+/// The refusal vocabulary the field scrub's doors answer with (field-grain scrub spec S4). Its own
+/// type, not new values of [`ResourceErasureRefusalReason`]: those doors' clients parse that enum,
+/// and a value they never saw would strand them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum FieldScrubRefusalReason {
+    /// A cogmap's telos/charter resource, as for the erasure.
+    CharterResource,
+    /// The resource is already erased: there is nothing left to scrub.
+    AlreadyErased,
+    /// The owner's ledger already names the text of one of the field scrub's sentinels. Writing
+    /// it could only make replay diverge, so the field scrub records this and changes nothing.
+    SentinelCollision,
+    /// In keep mode, the latest event carrying the title or origin URI disagrees with the
+    /// resource's projected value: an inversion inside a transaction, which the field scrub
+    /// refuses rather than resolves. Nothing changes.
+    ProjectionDisagrees,
+}
+
+/// The closed refusal vocabulary `resource_erasure_refused` records (resource erasure spec D5,
+/// D11; field-grain scrub spec S4): every value either act family's doors answer with. A ledger
+/// vocabulary only; no door answers in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum RecordedRefusalReason {
+    /// Retired: no path raises it. The value stays registered because removing one from a closed
+    /// vocabulary is not additive.
+    Unauthorized,
+    /// A cogmap's telos/charter resource: map-grain erasure is its own act, named in `detail`.
+    CharterResource,
+    /// Retired: no path raises it. The value stays registered because removing one from a closed
+    /// vocabulary is not additive.
+    IngestInFlight,
+    /// The resource is already erased. Nothing in the projection changes and no second
+    /// `resource_erased` is minted.
+    AlreadyErased,
+    /// The field scrub's sentinel text is already on the owner's ledger.
+    SentinelCollision,
+    /// The field scrub found the latest title or origin URI event disagreeing with the projection.
+    ProjectionDisagrees,
+}
+
+impl From<ResourceErasureRefusalReason> for RecordedRefusalReason {
+    fn from(reason: ResourceErasureRefusalReason) -> Self {
+        match reason {
+            ResourceErasureRefusalReason::Unauthorized => Self::Unauthorized,
+            ResourceErasureRefusalReason::CharterResource => Self::CharterResource,
+            ResourceErasureRefusalReason::IngestInFlight => Self::IngestInFlight,
+            ResourceErasureRefusalReason::AlreadyErased => Self::AlreadyErased,
+        }
+    }
+}
+
+impl From<FieldScrubRefusalReason> for RecordedRefusalReason {
+    fn from(reason: FieldScrubRefusalReason) -> Self {
+        match reason {
+            FieldScrubRefusalReason::CharterResource => Self::CharterResource,
+            FieldScrubRefusalReason::AlreadyErased => Self::AlreadyErased,
+            FieldScrubRefusalReason::SentinelCollision => Self::SentinelCollision,
+            FieldScrubRefusalReason::ProjectionDisagrees => Self::ProjectionDisagrees,
+        }
+    }
+}
+
 /// Which act a `resource_erasure_refused` event refuses. Absent on the payload reads as
 /// [`ErasureAct::Erasure`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +141,39 @@ pub enum ErasureAct {
     Erasure,
     /// The block history scrub.
     BlockHistoryScrub,
+    /// The field scrub: a resource's title, origin URI or property history redacted while the
+    /// resource survives.
+    FieldScrub,
+}
+
+/// The field a field scrub names. A field, never a value: no request or record carries the text
+/// being scrubbed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ScrubFieldKind {
+    /// The resource's title.
+    Title,
+    /// The resource's origin URI.
+    OriginUri,
+    /// One resource-owned property family, named by its handle.
+    Property,
+    /// Every resource-owned property family's prior history. Never cleared.
+    Properties,
+}
+
+/// The field a field scrub acted on. `family` is the handle of a property family: the id of the
+/// first event that still carries the family's key text on the resource. It is present only for
+/// [`ScrubFieldKind::Property`]. Keyed `family`, never `event_id`: no trail join-key shape rides
+/// an admin payload (resource erasure D1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct ScrubbedField {
+    pub kind: ScrubFieldKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<EventId>,
 }
 
 /// An edge touching the resource whose asserting principal is not the resource's owner.
@@ -384,5 +486,168 @@ pub enum BlockHistoryScrubExecuteResponse {
         /// `blocks`. Each is a block of the resource: the list is checked before a refusal is
         /// recorded.
         blocks: Vec<Uuid>,
+    },
+}
+
+/// The request the field scrub's execute and survey doors take (field-grain scrub spec S1, S2): the
+/// resource, the field by kind, the family's handle for `property`, and `clear`. No text: the field
+/// is named by its kind and a family by the id of the first event still carrying its key text,
+/// read from the family listing. `clear` is the operator's statement that today's value is part of
+/// the leak; absent, today's value is kept and only the field's prior history is redacted.
+/// `deny_unknown_fields`: the act's request reference is minted by the service, so a caller that
+/// sends one is refused, not ignored.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(deny_unknown_fields)]
+pub struct FieldScrubRequestBody {
+    pub resource: Uuid,
+    pub field: ScrubFieldKind,
+    /// The family's handle. Required for `property`, refused for every other field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<Uuid>,
+    /// Clear today's value first, then redact every value the field held. Refused for
+    /// `properties`: clear always names one field.
+    #[serde(default)]
+    pub clear: bool,
+}
+
+/// The family listing door's request: the resource and nothing else.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(deny_unknown_fields)]
+pub struct FieldScrubFamiliesRequest {
+    pub resource: Uuid,
+}
+
+/// One row of the family listing (field-grain scrub spec S1): the title, the origin URI, or one
+/// resource-owned property family. Structure only, never a key or a value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct FieldScrubFamily {
+    /// `title`, `origin_uri` or `property`.
+    pub field: ScrubFieldKind,
+    /// The family's handle, for `property`: the id of the first event still carrying its key text
+    /// (the `doc_type` family's is the resource's `resource_created`). Absent for the title and
+    /// origin URI, which need none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<EventId>,
+    /// How many events carry the field.
+    pub events: i32,
+    /// Some row the field's events asserted is live. Always true for the title and origin URI.
+    pub live: bool,
+    /// The family has a `property_unset`, so its key text up to the latest one is scrubbable in
+    /// keep mode.
+    pub unset: bool,
+    pub first_seen: chrono::DateTime<chrono::Utc>,
+    /// The profile behind the first event's emitter.
+    pub first_by: Option<ProfileId>,
+    /// The JSON type of the latest value the field carries; absent for a family only ever unset.
+    pub value_type: Option<String>,
+    /// The sensitivity sweep holds an open finding on a place of the field: a redactable path of one
+    /// of its events, or the projection's title, origin URI or one of the family's rows. A flag
+    /// confirms a leak; its absence never means the field is clean.
+    #[serde(default)]
+    pub flagged: bool,
+    /// The same, on today's place only: the title or origin URI, or a live row. A flagged current
+    /// value survives a scrub unless the request says `clear`.
+    #[serde(default)]
+    pub current_flagged: bool,
+    /// The sweep has read all of the resource with every enabled detector. The same on every row.
+    #[serde(default)]
+    pub covered: bool,
+}
+
+/// The family listing door's answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct FieldScrubFamilies {
+    pub resource: ResourceId,
+    /// The title, then the origin URI, then each property family by its handle. Empty for an erased
+    /// resource or a charter, which the act refuses before it reads a family.
+    pub families: Vec<FieldScrubFamily>,
+}
+
+/// Paths of one event the scrub holds back, and why: `current` (today's value, kept),
+/// `after_latest_unset` (key text after the family's latest unset) or `after_whole_facet_fold` (a
+/// facet event after the latest whole-facet fold). Paths only, never values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct FieldScrubHeldPaths {
+    pub event: EventId,
+    pub paths: Vec<String>,
+    pub why: String,
+}
+
+/// An event clear mode appends before it redacts (field-grain scrub spec S2): a
+/// `resource_updated` setting the placeholder title or origin URI, a `property_set` of `doc_type` to
+/// the placeholder type, or a `property_unset` of the family.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct FieldScrubClearingEvent {
+    pub event_type: String,
+    /// The path of that event the clear writes.
+    pub path: String,
+}
+
+/// The plan `resource_field_scrub_plan` computes (field-grain scrub spec S5): the act consumes the
+/// same computation. Event ids, row ids and paths only. In keep mode an empty `redacted_fields`
+/// means the field has nothing prior, and the act would answer 400.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct FieldScrubPlan {
+    /// The ledger paths the act would rewrite to their sentinels.
+    pub redacted_fields: Vec<RedactedEventFields>,
+    /// Today's value, kept (`why: current`).
+    pub kept: Vec<FieldScrubHeldPaths>,
+    /// Paths the act cannot reach, and why.
+    pub unreachable: Vec<FieldScrubHeldPaths>,
+    /// The folded `kb_properties` rows the act would rewrite to what replay projects.
+    pub folded_rows: Vec<PropertyId>,
+    /// The events clear mode would append first. Empty in keep mode.
+    pub clears: Vec<FieldScrubClearingEvent>,
+}
+
+/// The read-only survey. Exactly one of `refusal` and `plan` is present: `refusal` when the act
+/// would refuse, with `detail` for a charter; otherwise the `plan`. `families` is the listing,
+/// absent exactly when the resource is a charter or erased. Nothing is recorded either way.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct FieldScrubSurvey {
+    pub resource: ResourceId,
+    /// The refusal the act would record now.
+    pub refusal: Option<FieldScrubRefusalReason>,
+    /// The refusal's fixed evidence (a charter's map-grain task).
+    pub detail: Option<String>,
+    pub families: Option<Vec<FieldScrubFamily>>,
+    pub plan: Option<FieldScrubPlan>,
+}
+
+/// What the execute door's act did: a completion and a refusal are different answers, so the
+/// response is a tagged enum. A refusal here is an operator-facing one (`charter_resource`,
+/// `already_erased`, `sentinel_collision`, `projection_disagrees`); a caller who is not a system
+/// admin never reaches the act.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum FieldScrubExecuteResponse {
+    Completed {
+        /// The server-minted reference the operator cites.
+        request_reference: Uuid,
+        event_id: Uuid,
+        /// The field the act scrubbed, as its `resource_scrubbed` record names it.
+        field: ScrubbedField,
+        /// True when the act cleared today's value first.
+        cleared: bool,
+        /// The ledger paths the act rewrote to their sentinels.
+        redacted_fields: Vec<RedactedEventFields>,
+    },
+    Refused {
+        request_reference: Uuid,
+        event_id: Uuid,
+        reason: FieldScrubRefusalReason,
+        detail: Option<String>,
+        /// The field the refused act named. A family handle here is one of the resource's: the
+        /// handle is checked before a refusal is recorded.
+        field: ScrubbedField,
     },
 }

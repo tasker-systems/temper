@@ -133,7 +133,7 @@ BEGIN
 END $$;
 
 SELECT declare_migration(
-    20261017100000,
+    20261019100000,
     'additive',
     'Adds is_machine_profile(uuid) and three triggers: kb_team_members refuses a role above member '
     'for a machine profile; kb_principal_governance refuses a machine profile; a kb_machine_clients '

@@ -10,7 +10,7 @@
 //! where someone with authority over the team chose it — the explicit `teams` reach, bounded by
 //! `machine_authz`. Its personal team still sits under `temper-system`, so what reaches every
 //! member of the root through ancestry reaches the machine too. It holds that team as `member`,
-//! never `owner`: a machine never governs (`20261017100000_machines_never_govern.sql`).
+//! never `owner`: a machine never governs (`20261019100000_machines_never_govern.sql`).
 //!
 //! Authorization happens HERE, not in the handler (B2 D3): `provision` and `issue` resolve the
 //! caller's authority through `machine_authz` before opening the transaction, so a rejected
@@ -1221,7 +1221,7 @@ mod tests {
         );
     }
 
-    // ── A machine never governs (20261017100000_machines_never_govern.sql) ──────────────────
+    // ── A machine never governs (20261019100000_machines_never_govern.sql) ──────────────────
 
     /// The SQLSTATE a refusing trigger raises. Asserting it (not just "an error") is what makes a
     /// DB witness bite on its own trigger rather than on any failure.

@@ -67,6 +67,7 @@ fn payload_schemas_match_snapshots() {
     check::<p::ResourceErased>("resource_erased");
     check::<p::ResourceErasureRefused>("resource_erasure_refused");
     check::<p::BlockHistoryScrubbed>("block_history_scrubbed");
+    check::<p::ResourceScrubbed>("resource_scrubbed");
 }
 
 /// `EventContext` serializes an act's authorship, and nothing else, into `kb_events.metadata`.
@@ -152,12 +153,19 @@ fn the_migration_literal_matches_the_committed_fixture() {
             "20261003000210_block_history_scrub.sql",
             &[
                 "block_history_scrubbed.v1.schema.json",
-                "resource_erasure_refused.v1.schema.json",
+                SUPERSEDED, // resource_erasure_refused: 20261018100010
             ],
         ),
         (
             "20261004130000_resource_erasure_derived_vectors.sql",
             &["resource_erased.v1.schema.json"],
+        ),
+        (
+            "20261018100010_ledger_exception_second_authority.sql",
+            &[
+                "resource_scrubbed.v1.schema.json",
+                "resource_erasure_refused.v1.schema.json",
+            ],
         ),
     ] {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../migrations/");

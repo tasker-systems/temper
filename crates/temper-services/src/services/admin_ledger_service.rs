@@ -87,6 +87,8 @@ const ADMIN_EVENT_TYPES: &[&str] = &[
     "resource_erased",
     "resource_erasure_refused",
     "block_history_scrubbed",
+    // The field scrub's record (field-grain scrub spec S4): the same admin-only posture.
+    "resource_scrubbed",
 ];
 
 /// The §5 table, evaluated for one subject. Returns the event types `caller` may read about
