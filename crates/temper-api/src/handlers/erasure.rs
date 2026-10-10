@@ -124,6 +124,8 @@ pub async fn execute(
                 released: s.released,
             })
             .collect(),
+        resource_erasures: c.resource_erasures,
+        estate_stragglers: c.estate_stragglers,
     }))
 }
 
@@ -172,6 +174,8 @@ pub async fn survey(
                 released: s.released,
             })
             .collect(),
+        estate: prediction.estate,
+        resources: prediction.resources,
     }))
 }
 

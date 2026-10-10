@@ -18,10 +18,12 @@ import re  # noqa: F401
 import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
-from typing import Any, ClassVar, Dict, List
+from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from temper.generated.models.blob_strike_view import BlobStrikeView
 from temper.generated.models.erasure_target_outcome import ErasureTargetOutcome
+from temper.generated.models.estate_counts import EstateCounts
+from temper.generated.models.estate_resource_plan import EstateResourcePlan
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -32,10 +34,12 @@ class ErasureSurveyResponse(BaseModel):
     """ # noqa: E501
     already_erased: StrictBool
     blob_strikes: List[BlobStrikeView]
+    estate: Optional[EstateCounts] = Field(default=None, description="The estate's size by disposition: the subject's @me and personal-team contexts' resources.")
     redacted_hashes: List[StrictStr] = Field(description="The redacted set (D2) the act would admit.")
+    resources: Optional[List[EstateResourcePlan]] = Field(default=None, description="Every estate resource, in the order the act would take it.")
     subject: UUID
     targets: List[ErasureTargetOutcome] = Field(description="Per-target outcomes and the named remainder, exactly as the record would carry them.")
-    __properties: ClassVar[List[str]] = ["already_erased", "blob_strikes", "redacted_hashes", "subject", "targets"]
+    __properties: ClassVar[List[str]] = ["already_erased", "blob_strikes", "estate", "redacted_hashes", "resources", "subject", "targets"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -83,6 +87,16 @@ class ErasureSurveyResponse(BaseModel):
                 if _item_blob_strikes:
                     _items.append(_item_blob_strikes.to_dict())
             _dict['blob_strikes'] = _items
+        # override the default output from pydantic by calling `to_dict()` of estate
+        if self.estate:
+            _dict['estate'] = self.estate.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of each item in resources (list)
+        _items = []
+        if self.resources:
+            for _item_resources in self.resources:
+                if _item_resources:
+                    _items.append(_item_resources.to_dict())
+            _dict['resources'] = _items
         # override the default output from pydantic by calling `to_dict()` of each item in targets (list)
         _items = []
         if self.targets:
@@ -104,7 +118,9 @@ class ErasureSurveyResponse(BaseModel):
         _obj = cls.model_validate({
             "already_erased": obj.get("already_erased"),
             "blob_strikes": [BlobStrikeView.from_dict(_item) for _item in obj["blob_strikes"]] if obj.get("blob_strikes") is not None else None,
+            "estate": EstateCounts.from_dict(obj["estate"]) if obj.get("estate") is not None else None,
             "redacted_hashes": obj.get("redacted_hashes"),
+            "resources": [EstateResourcePlan.from_dict(_item) for _item in obj["resources"]] if obj.get("resources") is not None else None,
             "subject": obj.get("subject"),
             "targets": [ErasureTargetOutcome.from_dict(_item) for _item in obj["targets"]] if obj.get("targets") is not None else None
         })

@@ -15,11 +15,34 @@
         }
       ]
     },
+    "charters_held": {
+      "description": "The estate's charters, emptied and held until map-grain erasure (D3).",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "estate_contexts": {
+      "description": "The estate the act reached (20261021100000, person-erasure design D1): the subject's @me\ncontexts and their personal team's contexts, in id order. The redaction reads it back from\nhere, so replay reaches the set live reached.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
     "redacted_hashes": {
       "description": "The redacted set (D2): bare sha256 hex, exactly as `content_hash` carries it — the key\nevery reader already shares and no trail join-key shape can match.",
       "type": "array",
       "items": {
         "type": "string"
+      }
+    },
+    "resource_erasures": {
+      "description": "The resource erasures the act ran over the estate, in the order it ran them (D4).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EstateResourceErasureRef"
       }
     },
     "subject_id": {
@@ -76,6 +99,36 @@
       "required": [
         "target",
         "outcome"
+      ]
+    },
+    "EstateResourceErasureKind": {
+      "description": "Whether that resource erasure was a first erasure or a completion pass (D2's `complete`).",
+      "type": "string",
+      "enum": [
+        "erasure",
+        "completion"
+      ]
+    },
+    "EstateResourceErasureRef": {
+      "description": "One resource erasure a person act ran: its subject and its `resource_erased` event. Keyed\n`resource` and `event`, never `resource_id`: the completion payload carries no key the trail\nfunctions join on.",
+      "type": "object",
+      "properties": {
+        "event": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "$ref": "#/$defs/EstateResourceErasureKind"
+        },
+        "resource": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "resource",
+        "event",
+        "kind"
       ]
     },
     "ProfileId": {

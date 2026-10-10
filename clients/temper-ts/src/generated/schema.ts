@@ -6144,10 +6144,18 @@ export interface components {
         ErasureExecuteResponse: {
             already_erased: boolean;
             blob_strikes: components["schemas"]["BlobStrikeView"][];
+            /**
+             * Format: int32
+             * @description Live resources still homed in the estate after the act committed: created there while
+             *     the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which erases them.
+             */
+            estate_stragglers?: number;
             /** Format: uuid */
             event_id: string;
             /** @description The redacted set (D2): content hashes only. */
             redacted_hashes: string[];
+            /** @description The resource erasures the act ran over the estate, in the order it ran them. */
+            resource_erasures?: components["schemas"]["EstateResourceErasure"][];
             /** @enum {string} */
             status: "completed";
             /**
@@ -6176,8 +6184,12 @@ export interface components {
         ErasureSurveyResponse: {
             already_erased: boolean;
             blob_strikes: components["schemas"]["BlobStrikeView"][];
+            /** @description The estate's size by disposition: the subject's @me and personal-team contexts' resources. */
+            estate?: components["schemas"]["EstateCounts"];
             /** @description The redacted set (D2) the act would admit. */
             redacted_hashes: string[];
+            /** @description Every estate resource, in the order the act would take it. */
+            resources?: components["schemas"]["EstateResourcePlan"][];
             /** Format: uuid */
             subject: string;
             /** @description Per-target outcomes and the named remainder, exactly as the record would carry them. */
@@ -6217,6 +6229,66 @@ export interface components {
          *     break that, silently, at the first payload that omits everything.
          */
         ErrorDetails: components["schemas"]["SystemAccessDetails"] | components["schemas"]["PlanRefusalDetails"];
+        /** @description The estate's size, by disposition: the survey's first answer (2g). */
+        EstateCounts: {
+            /** Format: int32 */
+            charter: number;
+            /** Format: int32 */
+            complete: number;
+            /** Format: int32 */
+            erase: number;
+            /** Format: int32 */
+            skip: number;
+            /** Format: int32 */
+            total: number;
+        };
+        /**
+         * @description What the person act does with one resource of the estate (person-erasure design D2, 2026-10-10).
+         * @enum {string}
+         */
+        EstateDisposition: "erase" | "complete" | "skip" | "charter";
+        /**
+         * @description Whether a resource erasure the person act ran was a first erasure or a completion pass.
+         * @enum {string}
+         */
+        EstateErasureKind: "erasure" | "completion";
+        /** @description One resource erasure the person act ran: its `resource_erased` event, in act order. */
+        EstateResourceErasure: {
+            /** Format: uuid */
+            event_id: string;
+            kind: components["schemas"]["EstateErasureKind"];
+            /** Format: uuid */
+            resource_id: string;
+        };
+        /**
+         * @description One estate resource in the survey, in the order the act takes them (resource id). The counts
+         *     come from that resource's own erasure survey; the full plan is the resource survey door's.
+         */
+        EstateResourcePlan: {
+            disposition: components["schemas"]["EstateDisposition"];
+            /**
+             * Format: int32
+             * @description Edges the resource erasure would fold.
+             */
+            edges?: number;
+            /**
+             * Format: int32
+             * @description Entries in the resource erasure's ledger remainder.
+             */
+            ledger_remainder?: number;
+            /**
+             * Format: int32
+             * @description Ledger events whose fields the resource erasure would rewrite.
+             */
+            redacted_fields?: number;
+            /**
+             * Format: int32
+             * @description Entries in the resource erasure's named remainder.
+             */
+            remainder?: number;
+            /** Format: uuid */
+            resource_id: string;
+        };
         /**
          * @description Response body for the event-cursor endpoint: the most recent event id
          *     recorded for a context, or `None` if the context has no events.

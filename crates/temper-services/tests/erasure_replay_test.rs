@@ -22,9 +22,9 @@ use uuid::Uuid;
 use temper_core::types::ids::ProfileId;
 use temper_services::services::erasure_service::{execute_erasure, survey_erasure};
 use temper_substrate::blob_store::{blob_pathname, InMemoryBlobStore};
-use temper_substrate::content::{self, IncomingChunk};
+use temper_substrate::content::IncomingChunk;
 use temper_substrate::events::{fire, EventContext, SeedAction};
-use temper_substrate::ids::{BlockId, ContextId, EntityId};
+use temper_substrate::ids::{ContextId, EntityId};
 use temper_substrate::payloads::{AnchorRef, ArtifactIntent, KindOwner};
 use temper_substrate::replay;
 use temper_substrate::writes::{self, CommitBlobParams, CommitDataArtifactParams, CreateParams};
@@ -352,7 +352,12 @@ async fn assert_redacted_shape(pool: &PgPool, w: &ErasedWorld) {
             .fetch_one(pool)
             .await
             .unwrap();
-    assert_eq!(in_set, 2, "the erased-content set holds both hashes (D4)");
+    // Since 20261021100000 the set holds the struck blob's hash and no non-charter text hash:
+    // resource erasure empties the estate row by row and admits none (D5, ruled Q1).
+    assert_eq!(
+        in_set, 1,
+        "the erased-content set holds the blob hash alone"
+    );
 
     // Ruling 1: the entity names are sentineled to 'erased-' || the entity's OWN id — the
     // per-row spelling the (profile_id, name) UNIQUE grain demands (two entities of one
@@ -380,9 +385,10 @@ async fn assert_redacted_shape(pool: &PgPool, w: &ErasedWorld) {
         "the subject's entities survive (undeletable)"
     );
 
-    // Ruling 1: the subject's OWN artifact content is emptied, hashes kept (D3's retention
-    // shape); the team-kind artifact on the SAME governed resource is untouched — the
-    // disposition-iii remainder, not the subject's data.
+    // Every artifact of an estate resource is emptied, hashes kept (D3's retention shape). Since
+    // 20261021100000 that includes another principal's kind namespace on the resource: resource
+    // erasure's step (5) empties every artifact whatever its kind owner (ruled 2026-09-28), and
+    // the estate is erased whole (R5).
     let (content, hash): (serde_json::Value, String) = sqlx::query_as(
         "SELECT dac.content, dac.content_hash FROM kb_data_artifact_content dac \
           WHERE dac.artifact_id = $1",
@@ -407,9 +413,11 @@ async fn assert_redacted_shape(pool: &PgPool, w: &ErasedWorld) {
             .await
             .unwrap();
     assert_eq!(
-        content, w.team_artifact_content,
-        "another principal's kind namespace on a governed resource is NOT struck"
+        content,
+        serde_json::json!({}),
+        "another principal's kind namespace on an estate resource is emptied with it"
     );
+    let _ = &w.team_artifact_content;
 }
 
 fn diff_projections(before: &[(String, serde_json::Value)], after: &[(String, serde_json::Value)]) {
@@ -662,10 +670,16 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
             .targets
             .iter()
             .all(|t| t.outcome == "already-erased"
-                || t.outcome.starts_with("independent_obligation")),
-        "targets report already-erased, or the STANDING independent-obligation remainder \
-         (it persists by design and is re-named on every run), got {:?}",
+                || t.outcome.starts_with("independent_obligation")
+                || (t.target == "kb_resources" && t.outcome.ends_with("; skipped"))),
+        "targets report already-erased, the STANDING independent-obligation remainder \
+         (it persists by design and is re-named on every run), or the estate's husks as \
+         skipped (2f), got {:?}",
         re_erase.targets
+    );
+    assert!(
+        re_erase.resource_erasures.is_empty(),
+        "the replayed husks are complete: no resource erasure runs again"
     );
     // First-admit attribution survived the round-trip AND the re-erase: every set row still
     // cites the ORIGINAL completing event, on the replayed namespace as on the live one.
@@ -677,11 +691,11 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
     .unwrap();
     assert_eq!(
         distinct,
-        (3, 1),
-        "the set holds the subject's hashes PLUS the other principal's resource homed into the \
-         governed context (home-pure scope, the 2026-09-11 scope-of-engagement ruling: content \
-         inside a private context dies with that estate), all attributed to the ONE first-admitting \
-         event — the re-erase's own new completion did not steal attribution (ON CONFLICT DO NOTHING)"
+        (1, 1),
+        "the set holds the struck blob's hash (no text hash since 20261021100000: resource \
+         erasure empties the estate, the other principal's resource homed into it included, row \
+         by row), attributed to the ONE first-admitting event — the re-erase's own new \
+         completion did not steal attribution (ON CONFLICT DO NOTHING)"
     );
 
     // ── replay #2 (of the ledger extended by the re-erase): still byte-identical ──
@@ -697,9 +711,9 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
         .await
         .unwrap();
     assert_eq!(
-        admits, 3,
-        "the second replay's redaction arm re-fires idempotently: still exactly three admits \
-         (home-pure scope, the 2026-09-11 ruling)"
+        admits, 1,
+        "the second replay's redaction arm re-fires idempotently: still exactly one admit, the \
+         struck blob's hash"
     );
 
     // The typed contract meets REALLY-EMITTED erasure payloads: every principal_erased /
@@ -790,34 +804,16 @@ async fn post_erasure_recommits_survive_replay(pool: sqlx::PgPool) {
     assert_eq!(f_hash, recommit_hash);
     assert_eq!(recommit_hash, blob_hash, "identical bytes");
 
-    // (b) The text re-write: NEW prose → NEW hash, through the real revise path
-    //     (deferred chunks — the async-embed shape, ONNX-free).
+    // (b) A text write: NEW prose → NEW hash. Since 20261021100000 the erased resource is a husk
+    //     and refuses every write (the write floor), so the lawful post-erasure text is a NEW
+    //     resource, written into the home after the act (the straggler shape D9 reports).
+    let _ = block;
     let new_prose = "a wholly different and lawful assertion";
-    let prepared = content::prepare_block_deferred(0, None, new_prose);
-    let mut tx = pool.begin().await.unwrap();
-    fire(
-        &mut tx,
-        SeedAction::BlockMutate {
-            block: BlockId::from(block),
-            chunks: &prepared.chunks,
-            raw: Some(new_prose),
-            incorporated: &[],
-            replaces_body: false,
-            emitter: EntityId::from(emitter),
-        },
-    )
-    .await
-    .expect("the re-write proceeds (its hash is not in the erased set)");
-    tx.commit().await.unwrap();
-    let new_hash: String =
-        sqlx::query_scalar("SELECT content_hash FROM kb_chunks WHERE block_id = $1 AND is_current")
-            .bind(block)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (_, new_hash) =
+        seed_resource(&pool, subject, emitter, home, "later notes", new_prose).await;
     assert_ne!(
         new_hash, chunk_hash,
-        "the re-write's hash is NEW — the erased hash is not reused"
+        "the later write's hash is NEW — the erased hash is not reused"
     );
 
     // ── replay: the pre-erasure rows stay redacted, the post-erasure commits stay LIVE ──
@@ -862,17 +858,17 @@ async fn post_erasure_recommits_survive_replay(pool: sqlx::PgPool) {
         "the post-erasure re-write replays LIVE: current, prose intact"
     );
 
-    // The erased hash is dead forever on the text side; the new hash was never admitted to the
-    // set. (The blob hash IS in the set — the act struck the bytes — while the re-committed
-    // LIVE row beside it is exactly the substrate's ruled shape.)
+    // The set holds the struck blob's hash (the act struck the bytes, while the re-committed LIVE
+    // row beside it is exactly the substrate's ruled shape). No text hash: since 20261021100000
+    // resource erasure empties the estate row by row and admits none (D5).
     let set: Vec<String> =
         sqlx::query_scalar("SELECT content_hash FROM kb_erased_content ORDER BY content_hash")
             .fetch_all(&pool)
             .await
             .unwrap();
     assert!(
-        set.contains(&chunk_hash) && set.contains(&blob_hash),
-        "the set holds the pre-erasure hashes, got {set:?}"
+        !set.contains(&chunk_hash) && set.contains(&blob_hash),
+        "the set holds the struck blob's hash alone, got {set:?}"
     );
     assert!(
         !set.contains(&new_hash),
@@ -1115,16 +1111,17 @@ async fn a_guest_committed_blob_in_a_governed_home_is_struck_with_the_estate(poo
         "the struck guest hashes enter the erased-content set"
     );
 
-    // The attached shape's provenance survives the strike as the substrate leaves it: the
-    // strike folds no edges — the relation renders absent because the blob is gone.
+    // The strike itself folds no edges (the substrate's ruled shape). The attached relation is
+    // folded all the same: its other end is an estate resource, and since 20261021100000 that
+    // resource's erasure folds every edge touching it (2e), with its own relationship_folded.
     let folded: bool = sqlx::query_scalar("SELECT is_folded FROM kb_edges WHERE source_id = $1")
         .bind(guest_attached)
         .fetch_one(&pool)
         .await
         .unwrap();
     assert!(
-        !folded,
-        "the strike folds no edges (the substrate's ruled shape)"
+        folded,
+        "the estate resource's erasure folds the relation into it (2e)"
     );
 }
 
@@ -1166,9 +1163,12 @@ async fn the_subjects_team_context_text_is_named_in_the_record(pool: sqlx::PgPoo
     // act under the terms-of-use line, and the record must name it rather than skip it.
     let team_context: ContextId = ContextId::from(
         sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
-                 SELECT 'kb_teams', t.id, 'shared', 'Shared' \
-                   FROM kb_teams t WHERE t.slug = 'personal-' || $1 RETURNING id",
+            // Another team's context: since 20261021100000 the subject's personal team's
+            // contexts are the estate (R1), so the not-governed home is a team they do not own.
+            "WITH t AS (INSERT INTO kb_teams (slug, name) VALUES ('shared-' || $1, 'Shared') \
+                       RETURNING id) \
+             INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+                 SELECT 'kb_teams', t.id, 'shared', 'Shared' FROM t RETURNING id",
         )
         .bind(&handle)
         .fetch_one(&pool)
@@ -1249,11 +1249,12 @@ async fn the_subjects_team_context_text_is_named_in_the_record(pool: sqlx::PgPoo
         "the act names exactly what the survey named; got {named:?} vs {predicted:?}"
     );
 
-    // Named, never redacted: the team hash stays out of the redacted set while the estate
-    // hash is in it, and the team's copy of the prose still reads.
+    // Named, never redacted: the team hash stays out of the redacted set, and the team's copy of
+    // the prose still reads. The estate prose's hash is not in it either since 20261021100000:
+    // resource erasure empties the estate row by row, and the set is the charters' (D5).
     assert!(
-        completion.redacted_hashes.contains(&estate_hash),
-        "the estate prose's hash is redacted"
+        !completion.redacted_hashes.contains(&estate_hash),
+        "a non-charter estate hash is not in the redacted set"
     );
     assert!(
         !completion.redacted_hashes.contains(&team_block_hash),
@@ -1383,13 +1384,13 @@ async fn the_act_nulls_a_governed_chunks_heading_trail_and_leaves_a_same_hash_tw
     let survey = survey_erasure(&pool, &admin, ProfileId::from(subject))
         .await
         .expect("the operator's survey");
+    // Since 20261021100000 a non-charter estate resource's trail is nulled by its resource
+    // erasure (step 1), so the survey names the resource for erasure, not a hash-arm target.
     assert!(
-        survey
-            .targets
-            .iter()
-            .any(|t| t.target == "kb_chunks.header_path" && t.outcome == "erased"),
-        "the survey names the heading trail the act will null; got {:?}",
-        survey.targets
+        survey.resources.iter().any(|r| r.resource_id == governed
+            && r.disposition == temper_core::types::erasure::EstateDisposition::Erase),
+        "the survey names the governed resource for erasure; got {:?}",
+        survey.resources
     );
 
     let completion = execute_erasure(
@@ -1403,11 +1404,11 @@ async fn the_act_nulls_a_governed_chunks_heading_trail_and_leaves_a_same_hash_tw
     .expect("the operator's act completes");
     assert!(
         completion
-            .targets
+            .resource_erasures
             .iter()
-            .any(|t| t.target == "kb_chunks.header_path" && t.outcome == "erased"),
-        "the record names the heading trail it nulled; got {:?}",
-        completion.targets
+            .any(|e| e.resource_id == governed),
+        "the record names the resource erasure that nulled the trail; got {:?}",
+        completion.resource_erasures
     );
     // The trail never reached the ledger (header_path rides the sidecar, not a payload), and
     // the act's record does not put it there.
@@ -1466,80 +1467,47 @@ async fn the_act_nulls_a_governed_chunks_heading_trail_and_leaves_a_same_hash_tw
     );
 }
 
-/// The migration that taught the act to null `header_path` (20261020100000), read whole so its
-/// backfill can run against a world this binary's act no longer produces.
-const HEADER_PATH_MIGRATION: &str =
-    include_str!("../../../migrations/20261020100000_principal_erasure_nulls_header_path.sql");
+/// The migration that made the person act run resource erasure (20261021100000), read whole so its
+/// Section 0 guard can run against a ledger it must refuse.
+const ESTATE_MIGRATION: &str =
+    include_str!("../../../migrations/20261021100000_person_erasure_runs_resource_erasure.sql");
 
-/// FAILS IF an erasure executed before 20261020100000 replays to a different projection than live.
-/// Such an erasure left the governed chunk's trail in place, replay reads the trail from the live
-/// row and then re-runs today's redaction, which nulls it. The migration's backfill nulls the live
-/// row by each `principal_erased` event's own payload. The old act's state is rebuilt by putting
-/// the trail back after today's act; the backfill is the migration's own DO block, run as shipped.
+/// FAILS IF the migration would deploy over a ledger that already holds a `principal_erased`
+/// event. Ruling Q5 (2026-10-10) dropped replay's fallback for events without `estate_contexts`
+/// because no principal has ever been erased; the guard is what makes that premise checked rather
+/// than assumed. It replaces the witness for 20261020100000's header_path backfill, which acted
+/// only on events written before this migration, of which the guard proves there are none.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn the_backfill_brings_an_older_erasures_heading_trail_in_line_with_replay(
-    pool: sqlx::PgPool,
-) {
+async fn the_estate_migration_refuses_a_ledger_that_holds_a_principal_erasure(pool: sqlx::PgPool) {
     use sqlx::Executor;
+    let section = ESTATE_MIGRATION
+        .split_once("-- Section 0.")
+        .and_then(|(_, rest)| rest.split_once("-- Section 1."))
+        .map(|(body, _)| body)
+        .expect("the migration carries its Section 0 guard");
+    let guard = &section[section.find("DO $$").expect("the guard is a DO block")..];
+
+    pool.execute(guard)
+        .await
+        .expect("an empty ledger passes the guard");
+
     let (subject, _) = insert_profile(&pool).await;
-    let (operator, _) = insert_profile(&pool).await;
-    temper_services::test_support::grant_governance(&pool, operator).await;
-    let admin = temper_services::test_support::system_admin_proof_for(&pool, operator).await;
-    let emitter: Uuid = sqlx::query_scalar(
-        "SELECT id FROM kb_entities WHERE profile_id = $1 AND name LIKE '%@web'",
+    sqlx::query(
+        "SELECT _event_append('principal_erased', \
+            (SELECT e.id FROM kb_entities e WHERE e.profile_id = $1 LIMIT 1), NULL, NULL, \
+            jsonb_build_object('subject_table', 'kb_profiles', 'subject_id', $1::text))",
     )
     .bind(subject)
-    .fetch_one(&pool)
+    .execute(&pool)
     .await
-    .unwrap();
-    let home = insert_personal_context(&pool, subject, "notes").await;
-    let (governed, _) = seed_headed_resource(
-        &pool,
-        subject,
-        emitter,
-        home,
-        "older notes",
-        "prose an older act emptied",
-        "Notes on Jane Roe",
-    )
-    .await;
-    execute_erasure(
-        &pool,
-        &admin,
-        ProfileId::from(subject),
-        Uuid::now_v7(),
-        Surface::ApiHttp,
-    )
-    .await
-    .expect("the operator's act completes");
+    .expect("append an erasure event without estate_contexts");
 
-    // The pre-migration act's leftover: the trail it never touched.
-    sqlx::query("UPDATE kb_chunks SET header_path = 'Notes on Jane Roe' WHERE resource_id = $1")
-        .bind(governed)
-        .execute(&pool)
+    let err = pool
+        .execute(guard)
         .await
-        .unwrap();
-
-    let section = HEADER_PATH_MIGRATION
-        .split_once("-- Section 3.")
-        .and_then(|(_, rest)| rest.split_once("SELECT declare_migration("))
-        .map(|(body, _)| body)
-        .expect("the migration carries its Section 3 backfill");
-    let backfill = &section[section.find("DO $$").expect("the backfill is a DO block")..];
-    pool.execute(backfill).await.expect("the backfill runs");
-
-    let trail: Option<String> =
-        sqlx::query_scalar("SELECT header_path FROM kb_chunks WHERE resource_id = $1")
-            .bind(governed)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(trail, None, "the backfill nulls the older erasure's trail");
-
-    let before = replay::dump_projections(&pool).await.unwrap();
-    let snap = replay::snapshot(&pool).await.unwrap();
-    reset_namespace(&pool).await;
-    replay::replay(&pool, &snap).await.unwrap();
-    let after = replay::dump_projections(&pool).await.unwrap();
-    diff_projections(&before, &after);
+        .expect_err("the guard refuses a ledger holding a principal_erased event");
+    assert!(
+        err.to_string().contains("a principal_erased event exists"),
+        "the guard names why it halted, got {err}"
+    );
 }

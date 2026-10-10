@@ -23,13 +23,19 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_core::types::ids::ProfileId;
+use temper_core::types::erasure::{
+    EstateCounts, EstateErasureKind, EstateResourceErasure, EstateResourcePlan,
+};
+use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_substrate::payloads::ErasureTargetOutcome;
 use temper_substrate::writes::resolve_emitter;
 use temper_workflow::operations::Surface;
 
 use crate::auth::SystemAdmin;
 use crate::error::{ApiError, ApiResult};
+use crate::services::resource_erasure_service::{
+    is_retryable_act_error, queue_region_settling, MAX_ACT_RETRIES,
+};
 
 /// One blob strike's verdict, exactly what the `blob_delete` wrapper returned. The provider
 /// bytes themselves are not the service's business: a released verdict is drained by the
@@ -60,6 +66,10 @@ pub struct ErasureCompletion {
     pub blob_strikes: Vec<BlobStrikeOutcome>,
     /// True when the subject was already tombstoned: this completion erased nothing new.
     pub already_erased: bool,
+    /// The resource erasures the act ran over the estate, in the order it ran them (D4).
+    pub resource_erasures: Vec<EstateResourceErasure>,
+    /// Live resources still homed in the estate once the act committed (D9, ruled Q3).
+    pub estate_stragglers: u32,
 }
 
 /// The jsonb `principal_erasure_execute` returns, before mapping onto the typed outcome.
@@ -69,6 +79,17 @@ struct ExecuteOutcomeWire {
     redacted_hashes: Vec<String>,
     targets: Vec<ErasureTargetOutcome>,
     already_erased: bool,
+    estate_contexts: Vec<Uuid>,
+    resource_erasures: Vec<ResourceErasureWire>,
+}
+
+/// One entry of the act's `resource_erasures`, as the ledger spells it: `resource` and `event`,
+/// never `resource_id`, because the completion payload carries no trail join key.
+#[derive(Debug, serde::Deserialize)]
+struct ResourceErasureWire {
+    resource: Uuid,
+    event: Uuid,
+    kind: EstateErasureKind,
 }
 
 /// One blob strike's PREDICTED verdict from the survey — the plan's `released_would_be`:
@@ -95,6 +116,10 @@ pub struct ErasureSurvey {
     pub redacted_hashes: Vec<String>,
     pub targets: Vec<ErasureTargetOutcome>,
     pub blob_strikes: Vec<BlobStrikeVerdict>,
+    /// The estate's size by disposition (D6): the survey's first answer.
+    pub estate: EstateCounts,
+    /// Every estate resource, in the order the act would take it, with counts from its own survey.
+    pub resources: Vec<EstateResourcePlan>,
 }
 
 /// The jsonb `principal_erasure_survey` returns, before mapping onto the typed survey.
@@ -104,6 +129,8 @@ struct SurveyOutcomeWire {
     targets: Vec<ErasureTargetOutcome>,
     already_erased: bool,
     blob_strikes: Vec<BlobStrikeVerdict>,
+    estate: EstateCounts,
+    resources: Vec<EstateResourcePlan>,
 }
 
 /// Execute the erasure act for `subject`, as the operator `admin` names.
@@ -144,18 +171,40 @@ pub async fn execute_erasure(
         return Err(ApiError::NotFound("profile not found".to_string()));
     }
 
-    let raw = sqlx::query_scalar!(
-        r#"SELECT principal_erasure_execute($1, $2, $3, $4) AS "outcome: serde_json::Value""#,
-        subject.uuid(),
-        operator.uuid(),
-        emitter.uuid(),
-        request_reference,
-    )
-    .fetch_one(pool)
-    .await?
+    // The act runs resource erasure once per estate resource (20261021100000), so it fails
+    // retryably where that act does: a deadlock, a raced edge fold, a remote source that gained or
+    // lost a citer, a collision on the redaction rows (D8). The act is one statement and one
+    // transaction, so a failed attempt commits nothing and each retry is a fresh statement against
+    // the post-conflict state.
+    let mut retries = 0;
+    let raw = loop {
+        let result = sqlx::query_scalar!(
+            r#"SELECT principal_erasure_execute($1, $2, $3, $4) AS "outcome: serde_json::Value""#,
+            subject.uuid(),
+            operator.uuid(),
+            emitter.uuid(),
+            request_reference,
+        )
+        .fetch_one(pool)
+        .await;
+        match result {
+            Ok(raw) => break raw,
+            Err(err) if is_retryable_act_error(&err) && retries < MAX_ACT_RETRIES => retries += 1,
+            Err(err) => return Err(err.into()),
+        }
+    }
     .ok_or_else(|| ApiError::Internal("principal_erasure_execute returned no row".to_string()))?;
     let wire: ExecuteOutcomeWire = serde_json::from_value(raw)
         .map_err(|e| ApiError::Internal(format!("erasure outcome shape: {e}")))?;
+
+    // COMMITTED. Nothing below may answer as a failure: the operator would re-run an act that
+    // succeeded. Region settling for every erased resource's anchors, as the resource door does
+    // after its own act (each erasure nulled those watermarks and recomputed the live centroids;
+    // the settling re-forms the regions without the husk). Never fails the act.
+    for e in &wire.resource_erasures {
+        queue_region_settling(pool, ResourceId::from(e.resource), emitter).await;
+    }
+    let estate_stragglers = estate_stragglers(pool, &wire.estate_contexts).await;
 
     // The per-row verdicts live in the payload's targets; the strikes are re-matched out of
     // them so the typed outcome can carry what a fence needs without re-deriving from prose.
@@ -170,7 +219,43 @@ pub async fn execute_erasure(
         targets: wire.targets,
         blob_strikes,
         already_erased: wire.already_erased,
+        resource_erasures: wire
+            .resource_erasures
+            .into_iter()
+            .map(|e| EstateResourceErasure {
+                resource_id: e.resource,
+                event_id: e.event,
+                kind: e.kind,
+            })
+            .collect(),
+        estate_stragglers,
     })
+}
+
+/// Live resources still homed in the estate contexts the act recorded, charters aside: a resource
+/// created in one after the act's plan read the estate and committed before the act retired the
+/// context (D9). Ruled Q3 (2026-10-10): reported, not locked against. Re-running the act erases
+/// them. A failed read is logged and reported as zero rather than failing an act that committed.
+async fn estate_stragglers(pool: &PgPool, estate: &[Uuid]) -> u32 {
+    let count = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!"
+             FROM kb_resource_homes h
+             JOIN kb_resources r ON r.id = h.resource_id
+            WHERE h.anchor_table = 'kb_contexts'
+              AND h.anchor_id = ANY($1)
+              AND r.erased_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM kb_cogmaps m WHERE m.telos_resource_id = r.id)"#,
+        estate,
+    )
+    .fetch_one(pool)
+    .await;
+    match count {
+        Ok(n) => u32::try_from(n).unwrap_or(u32::MAX),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to count the estate's remaining live resources after erasure; reported as 0");
+            0
+        }
+    }
 }
 
 /// The per-row strike verdicts for a completion: every `blob_erased` event sharing the
@@ -276,6 +361,8 @@ pub async fn survey_erasure(
         redacted_hashes: wire.redacted_hashes,
         targets: wire.targets,
         blob_strikes: wire.blob_strikes,
+        estate: wire.estate,
+        resources: wire.resources,
     })
 }
 
@@ -523,9 +610,12 @@ mod tests {
     async fn seed_team_context(pool: &PgPool, handle: &str) -> Uuid {
         let context = Uuid::now_v7();
         sqlx::query(
-            "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-                     SELECT $1, 'kb_teams', t.id, 'shared', 'Shared' \
-                       FROM kb_teams t WHERE t.slug = 'personal-' || $2",
+            // A team the subject does NOT own personally: since 20261021100000 the personal
+            // team's contexts are the estate (R1), so a not-governed team home is another team.
+            "WITH t AS (INSERT INTO kb_teams (slug, name) VALUES ('shared-' || $2, 'Shared') \
+                       RETURNING id) \
+             INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
+                     SELECT $1, 'kb_teams', t.id, 'shared', 'Shared' FROM t",
         )
         .bind(context)
         .bind(handle)
@@ -662,8 +752,8 @@ mod tests {
         let completion = outcome;
         assert_eq!(
             completion.redacted_hashes.len(),
-            3,
-            "two text hashes + one blob hash"
+            1,
+            "the struck blob's hash; no non-charter text hash (D5)"
         );
 
         // The row is in the D5.2 shape — and there is deliberately no marker of WHICH act
@@ -925,9 +1015,11 @@ mod tests {
         .await
         .expect("completes");
         let completion = outcome;
+        // Since 20261021100000 the subject's copy is emptied by resource erasure, row by row, and
+        // no estate hash but a charter's is admitted (D5, ruled Q1): the record names none.
         assert!(
-            completion.redacted_hashes.contains(&world.chunk_hash),
-            "the shared hash is redacted — the subject's own copy is in scope"
+            !completion.redacted_hashes.contains(&world.chunk_hash),
+            "a non-charter estate hash is not in the redacted set"
         );
 
         // The subject's copy: emptied.
@@ -1025,11 +1117,14 @@ mod tests {
 
     /// ── WITNESS: the text content ───────────────────────────────────────────────────────
     /// FAILS IF the emptied shape is incomplete: chunk AND block prose emptied with hashes
-    /// retained, embedding AND provenance nulled together, the search vector emptied, the
-    /// erased-content set holding every redacted hash — and the formation watermark on the
-    /// affected anchor nulled (the centroid recompute mark, D5).
+    /// retained, embedding AND provenance nulled together, the search vector emptied — and the
+    /// formation watermark on the affected anchor nulled (the centroid recompute mark, D5).
+    /// Since 20261021100000 resource erasure empties the estate row by row and admits no hash to
+    /// the erased-content set (D5 of the person-erasure design, ruled Q1): the set gains none.
     #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-    async fn text_content_is_emptied_hashes_kept_and_the_set_holds_every_hash(pool: sqlx::PgPool) {
+    async fn text_content_is_emptied_hashes_kept_and_no_estate_hash_enters_the_set(
+        pool: sqlx::PgPool,
+    ) {
         let (subject, _) = insert_profile(&pool).await;
         let (operator, _) = insert_profile(&pool).await;
         test_support::grant_governance(&pool, operator).await;
@@ -1101,8 +1196,8 @@ mod tests {
 
         for h in [&world.chunk_hash, &world.block_hash] {
             assert!(
-                completion.redacted_hashes.contains(h),
-                "every text hash is in the redacted set ({h})"
+                !completion.redacted_hashes.contains(h),
+                "a non-charter text hash is not in the redacted set ({h})"
             );
             assert_eq!(
                 count_hash(
@@ -1111,8 +1206,8 @@ mod tests {
                     h.to_string(),
                 )
                 .await,
-                1,
-                "kb_erased_content holds {h}"
+                0,
+                "kb_erased_content does not hold {h}"
             );
         }
 
@@ -1439,10 +1534,26 @@ mod tests {
         .expect("re-erase completes");
         assert!(second.already_erased, "the no-op completion says so");
         assert_ne!(first.event_id, second.event_id, "a new event is recorded");
+        // The estate's resources are husks the first act completed, so the re-erase runs no
+        // resource erasure and names them skipped (2f); every other target is already-erased.
         assert!(
-            !second.targets.is_empty()
-                && second.targets.iter().all(|t| t.outcome == "already-erased"),
-            "targets ALL report already-erased, got {:?}",
+            second.resource_erasures.is_empty(),
+            "no resource erasure runs again"
+        );
+        assert!(
+            second.targets.iter().any(|t| t.target == "kb_resources"
+                && t.outcome == "1 estate resource(s) already erased and complete; skipped"),
+            "the complete husk is named skipped, got {:?}",
+            second.targets
+        );
+        assert!(
+            second
+                .targets
+                .iter()
+                .filter(|t| t.target != "kb_resources")
+                .all(|t| t.outcome == "already-erased")
+                && second.targets.iter().any(|t| t.target != "kb_resources"),
+            "every other target reports already-erased, got {:?}",
             second.targets
         );
 
@@ -1467,7 +1578,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(admits, 3, "two text hashes + one blob hash");
+        assert_eq!(admits, 1, "the struck blob's hash alone (D5)");
         assert_eq!(distinct_events, 1, "every admit cites the FIRST event");
         assert_eq!(
             count_with(
@@ -1476,7 +1587,7 @@ mod tests {
                 first.event_id,
             )
             .await,
-            3,
+            1,
             "the first completion is the attributed one"
         );
     }
@@ -1519,7 +1630,14 @@ mod tests {
             assert!(
                 matches!(
                     key.as_str(),
-                    "subject_table" | "subject_id" | "actor" | "redacted_hashes" | "targets"
+                    "subject_table"
+                        | "subject_id"
+                        | "actor"
+                        | "redacted_hashes"
+                        | "targets"
+                        | "estate_contexts"
+                        | "resource_erasures"
+                        | "charters_held"
                 ),
                 "unexpected payload key {key:?} — the payload must never carry a trail join-key shape"
             );
@@ -1530,7 +1648,11 @@ mod tests {
 
         // redacted_hashes is the only content key-set: hashes, and nothing id-shaped anywhere.
         let hashes = obj["redacted_hashes"].as_array().unwrap();
-        assert_eq!(hashes.len(), 3, "two text hashes + the struck blob hash");
+        assert_eq!(
+            hashes.len(),
+            1,
+            "the struck blob hash; no charter in this estate (D5)"
+        );
         for h in hashes {
             let s = h.as_str().unwrap();
             assert_eq!(

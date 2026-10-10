@@ -18,10 +18,12 @@ import re  # noqa: F401
 import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, field_validator
-from typing import Any, ClassVar, Dict, List
+from typing import Any, ClassVar, Dict, List, Optional
+from typing_extensions import Annotated
 from uuid import UUID
 from temper.generated.models.blob_strike_view import BlobStrikeView
 from temper.generated.models.erasure_target_outcome import ErasureTargetOutcome
+from temper.generated.models.estate_resource_erasure import EstateResourceErasure
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -32,11 +34,13 @@ class ErasureExecuteResponse(BaseModel):
     """ # noqa: E501
     already_erased: StrictBool
     blob_strikes: List[BlobStrikeView]
+    estate_stragglers: Optional[Annotated[int, Field(strict=True, ge=0)]] = Field(default=None, description="Live resources still homed in the estate after the act committed: created there while the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which erases them.")
     event_id: UUID
     redacted_hashes: List[StrictStr] = Field(description="The redacted set (D2): content hashes only.")
+    resource_erasures: Optional[List[EstateResourceErasure]] = Field(default=None, description="The resource erasures the act ran over the estate, in the order it ran them.")
     status: StrictStr
     targets: List[ErasureTargetOutcome] = Field(description="Per-target outcomes and the named remainder (D6's accepted-in-part arm): the operator sees the `independent_obligation` remainder AT THE DOOR, not only in the ledger — the completion's own payload is the audit, but the door's caller is the actor and deserves the same facts.")
-    __properties: ClassVar[List[str]] = ["already_erased", "blob_strikes", "event_id", "redacted_hashes", "status", "targets"]
+    __properties: ClassVar[List[str]] = ["already_erased", "blob_strikes", "estate_stragglers", "event_id", "redacted_hashes", "resource_erasures", "status", "targets"]
 
     @field_validator('status')
     def status_validate_enum(cls, value):
@@ -91,6 +95,13 @@ class ErasureExecuteResponse(BaseModel):
                 if _item_blob_strikes:
                     _items.append(_item_blob_strikes.to_dict())
             _dict['blob_strikes'] = _items
+        # override the default output from pydantic by calling `to_dict()` of each item in resource_erasures (list)
+        _items = []
+        if self.resource_erasures:
+            for _item_resource_erasures in self.resource_erasures:
+                if _item_resource_erasures:
+                    _items.append(_item_resource_erasures.to_dict())
+            _dict['resource_erasures'] = _items
         # override the default output from pydantic by calling `to_dict()` of each item in targets (list)
         _items = []
         if self.targets:
@@ -112,8 +123,10 @@ class ErasureExecuteResponse(BaseModel):
         _obj = cls.model_validate({
             "already_erased": obj.get("already_erased"),
             "blob_strikes": [BlobStrikeView.from_dict(_item) for _item in obj["blob_strikes"]] if obj.get("blob_strikes") is not None else None,
+            "estate_stragglers": obj.get("estate_stragglers"),
             "event_id": obj.get("event_id"),
             "redacted_hashes": obj.get("redacted_hashes"),
+            "resource_erasures": [EstateResourceErasure.from_dict(_item) for _item in obj["resource_erasures"]] if obj.get("resource_erasures") is not None else None,
             "status": obj.get("status"),
             "targets": [ErasureTargetOutcome.from_dict(_item) for _item in obj["targets"]] if obj.get("targets") is not None else None
         })
