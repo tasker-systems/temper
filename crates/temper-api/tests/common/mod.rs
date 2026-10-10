@@ -283,6 +283,39 @@ pub fn generate_test_jwt_with_audience(sub: &str, email: &str, aud: &str) -> Str
         .expect("Failed to sign test JWT")
 }
 
+/// Claim shape of an Auth0 `client_credentials` token — a machine's.
+#[derive(Debug, Serialize, Deserialize)]
+struct MachineTestClaims {
+    sub: String,
+    azp: String,
+    gty: String,
+    iss: String,
+    aud: String,
+    iat: i64,
+    exp: i64,
+}
+
+/// Sign a machine JWT with the test RSA private key, valid for 1 hour. The claim shape mirrors the
+/// e2e suite's `generate_machine_jwt`, which mirrors the real `client_credentials` token.
+pub fn generate_machine_jwt(client_id: &str) -> String {
+    let encoding_key = EncodingKey::from_rsa_pem(include_bytes!("test_rsa.key"))
+        .expect("Failed to load test RSA private key");
+
+    let now = chrono::Utc::now().timestamp();
+    let claims = MachineTestClaims {
+        sub: format!("{client_id}@clients"),
+        azp: client_id.to_string(),
+        gty: "client-credentials".to_string(),
+        iss: "test-issuer".to_string(),
+        aud: TEST_AUDIENCE.to_string(),
+        iat: now,
+        exp: now + 3600,
+    };
+
+    jsonwebtoken::encode(&Header::new(Algorithm::RS256), &claims, &encoding_key)
+        .expect("Failed to sign machine JWT")
+}
+
 /// Sign a JWT that expired 1 hour ago.
 pub fn generate_expired_jwt(sub: &str, email: &str) -> String {
     let encoding_key = EncodingKey::from_rsa_pem(include_bytes!("test_rsa.key"))

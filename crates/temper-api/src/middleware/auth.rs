@@ -81,6 +81,20 @@ pub(super) fn planted_caller(request: &Request<Body>) -> Option<&Caller> {
         .map(|planted| &planted.0)
 }
 
+/// Axum middleware for the human-only tiers: refuses a machine caller with the machine refusal
+/// (403) before the request reaches anything inner to it — `require_system_access` included, so an
+/// unapproved machine is told it is a machine, not that it lacks system access. Reads the caller
+/// `require_auth` planted and does no database work; it must sit inner to `require_auth`.
+pub async fn refuse_machine(request: Request<Body>, next: Next) -> Result<Response, ApiError> {
+    match planted_caller(&request) {
+        Some(Caller::Human(_)) => Ok(next.run(request).await),
+        Some(Caller::Machine(_)) => Err(temper_services::auth::machine_principal_refused()),
+        None => Err(ApiError::Internal(
+            "caller not found in request extensions".to_string(),
+        )),
+    }
+}
+
 /// Axum middleware that verifies a Bearer JWT, resolves or auto-provisions the
 /// corresponding profile, classifies it as a person or a machine, and plants the classified
 /// [`Caller`] (in the module-private `Planted`) for the extractors and later layers.

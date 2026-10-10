@@ -27,6 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AUDIT_SCRIPT="${SCRIPT_DIR}/audit-route-auth.sh"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 REAL_ROUTES="${REPO_ROOT}/crates/temper-api/src/routes"
+REAL_API_SRC="${REPO_ROOT}/crates/temper-api/src"
 PASS=0
 FAIL=0
 
@@ -45,7 +46,12 @@ run_test() {
 
     local output actual_exit
     set +e
-    output="$(ROUTES_FILE="$routes_path" bash "$AUDIT_SCRIPT" 2>&1)"
+    # FIX_HANDLERS_DIR / FIX_API_SRC_DIR point the handler checks (e)/(f) and the source check (g)
+    # at fixture copies; unset, the auditor reads the live tree.
+    output="$(ROUTES_FILE="$routes_path" \
+        HANDLERS_DIR="${FIX_HANDLERS_DIR:-${REPO_ROOT}/crates/temper-api/src/handlers}" \
+        API_SRC_DIR="${FIX_API_SRC_DIR:-${REPO_ROOT}/crates/temper-api/src}" \
+        bash "$AUDIT_SCRIPT" 2>&1)"
     actual_exit=$?
     set -e
 
@@ -220,6 +226,153 @@ open(p, "w").write(s)
 PYEOF
 run_test "Gated arm's auth/system-access pair swapped: fails" "$FIX" 1 \
     "order pin"
+
+# --- (i) the order pins are bounded by arm: a name missing from its OWN arm fails even when a later
+#     arm still has it ---
+# The Gated arm losing require_system_access while HumanGated keeps it: an unbounded sequential
+# search would find HumanGated's occurrence and pass over a gated tier that admits the unapproved.
+FIX="${FIXTURE_DIR}/gated_arm_no_system_access"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+head, rest = s.split("Tier::Gated => router", 1)
+arm, tail = rest.split("Tier::HumanGated =>", 1)
+cut = """            .layer(from_fn_with_state(
+                state.clone(),
+                system_access::require_system_access,
+            ))
+"""
+assert cut in arm, "Gated arm's system-access layer not found"
+s = head + "Tier::Gated => router" + arm.replace(cut, "", 1) + "Tier::HumanGated =>" + tail
+open(p, "w").write(s)
+PYEOF
+run_test "Gated arm missing require_system_access (HumanGated still has it): fails" "$FIX" 1 \
+    "'system_access::require_system_access' not found in apply_tier's 'Tier::Gated =>' arm"
+
+# The admin tier losing its machine refusal while HumanAuthOnly keeps one.
+FIX="${FIXTURE_DIR}/human_gated_no_refusal"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+head, rest = s.split("Tier::HumanGated => router", 1)
+arm, tail = rest.split("Tier::InternalHmac", 1)
+cut = "            .layer(from_fn(auth::refuse_machine))\n"
+assert cut in arm, "HumanGated arm's refusal not found"
+s = head + "Tier::HumanGated => router" + arm.replace(cut, "", 1) + "Tier::InternalHmac" + tail
+open(p, "w").write(s)
+PYEOF
+run_test "HumanGated arm missing refuse_machine (HumanAuthOnly still has it): fails" "$FIX" 1 \
+    "'auth::refuse_machine' not found in apply_tier's 'Tier::HumanGated =>' arm"
+
+# The refusal moved INNER to require_system_access — composed from the Gated arm instead of spelled
+# out: an unapproved machine would be told it lacks system access, not that it is a machine.
+FIX="${FIXTURE_DIR}/human_gated_refusal_innermost"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+head, rest = s.split("Tier::HumanGated => router", 1)
+arm, tail = rest.split("Tier::InternalHmac", 1)
+refusal = "            .layer(from_fn(auth::refuse_machine))\n"
+assert refusal in arm
+arm = arm.replace(refusal, "", 1)
+arm = "\n" + refusal + arm.lstrip("\n")
+s = head + "Tier::HumanGated => router" + arm + "Tier::InternalHmac" + tail
+open(p, "w").write(s)
+PYEOF
+run_test "HumanGated refusal moved inner to require_system_access: fails" "$FIX" 1 \
+    "'auth::refuse_machine' not found in apply_tier's 'Tier::HumanGated =>' arm (after offset"
+
+# --- (j) a human-only row quietly moved to a machine-admitting tier fails ---
+FIX="${FIXTURE_DIR}/admin_tier_admits_machines"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+a = 'key: "admin_routes", tier: Tier::HumanGated,'
+assert a in s
+s = s.replace(a, 'key: "admin_routes", tier: Tier::Gated,', 1)
+open(p, "w").write(s)
+PYEOF
+run_test "admin_routes tier relaxed to Gated: fails" "$FIX" 1 \
+    "table row changed"
+
+# --- (k) the machine-admitting status group gaining a handler fails ---
+FIX="${FIXTURE_DIR}/status_group_grows"
+copy_module "$FIX"
+python3 - "$FIX/auth_only.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+a = "OpenApiRouter::new().routes(routes!(handlers::profiles::get))"
+assert a in s
+s = s.replace(a, a + "\n        .routes(routes!(handlers::profiles::update))", 1)
+open(p, "w").write(s)
+PYEOF
+run_test "a handler added to auth_only_status_routes: fails" "$FIX" 1 \
+    "the auth_only_status group's handler set changed"
+
+# --- (l) a handler that names no identity extractor fails (e) ---
+FIX_SRC="${FIXTURE_DIR}/src_no_extractor"
+cp -R "$REAL_API_SRC" "$FIX_SRC"
+python3 - "$FIX_SRC/handlers/access.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+a = "    State(state): State<AppState>,\n    _auth: AuthUser,\n) -> ApiResult<Json<PublicSystemSettings>> {"
+assert a in s, "get_settings signature not found"
+s = s.replace(a, "    State(state): State<AppState>,\n) -> ApiResult<Json<PublicSystemSettings>> {", 1)
+open(p, "w").write(s)
+PYEOF
+FIX_HANDLERS_DIR="$FIX_SRC/handlers" FIX_API_SRC_DIR="$FIX_SRC"
+run_test "an auth-covered handler with no extractor: fails" "$REAL_ROUTES" 1 \
+    "names no identity extractor"
+unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
+
+# --- (m) a new machine-admitting (AnyPrincipal) handler fails (f) ---
+FIX_SRC="${FIXTURE_DIR}/src_new_any_principal"
+cp -R "$REAL_API_SRC" "$FIX_SRC"
+python3 - "$FIX_SRC/handlers/access.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+a = "    _auth: AuthUser,\n) -> ApiResult<Json<PublicSystemSettings>> {"
+assert a in s, "get_settings signature not found"
+s = s.replace(a, "    _auth: AnyPrincipal,\n) -> ApiResult<Json<PublicSystemSettings>> {", 1)
+open(p, "w").write(s)
+PYEOF
+FIX_HANDLERS_DIR="$FIX_SRC/handlers" FIX_API_SRC_DIR="$FIX_SRC"
+run_test "a handler newly taking AnyPrincipal: fails" "$REAL_ROUTES" 1 \
+    "the set of machine-admitting (AnyPrincipal) handlers changed"
+unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
+
+# --- (n) a raw caller proof read from extensions outside middleware/ fails (g) ---
+# Two spellings: the field form on one line, and a method form split across lines with a
+# path-qualified type — the second is what a line grep for a bare type name misses.
+for spelling in field split; do
+  FIX_SRC="${FIXTURE_DIR}/src_raw_proof_${spelling}"
+  cp -R "$REAL_API_SRC" "$FIX_SRC"
+  python3 - "$FIX_SRC/handlers/health.rs" "$spelling" <<'PYEOF'
+import sys
+p, spelling = sys.argv[1], sys.argv[2]
+s = open(p).read()
+if spelling == "field":
+    s += "\nfn peek(parts: &axum::http::request::Parts) -> bool { parts.extensions.get::<Caller>().is_some() }\n"
+else:
+    s += "\nfn peek(req: &axum::http::Request<axum::body::Body>) -> bool {\n    req.extensions()\n        .get::<temper_services::auth::Caller>()\n        .is_some()\n}\n"
+open(p, "w").write(s)
+PYEOF
+  FIX_HANDLERS_DIR="$FIX_SRC/handlers" FIX_API_SRC_DIR="$FIX_SRC"
+  run_test "a raw Caller read from extensions outside middleware (${spelling}): fails" "$REAL_ROUTES" 1 \
+      "a raw caller proof read from request extensions outside middleware/"
+  unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
+done
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
