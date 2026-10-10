@@ -1466,12 +1466,12 @@ async fn the_act_nulls_a_governed_chunks_heading_trail_and_leaves_a_same_hash_tw
     );
 }
 
-/// The migration that taught the act to null `header_path` (20261019100000), read whole so its
+/// The migration that taught the act to null `header_path` (20261020100000), read whole so its
 /// backfill can run against a world this binary's act no longer produces.
 const HEADER_PATH_MIGRATION: &str =
-    include_str!("../../../migrations/20261019100000_principal_erasure_nulls_header_path.sql");
+    include_str!("../../../migrations/20261020100000_principal_erasure_nulls_header_path.sql");
 
-/// FAILS IF an erasure executed before 20261019100000 replays to a different projection than live.
+/// FAILS IF an erasure executed before 20261020100000 replays to a different projection than live.
 /// Such an erasure left the governed chunk's trail in place, replay reads the trail from the live
 /// row and then re-runs today's redaction, which nulls it. The migration's backfill nulls the live
 /// row by each `principal_erased` event's own payload. The old act's state is rebuilt by putting

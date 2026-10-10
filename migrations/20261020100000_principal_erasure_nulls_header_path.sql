@@ -112,7 +112,7 @@ BEGIN
                     WHERE g.owner_table = 'kb_profiles'
                       AND g.owner_id = p_subject));
 
-    -- (4a) The heading trail nulled (20261019100000): header_path is authored heading prose,
+    -- (4a) The heading trail nulled (20261020100000): header_path is authored heading prose,
     --      so a heading naming the subject is the subject's text like the chunk body (2). The
     --      resource act's D2.1 spelling (NULL, not ''). Same hash, same governed reach: a
     --      same-hash chunk elsewhere keeps its own trail.
@@ -676,7 +676,7 @@ BEGIN
                                                        AND h.anchor_id = ANY(v_governed)))
                                 THEN 'erased' ELSE 'already-erased' END));
     END IF;
-    -- The heading trail, arm (4a) of the redaction (20261019100000). Claimed only when the act
+    -- The heading trail, arm (4a) of the redaction (20261020100000). Claimed only when the act
     -- will null one: a chunk with no heading trail never held one, so "already-erased" would
     -- claim an act that never happened. A re-run of the act therefore omits the target.
     IF EXISTS (SELECT 1 FROM kb_chunks
@@ -773,7 +773,7 @@ the text analog of the blobs'' D5.2 shape): content emptied BY HASH with hashes 
 GOVERNED HOMES ONLY since the 2026-09-10 offboarding ruling (decision 01a08dc2: the hash
 is the record key, never the reach; a same-hash chunk or block in a home the subject does
 not govern keeps its prose, heading trail, vector and search vector) — embeddings+provenance
-nulled together, the chunk heading trail (header_path) nulled (20261019100000), search
+nulled together, the chunk heading trail (header_path) nulled (20261020100000), search
 vectors emptied for governed resources only, the profile tombstoned to
 occurred_at, the sync_personal_team denormalization scrubbed to the sentinel derivation,
 the two no-FK Slack identifier stores deleted, the auth-link identifiers unclaimed (email
@@ -825,7 +825,7 @@ END;
 $$;
 
 SELECT declare_migration(
-    20261019100000,
+    20261020100000,
     'additive',
     'CREATE OR REPLACE of _erasure_apply_redaction and principal_erasure_survey_plan with signatures unchanged, one COMMENT, and a backfill nulling kb_chunks.header_path for each principal_erased event already in the ledger. The redaction gains one UPDATE nulling a governed chunk''s heading trail; the survey gains a kb_chunks.header_path target when the act will null one. A binary without this migration keeps working: no table, column, constraint or grant changes, and both functions are called as before.'
 );
