@@ -27,7 +27,7 @@
     "onnxruntime-node": "1.21.0",
     "pino": "^10.3.1",
     "uuidv7": "^1.2.1",
-    "workflow": "^0",
+    "workflow": "^5",
     "zod": "^4.3.6"
   },
   "overrides": {
