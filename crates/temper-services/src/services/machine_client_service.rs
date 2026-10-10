@@ -76,6 +76,22 @@ pub async fn is_registered_principal(pool: &PgPool, profile: ProfileId) -> ApiRe
     Ok(registered)
 }
 
+/// Is this profile a machine principal at all — any `kb_machine_clients` row, **revoked or not**?
+///
+/// The question a ceiling asks, as distinct from [`is_registered_principal`]'s "may it act now?":
+/// revoking a credential ends the login, not what the profile is, so a revoked machine still never
+/// holds a governing role. Reads the SQL `is_machine_profile` so the services and the triggers
+/// that back them (20261019100000_machines_never_govern.sql) share one definition.
+pub async fn is_machine_profile(pool: &PgPool, profile: ProfileId) -> ApiResult<bool> {
+    let machine: bool = sqlx::query_scalar!(
+        r#"SELECT is_machine_profile($1) AS "machine!: bool""#,
+        *profile,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(machine)
+}
+
 /// Coarse liveness touch (D9): writes only when `last_seen_at` is NULL or older
 /// than five minutes, so the common authentication is a pure read. Returns
 /// whether a write actually happened.

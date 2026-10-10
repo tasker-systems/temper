@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT context_authorable_by_profile($1, c.id) AS \"a!: bool\"\n                 FROM kb_contexts c\n                WHERE c.owner_table = 'kb_profiles' AND c.owner_id = $1 AND c.slug = 'default'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "a!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "8576071caf953c19b4bb3ada9bb1ac348d876fffd6061970cb910d213c6c270e"
+}

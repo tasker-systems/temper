@@ -160,6 +160,14 @@ pub async fn create_team(
         )));
     }
 
+    // A team's creator becomes its `owner`, and a machine principal never governs (ruled
+    // 2026-10-09; the database refuses the row — 20261019100000_machines_never_govern.sql).
+    if crate::services::machine_client_service::is_machine_profile(pool, creator).await? {
+        return Err(ApiError::BadRequest(
+            "a machine principal cannot create a team".to_string(),
+        ));
+    }
+
     // --- Auth before writes ---
 
     // Child team: resolve the parent and require owner/maintainer on it.
@@ -271,6 +279,12 @@ pub async fn add_member(
             "cannot grant owner via add_member; use ownership transfer".to_string(),
         ));
     }
+    crate::services::machine_authz::refuse_machine_above_ceiling(
+        pool,
+        ProfileId::from(req.profile_id),
+        req.role,
+    )
+    .await?;
 
     // `DO NOTHING` + `RETURNING` yields no row on conflict, so an existing membership is
     // detected by the same statement that would have written it — no separate existence check
@@ -505,6 +519,23 @@ pub async fn remove_member(
         ));
     }
 
+    // A profile's personal team is its own for as long as the profile exists. For a person the
+    // last-owner guard below already holds them there; a machine holds its personal team as
+    // `member` (20261019100000_machines_never_govern.sql), so without this a machine could leave
+    // it, stranding a team nobody can manage and cutting its own reach to the root.
+    let personal: bool = sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM kb_teams WHERE id = $1 AND personal_of = $2) AS "p!: bool""#,
+        team_id,
+        target,
+    )
+    .fetch_one(pool)
+    .await?;
+    if personal {
+        return Err(ApiError::Conflict(
+            "a profile cannot be removed from its own personal team".to_string(),
+        ));
+    }
+
     // Last-owner guard folded into the DELETE so the count and the delete are one
     // atomic statement — two concurrent removals cannot both pass a separate count
     // check and orphan the team. The row is known to exist and be non-idp (checked
@@ -584,6 +615,12 @@ pub async fn change_role(
             "cannot grant owner via role change; use ownership transfer".to_string(),
         ));
     }
+    crate::services::machine_authz::refuse_machine_above_ceiling(
+        pool,
+        ProfileId::from(target),
+        new_role,
+    )
+    .await?;
 
     let (_current_role, source) = load_member(pool, team_id, target)
         .await?

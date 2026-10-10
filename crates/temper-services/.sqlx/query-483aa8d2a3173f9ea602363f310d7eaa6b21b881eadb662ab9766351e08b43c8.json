@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT principal_governance_set($1, true, $2, NULL)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "principal_governance_set",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "483aa8d2a3173f9ea602363f310d7eaa6b21b881eadb662ab9766351e08b43c8"
+}

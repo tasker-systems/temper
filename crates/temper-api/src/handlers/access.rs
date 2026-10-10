@@ -430,7 +430,7 @@ pub async fn update_settings(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Profile promoted; the side-effect team membership row", body = TeamMemberRow),
-        (status = 400, description = "The profile or team cannot be promoted into", body = ErrorBody),
+        (status = 400, description = "The profile or team cannot be promoted into, or the profile is a machine principal (a machine never governs)", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
         (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
 )
