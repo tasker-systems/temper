@@ -1555,6 +1555,35 @@ pub struct PrincipalErased {
     /// unhonourable is named here. Partial completion is data, never a silent success.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub targets: Vec<ErasureTargetOutcome>,
+    /// The estate the act reached (20261021100000, person-erasure design D1): the subject's @me
+    /// contexts and their personal team's contexts, in id order. The redaction reads it back from
+    /// here, so replay reaches the set live reached. Required, and written even when empty: the
+    /// redaction raises without it, and no `principal_erased` predates it (the migration guards).
+    pub estate_contexts: Vec<Uuid>,
+    /// The resource erasures the act ran over the estate, in the order it ran them (D4).
+    pub resource_erasures: Vec<EstateResourceErasureRef>,
+    /// The estate's charters, emptied and held until map-grain erasure (D3).
+    pub charters_held: Vec<Uuid>,
+}
+
+/// One resource erasure a person act ran: its subject and its `resource_erased` event. Keyed
+/// `resource` and `event`, never `resource_id`: the completion payload carries no key the trail
+/// functions join on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct EstateResourceErasureRef {
+    pub resource: Uuid,
+    pub event: Uuid,
+    pub kind: EstateResourceErasureKind,
+}
+
+/// Whether that resource erasure was a first erasure or a completion pass (D2's `complete`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum EstateResourceErasureKind {
+    Erasure,
+    Completion,
 }
 
 /// The closed refusal vocabulary for `principal_erasure_refused` (erasure spec D6). No door
@@ -2206,8 +2235,19 @@ mod tests {
                 target: "kb_profiles.email".into(),
                 outcome: "erased".into(),
             }],
+            estate_contexts: vec![Uuid::now_v7()],
+            resource_erasures: vec![EstateResourceErasureRef {
+                resource: Uuid::now_v7(),
+                event: Uuid::now_v7(),
+                kind: EstateResourceErasureKind::Erasure,
+            }],
+            charters_held: vec![],
         };
         let v = serde_json::to_value(&erased).unwrap();
+        assert!(
+            !v.to_string().contains("resource_id"),
+            "no trail join key rides the completion payload"
+        );
         assert_eq!(v["subject_table"], "kb_profiles");
         assert!(
             v.get("request_reference").is_none() && !v.to_string().contains("reference"),

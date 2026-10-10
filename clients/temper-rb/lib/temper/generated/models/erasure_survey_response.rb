@@ -20,8 +20,14 @@ module Temper::Generated
 
     attr_accessor :blob_strikes
 
+    # The estate's size by disposition: the subject's @me and personal-team contexts' resources.
+    attr_accessor :estate
+
     # The redacted set (D2) the act would admit.
     attr_accessor :redacted_hashes
+
+    # Every estate resource, in the order the act would take it.
+    attr_accessor :resources
 
     attr_accessor :subject
 
@@ -33,7 +39,9 @@ module Temper::Generated
       {
         :'already_erased' => :'already_erased',
         :'blob_strikes' => :'blob_strikes',
+        :'estate' => :'estate',
         :'redacted_hashes' => :'redacted_hashes',
+        :'resources' => :'resources',
         :'subject' => :'subject',
         :'targets' => :'targets'
       }
@@ -54,7 +62,9 @@ module Temper::Generated
       {
         :'already_erased' => :'Boolean',
         :'blob_strikes' => :'Array<BlobStrikeView>',
+        :'estate' => :'EstateCounts',
         :'redacted_hashes' => :'Array<String>',
+        :'resources' => :'Array<EstateResourcePlan>',
         :'subject' => :'String',
         :'targets' => :'Array<ErasureTargetOutcome>'
       }
@@ -96,12 +106,22 @@ module Temper::Generated
         self.blob_strikes = nil
       end
 
+      if attributes.key?(:'estate')
+        self.estate = attributes[:'estate']
+      end
+
       if attributes.key?(:'redacted_hashes')
         if (value = attributes[:'redacted_hashes']).is_a?(Array)
           self.redacted_hashes = value
         end
       else
         self.redacted_hashes = nil
+      end
+
+      if attributes.key?(:'resources')
+        if (value = attributes[:'resources']).is_a?(Array)
+          self.resources = value
+        end
       end
 
       if attributes.key?(:'subject')
@@ -216,7 +236,9 @@ module Temper::Generated
       self.class == o.class &&
           already_erased == o.already_erased &&
           blob_strikes == o.blob_strikes &&
+          estate == o.estate &&
           redacted_hashes == o.redacted_hashes &&
+          resources == o.resources &&
           subject == o.subject &&
           targets == o.targets
     end
@@ -230,7 +252,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [already_erased, blob_strikes, redacted_hashes, subject, targets].hash
+      [already_erased, blob_strikes, estate, redacted_hashes, resources, subject, targets].hash
     end
 
     # Builds the object from hash

@@ -21,13 +21,15 @@ and it is never self-serve; the door belongs to the organization, not the subjec
 ## The two lines a contributor crosses
 
 **1. Writing into a team's context gives up any sole claim on deletion.** Content homed in
-a team-owned context — resources, edges, properties, uploaded files, data artifacts,
-schemas — stays when you leave the team, and stays when an erasure acts on your profile,
-whoever authored it. You crossed this line the moment you wrote there; deleting the content
+a team-owned context other than someone's personal team (line 2) — resources, edges,
+properties, uploaded files, data artifacts, schemas — stays when you leave the team, and
+stays when an erasure acts on your profile, whoever authored it. You crossed this line the moment you wrote there; deleting the content
 afterwards is the team's act, not yours, and your erasure never performs it for you.
 
-**2. Writing into someone else's personal context declares the content's lifetime.** When
-the owner of a personal context grants you authorship into it, everything you write there
+**2. Writing into someone else's personal context declares the content's lifetime.** A
+person's personal contexts are their own (`@me`) contexts and the contexts of their personal
+team, the `+personal-<handle>` team made for them. When the owner of a personal context
+grants you authorship into it — or adds you to their personal team — everything you write there
 lives and dies with that context: if that profile is later erased, your content there is
 erased with it — text, structured content, and binary files alike. You tied its lifetime
 to theirs by writing into their context — being its author does not hold it back, and
@@ -46,22 +48,27 @@ The act runs against a **subject profile** — the profile an erasure request na
 executed by an instance administrator (system-admin standing) on the organization's
 determination. In one server-side transaction it:
 
-- Empties the content of everything homed in the subject's **own personal contexts** —
-  text, structured content, embeddings, search data, and uploaded files — **whoever
-  authored or uploaded it**. Content a guest wrote there under line 2 dies with the
-  context, files included; the bytes are released only when no live record carries the
-  same content hash.
+- Erases everything homed in the subject's **estate**: their own personal (`@me`) contexts
+  **and their personal team's contexts** — **whoever authored or uploaded it**. Each
+  resource there goes through the same act that erases a single resource: its text,
+  structured content, embeddings, search data, title, origin, properties and history are
+  emptied or replaced by placeholders, in the projections **and in the event ledger**, and
+  it remains only as an empty record marked erased. Every relationship touching it is ended
+  and its label cleared, including relationships from a team's content into the estate.
+  Content a guest wrote there under line 2 dies with it, files included; the bytes are
+  released only when no live record carries the same content hash.
 - Scrubs the subject's identity fields: handle, display name, email, linked provider
   identifiers. Attribution to them anywhere else breaks because their profile stops
   resolving to a person (the pseudonym break) — their past contributions to team contexts
   are never edited to hide them.
-- **Retires the subject's personal contexts** in the same transaction. This is what makes
+- **Retires the estate's contexts** in the same transaction. This is what makes
   line 2 enforceable rather than promised: every share and grant that reached the estate
   *through the context* dies with the retirement — nobody can read into a retired context
   afterward, guests included. Writing is deliberately not blocked the same way: a fresh
   commit into a retired home mints live, lawful content, and any later erasure of the same
   estate strikes it again.
-- Leaves team-owned contexts untouched: the content stays, whoever authored it.
+- Leaves other teams' contexts untouched: the content stays, whoever authored it. The one
+  change it makes there is to end a relationship that points into the estate.
 
 One pre-existing door the retirement deliberately leaves open, stated because erasure
 inherits it: whoever **owns a resource** homed in the wiped estate keeps owner standing
@@ -72,20 +79,20 @@ and what they write there now, nobody else can reach.
 ## What the code enforces, and what it only reports
 
 The lines above are enforced by the act's scope computation, not by documentation: the
-wipe is computed from where content is homed, so shared-context contributions are never in
-scope and personal-context content never escapes it, regardless of author. What the act
+wipe is computed from where content is homed, so contributions to other teams' contexts are
+never in scope and personal-context content never escapes it, regardless of author. What the act
 cannot enforce, it names in its record — the erasure's response and the ledger event carry
 per-target outcomes, so an operator reads the remainder at the door and the audit trail
 keeps it afterward:
 
 - **Prose the subject authored into shared homes is named, not struck.** Content blocks
-  whose genesis write the subject emitted — in team or map homes — are named in the record
+  whose genesis write the subject emitted — in other teams' or map homes — are named in the record
   with their content hashes: attribution for the audit trail, never a deletion claim.
   Contributing into a shared space never carried a sole claim on the content; attribution
   is what the system provides and what survives. The prose itself stays; only the
   attribution breaks (the pseudonym break).
 
-- **Files the subject contributed to team or map homes are reported, not struck.** Each
+- **Files the subject contributed to other teams' or map homes are reported, not struck.** Each
   one is named in the record with its content hash as held by the team or map that homes
   it. The team keeps the bytes; the record is what proves the erasure was not silent about
   them.
@@ -95,9 +102,13 @@ keeps it afterward:
   the accepted cost of line 2, disclosed there rather than adjudicated here — the act
   itself neither asks nor compensates; it strikes. The bytes release only when no live
   record carries the same content hash, so a guest's bytes die outright only when they
-  were the last copy. Structured-data artifacts a guest's kind owns on those resources
-  are a different grain: their content is not the act's to strike, and it is named in
-  the record as an un-struck obligation.
+  were the last copy. Structured-data artifacts on those resources are emptied with the
+  resource, whichever principal's kind owns them.
+- **The record lists each resource erasure it ran,** and the response says how many live
+  resources and files were still homed in the estate after the act committed: ones created
+  there while the act ran. A non-zero count means the operator runs the act again, which
+  erases them. When the count cannot be read, the response leaves it out rather than report
+  zero.
 
 ## Where the act lives
 

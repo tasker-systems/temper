@@ -343,7 +343,7 @@ async fn execute_with_release_timeout(
 ///
 /// **Never fails the act**, as `DbBackend::queue_region_clocks` never fails a write: the act has
 /// committed, and a failed enqueue leaves the regions to the next write that reaches the anchor.
-async fn queue_region_settling(pool: &PgPool, resource: ResourceId, emitter: EntityId) {
+pub(super) async fn queue_region_settling(pool: &PgPool, resource: ResourceId, emitter: EntityId) {
     let anchors = match sqlx::query!(
         r#"SELECT 'kb_contexts' AS "anchor_table!", h.anchor_id AS "anchor_id!"
              FROM kb_resource_homes h
@@ -530,6 +530,14 @@ pub(super) fn listed_refusal(
         Some(id) => ApiError::BadRequest(format!("{noun} {id} {reason}")),
         None => ApiError::BadRequest(format!("a listed {noun} {reason}")),
     }
+}
+
+/// Whether a failed call into `resource_erasure_execute` is one a fresh attempt can succeed at: a
+/// deadlock, a raced edge fold, a remote source that gained or lost a citer, or a collision on the
+/// redaction rows. The person act runs this act once per estate resource and retries on the same
+/// classification (person-erasure design D8).
+pub(super) fn is_retryable_act_error(err: &sqlx::Error) -> bool {
+    matches!(classify_act_error(err), ActFailure::Retryable)
 }
 
 /// Classify a failed act call. A non-database error (a lost connection, a decode failure) is

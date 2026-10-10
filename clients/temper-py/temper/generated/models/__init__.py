@@ -174,6 +174,11 @@ from temper.generated.models.erasure_target_outcome import ErasureTargetOutcome
 from temper.generated.models.error_body import ErrorBody
 from temper.generated.models.error_detail import ErrorDetail
 from temper.generated.models.error_details import ErrorDetails
+from temper.generated.models.estate_counts import EstateCounts
+from temper.generated.models.estate_disposition import EstateDisposition
+from temper.generated.models.estate_erasure_kind import EstateErasureKind
+from temper.generated.models.estate_resource_erasure import EstateResourceErasure
+from temper.generated.models.estate_resource_plan import EstateResourcePlan
 from temper.generated.models.event_cursor_response import EventCursorResponse
 from temper.generated.models.event_trail import EventTrail
 from temper.generated.models.exact_arm import ExactArm

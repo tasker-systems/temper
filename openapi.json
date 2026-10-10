@@ -18977,6 +18977,15 @@
                   "$ref": "#/components/schemas/BlobStrikeView"
                 }
               },
+              "estate_stragglers": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "description": "Live resources and blobs still homed in the estate after the act committed: created\nthere while the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which\nerases them. Absent when the count could not be read: unknown, never zero.",
+                "minimum": 0
+              },
               "event_id": {
                 "type": "string",
                 "format": "uuid"
@@ -18987,6 +18996,13 @@
                   "type": "string"
                 },
                 "description": "The redacted set (D2): content hashes only."
+              },
+              "resource_erasures": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/EstateResourceErasure"
+                },
+                "description": "The resource erasures the act ran over the estate, in the order it ran them."
               },
               "status": {
                 "type": "string",
@@ -19039,12 +19055,23 @@
               "$ref": "#/components/schemas/BlobStrikeView"
             }
           },
+          "estate": {
+            "$ref": "#/components/schemas/EstateCounts",
+            "description": "The estate's size by disposition: the subject's @me and personal-team contexts' resources."
+          },
           "redacted_hashes": {
             "type": "array",
             "items": {
               "type": "string"
             },
             "description": "The redacted set (D2) the act would admit."
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EstateResourcePlan"
+            },
+            "description": "Every estate resource, in the order the act would take it."
           },
           "subject": {
             "type": "string",
@@ -19124,6 +19151,125 @@
           }
         ],
         "description": "The `oneOf` an error's `details` may be.\n\nUntagged, so the payload stays exactly what each arm already sent — widening the contract must\nnot move the shipped `SYSTEM_ACCESS_REQUIRED` body, which every current client parses.\n\n**The variants are unambiguous by required field, not by order.** `SystemAccessDetails` requires\n`refusal` (its four other fields are `Option`); `PlanRefusalDetails` requires `refusals`. Neither\npayload satisfies the other's required field, so untagged deserialization cannot pick wrong —\nasserted by `each_arm_round_trips_to_its_own_variant`. Adding an all-optional arm here would\nbreak that, silently, at the first payload that omits everything."
+      },
+      "EstateCounts": {
+        "type": "object",
+        "description": "The estate's size, by disposition: the survey's first answer (2g).",
+        "required": [
+          "erase",
+          "complete",
+          "skip",
+          "charter",
+          "total"
+        ],
+        "properties": {
+          "charter": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "complete": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "erase": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "skip": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "EstateDisposition": {
+        "type": "string",
+        "description": "What the person act does with one resource of the estate (person-erasure design D2, 2026-10-10).",
+        "enum": [
+          "erase",
+          "complete",
+          "skip",
+          "charter"
+        ]
+      },
+      "EstateErasureKind": {
+        "type": "string",
+        "description": "Whether a resource erasure the person act ran was a first erasure or a completion pass.",
+        "enum": [
+          "erasure",
+          "completion"
+        ]
+      },
+      "EstateResourceErasure": {
+        "type": "object",
+        "description": "One resource erasure the person act ran: its `resource_erased` event, in act order.",
+        "required": [
+          "resource_id",
+          "event_id",
+          "kind"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EstateErasureKind"
+          },
+          "resource_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "EstateResourcePlan": {
+        "type": "object",
+        "description": "One estate resource in the survey, in the order the act takes them (resource id). The counts\ncome from that resource's own erasure survey; the full plan is the resource survey door's.",
+        "required": [
+          "resource_id",
+          "disposition"
+        ],
+        "properties": {
+          "disposition": {
+            "$ref": "#/components/schemas/EstateDisposition"
+          },
+          "edges": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Edges the resource erasure would fold.",
+            "minimum": 0
+          },
+          "ledger_remainder": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Entries in the resource erasure's ledger remainder.",
+            "minimum": 0
+          },
+          "redacted_fields": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Ledger events whose fields the resource erasure would rewrite.",
+            "minimum": 0
+          },
+          "remainder": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Entries in the resource erasure's named remainder.",
+            "minimum": 0
+          },
+          "resource_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
       },
       "EventCursorResponse": {
         "type": "object",

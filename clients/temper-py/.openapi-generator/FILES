@@ -196,6 +196,11 @@ temper/generated/models/erasure_target_outcome.py
 temper/generated/models/error_body.py
 temper/generated/models/error_detail.py
 temper/generated/models/error_details.py
+temper/generated/models/estate_counts.py
+temper/generated/models/estate_disposition.py
+temper/generated/models/estate_erasure_kind.py
+temper/generated/models/estate_resource_erasure.py
+temper/generated/models/estate_resource_plan.py
 temper/generated/models/event_cursor_response.py
 temper/generated/models/event_trail.py
 temper/generated/models/exact_arm.py

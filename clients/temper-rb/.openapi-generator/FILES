@@ -194,6 +194,11 @@ lib/temper/generated/models/erasure_target_outcome.rb
 lib/temper/generated/models/error_body.rb
 lib/temper/generated/models/error_detail.rb
 lib/temper/generated/models/error_details.rb
+lib/temper/generated/models/estate_counts.rb
+lib/temper/generated/models/estate_disposition.rb
+lib/temper/generated/models/estate_erasure_kind.rb
+lib/temper/generated/models/estate_resource_erasure.rb
+lib/temper/generated/models/estate_resource_plan.rb
 lib/temper/generated/models/event_cursor_response.rb
 lib/temper/generated/models/event_trail.rb
 lib/temper/generated/models/exact_arm.rb
