@@ -27,7 +27,6 @@ use temper_services::{
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use temper_core::types::ids::ProfileId;
 use temper_services::services::access_service;
 
 /// The limit the bites-witnesses use: two requests per hour. Small enough to exhaust in
@@ -67,9 +66,13 @@ async fn denied_profile(pool: &sqlx::PgPool, email: &str) -> Uuid {
     profile
 }
 
-fn request_for(profile: Uuid) -> access_service::CreateJoinRequestParams {
+/// The requester, minted through the real gate and classification.
+async fn person(pool: &sqlx::PgPool, profile: Uuid) -> temper_services::auth::HumanPrincipal {
+    temper_services::test_support::human_principal_for(pool, profile).await
+}
+
+fn request() -> access_service::CreateJoinRequestParams {
     access_service::CreateJoinRequestParams {
-        profile_id: ProfileId::from(profile),
         message: None,
         source: "test".to_owned(),
         accepted_terms_version: None,
@@ -79,10 +82,10 @@ fn request_for(profile: Uuid) -> access_service::CreateJoinRequestParams {
 /// One Request/Withdraw half-cycle. `withdraw_request` needs no gating setup (its
 /// not-found exits are uniform), so only the request side can fail here.
 async fn request_then_withdraw(pool: &sqlx::PgPool, profile: Uuid, rate: Option<WindowLimit>) {
-    access_service::create_join_request(pool, request_for(profile), rate)
+    access_service::create_join_request(pool, &person(pool, profile).await, request(), rate)
         .await
         .expect("request filed");
-    access_service::withdraw_request(pool, ProfileId::from(profile))
+    access_service::withdraw_request(pool, &person(pool, profile).await)
         .await
         .expect("request withdrawn");
 }
@@ -104,9 +107,10 @@ async fn the_third_request_in_the_window_is_refused(pool: sqlx::PgPool) {
     request_then_withdraw(&pool, profile, rate).await;
     request_then_withdraw(&pool, profile, rate).await;
 
-    let err = access_service::create_join_request(&pool, request_for(profile), rate)
-        .await
-        .expect_err("the third in-window request must be refused");
+    let err =
+        access_service::create_join_request(&pool, &person(&pool, profile).await, request(), rate)
+            .await
+            .expect_err("the third in-window request must be refused");
     let temper_services::error::ApiError::TooManyRequests {
         retry_after_secs, ..
     } = err
@@ -146,7 +150,8 @@ async fn withdrawal_is_never_rate_limited(pool: sqlx::PgPool) {
     // The third REQUEST is refused (same assertion as the bites witness, kept local so
     // this test stands alone)...
     assert!(matches!(
-        access_service::create_join_request(&pool, request_for(profile), rate).await,
+        access_service::create_join_request(&pool, &person(&pool, profile).await, request(), rate)
+            .await,
         Err(temper_services::error::ApiError::TooManyRequests { .. })
     ));
 
@@ -156,7 +161,7 @@ async fn withdrawal_is_never_rate_limited(pool: sqlx::PgPool) {
     // withdraw, the uniform not-found is the other answer. Either way: never the seam's
     // 429. A caller that cannot request must still be able to find out they have nothing
     // to withdraw.
-    let err = access_service::withdraw_request(&pool, ProfileId::from(profile))
+    let err = access_service::withdraw_request(&pool, &person(&pool, profile).await)
         .await
         .expect_err("nothing pending");
     assert!(
@@ -181,9 +186,10 @@ async fn an_unset_door_limits_nothing(pool: sqlx::PgPool) {
     request_then_withdraw(&pool, profile, None).await;
 
     // The exact call the bites-witness refuses, now filed without complaint.
-    let filed = access_service::create_join_request(&pool, request_for(profile), None)
-        .await
-        .expect("an unlimited door must file the third request");
+    let filed =
+        access_service::create_join_request(&pool, &person(&pool, profile).await, request(), None)
+            .await
+            .expect("an unlimited door must file the third request");
     assert_eq!(filed.requesting_profile_id, profile);
 }
 

@@ -14,9 +14,9 @@ use rand::Rng as _;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::auth::HumanPrincipal;
 use crate::error::{ApiError, ApiResult};
 use crate::services::team_service::{can_manage, role_on_team};
-use temper_core::types::ids::ProfileId;
 use temper_core::types::invitation::{
     AcceptInvitationResponse, InvitationStatus, InviteeInvitation, PendingInvitationCounts,
     TeamInvitation,
@@ -41,10 +41,11 @@ fn mint_token() -> String {
 /// `(team, email)` conflicts (partial unique index `idx_invitations_one_pending`).
 pub async fn create_invitation(
     pool: &PgPool,
-    caller: ProfileId,
+    caller: &HumanPrincipal,
     team_id: Uuid,
     params: CreateInvitationParams,
 ) -> ApiResult<TeamInvitation> {
+    let caller = caller.profile_id();
     // Auth before writes.
     match role_on_team(pool, team_id, caller).await? {
         Some(role) if can_manage(role) => {}
@@ -128,9 +129,10 @@ pub async fn create_invitation(
 /// An already-accepted invitation answers 200 to a caller already on the team, 409 to anyone else.
 pub async fn accept_invitation(
     pool: &PgPool,
-    caller: ProfileId,
+    caller: &HumanPrincipal,
     token: &str,
 ) -> ApiResult<AcceptInvitationResponse> {
+    let caller = caller.profile_id();
     let claimed = sqlx::query!(
         r#"
         WITH claimed AS (
@@ -194,7 +196,12 @@ pub async fn accept_invitation(
 /// guarded statement, as for accept. Idempotent if already declined; declining an accepted
 /// invitation is a `BadRequest`. An expired invitation is already spent, so declining one changes
 /// nothing (a pending row past its expiry is flipped to `expired`, as accept does).
-pub async fn decline_invitation(pool: &PgPool, caller: ProfileId, token: &str) -> ApiResult<()> {
+pub async fn decline_invitation(
+    pool: &PgPool,
+    caller: &HumanPrincipal,
+    token: &str,
+) -> ApiResult<()> {
+    let caller = caller.profile_id();
     let declined = sqlx::query_scalar!(
         r#"
         UPDATE kb_team_invitations i
@@ -310,10 +317,11 @@ async fn pending_refusal(pool: &PgPool, inv: &Unclaimed) -> ApiResult<()> {
 /// write are one statement, so there is no check-then-act gap.
 pub async fn revoke_invitation(
     pool: &PgPool,
-    caller: ProfileId,
+    caller: &HumanPrincipal,
     team_id: Uuid,
     invitation_id: Uuid,
 ) -> ApiResult<()> {
+    let caller = caller.profile_id();
     // Auth before writes.
     match role_on_team(pool, team_id, caller).await? {
         Some(role) if can_manage(role) => {}
@@ -364,9 +372,10 @@ pub async fn revoke_invitation(
 /// List pending, non-expired invitations for a team. Auth: owner/maintainer.
 pub async fn list_invitations(
     pool: &PgPool,
-    caller: ProfileId,
+    caller: &HumanPrincipal,
     team_id: Uuid,
 ) -> ApiResult<Vec<TeamInvitation>> {
+    let caller = caller.profile_id();
     match role_on_team(pool, team_id, caller).await? {
         Some(role) if can_manage(role) => {}
         _ => return Err(ApiError::Forbidden),
@@ -400,8 +409,9 @@ pub async fn list_invitations(
 /// Auth: any authenticated caller (their own invitations only).
 pub async fn list_for_profile(
     pool: &PgPool,
-    caller: ProfileId,
+    caller: &HumanPrincipal,
 ) -> ApiResult<Vec<InviteeInvitation>> {
+    let caller = caller.profile_id();
     let rows = sqlx::query_as!(
         InviteeInvitation,
         r#"
@@ -440,9 +450,10 @@ pub async fn list_for_profile(
 /// that one does.
 pub async fn count_for_profile(
     pool: &PgPool,
-    caller: ProfileId,
+    caller: &HumanPrincipal,
     team_slug: Option<&str>,
 ) -> ApiResult<PendingInvitationCounts> {
+    let caller = caller.profile_id();
     let row = sqlx::query!(
         r#"
         SELECT COUNT(*)::int4 as "count!",
@@ -469,6 +480,7 @@ pub async fn count_for_profile(
 mod tests {
     use super::*;
     use sqlx::PgPool;
+    use temper_core::types::ids::ProfileId;
     use temper_core::types::team::TeamRole;
 
     /// Insert a profile with the given handle, return its ProfileId.
@@ -584,7 +596,12 @@ mod tests {
         add_member(&pool, team, inviter, "owner").await;
         seed_invite(&pool, team, "invitee@x.com", inviter, "pending", 7).await;
 
-        let got = list_for_profile(&pool, invitee).await.unwrap();
+        let got = list_for_profile(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+        )
+        .await
+        .unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].team_slug, "platform");
         assert_eq!(got[0].invited_email, "invitee@x.com");
@@ -601,7 +618,12 @@ mod tests {
         add_member(&pool, team, inviter, "owner").await;
         seed_invite(&pool, team, "Invitee@X.com", inviter, "pending", 7).await; // mixed case
 
-        let got = list_for_profile(&pool, invitee).await.unwrap();
+        let got = list_for_profile(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+        )
+        .await
+        .unwrap();
         assert_eq!(got.len(), 1);
     }
 
@@ -617,7 +639,12 @@ mod tests {
         add_member(&pool, team, inviter, "owner").await;
         seed_invite(&pool, team, "kate@x.com", inviter, "pending", 7).await;
 
-        let got = list_for_profile(&pool, holder).await.unwrap();
+        let got = list_for_profile(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *holder).await,
+        )
+        .await
+        .unwrap();
         assert!(
             got.is_empty(),
             "a look-alike address is not the invited one"
@@ -637,7 +664,12 @@ mod tests {
         add_member(&pool, team, inviter, "owner").await;
         seed_invite(&pool, team, "dup@x.com", inviter, "pending", 7).await;
 
-        let got = list_for_profile(&pool, invitee).await.unwrap();
+        let got = list_for_profile(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+        )
+        .await
+        .unwrap();
         assert!(got.is_empty(), "ambiguous email must not resolve");
     }
 
@@ -661,7 +693,12 @@ mod tests {
             .unwrap();
         seed_invite(&pool, dead, "invitee@x.com", inviter, "pending", 7).await;
 
-        let got = list_for_profile(&pool, invitee).await.unwrap();
+        let got = list_for_profile(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+        )
+        .await
+        .unwrap();
         assert!(got.is_empty());
     }
 
@@ -679,7 +716,12 @@ mod tests {
         add_member(&pool, team, inviter, "owner").await;
         seed_invite(&pool, team, "invitee@x.com", inviter, "pending", 7).await;
 
-        let got = list_for_profile(&pool, invitee).await.unwrap();
+        let got = list_for_profile(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+        )
+        .await
+        .unwrap();
         assert!(got.is_empty(), "unverified email must not resolve");
     }
 
@@ -699,9 +741,19 @@ mod tests {
         add_member(&pool, team, inviter, "owner").await;
         seed_invite(&pool, team, "shared@x.com", inviter, "pending", 7).await;
 
-        let got = list_for_profile(&pool, invitee).await.unwrap();
+        let got = list_for_profile(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+        )
+        .await
+        .unwrap();
         assert_eq!(got.len(), 1, "verified holder resolves despite squatter");
-        let denied = list_for_profile(&pool, squatter).await.unwrap();
+        let denied = list_for_profile(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *squatter).await,
+        )
+        .await
+        .unwrap();
         assert!(
             denied.is_empty(),
             "squatter's unverified link matches nothing"
@@ -712,7 +764,12 @@ mod tests {
     async fn list_for_profile_null_email_caller_empty(pool: PgPool) {
         let agent = mk_profile(&pool, "agent").await;
         add_auth_email(&pool, agent, "agent-uid", None).await;
-        let got = list_for_profile(&pool, agent).await.unwrap();
+        let got = list_for_profile(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *agent).await,
+        )
+        .await
+        .unwrap();
         assert!(got.is_empty());
     }
 
@@ -721,7 +778,7 @@ mod tests {
         let (team_id, owner) = seed_team_with_owner(&pool).await;
         let inv = create_invitation(
             &pool,
-            owner,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "alice@example.com".into(),
@@ -741,7 +798,7 @@ mod tests {
         let (team_id, owner) = seed_team_with_owner(&pool).await;
         let err = create_invitation(
             &pool,
-            owner,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "a@e.com".into(),
@@ -759,7 +816,7 @@ mod tests {
         let stranger = mk_profile(&pool, "stranger").await;
         let err = create_invitation(
             &pool,
-            stranger,
+            &crate::test_support::human_principal_for(&pool, *stranger).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "a@e.com".into(),
@@ -778,10 +835,22 @@ mod tests {
             invited_email: "dup@e.com".into(),
             role: TeamRole::Member,
         };
-        create_invitation(&pool, owner, team_id, p()).await.unwrap();
-        let err = create_invitation(&pool, owner, team_id, p())
-            .await
-            .unwrap_err();
+        create_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
+            team_id,
+            p(),
+        )
+        .await
+        .unwrap();
+        let err = create_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
+            team_id,
+            p(),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::Conflict(_)));
     }
 
@@ -792,7 +861,7 @@ mod tests {
         add_auth_email(&pool, invitee, "invitee-uid", Some("again@e.com")).await;
         let inv = create_invitation(
             &pool,
-            owner,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "again@e.com".into(),
@@ -801,13 +870,17 @@ mod tests {
         )
         .await
         .unwrap();
-        decline_invitation(&pool, invitee, &inv.token)
-            .await
-            .unwrap();
+        decline_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+            &inv.token,
+        )
+        .await
+        .unwrap();
         // A new pending invite for the same (team, email) is now allowed.
         create_invitation(
             &pool,
-            owner,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "again@e.com".into(),
@@ -827,7 +900,7 @@ mod tests {
 
         let fresh = create_invitation(
             &pool,
-            owner,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "lapsed@e.com".into(),
@@ -861,7 +934,7 @@ mod tests {
         seed_invite(&pool, team_id, "live@e.com", owner, "pending", 7).await;
         let err = create_invitation(
             &pool,
-            owner,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "live@e.com".into(),
@@ -878,7 +951,7 @@ mod tests {
         let (team_id, owner) = seed_team_with_owner(&pool).await;
         let inv = create_invitation(
             &pool,
-            owner,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "gone@e.com".into(),
@@ -888,9 +961,14 @@ mod tests {
         .await
         .unwrap();
 
-        revoke_invitation(&pool, owner, team_id, inv.id)
-            .await
-            .expect("owner may revoke a pending invite");
+        revoke_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
+            team_id,
+            inv.id,
+        )
+        .await
+        .expect("owner may revoke a pending invite");
 
         // Revocation is recorded as revoked_at (status stays 'pending'); a re-revoke is a no-op error.
         let revoked_at: Option<chrono::DateTime<chrono::Utc>> =
@@ -900,9 +978,14 @@ mod tests {
                 .await
                 .unwrap();
         assert!(revoked_at.is_some(), "revoke must stamp revoked_at");
-        let reraise = revoke_invitation(&pool, owner, team_id, inv.id)
-            .await
-            .unwrap_err();
+        let reraise = revoke_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
+            team_id,
+            inv.id,
+        )
+        .await
+        .unwrap_err();
         assert!(
             matches!(reraise, ApiError::BadRequest(_)),
             "re-revoke is rejected"
@@ -912,7 +995,7 @@ mod tests {
         // (team, email) is allowed.
         create_invitation(
             &pool,
-            owner,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "gone@e.com".into(),
@@ -928,7 +1011,7 @@ mod tests {
         let (team_id, owner) = seed_team_with_owner(&pool).await;
         let inv = create_invitation(
             &pool,
-            owner,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "x@e.com".into(),
@@ -938,18 +1021,28 @@ mod tests {
         .await
         .unwrap();
         let stranger = mk_profile(&pool, "stranger").await;
-        let err = revoke_invitation(&pool, stranger, team_id, inv.id)
-            .await
-            .unwrap_err();
+        let err = revoke_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *stranger).await,
+            team_id,
+            inv.id,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn revoke_unknown_invitation_is_not_found(pool: PgPool) {
         let (team_id, owner) = seed_team_with_owner(&pool).await;
-        let err = revoke_invitation(&pool, owner, team_id, Uuid::now_v7())
-            .await
-            .unwrap_err();
+        let err = revoke_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
+            team_id,
+            Uuid::now_v7(),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::NotFound(_)));
     }
 
@@ -960,7 +1053,7 @@ mod tests {
         add_auth_email(&pool, invitee, "invitee-uid", Some("acc@e.com")).await;
         let inv = create_invitation(
             &pool,
-            owner,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "acc@e.com".into(),
@@ -969,10 +1062,21 @@ mod tests {
         )
         .await
         .unwrap();
-        accept_invitation(&pool, invitee, &inv.token).await.unwrap();
-        let err = revoke_invitation(&pool, owner, team_id, inv.id)
-            .await
-            .unwrap_err();
+        accept_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+            &inv.token,
+        )
+        .await
+        .unwrap();
+        let err = revoke_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
+            team_id,
+            inv.id,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::BadRequest(_)));
     }
 
@@ -981,7 +1085,7 @@ mod tests {
         let (team_id, owner) = seed_team_with_owner(&pool).await;
         let inv = create_invitation(
             &pool,
-            owner,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "hide@e.com".into(),
@@ -991,17 +1095,33 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            list_invitations(&pool, owner, team_id).await.unwrap().len(),
+            list_invitations(
+                &pool,
+                &crate::test_support::human_principal_for(&pool, *owner).await,
+                team_id
+            )
+            .await
+            .unwrap()
+            .len(),
             1
         );
-        revoke_invitation(&pool, owner, team_id, inv.id)
-            .await
-            .unwrap();
+        revoke_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
+            team_id,
+            inv.id,
+        )
+        .await
+        .unwrap();
         assert!(
-            list_invitations(&pool, owner, team_id)
-                .await
-                .unwrap()
-                .is_empty(),
+            list_invitations(
+                &pool,
+                &crate::test_support::human_principal_for(&pool, *owner).await,
+                team_id
+            )
+            .await
+            .unwrap()
+            .is_empty(),
             "a revoked invite must not appear in the team listing"
         );
     }
@@ -1013,7 +1133,7 @@ mod tests {
         add_auth_email(&pool, invitee, "invitee-uid", Some("rev@e.com")).await;
         let inv = create_invitation(
             &pool,
-            owner,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "rev@e.com".into(),
@@ -1022,12 +1142,21 @@ mod tests {
         )
         .await
         .unwrap();
-        revoke_invitation(&pool, owner, team_id, inv.id)
-            .await
-            .unwrap();
-        let err = accept_invitation(&pool, invitee, &inv.token)
-            .await
-            .unwrap_err();
+        revoke_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
+            team_id,
+            inv.id,
+        )
+        .await
+        .unwrap();
+        let err = accept_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+            &inv.token,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::BadRequest(_)));
     }
 
@@ -1038,7 +1167,7 @@ mod tests {
         add_auth_email(&pool, invitee, "invitee-uid", Some("i@e.com")).await;
         let inv = create_invitation(
             &pool,
-            owner,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "i@e.com".into(),
@@ -1048,9 +1177,13 @@ mod tests {
         .await
         .unwrap();
 
-        let resp = accept_invitation(&pool, invitee, &inv.token)
-            .await
-            .expect("accept");
+        let resp = accept_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+            &inv.token,
+        )
+        .await
+        .expect("accept");
         assert_eq!(resp.team_id, team_id);
         assert_eq!(resp.role, TeamRole::Member);
         assert_eq!(resp.team_slug, "acme");
@@ -1066,7 +1199,7 @@ mod tests {
         add_auth_email(&pool, invitee, "invitee-uid", Some("i@e.com")).await;
         let inv = create_invitation(
             &pool,
-            owner,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "i@e.com".into(),
@@ -1075,19 +1208,33 @@ mod tests {
         )
         .await
         .unwrap();
-        accept_invitation(&pool, invitee, &inv.token).await.unwrap();
-        let resp = accept_invitation(&pool, invitee, &inv.token)
-            .await
-            .expect("idempotent");
+        accept_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+            &inv.token,
+        )
+        .await
+        .unwrap();
+        let resp = accept_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+            &inv.token,
+        )
+        .await
+        .expect("idempotent");
         assert_eq!(resp.team_id, team_id);
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn accept_unknown_token_not_found(pool: PgPool) {
         let invitee = mk_profile(&pool, "invitee").await;
-        let err = accept_invitation(&pool, invitee, "deadbeef")
-            .await
-            .unwrap_err();
+        let err = accept_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+            "deadbeef",
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::NotFound(_)));
     }
 
@@ -1098,7 +1245,7 @@ mod tests {
         add_auth_email(&pool, invitee, "invitee-uid", Some("i@e.com")).await;
         let inv = create_invitation(
             &pool,
-            owner,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "i@e.com".into(),
@@ -1115,9 +1262,13 @@ mod tests {
         .await
         .unwrap();
 
-        let err = accept_invitation(&pool, invitee, &inv.token)
-            .await
-            .unwrap_err();
+        let err = accept_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+            &inv.token,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::BadRequest(_)));
         let status: InvitationStatus = sqlx::query_scalar!(
             r#"SELECT status AS "status: InvitationStatus" FROM kb_team_invitations WHERE id = $1"#,
@@ -1136,7 +1287,7 @@ mod tests {
         add_auth_email(&pool, invitee, "invitee-uid", Some("i@e.com")).await;
         let inv = create_invitation(
             &pool,
-            owner,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "i@e.com".into(),
@@ -1146,9 +1297,13 @@ mod tests {
         .await
         .unwrap();
 
-        decline_invitation(&pool, invitee, &inv.token)
-            .await
-            .expect("decline");
+        decline_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+            &inv.token,
+        )
+        .await
+        .expect("decline");
         let status: InvitationStatus = sqlx::query_scalar!(
             r#"SELECT status AS "status: InvitationStatus" FROM kb_team_invitations WHERE id = $1"#,
             inv.id
@@ -1157,9 +1312,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(status, InvitationStatus::Declined);
-        decline_invitation(&pool, invitee, &inv.token)
-            .await
-            .expect("idempotent decline");
+        decline_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+            &inv.token,
+        )
+        .await
+        .expect("idempotent decline");
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -1167,7 +1326,7 @@ mod tests {
         let (team_id, owner) = seed_team_with_owner(&pool).await;
         create_invitation(
             &pool,
-            owner,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: "a@e.com".into(),
@@ -1176,7 +1335,13 @@ mod tests {
         )
         .await
         .unwrap();
-        let list = list_invitations(&pool, owner, team_id).await.expect("list");
+        let list = list_invitations(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
+            team_id,
+        )
+        .await
+        .expect("list");
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].invited_email, "a@e.com");
     }
@@ -1185,9 +1350,13 @@ mod tests {
     async fn list_forbidden_for_non_manager(pool: PgPool) {
         let (team_id, _owner) = seed_team_with_owner(&pool).await;
         let stranger = mk_profile(&pool, "stranger").await;
-        let err = list_invitations(&pool, stranger, team_id)
-            .await
-            .unwrap_err();
+        let err = list_invitations(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *stranger).await,
+            team_id,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
     }
 
@@ -1222,10 +1391,19 @@ mod tests {
         seed_invite(&pool, acme, "invitee@x.com", inviter, "declined", 7).await;
         seed_invite(&pool, stale, "invitee@x.com", inviter, "pending", -1).await;
 
-        let listed = list_for_profile(&pool, invitee).await.expect("list");
-        let counted = count_for_profile(&pool, invitee, None)
-            .await
-            .expect("count");
+        let listed = list_for_profile(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+        )
+        .await
+        .expect("list");
+        let counted = count_for_profile(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+            None,
+        )
+        .await
+        .expect("count");
 
         assert_eq!(listed.len(), 2, "two invitations are actually waiting");
         assert_eq!(
@@ -1256,18 +1434,26 @@ mod tests {
         add_member(&pool, acme, inviter, "owner").await;
         seed_invite(&pool, acme, "invitee@x.com", inviter, "pending", 7).await;
 
-        let held = count_for_profile(&pool, invitee, Some("acme-eng"))
-            .await
-            .expect("count");
+        let held = count_for_profile(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+            Some("acme-eng"),
+        )
+        .await
+        .expect("count");
         assert_eq!(
             held.matching,
             Some(1),
             "the caller does hold one to acme-eng"
         );
 
-        let unrelated = count_for_profile(&pool, invitee, Some("other-co"))
-            .await
-            .expect("count");
+        let unrelated = count_for_profile(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+            Some("other-co"),
+        )
+        .await
+        .expect("count");
         assert_eq!(
             unrelated.count, 1,
             "still one invitation waiting on them overall"
@@ -1278,9 +1464,13 @@ mod tests {
             "asked about a team they hold nothing for, and told so"
         );
 
-        let unasked = count_for_profile(&pool, invitee, None)
-            .await
-            .expect("count");
+        let unasked = count_for_profile(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+            None,
+        )
+        .await
+        .expect("count");
         assert_eq!(
             unasked.matching, None,
             "not asking is a different answer from being told none"
@@ -1309,9 +1499,13 @@ mod tests {
         add_member(&pool, acme, inviter, "owner").await;
         seed_invite(&pool, acme, "invitee@x.com", inviter, "pending", 7).await;
 
-        let counted = count_for_profile(&pool, invitee, Some("acme-eng"))
-            .await
-            .expect("count");
+        let counted = count_for_profile(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+            Some("acme-eng"),
+        )
+        .await
+        .expect("count");
         assert_eq!(
             counted.count, 1,
             "one invitation, however many links carry the address"
@@ -1322,7 +1516,13 @@ mod tests {
             "and it is counted once for the team too"
         );
         assert_eq!(
-            list_for_profile(&pool, invitee).await.expect("list").len(),
+            list_for_profile(
+                &pool,
+                &crate::test_support::human_principal_for(&pool, *invitee).await
+            )
+            .await
+            .expect("list")
+            .len(),
             1,
             "the list agrees, as it must",
         );
@@ -1333,7 +1533,7 @@ mod tests {
     async fn invite(pool: &PgPool, team_id: Uuid, owner: ProfileId, email: &str) -> TeamInvitation {
         create_invitation(
             pool,
-            owner,
+            &crate::test_support::human_principal_for(pool, *owner).await,
             team_id,
             CreateInvitationParams {
                 invited_email: email.into(),
@@ -1365,9 +1565,13 @@ mod tests {
         add_auth_email(&pool, stranger, "stranger-uid", Some("stranger@e.com")).await;
         let inv = invite(&pool, team_id, owner, "i@e.com").await;
 
-        let err = accept_invitation(&pool, stranger, &inv.token)
-            .await
-            .expect_err("only the invitee may accept");
+        let err = accept_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *stranger).await,
+            &inv.token,
+        )
+        .await
+        .expect_err("only the invitee may accept");
         assert!(matches!(err, ApiError::ForbiddenDetail(_)), "got {err:?}");
         assert!(
             !err.to_string().contains("i@e.com"),
@@ -1385,9 +1589,13 @@ mod tests {
         add_auth_email_with_verified(&pool, claimant, "claimant-uid", Some("i@e.com"), false).await;
         let inv = invite(&pool, team_id, owner, "i@e.com").await;
 
-        let err = accept_invitation(&pool, claimant, &inv.token)
-            .await
-            .expect_err("an unverified address is not the invitee");
+        let err = accept_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *claimant).await,
+            &inv.token,
+        )
+        .await
+        .expect_err("an unverified address is not the invitee");
         assert!(matches!(err, ApiError::ForbiddenDetail(_)), "got {err:?}");
         assert_eq!(role_on_team(&pool, team_id, claimant).await.unwrap(), None);
     }
@@ -1404,9 +1612,13 @@ mod tests {
         let inv = invite(&pool, team_id, owner, "i@e.com").await;
 
         for who in [one, two] {
-            let err = accept_invitation(&pool, who, &inv.token)
-                .await
-                .expect_err("an ambiguous address addresses nobody");
+            let err = accept_invitation(
+                &pool,
+                &crate::test_support::human_principal_for(&pool, *who).await,
+                &inv.token,
+            )
+            .await
+            .expect_err("an ambiguous address addresses nobody");
             assert!(matches!(err, ApiError::ForbiddenDetail(_)), "got {err:?}");
         }
         assert_eq!(status_of(&pool, inv.id).await, InvitationStatus::Pending);
@@ -1422,9 +1634,13 @@ mod tests {
         add_auth_email(&pool, stranger, "stranger-uid", Some("stranger@e.com")).await;
         let inv = invite(&pool, team_id, owner, "i@e.com").await;
 
-        let err = decline_invitation(&pool, stranger, &inv.token)
-            .await
-            .expect_err("only the invitee may decline");
+        let err = decline_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *stranger).await,
+            &inv.token,
+        )
+        .await
+        .expect_err("only the invitee may decline");
         assert!(matches!(err, ApiError::ForbiddenDetail(_)), "got {err:?}");
         assert_eq!(status_of(&pool, inv.id).await, InvitationStatus::Pending);
     }
@@ -1440,12 +1656,20 @@ mod tests {
         add_auth_email(&pool, invitee, "invitee-uid", Some("Invitee@E.com")).await;
         let inv = invite(&pool, team_id, owner, "invitee@e.com").await;
 
-        accept_invitation(&pool, stranger, &inv.token)
-            .await
-            .expect_err("refused");
-        let resp = accept_invitation(&pool, invitee, &inv.token)
-            .await
-            .expect("the invitee accepts");
+        accept_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *stranger).await,
+            &inv.token,
+        )
+        .await
+        .expect_err("refused");
+        let resp = accept_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+            &inv.token,
+        )
+        .await
+        .expect("the invitee accepts");
         assert_eq!(resp.team_id, team_id);
         assert_eq!(
             role_on_team(&pool, team_id, invitee).await.unwrap(),
@@ -1469,9 +1693,13 @@ mod tests {
         .unwrap();
 
         for _ in 0..2 {
-            decline_invitation(&pool, invitee, &token)
-                .await
-                .expect("declining a spent invitation is a no-op");
+            decline_invitation(
+                &pool,
+                &crate::test_support::human_principal_for(&pool, *invitee).await,
+                &token,
+            )
+            .await
+            .expect("declining a spent invitation is a no-op");
         }
         let status: String =
             sqlx::query_scalar("SELECT status::text FROM kb_team_invitations WHERE token = $1")
@@ -1496,9 +1724,13 @@ mod tests {
             .await
             .unwrap();
 
-        let err = accept_invitation(&pool, invitee, &inv.token)
-            .await
-            .expect_err("a deleted team admits nobody");
+        let err = accept_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *invitee).await,
+            &inv.token,
+        )
+        .await
+        .expect_err("a deleted team admits nobody");
         assert!(
             matches!(&err, ApiError::BadRequest(m) if m.contains("no longer exists")),
             "got {err:?}"

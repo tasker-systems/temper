@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_join_requests (id, team_id, requesting_profile_id, status, source, created, updated) SELECT $1, t.id, $2, 'pending', 'test', now(), now() FROM kb_teams t JOIN kb_system_settings s ON t.slug = s.gating_team_slug RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "415516efcec7cf5675fc097ddf87d238332ba8e3d4f7343f9400bddfb79353d8"
+}

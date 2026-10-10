@@ -18,7 +18,6 @@ use axum::Json;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
-use temper_core::types::ids::ProfileId;
 use temper_core::types::invitation::{
     AcceptInvitationResponse, CreateInvitationRequest, InvitationTokenRequest, InviteeInvitation,
     PendingInvitationCounts, TeamInvitation,
@@ -54,13 +53,7 @@ pub async fn create(
         invited_email: body.invited_email,
         role: body.role,
     };
-    let inv = invitation_service::create_invitation(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        team_id,
-        params,
-    )
-    .await?;
+    let inv = invitation_service::create_invitation(&state.pool, &auth.0, team_id, params).await?;
     Ok((StatusCode::CREATED, Json(inv)))
 }
 
@@ -87,14 +80,9 @@ pub async fn revoke(
     auth: AuthUser,
     Path((team_id, invitation_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<StatusCode> {
-    invitation_service::revoke_invitation(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        team_id,
-        invitation_id,
-    )
-    .await
-    .map(|()| StatusCode::NO_CONTENT)
+    invitation_service::revoke_invitation(&state.pool, &auth.0, team_id, invitation_id)
+        .await
+        .map(|()| StatusCode::NO_CONTENT)
 }
 
 /// List a team's open invitations
@@ -115,7 +103,7 @@ pub async fn list(
     auth: AuthUser,
     Path(team_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<TeamInvitation>>> {
-    invitation_service::list_invitations(&state.pool, ProfileId::from(auth.0.profile().id), team_id)
+    invitation_service::list_invitations(&state.pool, &auth.0, team_id)
         .await
         .map(Json)
 }
@@ -134,7 +122,7 @@ pub async fn list_mine(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<Json<Vec<InviteeInvitation>>> {
-    invitation_service::list_for_profile(&state.pool, ProfileId::from(auth.0.profile().id))
+    invitation_service::list_for_profile(&state.pool, &auth.0)
         .await
         .map(Json)
 }
@@ -163,13 +151,9 @@ pub async fn count_mine(
     auth: AuthUser,
     Query(q): Query<CountMineQuery>,
 ) -> ApiResult<Json<PendingInvitationCounts>> {
-    invitation_service::count_for_profile(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        q.team_slug.as_deref(),
-    )
-    .await
-    .map(Json)
+    invitation_service::count_for_profile(&state.pool, &auth.0, q.team_slug.as_deref())
+        .await
+        .map(Json)
 }
 
 /// Accept a team invitation
@@ -192,13 +176,9 @@ pub async fn accept(
     auth: AuthUser,
     Json(body): Json<InvitationTokenRequest>,
 ) -> ApiResult<Json<AcceptInvitationResponse>> {
-    invitation_service::accept_invitation(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        &body.token,
-    )
-    .await
-    .map(Json)
+    invitation_service::accept_invitation(&state.pool, &auth.0, &body.token)
+        .await
+        .map(Json)
 }
 
 /// Decline a team invitation
@@ -220,11 +200,7 @@ pub async fn decline(
     auth: AuthUser,
     Json(body): Json<InvitationTokenRequest>,
 ) -> ApiResult<StatusCode> {
-    invitation_service::decline_invitation(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        &body.token,
-    )
-    .await
-    .map(|()| StatusCode::NO_CONTENT)
+    invitation_service::decline_invitation(&state.pool, &auth.0, &body.token)
+        .await
+        .map(|()| StatusCode::NO_CONTENT)
 }

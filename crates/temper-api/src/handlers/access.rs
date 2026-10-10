@@ -50,7 +50,6 @@ pub async fn create_request(
     Json(body): Json<CreateRequestBody>,
 ) -> ApiResult<(StatusCode, Json<JoinRequest>)> {
     let params = access_service::CreateJoinRequestParams {
-        profile_id: ProfileId::from(auth.0.profile().id),
         message: body.message,
         source: body.source,
         accepted_terms_version: body.accepted_terms_version,
@@ -58,6 +57,7 @@ pub async fn create_request(
 
     let request = access_service::create_join_request(
         &state.pool,
+        &auth.0,
         params,
         state.config.rate_limit.and_then(|r| r.create_request),
     )
@@ -101,7 +101,7 @@ pub async fn withdraw_request(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<StatusCode> {
-    access_service::withdraw_request(&state.pool, ProfileId::from(auth.0.profile().id)).await?;
+    access_service::withdraw_request(&state.pool, &auth.0).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -132,8 +132,8 @@ pub async fn create_review_request(
 ) -> ApiResult<StatusCode> {
     access_service::create_review_request(
         &state.pool,
+        &auth.0,
         access_service::CreateReviewRequestParams {
-            profile_id: ProfileId::from(auth.0.profile().id),
             message: body.message,
         },
     )
@@ -152,7 +152,10 @@ pub async fn create_review_request(
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
 )]
-pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<PublicSystemSettings>> {
+pub async fn get_settings(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+) -> ApiResult<Json<PublicSystemSettings>> {
     access_service::get_public_settings(&state.pool)
         .await
         .map(Json)

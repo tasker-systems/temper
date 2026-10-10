@@ -69,7 +69,7 @@ async fn soft_delete_team(pool: &PgPool, team_id: Uuid) {
 async fn add_member(pool: &PgPool, actor: Uuid, team_id: Uuid, profile: Uuid, role: TeamRole) {
     team_service::add_member(
         pool,
-        ProfileId::from(actor),
+        &temper_services::test_support::human_principal_for(pool, actor).await,
         team_id,
         &AddMemberRequest {
             profile_id: profile,

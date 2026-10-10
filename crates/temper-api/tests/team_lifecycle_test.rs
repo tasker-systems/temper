@@ -160,7 +160,7 @@ async fn create_child_as_maintainer_ok(pool: PgPool) {
     // Owner grants maintainer.
     team_service::add_member(
         &pool,
-        ProfileId::from(owner),
+        &temper_services::test_support::human_principal_for(&pool, owner).await,
         parent.id,
         &AddMemberRequest {
             profile_id: maintainer,
@@ -244,7 +244,7 @@ async fn add_member_by_non_owner_is_forbidden(pool: PgPool) {
 
     let denied = team_service::add_member(
         &pool,
-        ProfileId::from(stranger),
+        &temper_services::test_support::human_principal_for(&pool, stranger).await,
         team.id,
         &AddMemberRequest {
             profile_id: newbie,
@@ -272,7 +272,7 @@ async fn add_member_by_owner_succeeds(pool: PgPool) {
 
     let member = team_service::add_member(
         &pool,
-        ProfileId::from(owner),
+        &temper_services::test_support::human_principal_for(&pool, owner).await,
         team.id,
         &AddMemberRequest {
             profile_id: newbie,
@@ -424,7 +424,7 @@ async fn http_remove_member_returns_residual_reach_body(pool: PgPool) {
     let leaver = common::fixtures::create_test_profile(&app.pool, &leaver_email).await;
     team_service::add_member(
         &app.pool,
-        ProfileId::from(owner),
+        &temper_services::test_support::human_principal_for(&app.pool, owner).await,
         team,
         &AddMemberRequest {
             profile_id: leaver,

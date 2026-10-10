@@ -16,8 +16,7 @@ use temper_core::types::slack::{
 use temper_services::error::{ApiError, ApiResult};
 use temper_services::link_provider;
 use temper_services::services::slack_disconnect_service::{
-    admin_disconnect_slack_principal, disconnect_slack_principal, DisconnectOutcome,
-    DisconnectRequest,
+    admin_disconnect_slack_principal, disconnect_own, DisconnectOutcome, DisconnectRequest,
 };
 use temper_services::services::slack_link_service;
 use temper_services::state::AppState;
@@ -89,11 +88,11 @@ pub async fn disconnect_me(
 
     let mut disconnected = Vec::with_capacity(principals.len());
     for principal in principals {
-        let outcome = disconnect_slack_principal(
+        let outcome = disconnect_own(
             &state.pool,
             // Self-serve: the actor IS the subject. The principals were derived
             // from this profile's own link rows.
-            profile_id,
+            &auth.0,
             DisconnectRequest {
                 slack_principal_id: &principal,
                 key: &cfg.vault_key,

@@ -6,7 +6,6 @@ use axum::Json;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
-use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::{
     BulkReassignAck, BulkReassignRequest, ReassignAck, ReassignResourceRequest,
 };
@@ -36,13 +35,8 @@ pub async fn reassign_resource(
     Path(resource_id): Path<Uuid>,
     Json(body): Json<ReassignResourceRequest>,
 ) -> ApiResult<Json<ReassignAck>> {
-    reassign_service::reassign_resource(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        resource_id,
-        body.to_profile_id,
-    )
-    .await?;
+    reassign_service::reassign_resource(&state.pool, &auth.0, resource_id, body.to_profile_id)
+        .await?;
     Ok(Json(ReassignAck {
         resource_id,
         to_profile_id: body.to_profile_id,
@@ -70,7 +64,7 @@ pub async fn reassign_team(
 ) -> ApiResult<Json<BulkReassignAck>> {
     let ids = reassign_service::reassign_team_resources(
         &state.pool,
-        ProfileId::from(auth.0.profile().id),
+        &auth.0,
         team_id,
         body.from_profile_id,
         body.to_profile_id,

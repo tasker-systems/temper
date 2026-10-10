@@ -263,12 +263,12 @@ pub async fn create_team(
 /// Changing a role is `change_role`'s job, and only there are those guards enforced.
 pub async fn add_member(
     pool: &PgPool,
-    caller: ProfileId,
+    caller: &HumanPrincipal,
     team_id: Uuid,
     req: &AddMemberRequest,
 ) -> ApiResult<TeamMemberRow> {
     // Auth before writes.
-    match role_on_team(pool, team_id, caller).await? {
+    match role_on_team(pool, team_id, caller.profile_id()).await? {
         Some(role) if can_manage(role) => {}
         _ => return Err(ApiError::Forbidden),
     }
@@ -394,12 +394,12 @@ pub async fn team_detail(pool: &PgPool, caller: &Caller, team_id: Uuid) -> ApiRe
 /// `NotFound`. Auth precedes the write.
 pub async fn update_team(
     pool: &PgPool,
-    caller: ProfileId,
+    caller: &HumanPrincipal,
     team_id: Uuid,
     req: &TeamUpdateRequest,
 ) -> ApiResult<TeamRow> {
     // Auth before writes: owner or maintainer.
-    match role_on_team(pool, team_id, caller).await? {
+    match role_on_team(pool, team_id, caller.profile_id()).await? {
         Some(role) if can_manage(role) => {}
         _ => return Err(ApiError::Forbidden),
     }
@@ -431,10 +431,10 @@ pub async fn update_team(
 /// it). Idempotency: a team that is absent OR already soft-deleted yields
 /// `NotFound`. Rows are preserved — recovery is a DB-level `is_active = true`.
 /// Children are NOT recursively deleted (see the migration's cascade note).
-pub async fn delete_team(pool: &PgPool, caller: ProfileId, team_id: Uuid) -> ApiResult<()> {
+pub async fn delete_team(pool: &PgPool, caller: &HumanPrincipal, team_id: Uuid) -> ApiResult<()> {
     // Auth before writes: owner only (stricter than manage — a maintainer cannot
     // dissolve the team).
-    match role_on_team(pool, team_id, caller).await? {
+    match role_on_team(pool, team_id, caller.profile_id()).await? {
         Some(TeamRole::Owner) => {}
         _ => return Err(ApiError::Forbidden),
     }
@@ -492,14 +492,14 @@ async fn load_member(
 /// to remove the last owner.
 pub async fn remove_member(
     pool: &PgPool,
-    caller: ProfileId,
+    caller: &HumanPrincipal,
     team_id: Uuid,
     target: Uuid,
 ) -> ApiResult<RemoveMemberOutcome> {
     // Auth before writes: manager, or self-leave.
-    let is_self = *caller == target;
+    let is_self = *caller.profile_id() == target;
     if !is_self {
-        match role_on_team(pool, team_id, caller).await? {
+        match role_on_team(pool, team_id, caller.profile_id()).await? {
             Some(role) if can_manage(role) => {}
             _ => return Err(ApiError::Forbidden),
         }
@@ -518,8 +518,9 @@ pub async fn remove_member(
 
     // A profile's personal team is its own for as long as the profile exists. For a person the
     // last-owner guard below already holds them there; a machine holds its personal team as
-    // `member` (20261019100000_machines_never_govern.sql), so without this a machine could leave
-    // it, stranding a team nobody can manage and cutting its own reach to the root.
+    // `member` (20261019100000_machines_never_govern.sql), so without this anyone who manages that
+    // team could remove it, cutting its reach to the root. (The machine itself never reaches here:
+    // the caller is a person.)
     let personal: bool = sqlx::query_scalar!(
         r#"SELECT EXISTS (SELECT 1 FROM kb_teams WHERE id = $1 AND personal_of = $2) AS "p!: bool""#,
         team_id,
@@ -596,13 +597,13 @@ pub async fn remove_member(
 /// granted), refuses SAML rows, and refuses to demote the last owner.
 pub async fn change_role(
     pool: &PgPool,
-    caller: ProfileId,
+    caller: &HumanPrincipal,
     team_id: Uuid,
     target: Uuid,
     new_role: TeamRole,
 ) -> ApiResult<TeamMemberRow> {
     // Auth before writes.
-    match role_on_team(pool, team_id, caller).await? {
+    match role_on_team(pool, team_id, caller.profile_id()).await? {
         Some(role) if can_manage(role) => {}
         _ => return Err(ApiError::Forbidden),
     }
@@ -820,9 +821,14 @@ mod lifecycle_tests {
         let _r1 = mk_homed_resource(&pool, shared, leaver).await;
         let _r2 = mk_homed_resource(&pool, shared, leaver).await;
 
-        let outcome = remove_member(&pool, ProfileId::from(owner), team, leaver)
-            .await
-            .expect("removal ok");
+        let outcome = remove_member(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            team,
+            leaver,
+        )
+        .await
+        .expect("removal ok");
         assert_eq!(outcome.residual_owned.count, 2);
         assert_eq!(outcome.residual_owned.contexts.len(), 1);
         assert_eq!(outcome.residual_owned.contexts[0].count, 2);
@@ -852,9 +858,14 @@ mod lifecycle_tests {
         let _r2 = mk_homed_resource(&pool, ctx_b, leaver).await;
         let _r3 = mk_homed_resource(&pool, ctx_a, leaver).await;
 
-        let outcome = remove_member(&pool, ProfileId::from(owner), team, leaver)
-            .await
-            .expect("removal ok");
+        let outcome = remove_member(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            team,
+            leaver,
+        )
+        .await
+        .expect("removal ok");
         assert_eq!(outcome.residual_owned.count, 3);
         assert_eq!(
             outcome.residual_owned.contexts.len(),
@@ -879,9 +890,14 @@ mod lifecycle_tests {
         add(&pool, team, owner, "owner", "native").await;
         add(&pool, team, leaver, "member", "native").await;
 
-        let outcome = remove_member(&pool, ProfileId::from(owner), team, leaver)
-            .await
-            .expect("removal ok");
+        let outcome = remove_member(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            team,
+            leaver,
+        )
+        .await
+        .expect("removal ok");
         assert_eq!(outcome.residual_owned.count, 0);
         assert!(outcome.residual_owned.contexts.is_empty());
     }
@@ -894,9 +910,14 @@ mod lifecycle_tests {
         add(&pool, team, owner, "owner", "native").await;
         add(&pool, team, member, "member", "native").await;
 
-        remove_member(&pool, ProfileId::from(owner), team, member)
-            .await
-            .unwrap();
+        remove_member(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            team,
+            member,
+        )
+        .await
+        .unwrap();
         let detail = team_detail(
             &pool,
             &crate::test_support::caller_for(&pool, owner).await,
@@ -918,12 +939,23 @@ mod lifecycle_tests {
         add(&pool, team, b, "member", "native").await;
 
         // a removing b → Forbidden.
-        let denied = remove_member(&pool, ProfileId::from(a), team, b).await;
+        let denied = remove_member(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, a).await,
+            team,
+            b,
+        )
+        .await;
         assert!(matches!(denied, Err(ApiError::Forbidden)));
         // a removing a (self-leave) → ok.
-        remove_member(&pool, ProfileId::from(a), team, a)
-            .await
-            .unwrap();
+        remove_member(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, a).await,
+            team,
+            a,
+        )
+        .await
+        .unwrap();
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -932,7 +964,13 @@ mod lifecycle_tests {
         let team = mk_team(&pool, "acme").await;
         add(&pool, team, owner, "owner", "native").await;
 
-        let denied = remove_member(&pool, ProfileId::from(owner), team, owner).await;
+        let denied = remove_member(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            team,
+            owner,
+        )
+        .await;
         assert!(matches!(denied, Err(ApiError::Conflict(_))));
     }
 
@@ -944,7 +982,13 @@ mod lifecycle_tests {
         add(&pool, team, owner, "owner", "native").await;
         add(&pool, team, idp, "member", "idp").await;
 
-        let denied = remove_member(&pool, ProfileId::from(owner), team, idp).await;
+        let denied = remove_member(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            team,
+            idp,
+        )
+        .await;
         assert!(matches!(denied, Err(ApiError::Conflict(_))));
     }
 
@@ -958,7 +1002,7 @@ mod lifecycle_tests {
 
         let row = change_role(
             &pool,
-            ProfileId::from(owner),
+            &crate::test_support::human_principal_for(&pool, owner).await,
             team,
             member,
             TeamRole::Maintainer,
@@ -976,8 +1020,14 @@ mod lifecycle_tests {
         add(&pool, team, owner, "owner", "native").await;
         add(&pool, team, member, "member", "native").await;
 
-        let denied =
-            change_role(&pool, ProfileId::from(owner), team, member, TeamRole::Owner).await;
+        let denied = change_role(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            team,
+            member,
+            TeamRole::Owner,
+        )
+        .await;
         assert!(matches!(denied, Err(ApiError::BadRequest(_))));
     }
 
@@ -989,7 +1039,7 @@ mod lifecycle_tests {
 
         let denied = change_role(
             &pool,
-            ProfileId::from(owner),
+            &crate::test_support::human_principal_for(&pool, owner).await,
             team,
             owner,
             TeamRole::Maintainer,
@@ -1005,8 +1055,14 @@ mod lifecycle_tests {
         let team = mk_team(&pool, "acme").await;
         add(&pool, team, owner, "owner", "native").await;
 
-        let denied =
-            change_role(&pool, ProfileId::from(owner), team, ghost, TeamRole::Member).await;
+        let denied = change_role(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            team,
+            ghost,
+            TeamRole::Member,
+        )
+        .await;
         assert!(matches!(denied, Err(ApiError::NotFound(_))));
     }
 
@@ -1020,7 +1076,7 @@ mod lifecycle_tests {
 
         let denied = change_role(
             &pool,
-            ProfileId::from(owner),
+            &crate::test_support::human_principal_for(&pool, owner).await,
             team,
             idp,
             TeamRole::Maintainer,
@@ -1040,9 +1096,14 @@ mod lifecycle_tests {
         add(&pool, team, member, "member", "native").await;
 
         // A maintainer (not just an owner) may manage membership.
-        remove_member(&pool, ProfileId::from(maintainer), team, member)
-            .await
-            .unwrap();
+        remove_member(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, maintainer).await,
+            team,
+            member,
+        )
+        .await
+        .unwrap();
         let detail = team_detail(
             &pool,
             &crate::test_support::caller_for(&pool, owner).await,
@@ -1088,9 +1149,14 @@ mod lifecycle_tests {
             name: Some("Acme Inc".to_string()),
             description: Some("the roadrunner people".to_string()),
         };
-        let row = update_team(&pool, ProfileId::from(owner), team, &req)
-            .await
-            .unwrap();
+        let row = update_team(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            team,
+            &req,
+        )
+        .await
+        .unwrap();
         assert_eq!(row.name, "Acme Inc");
         assert_eq!(row.description.as_deref(), Some("the roadrunner people"));
 
@@ -1099,9 +1165,14 @@ mod lifecycle_tests {
             name: Some("Acme LLC".to_string()),
             description: None,
         };
-        let row2 = update_team(&pool, ProfileId::from(owner), team, &req2)
-            .await
-            .unwrap();
+        let row2 = update_team(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            team,
+            &req2,
+        )
+        .await
+        .unwrap();
         assert_eq!(row2.name, "Acme LLC");
         assert_eq!(row2.description.as_deref(), Some("the roadrunner people"));
     }
@@ -1118,7 +1189,13 @@ mod lifecycle_tests {
             name: Some("hijack".to_string()),
             description: None,
         };
-        let denied = update_team(&pool, ProfileId::from(member), team, &req).await;
+        let denied = update_team(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, member).await,
+            team,
+            &req,
+        )
+        .await;
         assert!(matches!(denied, Err(ApiError::Forbidden)));
     }
 
@@ -1128,14 +1205,24 @@ mod lifecycle_tests {
         let team = mk_team(&pool, "acme").await;
         add(&pool, team, owner, "owner", "native").await;
 
-        delete_team(&pool, ProfileId::from(owner), team)
-            .await
-            .unwrap();
+        delete_team(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            team,
+        )
+        .await
+        .unwrap();
         let req = TeamUpdateRequest {
             name: Some("ghost".to_string()),
             description: None,
         };
-        let denied = update_team(&pool, ProfileId::from(owner), team, &req).await;
+        let denied = update_team(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            team,
+            &req,
+        )
+        .await;
         assert!(matches!(denied, Err(ApiError::NotFound(_))));
     }
 
@@ -1150,9 +1237,13 @@ mod lifecycle_tests {
         let before = list_teams(&pool, ProfileId::from(owner)).await.unwrap();
         assert!(before.iter().any(|t| t.id == team));
 
-        delete_team(&pool, ProfileId::from(owner), team)
-            .await
-            .unwrap();
+        delete_team(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            team,
+        )
+        .await
+        .unwrap();
 
         // Gone from the caller's listing and no longer showable.
         let after = list_teams(&pool, ProfileId::from(owner)).await.unwrap();
@@ -1175,7 +1266,12 @@ mod lifecycle_tests {
         add(&pool, team, maintainer, "maintainer", "native").await;
 
         // A maintainer may manage membership but NOT dissolve the team.
-        let denied = delete_team(&pool, ProfileId::from(maintainer), team).await;
+        let denied = delete_team(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, maintainer).await,
+            team,
+        )
+        .await;
         assert!(matches!(denied, Err(ApiError::Forbidden)));
     }
 
@@ -1198,7 +1294,12 @@ mod lifecycle_tests {
         .await
         .unwrap();
 
-        let denied = delete_team(&pool, ProfileId::from(owner), sys).await;
+        let denied = delete_team(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            sys,
+        )
+        .await;
         assert!(matches!(denied, Err(ApiError::Conflict(_))));
     }
 
@@ -1220,9 +1321,13 @@ mod lifecycle_tests {
         assert!(is_visible(&pool, member, resource).await);
 
         // Soft-delete the team → the read-reach evaporates for the member...
-        delete_team(&pool, ProfileId::from(owner), team)
-            .await
-            .unwrap();
+        delete_team(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            team,
+        )
+        .await
+        .unwrap();
         assert!(!is_visible(&pool, member, resource).await);
 
         // ...while the resource's own owner still sees it (unaffected by the team).
@@ -1240,7 +1345,7 @@ mod lifecycle_tests {
 
         let denied = add_member(
             &pool,
-            ProfileId::from(owner),
+            &crate::test_support::human_principal_for(&pool, owner).await,
             team,
             &AddMemberRequest {
                 profile_id: newcomer,
@@ -1263,7 +1368,7 @@ mod lifecycle_tests {
 
         let denied = add_member(
             &pool,
-            ProfileId::from(owner),
+            &crate::test_support::human_principal_for(&pool, owner).await,
             team,
             &AddMemberRequest {
                 profile_id: member,
@@ -1295,7 +1400,7 @@ mod lifecycle_tests {
 
         let row = add_member(
             &pool,
-            ProfileId::from(owner),
+            &crate::test_support::human_principal_for(&pool, owner).await,
             team,
             &AddMemberRequest {
                 profile_id: newcomer,
@@ -1332,7 +1437,7 @@ mod lifecycle_tests {
 
         let denied = add_member(
             &pool,
-            ProfileId::from(maintainer),
+            &crate::test_support::human_principal_for(&pool, maintainer).await,
             team,
             &AddMemberRequest {
                 profile_id: owner,
@@ -1361,7 +1466,7 @@ mod lifecycle_tests {
 
         let denied = add_member(
             &pool,
-            ProfileId::from(owner),
+            &crate::test_support::human_principal_for(&pool, owner).await,
             team,
             &AddMemberRequest {
                 profile_id: provisioned,
@@ -1391,7 +1496,7 @@ mod lifecycle_tests {
 
         let denied = add_member(
             &pool,
-            ProfileId::from(owner),
+            &crate::test_support::human_principal_for(&pool, owner).await,
             team,
             &AddMemberRequest {
                 profile_id: member,

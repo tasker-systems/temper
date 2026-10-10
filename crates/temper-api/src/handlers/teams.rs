@@ -83,13 +83,7 @@ pub async fn add_member(
     Path(team_id): Path<Uuid>,
     Json(body): Json<AddMemberRequest>,
 ) -> ApiResult<(StatusCode, Json<TeamMemberRow>)> {
-    let row = team_service::add_member(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        team_id,
-        &body,
-    )
-    .await?;
+    let row = team_service::add_member(&state.pool, &auth.0, team_id, &body).await?;
     Ok((StatusCode::CREATED, Json(row)))
 }
 
@@ -136,14 +130,9 @@ pub async fn update(
     Path(team_id): Path<Uuid>,
     Json(body): Json<TeamUpdateRequest>,
 ) -> ApiResult<Json<TeamRow>> {
-    team_service::update_team(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        team_id,
-        &body,
-    )
-    .await
-    .map(Json)
+    team_service::update_team(&state.pool, &auth.0, team_id, &body)
+        .await
+        .map(Json)
 }
 
 /// Delete a team
@@ -166,7 +155,7 @@ pub async fn delete(
     auth: AuthUser,
     Path(team_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    team_service::delete_team(&state.pool, ProfileId::from(auth.0.profile().id), team_id).await?;
+    team_service::delete_team(&state.pool, &auth.0, team_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -192,13 +181,7 @@ pub async fn remove_member(
     auth: AuthUser,
     Path((team_id, profile_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<RemoveMemberOutcome>> {
-    let outcome = team_service::remove_member(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        team_id,
-        profile_id,
-    )
-    .await?;
+    let outcome = team_service::remove_member(&state.pool, &auth.0, team_id, profile_id).await?;
     Ok(Json(outcome))
 }
 
@@ -227,13 +210,7 @@ pub async fn change_role(
     Path((team_id, profile_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<ChangeRoleRequest>,
 ) -> ApiResult<Json<TeamMemberRow>> {
-    team_service::change_role(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        team_id,
-        profile_id,
-        body.role,
-    )
-    .await
-    .map(Json)
+    team_service::change_role(&state.pool, &auth.0, team_id, profile_id, body.role)
+        .await
+        .map(Json)
 }

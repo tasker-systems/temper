@@ -710,6 +710,10 @@ mod tests {
 
     /// Approving a machine's join request admits it by standing and enrolls it nowhere: the
     /// approval's gating-team `watcher` row is for people.
+    ///
+    /// A machine cannot file a join request (`create_join_request` takes a person), so the request
+    /// is seeded as the standing transition and row that filing writes — the shape a request filed
+    /// before that line still has.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn approving_a_machines_join_request_does_not_enroll_it(pool: PgPool) {
         let admin = seed_admin(&pool).await;
@@ -720,18 +724,25 @@ mod tests {
         )
         .await
         .expect("provision");
-        let request = access_service::create_join_request(
-            &pool,
-            access_service::CreateJoinRequestParams {
-                profile_id: ProfileId::from(client.profile_id),
-                message: None,
-                source: "test".to_string(),
-                accepted_terms_version: None,
-            },
-            None,
+        sqlx::query_scalar!(
+            "SELECT principal_standing_apply($1, 'request', 'requested', $1, NULL)",
+            client.profile_id,
         )
+        .fetch_one(&pool)
         .await
-        .expect("a born-Denied machine may request");
+        .expect("a born-Denied machine moves to requested");
+        let request_id: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_join_requests \
+                 (id, team_id, requesting_profile_id, status, source, created, updated) \
+             SELECT $1, t.id, $2, 'pending', 'test', now(), now() \
+               FROM kb_teams t JOIN kb_system_settings s ON t.slug = s.gating_team_slug \
+             RETURNING id",
+            Uuid::now_v7(),
+            client.profile_id,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the machine's pending request on the gating team");
         // Take `temper-system` out of auto-join, so the approval's own `watcher` insert is the only
         // thing that could put the machine in the gating team.
         sqlx::query!("UPDATE kb_teams SET auto_join_role = NULL WHERE slug = 'temper-system'")
@@ -742,7 +753,7 @@ mod tests {
             &pool,
             &crate::test_support::system_admin_proof_for(&pool, admin.uuid()).await,
             access_service::ReviewRequestParams {
-                request_id: request.id,
+                request_id,
                 decision: temper_core::types::access_gate::JoinRequestStatus::Approved,
                 decision_note: None,
             },
@@ -1387,7 +1398,7 @@ mod tests {
 
         let err = crate::services::team_service::add_member(
             &pool,
-            admin,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
             team,
             &AddMemberRequest {
                 profile_id: machine,
@@ -1400,7 +1411,7 @@ mod tests {
 
         crate::services::team_service::add_member(
             &pool,
-            admin,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
             team,
             &AddMemberRequest {
                 profile_id: machine,
@@ -1430,7 +1441,7 @@ mod tests {
 
         let err = crate::services::team_service::change_role(
             &pool,
-            admin,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
             team,
             machine,
             TeamRole::Maintainer,
@@ -1454,9 +1465,10 @@ mod tests {
     }
 
     /// As `member` the last-owner guard no longer holds a machine on its personal team; this
-    /// refusal does.
+    /// refusal does. The machine cannot leave by itself (`remove_member` takes a person), so the
+    /// witness is a person who manages the team removing it.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn a_machine_cannot_leave_its_personal_team(pool: PgPool) {
+    async fn a_machine_is_never_removed_from_its_personal_team(pool: PgPool) {
         let admin = seed_admin(&pool).await;
         let machine = approved_machine(&pool, admin, "stay-agent").await;
         let team: Uuid =
@@ -1464,14 +1476,22 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .expect("personal team");
+        sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner')",
+            team,
+            *admin,
+        )
+        .execute(&pool)
+        .await
+        .expect("a person manages the machine's personal team");
         let err = crate::services::team_service::remove_member(
             &pool,
-            ProfileId::from(machine),
+            &crate::test_support::human_principal_for(&pool, *admin).await,
             team,
             machine,
         )
         .await
-        .expect_err("a machine cannot leave its personal team");
+        .expect_err("a machine is never removed from its personal team");
         assert!(
             matches!(&err, crate::error::ApiError::Conflict(m) if m.contains("personal team")),
             "{err:?}"

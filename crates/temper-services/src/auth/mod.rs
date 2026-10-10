@@ -21,21 +21,23 @@
 //! asymmetric. One constructor, one ladder (`email.rs`), one answer per token.
 //!
 //! Entry points:
-//! - [`authenticate_token`] — the token path. Verified [`RawJwtClaims`] + the raw
-//!   token ⇒ authenticated profile. Both surfaces' every authed request.
-//! - [`authenticate_token_existing_only`] — the same token path, LOOKUP-ONLY: it
-//!   refuses rather than provisioning. For flows that authenticate a human but are
-//!   not registration routes (the Slack account-link callback). Same seam, same
-//!   Level 1 gate; it differs only in never minting a profile.
+//! - [`authenticate_caller`] — the token path. Verified [`RawJwtClaims`] + the raw token ⇒ a
+//!   classified [`Caller`], holding exactly one of [`HumanPrincipal`] / [`MachinePrincipal`].
+//!   Both surfaces' every authed request.
+//! - [`authenticate_caller_existing_only`] — the same token path, LOOKUP-ONLY: it refuses rather
+//!   than provisioning. For flows that authenticate a person but are not registration routes (the
+//!   Slack account-link callback). Same seam, same Level 1 gate, same classification; it differs
+//!   only in never minting a profile.
 //! - [`resolve_federated_human`] — the federated path. An assertion already
 //!   authenticated out-of-band (SAML/HMAC, no JWT) ⇒ resolved-or-JIT'd profile.
 //! - [`require_system_access`] — Level 2, consuming proof of Level 1.
-//! - [`authenticate_caller`] / [`authenticate_caller_existing_only`] — the two token paths above,
-//!   followed by the one human-or-machine classification. Yield a [`Caller`] holding exactly one
-//!   of [`HumanPrincipal`] / [`MachinePrincipal`].
+//!
+//! The two token paths are crate-private (`authenticate_token` and
+//! `authenticate_token_existing_only`), so no surface can hold an unclassified
+//! [`AuthenticatedProfile`] from a token.
 //!
 //! Two levels form a typestate chain:
-//! 1. `authenticate` (crate-private, reached only via [`authenticate_token`]) — resolve
+//! 1. `authenticate` (crate-private, reached only via `authenticate_token`) — resolve
 //!    the profile + `is_active`. Runs on every authed request on both surfaces.
 //!    Yields [`AuthenticatedProfile`].
 //! 2. [`require_system_access`] — consumes proof of Level 1, adds the access gate.
@@ -114,7 +116,7 @@ pub enum AuthzError {
 /// and no `/userinfo` to ask, so a ladder on that path would be an authentication
 /// failure dressed as a lookup. That ordering is load-bearing, not incidental — see
 /// `machine_token_authenticates_without_running_the_email_ladder`.
-pub async fn authenticate_token(
+pub(crate) async fn authenticate_token(
     state: &AppState,
     raw: &RawJwtClaims,
     token: &str,
@@ -181,7 +183,7 @@ async fn claims_from_token(
 /// with `authenticate`, so an inactive profile is refused here exactly as it is on the login
 /// path. Level 2 ([`require_system_access`]) remains the caller's to apply, identical to the
 /// login path.
-pub async fn authenticate_token_existing_only(
+pub(crate) async fn authenticate_token_existing_only(
     state: &AppState,
     raw: &RawJwtClaims,
     token: &str,
@@ -477,7 +479,7 @@ pub(crate) async fn classify_caller(
     Ok(Caller::Human(HumanPrincipal(authed)))
 }
 
-/// [`authenticate_token`], then `classify_caller`: a verified JWT ⇒ a classified [`Caller`]. The
+/// `authenticate_token`, then `classify_caller`: a verified JWT ⇒ a classified [`Caller`]. The
 /// entry point for a surface's authed requests, so classification lives in this module with the
 /// proofs it mints.
 pub async fn authenticate_caller(
@@ -489,7 +491,7 @@ pub async fn authenticate_caller(
     classify_caller(&state.pool, authed).await
 }
 
-/// [`authenticate_token_existing_only`], then `classify_caller` — the lookup-only path, for a
+/// `authenticate_token_existing_only`, then `classify_caller` — the lookup-only path, for a
 /// credential act outside the request middleware (the Slack account-link callback), which must not
 /// be the one door that skips classification.
 pub async fn authenticate_caller_existing_only(

@@ -12,8 +12,7 @@ use jsonwebtoken::{decode, TokenData};
 
 use temper_auth::{build_authorize_url, generate_pkce_pair, AuthorizeParams};
 use temper_core::types::ids::ProfileId;
-use temper_services::auth::AuthenticatedProfile;
-use temper_services::auth::{AuthzError, RawJwtClaims};
+use temper_services::auth::{AuthzError, Caller, HumanPrincipal, RawJwtClaims};
 use temper_services::error::ApiError;
 use temper_services::services::{slack_grant_vault_service, slack_link_service, standing_service};
 use temper_services::state::{AppState, KeyLookupError};
@@ -353,13 +352,14 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<CallbackOutc
 /// `middleware::auth::require_auth` — same key store, same algorithm-scoped validation, same
 /// `decode` — before handing the verified claims to the seam.
 ///
-/// `authenticate_token_existing_only`, never `authenticate_token`: the latter auto-provisions
+/// `authenticate_caller_existing_only`, never `authenticate_caller`: the latter auto-provisions
 /// a profile, which on a stray click would mint an account and confer auto-join team reach.
-/// Linking an existing identity is not a registration route.
+/// Linking an existing identity is not a registration route. Its classification is what lets
+/// this return a [`HumanPrincipal`]: a machine never links a Slack account.
 async fn resolve_existing(
     state: &AppState,
     access_token: &str,
-) -> Result<AuthenticatedProfile, ApiError> {
+) -> Result<HumanPrincipal, ApiError> {
     let vk = state
         .jwks_store
         .get_decoding_key_for_token(access_token)
@@ -393,23 +393,38 @@ async fn resolve_existing(
         })?;
     let raw = token_data.claims;
 
-    temper_services::auth::authenticate_token_existing_only(state, &raw, access_token)
-        .await
-        .map_err(|e| {
-            // Every arm collapses to ONE refusal, here and in the caller, so that no page
-            // ever reveals whether a profile exists (D3). Mapping the arms to distinct
-            // `ApiError`s would only look like it did something: `run_callback` discards
-            // this value and renders a single fixed sentence. The seam has already logged
-            // each reason with the `sub`.
-            //
-            // The one arm worth distinguishing is `Deactivated`, and what makes it worth it
-            // is the log line, not the error — a deactivated profile reaching the link flow
-            // is an operator-visible event.
-            if let AuthzError::Deactivated { profile_id } = e {
-                tracing::warn!(%profile_id, "slack link: rejected (profile is deactivated)");
-            }
-            ApiError::Unauthorized("Invalid or expired token".to_string())
-        })
+    let caller =
+        temper_services::auth::authenticate_caller_existing_only(state, &raw, access_token)
+            .await
+            .map_err(|e| {
+                // Every arm collapses to ONE refusal, here and in the caller, so that no page
+                // ever reveals whether a profile exists (D3). Mapping the arms to distinct
+                // `ApiError`s would only look like it did something: `run_callback` discards
+                // this value and renders a single fixed sentence. The seam has already logged
+                // each reason with the `sub`.
+                //
+                // The one arm worth distinguishing is `Deactivated`, and what makes it worth it
+                // is the log line, not the error — a deactivated profile reaching the link flow
+                // is an operator-visible event.
+                if let AuthzError::Deactivated { profile_id } = e {
+                    tracing::warn!(%profile_id, "slack link: rejected (profile is deactivated)");
+                }
+                ApiError::Unauthorized("Invalid or expired token".to_string())
+            })?;
+
+    // Linking a Slack account vaults a credential grant — a person's act. A login that resolves to
+    // a machine profile is refused here, before the link transaction opens, and `run_callback`
+    // renders the same single sentence as every other refusal.
+    match caller {
+        Caller::Human(human) => Ok(human),
+        Caller::Machine(machine) => {
+            tracing::warn!(
+                profile_id = %machine.profile_id(),
+                "slack link: rejected (the login resolves to a machine principal)"
+            );
+            Err(temper_services::auth::machine_principal_refused())
+        }
+    }
 }
 
 // ── Branded callback pages ──────────────────────────────────────────────────────
