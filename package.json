@@ -2,13 +2,14 @@
   "private": true,
   "workspaces": ["packages/temper-cloud", "packages/temper-ui"],
   "devDependencies": {
-    "@vercel/blob": "^1",
+    "@vercel/blob": "^2",
     "onnxruntime-common": "1.21.0",
     "onnxruntime-node": "1.21.0",
     "typescript": "^5.8"
   },
   "overrides": {
     "onnxruntime-node": "1.21.0",
-    "onnxruntime-common": "1.21.0"
+    "onnxruntime-common": "1.21.0",
+    "sharp": "^0.35.5"
   }
 }
