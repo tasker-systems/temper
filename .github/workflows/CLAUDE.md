@@ -62,3 +62,31 @@ skips loudly when the binary is absent; CI is the backstop that does not depend 
 setup. The committed test-fixture keys are allowlisted in `.gitleaks.toml` with their
 rationale beside them; inline source exceptions use `gitleaks:allow` on the same line (the
 line-above form is NOT honored by gitleaks 8.30).
+
+## The merge queue: `CI Success` must report on `merge_group` too
+
+`ci.yml` triggers on `merge_group` so the queue can re-test each PR as the exact commit that
+will land (main + every entry ahead of it + this PR) on a `gh-readonly-queue/main/pr-N-<sha>`
+branch. The ruleset's one required context, `CI Success`, has to report on that commit or every
+queued PR waits out the queue's timeout and is ejected — so **anything new that gates on PR
+context must say what it does on a `merge_group` event too**. The payload has no
+`pull_request`; what it has instead:
+
+- **Base** — `github.event.merge_group.base_sha`, the group's parent. Behind other queued PRs
+  that is *their* group commit, not main's tip, so diffing against it sees this PR alone.
+  `merge-base origin/main HEAD` does not: it is main's tip, and the diff carries every PR ahead.
+  `detect-scope` passes it as `--base`; `quality-gate.yml` passes it as `GITHUB_BASE_SHA`.
+- **PR number / labels** — only through the branch name, `pr-<N>-`. The wire cross-check parses
+  it for `GITHUB_PR_NUMBER`; `ci-success` parses it to read `codeql-override` off the PR, so a
+  CodeQL stall in the queue is released the same way it is on the PR.
+
+The `code_scanning` ruleset rule does not evaluate merge groups — it judges each PR before it
+can be queued. CodeQL still runs in the queue (uniform, as above) and still fans into
+`CI Success`.
+
+The post-merge run on `main` stays. The queue makes it redundant as a merge-skew check (the
+queue tested that exact commit), but it is still what refreshes the default branch's CodeQL
+analyses that the `code_scanning` rule diffs every PR against.
+
+Vercel skips previews of `gh-readonly-queue/*` branches (`scripts/vercel-ignore-build.sh`):
+the PR had its own preview and the commit is on main minutes later.

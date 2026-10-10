@@ -227,9 +227,12 @@ jobs:
       # attempts this fetch itself; if BOTH fail it exits 2, and the cross-check turns that into a
       # failure whenever the change carries a migration. "I could not look" never renders as
       # "nothing moved".
+      #
+      # A merge-queue run fetches the group's parent instead: the exact base of this entry, which
+      # behind other queued PRs is THEIR group commit, not main — so the diff is this PR alone.
       - name: Fetch the base revision (for the wire diff)
-        if: github.event_name == 'pull_request'
-        run: git fetch --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        run: git fetch --depth=1 origin "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
 
       - name: Guard test — detect-ci-scope
         run: bash .github/scripts/test-detect-ci-scope.sh
@@ -418,7 +421,7 @@ jobs:
       # 2026-07-30 outage.
       - name: A migration's classification survives the compiler's record (cross-check)
         env:
-          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: bash .github/scripts/sqlx-schema-crosscheck.sh
 
       # The wire half of the declared-class gate (shared-semver-policy spec §4, D-S4): every PR
@@ -434,10 +437,20 @@ jobs:
       # Cargo.toml [*dependencies*] tables) are set aside by content, so a Dependabot bump owes
       # no row — see the script's DEPENDENCY-ONLY section.
       - name: Wire-touching PRs declare their compat class (register cross-check)
+        #
+        # In the merge queue there is no pull_request payload; the queue branch
+        # (`gh-readonly-queue/main/pr-<N>-<base sha>`) names the PR, so a row written with
+        # the real number still matches. Unparsable leaves it empty — `pr: self` only.
         env:
-          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: bash .github/scripts/wire-class-crosscheck.sh
+          MERGE_GROUP_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+        run: |
+          if [ -z "${GITHUB_PR_NUMBER}" ] && [ -n "${MERGE_GROUP_HEAD_REF}" ]; then
+            GITHUB_PR_NUMBER="$(printf '%s' "${MERGE_GROUP_HEAD_REF}" | sed -n 's#^refs/heads/gh-readonly-queue/[^ ]*/pr-\([0-9][0-9]*\)-[0-9a-f]*$#\1#p')"
+            export GITHUB_PR_NUMBER
+          fi
+          bash .github/scripts/wire-class-crosscheck.sh
 
       # The pinned-contract gate (2026-09-16): the committed openapi.json stays inside
       # the current pinned minor (schemas/versions/<M.m>/) — additive-only within the
