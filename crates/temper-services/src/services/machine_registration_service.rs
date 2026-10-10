@@ -1453,6 +1453,49 @@ mod tests {
         assert!(is_machine_refusal(&err), "{err:?}");
     }
 
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn create_team_refuses_a_machine(pool: PgPool) {
+        use temper_core::types::team::TeamCreateRequest;
+        let admin = seed_admin(&pool).await;
+        let machine = approved_machine(&pool, admin, "founder-agent").await;
+        let authed = crate::test_support::authenticated_profile_for(&pool, machine).await;
+        let req = TeamCreateRequest {
+            slug: "agent-made".to_string(),
+            name: None,
+            parent: None,
+            auto_join_role: None,
+        };
+        let err = crate::services::team_service::create_team(&pool, &authed, &req)
+            .await
+            .expect_err("a machine cannot create a team");
+        assert!(is_machine_refusal(&err), "{err:?}");
+    }
+
+    /// As `member` the last-owner guard no longer holds a machine on its personal team; this
+    /// refusal does.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_machine_cannot_leave_its_personal_team(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let machine = approved_machine(&pool, admin, "stay-agent").await;
+        let team: Uuid =
+            sqlx::query_scalar!("SELECT id FROM kb_teams WHERE personal_of = $1", machine,)
+                .fetch_one(&pool)
+                .await
+                .expect("personal team");
+        let err = crate::services::team_service::remove_member(
+            &pool,
+            ProfileId::from(machine),
+            team,
+            machine,
+        )
+        .await
+        .expect_err("a machine cannot leave its personal team");
+        assert!(
+            matches!(&err, crate::error::ApiError::Conflict(m) if m.contains("personal team")),
+            "{err:?}"
+        );
+    }
+
     /// Pin, not a bite: capping the personal team at `member` takes nothing a machine uses on its
     /// own content — its default context is profile-owned.
     #[sqlx::test(migrator = "crate::MIGRATOR")]

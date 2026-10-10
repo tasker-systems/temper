@@ -18,8 +18,9 @@
 --      out right: the personal-team trigger fires on the profile insert, before the client row
 --      exists, so at that moment the profile is not yet a machine. Capping here rather than
 --      refusing keeps a binary that inserts in that order working. A governance grant on the
---      profile refuses the client row outright — a machine is always a fresh profile, so that
---      can only be a mistake.
+--      profile refuses the client row outright: registration always creates a fresh profile and
+--      rebind adds a client row to a profile that is already a machine, so a governing profile
+--      becoming a machine can only be a mistake.
 --   2. A role above `member` is refused for a machine profile on any insert or update of
 --      `kb_team_members`.
 --   3. A governance grant is refused for a machine profile.
@@ -90,7 +91,30 @@ CREATE TRIGGER trg_machine_client_caps_profile
 
 -- Existing machines: personal-team `owner` rows (and anything else above `member`) become
 -- `member`, and any governance grant is revoked through `principal_governance_set` so the
--- revocation is evented like every other.
+-- revocation is evented like every other. Before that, warn for each team (other than a machine's
+-- own personal team) whose only owners are machines — lowering them leaves it ownerless, which no
+-- API act can repair — and for a deployment whose only governance grants are held by machines.
+DO $$
+DECLARE r record;
+BEGIN
+    FOR r IN SELECT t.id, t.slug FROM kb_teams t
+              WHERE (t.personal_of IS NULL OR NOT is_machine_profile(t.personal_of))
+                AND EXISTS (SELECT 1 FROM kb_team_members tm
+                             WHERE tm.team_id = t.id AND tm.role = 'owner')
+                AND NOT EXISTS (SELECT 1 FROM kb_team_members tm
+                                 WHERE tm.team_id = t.id AND tm.role = 'owner'
+                                   AND NOT is_machine_profile(tm.profile_id))
+    LOOP
+        RAISE WARNING 'team % (%) is owned only by machine principals and is left without an owner',
+            r.slug, r.id;
+    END LOOP;
+    IF EXISTS (SELECT 1 FROM kb_principal_governance)
+       AND NOT EXISTS (SELECT 1 FROM kb_principal_governance g
+                        WHERE NOT is_machine_profile(g.profile_id)) THEN
+        RAISE WARNING 'every governance grant is held by a machine principal; revoking them leaves no system admin';
+    END IF;
+END $$;
+
 UPDATE kb_team_members tm
    SET role = 'member'
  WHERE tm.role < 'member'::team_role
