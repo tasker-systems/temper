@@ -1,3 +1,13 @@
+<p align="right">
+
+<a href="https://superagent.sh">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://www.superagent.sh/api/badge/tasker-systems/temper/shield.svg?theme=dark&accent=violet">
+    <img alt="Security posture verified by Superagent" src="https://www.superagent.sh/api/badge/tasker-systems/temper/shield.svg?theme=light&accent=violet">
+  </picture>
+</a>
+</p>
+
 <p align="center">
   <img src="docs/brand-mark.svg" alt="temper" width="200" />
 </p>
