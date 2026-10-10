@@ -80,7 +80,8 @@ pub fn lost_ack_prone(command: &Commands) -> Option<LostAckProne> {
         } => match action {
             AdminErasureAction::Resource { execute, .. }
             | AdminErasureAction::Principal { execute, .. }
-            | AdminErasureAction::BlockHistory { execute, .. } => {
+            | AdminErasureAction::BlockHistory { execute, .. }
+            | AdminErasureAction::Field { execute, .. } => {
                 execute.then_some(LostAckProne::ErasureAct)
             }
         },
@@ -175,6 +176,30 @@ mod tests {
                 "{err}"
             );
         }
+    }
+
+    /// FAILS IF an executed field scrub goes unhinted, or its listing or survey is treated as a
+    /// write.
+    #[test]
+    fn only_an_executed_field_scrub_is_lost_ack_prone() {
+        let field = |field: Option<crate::cli::CliScrubField>, execute: bool| Commands::Admin {
+            action: AdminAction::Erasure {
+                action: AdminErasureAction::Field {
+                    resource: "r".into(),
+                    field,
+                    family: None,
+                    clear: false,
+                    execute,
+                },
+            },
+        };
+        let title = Some(crate::cli::CliScrubField::Title);
+        assert_eq!(lost_ack_prone(&field(None, false)), None, "the listing");
+        assert_eq!(lost_ack_prone(&field(title, false)), None, "the survey");
+        assert_eq!(
+            lost_ack_prone(&field(title, true)),
+            Some(LostAckProne::ErasureAct)
+        );
     }
 
     #[test]

@@ -623,6 +623,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/resources/field-scrub": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Scrub a resource field's history
+         * @description Redacts every prior value of a resource's title, origin URI, one property family (named by its handle from the family listing) or every property family, from the ledger and the projection, while the resource survives. By default today's value is kept; with `clear`, the act first clears it (a placeholder title or origin URI, the placeholder type for `doc_type`, or an unset of the family) and then redacts every value the field held. `properties` cannot be cleared. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). The request and the handle are checked first, whatever the resource's state, so a recorded refusal names only a real family of the resource. No key text or value appears in the request, the answer or the record. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.
+         */
+        post: operations["admin_scrub_resource_field"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/resources/field-scrub/families": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * List a resource's scrubbable fields
+         * @description Lists what a field scrub can name on a resource, without recording or changing anything: the title, the origin URI and each resource-owned property family by its handle (the id of the first event still carrying its key text), with its event count, whether it is live or unset, when and by which profile it was first seen, the JSON type of its latest value, and the sensitivity sweep's flags. No key text and no value. Requires a system admin. Any other caller gets 404, decided before any lookup.
+         */
+        post: operations["admin_list_resource_field_families"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/resources/field-scrub/survey": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Survey a field scrub
+         * @description Reports what the field scrub would do, without recording or changing anything: the ledger paths it would redact, the paths it keeps (today's value) or cannot reach and why, the folded property rows it would rewrite, and the events `clear` would append, beside the family listing with the sensitivity sweep's flags. For a charter, an erased resource, a sentinel collision or a title or origin URI whose latest event disagrees with the projection it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the request and its handle are well formed. In keep mode a plan with no `redacted_fields` means nothing is prior, which the act answers 400. Requires a system admin. Any other caller gets 404, decided before any lookup.
+         */
+        post: operations["admin_survey_resource_field_scrub"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/slack/links/disconnect": {
         parameters: {
             query?: never;
@@ -6302,6 +6371,174 @@ export interface components {
              */
             weight?: number;
         };
+        /**
+         * @description An event clear mode appends before it redacts (field-grain scrub spec S2): a
+         *     `resource_updated` setting the placeholder title or origin URI, a `property_set` of `doc_type` to
+         *     the placeholder type, or a `property_unset` of the family.
+         */
+        FieldScrubClearingEvent: {
+            event_type: string;
+            /** @description The path of that event the clear writes. */
+            path: string;
+        };
+        /**
+         * @description What the execute door's act did: a completion and a refusal are different answers, so the
+         *     response is a tagged enum. A refusal here is an operator-facing one (`charter_resource`,
+         *     `already_erased`, `sentinel_collision`, `projection_disagrees`); a caller who is not a system
+         *     admin never reaches the act.
+         */
+        FieldScrubExecuteResponse: {
+            /** @description True when the act cleared today's value first. */
+            cleared: boolean;
+            /** Format: uuid */
+            event_id: string;
+            /** @description The field the act scrubbed, as its `resource_scrubbed` record names it. */
+            field: components["schemas"]["ScrubbedField"];
+            /** @description The ledger paths the act rewrote to their sentinels. */
+            redacted_fields: components["schemas"]["RedactedEventFields"][];
+            /**
+             * Format: uuid
+             * @description The server-minted reference the operator cites.
+             */
+            request_reference: string;
+            /** @enum {string} */
+            status: "completed";
+        } | {
+            detail?: string | null;
+            /** Format: uuid */
+            event_id: string;
+            /**
+             * @description The field the refused act named. A family handle here is one of the resource's: the
+             *     handle is checked before a refusal is recorded.
+             */
+            field: components["schemas"]["ScrubbedField"];
+            reason: components["schemas"]["FieldScrubRefusalReason"];
+            /** Format: uuid */
+            request_reference: string;
+            /** @enum {string} */
+            status: "refused";
+        };
+        /** @description The family listing door's answer. */
+        FieldScrubFamilies: {
+            /** @description The title, then the origin URI, then each property family by its handle. */
+            families: components["schemas"]["FieldScrubFamily"][];
+            resource: components["schemas"]["ResourceId"];
+        };
+        /** @description The family listing door's request: the resource and nothing else. */
+        FieldScrubFamiliesRequest: {
+            /** Format: uuid */
+            resource: string;
+        };
+        /**
+         * @description One row of the family listing (field-grain scrub spec S1): the title, the origin URI, or one
+         *     resource-owned property family. Structure only, never a key or a value.
+         */
+        FieldScrubFamily: {
+            /** @description The sweep has read all of the resource with every enabled detector. The same on every row. */
+            covered?: boolean;
+            /**
+             * @description The same, on today's place only: the title or origin URI, or a live row. A flagged current
+             *     value survives a scrub unless the request says `clear`.
+             */
+            current_flagged?: boolean;
+            /**
+             * Format: int32
+             * @description How many events carry the field.
+             */
+            events: number;
+            family?: null | components["schemas"]["EventId"];
+            /** @description `title`, `origin_uri` or `property`. */
+            field: components["schemas"]["ScrubFieldKind"];
+            first_by?: null | components["schemas"]["ProfileId"];
+            /** Format: date-time */
+            first_seen: string;
+            /**
+             * @description The sensitivity sweep holds an open finding on a place of the field: a redactable path of one
+             *     of its events, or the projection's title, origin URI or one of the family's rows. A flag
+             *     confirms a leak; its absence never means the field is clean.
+             */
+            flagged?: boolean;
+            /** @description Some row the field's events asserted is live. Always true for the title and origin URI. */
+            live: boolean;
+            /**
+             * @description The family has a `property_unset`, so its key text up to the latest one is scrubbable in
+             *     keep mode.
+             */
+            unset: boolean;
+            /** @description The JSON type of the latest value the field carries; absent for a family only ever unset. */
+            value_type?: string | null;
+        };
+        /**
+         * @description Paths of one event the scrub holds back, and why: `current` (today's value, kept),
+         *     `after_latest_unset` (key text after the family's latest unset) or `after_whole_facet_fold` (a
+         *     facet event after the latest whole-facet fold). Paths only, never values.
+         */
+        FieldScrubHeldPaths: {
+            event: components["schemas"]["EventId"];
+            paths: string[];
+            why: string;
+        };
+        /**
+         * @description The plan `resource_field_scrub_plan` computes (field-grain scrub spec S5): the act consumes the
+         *     same computation. Event ids, row ids and paths only. In keep mode an empty `redacted_fields`
+         *     means the field has nothing prior, and the act would answer 400.
+         */
+        FieldScrubPlan: {
+            /** @description The events clear mode would append first. Empty in keep mode. */
+            clears: components["schemas"]["FieldScrubClearingEvent"][];
+            /** @description The folded `kb_properties` rows the act would rewrite to what replay projects. */
+            folded_rows: components["schemas"]["PropertyId"][];
+            /** @description Today's value, kept (`why: current`). */
+            kept: components["schemas"]["FieldScrubHeldPaths"][];
+            /** @description The ledger paths the act would rewrite to their sentinels. */
+            redacted_fields: components["schemas"]["RedactedEventFields"][];
+            /** @description Paths the act cannot reach, and why. */
+            unreachable: components["schemas"]["FieldScrubHeldPaths"][];
+        };
+        /**
+         * @description The refusal vocabulary the field scrub's doors answer with (field-grain scrub spec S4). Its own
+         *     type, not new values of [`ResourceErasureRefusalReason`]: those doors' clients parse that enum,
+         *     and a value they never saw would strand them.
+         * @enum {string}
+         */
+        FieldScrubRefusalReason: "charter_resource" | "already_erased" | "sentinel_collision" | "projection_disagrees";
+        /**
+         * @description The request the field scrub's execute and survey doors take (field-grain scrub spec S1, S2): the
+         *     resource, the field by kind, the family's handle for `property`, and `clear`. No text: the field
+         *     is named by its kind and a family by the id of the first event still carrying its key text,
+         *     read from the family listing. `clear` is the operator's statement that today's value is part of
+         *     the leak; absent, today's value is kept and only the field's prior history is redacted.
+         *     `deny_unknown_fields`: the act's request reference is minted by the service, so a caller that
+         *     sends one is refused, not ignored.
+         */
+        FieldScrubRequestBody: {
+            /**
+             * @description Clear today's value first, then redact every value the field held. Refused for
+             *     `properties`: clear always names one field.
+             */
+            clear?: boolean;
+            /**
+             * Format: uuid
+             * @description The family's handle. Required for `property`, refused for every other field.
+             */
+            family?: string | null;
+            field: components["schemas"]["ScrubFieldKind"];
+            /** Format: uuid */
+            resource: string;
+        };
+        /**
+         * @description The read-only survey. Exactly one of `refusal` and `plan` is present: `refusal` when the act
+         *     would refuse, with `detail` for a charter; otherwise the `plan`. `families` is the listing,
+         *     absent exactly when the resource is a charter or erased. Nothing is recorded either way.
+         */
+        FieldScrubSurvey: {
+            /** @description The refusal's fixed evidence (a charter's map-grain task). */
+            detail?: string | null;
+            families?: components["schemas"]["FieldScrubFamily"][] | null;
+            plan?: null | components["schemas"]["FieldScrubPlan"];
+            refusal?: null | components["schemas"]["FieldScrubRefusalReason"];
+            resource: components["schemas"]["ResourceId"];
+        };
         /** @description Declare a segmented ingest complete — `POST /api/resources/{id}/finalize`. */
         FinalizePayload: {
             /** Format: int32 */
@@ -9503,6 +9740,22 @@ export interface components {
              */
             score_present?: boolean | null;
         };
+        /**
+         * @description The field a field scrub names. A field, never a value: no request or record carries the text
+         *     being scrubbed.
+         * @enum {string}
+         */
+        ScrubFieldKind: "title" | "origin_uri" | "property" | "properties";
+        /**
+         * @description The field a field scrub acted on. `family` is the handle of a property family: the id of the
+         *     first event that still carries the family's key text on the resource. It is present only for
+         *     [`ScrubFieldKind::Property`]. Keyed `family`, never `event_id`: no trail join-key shape rides
+         *     an admin payload (resource erasure D1).
+         */
+        ScrubbedField: {
+            family?: null | components["schemas"]["EventId"];
+            kind: components["schemas"]["ScrubFieldKind"];
+        };
         /** @description Request body for POST /api/search. */
         SearchParams: {
             /**
@@ -12319,6 +12572,207 @@ export interface operations {
                 };
             };
             /** @description The body is JSON but not the expected shape, e.g. a missing or unknown field (a plain-text rejection, not an ErrorBody) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    admin_scrub_resource_field: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FieldScrubRequestBody"];
+            };
+        };
+        responses: {
+            /** @description The act completed, or was refused and the refusal recorded (`status` says which) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FieldScrubExecuteResponse"];
+                };
+            };
+            /** @description A handle with a field that takes none, `property` without a handle, `properties` with `clear`, a handle that is not a property family of the resource (checked before any refusal), or, in keep mode, nothing prior to scrub; nothing was scrubbed or recorded */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The body is JSON but not the expected shape, e.g. a missing or unknown field or an unknown field kind: a caller-supplied `request_reference` is refused, not ignored (a plain-text rejection, not an ErrorBody) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    admin_list_resource_field_families: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FieldScrubFamiliesRequest"];
+            };
+        };
+        responses: {
+            /** @description The resource's scrubbable fields; nothing is recorded or changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FieldScrubFamilies"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The body is JSON but not the expected shape, e.g. a missing or unknown field (a plain-text rejection, not an ErrorBody) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    admin_survey_resource_field_scrub: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FieldScrubRequestBody"];
+            };
+        };
+        responses: {
+            /** @description What the act would do (`plan`), or the refusal it would record (`refusal`); nothing is recorded or changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FieldScrubSurvey"];
+                };
+            };
+            /** @description A handle with a field that takes none, `property` without a handle, `properties` with `clear`, or a handle that is not a property family of the resource, whatever the resource's state (checked before any refusal is reported) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The body is JSON but not the expected shape, e.g. a missing or unknown field or an unknown field kind (a plain-text rejection, not an ErrorBody) */
             422: {
                 headers: {
                     [name: string]: unknown;

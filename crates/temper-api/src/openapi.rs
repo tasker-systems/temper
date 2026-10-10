@@ -508,6 +508,9 @@ mod tests {
             "/api/admin/resources/erasure",
             "/api/admin/resources/block-history-scrub",
             "/api/admin/resources/block-history-scrub/survey",
+            "/api/admin/resources/field-scrub",
+            "/api/admin/resources/field-scrub/survey",
+            "/api/admin/resources/field-scrub/families",
             "/api/embed/admin/reembed",
             "/api/machine-clients/{id}/rebind",
         ] {

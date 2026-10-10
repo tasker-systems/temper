@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT field AS \"field!\", family, flagged AS \"flagged!\",\n                  current_flagged AS \"current_flagged!\", covered AS \"covered!\"\n             FROM resource_field_scrub_family_flags($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "field!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "family",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "flagged!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "current_flagged!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "covered!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "f186b21d2c5b80a37293d01866a53cb04b1c6f095f9edf77e3c49f03c20eef35"
+}

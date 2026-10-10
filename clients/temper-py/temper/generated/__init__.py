@@ -230,6 +230,18 @@ __all__ = [
     "FacetPredicate",
     "FacetRetractAck",
     "FacetSetRequest",
+    "FieldScrubClearingEvent",
+    "FieldScrubExecuteResponse",
+    "FieldScrubExecuteResponseOneOf",
+    "FieldScrubExecuteResponseOneOf1",
+    "FieldScrubFamilies",
+    "FieldScrubFamiliesRequest",
+    "FieldScrubFamily",
+    "FieldScrubHeldPaths",
+    "FieldScrubPlan",
+    "FieldScrubRefusalReason",
+    "FieldScrubRequestBody",
+    "FieldScrubSurvey",
     "FinalizePayload",
     "FingerprintMatch",
     "FoldRelationshipRequest",
@@ -413,6 +425,8 @@ __all__ = [
     "RotateSecretRequest",
     "ScoreKind",
     "Scoring",
+    "ScrubFieldKind",
+    "ScrubbedField",
     "SearchParams",
     "SearchReason",
     "SearchResponse",
@@ -696,6 +710,18 @@ from temper.generated.models.facet_ack import FacetAck as FacetAck
 from temper.generated.models.facet_predicate import FacetPredicate as FacetPredicate
 from temper.generated.models.facet_retract_ack import FacetRetractAck as FacetRetractAck
 from temper.generated.models.facet_set_request import FacetSetRequest as FacetSetRequest
+from temper.generated.models.field_scrub_clearing_event import FieldScrubClearingEvent as FieldScrubClearingEvent
+from temper.generated.models.field_scrub_execute_response import FieldScrubExecuteResponse as FieldScrubExecuteResponse
+from temper.generated.models.field_scrub_execute_response_one_of import FieldScrubExecuteResponseOneOf as FieldScrubExecuteResponseOneOf
+from temper.generated.models.field_scrub_execute_response_one_of1 import FieldScrubExecuteResponseOneOf1 as FieldScrubExecuteResponseOneOf1
+from temper.generated.models.field_scrub_families import FieldScrubFamilies as FieldScrubFamilies
+from temper.generated.models.field_scrub_families_request import FieldScrubFamiliesRequest as FieldScrubFamiliesRequest
+from temper.generated.models.field_scrub_family import FieldScrubFamily as FieldScrubFamily
+from temper.generated.models.field_scrub_held_paths import FieldScrubHeldPaths as FieldScrubHeldPaths
+from temper.generated.models.field_scrub_plan import FieldScrubPlan as FieldScrubPlan
+from temper.generated.models.field_scrub_refusal_reason import FieldScrubRefusalReason as FieldScrubRefusalReason
+from temper.generated.models.field_scrub_request_body import FieldScrubRequestBody as FieldScrubRequestBody
+from temper.generated.models.field_scrub_survey import FieldScrubSurvey as FieldScrubSurvey
 from temper.generated.models.finalize_payload import FinalizePayload as FinalizePayload
 from temper.generated.models.fingerprint_match import FingerprintMatch as FingerprintMatch
 from temper.generated.models.fold_relationship_request import FoldRelationshipRequest as FoldRelationshipRequest
@@ -879,6 +905,8 @@ from temper.generated.models.reweight_relationship_request import ReweightRelati
 from temper.generated.models.rotate_secret_request import RotateSecretRequest as RotateSecretRequest
 from temper.generated.models.score_kind import ScoreKind as ScoreKind
 from temper.generated.models.scoring import Scoring as Scoring
+from temper.generated.models.scrub_field_kind import ScrubFieldKind as ScrubFieldKind
+from temper.generated.models.scrubbed_field import ScrubbedField as ScrubbedField
 from temper.generated.models.search_params import SearchParams as SearchParams
 from temper.generated.models.search_reason import SearchReason as SearchReason
 from temper.generated.models.search_response import SearchResponse as SearchResponse

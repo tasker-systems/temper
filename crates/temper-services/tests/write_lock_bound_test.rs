@@ -712,3 +712,253 @@ async fn a_create_citing_a_url_does_not_deadlock_with_an_erasure_of_its_goal(poo
         answer.map(|o| o.value.id)
     );
 }
+
+/// The profile's `@web` emitter, the one the services resolve for `Surface::ApiHttp`.
+async fn web_emitter(pool: &PgPool, profile: uuid::Uuid) -> uuid::Uuid {
+    sqlx::query_scalar("SELECT id FROM kb_entities WHERE profile_id = $1 AND name LIKE '%@web'")
+        .bind(profile)
+        .fetch_one(pool)
+        .await
+        .expect("the @web emitter")
+}
+
+/// A resource whose title has a prior value, so a keep-mode field scrub of it has work to do.
+async fn seed_with_a_prior_title(
+    pool: &PgPool,
+    email: &str,
+) -> (uuid::Uuid, uuid::Uuid, ResourceId) {
+    let (backend, profile, resource) = seed(pool, email).await;
+    backend
+        .update_resource(retitle(resource, "after"))
+        .await
+        .expect("fixture: the retitle lands");
+    let emitter = web_emitter(pool, profile).await;
+    (profile, emitter, resource)
+}
+
+/// How many redaction rows of `authority` name an event of `resource`'s own (its title events).
+async fn redaction_rows(pool: &PgPool, resource: ResourceId, authority: &str) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_event_field_redactions r JOIN kb_events e ON e.id = r.event_id \
+          WHERE r.authority = $2 AND e.payload->>'resource_id' = $1::text",
+    )
+    .bind(uuid::Uuid::from(resource))
+    .bind(authority)
+    .fetch_one(pool)
+    .await
+    .expect("redaction rows")
+}
+
+/// **The field scrub completes under any session bound, and writers queue behind it** (field-grain
+/// scrub spec witness 6). The field scrub takes the erasure act's two guarantees: it pins
+/// `lock_timeout = 0`, and it takes R's act queue exclusive before R's row. A writer holds R
+/// `FOR KEY SHARE` past a tight bound on the scrub's own session; the scrub waits it out and
+/// completes, so no bound — the floor's 5 s included — can cut it off. Meanwhile a second writer
+/// arriving after the scrub must queue behind it.
+///
+/// FAILS IF `resource_field_scrub_execute` loses its `SET lock_timeout = 0` (cancelled with
+/// `55P03`) or its queue line (the second writer's floor is granted while the scrub waits).
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_field_scrub_completes_under_a_session_lock_timeout_and_queues_writers(pool: PgPool) {
+    use temper_services::backend::write_floor::modify_floor_in_tx;
+
+    let (profile, emitter, resource) =
+        seed_with_a_prior_title(&pool, "field-scrubbed@example.com").await;
+
+    let mut first = pool.begin().await.expect("begin");
+    modify_floor_in_tx(&mut first, ProfileId::from(profile), resource)
+        .await
+        .expect("the first writer is admitted");
+
+    let scrub_pool = pool.clone();
+    let scrub = tokio::spawn(async move {
+        let mut conn = scrub_pool.acquire().await.expect("acquire");
+        sqlx::query("SET lock_timeout = '100ms'")
+            .execute(&mut *conn)
+            .await
+            .expect("a tight session bound");
+        let done = sqlx::query(
+            "SELECT resource_field_scrub_execute($1, 'title', NULL, false, $2, $3, $4)",
+        )
+        .bind(uuid::Uuid::from(resource))
+        .bind(profile)
+        .bind(emitter)
+        .bind(uuid::Uuid::now_v7())
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string());
+        let _ = sqlx::query("RESET lock_timeout").execute(&mut *conn).await;
+        done
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // A second writer arrives while the scrub waits: it must queue, not join the first.
+    let second_pool = pool.clone();
+    let second = tokio::spawn(async move {
+        let mut tx = second_pool.begin().await.expect("begin");
+        let asked = Instant::now();
+        let floored = modify_floor_in_tx(&mut tx, ProfileId::from(profile), resource).await;
+        let waited = asked.elapsed();
+        tx.rollback().await.expect("end");
+        (floored, waited)
+    });
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    first.rollback().await.expect("the first writer ends");
+
+    scrub
+        .await
+        .expect("scrub task")
+        .expect("the field scrub completes whatever lock_timeout its session carries");
+    let (floored, waited) = second.await.expect("second writer");
+    assert!(
+        floored.is_ok(),
+        "the second writer is admitted after the scrub: {floored:?}"
+    );
+    assert!(
+        waited >= Duration::from_millis(600),
+        "the second writer queued behind the waiting scrub rather than joining the first writer: \
+         waited {waited:?}"
+    );
+    assert!(
+        redaction_rows(&pool, resource, "scrub").await > 0,
+        "the scrub redacted the prior title"
+    );
+}
+
+/// **A field scrub and an erasure of one resource, scrub first** (field-grain scrub review focus
+/// 5). The scrub holds R's act queue in an open transaction; the erasure arrives and waits on the
+/// queue; the scrub commits, and the erasure then completes over the scrubbed ledger, leaving both
+/// acts' redaction rows (spec witness 2's state, reached by a race).
+///
+/// FAILS IF the erasure does not wait for the scrub (it would complete while the scrub is open),
+/// or fails over the scrubbed ledger (a key collision on the redaction rows, or a verifier refusal).
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_field_scrub_then_an_erasure_racing_both_complete(pool: PgPool) {
+    let (profile, emitter, resource) =
+        seed_with_a_prior_title(&pool, "scrub-first@example.com").await;
+
+    let mut scrub = pool.begin().await.expect("begin");
+    sqlx::query("SELECT resource_field_scrub_execute($1, 'title', NULL, false, $2, $3, $4)")
+        .bind(uuid::Uuid::from(resource))
+        .bind(profile)
+        .bind(emitter)
+        .bind(uuid::Uuid::now_v7())
+        .execute(&mut *scrub)
+        .await
+        .expect("the scrub runs, uncommitted");
+
+    let erase_pool = pool.clone();
+    let erasure = tokio::spawn(async move {
+        sqlx::query("SELECT resource_erasure_execute($1, $2, $3, $4)")
+            .bind(uuid::Uuid::from(resource))
+            .bind(profile)
+            .bind(emitter)
+            .bind(uuid::Uuid::now_v7())
+            .execute(&erase_pool)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !erasure.is_finished(),
+        "the erasure waits on the act queue while the scrub is open"
+    );
+    scrub.commit().await.expect("the scrub commits");
+
+    erasure
+        .await
+        .expect("erasure task")
+        .expect("the erasure completes over the scrubbed ledger");
+    let erased_at: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT erased_at FROM kb_resources WHERE id = $1")
+            .bind(uuid::Uuid::from(resource))
+            .fetch_one(&pool)
+            .await
+            .expect("erased_at");
+    assert!(erased_at.is_some(), "the erasure landed");
+    assert!(
+        redaction_rows(&pool, resource, "scrub").await > 0,
+        "the scrub's rows stand"
+    );
+    assert!(
+        redaction_rows(&pool, resource, "erasure").await > 0,
+        "the erasure redacted what the scrub kept"
+    );
+}
+
+/// **A field scrub and an erasure of one resource, erasure first** (field-grain scrub review
+/// focus 5). The erasure holds R's act queue in an open transaction; the scrub arrives through the
+/// service and waits on the queue; the erasure commits, and the scrub then finds R erased and
+/// records `already_erased`, naming the field scrub, and scrubs nothing.
+///
+/// FAILS IF the scrub does not wait for the erasure, or answers anything but a recorded
+/// `already_erased` refusal once it lands.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_erasure_then_a_field_scrub_racing_the_scrub_records_already_erased(pool: PgPool) {
+    use temper_core::types::erasure::{FieldScrubRefusalReason, ScrubFieldKind};
+    use temper_services::services::field_scrub_service::{
+        execute_field_scrub, FieldScrubOutcome, FieldScrubRequest,
+    };
+
+    let (profile, emitter, resource) =
+        seed_with_a_prior_title(&pool, "erasure-first@example.com").await;
+    temper_services::test_support::approved_admin(&pool, profile).await;
+    let admin = temper_services::test_support::system_admin_proof_for(&pool, profile).await;
+
+    let mut erasure = pool.begin().await.expect("begin");
+    sqlx::query("SELECT resource_erasure_execute($1, $2, $3, $4)")
+        .bind(uuid::Uuid::from(resource))
+        .bind(profile)
+        .bind(emitter)
+        .bind(uuid::Uuid::now_v7())
+        .execute(&mut *erasure)
+        .await
+        .expect("the erasure runs, uncommitted");
+
+    let scrub_pool = pool.clone();
+    let scrub = tokio::spawn(async move {
+        execute_field_scrub(
+            &scrub_pool,
+            &admin,
+            FieldScrubRequest {
+                resource,
+                field: ScrubFieldKind::Title,
+                family: None,
+                clear: false,
+                surface: Surface::ApiHttp,
+            },
+        )
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !scrub.is_finished(),
+        "the scrub waits on the act queue while the erasure is open"
+    );
+    erasure.commit().await.expect("the erasure commits");
+
+    let outcome = scrub.await.expect("scrub task").expect("the scrub answers");
+    let FieldScrubOutcome::Refused(refusal) = outcome else {
+        panic!("a scrub behind an erasure is refused, got {outcome:?}");
+    };
+    assert_eq!(refusal.reason, FieldScrubRefusalReason::AlreadyErased);
+    let payload: serde_json::Value =
+        sqlx::query_scalar("SELECT payload FROM kb_events WHERE id = $1")
+            .bind(refusal.event_id)
+            .fetch_one(&pool)
+            .await
+            .expect("the refusal");
+    assert_eq!(payload["reason"], "already_erased", "{payload}");
+    assert_eq!(payload["act"], "field_scrub", "{payload}");
+    let scrubbed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'resource_scrubbed'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("scrub records");
+    assert_eq!(scrubbed, 0, "nothing was scrubbed");
+    assert_eq!(redaction_rows(&pool, resource, "scrub").await, 0);
+}

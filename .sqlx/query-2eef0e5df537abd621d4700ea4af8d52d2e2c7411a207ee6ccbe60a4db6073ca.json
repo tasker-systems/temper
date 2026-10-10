@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT resource_field_scrub_survey($1, $2, $3, $4) AS \"survey: serde_json::Value\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "survey: serde_json::Value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2eef0e5df537abd621d4700ea4af8d52d2e2c7411a207ee6ccbe60a4db6073ca"
+}

@@ -803,6 +803,81 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # List a resource's scrubbable fields
+    # Lists what a field scrub can name on a resource, without recording or changing anything: the title, the origin URI and each resource-owned property family by its handle (the id of the first event still carrying its key text), with its event count, whether it is live or unset, when and by which profile it was first seen, the JSON type of its latest value, and the sensitivity sweep's flags. No key text and no value. Requires a system admin. Any other caller gets 404, decided before any lookup.
+    # @param field_scrub_families_request [FieldScrubFamiliesRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [FieldScrubFamilies]
+    def admin_list_resource_field_families(field_scrub_families_request, opts = {})
+      data, _status_code, _headers = admin_list_resource_field_families_with_http_info(field_scrub_families_request, opts)
+      data
+    end
+
+    # List a resource&#39;s scrubbable fields
+    # Lists what a field scrub can name on a resource, without recording or changing anything: the title, the origin URI and each resource-owned property family by its handle (the id of the first event still carrying its key text), with its event count, whether it is live or unset, when and by which profile it was first seen, the JSON type of its latest value, and the sensitivity sweep&#39;s flags. No key text and no value. Requires a system admin. Any other caller gets 404, decided before any lookup.
+    # @param field_scrub_families_request [FieldScrubFamiliesRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(FieldScrubFamilies, Integer, Hash)>] FieldScrubFamilies data, response status code and response headers
+    def admin_list_resource_field_families_with_http_info(field_scrub_families_request, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: AdminApi.admin_list_resource_field_families ...'
+      end
+      # verify the required parameter 'field_scrub_families_request' is set
+      if @api_client.config.client_side_validation && field_scrub_families_request.nil?
+        fail ArgumentError, "Missing the required parameter 'field_scrub_families_request' when calling AdminApi.admin_list_resource_field_families"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/admin/resources/field-scrub/families'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(field_scrub_families_request)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'FieldScrubFamilies'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"AdminApi.admin_list_resource_field_families",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: AdminApi#admin_list_resource_field_families\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # List open reconsideration requests
     # Reconsideration requests that have not been closed, with the asking principal's identity. Requires a system admin.
     # @param [Hash] opts the optional parameters
@@ -1469,6 +1544,81 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Scrub a resource field's history
+    # Redacts every prior value of a resource's title, origin URI, one property family (named by its handle from the family listing) or every property family, from the ledger and the projection, while the resource survives. By default today's value is kept; with `clear`, the act first clears it (a placeholder title or origin URI, the placeholder type for `doc_type`, or an unset of the family) and then redacts every value the field held. `properties` cannot be cleared. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). The request and the handle are checked first, whatever the resource's state, so a recorded refusal names only a real family of the resource. No key text or value appears in the request, the answer or the record. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.
+    # @param field_scrub_request_body [FieldScrubRequestBody] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [FieldScrubExecuteResponse]
+    def admin_scrub_resource_field(field_scrub_request_body, opts = {})
+      data, _status_code, _headers = admin_scrub_resource_field_with_http_info(field_scrub_request_body, opts)
+      data
+    end
+
+    # Scrub a resource field&#39;s history
+    # Redacts every prior value of a resource&#39;s title, origin URI, one property family (named by its handle from the family listing) or every property family, from the ledger and the projection, while the resource survives. By default today&#39;s value is kept; with &#x60;clear&#x60;, the act first clears it (a placeholder title or origin URI, the placeholder type for &#x60;doc_type&#x60;, or an unset of the family) and then redacts every value the field held. &#x60;properties&#x60; cannot be cleared. The server mints the request reference. The answer is either a completion or a recorded refusal (&#x60;status&#x60;). The request and the handle are checked first, whatever the resource&#39;s state, so a recorded refusal names only a real family of the resource. No key text or value appears in the request, the answer or the record. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.
+    # @param field_scrub_request_body [FieldScrubRequestBody] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(FieldScrubExecuteResponse, Integer, Hash)>] FieldScrubExecuteResponse data, response status code and response headers
+    def admin_scrub_resource_field_with_http_info(field_scrub_request_body, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: AdminApi.admin_scrub_resource_field ...'
+      end
+      # verify the required parameter 'field_scrub_request_body' is set
+      if @api_client.config.client_side_validation && field_scrub_request_body.nil?
+        fail ArgumentError, "Missing the required parameter 'field_scrub_request_body' when calling AdminApi.admin_scrub_resource_field"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/admin/resources/field-scrub'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(field_scrub_request_body)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'FieldScrubExecuteResponse'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"AdminApi.admin_scrub_resource_field",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: AdminApi#admin_scrub_resource_field\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Show a profile's state card
     # One profile's admission state, governance, identity links, team memberships, pending invitations and open queue items. Requires a system admin.
     # @param profile_id [String] Profile ID
@@ -1760,6 +1910,81 @@ module Temper::Generated
       data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
       if @api_client.config.debugging
         @api_client.config.logger.debug "API called: AdminApi#admin_survey_resource_erasure\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # Survey a field scrub
+    # Reports what the field scrub would do, without recording or changing anything: the ledger paths it would redact, the paths it keeps (today's value) or cannot reach and why, the folded property rows it would rewrite, and the events `clear` would append, beside the family listing with the sensitivity sweep's flags. For a charter, an erased resource, a sentinel collision or a title or origin URI whose latest event disagrees with the projection it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the request and its handle are well formed. In keep mode a plan with no `redacted_fields` means nothing is prior, which the act answers 400. Requires a system admin. Any other caller gets 404, decided before any lookup.
+    # @param field_scrub_request_body [FieldScrubRequestBody] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [FieldScrubSurvey]
+    def admin_survey_resource_field_scrub(field_scrub_request_body, opts = {})
+      data, _status_code, _headers = admin_survey_resource_field_scrub_with_http_info(field_scrub_request_body, opts)
+      data
+    end
+
+    # Survey a field scrub
+    # Reports what the field scrub would do, without recording or changing anything: the ledger paths it would redact, the paths it keeps (today&#39;s value) or cannot reach and why, the folded property rows it would rewrite, and the events &#x60;clear&#x60; would append, beside the family listing with the sensitivity sweep&#39;s flags. For a charter, an erased resource, a sentinel collision or a title or origin URI whose latest event disagrees with the projection it reports the refusal the act would record (&#x60;refusal&#x60;, &#x60;detail&#x60;) and no plan, once the request and its handle are well formed. In keep mode a plan with no &#x60;redacted_fields&#x60; means nothing is prior, which the act answers 400. Requires a system admin. Any other caller gets 404, decided before any lookup.
+    # @param field_scrub_request_body [FieldScrubRequestBody] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(FieldScrubSurvey, Integer, Hash)>] FieldScrubSurvey data, response status code and response headers
+    def admin_survey_resource_field_scrub_with_http_info(field_scrub_request_body, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: AdminApi.admin_survey_resource_field_scrub ...'
+      end
+      # verify the required parameter 'field_scrub_request_body' is set
+      if @api_client.config.client_side_validation && field_scrub_request_body.nil?
+        fail ArgumentError, "Missing the required parameter 'field_scrub_request_body' when calling AdminApi.admin_survey_resource_field_scrub"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/admin/resources/field-scrub/survey'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(field_scrub_request_body)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'FieldScrubSurvey'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"AdminApi.admin_survey_resource_field_scrub",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: AdminApi#admin_survey_resource_field_scrub\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
       end
       return data, status_code, headers
     end
