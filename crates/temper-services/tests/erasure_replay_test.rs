@@ -197,6 +197,20 @@ async fn seed_resource(
     title: &str,
     prose: &str,
 ) -> (Uuid, String) {
+    seed_headed_resource(pool, subject, emitter, home, title, prose, "").await
+}
+
+/// `seed_resource` with the chunk under a heading trail. An empty `header_path` stores NULL
+/// (`content::map_heading`), so only a non-empty one gives the erasure a trail to null.
+async fn seed_headed_resource(
+    pool: &PgPool,
+    subject: Uuid,
+    emitter: Uuid,
+    home: ContextId,
+    title: &str,
+    prose: &str,
+    header_path: &str,
+) -> (Uuid, String) {
     let chunk_hash = {
         use sha2::Digest;
         format!("{:x}", sha2::Sha256::digest(prose.trim()))
@@ -207,8 +221,8 @@ async fn seed_resource(
         content: prose.to_string(),
         embedding: vec![0.1; 768],
         embedded_with: Some("model-sha-1".to_string()),
-        header_path: String::new(),
-        heading_depth: 0,
+        header_path: header_path.to_string(),
+        heading_depth: if header_path.is_empty() { 0 } else { 1 },
     };
     writes::create_resource_with(
         pool,
@@ -1270,5 +1284,180 @@ async fn the_subjects_team_context_text_is_named_in_the_record(pool: sqlx::PgPoo
     assert!(
         estate_prose.as_deref().is_none_or(str::is_empty),
         "the estate prose is emptied"
+    );
+}
+
+/// FAILS IF the act leaves a governed chunk's heading trail in place. `header_path` is authored
+/// heading prose, so a heading naming a person is that person's text like the chunk body. A
+/// same-hash chunk in a team context keeps its own trail (custody is never decided by bytes).
+/// The survey and the record name the target, and replay of the erased ledger reproduces the
+/// nulled trail, since replay reads header_path from the live row's sidecar and re-runs the
+/// redaction.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_act_nulls_a_governed_chunks_heading_trail_and_leaves_a_same_hash_twins(
+    pool: sqlx::PgPool,
+) {
+    let (subject, _) = insert_profile(&pool).await;
+    let (operator, _) = insert_profile(&pool).await;
+    temper_services::test_support::grant_governance(&pool, operator).await;
+    let admin = temper_services::test_support::system_admin_proof_for(&pool, operator).await;
+    let emitter: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_entities WHERE profile_id = $1 AND name LIKE '%@web'",
+    )
+    .bind(subject)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let home = insert_personal_context(&pool, subject, "notes").await;
+    let prose = "the prose under a heading";
+    let (governed, chunk_hash) = seed_headed_resource(
+        &pool,
+        subject,
+        emitter,
+        home,
+        "headed notes",
+        prose,
+        "Notes on Jane Roe",
+    )
+    .await;
+
+    // The twin: another principal's resource in a team context, with the SAME chunk bytes (so
+    // the same hash, which the act redacts by) under its own heading.
+    let (other, _) = insert_profile(&pool).await;
+    let other_emitter: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_entities WHERE profile_id = $1 AND name LIKE '%@web'",
+    )
+    .bind(other)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let team: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_teams (slug, name) VALUES ('headings-team', 'Headings Team') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let team_context = ContextId::from(
+        sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+                 VALUES ('kb_teams', $1, 'headings', 'headings') RETURNING id",
+        )
+        .bind(team)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+    );
+    let (twin, twin_hash) = seed_headed_resource(
+        &pool,
+        other,
+        other_emitter,
+        team_context,
+        "team headed notes",
+        prose,
+        "The team's own heading",
+    )
+    .await;
+    assert_eq!(
+        twin_hash, chunk_hash,
+        "the twin shares the governed chunk's hash"
+    );
+
+    let trail = |resource: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT header_path FROM kb_chunks WHERE resource_id = $1",
+            )
+            .bind(resource)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(
+        trail(governed).await.as_deref(),
+        Some("Notes on Jane Roe"),
+        "the governed chunk carries its heading trail before the act"
+    );
+
+    let survey = survey_erasure(&pool, &admin, ProfileId::from(subject))
+        .await
+        .expect("the operator's survey");
+    assert!(
+        survey
+            .targets
+            .iter()
+            .any(|t| t.target == "kb_chunks.header_path" && t.outcome == "erased"),
+        "the survey names the heading trail the act will null; got {:?}",
+        survey.targets
+    );
+
+    let completion = execute_erasure(
+        &pool,
+        &admin,
+        ProfileId::from(subject),
+        Uuid::now_v7(),
+        Surface::ApiHttp,
+    )
+    .await
+    .expect("the operator's act completes");
+    assert!(
+        completion
+            .targets
+            .iter()
+            .any(|t| t.target == "kb_chunks.header_path" && t.outcome == "erased"),
+        "the record names the heading trail it nulled; got {:?}",
+        completion.targets
+    );
+    assert!(
+        !completion
+            .targets
+            .iter()
+            .any(|t| t.outcome.contains("Jane Roe")),
+        "the record never repeats the trail it erased"
+    );
+
+    assert_eq!(
+        trail(governed).await,
+        None,
+        "the governed chunk's heading trail is nulled"
+    );
+    assert_eq!(
+        trail(twin).await.as_deref(),
+        Some("The team's own heading"),
+        "a same-hash chunk in a home the subject does not govern keeps its trail"
+    );
+
+    let before = replay::dump_projections(&pool).await.unwrap();
+    let snap = replay::snapshot(&pool).await.unwrap();
+    reset_namespace(&pool).await;
+    replay::replay(&pool, &snap).await.unwrap();
+    let after = replay::dump_projections(&pool).await.unwrap();
+    diff_projections(&before, &after);
+    assert_eq!(trail(governed).await, None, "replay keeps the trail nulled");
+    assert_eq!(
+        trail(twin).await.as_deref(),
+        Some("The team's own heading"),
+        "replay keeps the twin's trail"
+    );
+
+    // A re-run claims nothing for the trail: there is none left to null.
+    let admin = temper_services::test_support::system_admin_proof_for(&pool, operator).await;
+    let again = execute_erasure(
+        &pool,
+        &admin,
+        ProfileId::from(subject),
+        Uuid::now_v7(),
+        Surface::ApiHttp,
+    )
+    .await
+    .expect("the re-erase completes");
+    assert!(
+        !again
+            .targets
+            .iter()
+            .any(|t| t.target == "kb_chunks.header_path"),
+        "a re-run does not claim the trail; got {:?}",
+        again.targets
     );
 }
