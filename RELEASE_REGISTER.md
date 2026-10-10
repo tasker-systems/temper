@@ -32,6 +32,22 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 (`schemas/versions/<M.m>/`); the pin gate checks the record names a `spec-correction` row.
 
 ## Since v0.6.0 — unreleased
+- **A machine principal never governs a team, and never holds a governance grant**
+  A machine principal (a profile registered as a machine client, revoked or not) now holds every
+  team at `member` or below, its own personal team included, and can never be a system admin. New
+  `400` refusals, each naming the rule: `POST /api/teams/{id}/members` and
+  `PATCH /api/teams/{id}/members/{profile_id}` refuse a machine above `member`; the admin promote
+  act refuses a machine target; `POST /api/teams` refuses a machine caller (a team's creator
+  becomes its owner). `DELETE /api/teams/{id}/members/{profile_id}` refuses removing any profile
+  from its own personal team (`409`). Existing machines' `owner` rows on their personal teams
+  become `member` at migration; the database refuses these states underneath every path. Who
+  observes: a team manager adding or raising a machine to `maintainer`; an admin promoting a
+  machine; an approved machine credential calling team create or leaving its personal team.
+  Shapes unchanged.
+pr: self
+classes: behavioral
+surfaces: http
+status: signal-only
 - **An invitation redeems only for the person invited**
   `POST /api/invitations/accept` and `POST /api/invitations/decline` used to treat the token as
   bearer authority: whoever held it joined the team at the invited role (or declined it), whatever
