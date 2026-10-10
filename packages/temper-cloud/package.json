@@ -27,7 +27,7 @@
     "onnxruntime-node": "1.21.0",
     "pino": "^10.3.1",
     "uuidv7": "^1.2.1",
-    "workflow": "^0",
+    "workflow": "^5",
     "zod": "^4.3.6"
   },
   "overrides": {
@@ -44,7 +44,7 @@
     "postgres": "^3.4.8",
     "sharp": "^0.35.5",
     "typescript": "^5.8",
-    "vitest": "^4.1.11",
+    "vitest": "^5.0.3",
     "xml-crypto": "^6.1.2"
   }
 }
