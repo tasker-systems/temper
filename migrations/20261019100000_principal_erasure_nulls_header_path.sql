@@ -9,7 +9,7 @@
 -- act has nulled it since its joint read (20260929040730, D2.1); the principal act was not given the
 -- same fix.
 --
---   1. _erasure_apply_redaction: arm (4) nulls header_path with the embedding and its provenance, by
+--   1. _erasure_apply_redaction: a new arm (4a), beside arm (4)'s embedding null, nulls header_path by
 --      the same hash and governed-home predicate. A same-hash chunk in a home the subject does not
 --      govern keeps its own heading trail (custody-never-bytes, ruled 2026-09-10). Replay's redaction
 --      pre-pass calls this same function, so it follows.
@@ -18,8 +18,11 @@
 --      not claim the target.
 --   3. Every principal_erased event already in the ledger gets the same null, by its own payload's
 --      subject and hashes. Without it, replay of an older erasure would null what live still holds,
---      and the projections would diverge. The governed contexts were retired by that act, so no
---      later write can have put a chunk there for this to reach.
+--      and the projections would diverge. Since 20260911000000 the act retires the governed
+--      contexts (arm 13), so no later write can put a chunk there for this to reach. An erasure
+--      run under 20260909000025 alone did not retire them: a same-hash chunk written into one
+--      afterwards would lose its trail here. Replay still agrees with live, since the sidecar
+--      reads the nulled row. No deployment is known to have run a principal erasure at all.
 --
 -- Each body is its latest definition verbatim (20261013100000) except for the header_path lines
 -- and their comments.

@@ -1409,12 +1409,16 @@ async fn the_act_nulls_a_governed_chunks_heading_trail_and_leaves_a_same_hash_tw
         "the record names the heading trail it nulled; got {:?}",
         completion.targets
     );
-    assert!(
-        !completion
-            .targets
-            .iter()
-            .any(|t| t.outcome.contains("Jane Roe")),
-        "the record never repeats the trail it erased"
+    // The trail never reached the ledger (header_path rides the sidecar, not a payload), and
+    // the act's record does not put it there.
+    let quoting: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_events WHERE payload::text LIKE '%Jane Roe%'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        quoting, 0,
+        "no ledger event, the record included, quotes the trail"
     );
 
     assert_eq!(
@@ -1460,4 +1464,82 @@ async fn the_act_nulls_a_governed_chunks_heading_trail_and_leaves_a_same_hash_tw
         "a re-run does not claim the trail; got {:?}",
         again.targets
     );
+}
+
+/// The migration that taught the act to null `header_path` (20261019100000), read whole so its
+/// backfill can run against a world this binary's act no longer produces.
+const HEADER_PATH_MIGRATION: &str =
+    include_str!("../../../migrations/20261019100000_principal_erasure_nulls_header_path.sql");
+
+/// FAILS IF an erasure executed before 20261019100000 replays to a different projection than live.
+/// Such an erasure left the governed chunk's trail in place, replay reads the trail from the live
+/// row and then re-runs today's redaction, which nulls it. The migration's backfill nulls the live
+/// row by each `principal_erased` event's own payload. The old act's state is rebuilt by putting
+/// the trail back after today's act; the backfill is the migration's own DO block, run as shipped.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_backfill_brings_an_older_erasures_heading_trail_in_line_with_replay(
+    pool: sqlx::PgPool,
+) {
+    use sqlx::Executor;
+    let (subject, _) = insert_profile(&pool).await;
+    let (operator, _) = insert_profile(&pool).await;
+    temper_services::test_support::grant_governance(&pool, operator).await;
+    let admin = temper_services::test_support::system_admin_proof_for(&pool, operator).await;
+    let emitter: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_entities WHERE profile_id = $1 AND name LIKE '%@web'",
+    )
+    .bind(subject)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let home = insert_personal_context(&pool, subject, "notes").await;
+    let (governed, _) = seed_headed_resource(
+        &pool,
+        subject,
+        emitter,
+        home,
+        "older notes",
+        "prose an older act emptied",
+        "Notes on Jane Roe",
+    )
+    .await;
+    execute_erasure(
+        &pool,
+        &admin,
+        ProfileId::from(subject),
+        Uuid::now_v7(),
+        Surface::ApiHttp,
+    )
+    .await
+    .expect("the operator's act completes");
+
+    // The pre-migration act's leftover: the trail it never touched.
+    sqlx::query("UPDATE kb_chunks SET header_path = 'Notes on Jane Roe' WHERE resource_id = $1")
+        .bind(governed)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let section = HEADER_PATH_MIGRATION
+        .split_once("-- Section 3.")
+        .and_then(|(_, rest)| rest.split_once("SELECT declare_migration("))
+        .map(|(body, _)| body)
+        .expect("the migration carries its Section 3 backfill");
+    let backfill = &section[section.find("DO $$").expect("the backfill is a DO block")..];
+    pool.execute(backfill).await.expect("the backfill runs");
+
+    let trail: Option<String> =
+        sqlx::query_scalar("SELECT header_path FROM kb_chunks WHERE resource_id = $1")
+            .bind(governed)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(trail, None, "the backfill nulls the older erasure's trail");
+
+    let before = replay::dump_projections(&pool).await.unwrap();
+    let snap = replay::snapshot(&pool).await.unwrap();
+    reset_namespace(&pool).await;
+    replay::replay(&pool, &snap).await.unwrap();
+    let after = replay::dump_projections(&pool).await.unwrap();
+    diff_projections(&before, &after);
 }
