@@ -71,16 +71,20 @@ pub(super) fn admin_routes() -> OpenApiRouter<AppState> {
         // longer embed with. The per-minute drain does the work; this is only the trigger, gated
         // on the operator's own login rather than the drain's deploy secret.
         .routes(routes!(handlers::embed::reembed))
-        // The erasure doors (principal and resource) and the block history scrub, each with its
-        // read-only survey. A caller who is not a system admin is answered 404, never 403, before
-        // any lookup, with one telemetry line and no ledger event (ruled 2026-09-30) — the 404
-        // protects the SUBJECT; the doors themselves are documented.
+        // The erasure doors (principal and resource), the block history scrub and the field
+        // scrub, each with its read-only survey (and the field scrub's family listing). A caller
+        // who is not a system admin is answered 404, never 403, before any lookup, with one
+        // telemetry line and no ledger event (ruled 2026-09-30) — the 404 protects the SUBJECT;
+        // the doors themselves are documented.
         .routes(routes!(handlers::erasure::execute))
         .routes(routes!(handlers::erasure::survey))
         .routes(routes!(handlers::resource_erasure::execute))
         .routes(routes!(handlers::resource_erasure::survey))
         .routes(routes!(handlers::block_history_scrub::execute))
         .routes(routes!(handlers::block_history_scrub::survey))
+        .routes(routes!(handlers::field_scrub::execute))
+        .routes(routes!(handlers::field_scrub::survey))
+        .routes(routes!(handlers::field_scrub::families))
         // Machine-client rebind (G3 B2). Its siblings under `/api/machine-clients` are gated on
         // `is_system_admin OR owner of the owning team` and stay in `gated_routes`; rebind alone
         // requires the proof, because team ownership cannot bound the reach a rebind inherits.
@@ -98,7 +102,7 @@ mod tests {
     /// The admin group's documented surface, pinned by operation id. A route added here, dropped
     /// from here, or moved back to an undocumented plain mount changes this set and fails —
     /// the review the move deserves happens at the diff of this list.
-    const ADMIN_OPERATIONS: [&str; 26] = [
+    const ADMIN_OPERATIONS: [&str; 29] = [
         "admin_list_join_requests",
         "admin_count_join_requests",
         "admin_review_join_request",
@@ -124,6 +128,9 @@ mod tests {
         "admin_survey_resource_erasure",
         "admin_scrub_block_history",
         "admin_survey_block_history_scrub",
+        "admin_scrub_resource_field",
+        "admin_survey_resource_field_scrub",
+        "admin_list_resource_field_families",
         "admin_rebind_machine_client",
     ];
 

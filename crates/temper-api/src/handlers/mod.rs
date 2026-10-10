@@ -17,6 +17,7 @@ pub mod erasure;
 pub mod events;
 pub mod evidence;
 pub mod facets;
+pub mod field_scrub;
 pub mod graph;
 pub mod health;
 pub mod ingest;

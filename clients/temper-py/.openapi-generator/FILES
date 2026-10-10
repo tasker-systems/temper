@@ -208,6 +208,18 @@ temper/generated/models/facet_ack.py
 temper/generated/models/facet_predicate.py
 temper/generated/models/facet_retract_ack.py
 temper/generated/models/facet_set_request.py
+temper/generated/models/field_scrub_clearing_event.py
+temper/generated/models/field_scrub_execute_response.py
+temper/generated/models/field_scrub_execute_response_one_of.py
+temper/generated/models/field_scrub_execute_response_one_of1.py
+temper/generated/models/field_scrub_families.py
+temper/generated/models/field_scrub_families_request.py
+temper/generated/models/field_scrub_family.py
+temper/generated/models/field_scrub_held_paths.py
+temper/generated/models/field_scrub_plan.py
+temper/generated/models/field_scrub_refusal_reason.py
+temper/generated/models/field_scrub_request_body.py
+temper/generated/models/field_scrub_survey.py
 temper/generated/models/finalize_payload.py
 temper/generated/models/fingerprint_match.py
 temper/generated/models/fold_relationship_request.py
@@ -391,6 +403,8 @@ temper/generated/models/reweight_relationship_request.py
 temper/generated/models/rotate_secret_request.py
 temper/generated/models/score_kind.py
 temper/generated/models/scoring.py
+temper/generated/models/scrub_field_kind.py
+temper/generated/models/scrubbed_field.py
 temper/generated/models/search_params.py
 temper/generated/models/search_reason.py
 temper/generated/models/search_response.py

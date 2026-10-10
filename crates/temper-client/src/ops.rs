@@ -178,6 +178,9 @@ registry! {
         ADMIN_SURVEY_RESOURCE_ERASURE = Post "/api/admin/resources/erasure/survey" => "admin_survey_resource_erasure";
         ADMIN_SCRUB_BLOCK_HISTORY = Post "/api/admin/resources/block-history-scrub" => "admin_scrub_block_history";
         ADMIN_SURVEY_BLOCK_HISTORY_SCRUB = Post "/api/admin/resources/block-history-scrub/survey" => "admin_survey_block_history_scrub";
+        ADMIN_SCRUB_RESOURCE_FIELD = Post "/api/admin/resources/field-scrub" => "admin_scrub_resource_field";
+        ADMIN_SURVEY_RESOURCE_FIELD_SCRUB = Post "/api/admin/resources/field-scrub/survey" => "admin_survey_resource_field_scrub";
+        ADMIN_LIST_RESOURCE_FIELD_FAMILIES = Post "/api/admin/resources/field-scrub/families" => "admin_list_resource_field_families";
         ADMIN_DEMOTE = Post "/api/access/admin/demote" => "admin_demote";
         ADMIN_APPROVE_PRINCIPAL = Post "/api/access/admin/principals/{id}/approve" => "admin_approve_principal";
         ADMIN_DEACTIVATE_PRINCIPAL = Post "/api/access/admin/principals/{id}/deactivate" => "admin_deactivate_principal";

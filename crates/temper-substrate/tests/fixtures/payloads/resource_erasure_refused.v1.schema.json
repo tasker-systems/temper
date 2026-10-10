@@ -42,7 +42,7 @@
       ]
     },
     "reason": {
-      "$ref": "#/$defs/ResourceErasureRefusalReason"
+      "$ref": "#/$defs/RecordedRefusalReason"
     },
     "subject_id": {
       "type": "string",
@@ -88,6 +88,11 @@
           "description": "The block history scrub.",
           "type": "string",
           "const": "block_history_scrub"
+        },
+        {
+          "description": "The field scrub: a resource's title, origin URI or property history redacted while the\nresource survives.",
+          "type": "string",
+          "const": "field_scrub"
         }
       ]
     },
@@ -96,11 +101,11 @@
       "type": "string",
       "format": "uuid"
     },
-    "ResourceErasureRefusalReason": {
-      "description": "The closed refusal vocabulary for `resource_erasure_refused` (resource erasure spec D5, D11).",
+    "RecordedRefusalReason": {
+      "description": "The closed refusal vocabulary `resource_erasure_refused` records (resource erasure spec D5,\nD11; field-grain scrub spec S4): every value either act family's doors answer with. A ledger\nvocabulary only; no door answers in it.",
       "oneOf": [
         {
-          "description": "Retired: no path raises it. A non-admin is refused at the wire with no event. The value\nstays registered because removing one from a closed vocabulary is not additive.",
+          "description": "Retired: no path raises it. The value stays registered because removing one from a closed\nvocabulary is not additive.",
           "type": "string",
           "const": "unauthorized"
         },
@@ -110,14 +115,24 @@
           "const": "charter_resource"
         },
         {
-          "description": "Retired: no path raises it. Ingest state does not refuse an erasure; an in-flight ingest\nends with it (spec D5). The value stays registered because removing one from a closed\nvocabulary is not additive.",
+          "description": "Retired: no path raises it. The value stays registered because removing one from a closed\nvocabulary is not additive.",
           "type": "string",
           "const": "ingest_in_flight"
         },
         {
-          "description": "The resource is already erased. Recorded by the erasure act on a repeat request and by\nthe block history scrub, which has nothing to scrub on an erased resource. Nothing in the\nprojection changes and no second `resource_erased` is minted.",
+          "description": "The resource is already erased. Nothing in the projection changes and no second\n`resource_erased` is minted.",
           "type": "string",
           "const": "already_erased"
+        },
+        {
+          "description": "The field scrub's sentinel text is already on the owner's ledger.",
+          "type": "string",
+          "const": "sentinel_collision"
+        },
+        {
+          "description": "The field scrub found the latest title or origin URI event disagreeing with the projection.",
+          "type": "string",
+          "const": "projection_disagrees"
         }
       ]
     }

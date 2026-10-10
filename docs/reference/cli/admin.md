@@ -17,7 +17,7 @@ Commands:
   requests      Review pending join requests
   reviews       Read and close reconsideration requests from revoked principals
   profiles      The operator directory: who exists in this deployment, and their state. Lists denied principals (the default `needs-access` view) and resolves an email to a state card — the bridge into the strict-UUID admin acts
-  erasure       Erase a resource or a principal, or scrub a resource's block history. Surveys by default; --execute acts
+  erasure       Erase a resource or a principal, or scrub a resource's block history or one of its fields. Surveys by default; --execute acts
   ledger        Read the admin ledger: who granted what, to whom, and when
   saml          SAML provisioning: generate keys + emit the consistent env bundle and SQL (operator tooling)
   machine       Register and rotate machine (client_credentials) principals
@@ -396,7 +396,7 @@ Options:
 ### `temper admin erasure`
 
 ```text
-Erase a resource or a principal, or scrub a resource's block history. Surveys by default; --execute acts
+Erase a resource or a principal, or scrub a resource's block history or one of its fields. Surveys by default; --execute acts
 
 Usage: temper admin erasure [OPTIONS] <COMMAND>
 
@@ -404,6 +404,7 @@ Commands:
   resource       Erase a resource. The survey counts the blocks, revisions, chunks, artifacts and edges the act would reach, and names what it would leave as remainder
   principal      Erase a principal, named by its pseudonym UUID
   block-history  Scrub the revision history of named blocks of a resource
+  field          Scrub the history of one field of a resource (its title, its origin URI, or a property family) while the resource survives. With no --field, list the fields and property families to choose from: handles, counts, dates, profile ids and the sensitivity sweep's flags, never a key or a value. Today's value is kept unless --clear says it is part of the leak
   help           Print this message or the help of the given subcommand(s)
 
 Options:
@@ -485,6 +486,28 @@ Options:
       --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
       --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+#### `temper admin erasure field`
+
+```text
+Scrub the history of one field of a resource (its title, its origin URI, or a property family) while the resource survives. With no --field, list the fields and property families to choose from: handles, counts, dates, profile ids and the sensitivity sweep's flags, never a key or a value. Today's value is kept unless --clear says it is part of the leak
+
+Usage: temper admin erasure field [OPTIONS] <RESOURCE>
+
+Arguments:
+  <RESOURCE>  The resource (UUID or decorated ref)
+
+Options:
+      --field <FIELD>      The field: title, origin_uri, property (with --family) or properties (every family's prior history; never cleared). Without it, the command lists the families [possible values: title, origin_uri, property, properties]
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --family <FAMILY>    The property family's handle, from the listing. Only with --field property
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --clear              Today's value is part of the leak: clear it first, then redact every value the field held. Without it, today's value is kept and only earlier values are redacted
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+      --execute            Scrub the field. Without it, the command only surveys
   -h, --help               Print help
 ```
 

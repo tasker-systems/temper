@@ -11,8 +11,8 @@
 //! with a literal `include_str!` is scanned with it. Test trees are outside the set, because these
 //! witnesses read the store directly.
 //!
-//! The two public doors that compare resources the caller names are held the same way: only the
-//! two survey services may name them (`the_pairwise_doors_are_named_only_by_the_surveys`).
+//! The public doors that read the store for resources the caller names are held the same way: only
+//! the survey services may name them (`the_pairwise_doors_are_named_only_by_the_surveys`).
 //!
 //! What a grep cannot see, and so is not claimed: a schema name assembled at run time
 //! (`format!("{SCHEMA}.findings")`, `'sensitiv' || 'ity.findings'`), an `include_str!` whose path is
@@ -166,22 +166,26 @@ fn no_application_code_names_the_sensitivity_schema() {
     );
 }
 
-/// The public doors into the sweep that take the resources to compare from their caller: each is a
-/// pairwise confirmation oracle over any two resources (resource erasure spec D10, build order 3c
-/// security review), so naming one is reaching the store.
+/// The public doors into the sweep that take the resources to read from their caller: each is a
+/// confirmation oracle over resources the caller names (resource erasure spec D10, build order 3c
+/// security review; field-grain scrub S1's family flags, a per-resource oracle), so naming one is
+/// reaching the store.
 const PAIRWISE_DOORS: &[&str] = &[
     "resource_erasure_deriver_fingerprints",
     "block_history_scrub_flagged_blocks",
+    "resource_field_scrub_family_flags",
 ];
 
-/// The only callers allowed, both behind the system-admin gate, each passing its plan's own ids.
+/// The only callers allowed, each behind the system-admin gate, each passing its own resource and
+/// plan ids.
 const PAIRWISE_CALLERS: &[&str] = &[
     "crates/temper-services/src/services/resource_erasure_service.rs",
     "crates/temper-services/src/services/block_history_scrub_service.rs",
+    "crates/temper-services/src/services/field_scrub_service.rs",
 ];
 
-/// FAILS IF a pairwise door is named anywhere but the two survey services, or if the walk stops
-/// reaching either of them (an empty match would pass vacuously).
+/// FAILS IF a door is named anywhere but the three survey services, or if the walk stops
+/// reaching any of them (an empty match would pass vacuously).
 #[test]
 fn the_pairwise_doors_are_named_only_by_the_surveys() {
     let root = workspace_root();
@@ -200,7 +204,7 @@ fn the_pairwise_doors_are_named_only_by_the_surveys() {
     allowed.sort();
     assert_eq!(
         callers, allowed,
-        "only the two survey services may name a pairwise door into the sensitivity sweep"
+        "only the three survey services may name a door into the sensitivity sweep"
     );
 }
 

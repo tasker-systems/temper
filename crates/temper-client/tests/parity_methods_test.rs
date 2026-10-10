@@ -230,8 +230,10 @@ mod erasure {
     use super::*;
     use temper_core::types::erasure::{
         BlockHistoryScrubExecuteResponse, BlockHistoryScrubRequestBody, ErasureExecuteRequest,
-        ErasureExecuteResponse, ErasureSurveyRequest, ResourceErasureExecuteRequest,
-        ResourceErasureExecuteResponse, ResourceErasureRefusalReason, ResourceErasureSurveyRequest,
+        ErasureExecuteResponse, ErasureSurveyRequest, FieldScrubExecuteResponse,
+        FieldScrubFamiliesRequest, FieldScrubRefusalReason, FieldScrubRequestBody,
+        ResourceErasureExecuteRequest, ResourceErasureExecuteResponse,
+        ResourceErasureRefusalReason, ResourceErasureSurveyRequest, ScrubFieldKind,
     };
 
     #[tokio::test]
@@ -449,6 +451,95 @@ mod erasure {
         assert!(matches!(
             answer,
             BlockHistoryScrubExecuteResponse::Completed { .. }
+        ));
+    }
+
+    /// FAILS IF a field scrub method posts to another door, drops `family` or `clear` from the
+    /// body, or reads a refusal in the erasure doors' vocabulary instead of the field scrub's own.
+    #[tokio::test]
+    async fn the_field_scrub_listing_survey_and_act_post_to_their_doors() {
+        let server = MockServer::start().await;
+        let resource = Uuid::now_v7();
+        let family = Uuid::now_v7();
+        let body = FieldScrubRequestBody {
+            resource,
+            field: ScrubFieldKind::Property,
+            family: Some(family),
+            clear: true,
+        };
+        let wire = json!({
+            "resource": resource, "field": "property", "family": family, "clear": true,
+        });
+        Mock::given(method("POST"))
+            .and(path("/api/admin/resources/field-scrub/families"))
+            .and(body_json(json!({ "resource": resource })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "resource": resource,
+                "families": [{
+                    "field": "property", "family": family, "events": 2, "live": true,
+                    "unset": false, "first_seen": "2026-10-09T10:00:00Z",
+                    "first_by": Uuid::now_v7(), "value_type": "string",
+                    "flagged": true, "current_flagged": false, "covered": true,
+                }],
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/admin/resources/field-scrub/survey"))
+            .and(body_json(wire.clone()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "resource": resource,
+                "refusal": null,
+                "detail": null,
+                "families": [],
+                "plan": {
+                    "redacted_fields": [], "kept": [], "unreachable": [], "folded_rows": [],
+                    "clears": [{ "event_type": "property_unset", "path": "property_key" }],
+                },
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/admin/resources/field-scrub"))
+            .and(body_json(wire))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": "refused",
+                "request_reference": Uuid::now_v7(),
+                "event_id": Uuid::now_v7(),
+                "reason": "sentinel_collision",
+                "detail": null,
+                "field": { "kind": "property", "family": family },
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = test_client(&server.uri());
+        let listing = client
+            .admin()
+            .list_resource_field_families(&FieldScrubFamiliesRequest { resource })
+            .await
+            .expect("the listing answers");
+        assert!(listing.families[0].flagged);
+        let survey = client
+            .admin()
+            .survey_resource_field_scrub(&body)
+            .await
+            .expect("survey answers");
+        assert_eq!(survey.plan.expect("a plan").clears.len(), 1);
+        let answer = client
+            .admin()
+            .scrub_resource_field(&body)
+            .await
+            .expect("scrub answers");
+        assert!(matches!(
+            answer,
+            FieldScrubExecuteResponse::Refused {
+                reason: FieldScrubRefusalReason::SentinelCollision,
+                ..
+            }
         ));
     }
 }
