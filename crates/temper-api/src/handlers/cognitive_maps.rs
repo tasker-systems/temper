@@ -331,7 +331,7 @@ pub async fn analytics(
     request_body = BindTeamRequest,
     responses(
         (status = 200, description = "Team bound (or idempotent no-op)", body = BindTeamOutcome),
-        (status = 403, description = "Caller is not a system admin and does not both administer the map and manage the team"),
+        (status = 403, description = "Caller is not a system admin and does not both administer the map and manage the team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
     )
 )]
 pub async fn bind_team(
@@ -358,7 +358,7 @@ pub async fn bind_team(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Team unbound (or no-op)", body = UnbindTeamOutcome),
-        (status = 403, description = "Caller is not a system admin and does not both administer the map and manage the team"),
+        (status = 403, description = "Caller is not a system admin and does not both administer the map and manage the team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
     )
 )]
 pub async fn unbind_team(
@@ -381,7 +381,7 @@ pub async fn unbind_team(
     request_body = CogmapGrantBody,
     responses(
         (status = 200, description = "Grant minted (or updated)", body = GrantOutcome),
-        (status = 403, description = "Caller may not administer grants on this map"),
+        (status = 403, description = "Caller may not administer grants on this map; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
     )
 )]
 pub async fn grant(
@@ -417,7 +417,7 @@ pub async fn grant(
     request_body = CogmapRevokeBody,
     responses(
         (status = 200, description = "Grant revoked (or no-op)", body = RevokeOutcome),
-        (status = 403, description = "Caller may not administer grants on this map"),
+        (status = 403, description = "Caller may not administer grants on this map; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
     )
 )]
 pub async fn revoke(

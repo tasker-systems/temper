@@ -502,7 +502,7 @@ pub async fn delete(
     responses(
         (status = 200, description = "Grant minted (or updated in place)", body = GrantOutcome),
         (status = 401, description = "Unauthorized", body = ErrorBody),
-        (status = 403, description = "Caller may not administer grants on this resource", body = ErrorBody),
+        (status = 403, description = "Caller may not administer grants on this resource; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
     )
 )]
@@ -541,7 +541,7 @@ pub async fn grant(
     responses(
         (status = 200, description = "Grant revoked (no-op safe)", body = RevokeOutcome),
         (status = 401, description = "Unauthorized", body = ErrorBody),
-        (status = 403, description = "Caller may not administer grants on this resource", body = ErrorBody),
+        (status = 403, description = "Caller may not administer grants on this resource; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
     )
 )]

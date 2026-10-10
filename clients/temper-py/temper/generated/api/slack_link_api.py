@@ -390,6 +390,7 @@ class SlackLinkApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "SlackDisconnectResponse",
             '401': "ErrorBody",
+            '403': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -458,6 +459,7 @@ class SlackLinkApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "SlackDisconnectResponse",
             '401': "ErrorBody",
+            '403': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -526,6 +528,7 @@ class SlackLinkApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "SlackDisconnectResponse",
             '401': "ErrorBody",
+            '403': None,
         }
         response_data = self.api_client.call_api(
             *_param,

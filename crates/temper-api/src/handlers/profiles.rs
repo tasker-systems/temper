@@ -45,6 +45,7 @@ pub async fn get(
     request_body = ProfileUpdateRequest,
     security(("bearer_auth" = [])),
     responses(
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
         (status = 200, description = "Updated profile", body = Profile),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
@@ -75,6 +76,7 @@ pub async fn update(
     tag = "Profile",
     security(("bearer_auth" = [])),
     responses(
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
         (status = 200, description = "Linked auth providers", body = Vec<ProfileAuthLink>),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )

@@ -24,7 +24,7 @@ use temper_services::state::AppState;
     responses(
         (status = 200, description = "Owner reassigned", body = ReassignAck),
         (status = 400, description = "The caller owns the resource, but it is homed in a cognitive map (map interiors are not reassignable)", body = ErrorBody),
-        (status = 403, description = "Forbidden: not the owner and no admin reach over the resource and target. An unknown id answers the same 403"),
+        (status = 403, description = "Forbidden: not the owner and no admin reach over the resource and target. An unknown id answers the same 403; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
         (status = 404, description = "Not answered: an unknown id answers 403, as a resource the caller has no authority over"),
         (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered to a caller with authority who also holds the erased resource (its owner, or an admin with reach who holds a read grant on it); everyone else gets 403", body = ErrorBody),
     )
@@ -53,7 +53,7 @@ pub async fn reassign_resource(
     request_body = BulkReassignRequest,
     responses(
         (status = 200, description = "Team resources reassigned", body = BulkReassignAck),
-        (status = 403, description = "Forbidden (caller does not manage the team, or target not a member)"),
+        (status = 403, description = "Forbidden (caller does not manage the team, or target not a member); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
     )
 )]
 pub async fn reassign_team(

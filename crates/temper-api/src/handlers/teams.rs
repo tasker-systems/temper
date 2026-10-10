@@ -49,7 +49,7 @@ pub async fn list(
     responses(
         (status = 201, description = "Team created", body = TeamRow),
         (status = 400, description = "The `personal-` slug prefix is reserved for personal teams, or the caller is a machine principal (a team's creator becomes its owner, and a machine never governs)"),
-        (status = 403, description = "Forbidden (child requires owner/maintainer; auto_join_role requires admin)"),
+        (status = 403, description = "Forbidden (child requires owner/maintainer; auto_join_role requires admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
         (status = 409, description = "Team slug already exists"),
     )
 )]
@@ -72,7 +72,7 @@ pub async fn create(
     request_body = AddMemberRequest,
     responses(
         (status = 201, description = "Member added", body = TeamMemberRow),
-        (status = 403, description = "Forbidden (caller is not owner/maintainer)"),
+        (status = 403, description = "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
         (status = 400, description = "Cannot grant owner via add_member (use ownership transfer), or the target is a machine principal and the role is above `member`"),
         (status = 409, description = "Already a member of this team; change the role with PATCH /api/teams/{id}/members/{profile_id}"),
     )
@@ -120,7 +120,7 @@ pub async fn detail(
     request_body = TeamUpdateRequest,
     responses(
         (status = 200, description = "Team metadata updated", body = TeamRow),
-        (status = 403, description = "Forbidden (caller is not owner/maintainer)"),
+        (status = 403, description = "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
         (status = 404, description = "Team not found or soft-deleted"),
     )
 )]
@@ -145,7 +145,7 @@ pub async fn update(
     security(("bearer_auth" = [])),
     responses(
         (status = 204, description = "Team soft-deleted"),
-        (status = 403, description = "Forbidden (caller is not the owner)"),
+        (status = 403, description = "Forbidden (caller is not the owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
         (status = 404, description = "Team not found or already soft-deleted"),
         (status = 409, description = "Cannot delete the temper-system root team"),
     )
@@ -171,7 +171,7 @@ pub async fn delete(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Member removed; residual owned-resource reach reported", body = RemoveMemberOutcome),
-        (status = 403, description = "Forbidden (not owner/maintainer and not self)"),
+        (status = 403, description = "Forbidden (not owner/maintainer and not self); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
         (status = 404, description = "Member not found"),
         (status = 409, description = "Cannot remove the last owner, a SAML-provisioned row, or a profile from its own personal team"),
     )
@@ -199,7 +199,7 @@ pub async fn remove_member(
     responses(
         (status = 200, description = "Role changed", body = TeamMemberRow),
         (status = 400, description = "Cannot grant owner via role change, or the target is a machine principal and the role is above `member`"),
-        (status = 403, description = "Forbidden (not owner/maintainer)"),
+        (status = 403, description = "Forbidden (not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
         (status = 404, description = "Member not found"),
         (status = 409, description = "Cannot demote last owner or SAML-provisioned row"),
     )

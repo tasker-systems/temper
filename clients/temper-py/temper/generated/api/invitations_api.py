@@ -401,6 +401,7 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "PendingInvitationCounts",
+            '403': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -472,6 +473,7 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "PendingInvitationCounts",
+            '403': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -543,6 +545,7 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "PendingInvitationCounts",
+            '403': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1272,6 +1275,7 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "List[InviteeInvitation]",
+            '403': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1338,6 +1342,7 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "List[InviteeInvitation]",
+            '403': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1404,6 +1409,7 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "List[InviteeInvitation]",
+            '403': None,
         }
         response_data = self.api_client.call_api(
             *_param,
