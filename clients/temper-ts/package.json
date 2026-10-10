@@ -41,7 +41,7 @@
     "@types/node": "24.x",
     "openapi-typescript": "7.13.0",
     "typescript": "^5.8",
-    "vitest": "^3"
+    "vitest": "^4.1.11"
   },
   "engines": {
     "node": ">=22"
