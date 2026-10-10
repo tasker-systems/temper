@@ -5,6 +5,15 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The merge queue. Each queued PR is re-tested as the exact commit that will land —
+  # main plus every entry ahead of it plus this PR — on a `gh-readonly-queue/main/pr-N-<sha>`
+  # branch, and `CI Success` must report on THAT commit before the queue merges it. Without
+  # this trigger the required check never reports there and every queued PR waits out the
+  # queue's status-check timeout and is ejected. This is what retires "main moved, merge it
+  # back in, wait for CI, repeat": a PR no longer has to be up to date with main to be queued,
+  # because the queue does the up-to-date test itself.
+  merge_group:
+    types: [checks_requested]
 
 # Least privilege. The org default is `default_workflow_permissions: write`,
 # which grants EVERY scope — including `actions: write` and `contents: write` —
@@ -28,15 +37,28 @@ permissions:
 #   32609251193, 32609474823), and only the last one's verdict gated anything. At ~67
 #   minutes of compute per run that is ~400 minutes to answer one question.
 #
-#   The post-merge run on main is the OPPOSITE case and must never be cancelled. It is the
-#   only thing that catches semantic merge skew — a PR that was green against its own base
-#   but is wrong against the main it landed on — and each merge commit's run is the only
-#   run that commit will ever get. Cancelling one because the next merge arrived would
-#   leave a commit on main with no verdict at all.
+#   The post-merge run on main is the OPPOSITE case and is never cancelled from here. It
+#   used to be the only thing that caught semantic merge skew — a PR that was green against
+#   its own base but wrong against the main it landed on. The merge queue now catches that
+#   BEFORE the merge: main is fast-forwarded to the exact commit the queue tested, so every
+#   main commit already carries a verdict. The run on main stays for what only it does —
+#   refreshing the default branch's CodeQL analyses (see codeql.yml).
+#
+#   `cancel-in-progress: false` is NOT a guarantee that every push to main runs. GitHub keeps
+#   one running and ONE pending run per concurrency group: a third push while one runs and
+#   one waits cancels the waiting one. A burst of queue merges therefore runs main's CI on
+#   the first and the last, not every commit between. That is acceptable only because the
+#   queue verdict covers each of them and the latest CodeQL upload is the one the
+#   code_scanning rule reads — do not read a missing run on main as a missing verdict.
 #
 #   `cancel-in-progress` therefore reads the event rather than being a constant, and the
 #   group keys on the PR number so two PRs never contend, falling back to the ref for
 #   pushes so main has a group of its own.
+#
+#   A merge-queue run falls through to the ref too, and its ref is unique per queue entry
+#   (`gh-readonly-queue/main/pr-N-<base sha>`), so entries never contend with each other or
+#   with the PR's own run. It is never cancelled from here: the queue owns that lifecycle,
+#   and a cancelled run would read as a failure and eject the PR.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -71,11 +93,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      # A merge-queue run has no GITHUB_BASE_REF, so the script's own ladder would fall to
+      # its local-dev rung — the merge base with origin/main — which for an entry behind
+      # others in the queue is main's tip, and the diff would carry every PR ahead of it.
+      # The group's parent commit is the exact base: this entry's changes and nothing else.
       - name: Detect change scope
         id: detect
+        env:
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: |
           chmod +x .github/scripts/detect-ci-scope.sh
-          .github/scripts/detect-ci-scope.sh --github-output --verbose
+          if [ -n "${MERGE_GROUP_BASE_SHA}" ]; then
+            .github/scripts/detect-ci-scope.sh --github-output --verbose --base "${MERGE_GROUP_BASE_SHA}"
+          else
+            .github/scripts/detect-ci-scope.sh --github-output --verbose
+          fi
 
       - name: Annotate scope
         run: echo "::notice title=CI Scope::${{ steps.detect.outputs.scope-summary }}"
@@ -197,7 +229,39 @@ jobs:
     needs: [detect-scope, quality-gate, code-quality, test-rust, test-typescript, test-ruby, test-python, test-agents-ts, codeql, secret-scan]
     if: always()
     runs-on: ubuntu-latest
+    # Read-only, and only so a merge-queue run can read the queued PR's labels (the
+    # `codeql-override` eject below). The workflow-level block zeroes every unlisted scope.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
+      # The eject label lives on the PR, and a merge_group event carries no PR — only the
+      # queue branch, `gh-readonly-queue/main/pr-<N>-<base sha>`, which names the queued PR.
+      # Read the label from that PR so a CodeQL stall in the queue can be released the same
+      # way it is on the PR. Off a merge group this prints "false" and the PR's own payload
+      # decides, exactly as before.
+      #
+      # Fails closed: no parsable number, or an API error, is "false" — the gate holds.
+      # With a queue group size above 1 the branch names the group's LAST PR only, so its
+      # label releases CodeQL for the batch; every PR in it already passed the code_scanning
+      # rule on its own, which is the gate that judges findings.
+      - name: Resolve codeql-override for a merge-queue run
+        id: queue-override
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_GROUP_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+        run: |
+          override=false
+          pr="$(printf '%s' "${MERGE_GROUP_HEAD_REF}" | sed -n 's#^refs/heads/gh-readonly-queue/[^ ]*/pr-\([0-9][0-9]*\)-[0-9a-f]*$#\1#p')"
+          if [ -n "$pr" ]; then
+            if gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels" --jq '.[].name' 2>/dev/null \
+                 | grep -qx 'codeql-override'; then
+              override=true
+            fi
+            echo "merge queue: PR #${pr}, codeql-override=${override}"
+          fi
+          echo "override=${override}" >> "$GITHUB_OUTPUT"
+
       - name: Validate CI results against scope
         run: |
           echo "=== CI Scope: ${{ needs.detect-scope.outputs.scope-summary }} ==="
@@ -245,7 +309,8 @@ jobs:
           # be triaged is a gate that gets disabled the first time it is inconvenient.
           #
           # Fails closed off a PR: `github.event.pull_request.labels` is empty on a push to main, so
-          # the override cannot apply to the post-merge run.
+          # the override cannot apply to the post-merge run. A merge-queue run reads the queued
+          # PR's labels instead (the step above), because the queue run is a merge decision too.
           check_job_overridable() {
             name="$1"; result="$2"; should_run="$3"; override="$4"; label="$5"
             if [ "$should_run" = "true" ] && [ "$result" != "success" ] && [ "$result" != "skipped" ] \
@@ -295,7 +360,7 @@ jobs:
           check_job_overridable "codeql" \
             "${{ needs.codeql.result }}" \
             "true" \
-            "${{ contains(github.event.pull_request.labels.*.name, 'codeql-override') }}" \
+            "${{ contains(github.event.pull_request.labels.*.name, 'codeql-override') || steps.queue-override.outputs.override == 'true' }}" \
             "codeql-override"
 
           # Always "should run": the job is invoked for every change because no scope

@@ -200,6 +200,18 @@ case "${VERCEL_ENV:-}:${VERCEL_GIT_COMMIT_REF:-}" in
     echo "skip: preview of Dependabot branch '${VERCEL_GIT_COMMIT_REF}' — unreviewed dependency code does not build here"
     exit 0
     ;;
+  # ── NO PREVIEW FOR A MERGE-QUEUE BRANCH — a cost rule ─────────────────────────────────
+  #
+  # The merge queue pushes a `gh-readonly-queue/main/pr-<N>-<sha>` branch per queued PR to
+  # re-run CI on the exact commit that will land. Nobody opens a preview of it: the PR
+  # already had its own, and the commit becomes main within minutes, where production
+  # decides for itself. Building it would pay every project's build a second time per PR,
+  # and a Dependabot bump would install its versions here under a name the rule above
+  # does not match. Previews only, like the rule above.
+  preview:gh-readonly-queue/*)
+    echo "skip: preview of merge-queue branch '${VERCEL_GIT_COMMIT_REF}' — CI tests it; the PR had its own preview"
+    exit 0
+    ;;
 esac
 
 # ---------------------------------------------------------------------------------------
