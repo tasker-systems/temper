@@ -3657,7 +3657,7 @@ dependencies = [
  "num-integer",
  "num-iter",
  "num-traits",
- "rand 0.8.5",
+ "rand 0.8.8",
  "smallvec",
  "zeroize",
 ]
@@ -4532,9 +4532,9 @@ checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 
 [[package]]
 name = "rand"
-version = "0.8.5"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
+checksum = "e058c7de0b26af77780c769414d6257830bb240f3c38477dbc2c16e5f54d6d4c"
 dependencies = [
  "libc",
  "rand_chacha 0.3.1",
@@ -5945,7 +5945,7 @@ dependencies = [
  "memchr",
  "once_cell",
  "percent-encoding",
- "rand 0.8.5",
+ "rand 0.8.8",
  "rsa",
  "serde",
  "sha1",
@@ -5985,7 +5985,7 @@ dependencies = [
  "md-5 0.10.6",
  "memchr",
  "once_cell",
- "rand 0.8.5",
+ "rand 0.8.8",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -6289,7 +6289,7 @@ dependencies = [
  "indicatif 0.17.11",
  "libc",
  "pkcs8",
- "rand 0.8.5",
+ "rand 0.10.0",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -6468,7 +6468,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry_sdk",
  "percent-encoding",
- "rand 0.8.5",
+ "rand 0.10.0",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -6525,7 +6525,7 @@ name = "temperkb-auth"
 version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
- "rand 0.8.5",
+ "rand 0.10.0",
  "serde",
  "sha2 0.10.9",
  "thiserror 2.0.21",
