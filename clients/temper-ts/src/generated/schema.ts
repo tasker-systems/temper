@@ -11245,7 +11245,7 @@ export interface operations {
                     "application/json": components["schemas"]["TeamMemberRow"];
                 };
             };
-            /** @description The profile or team cannot be promoted into */
+            /** @description The profile or team cannot be promoted into, or the profile is a machine principal (a machine never governs) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -19532,7 +19532,7 @@ export interface operations {
                     "application/json": components["schemas"]["TeamRow"];
                 };
             };
-            /** @description The `personal-` slug prefix is reserved for personal teams */
+            /** @description The `personal-` slug prefix is reserved for personal teams, or the caller is a machine principal (a team's creator becomes its owner, and a machine never governs) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -19836,7 +19836,7 @@ export interface operations {
                     "application/json": components["schemas"]["TeamMemberRow"];
                 };
             };
-            /** @description Cannot grant owner via add_member; use ownership transfer */
+            /** @description Cannot grant owner via add_member (use ownership transfer), or the target is a machine principal and the role is above `member` */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -19899,7 +19899,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Cannot remove last owner or SAML-provisioned row */
+            /** @description Cannot remove the last owner, a SAML-provisioned row, or a profile from its own personal team */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -19938,7 +19938,7 @@ export interface operations {
                     "application/json": components["schemas"]["TeamMemberRow"];
                 };
             };
-            /** @description Cannot grant owner via role change */
+            /** @description Cannot grant owner via role change, or the target is a machine principal and the role is above `member` */
             400: {
                 headers: {
                     [name: string]: unknown;

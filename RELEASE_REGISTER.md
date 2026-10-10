@@ -36,17 +36,19 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
   A machine principal (a profile registered as a machine client, revoked or not) now holds every
   team at `member` or below, its own personal team included, and can never be a system admin. New
   `400` refusals, each naming the rule: `POST /api/teams/{id}/members` and
-  `PATCH /api/teams/{id}/members/{profile_id}` refuse a machine above `member`; the admin promote
-  act refuses a machine target; `POST /api/teams` refuses a machine caller (a team's creator
-  becomes its owner). `DELETE /api/teams/{id}/members/{profile_id}` refuses removing any profile
-  from its own personal team (`409`). Existing machines' `owner` rows on their personal teams
-  become `member` at migration; the database refuses these states underneath every path. Who
-  observes: a team manager adding or raising a machine to `maintainer`; an admin promoting a
-  machine; an approved machine credential calling team create or leaving its personal team.
-  Shapes unchanged.
+  `PATCH /api/teams/{id}/members/{profile_id}` refuse a machine above `member`;
+  `POST /api/access/admin/promote` refuses a machine target; `POST /api/teams` refuses a machine
+  caller (a team's creator becomes its owner). `DELETE /api/teams/{id}/members/{profile_id}`
+  refuses removing any profile, person or machine, from its own personal team (`409`). Existing
+  machines' `owner` rows on their personal teams become `member` at migration; the database
+  refuses these states underneath every path. Who observes: a team manager adding or raising a
+  machine to `maintainer`; an admin promoting a machine; an approved machine credential calling
+  team create or leaving its personal team; a person whose personal team has a second owner, who
+  can no longer leave it, and that co-owner, who can no longer remove them. The OpenAPI response
+  descriptions name the new refusals; shapes are otherwise unchanged.
 pr: self
-classes: behavioral
-surfaces: http
+classes: additive, behavioral
+surfaces: http, clients
 status: signal-only
 - **An invitation redeems only for the person invited**
   `POST /api/invitations/accept` and `POST /api/invitations/decline` used to treat the token as
