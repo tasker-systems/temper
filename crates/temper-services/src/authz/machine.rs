@@ -14,7 +14,7 @@ use temper_core::types::team::TeamRole;
 use super::{Principal, ScopedAuthority};
 use crate::error::{ApiError, ApiResult};
 use crate::services::machine_client_service::{self, MACHINE_CLIENT_REFUSAL};
-use crate::services::{access_service, machine_authz::MachineAuthority, team_service};
+use crate::services::{machine_authz::MachineAuthority, team_service};
 
 #[async_trait]
 impl ScopedAuthority for MachineAuthority {
@@ -23,8 +23,9 @@ impl ScopedAuthority for MachineAuthority {
     type Subject = Option<Uuid>;
 
     async fn resolve(pool: &PgPool, caller: Principal<'_>, team: Option<Uuid>) -> ApiResult<Self> {
-        let caller = caller.profile_id();
-        if access_service::is_system_admin(pool, caller).await? {
+        let principal = caller;
+        let caller = principal.profile_id();
+        if principal.system_admin(pool).await?.is_some() {
             return Ok(MachineAuthority::SystemAdmin);
         }
 

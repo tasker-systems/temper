@@ -1,0 +1,11 @@
+error[E0599]: no associated function or constant named `new` found for struct `DbBackend` in the current scope
+ --> tests/compile_fail/backend_new_without_test_harness.rs:9:24
+  |
+9 |     let _ = DbBackend::new(pool, ProfileId::from(uuid::Uuid::nil()));
+  |                        ^^^ associated function or constant not found in `DbBackend`
+  |
+note: if you're trying to build a new `DbBackend`, consider using `DbBackend::with_proof` which returns `DbBackend`
+ --> src/backend/db_backend.rs
+  |
+  |     pub fn with_proof(pool: PgPool, caller: &crate::auth::Caller) -> Self {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

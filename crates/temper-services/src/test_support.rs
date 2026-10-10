@@ -108,6 +108,16 @@ pub async fn human_principal_for(pool: &PgPool, profile_id: Uuid) -> crate::auth
     }
 }
 
+/// [`human_principal_for`], as the [`crate::auth::Caller`] an allowed act takes.
+pub async fn caller_for(pool: &PgPool, profile_id: Uuid) -> crate::auth::Caller {
+    crate::auth::Caller::Human(human_principal_for(pool, profile_id).await)
+}
+
+/// [`machine_principal_for`], as the [`crate::auth::Caller`] an allowed act takes.
+pub async fn machine_caller_for(pool: &PgPool, profile_id: Uuid) -> crate::auth::Caller {
+    crate::auth::Caller::Machine(machine_principal_for(pool, profile_id).await)
+}
+
 /// Mint a real `MachinePrincipal` for a seeded **machine** profile: a machine token's claims through
 /// the actual Level-1 gate and classification. Panics if the profile has no `kb_machine_clients` row,
 /// because production refuses a machine token without one (G3) — a machine fixture must be one.
@@ -151,6 +161,60 @@ pub async fn machine_principal_for(
     }
 }
 
+/// A machine principal whose profile **holds a governance grant** — a state production cannot reach,
+/// built on purpose for the witnesses that isolate the type.
+///
+/// The #1089 triggers refuse governance to any profile with a client row, and G3 refuses a machine
+/// token without one, so no real machine is ever an admin by the database's answer. That makes a
+/// real machine useless for proving that an admin decision is *minted from a person*: a boolean read
+/// would refuse it too. This fixture is a seeded, approved, governed profile reached by machine claims
+/// (no client row), so `is_system_admin` says yes and only the type can say no. Runs the real Level-1
+/// gate and classification; nothing is forged.
+#[cfg(test)]
+pub(crate) async fn governed_machine_caller(pool: &PgPool) -> crate::auth::Caller {
+    use temper_core::types::ids::ProfileId;
+    use temper_core::types::{AuthClaims, PrincipalKind};
+
+    let id: Uuid = sqlx::query_scalar!(
+        "INSERT INTO kb_profiles (handle, display_name) \
+         VALUES ('governed-machine-' || gen_random_uuid(), 'governed machine') RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("seed governed machine profile");
+    approved_admin(pool, id).await;
+    assert!(
+        crate::services::access_service::is_system_admin(pool, ProfileId::from(id))
+            .await
+            .expect("read"),
+        "the fixture's point: the database calls this machine's profile an admin"
+    );
+
+    let profile = crate::services::profile_service::get_by_id(pool, ProfileId::from(id))
+        .await
+        .expect("load governed machine profile");
+    let claims = AuthClaims {
+        principal_kind: PrincipalKind::Machine,
+        provider: crate::auth::MACHINE_PROVIDER_TAG.to_string(),
+        external_user_id: format!("governed-client-{id}"),
+        email: String::new(),
+        email_verified: None,
+        exp: 0,
+        iat: 0,
+    };
+    let authed = crate::auth::gate_resolved_profile(pool, profile, &claims)
+        .await
+        .expect("seeded fixture must pass the Level-1 gate");
+    let caller = crate::auth::classify_caller(pool, authed)
+        .await
+        .expect("classification must read");
+    assert!(
+        matches!(caller, crate::auth::Caller::Machine(_)),
+        "machine claims classify Machine"
+    );
+    caller
+}
+
 /// Mint a real, sealed `SystemAdmin` proof — seeding a fresh approved-admin operator and passing it
 /// through the actual `require_system_admin` gate. For mechanics tests that must *call* a proof-gated
 /// admin fn but do not themselves exercise the gate; the seal has no test bypass, so the honest path
@@ -177,8 +241,8 @@ pub async fn system_admin_proof(pool: &PgPool) -> crate::auth::SystemAdmin {
 /// The profile must already satisfy `is_system_admin`; this runs the real gate, so a fixture that
 /// forgot [`grant_governance`] panics here rather than silently acting unauthorized.
 pub async fn system_admin_proof_for(pool: &PgPool, profile_id: Uuid) -> crate::auth::SystemAdmin {
-    let authed = authenticated_profile_for(pool, profile_id).await;
-    crate::auth::require_system_admin(pool, &authed)
+    let human = human_principal_for(pool, profile_id).await;
+    crate::auth::require_system_admin(pool, &human)
         .await
         .expect("the seeded profile must satisfy is_system_admin to mint a proof")
 }

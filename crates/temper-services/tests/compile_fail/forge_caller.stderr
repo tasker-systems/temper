@@ -1,0 +1,12 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> tests/compile_fail/forge_caller.rs:7:19
+  |
+7 |     Caller::Human(HumanPrincipal(authed))
+  |                   ^^^^^^^^^^^^^^
+  |
+  = note: a struct named `HumanPrincipal` exists in another namespace
+note: constructor is not visible here due to private fields
+ --> src/auth/mod.rs
+  |
+  | pub struct HumanPrincipal(AuthenticatedProfile);
+  |                           ^^^^^^^^^^^^^^^^^^^^ private field

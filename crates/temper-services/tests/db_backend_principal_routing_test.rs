@@ -2,21 +2,19 @@
 //! The DbBackend caller-principal routing pin (single-ingress follow-on, 2026-09-29).
 //!
 //! The seam's Principal-consuming gates dispatch through `DbBackend::principal`, which routes
-//! `with_proof`-constructed callers to the `Principal::Proof` arm and `new`-constructed ones to
-//! the `Principal::Bare` arm. This file pins the ROUTING, not the SQL predicates (the
-//! predicates are the gates' own unit suites' subject — `authz/audit_gate.rs`,
-//! `services/machine_authz.rs`). Two properties matter:
+//! `with_proof`-constructed callers to the classified arm (`Principal::Human` /
+//! `Principal::Machine`) their `Caller` carries, and test-harness `new`-constructed ones to
+//! `Principal::Bare`. This file pins the ROUTING, not the SQL predicates (the predicates are the
+//! gates' own unit suites' subject — `authz/audit_gate.rs`, `services/machine_authz.rs`). Two
+//! properties matter:
 //!
-//! 1. **A proof-holding caller reaches the same gate decision it always did.** The witness
+//! 1. **A classified caller reaches the same gate decision the bare id does.** The witness
 //!    drives the real audit write through BOTH spellings for the same caller and demands the
-//!    same admission — routing must change which proof the gate receives, never the gate's
-//!    answer. An accidental hard-demote of the proof arm to `Bare` is behaviorally invisible
-//!    on the admitting path (both arms bind the same profile id into the same predicates); the
-//!    pin's job is to make that routing change SURFACE at the seam's front door rather than
-//!    drift silently, named, exactly like every other wiring pin in this repo.
-//! 2. **The CLI/operator spelling keeps its posture.** `new` stays the Class E constructor —
-//!    no proof is minted, faked, or implied; the second call below IS that spelling proving it
-//!    still admits on the same predicates.
+//!    same admission — routing must change which arm the gate receives, never the gate's
+//!    answer on these predicates.
+//! 2. **The test-harness spelling keeps its posture.** `new` mints, fakes and implies no proof;
+//!    the second call below IS that spelling proving it still admits on the same predicates.
+//!    It exists only under `test-harness` — no production path builds one.
 //!
 //! Fixture convention cribbed per this tier's rule from `audit_gate_folded_test.rs` (the
 //! bootseed + write-path fixture geometry; `seed_auditor`'s surface-emitter entities — the
@@ -29,7 +27,7 @@ use sqlx::PgPool;
 use temper_core::types::authorship::ActContext;
 use temper_core::types::ids::{BlockId, CogmapId, EntityId, ProfileId, ResourceId};
 use temper_core::types::provenance::ProvenanceSource;
-use temper_services::auth::AuthenticatedProfile;
+use temper_services::auth::Caller;
 use temper_services::backend::DbBackend;
 use temper_substrate::payloads::{AnchorRef, Incorporation};
 use temper_substrate::scenario::bootseed;
@@ -263,8 +261,8 @@ async fn seed_auditor_job(pool: &PgPool, auditor_profile: ProfileId) -> CogmapId
 }
 
 /// THE SECOND ROUTING PIN, on the machine-principal job door (`complete_auditor_job`): the same
-/// caller, both constructor spellings — the `Proof` arm its middleware minted and the `Bare` arm
-/// the CLI path re-derives. The completion must land under both, and the ledger-row count forbids
+/// caller, both constructor spellings — the classified arm its middleware minted and the
+/// test-harness `Bare` arm. The completion must land under both, and the ledger-row count forbids
 /// either spelling from widening or demoting the gate's answer for this caller.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn proof_holding_and_bare_spellings_complete_the_same_auditor_job(pool: sqlx::PgPool) {
@@ -279,11 +277,11 @@ async fn proof_holding_and_bare_spellings_complete_the_same_auditor_job(pool: sq
          VALUES ($1, $1, $2, $2)",
     )
     .bind(format!("routing-pin-{}", Uuid::now_v7()))
-    .bind(auditor.profile().id)
+    .bind(auditor.profile_id().uuid())
     .execute(&pool)
     .await
     .unwrap();
-    let cogmap = seed_auditor_job(&pool, ProfileId::from(auditor.profile().id)).await;
+    let cogmap = seed_auditor_job(&pool, auditor.profile_id()).await;
     let complete_cmd = CompleteAuditorJob {
         cogmap,
         origin: Surface::ApiHttp,
@@ -296,12 +294,12 @@ async fn proof_holding_and_bare_spellings_complete_the_same_auditor_job(pool: sq
         .await
         .expect("the proof-holding caller's gate dispatch completes its job");
 
-    // Arm 2 — the SAME caller through the CLI/operator spelling (`new`): the `Bare` arm keeps
+    // Arm 2 — the SAME caller through the test-harness spelling (`new`): the `Bare` arm keeps
     // the gate's identical admission. The first call already finished the caller's only job
     // (`workflow_job_complete_claimed` is single-flight), so this exercises the gate's ADMIT
     // and the no-op `None` return — both spellings must pass the gate identically rather than
     // one being refused where the other was admitted.
-    let bare_backend = DbBackend::new(pool.clone(), ProfileId::from(auditor.profile().id));
+    let bare_backend = DbBackend::new(pool.clone(), auditor.profile_id());
     let second = bare_backend
         .complete_auditor_job(complete_cmd)
         .await
@@ -312,9 +310,9 @@ async fn proof_holding_and_bare_spellings_complete_the_same_auditor_job(pool: sq
     );
 }
 
-/// Mint a real Level-1 proof for a seeded profile — the exact thing `with_proof` accepts and
-/// the HTTP/MCP middleware produces. Same shape as `system_admin_proof_test.rs`'s helper.
-async fn seeded_authed(pool: &PgPool, handle: &str) -> AuthenticatedProfile {
+/// Mint a real classified caller for a seeded profile — the exact thing `with_proof` accepts and
+/// the HTTP middleware produces. Same shape as `system_admin_proof_test.rs`'s helper.
+async fn seeded_authed(pool: &PgPool, handle: &str) -> Caller {
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_profiles (handle, display_name) VALUES ($1,$1) RETURNING id",
     )
@@ -333,11 +331,11 @@ async fn seeded_authed(pool: &PgPool, handle: &str) -> AuthenticatedProfile {
         .await
         .unwrap();
     }
-    temper_services::test_support::authenticated_profile_for(pool, id).await
+    temper_services::test_support::caller_for(pool, id).await
 }
 
 /// THE ROUTING PIN, on the real audit door: the same caller, the same gate, both constructor
-/// spellings. `with_proof` dispatches the `Proof` arm its middleware minted; `new` dispatches
+/// spellings. `with_proof` dispatches the classified arm its middleware minted; `new` dispatches
 /// `Bare` — and for this caller both must land the identical admission, because the spelling
 /// changes the arm the gate receives, never the gate's answer. The second call is also the one
 /// place the `Bare` spelling is exercised end-to-end at the seam beside its unit suites.
@@ -361,13 +359,7 @@ async fn proof_holding_and_bare_spellings_reach_the_same_gate_decision(pool: sql
     .await;
     let (cited_block, _) = blocks_of(&pool, finding).await[0];
     let auditor = seeded_authed(&pool, "routing-auditor").await;
-    grant_read(
-        &pool,
-        finding.uuid(),
-        ProfileId::from(auditor.profile().id),
-        author,
-    )
-    .await;
+    grant_read(&pool, finding.uuid(), auditor.profile_id(), author).await;
 
     // Arm 1 — the proof-holding spelling (what every HTTP handler and MCP tool builds).
     let proof_backend = DbBackend::with_proof(pool.clone(), &auditor);
@@ -376,9 +368,9 @@ async fn proof_holding_and_bare_spellings_reach_the_same_gate_decision(pool: sql
         .await
         .expect("the proof-holding caller's gate dispatch lands the audit");
 
-    // Arm 2 — the SAME caller through the CLI/operator spelling (`new`): the `Bare` arm keeps
+    // Arm 2 — the SAME caller through the test-harness spelling (`new`): the `Bare` arm keeps
     // the gate's identical admission, unchanged from before the refactor.
-    let bare_backend = DbBackend::new(pool.clone(), ProfileId::from(auditor.profile().id));
+    let bare_backend = DbBackend::new(pool.clone(), auditor.profile_id());
     bare_backend
         .record_citation_audit(audit_cmd(cited_block, source))
         .await

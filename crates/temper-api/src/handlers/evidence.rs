@@ -2,7 +2,7 @@ use axum::extract::{Path, State};
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use temper_core::types::standing::StandingShape;
 use temper_services::error::{ApiResult, ErrorBody};
 use temper_services::services::evidential_standing_service;
@@ -24,7 +24,7 @@ use temper_services::state::AppState;
 )]
 pub async fn evidence(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<StandingShape>> {
     evidential_standing_service::resource_evidence(&state.pool, auth.0.profile().id, resource_id)

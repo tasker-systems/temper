@@ -2,7 +2,7 @@ use axum::extract::{Path, State};
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use crate::middleware::surface::RequestSurface;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
@@ -35,7 +35,7 @@ use temper_workflow::types::managed_meta::ManagedMeta;
 )]
 pub async fn create(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Json(payload): Json<IngestPayload>,
 ) -> ApiResult<Json<IngestCreateResponse>> {
@@ -159,7 +159,7 @@ pub async fn create(
 )]
 pub async fn update(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Json(payload): Json<IngestPayload>,

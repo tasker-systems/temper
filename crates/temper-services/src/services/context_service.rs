@@ -21,7 +21,7 @@
 
 use sqlx::PgPool;
 
-use crate::auth::AuthenticatedProfile;
+use crate::auth::{Caller, HumanPrincipal};
 use crate::authz::{ContextAdminAuthority, Principal, TwoSidedAuthority, TwoSidedScope};
 use crate::error::{ApiError, ApiResult};
 use crate::services::team_service;
@@ -757,11 +757,11 @@ fn manage_capable_roles() -> Vec<String> {
 /// The comment on `list_visible` gives the fuller argument for the subquery's shape.
 pub async fn list_retired_administered(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    caller: &Caller,
 ) -> ApiResult<Vec<ContextRowWithCounts>> {
-    let profile_id = ProfileId::from(authed.profile().id);
+    let profile_id = caller.profile_id();
     let roles = manage_capable_roles();
-    let is_admin = crate::services::access_service::is_system_admin(pool, profile_id).await?;
+    let is_admin = Principal::from(caller).system_admin(pool).await?.is_some();
     let rows = sqlx::query_as!(
         ContextRowWithCounts,
         r#"
@@ -825,12 +825,12 @@ pub async fn list_retired_administered(
 /// reason that constant's doc gives.
 pub async fn get_retired_administered(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    caller: &Caller,
     context_id: ContextId,
 ) -> ApiResult<ContextRow> {
-    let profile_id = ProfileId::from(authed.profile().id);
+    let profile_id = caller.profile_id();
     let roles = manage_capable_roles();
-    let is_admin = crate::services::access_service::is_system_admin(pool, profile_id).await?;
+    let is_admin = Principal::from(caller).system_admin(pool).await?.is_some();
     sqlx::query_as!(
         ContextRow,
         r#"
@@ -881,13 +881,13 @@ pub async fn get_retired_administered(
 /// `shared: false` when it already existed.
 pub async fn share(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     context_id: uuid::Uuid,
     req: &ShareContextRequest,
 ) -> ApiResult<ShareContextOutcome> {
     crate::authz::authorize::<TwoSidedAuthority>(
         pool,
-        Principal::Proof(authed),
+        Principal::Human(authed),
         TwoSidedScope::context(context_id, req.team_id),
     )
     .await?;
@@ -917,13 +917,13 @@ pub async fn share(
 /// (the same `crate::authz::TwoSidedAuthority` gate).
 pub async fn unshare(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     context_id: uuid::Uuid,
     team_id: uuid::Uuid,
 ) -> ApiResult<UnshareContextOutcome> {
     crate::authz::authorize::<TwoSidedAuthority>(
         pool,
-        Principal::Proof(authed),
+        Principal::Human(authed),
         TwoSidedScope::context(context_id, team_id),
     )
     .await?;
@@ -959,14 +959,14 @@ pub async fn unshare(
 /// `UNIQUE(owner_table, owner_id, slug)` constraint is the backstop).
 pub async fn reassign(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     context_id: uuid::Uuid,
     to_team_id: uuid::Uuid,
 ) -> ApiResult<ReassignContextOutcome> {
     let caller = ProfileId::from(authed.profile().id);
     crate::authz::authorize::<TwoSidedAuthority>(
         pool,
-        Principal::Proof(authed),
+        Principal::Human(authed),
         TwoSidedScope::context(context_id, to_team_id),
     )
     .await?;
@@ -1126,12 +1126,12 @@ async fn inherited_reach(
 /// put.
 pub async fn rename(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &Caller,
     context_id: uuid::Uuid,
     name: &str,
 ) -> ApiResult<RenameContextOutcome> {
-    let caller = ProfileId::from(authed.profile().id);
-    crate::authz::authorize::<ContextAdminAuthority>(pool, Principal::Proof(authed), context_id)
+    let caller = authed.profile_id();
+    crate::authz::authorize::<ContextAdminAuthority>(pool, Principal::from(authed), context_id)
         .await?;
 
     // The current identity pair plus the already-sigil'd owner ref, in one read. A rename leaves
@@ -1263,11 +1263,11 @@ pub async fn rename(
 /// point is that a context homing live resources can still be retired.
 pub async fn retire(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &Caller,
     context_id: uuid::Uuid,
 ) -> ApiResult<RetireContextOutcome> {
-    let caller = ProfileId::from(authed.profile().id);
-    crate::authz::authorize::<ContextAdminAuthority>(pool, Principal::Proof(authed), context_id)
+    let caller = authed.profile_id();
+    crate::authz::authorize::<ContextAdminAuthority>(pool, Principal::from(authed), context_id)
         .await?;
 
     // The current identity pair plus the already-sigil'd owner ref, in one read — copied verbatim
@@ -1339,11 +1339,11 @@ pub async fn retire(
 /// primary key, not through `context_visible_to`.
 pub async fn restore(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &Caller,
     context_id: uuid::Uuid,
 ) -> ApiResult<RestoreContextOutcome> {
-    let caller = ProfileId::from(authed.profile().id);
-    crate::authz::authorize::<ContextAdminAuthority>(pool, Principal::Proof(authed), context_id)
+    let caller = authed.profile_id();
+    crate::authz::authorize::<ContextAdminAuthority>(pool, Principal::from(authed), context_id)
         .await?;
 
     let cur = sqlx::query!(
@@ -1674,7 +1674,7 @@ mod tests {
         let req = ShareContextRequest { team_id };
         let denied = share(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, non_admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, non_admin.uuid()).await,
             *context_id,
             &req,
         )
@@ -1684,7 +1684,7 @@ mod tests {
         // Admin → shares; first call inserts, second is a no-op.
         let first = share(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             *context_id,
             &req,
         )
@@ -1693,7 +1693,7 @@ mod tests {
         assert!(first.shared);
         let second = share(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             *context_id,
             &req,
         )
@@ -1704,7 +1704,7 @@ mod tests {
         // Unshare removes it; second unshare is a no-op.
         let u1 = unshare(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             *context_id,
             team_id,
         )
@@ -1713,7 +1713,7 @@ mod tests {
         assert!(u1.unshared);
         let u2 = unshare(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             *context_id,
             team_id,
         )
@@ -1855,7 +1855,7 @@ mod tests {
 
         let outcome = reassign(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, alice.uuid()).await,
             ctx,
             acme,
         )
@@ -1893,7 +1893,7 @@ mod tests {
 
         let first = reassign(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, alice.uuid()).await,
             ctx,
             acme,
         )
@@ -1902,7 +1902,7 @@ mod tests {
         assert!(first.reassigned);
         let second = reassign(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, alice.uuid()).await,
             ctx,
             acme,
         )
@@ -1922,7 +1922,7 @@ mod tests {
 
         let err = reassign(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, mallory.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, mallory.uuid()).await,
             ctx,
             acme,
         )
@@ -1941,7 +1941,7 @@ mod tests {
 
         let err = reassign(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, alice.uuid()).await,
             ctx,
             acme,
         )
@@ -1962,7 +1962,7 @@ mod tests {
 
         let err = reassign(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, alice.uuid()).await,
             alice_ctx,
             gating_team,
         )
@@ -1982,7 +1982,7 @@ mod tests {
 
         let err = reassign(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, alice.uuid()).await,
             ctx,
             acme,
         )
@@ -2006,7 +2006,7 @@ mod tests {
 
         let outcome = reassign(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             *context_id,
             acme,
         )
@@ -2027,7 +2027,7 @@ mod tests {
         let ctx = mk_personal_context(&pool, "proj", alice).await;
         reassign(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, alice.uuid()).await,
             ctx,
             acme,
         )
@@ -2211,7 +2211,7 @@ mod tests {
         for bad in ["   ", "!!!"] {
             match rename(
                 &pool,
-                &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+                &crate::test_support::caller_for(&pool, alice.uuid()).await,
                 ctx,
                 bad,
             )
@@ -2239,7 +2239,7 @@ mod tests {
 
         let outcome = rename(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             ctx,
             "  Temper   KB  ",
         )
@@ -2262,7 +2262,7 @@ mod tests {
 
         match rename(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             scratch,
             "Notes",
         )
@@ -2292,7 +2292,7 @@ mod tests {
 
         let outcome = rename(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             ctx,
             "  Temper   KB ",
         )
@@ -2324,7 +2324,7 @@ mod tests {
 
         let outcome = rename(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             ctx,
             "Temper-KB",
         )
@@ -2353,7 +2353,7 @@ mod tests {
 
         let outcome = rename(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             ctx,
             "Temper KB",
         )
@@ -2397,7 +2397,7 @@ mod tests {
         assert!(matches!(
             rename(
                 &pool,
-                &crate::test_support::authenticated_profile_for(&pool, member.uuid()).await,
+                &crate::test_support::caller_for(&pool, member.uuid()).await,
                 ctx,
                 "Engineering Notes"
             )
@@ -2407,7 +2407,7 @@ mod tests {
         ));
         match rename(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, stranger.uuid()).await,
+            &crate::test_support::caller_for(&pool, stranger.uuid()).await,
             ctx,
             "Engineering Notes",
         )
@@ -2531,7 +2531,7 @@ mod tests {
 
         let outcome = rename(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             ctx,
             "Temper KB",
         )
@@ -2569,7 +2569,7 @@ mod tests {
 
         retire(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             ctx,
         )
         .await
@@ -2616,7 +2616,7 @@ mod tests {
 
         let out = retire(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             ctx,
         )
         .await
@@ -2642,7 +2642,7 @@ mod tests {
 
         retire(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             ctx,
         )
         .await
@@ -2650,7 +2650,7 @@ mod tests {
 
         let second = retire(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             ctx,
         )
         .await;
@@ -2670,7 +2670,7 @@ mod tests {
 
         retire(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             ctx,
         )
         .await
@@ -2678,7 +2678,7 @@ mod tests {
 
         let out = restore(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             ctx,
         )
         .await
@@ -2705,7 +2705,7 @@ mod tests {
 
         retire(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             ctx,
         )
         .await
@@ -2718,7 +2718,7 @@ mod tests {
 
         let out = restore(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             ctx,
         )
         .await
@@ -2756,7 +2756,7 @@ mod tests {
 
         retire(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             *second.id,
         )
         .await
@@ -2764,7 +2764,7 @@ mod tests {
         // Retiring the first frees `notes`, so the restore below can reclaim it.
         retire(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             *first.id,
         )
         .await
@@ -2772,7 +2772,7 @@ mod tests {
 
         let out = restore(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             *second.id,
         )
         .await
@@ -2804,7 +2804,7 @@ mod tests {
 
         retire(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             *second.id,
         )
         .await
@@ -2812,7 +2812,7 @@ mod tests {
 
         let out = restore(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             *second.id,
         )
         .await
@@ -2833,7 +2833,7 @@ mod tests {
 
         let out = restore(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             ctx,
         )
         .await;
@@ -2871,7 +2871,7 @@ mod tests {
 
         retire(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             ctx,
         )
         .await
@@ -2881,7 +2881,7 @@ mod tests {
         // nothing in the retired listing. This is the property under test.
         let bob_listing = list_retired_administered(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, bob.uuid()).await,
+            &crate::test_support::caller_for(&pool, bob.uuid()).await,
         )
         .await
         .unwrap();
@@ -2893,7 +2893,7 @@ mod tests {
         // The owner, who manages the owning team, sees exactly the one retired context.
         let alice_listing = list_retired_administered(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
         )
         .await
         .unwrap();
@@ -2915,7 +2915,7 @@ mod tests {
 
         retire(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             ctx,
         )
         .await
@@ -2923,7 +2923,7 @@ mod tests {
 
         let shown = get_retired_administered(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &crate::test_support::caller_for(&pool, alice.uuid()).await,
             ContextId::from(ctx),
         )
         .await
@@ -2933,7 +2933,7 @@ mod tests {
 
         let denied = get_retired_administered(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, bob.uuid()).await,
+            &crate::test_support::caller_for(&pool, bob.uuid()).await,
             ContextId::from(ctx),
         )
         .await;
@@ -2968,7 +2968,7 @@ mod tests {
 
         retire(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::caller_for(&pool, owner.uuid()).await,
             ctx,
         )
         .await
@@ -2976,7 +2976,7 @@ mod tests {
 
         let root_listing = list_retired_administered(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, root.uuid()).await,
+            &crate::test_support::caller_for(&pool, root.uuid()).await,
         )
         .await
         .unwrap();
@@ -2991,7 +2991,7 @@ mod tests {
 
         let shown = get_retired_administered(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, root.uuid()).await,
+            &crate::test_support::caller_for(&pool, root.uuid()).await,
             ContextId::from(ctx),
         )
         .await

@@ -73,43 +73,81 @@ use std::fmt::Debug;
 
 use temper_core::types::ids::ProfileId;
 
-use crate::auth::AuthenticatedProfile;
+use crate::auth::{Caller, HumanPrincipal, MachinePrincipal, SystemAdmin};
 use crate::error::{ApiError, ApiResult};
 
 /// The caller identity a scoped-authority probe runs for — the Level-1 boundary made a type.
 ///
-/// Two arms, and the split is the refactor's whole point:
+/// Every production arm carries a **classified** proof minted by `crate::auth::classify_caller`:
 ///
-/// * [`Principal::Proof`] — an `&AuthenticatedProfile` minted by the seam. Every service that
-///   sits on a visibility ladder or widens a result set by admin-ness (Classes A and B of the
-///   2026-09-28 single-ingress inventory) takes the proof in its signature, so a caller that
-///   cannot hold one cannot compile the call. This is the enforcement the signature buys.
-/// * [`Principal::Bare`] — a bare `ProfileId`, with no provenance behind it. This is the
-///   db_backend seam's door (the CLI/backend path has no HTTP middleware above it, so there is
-///   no proof to pass — Class E of the inventory) and, until its own PR migrates them, the
-///   conditional write-gates inside services (Class F). It is spelled `Bare` rather than
-///   `Backend` because it must not read as approval: a `Bare` caller is one whose Level-1
-///   passage this layer cannot see, and the arms that admit it are exactly the arms that
-///   admitted the bare id before the refactor. Nothing new admits under it.
+/// * [`Principal::Human`] — a person. The only arm from which an admin decision can be made
+///   ([`Principal::system_admin`]), because `SystemAdmin` is minted only from a `HumanPrincipal`.
+/// * [`Principal::Machine`] — a machine. It reaches every ladder a person does, on its own
+///   memberships and grants, but [`Principal::system_admin`] is `None` for it without a query.
+/// * `Principal::Bare` — a bare `ProfileId` with no provenance behind it. **Test-only**
+///   (`cfg(any(test, feature = "test-harness"))`): no production path builds one, so in a deployed
+///   binary every principal was minted from a proof. Its arms admit exactly what the bare id
+///   admitted before the reshape.
+///
+/// No arm carries a bare `&AuthenticatedProfile`: a proof over an unclassified profile is the shape
+/// that let an admin decision run without knowing whether the caller was a person.
 ///
 /// The ladders' probe orderings (membership-first, self-read-first, object-side-first) are
 /// invariants and read the id through [`Principal::profile_id`] — the enum never reorders,
 /// never widens, and never replaces a probe.
 #[derive(Clone, Copy)]
 pub(crate) enum Principal<'a> {
-    Proof(&'a AuthenticatedProfile),
+    Human(&'a HumanPrincipal),
+    Machine(&'a MachinePrincipal),
+    #[cfg(any(test, feature = "test-harness"))]
     Bare(ProfileId),
+}
+
+impl<'a> From<&'a Caller> for Principal<'a> {
+    fn from(caller: &'a Caller) -> Self {
+        match caller {
+            Caller::Human(human) => Principal::Human(human),
+            Caller::Machine(machine) => Principal::Machine(machine),
+        }
+    }
+}
+
+impl<'a> From<&'a HumanPrincipal> for Principal<'a> {
+    fn from(human: &'a HumanPrincipal) -> Self {
+        Principal::Human(human)
+    }
 }
 
 impl Principal<'_> {
     /// The principal id every SQL predicate below binds. Free — no query, no reorder.
     pub(crate) fn profile_id(&self) -> ProfileId {
         match self {
-            Principal::Proof(authed) => ProfileId::from(authed.profile().id),
+            Principal::Human(human) => human.profile_id(),
+            Principal::Machine(machine) => machine.profile_id(),
+            #[cfg(any(test, feature = "test-harness"))]
             Principal::Bare(id) => *id,
         }
     }
+
+    /// Is this caller a system admin? Answered by **minting** the proof, never by reading a boolean:
+    /// a human goes through `require_system_admin`, a machine is `None` with no query. Callers decide
+    /// with `.is_some()` and drop the proof inside the decision, so an authority's admin arm stays a
+    /// unit variant while every admin decision is made from a `SystemAdmin` minted from a person.
+    pub(crate) async fn system_admin(&self, pool: &PgPool) -> ApiResult<Option<SystemAdmin>> {
+        let minted = match self {
+            Principal::Human(human) => crate::auth::require_system_admin(pool, human).await,
+            Principal::Machine(_) => return Ok(None),
+            #[cfg(any(test, feature = "test-harness"))]
+            Principal::Bare(id) => crate::auth::require_system_admin_by_id(pool, *id).await,
+        };
+        match minted {
+            Ok(admin) => Ok(Some(admin)),
+            Err(ApiError::Forbidden) => Ok(None),
+            Err(other) => Err(other),
+        }
+    }
 }
+
 /// A domain's answer to "what authority does this caller hold over this subject?"
 ///
 /// Implemented by each domain's own authority enum. The arms stay domain-specific on purpose:
@@ -503,4 +541,131 @@ mod tests {
         );
         assert_eq!(refusal.to_string(), ApiError::Forbidden.to_string());
     }
+}
+
+/// **Every admin decision is minted from a person** (invariant 8), one witness per direct rung.
+///
+/// Each rung is resolved three times against the same subject: by an admin person (takes the admin
+/// arm), by a plain person (does not), and by a machine principal whose profile **holds a governance
+/// grant** (does not). The third is the one that isolates the type: the database would call that
+/// profile an admin — `is_system_admin` is true for it — so the only thing keeping the machine off
+/// the admin arm is that the rung decides through `Principal::system_admin`, which never asks for a
+/// machine. Reverting any one rung to a boolean read reds that rung's test alone.
+///
+/// The governed machine is a state production cannot reach; see
+/// `test_support::governed_machine_caller` for why the witness needs it.
+#[cfg(all(test, feature = "test-db"))]
+mod admin_rung_tests {
+    use super::*;
+    use uuid::Uuid;
+
+    struct Cast {
+        admin: HumanPrincipal,
+        plain: HumanPrincipal,
+        governed_machine: Caller,
+    }
+
+    async fn seed_profile(pool: &PgPool, handle: &str) -> Uuid {
+        let id = sqlx::query_scalar!(
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
+            format!("{handle}-{}", Uuid::now_v7()),
+        )
+        .fetch_one(pool)
+        .await
+        .expect("seed profile");
+        crate::test_support::approve(pool, id).await;
+        id
+    }
+
+    async fn cast(pool: &PgPool) -> Cast {
+        let admin = seed_profile(pool, "rung-admin").await;
+        crate::test_support::grant_governance(pool, admin).await;
+        let plain = seed_profile(pool, "rung-plain").await;
+        Cast {
+            admin: crate::test_support::human_principal_for(pool, admin).await,
+            plain: crate::test_support::human_principal_for(pool, plain).await,
+            governed_machine: crate::test_support::governed_machine_caller(pool).await,
+        }
+    }
+
+    macro_rules! rung {
+        ($name:ident, $authority:ty, $admin_arm:pat, $subject:expr) => {
+            #[sqlx::test(migrator = "crate::MIGRATOR")]
+            async fn $name(pool: PgPool) {
+                let c = cast(&pool).await;
+                let subject = $subject;
+
+                let arm = <$authority>::resolve(&pool, Principal::Human(&c.admin), subject)
+                    .await
+                    .expect("resolve for the admin person");
+                assert!(
+                    matches!(arm, $admin_arm),
+                    "an admin person takes the admin arm, got {arm:?}"
+                );
+
+                let arm = <$authority>::resolve(&pool, Principal::Human(&c.plain), subject)
+                    .await
+                    .expect("resolve for the plain person");
+                assert!(
+                    !matches!(arm, $admin_arm),
+                    "a plain person does not, got {arm:?}"
+                );
+
+                let arm =
+                    <$authority>::resolve(&pool, Principal::from(&c.governed_machine), subject)
+                        .await
+                        .expect("resolve for the governed machine");
+                assert!(
+                    !matches!(arm, $admin_arm),
+                    "a machine never takes the admin arm, whatever the database says; got {arm:?}"
+                );
+            }
+        };
+    }
+
+    rung!(
+        grant_authority_admin_arm_is_minted_from_a_person,
+        crate::services::access_service::GrantAuthority,
+        crate::services::access_service::GrantAuthority::SystemAdmin,
+        temper_substrate::payloads::RefTarget {
+            kind: temper_substrate::payloads::AnchorTable::Contexts,
+            id: Uuid::now_v7(),
+        }
+    );
+    rung!(
+        two_sided_authority_admin_arm_is_minted_from_a_person,
+        TwoSidedAuthority,
+        TwoSidedAuthority::SystemAdmin,
+        TwoSidedScope::context(Uuid::now_v7(), Uuid::now_v7())
+    );
+    rung!(
+        context_admin_authority_admin_arm_is_minted_from_a_person,
+        ContextAdminAuthority,
+        ContextAdminAuthority::SystemAdmin,
+        Uuid::now_v7()
+    );
+    rung!(
+        machine_authority_admin_arm_is_minted_from_a_person,
+        crate::services::machine_authz::MachineAuthority,
+        crate::services::machine_authz::MachineAuthority::SystemAdmin,
+        None::<Uuid>
+    );
+    rung!(
+        subscription_authority_admin_arm_is_minted_from_a_person,
+        SubscriptionAuthority,
+        SubscriptionAuthority::SystemAdmin,
+        Uuid::now_v7()
+    );
+    rung!(
+        team_read_authority_admin_arm_is_minted_from_a_person,
+        TeamReadAuthority,
+        TeamReadAuthority::SystemAdmin,
+        Uuid::now_v7()
+    );
+    rung!(
+        actor_history_authority_admin_arm_is_minted_from_a_person,
+        ActorHistoryAuthority,
+        ActorHistoryAuthority::SystemAdmin,
+        ProfileId::from(Uuid::now_v7())
+    );
 }

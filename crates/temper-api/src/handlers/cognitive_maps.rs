@@ -13,7 +13,7 @@ use axum::extract::{Path, Query, State};
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::{AnyPrincipal, AuthUser};
 use crate::middleware::surface::RequestSurface;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult};
@@ -57,7 +57,7 @@ use temper_workflow::operations::{
 )]
 pub async fn reconcile(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(cogmap_id): Path<Uuid>,
     Query(act_in): Query<temper_core::types::authorship::ActInput>,
@@ -99,7 +99,7 @@ pub async fn reconcile(
 )]
 pub async fn genesis(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Json(request): Json<CreateCogmapRequest>,
 ) -> ApiResult<Json<CreateCogmapOutcome>> {
@@ -132,7 +132,7 @@ pub async fn genesis(
 )]
 pub async fn list(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
 ) -> ApiResult<Json<Vec<CogmapRow>>> {
     // No entry gate: `list_visible` is self-scoped through `cogmap_visible_maps` — it returns exactly
     // the maps the caller may see (deny → empty list).
@@ -156,7 +156,7 @@ pub async fn list(
 )]
 pub async fn show(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(cogmap_id): Path<Uuid>,
 ) -> ApiResult<Json<CogmapDetail>> {
     // Map-read gated inside `show_visible`: an unreadable map is 404, never a partial leak.
@@ -182,7 +182,7 @@ pub async fn show(
 )]
 pub async fn shape(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(cogmap_id): Path<Uuid>,
     Query(q): Query<ShapeQuery>,
 ) -> ApiResult<Json<AnchorShape>> {
@@ -213,7 +213,7 @@ pub async fn shape(
 )]
 pub async fn materialize_delta(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(cogmap_id): Path<Uuid>,
     Query(q): Query<MaterializeDeltaQuery>,
 ) -> ApiResult<Json<MaterializeDelta>> {
@@ -243,7 +243,7 @@ pub async fn materialize_delta(
 )]
 pub async fn materialize(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(cogmap_id): Path<Uuid>,
     Json(req): Json<MaterializeRequest>,
@@ -279,7 +279,7 @@ pub async fn materialize(
 )]
 pub async fn region_metrics(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(cogmap_id): Path<Uuid>,
     Query(q): Query<ShapeQuery>,
 ) -> ApiResult<Json<Vec<CogmapRegionMetricsRow>>> {
@@ -308,7 +308,7 @@ pub async fn region_metrics(
 )]
 pub async fn analytics(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(cogmap_id): Path<Uuid>,
 ) -> ApiResult<Json<CogmapAnalyticsRow>> {
     temper_services::backend::substrate_read::cogmap_analytics_select(

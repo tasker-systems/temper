@@ -236,11 +236,8 @@ async fn grant_read(pool: &PgPool, finding: Uuid, reader: ProfileId, author: Pro
 /// ladder (public fields are sealed), so the proof is honest — a fixture helper, not a forgery.
 /// Needed because `citation_audit_service::record_citation_audit` now takes the caller's
 /// resolved proof rather than a bare id.
-async fn temperament_minted(
-    pool: &PgPool,
-    auditor: ProfileId,
-) -> temper_services::auth::AuthenticatedProfile {
-    temper_services::test_support::authenticated_profile_for(pool, auditor.uuid()).await
+async fn temperament_minted(pool: &PgPool, auditor: ProfileId) -> temper_services::auth::Caller {
+    temper_services::test_support::caller_for(pool, auditor.uuid()).await
 }
 
 fn audit_cmd(block: Uuid, source: Uuid, value: f64) -> RecordCitationAudit {

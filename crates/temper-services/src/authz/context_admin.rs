@@ -23,8 +23,8 @@ use uuid::Uuid;
 
 use super::{Principal, ScopedAuthority};
 use crate::error::{ApiError, ApiResult};
+use crate::services::context_service;
 use crate::services::context_service::CONTEXT_REFUSAL;
-use crate::services::{access_service, context_service};
 
 /// Who may administer a context (rename it, and whatever else joins that class later).
 ///
@@ -62,7 +62,8 @@ impl ScopedAuthority for ContextAdminAuthority {
     /// `404` to a system admin renaming a context they do not otherwise read — the exact actor the
     /// feature must admit.
     async fn resolve(pool: &PgPool, caller: Principal<'_>, context_id: Uuid) -> ApiResult<Self> {
-        let caller = caller.profile_id();
+        let principal = caller;
+        let caller = principal.profile_id();
         // 1. The object-side probe, unchanged and not re-derived: profile-owned ⇒ caller *is* the
         //    owner; team-owned ⇒ `can_manage` (Owner|Maintainer) by DIRECT membership. A missing
         //    context answers `false` here, which is why the visibility probe below — not this one —
@@ -71,7 +72,7 @@ impl ScopedAuthority for ContextAdminAuthority {
             return Ok(ContextAdminAuthority::Administers);
         }
         // 2. System authority admits, and stays its own arm: it never becomes ownership.
-        if access_service::is_system_admin(pool, caller).await? {
+        if principal.system_admin(pool).await?.is_some() {
             return Ok(ContextAdminAuthority::SystemAdmin);
         }
         // 3/4. The one visibility predicate, called through the one Rust spelling of it.
@@ -580,7 +581,7 @@ mod tests {
 
         let outcome = context_service::rename(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::caller_for(&pool, admin.uuid()).await,
             context,
             "Renamed By Admin",
         )
@@ -646,7 +647,7 @@ mod tests {
 
         let outcome = context_service::rename(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::caller_for(&pool, owner.uuid()).await,
             context,
             "New Notes",
         )

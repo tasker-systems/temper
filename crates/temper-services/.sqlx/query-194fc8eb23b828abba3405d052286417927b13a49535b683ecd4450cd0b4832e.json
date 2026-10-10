@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_system_settings SET gating_team_slug = 'temper-system' WHERE id = 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "194fc8eb23b828abba3405d052286417927b13a49535b683ecd4450cd0b4832e"
+}

@@ -22,7 +22,7 @@ use uuid::Uuid;
 use super::{Principal, ScopedAuthority};
 use crate::error::{ApiError, ApiResult};
 use crate::services::subscription_service::{self, SUBSCRIPTION_REFUSAL};
-use crate::services::{access_service, team_service};
+use crate::services::team_service;
 
 /// The caller's authority over subscriptions authored by a given team.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,7 +53,8 @@ impl ScopedAuthority for SubscriptionAuthority {
         caller: Principal<'_>,
         authoring_team: Uuid,
     ) -> ApiResult<Self> {
-        let caller = caller.profile_id();
+        let principal = caller;
+        let caller = principal.profile_id();
         // Role first, matching `TeamReadAuthority`'s ordering and for the same reason: the common
         // caller here is a team manager, and probing `is_system_admin` first would add a query to
         // every one of them.
@@ -66,7 +67,7 @@ impl ScopedAuthority for SubscriptionAuthority {
                 return Ok(SubscriptionAuthority::TeamManager);
             }
         }
-        Ok(if access_service::is_system_admin(pool, caller).await? {
+        Ok(if principal.system_admin(pool).await?.is_some() {
             SubscriptionAuthority::SystemAdmin
         } else {
             SubscriptionAuthority::None

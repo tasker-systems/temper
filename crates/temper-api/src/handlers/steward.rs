@@ -11,7 +11,7 @@ use axum::http::HeaderMap;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use crate::middleware::surface::RequestSurface;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult};
@@ -43,7 +43,7 @@ use temper_workflow::operations::{AdvanceStewardWatermark, Backend, StewardDispa
 )]
 pub async fn delta(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(cogmap): Path<Uuid>,
     Query(q): Query<DeltaQuery>,
 ) -> ApiResult<Json<IngestDelta>> {
@@ -73,7 +73,7 @@ pub async fn delta(
 )]
 pub async fn advance(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(cogmap): Path<Uuid>,
     Json(req): Json<AdvanceWatermarkRequest>,
@@ -111,7 +111,7 @@ pub async fn advance(
 )]
 pub async fn sweep(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Query(q): Query<DeltaQuery>,
 ) -> ApiResult<Json<Vec<DriftSweepRow>>> {
     let rows = steward_service::drift_sweep(
@@ -133,7 +133,7 @@ pub async fn sweep(
 )]
 pub async fn candidates(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
 ) -> ApiResult<Json<Vec<Uuid>>> {
     let ids = steward_service::candidate_cogmaps(&state.pool, ProfileId::from(auth.0.profile().id))
         .await?;
@@ -154,7 +154,7 @@ pub async fn candidates(
 )]
 pub async fn dispatch(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     headers: HeaderMap,
     Json(req): Json<DispatchTickRequest>,

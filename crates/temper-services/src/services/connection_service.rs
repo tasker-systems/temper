@@ -24,7 +24,7 @@ use temper_core::types::connection::{
 use temper_core::types::ids::ProfileId;
 use temper_workflow::operations::sluggify;
 
-use crate::auth::AuthenticatedProfile;
+use crate::auth::HumanPrincipal;
 use crate::authz::{ConnectionAuthority, ConnectionControlAuthority, ConnectionScope, Principal};
 use crate::broker::{BrokerError, CredentialBroker, MintRequest, MintSubject};
 use crate::error::{ApiError, ApiResult};
@@ -127,7 +127,7 @@ pub async fn resolve_inbound(
 /// exactly as a missing id is (`CONNECTION_REFUSAL`) — see `authz::ConnectionControlAuthority`.
 pub async fn get_for_caller(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     id: Uuid,
 ) -> ApiResult<Connection> {
     authorize_control(pool, authed, id).await?;
@@ -137,12 +137,8 @@ pub async fn get_for_caller(
 /// The per-row gate every act on an existing connection passes first: a system admin, or the owner
 /// of the connection's owning team, keyed on the row. A refusal is indistinguishable from a missing
 /// id.
-async fn authorize_control(
-    pool: &PgPool,
-    authed: &AuthenticatedProfile,
-    id: Uuid,
-) -> ApiResult<()> {
-    crate::authz::authorize::<ConnectionControlAuthority>(pool, Principal::Proof(authed), id)
+async fn authorize_control(pool: &PgPool, authed: &HumanPrincipal, id: Uuid) -> ApiResult<()> {
+    crate::authz::authorize::<ConnectionControlAuthority>(pool, Principal::Human(authed), id)
         .await?;
     Ok(())
 }
@@ -155,11 +151,14 @@ async fn authorize_control(
 /// yields NULL, which falls open.
 pub async fn list(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     include_revoked: bool,
 ) -> ApiResult<Vec<Connection>> {
     let caller = ProfileId::from(authed.profile().id);
-    let is_admin = crate::services::access_service::is_system_admin(pool, caller).await?;
+    let is_admin = crate::authz::Principal::Human(authed)
+        .system_admin(pool)
+        .await?
+        .is_some();
 
     let rows = sqlx::query_as!(
         Connection,
@@ -198,14 +197,14 @@ pub async fn list(
 /// it never silently pretends to be more than it is.
 pub async fn provision(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     req: &ProvisionConnectionRequest,
 ) -> ApiResult<Connection> {
     let caller = ProfileId::from(authed.profile().id);
     // Auth before writes: a rejected provisioning must leave the DB completely unchanged — no
     // orphaned profile, no orphaned entity, no orphaned context. Resolving before the
     // transaction opens is what makes that assertable.
-    machine_authz::authorize(pool, Principal::Proof(authed), req.owner_team_id).await?;
+    machine_authz::authorize(pool, Principal::Human(authed), req.owner_team_id).await?;
 
     if req.provider.trim().is_empty() {
         return Err(ApiError::BadRequest("provider must not be empty".into()));
@@ -306,11 +305,7 @@ pub async fn provision(
 /// for it again." Callers surfacing revocation must say so rather than imply an instantaneous cutoff
 /// (invariant 6: absence of a capability — here, immediate remote revocation — must never be
 /// silently assumed present).
-pub async fn revoke(
-    pool: &PgPool,
-    id: Uuid,
-    authed: &AuthenticatedProfile,
-) -> ApiResult<Connection> {
+pub async fn revoke(pool: &PgPool, id: Uuid, authed: &HumanPrincipal) -> ApiResult<Connection> {
     let revoker = ProfileId::from(authed.profile().id);
     // Auth before writes, keyed on the existing row's owning team.
     authorize_control(pool, authed, id).await?;
@@ -335,11 +330,7 @@ pub async fn revoke(
 ///
 /// The revoked check runs **after** authorization, so only a caller who controls the connection
 /// learns that it is revoked.
-async fn authorize_live(
-    pool: &PgPool,
-    authed: &AuthenticatedProfile,
-    id: Uuid,
-) -> ApiResult<Connection> {
+async fn authorize_live(pool: &PgPool, authed: &HumanPrincipal, id: Uuid) -> ApiResult<Connection> {
     authorize_control(pool, authed, id).await?;
     let existing = get(pool, id).await?;
     if existing.revoked_at.is_some() {
@@ -374,7 +365,7 @@ async fn authorize_live(
 pub async fn attach_credential(
     pool: &PgPool,
     broker: &dyn CredentialBroker,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     id: Uuid,
     credential: &ConnectionCredential,
 ) -> ApiResult<AttachCredentialResponse> {
@@ -471,7 +462,7 @@ async fn verify_by_minting(
 /// claim but do not have is exactly the silence invariant 6 forbids.
 pub async fn set_webhook_events(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     id: Uuid,
     events: &[String],
 ) -> ApiResult<Connection> {
@@ -498,7 +489,7 @@ pub async fn set_webhook_events(
 /// `Connection::is_reach_capable` reads.
 pub async fn set_tool_manifest(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     id: Uuid,
     tools: &[String],
 ) -> ApiResult<Connection> {
@@ -577,7 +568,7 @@ pub async fn set_tool_manifest(
 /// Auth stays FIRST — affirmation never bypasses authorization.
 pub async fn grant_reach(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     connection_id: Uuid,
     team_id: Uuid,
     affirm_reach: Option<String>,
@@ -586,7 +577,7 @@ pub async fn grant_reach(
     let connection = get(pool, connection_id).await?;
     let proof = crate::authz::authorize::<ConnectionAuthority>(
         pool,
-        Principal::Proof(authed),
+        Principal::Human(authed),
         ConnectionScope::new(connection_id, team_id),
     )
     .await?;
@@ -756,7 +747,7 @@ fn reach_grant_params(team_id: Uuid, granted_by: ProfileId) -> InsertGrantParams
 /// already exists (granted before this gate shipped), this is precisely the path that cleans it up.
 pub async fn revoke_reach(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     connection_id: Uuid,
     team_id: Uuid,
 ) -> ApiResult<Connection> {
@@ -768,7 +759,7 @@ pub async fn revoke_reach(
     // `revoke_reach_survives_losing_the_target_team_role` exists to hold in place.
     let proof = crate::authz::authorize::<crate::authz::ConnectionControlAuthority>(
         pool,
-        Principal::Proof(authed),
+        Principal::Human(authed),
         connection_id,
     )
     .await?;
@@ -997,7 +988,7 @@ mod tests {
 
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
@@ -1047,7 +1038,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
@@ -1073,7 +1064,7 @@ mod tests {
 
         let with_reach = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
@@ -1085,7 +1076,7 @@ mod tests {
 
         let no_reach = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req_no_reach("Bare GitHub", None),
         )
         .await
@@ -1105,7 +1096,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
@@ -1140,7 +1131,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
@@ -1164,7 +1155,7 @@ mod tests {
 
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req("Acme Linear", Some(team)),
         )
         .await
@@ -1190,7 +1181,7 @@ mod tests {
 
         let err = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, maintainer.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, maintainer.uuid()).await,
             &req("Acme Linear", Some(team)),
         )
         .await
@@ -1206,7 +1197,7 @@ mod tests {
 
         let err = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, outsider.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, outsider.uuid()).await,
             &req("Rogue GitHub", None),
         )
         .await
@@ -1230,7 +1221,7 @@ mod tests {
 
         svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, outsider.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, outsider.uuid()).await,
             &req("Rogue GitHub", None),
         )
         .await
@@ -1258,14 +1249,14 @@ mod tests {
 
         let a = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
         .expect("first");
         let b = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
@@ -1282,7 +1273,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
@@ -1291,7 +1282,7 @@ mod tests {
         let revoked = svc::revoke(
             &pool,
             c.id,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
         )
         .await
         .expect("revoke");
@@ -1310,7 +1301,7 @@ mod tests {
         // Hidden from the default list, visible when asked for.
         let visible = svc::list(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             false,
         )
         .await
@@ -1318,7 +1309,7 @@ mod tests {
         assert!(visible.is_empty());
         let all = svc::list(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             true,
         )
         .await
@@ -1335,14 +1326,14 @@ mod tests {
 
         svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Teamless GitHub", None),
         )
         .await
         .expect("teamless");
         svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req("Acme Linear", Some(team)),
         )
         .await
@@ -1350,7 +1341,7 @@ mod tests {
 
         let seen = svc::list(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             false,
         )
         .await
@@ -1360,7 +1351,7 @@ mod tests {
 
         let admin_sees = svc::list(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             false,
         )
         .await
@@ -1390,7 +1381,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
@@ -1400,7 +1391,7 @@ mod tests {
         let attached = svc::attach_credential(
             &pool,
             &granting_broker(),
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             c.id,
             &credential(),
         )
@@ -1431,7 +1422,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
@@ -1440,7 +1431,7 @@ mod tests {
         let out = svc::attach_credential(
             &pool,
             &granting_broker(),
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             c.id,
             &credential(),
         )
@@ -1467,7 +1458,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
@@ -1478,7 +1469,7 @@ mod tests {
             svc::attach_credential(
                 &pool,
                 &broker,
-                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                 c.id,
                 &credential()
             )
@@ -1503,7 +1494,7 @@ mod tests {
         // needs-consent: persisted, flagged.
         let c1 = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Consent Pending", None),
         )
         .await
@@ -1512,7 +1503,7 @@ mod tests {
         let out = svc::attach_credential(
             &pool,
             &consent,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             c1.id,
             &credential(),
         )
@@ -1531,7 +1522,7 @@ mod tests {
         // no broker configured: same shape.
         let c2 = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("No Broker", None),
         )
         .await
@@ -1539,7 +1530,7 @@ mod tests {
         let out2 = svc::attach_credential(
             &pool,
             &crate::broker::NullBroker,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             c2.id,
             &credential(),
         )
@@ -1556,7 +1547,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
@@ -1565,7 +1556,7 @@ mod tests {
         let events = vec!["pull_request".to_string(), "push".to_string()];
         let ledger_only = svc::set_webhook_events(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             c.id,
             &events,
         )
@@ -1582,7 +1573,7 @@ mod tests {
         let tools = vec!["get_pull_request".to_string()];
         let both = svc::set_tool_manifest(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             c.id,
             &tools,
         )
@@ -1605,7 +1596,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
@@ -1613,7 +1604,7 @@ mod tests {
 
         svc::set_webhook_events(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             c.id,
             &["push".to_string()],
         )
@@ -1621,7 +1612,7 @@ mod tests {
         .expect("first");
         let second = svc::set_webhook_events(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             c.id,
             &["pull_request".to_string()],
         )
@@ -1642,7 +1633,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
@@ -1650,7 +1641,7 @@ mod tests {
         svc::revoke(
             &pool,
             c.id,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
         )
         .await
         .expect("revoke");
@@ -1659,7 +1650,7 @@ mod tests {
             svc::attach_credential(
                 &pool,
                 &granting_broker(),
-                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                 c.id,
                 &credential()
             )
@@ -1669,7 +1660,7 @@ mod tests {
         assert!(matches!(
             svc::set_webhook_events(
                 &pool,
-                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                 c.id,
                 &["push".to_string()]
             )
@@ -1679,7 +1670,7 @@ mod tests {
         assert!(matches!(
             svc::set_tool_manifest(
                 &pool,
-                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                 c.id,
                 &["t".to_string()]
             )
@@ -1705,7 +1696,7 @@ mod tests {
 
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", Some(team)),
         )
         .await
@@ -1716,7 +1707,7 @@ mod tests {
                 svc::attach_credential(
                     &pool,
                     &granting_broker(),
-                    &crate::test_support::authenticated_profile_for(&pool, maintainer.uuid()).await,
+                    &crate::test_support::human_principal_for(&pool, maintainer.uuid()).await,
                     c.id,
                     &credential()
                 )
@@ -1738,7 +1729,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
@@ -1752,7 +1743,7 @@ mod tests {
             svc::attach_credential(
                 &pool,
                 &granting_broker(),
-                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                 c.id,
                 &no_broker
             )
@@ -1768,7 +1759,7 @@ mod tests {
             svc::attach_credential(
                 &pool,
                 &granting_broker(),
-                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                 c.id,
                 &no_connector
             )
@@ -1847,7 +1838,7 @@ mod tests {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req("Acme GitHub", Some(team)),
         )
         .await
@@ -1856,7 +1847,7 @@ mod tests {
 
         svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             Some("beta reviews acme CI".into()),
@@ -1878,7 +1869,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Teamless GitHub", None),
         )
         .await
@@ -1894,7 +1885,7 @@ mod tests {
 
         svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             c.id,
             beta,
             Some("admin binds teamless reach".into()),
@@ -1911,7 +1902,7 @@ mod tests {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req("Acme GitHub", Some(team)),
         )
         .await
@@ -1921,7 +1912,7 @@ mod tests {
 
         let err = svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, outsider.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, outsider.uuid()).await,
             c.id,
             team,
             None,
@@ -1946,7 +1937,7 @@ mod tests {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req("Acme GitHub", Some(team)),
         )
         .await
@@ -1956,7 +1947,7 @@ mod tests {
 
         let err = svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             stranger_team,
             Some("reaching somewhere I do not manage".into()),
@@ -1983,7 +1974,7 @@ mod tests {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req("Acme GitHub", Some(team)),
         )
         .await
@@ -2001,7 +1992,7 @@ mod tests {
 
         let err = svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             Some("I am merely a member".into()),
@@ -2032,7 +2023,7 @@ mod tests {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req("Acme GitHub", Some(team)),
         )
         .await
@@ -2067,7 +2058,7 @@ mod tests {
 
         svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             gating,
             Some("the root team reviews acme CI".into()),
@@ -2089,7 +2080,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
@@ -2098,7 +2089,7 @@ mod tests {
 
         let err = svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             c.id,
             ghost,
             Some("typo".into()),
@@ -2119,7 +2110,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Teamless GitHub", None),
         )
         .await
@@ -2130,7 +2121,7 @@ mod tests {
 
         let err = svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, outsider.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, outsider.uuid()).await,
             c.id,
             beta,
             None,
@@ -2149,7 +2140,7 @@ mod tests {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req("Acme GitHub", Some(team)),
         )
         .await
@@ -2158,7 +2149,7 @@ mod tests {
 
         svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             Some("beta reviews acme CI".into()),
@@ -2169,7 +2160,7 @@ mod tests {
 
         svc::revoke_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             beta,
         )
@@ -2193,7 +2184,7 @@ mod tests {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req("Acme GitHub", Some(team)),
         )
         .await
@@ -2202,7 +2193,7 @@ mod tests {
 
         svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             Some("beta reviews acme CI".into()),
@@ -2223,7 +2214,7 @@ mod tests {
         assert!(
             svc::grant_reach(
                 &pool,
-                &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+                &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
                 c.id,
                 beta,
                 Some("again".into())
@@ -2235,7 +2226,7 @@ mod tests {
 
         svc::revoke_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             beta,
         )
@@ -2262,7 +2253,7 @@ mod tests {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req("Acme GitHub", Some(team)),
         )
         .await
@@ -2272,7 +2263,7 @@ mod tests {
 
         let err = svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             None,
@@ -2301,7 +2292,7 @@ mod tests {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req("Acme GitHub", Some(team)),
         )
         .await
@@ -2310,7 +2301,7 @@ mod tests {
 
         let out = svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             Some("beta reviews acme CI".into()),
@@ -2347,7 +2338,7 @@ mod tests {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req_no_reach("Bare GitHub", Some(team)),
         )
         .await
@@ -2357,7 +2348,7 @@ mod tests {
 
         svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             None,
@@ -2383,7 +2374,7 @@ mod tests {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req_no_reach("Bare GitHub", Some(team)),
         )
         .await
@@ -2392,7 +2383,7 @@ mod tests {
 
         let err = svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             Some("but I insist".into()),
@@ -2415,7 +2406,7 @@ mod tests {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req("Acme GitHub", Some(team)),
         )
         .await
@@ -2426,7 +2417,7 @@ mod tests {
 
         let err = svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, outsider.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, outsider.uuid()).await,
             c.id,
             beta,
             Some("I insist".into()),
@@ -2456,7 +2447,7 @@ mod tests {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req("Acme GitHub", Some(team)),
         )
         .await
@@ -2466,7 +2457,7 @@ mod tests {
 
         svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             Some("first reason".into()),
@@ -2475,7 +2466,7 @@ mod tests {
         .expect("first affirmation");
         let second = svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             gamma,
             Some("second reason".into()),
@@ -2518,7 +2509,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
@@ -2531,7 +2522,7 @@ mod tests {
         let out = svc::attach_credential(
             &pool,
             &granting_broker(),
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             c.id,
             &credential(),
         )
@@ -2568,7 +2559,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("Acme GitHub", None),
         )
         .await
@@ -2578,7 +2569,7 @@ mod tests {
         let out = svc::attach_credential(
             &pool,
             &null_broker,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             c.id,
             &credential(),
         )
@@ -2606,7 +2597,7 @@ mod tests {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req("Acme GitHub", Some(team)),
         )
         .await
@@ -2615,7 +2606,7 @@ mod tests {
         svc::attach_credential(
             &pool,
             &granting_broker(),
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             &credential(),
         )
@@ -2625,7 +2616,7 @@ mod tests {
 
         let err = svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             None,
@@ -2646,7 +2637,7 @@ mod tests {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req("Acme GitHub", Some(team)),
         )
         .await
@@ -2654,7 +2645,7 @@ mod tests {
         svc::attach_credential(
             &pool,
             &granting_broker(),
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             &credential(),
         )
@@ -2664,7 +2655,7 @@ mod tests {
 
         let out = svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             Some("beta reads the whole org deliberately".into()),
@@ -2691,7 +2682,7 @@ mod tests {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req("Acme GitHub", Some(team)),
         )
         .await
@@ -2700,7 +2691,7 @@ mod tests {
         svc::attach_credential(
             &pool,
             &narrow_granting_broker(),
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             &credential(),
         )
@@ -2722,7 +2713,7 @@ mod tests {
         // No affirmation: the grant proceeds because the mint witnessed no gap.
         svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             None,
@@ -2750,7 +2741,7 @@ mod tests {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
         let c = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             &req("Acme GitHub", Some(team)),
         )
         .await
@@ -2758,7 +2749,7 @@ mod tests {
         svc::attach_credential(
             &pool,
             &narrow_granting_broker(),
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             &credential(),
         )
@@ -2768,7 +2759,7 @@ mod tests {
 
         let err = svc::grant_reach(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             Some("but I insist".into()),
@@ -2792,7 +2783,7 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_denied_connection_is_indistinguishable_from_a_missing_one(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let admin_auth = crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await;
+        let admin_auth = crate::test_support::human_principal_for(&pool, admin.uuid()).await;
         let (_owner, team) = seed_team_member(&pool, "conn-owner", "acme", TeamRole::Owner).await;
         let live = svc::provision(&pool, &admin_auth, &req("Acme GitHub", Some(team)))
             .await
@@ -2806,7 +2797,7 @@ mod tests {
 
         let (outsider, _other) =
             seed_team_member(&pool, "conn-prober", "other", TeamRole::Owner).await;
-        let prober = crate::test_support::authenticated_profile_for(&pool, outsider.uuid()).await;
+        let prober = crate::test_support::human_principal_for(&pool, outsider.uuid()).await;
         let missing = Uuid::now_v7();
 
         for (state, target) in [("live", live.id), ("revoked", revoked.id)] {

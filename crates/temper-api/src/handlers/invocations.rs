@@ -15,7 +15,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use crate::middleware::surface::RequestSurface;
 use temper_services::backend::{substrate_read, DbBackend};
 use temper_services::error::{ApiError, ApiResult};
@@ -43,7 +43,7 @@ use temper_workflow::operations::{Backend, CloseInvocation, OpenInvocation};
 )]
 pub async fn open(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Json(req): Json<OpenInvocationRequest>,
 ) -> ApiResult<Json<InvocationAck>> {
@@ -78,7 +78,7 @@ pub async fn open(
 )]
 pub async fn close(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(id): Path<Uuid>,
     Json(req): Json<CloseInvocationRequest>,
@@ -113,7 +113,7 @@ pub async fn close(
 )]
 pub async fn show(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<InvocationView>> {
     // Deny and absent are indistinguishable (readback returns None for both) — both 404.
@@ -144,7 +144,7 @@ pub async fn show(
 )]
 pub async fn list(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<InvocationSummary>>> {
     let rows = substrate_read::invocation_list_select(

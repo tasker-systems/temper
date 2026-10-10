@@ -666,7 +666,7 @@ mod tests {
         // Revoke the subscription.
         crate::services::subscription_service::revoke(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             sub_id,
         )
         .await

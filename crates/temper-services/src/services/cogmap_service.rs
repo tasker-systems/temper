@@ -19,7 +19,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::auth::AuthenticatedProfile;
+use crate::auth::HumanPrincipal;
 use crate::authz::{Principal, TwoSidedAuthority, TwoSidedScope};
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::cognitive_maps::{
@@ -119,7 +119,7 @@ pub async fn show_visible(
 /// `bound: false` when the binding already existed.
 pub async fn bind_team(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     cogmap_id: Uuid,
     req: &BindTeamRequest,
 ) -> ApiResult<BindTeamOutcome> {
@@ -128,7 +128,7 @@ pub async fn bind_team(
     // conditional shape is unchanged — the gate itself decides, the proof only identifies.
     crate::authz::authorize::<TwoSidedAuthority>(
         pool,
-        Principal::Proof(authed),
+        Principal::Human(authed),
         TwoSidedScope::cogmap(cogmap_id, req.team_id),
     )
     .await?;
@@ -171,7 +171,7 @@ pub async fn bind_team(
 /// when no binding existed.
 pub async fn unbind_team(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     cogmap_id: Uuid,
     team_id: Uuid,
 ) -> ApiResult<UnbindTeamOutcome> {
@@ -181,7 +181,7 @@ pub async fn unbind_team(
     // The gate consumes the typed principal (Class F, PR 2 of the single-ingress refactor).
     crate::authz::authorize::<TwoSidedAuthority>(
         pool,
-        Principal::Proof(authed),
+        Principal::Human(authed),
         TwoSidedScope::cogmap(cogmap_id, team_id),
     )
     .await?;

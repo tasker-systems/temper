@@ -119,8 +119,9 @@ impl ScopedAuthority for TwoSidedAuthority {
         caller: Principal<'_>,
         scope: TwoSidedScope,
     ) -> ApiResult<Self> {
-        let caller = caller.profile_id();
-        if access_service::is_system_admin(pool, caller).await? {
+        let principal = caller;
+        let caller = principal.profile_id();
+        if principal.system_admin(pool).await?.is_some() {
             return Ok(TwoSidedAuthority::SystemAdmin);
         }
         if access_service::is_gating_team(pool, scope.team_id).await? {

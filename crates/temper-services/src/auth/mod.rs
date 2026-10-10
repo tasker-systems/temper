@@ -359,6 +359,16 @@ impl HumanPrincipal {
     }
 }
 
+/// Reads through to the authenticated identity. Coercion runs one way only — a person's proof can be
+/// read as an unclassified profile, never the reverse — so it cannot be used to forge one.
+impl std::ops::Deref for HumanPrincipal {
+    type Target = AuthenticatedProfile;
+
+    fn deref(&self) -> &AuthenticatedProfile {
+        &self.0
+    }
+}
+
 /// Proof that the caller is a **machine**: authenticated, and classified machine by
 /// `classify_caller`. Sealed exactly as [`HumanPrincipal`] is; the two have no conversion between
 /// them, so a machine can never be handed to an act that requires a person.
@@ -377,6 +387,15 @@ impl MachinePrincipal {
     }
 }
 
+/// Reads through to the authenticated identity, one way only, as [`HumanPrincipal`]'s does.
+impl std::ops::Deref for MachinePrincipal {
+    type Target = AuthenticatedProfile;
+
+    fn deref(&self) -> &AuthenticatedProfile {
+        &self.0
+    }
+}
+
 /// A classified caller: exactly one of the two proofs. Minted only by `classify_caller`, and since
 /// each arm wraps a sealed proof, holding a `Caller` means the classification ran — the variants are
 /// public so a surface can match on them, not so it can build one.
@@ -384,6 +403,15 @@ impl MachinePrincipal {
 pub enum Caller {
     Human(HumanPrincipal),
     Machine(MachinePrincipal),
+}
+
+/// Reads through to the authenticated identity, one way only, as the two proofs' do.
+impl std::ops::Deref for Caller {
+    type Target = AuthenticatedProfile;
+
+    fn deref(&self) -> &AuthenticatedProfile {
+        self.authenticated()
+    }
 }
 
 impl Caller {
@@ -540,29 +568,49 @@ impl SystemAdmin {
 }
 
 /// Level 3 — governance check. A sibling of [`require_system_access`] off Level 1, not a chain on top
-/// of it: it consumes an [`AuthenticatedProfile`] and reads governance *alone* (D11's posture that
-/// `is_system_admin` never ANDs standing). Returns a plain [`ApiError::Forbidden`] on denial — admin
-/// denial needs none of `AuthzError::SystemAccessDenied`'s CLI-presentation payload, and `Forbidden`
-/// is exactly what the admin gate returns today, so parity is trivial and no new surface mapping is
-/// needed.
-pub async fn require_system_admin(
-    pool: &PgPool,
-    authed: &AuthenticatedProfile,
-) -> ApiResult<SystemAdmin> {
-    require_system_admin_by_id(pool, ProfileId::from(authed.profile.id)).await
+/// of it: it reads governance *alone* (D11's posture that `is_system_admin` never ANDs standing).
+///
+/// Takes a [`HumanPrincipal`], so a machine cannot be handed to it — that is a compile error, not a
+/// refusal, and it is why no code path can hold a `SystemAdmin` for a machine. (The #1089 triggers
+/// make `is_system_admin` false for every machine as well; the type is what makes the question
+/// unaskable.) Returns a plain [`ApiError::Forbidden`] on denial — admin denial needs none of
+/// `AuthzError::SystemAccessDenied`'s CLI-presentation payload.
+pub async fn require_system_admin(pool: &PgPool, human: &HumanPrincipal) -> ApiResult<SystemAdmin> {
+    let actor = human.profile_id();
+    if crate::services::access_service::is_system_admin(pool, actor).await? {
+        Ok(SystemAdmin(actor))
+    } else {
+        Err(ApiError::Forbidden)
+    }
 }
 
-/// The bare-id spelling of [`require_system_admin`] — the gate DEFINITION, with the surface gate
-/// and the db_backend seam its two callers. The seam (`backend/db_backend.rs`) sits below the
-/// middleware chain — the CLI/backend path has no HTTP layer above it, so there is no
-/// `AuthenticatedProfile` to hand it (Class E of the 2026-09-28 single-ingress inventory) — but it
-/// must ask the same question through the same predicate, or the two spellings drift. Probing
-/// `is_system_admin` here IS the shared spelling: both callers read the one SQL function.
+/// The bare-id spelling of [`require_system_admin`], **test-only**. It mints from a `ProfileId` with
+/// no classification behind it, so it exists only where `Principal::Bare` does — the test harness —
+/// and a production build cannot name it.
+#[cfg(any(test, feature = "test-harness"))]
 pub async fn require_system_admin_by_id(pool: &PgPool, actor: ProfileId) -> ApiResult<SystemAdmin> {
     if crate::services::access_service::is_system_admin(pool, actor).await? {
         Ok(SystemAdmin(actor))
     } else {
         Err(ApiError::Forbidden)
+    }
+}
+
+/// The one sentence a machine principal is refused with on every act outside content and workflow.
+/// Fixed, so an operator can find it in telemetry and a client can recognise it; it names nothing
+/// about the act or the subject.
+pub const MACHINE_PRINCIPAL_REFUSAL: &str = "this action is not available to a machine principal";
+
+/// The refusal for a machine principal on an act it may not take: `403` under
+/// `FORBIDDEN_DETAIL_CODE` with [`MACHINE_PRINCIPAL_REFUSAL`].
+pub fn machine_principal_refused() -> ApiError {
+    ApiError::ForbiddenDetail(MACHINE_PRINCIPAL_REFUSAL.to_string())
+}
+
+impl Caller {
+    /// The human proof, or the machine refusal — for a surface gating an act a machine may not take.
+    pub fn require_human(&self) -> ApiResult<&HumanPrincipal> {
+        self.as_human().ok_or_else(machine_principal_refused)
     }
 }
 

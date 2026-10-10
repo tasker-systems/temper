@@ -746,12 +746,26 @@ pub struct DbBackend {
     /// The caller profile — the substrate principal directly (a preserved profile id). Reads scope
     /// through `resources_visible_to`; writes gate through `can_modify_resource` (WS2).
     profile_id: ProfileId,
-    /// The Level-1 proof the caller held at its surface, when one exists. `Some` on every
-    /// HTTP/MCP-constructed backend; `None` on the CLI/operator path, where no middleware exists
-    /// above the frame and `new` is the honest spelling. The gated callsites dispatch through
-    /// [`Self::principal`], which renders this arm-for-arm — a proof-holding caller passes
-    /// `Principal::Proof`, exactly the arm its middleware minted.
-    authenticated: Option<crate::auth::AuthenticatedProfile>,
+    /// Who the caller is, as its surface classified it. The gated callsites dispatch through
+    /// [`Self::principal`], which renders this arm-for-arm.
+    caller: BackendCaller,
+}
+
+/// The caller a [`DbBackend`] holds. In a production build there is one arm: the classified
+/// [`crate::auth::Caller`] its surface minted. The `Bare` arm exists only under the test harness,
+/// for suites that drive the backend with a seeded id (`DbBackend::new`).
+#[derive(Debug)]
+#[cfg_attr(
+    any(test, feature = "test-harness"),
+    expect(
+        clippy::large_enum_variant,
+        reason = "the unit `Bare` arm exists only under the test harness; production has one arm"
+    )
+)]
+enum BackendCaller {
+    Classified(crate::auth::Caller),
+    #[cfg(any(test, feature = "test-harness"))]
+    Bare,
 }
 
 /// The invariant attribution carried through every reconcile phase: which cognitive map, on whose
@@ -784,60 +798,56 @@ impl DbBackend {
             .await
             .map_err(TemperError::from)?
         {
-            crate::auth::require_system_admin_by_id(&self.pool, self.profile_id).await?;
+            self.require_system_admin().await?;
             Ok(())
         } else {
             self.check_cogmap_authorable(uuid::Uuid::from(cogmap)).await
         }
     }
 
-    /// `profile_id` MUST be middleware-resolved (the HTTP handlers pass the authenticated
-    /// caller's own id) or the CLI operator's — the type carries no proof of that, which is
-    /// the Class E residue this constructor accepts: the bare id is the caller's own identity,
-    /// and the gates below re-probe it. This is the CLI/operator path's spelling — no middleware
-    /// exists above that frame, so there is genuinely no proof to pass, and every gate this
-    /// backend dispatches then runs under `Principal::Bare`, the arm that admitted the bare id
-    /// before the refactor and admits nothing new. HTTP/MCP callers that DO hold a resolved
-    /// proof construct through [`Self::with_proof`], which routes the same gates through the
-    /// `Principal::Proof` arm instead of silently demoting them to `Bare`.
+    /// **Test-only.** A backend acting as a seeded `profile_id` with no proof behind it: every gate
+    /// it dispatches runs under `Principal::Bare`. No production path builds one — the surfaces
+    /// construct through [`Self::with_proof`] — so a deployed binary cannot name this constructor.
+    /// (`capture_atlas_fixtures`, an operator example, runs it against a live database by design.)
+    #[cfg(any(test, feature = "test-harness"))]
     pub fn new(pool: PgPool, profile_id: ProfileId) -> Self {
         Self {
             pool,
             profile_id,
-            authenticated: None,
+            caller: BackendCaller::Bare,
         }
     }
 
-    /// Construct a backend from a caller whose surface already resolved Level 1 — the
-    /// HTTP handlers and the MCP tools, which receive an `AuthenticatedProfile` from
-    /// their middleware. The seam's Principal-consuming gates dispatch the `Proof` arm
-    /// the middleware minted instead of re-deriving a bare id from the proof's own
-    /// profile: the caller passes the proof it already holds, rather than having the
-    /// seam re-probe over it ([`Self::new`]'s Class E spelling).
-    ///
-    /// Takes the proof by reference and stores a clone, so a handler can keep reading
-    /// its `AuthUser` after handing the proof in.
-    pub fn with_proof(pool: PgPool, authenticated: &crate::auth::AuthenticatedProfile) -> Self {
+    /// Construct a backend for a classified caller — the HTTP handlers, which receive a
+    /// [`crate::auth::Caller`] from their middleware. The seam's gates dispatch the arm the
+    /// classification minted, so a machine runs every gate as a machine and never reaches an admin
+    /// decision. Takes the caller by reference and stores a clone, so a handler can keep using it.
+    pub fn with_proof(pool: PgPool, caller: &crate::auth::Caller) -> Self {
         Self {
             pool,
-            profile_id: ProfileId::from(authenticated.profile().id),
-            authenticated: Some(authenticated.clone()),
+            profile_id: caller.profile_id(),
+            caller: BackendCaller::Classified(caller.clone()),
         }
     }
 
-    /// The caller principal the seam's scoped-authority gates dispatch under.
-    ///
-    /// `Some` proof ⇒ the `Principal::Proof` arm — the exact proof the surface's middleware minted,
-    /// so a proof-holding caller's gates run under the same arm every Class A/B service gate
-    /// above it runs under. `None` ⇒ the `Principal::Bare` arm — the CLI/operator path, the one arm
-    /// that genuinely holds no middleware-resolved proof. NEVER `Proof`-rendered from a `None`:
-    /// the two spellings stay the one gate definition's two honest callers, per the
-    /// `Principal` doc's "arms that admit `Bare` are exactly the arms that admitted the bare id".
+    /// The caller principal the seam's scoped-authority gates dispatch under: the classified arm
+    /// the surface minted, or — under the test harness only — `Principal::Bare`.
     fn principal(&self) -> Principal<'_> {
-        match &self.authenticated {
-            Some(authed) => Principal::Proof(authed),
-            None => Principal::Bare(self.profile_id),
+        match &self.caller {
+            BackendCaller::Classified(caller) => Principal::from(caller),
+            #[cfg(any(test, feature = "test-harness"))]
+            BackendCaller::Bare => Principal::Bare(self.profile_id),
         }
+    }
+
+    /// Mint the caller's `SystemAdmin`, or refuse `Forbidden`. A machine is refused without a query;
+    /// a person is asked through `require_system_admin`. For the seam's two admin-only arms:
+    /// reconcile on an admin-only map, and reblock `All`.
+    async fn require_system_admin(&self) -> Result<crate::auth::SystemAdmin, TemperError> {
+        self.principal()
+            .system_admin(&self.pool)
+            .await?
+            .ok_or_else(|| crate::error::ApiError::Forbidden.into())
     }
 
     /// Auth-before-writes gate (WS2): the caller (`self.profile_id`, the substrate principal directly)
@@ -3491,10 +3501,8 @@ impl Backend for DbBackend {
         //    `From<ApiError>` carries through as `TemperError::NotFound` (`error.rs:158-168`) — no
         //    existence oracle beside the leak-safe evidence read.
         let subject = citation_subject(&self.pool, cmd.block, source_id).await?;
-        // The gate dispatches the caller principal arm-for-arm: `Principal::Proof` when the
-        // surface held a resolved proof (`with_proof`), `Principal::Bare` on the CLI/operator
-        // path (`new`) — the bare-id arm admitting exactly what it always did. Same gate,
-        // one spelling, the caller's own arm.
+        // The gate dispatches the caller principal arm-for-arm (`self.principal()`): the
+        // classified arm the surface minted. Same gate, one spelling, the caller's own arm.
         let proof = authorize::<AuditAuthority>(&self.pool, self.principal(), subject).await?;
         // 2. Correlation integrity — additive to the authorization above, before any mutation.
         self.check_act_invocation(cmd.act.invocation).await?;
@@ -3836,16 +3844,17 @@ impl Backend for DbBackend {
         // identity HERE (not deferring to the firing arm's `unwrap_or_else`) lets the existence
         // pre-check key on the realized id and lets the outcome echo a stable id even on the mint path.
         //
-        // The admin question is asked through the SAME predicate `require_system_admin` runs
-        // (`access_service::is_system_admin`) — parity by shared owner, not by copy. This site needs
-        // the BOOL (a non-admin genesis is legal; only the id-honoring arm narrows), so the refusal
-        // wrapper would swallow a DB error into "not an admin" — exactly the failure the
-        // `require_system_admin_by_id` doc warns of. The seam (Class E) has no proof to pass; the
-        // bare-id probe stays HERE, at the seam.
-        let caller_is_admin =
-            crate::services::access_service::is_system_admin(&self.pool, self.profile_id)
-                .await
-                .map_err(|e| TemperError::Api(e.to_string()))?;
+        // The admin question is answered by minting the proof from the classified caller
+        // (`Principal::system_admin`): a machine is never an admin, a person is asked through
+        // `require_system_admin`. A non-admin genesis is legal — only the id-honoring arm narrows —
+        // so the answer is an `Option`, and a DB error still propagates rather than reading as
+        // "not an admin".
+        let caller_is_admin = self
+            .principal()
+            .system_admin(&self.pool)
+            .await
+            .map_err(|e| TemperError::Api(e.to_string()))?
+            .is_some();
         let requested_cogmap_id = if caller_is_admin {
             cmd.request.cogmap_id
         } else {
@@ -4360,8 +4369,7 @@ impl Backend for DbBackend {
         use temper_core::types::workflow_job::{clamp_auditor_cap, DEFAULT_AUDITOR_LEASE_SECONDS};
 
         // 0. AUTH BEFORE ANY WRITE. `reap` below mutates rows, so the gate precedes it. Dispatches
-        // the caller principal arm-for-arm — `Proof` when the surface held a resolved proof,
-        // `Bare` on the CLI/operator path (no middleware exists above that frame).
+        // the caller principal arm-for-arm (`self.principal()`).
         require_machine_principal(&self.pool, self.principal()).await?;
 
         // 1. Reap stale leases (crashed runs → retry/dead) before claiming. Shared with the steward
@@ -4448,9 +4456,7 @@ impl Backend for DbBackend {
         &self,
         cmd: CompleteAuditorJob,
     ) -> Result<CommandOutput<Option<uuid::Uuid>>, TemperError> {
-        // The gate dispatches the caller principal arm-for-arm (`self.principal()`): `Proof`
-        // when the surface held a resolved proof, `Bare` on the CLI/operator path — unchanged
-        // in behavior there, the bare-id seam's original spelling.
+        // The gate dispatches the caller principal arm-for-arm (`self.principal()`).
         let proof =
             authorize::<AuditorJobAuthority>(&self.pool, self.principal(), cmd.cogmap).await?;
 
@@ -4660,11 +4666,10 @@ impl Backend for DbBackend {
             ));
         }
 
-        // The SystemAdmin gate for the deployment-wide arm, at the shared seam. `require_system_admin`
-        // cannot be called directly — no middleware above the seam means no `AuthenticatedProfile` —
-        // so this is its bare-id spelling, the one gate definition's second caller (Class E).
+        // The SystemAdmin gate for the deployment-wide arm, minted from the classified caller: a
+        // machine is refused without a query, a person must be a system admin.
         if matches!(cmd.scope, ReblockScope::All) {
-            crate::auth::require_system_admin_by_id(&self.pool, self.profile_id).await?;
+            self.require_system_admin().await?;
         }
 
         // The invoking operator is the emitter of every act this batch fires. Resolved once, and
@@ -5564,5 +5569,101 @@ mod tests {
             let empty = body_with("", vec![]);
             assert!(create_sources(Some(&empty), "https://example.com/x").is_empty());
         }
+    }
+}
+
+/// The seam's two admin-only arms mint `SystemAdmin` from the classified caller (D2): a machine is
+/// refused even when the database would call its profile an admin, and an admin person still passes.
+/// The machine here is `test_support::governed_machine_caller` — a boolean read would admit it, so
+/// each machine assertion fails if its arm stops deciding through the type.
+#[cfg(all(test, feature = "test-db"))]
+mod admin_arm_tests {
+    use super::*;
+    use temper_core::types::reblock::ReblockScope;
+
+    const L0_COGMAP: CogmapId = CogmapId(uuid::Uuid::from_u128(
+        0x00000000_0000_0000_0005_000000000001,
+    ));
+
+    async fn set_gating_team(pool: &PgPool) {
+        sqlx::query!(
+            "UPDATE kb_system_settings SET gating_team_slug = 'temper-system' WHERE id = 1"
+        )
+        .execute(pool)
+        .await
+        .expect("set gating team slug");
+    }
+
+    async fn admin_person(pool: &PgPool) -> crate::auth::Caller {
+        let id: uuid::Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_profiles (handle, display_name) \
+             VALUES ('seam-admin-' || gen_random_uuid(), 'seam admin') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("seed admin");
+        crate::test_support::approved_admin(pool, id).await;
+        crate::test_support::caller_for(pool, id).await
+    }
+
+    fn reblock_all() -> ReblockResources {
+        ReblockResources {
+            scope: ReblockScope::All,
+            dry_run: true,
+            limit: 1,
+            after_id: None,
+            origin: temper_workflow::operations::Surface::ApiHttp,
+        }
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_machine_cannot_reconcile_an_admin_only_map(pool: PgPool) {
+        set_gating_team(&pool).await;
+        let machine = crate::test_support::governed_machine_caller(&pool).await;
+
+        let refused = DbBackend::with_proof(pool.clone(), &machine)
+            .authorize_reconcile(L0_COGMAP)
+            .await;
+
+        assert!(
+            matches!(refused, Err(TemperError::Forbidden)),
+            "a machine is refused L0's admin regime whatever the database says; got {refused:?}"
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn an_admin_person_still_reconciles_an_admin_only_map(pool: PgPool) {
+        set_gating_team(&pool).await;
+        let admin = admin_person(&pool).await;
+
+        DbBackend::with_proof(pool.clone(), &admin)
+            .authorize_reconcile(L0_COGMAP)
+            .await
+            .expect("an admin person passes L0's regime gate");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_machine_cannot_reblock_the_whole_deployment(pool: PgPool) {
+        let machine = crate::test_support::governed_machine_caller(&pool).await;
+
+        let refused = DbBackend::with_proof(pool.clone(), &machine)
+            .reblock_resources(reblock_all())
+            .await;
+
+        assert!(
+            matches!(refused, Err(TemperError::Forbidden)),
+            "a machine is refused reblock `All` whatever the database says; got {:?}",
+            refused.map(|_| ())
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn an_admin_person_still_reblocks_the_whole_deployment(pool: PgPool) {
+        let admin = admin_person(&pool).await;
+
+        DbBackend::with_proof(pool.clone(), &admin)
+            .reblock_resources(reblock_all())
+            .await
+            .expect("an admin person passes reblock `All`'s gate");
     }
 }

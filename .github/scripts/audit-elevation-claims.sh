@@ -217,6 +217,16 @@ current_gates() {
 # (`check_cogmap_authorable_in_tx`), so that arm cannot widen unseen. Claim files about bind/unbind
 # rebound to `two_sided`, and genesis's reserved-id claims to `is_system_admin`. Re-read the one
 # claim still bound to `reconcile_regime` (handlers/cognitive_maps.rs, reconcile's 403): holds.
+# REVIEWED 2026-10-10 (machines reach only content and workflow) — `context_admin`, `grant`,
+# `ledger_subject`, `machine`, `read_gates`, `reconcile_regime`, `subscription`, `two_sided` all
+# re-fingerprinted by one change: each admin arm now decides by MINTING `SystemAdmin` from the
+# classified caller (`Principal::system_admin` / `require_system_admin(&HumanPrincipal)`) instead
+# of reading `is_system_admin` for a bare id, and `machine`'s registration/containment helpers take
+# `&HumanPrincipal`. Every gate NARROWED: a person's admission is unchanged, and a machine — never
+# an admin under the #1089 triggers — is now kept off every admin arm by the type. Re-read the
+# claims bound to these gates (access, admin_directory, admin_ledger, cognitive_maps, embed,
+# erasure, field_scrub, machine_clients, openapi, resource_erasure): each states what a system
+# admin may do, which still holds for a person. No over-claim.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -271,14 +281,14 @@ claim crates/temper-services/src/services/subscription_test_support.rs 1 subscri
 claim crates/temper-services/src/services/team_service.rs 2 require_manage_on_team,can_manage
 gate audit_gate 05a9b61226c4
 gate connection 30434edb8ee6
-gate context_admin 6bd5aa70ab69
-gate grant 693218eba938
-gate machine deb27d461b57
-gate reconcile_regime f9833fb81725
-gate read_gates 5b394645d054
-gate ledger_subject 595564c89c9c
-gate subscription 97b9a90d234d
-gate two_sided 4fb1fb73d559
+gate context_admin 141f4014a11e
+gate grant 8deae8174701
+gate machine 5be8104b394b
+gate reconcile_regime 76ead78c03ac
+gate read_gates 83ff7ebff99b
+gate ledger_subject 0b4a1f659c60
+gate subscription 6c9b01749d61
+gate two_sided 0474657e80e8
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e

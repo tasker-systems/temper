@@ -1,5 +1,5 @@
-//! Team lifecycle handlers — thin: extract `AuthUser`, dispatch one
-//! `team_service` call, return the typed row. Service-direct (no Backend-trait
+//! Team lifecycle handlers — thin: extract `AuthUser` (`AnyPrincipal` for the two reads a machine
+//! may take), dispatch one `team_service` call, return the typed row. Service-direct (no Backend-trait
 //! command, no event emission) per org-provisioning spec §2.6.
 
 use axum::extract::{Path, State};
@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::{AnyPrincipal, AuthUser};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::RemoveMemberOutcome;
 use temper_core::types::team::{
@@ -29,7 +29,10 @@ use temper_services::state::AppState;
         (status = 200, description = "Teams the caller is a member of", body = Vec<TeamRow>),
     )
 )]
-pub async fn list(State(state): State<AppState>, auth: AuthUser) -> ApiResult<Json<Vec<TeamRow>>> {
+pub async fn list(
+    State(state): State<AppState>,
+    auth: AnyPrincipal,
+) -> ApiResult<Json<Vec<TeamRow>>> {
     team_service::list_teams(&state.pool, ProfileId::from(auth.0.profile().id))
         .await
         .map(Json)
@@ -104,7 +107,7 @@ pub async fn add_member(
 )]
 pub async fn detail(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(team_id): Path<Uuid>,
 ) -> ApiResult<Json<TeamDetail>> {
     team_service::team_detail(&state.pool, &auth.0, team_id)

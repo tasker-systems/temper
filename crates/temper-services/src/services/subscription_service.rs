@@ -33,7 +33,7 @@ use temper_core::types::subscription::{
     CreateSubscriptionRequest, Subscription, SubscriptionSelector,
 };
 
-use crate::auth::AuthenticatedProfile;
+use crate::auth::HumanPrincipal;
 use crate::authz::{authorize, Principal, SubscriptionAuthority, SubscriptionControlAuthority};
 use crate::error::{ApiError, ApiResult};
 use crate::services::connection_service;
@@ -70,10 +70,10 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<Subscription> {
 /// `authz::SubscriptionControlAuthority`.
 pub async fn get_for_caller(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     id: Uuid,
 ) -> ApiResult<Subscription> {
-    authorize::<SubscriptionControlAuthority>(pool, Principal::Proof(authed), id).await?;
+    authorize::<SubscriptionControlAuthority>(pool, Principal::Human(authed), id).await?;
     get(pool, id).await
 }
 
@@ -88,12 +88,15 @@ pub async fn get_for_caller(
 /// they agree by being the same disjunction, not by sharing a call.
 pub async fn list(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     include_revoked: bool,
     connection_id: Option<Uuid>,
 ) -> ApiResult<Vec<Subscription>> {
     let caller = ProfileId::from(authed.profile().id);
-    let is_admin = crate::services::access_service::is_system_admin(pool, caller).await?;
+    let is_admin = crate::authz::Principal::Human(authed)
+        .system_admin(pool)
+        .await?
+        .is_some();
 
     sqlx::query_as!(
         Subscription,
@@ -130,7 +133,7 @@ pub async fn list(
 /// JSONB for storage — the column is the storage, the enum is the shape.
 pub async fn create(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     req: &CreateSubscriptionRequest,
 ) -> ApiResult<Subscription> {
     let caller = ProfileId::from(authed.profile().id);
@@ -155,7 +158,7 @@ pub async fn create(
     // resolves to the denial arm (role_on_team returns None for a team_id no row carries), so a
     // bogus UUID is refused here and never reaches the INSERT.
     let authorized =
-        authorize::<SubscriptionAuthority>(pool, Principal::Proof(authed), req.authoring_team_id)
+        authorize::<SubscriptionAuthority>(pool, Principal::Human(authed), req.authoring_team_id)
             .await?;
     let authoring_team = authorized.subject();
 
@@ -273,15 +276,11 @@ fn refuse_inert_declaration(
 /// `kb_connections`. A revoked subscription stops matching (chunk B's query filters
 /// `revoked_at IS NULL`); the history stays, so a subscription that existed at intake is
 /// resolvable at disposition time (the delivery row's research-corpus property).
-pub async fn revoke(
-    pool: &PgPool,
-    authed: &AuthenticatedProfile,
-    id: Uuid,
-) -> ApiResult<Subscription> {
+pub async fn revoke(pool: &PgPool, authed: &HumanPrincipal, id: Uuid) -> ApiResult<Subscription> {
     let caller = ProfileId::from(authed.profile().id);
     // Auth before writes, keyed on the existing row's authoring team. A refusal is
     // indistinguishable from a missing id.
-    authorize::<SubscriptionControlAuthority>(pool, Principal::Proof(authed), id).await?;
+    authorize::<SubscriptionControlAuthority>(pool, Principal::Human(authed), id).await?;
 
     sqlx::query!(
         r#"UPDATE kb_subscriptions
@@ -634,7 +633,7 @@ mod tests {
         };
         let conn = crate::services::connection_service::provision(
             pool,
-            &crate::test_support::authenticated_profile_for(pool, caller.uuid()).await,
+            &crate::test_support::human_principal_for(pool, caller.uuid()).await,
             &req,
         )
         .await
@@ -647,7 +646,7 @@ mod tests {
     async fn grant_reach(pool: &PgPool, caller: ProfileId, connection_id: Uuid, team_id: Uuid) {
         crate::services::connection_service::grant_reach(
             pool,
-            &crate::test_support::authenticated_profile_for(pool, caller.uuid()).await,
+            &crate::test_support::human_principal_for(pool, caller.uuid()).await,
             connection_id,
             team_id,
             None,
@@ -689,7 +688,7 @@ mod tests {
         // authoring_team_id = team.
         let created = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("kb_teams", team, team, conn),
         )
         .await
@@ -704,7 +703,7 @@ mod tests {
         // Revoke.
         let revoked = revoke(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             created.id,
         )
         .await
@@ -722,7 +721,7 @@ mod tests {
 
         let err = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("kb_teams", team, team, conn),
         )
         .await
@@ -742,7 +741,7 @@ mod tests {
 
         let err = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, stranger.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, stranger.uuid()).await,
             &req("kb_teams", team, team, conn),
         )
         .await
@@ -778,14 +777,14 @@ mod tests {
 
         let created = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("kb_teams", team, team, conn),
         )
         .await
         .expect("admin creates on a team it does not manage");
         let read = get_for_caller(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             created.id,
         )
         .await
@@ -793,7 +792,7 @@ mod tests {
         assert_eq!(read.id, created.id);
         let revoked = revoke(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             created.id,
         )
         .await
@@ -827,7 +826,7 @@ mod tests {
 
         let err = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("kb_teams", team, team, conn),
         )
         .await
@@ -850,7 +849,7 @@ mod tests {
         // create
         let err = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, stranger.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, stranger.uuid()).await,
             &req("kb_teams", team, team, conn),
         )
         .await
@@ -860,7 +859,7 @@ mod tests {
         // A real row to aim get/revoke at, authored by someone who may.
         let created = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, outsider.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, outsider.uuid()).await,
             &req("kb_teams", team, team, conn),
         )
         .await
@@ -868,7 +867,7 @@ mod tests {
 
         let err = get_for_caller(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, stranger.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, stranger.uuid()).await,
             created.id,
         )
         .await
@@ -880,7 +879,7 @@ mod tests {
 
         let err = revoke(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, stranger.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, stranger.uuid()).await,
             created.id,
         )
         .await
@@ -891,7 +890,7 @@ mod tests {
         );
 
         // And it is the same refusal a missing id gets, byte for byte: the existence oracle, closed.
-        let prober = crate::test_support::authenticated_profile_for(&pool, stranger.uuid()).await;
+        let prober = crate::test_support::human_principal_for(&pool, stranger.uuid()).await;
         let missing = uuid::Uuid::now_v7();
         assert_eq!(
             get_for_caller(&pool, &prober, created.id)
@@ -940,7 +939,7 @@ mod tests {
         // A maintainer of the subscriber team creates the subscription.
         let created = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("kb_teams", subscriber_team, subscriber_team, conn),
         )
         .await
@@ -962,7 +961,7 @@ mod tests {
 
         let created = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("kb_teams", team, team, conn),
         )
         .await
@@ -981,7 +980,7 @@ mod tests {
 
         let created = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("kb_teams", team, team, conn),
         )
         .await
@@ -989,7 +988,7 @@ mod tests {
 
         let revoked = revoke(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             created.id,
         )
         .await
@@ -1006,7 +1005,7 @@ mod tests {
         // Double revoke is a no-op returning the existing row (first revoker is the truth).
         let double = revoke(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             created.id,
         )
         .await
@@ -1023,7 +1022,7 @@ mod tests {
 
         let _first = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("kb_teams", team, team, conn),
         )
         .await
@@ -1031,7 +1030,7 @@ mod tests {
 
         let err = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("kb_teams", team, team, conn),
         )
         .await
@@ -1048,7 +1047,7 @@ mod tests {
 
         let first = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("kb_teams", team, team, conn),
         )
         .await
@@ -1067,7 +1066,7 @@ mod tests {
         };
         let second = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &second_req,
         )
         .await
@@ -1088,7 +1087,7 @@ mod tests {
         // Try to subscribe as team_b but with authoring_team_id = team_a — should be a 400.
         let err = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("kb_teams", team_b, team_a, conn),
         )
         .await
@@ -1107,7 +1106,7 @@ mod tests {
 
         let created = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("kb_contexts", context_id, team, conn),
         )
         .await
@@ -1132,7 +1131,7 @@ mod tests {
 
         let err = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("kb_contexts", context_id, other_team, conn),
         )
         .await
@@ -1151,7 +1150,7 @@ mod tests {
 
         let created = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("kb_cogmaps", cogmap_id, team, conn),
         )
         .await
@@ -1174,14 +1173,14 @@ mod tests {
 
         let _sub_a = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("kb_teams", team_a, team_a, conn_a),
         )
         .await
         .expect("sub a");
         let _sub_b = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("kb_teams", team_b, team_b, conn_b),
         )
         .await
@@ -1190,7 +1189,7 @@ mod tests {
         // admin is system admin → sees all.
         let all = list(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             false,
             None,
         )
@@ -1225,7 +1224,7 @@ mod tests {
 
         let none = list(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, stranger.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, stranger.uuid()).await,
             false,
             None,
         )
@@ -1243,7 +1242,7 @@ mod tests {
 
         let err = create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &CreateSubscriptionRequest {
                 subscriber_table: "kb_resources".into(), // not admissible
                 subscriber_id: team,

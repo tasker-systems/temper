@@ -11,14 +11,12 @@ use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 
-use temper_services::auth::AuthenticatedProfile;
-
 use temper_services::error::ApiError;
 use temper_services::state::AppState;
 
 /// Axum middleware that checks system-level access after authentication.
 ///
-/// Reads `AuthenticatedProfile` from request extensions (set by `require_auth`)
+/// Reads the classified caller `require_auth` planted
 /// and calls `has_system_access`. Returns `SystemAccessRequired` if the profile
 /// does not have approved standing (`kb_principal_standing`).
 pub async fn require_system_access(
@@ -26,12 +24,8 @@ pub async fn require_system_access(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, ApiError> {
-    let authed = request
-        .extensions()
-        .get::<AuthenticatedProfile>()
-        .ok_or_else(|| {
-            ApiError::Internal("AuthenticatedProfile not found in request extensions".to_string())
-        })?;
+    let authed = super::auth::planted_caller(&request)
+        .ok_or_else(|| ApiError::Internal("caller not found in request extensions".to_string()))?;
 
     match temper_services::auth::require_system_access(&state.pool, authed).await {
         Ok(_authorized) => {}

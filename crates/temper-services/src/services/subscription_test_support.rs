@@ -133,7 +133,7 @@ pub async fn seed_connection(
     };
     let conn = crate::services::connection_service::provision(
         pool,
-        &crate::test_support::authenticated_profile_for(pool, caller.uuid()).await,
+        &crate::test_support::human_principal_for(pool, caller.uuid()).await,
         &req,
     )
     .await
@@ -144,7 +144,7 @@ pub async fn seed_connection(
 pub async fn grant_reach(pool: &PgPool, caller: ProfileId, connection_id: Uuid, team_id: Uuid) {
     crate::services::connection_service::grant_reach(
         pool,
-        &crate::test_support::authenticated_profile_for(pool, caller.uuid()).await,
+        &crate::test_support::human_principal_for(pool, caller.uuid()).await,
         connection_id,
         team_id,
         None,
@@ -170,7 +170,7 @@ pub async fn create_subscription(
         selector,
     };
     let sub = {
-        let authed = crate::test_support::authenticated_profile_for(pool, *caller).await;
+        let authed = crate::test_support::human_principal_for(pool, *caller).await;
         crate::services::subscription_service::create(pool, &authed, &req)
             .await
             .expect("create subscription")

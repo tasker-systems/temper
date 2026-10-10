@@ -27,7 +27,7 @@ use temper_core::types::ids::ProfileId;
 use temper_core::types::machine::{GrantSpec, TeamSpec};
 use temper_core::types::team::TeamRole;
 
-use crate::auth::AuthenticatedProfile;
+use crate::auth::HumanPrincipal;
 use crate::error::{ApiError, ApiResult};
 use crate::services::{access_service, team_service};
 
@@ -186,12 +186,12 @@ impl<'a> AuthorizedReach<'a> {
 /// call site instead of being implicit in the absence of a check.
 pub(crate) async fn authorize_registration<'a>(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     team: Option<Uuid>,
     teams: &'a [TeamSpec],
     grants: &'a [GrantSpec],
 ) -> ApiResult<AuthorizedReach<'a>> {
-    let authority = authorize(pool, crate::authz::Principal::Proof(authed), team).await?;
+    let authority = authorize(pool, crate::authz::Principal::Human(authed), team).await?;
 
     // The caller is authorized; now the payload must be well-formed. An unknown role would
     // otherwise fail the `::team_role` enum cast deep inside `apply_reach`'s transaction and
@@ -296,7 +296,7 @@ pub(crate) async fn contain_target_team(
 /// The non-admin containment bar. Every check calls an existing human-surface predicate.
 async fn contain_reach(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     teams: &[TeamSpec],
     grants: &[GrantSpec],
 ) -> ApiResult<()> {
@@ -324,7 +324,7 @@ async fn contain_reach(
         // Delegated or None in practice.
         access_service::authorize_capability_grant(
             pool,
-            crate::authz::Principal::Proof(authed),
+            crate::authz::Principal::Human(authed),
             temper_substrate::payloads::RefTarget {
                 kind: temper_substrate::payloads::AnchorTable::Cogmaps,
                 id: grant.cogmap_id,
@@ -500,7 +500,7 @@ mod tests {
         }];
         let reach = authorize_registration(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice).await,
+            &crate::test_support::human_principal_for(&pool, alice).await,
             Some(owned),
             &teams,
             &[],
@@ -524,7 +524,7 @@ mod tests {
         }];
         let err = authorize_registration(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice).await,
+            &crate::test_support::human_principal_for(&pool, alice).await,
             Some(owned),
             &teams,
             &[],
@@ -565,7 +565,7 @@ mod tests {
             }];
             let err = authorize_registration(
                 &pool,
-                &crate::test_support::authenticated_profile_for(&pool, alice).await,
+                &crate::test_support::human_principal_for(&pool, alice).await,
                 Some(owned),
                 &teams,
                 &[],
@@ -592,7 +592,7 @@ mod tests {
             }];
             let err = authorize_registration(
                 &pool,
-                &crate::test_support::authenticated_profile_for(&pool, alice).await,
+                &crate::test_support::human_principal_for(&pool, alice).await,
                 Some(owned),
                 &teams,
                 &[],
@@ -636,7 +636,7 @@ mod tests {
                 }];
                 let err = authorize_registration(
                     &pool,
-                    &crate::test_support::authenticated_profile_for(&pool, admin).await,
+                    &crate::test_support::human_principal_for(&pool, admin).await,
                     None,
                     &teams,
                     &[],
@@ -671,7 +671,7 @@ mod tests {
 
             let reach = authorize_registration(
                 &pool,
-                &crate::test_support::authenticated_profile_for(&pool, alice).await,
+                &crate::test_support::human_principal_for(&pool, alice).await,
                 Some(owned),
                 &teams,
                 &[],
@@ -682,7 +682,7 @@ mod tests {
 
             let reach = authorize_registration(
                 &pool,
-                &crate::test_support::authenticated_profile_for(&pool, admin).await,
+                &crate::test_support::human_principal_for(&pool, admin).await,
                 None,
                 &teams,
                 &[],
@@ -708,7 +708,7 @@ mod tests {
 
         let err = authorize_registration(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice).await,
+            &crate::test_support::human_principal_for(&pool, alice).await,
             Some(owned),
             &[],
             &grants,
@@ -789,7 +789,7 @@ mod tests {
         }];
         let err = authorize_registration(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice).await,
+            &crate::test_support::human_principal_for(&pool, alice).await,
             Some(owned),
             &[],
             &grants,
@@ -815,7 +815,7 @@ mod tests {
         }];
         let reach = authorize_registration(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice).await,
+            &crate::test_support::human_principal_for(&pool, alice).await,
             Some(owned),
             &[],
             &grants,
@@ -857,7 +857,7 @@ mod tests {
         }];
         let err = authorize_registration(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice).await,
+            &crate::test_support::human_principal_for(&pool, alice).await,
             Some(owned),
             &[],
             &grants,
@@ -897,7 +897,7 @@ mod tests {
 
         let reach = authorize_registration(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin).await,
+            &crate::test_support::human_principal_for(&pool, admin).await,
             None,
             &teams,
             &grants,
@@ -922,7 +922,7 @@ mod tests {
         }];
         let err = authorize_registration(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice).await,
+            &crate::test_support::human_principal_for(&pool, alice).await,
             Some(owned),
             &teams,
             &[],
@@ -949,7 +949,7 @@ mod tests {
         }];
         let err = authorize_registration(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin).await,
+            &crate::test_support::human_principal_for(&pool, admin).await,
             None,
             &teams,
             &[],
@@ -1000,7 +1000,7 @@ mod tests {
 
         let mine = machine_client_service::list(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, alice).await,
+            &crate::test_support::human_principal_for(&pool, alice).await,
             false,
         )
         .await
@@ -1014,7 +1014,7 @@ mod tests {
 
         let all = machine_client_service::list(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin).await,
+            &crate::test_support::human_principal_for(&pool, admin).await,
             false,
         )
         .await

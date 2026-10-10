@@ -1009,7 +1009,7 @@ mod tests {
         // Mint door 1: a provisioned machine, through the REAL registration service.
         let provisioned = machine_registration_service::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.actor().uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.actor().uuid()).await,
             &ProvisionMachineRequest {
                 client_id: format!("m2m-provisioned-{}", Uuid::now_v7()),
                 label: "door one".to_owned(),
@@ -1024,7 +1024,7 @@ mod tests {
         // Mint door 2: a rebound machine — a SECOND auth0-m2m link on a fresh profile.
         let rebound = machine_registration_service::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.actor().uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.actor().uuid()).await,
             &ProvisionMachineRequest {
                 client_id: format!("m2m-rebind-src-{}", Uuid::now_v7()),
                 label: "rebind source".to_owned(),

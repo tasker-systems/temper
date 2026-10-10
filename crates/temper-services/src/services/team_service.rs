@@ -15,9 +15,8 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::auth::AuthenticatedProfile;
+use crate::auth::{Caller, HumanPrincipal};
 use crate::error::{ApiError, ApiResult};
-use crate::services::access_service;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::{RemoveMemberOutcome, ResidualContext, ResidualOwnedReach};
 use temper_core::types::team::{
@@ -146,7 +145,7 @@ pub(crate) async fn require_team_exists(pool: &PgPool, team_id: Uuid) -> ApiResu
 /// `ON CONFLICT DO NOTHING`).
 pub async fn create_team(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     req: &TeamCreateRequest,
 ) -> ApiResult<TeamRow> {
     let creator = ProfileId::from(authed.profile().id);
@@ -161,12 +160,9 @@ pub async fn create_team(
     }
 
     // A team's creator becomes its `owner`, and a machine principal never governs (ruled
-    // 2026-10-09; the database refuses the row — 20261019100000_machines_never_govern.sql).
-    if crate::services::machine_client_service::is_machine_profile(pool, creator).await? {
-        return Err(ApiError::BadRequest(
-            "a machine principal cannot create a team".to_string(),
-        ));
-    }
+    // 2026-10-09; the database refuses the row — 20261019100000_machines_never_govern.sql). The
+    // `&HumanPrincipal` parameter is what keeps a machine out: the classification that minted it
+    // already read `is_machine_profile`.
 
     // --- Auth before writes ---
 
@@ -190,7 +186,12 @@ pub async fn create_team(
     };
 
     // auto_join_role defines an everyone-pool — admin-gated.
-    if req.auto_join_role.is_some() && !access_service::is_system_admin(pool, creator).await? {
+    if req.auto_join_role.is_some()
+        && !crate::authz::Principal::Human(authed)
+            .system_admin(pool)
+            .await?
+            .is_some()
+    {
         return Err(ApiError::Forbidden);
     }
 
@@ -338,17 +339,13 @@ pub async fn list_teams(pool: &PgPool, caller: ProfileId) -> ApiResult<Vec<TeamR
 /// Visible to any member of the team, or to a system admin. Non-visible teams
 /// return `NotFound` (not `Forbidden`) to avoid leaking team existence to
 /// non-members — team slugs are globally unique and used in share flows.
-pub async fn team_detail(
-    pool: &PgPool,
-    authed: &AuthenticatedProfile,
-    team_id: Uuid,
-) -> ApiResult<TeamDetail> {
+pub async fn team_detail(pool: &PgPool, caller: &Caller, team_id: Uuid) -> ApiResult<TeamDetail> {
     // Auth (read gate): member (any role) or system admin. The `NotFound` above is rendered by
     // `TeamReadAuthority::denial`, so the information-hiding decision lives with the policy rather
     // than being re-made at each call site.
     crate::authz::authorize::<crate::authz::TeamReadAuthority>(
         pool,
-        crate::authz::Principal::Proof(authed),
+        crate::authz::Principal::from(caller),
         team_id,
     )
     .await?;
@@ -782,7 +779,7 @@ mod lifecycle_tests {
 
         let detail = team_detail(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner).await,
+            &crate::test_support::caller_for(&pool, owner).await,
             team,
         )
         .await
@@ -803,7 +800,7 @@ mod lifecycle_tests {
 
         let denied = team_detail(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, outsider).await,
+            &crate::test_support::caller_for(&pool, outsider).await,
             team,
         )
         .await;
@@ -902,7 +899,7 @@ mod lifecycle_tests {
             .unwrap();
         let detail = team_detail(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner).await,
+            &crate::test_support::caller_for(&pool, owner).await,
             team,
         )
         .await
@@ -1048,7 +1045,7 @@ mod lifecycle_tests {
             .unwrap();
         let detail = team_detail(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner).await,
+            &crate::test_support::caller_for(&pool, owner).await,
             team,
         )
         .await
@@ -1070,7 +1067,7 @@ mod lifecycle_tests {
 
         let detail = team_detail(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin).await,
+            &crate::test_support::caller_for(&pool, admin).await,
             team,
         )
         .await
@@ -1162,7 +1159,7 @@ mod lifecycle_tests {
         assert!(!after.iter().any(|t| t.id == team));
         let shown = team_detail(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, owner).await,
+            &crate::test_support::caller_for(&pool, owner).await,
             team,
         )
         .await;
@@ -1427,7 +1424,7 @@ mod lifecycle_tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn create_team_refuses_the_personal_slug_prefix(pool: PgPool) {
         let squatter = mk_profile(&pool, "squatter").await;
-        let authed = crate::test_support::authenticated_profile_for(&pool, squatter).await;
+        let authed = crate::test_support::human_principal_for(&pool, squatter).await;
         for slug in ["personal-victim", "Personal-Victim"] {
             let req = TeamCreateRequest {
                 slug: slug.to_string(),

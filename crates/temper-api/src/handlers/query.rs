@@ -1,7 +1,7 @@
 use axum::extract::{FromRequest, Request, State};
 use axum::{Extension, Json};
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::query::composition::{Composition, CompositionShape};
 use temper_core::types::query::envelope::QueryResponse;
@@ -71,7 +71,7 @@ use temper_workflow::operations::{RelayedSurface, Surface};
 /// The plan is shape-gated, embedded and validated before any act runs, so an invalid plan is refused whole rather than partially executed.
 pub async fn query(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     relayed: Option<Extension<RelayedSurface>>,
     CompositionBody(composition): CompositionBody,
 ) -> ApiResult<Json<QueryResponse>> {

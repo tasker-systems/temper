@@ -13,7 +13,7 @@ use temper_substrate::ids::EntityId;
 use temper_substrate::payloads::{AnchorTable, RefTarget};
 use uuid::Uuid;
 
-use crate::auth::{AuthenticatedProfile, SystemAdmin};
+use crate::auth::{HumanPrincipal, SystemAdmin};
 use crate::backend::substrate_read::husk_held_by;
 use crate::backend::write_floor;
 // In scope so `GrantAuthority::resolve` — the grant-administration gate, which lives as this
@@ -417,7 +417,7 @@ async fn grant_subject_floor_in_tx(
 /// the row already existed and was updated in place.
 pub async fn grant_capability(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     req: &GrantCapabilityRequest,
 ) -> ApiResult<GrantOutcome> {
     let caller = ProfileId::from(authed.profile().id);
@@ -428,7 +428,7 @@ pub async fn grant_capability(
     let subject = crate::authz::wire_subject(&req.subject_table, req.subject_id)
         .ok_or(ApiError::Forbidden)?;
     let proof =
-        match authorize_capability_grant(pool, Principal::Proof(authed), subject, req.into()).await
+        match authorize_capability_grant(pool, Principal::Human(authed), subject, req.into()).await
         {
             Ok(proof) => proof,
             Err(refusal) => return Err(erased_or_refused(pool, caller, subject, refusal).await),
@@ -470,7 +470,7 @@ pub async fn grant_capability(
 /// (idempotent, mirrors `bind_team`/`unbind_team`).
 pub async fn revoke_capability(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     req: &RevokeCapabilityRequest,
 ) -> ApiResult<RevokeOutcome> {
     let caller = ProfileId::from(authed.profile().id);
@@ -481,7 +481,7 @@ pub async fn revoke_capability(
     // its warrant. Deliberately NOT `authorize_capability_grant`: that adds attenuation, and
     // attenuating a revocation is what would make a grant unwithdrawable.
     let proof =
-        match crate::authz::authorize::<GrantAuthority>(pool, Principal::Proof(authed), subject)
+        match crate::authz::authorize::<GrantAuthority>(pool, Principal::Human(authed), subject)
             .await
         {
             Ok(proof) => proof,

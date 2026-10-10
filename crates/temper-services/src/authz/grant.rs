@@ -19,7 +19,7 @@ use super::{
 use crate::backend::write_floor;
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service::{
-    cogmap_write_requires_admin, is_system_admin, profile_can_grant, GrantAuthority,
+    cogmap_write_requires_admin, profile_can_grant, GrantAuthority,
 };
 use crate::services::machine_authz::AuthorizedGrant;
 
@@ -28,8 +28,9 @@ impl ScopedAuthority for GrantAuthority {
     type Subject = RefTarget;
 
     async fn resolve(pool: &PgPool, caller: Principal<'_>, subject: RefTarget) -> ApiResult<Self> {
-        let caller = caller.profile_id();
-        if is_system_admin(pool, caller).await? {
+        let principal = caller;
+        let caller = principal.profile_id();
+        if principal.system_admin(pool).await?.is_some() {
             // The subject-liveness floor the delegated arm carries inside `can()` (migration
             // `20260902000010`: "both profile branches answer a tombstoned subject identically")
             // applies to the admin arm too, so an admin cannot administer grants on a tombstoned

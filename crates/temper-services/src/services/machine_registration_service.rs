@@ -25,7 +25,7 @@ use uuid::Uuid;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::machine::{MachineClient, ProvisionMachineRequest, RebindMachineRequest};
 
-use crate::auth::{AuthenticatedProfile, SystemAdmin};
+use crate::auth::{HumanPrincipal, SystemAdmin};
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service::{insert_grant, InsertGrantParams};
 use crate::services::machine_authz::{self, AuthorizedReach};
@@ -132,7 +132,7 @@ fn map_duplicate_from_conflict(err: ApiError, client_id: &str) -> ApiError {
 /// Register a new machine principal, creating its agent profile. One transaction.
 pub async fn provision(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     req: &ProvisionMachineRequest,
 ) -> ApiResult<MachineClient> {
     let caller = ProfileId::from(authed.profile().id);
@@ -236,7 +236,7 @@ pub async fn provision(
 /// transaction, exactly like `provision`, but with `issuer='temper'` and a `secret_hash`.
 pub async fn issue(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     req: &temper_core::types::machine::IssueMachineRequest,
 ) -> ApiResult<temper_core::types::machine::IssuedMachineCredential> {
     let caller = ProfileId::from(authed.profile().id);
@@ -506,7 +506,7 @@ mod tests {
 
         let client = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("acme-agent"),
         )
         .await
@@ -543,7 +543,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let client = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("gated-agent"),
         )
         .await
@@ -567,7 +567,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let cred = svc::issue(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &IssueMachineRequest {
                 label: "sidekiq".to_string(),
                 owner_team_id: None,
@@ -586,7 +586,7 @@ mod tests {
     async fn approved_machine(pool: &PgPool, admin: ProfileId, client_id: &str) -> Uuid {
         let client = svc::provision(
             pool,
-            &crate::test_support::authenticated_profile_for(pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(pool, admin.uuid()).await,
             &req(client_id),
         )
         .await
@@ -715,7 +715,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let client = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("requesting-agent"),
         )
         .await
@@ -819,7 +819,7 @@ mod tests {
         };
         let client = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &request,
         )
         .await
@@ -868,7 +868,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let old = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("old-client"),
         )
         .await
@@ -907,7 +907,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let old = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("overlap-old"),
         )
         .await
@@ -972,7 +972,7 @@ mod tests {
         provision_req.owner_team_id = Some(team);
         let old = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &provision_req,
         )
         .await
@@ -982,7 +982,7 @@ mod tests {
         // rebind it onto a client_id she controls and inherit its identity. Post-enclosure the bar is
         // structural: rebind requires a `&SystemAdmin`, and a non-admin cannot mint one. The refusal
         // now happens at the proof gate, before rebind is even reachable.
-        let alice_authed = crate::test_support::authenticated_profile_for(&pool, alice).await;
+        let alice_authed = crate::test_support::human_principal_for(&pool, alice).await;
         let err = crate::auth::require_system_admin(&pool, &alice_authed)
             .await
             .expect_err("a non-admin team owner cannot mint an admin proof");
@@ -1008,7 +1008,7 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let old = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("to-be-revoked"),
         )
         .await
@@ -1017,7 +1017,7 @@ mod tests {
         crate::services::machine_client_service::revoke(
             &pool,
             old.id,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
         )
         .await
         .expect("revoke");
@@ -1047,7 +1047,7 @@ mod tests {
 
         let cred = svc::issue(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &IssueMachineRequest {
                 label: "sidekiq".to_string(),
                 owner_team_id: None,
@@ -1097,14 +1097,14 @@ mod tests {
         let admin = seed_admin(&pool).await;
         svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("dupe"),
         )
         .await
         .expect("first");
         let err = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("dupe"),
         )
         .await
@@ -1139,14 +1139,14 @@ mod tests {
 
         let provisioned = svc::provision(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("attributed-agent"),
         )
         .await
         .expect("provision");
         let issued = svc::issue(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &IssueMachineRequest {
                 label: "attributed-issue".to_string(),
                 owner_team_id: None,
@@ -1164,7 +1164,7 @@ mod tests {
             // The subject axis: an operator asking "who registered this machine?" gets an answer.
             let entries = admin_ledger_service::list_by_subject(
                 &pool,
-                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                 RefTarget {
                     kind: AnchorTable::Profiles,
                     id: machine_profile,
@@ -1202,7 +1202,7 @@ mod tests {
         // does not carry an act it never performed.
         let own = admin_ledger_service::list_by_actor(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             admin,
             100,
             0,
@@ -1450,24 +1450,6 @@ mod tests {
         let err = access_service::promote_admin(&pool, &gate, machine, None)
             .await
             .expect_err("a machine cannot be promoted");
-        assert!(is_machine_refusal(&err), "{err:?}");
-    }
-
-    #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn create_team_refuses_a_machine(pool: PgPool) {
-        use temper_core::types::team::TeamCreateRequest;
-        let admin = seed_admin(&pool).await;
-        let machine = approved_machine(&pool, admin, "founder-agent").await;
-        let authed = crate::test_support::authenticated_profile_for(&pool, machine).await;
-        let req = TeamCreateRequest {
-            slug: "agent-made".to_string(),
-            name: None,
-            parent: None,
-            auto_join_role: None,
-        };
-        let err = crate::services::team_service::create_team(&pool, &authed, &req)
-            .await
-            .expect_err("a machine cannot create a team");
         assert!(is_machine_refusal(&err), "{err:?}");
     }
 

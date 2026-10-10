@@ -6,7 +6,7 @@ use axum::response::Response;
 use jsonwebtoken::{decode, TokenData};
 use std::future::Future;
 
-use temper_services::auth::AuthenticatedProfile;
+use temper_services::auth::{Caller, HumanPrincipal};
 
 use temper_services::error::ApiError;
 use temper_services::state::{AppState, KeyLookupError};
@@ -15,11 +15,14 @@ use temper_services::state::{AppState, KeyLookupError};
 #[derive(Debug, Clone)]
 pub struct DeviceId(pub String);
 
-/// Local wrapper around [`AuthenticatedProfile`] that implements axum's
-/// [`FromRequestParts`] extractor. Route handlers use `AuthUser` and
-/// access the inner value via `.0`.
+/// The caller, **only if it is a person**. The default identity extractor: a handler that takes
+/// `AuthUser` refuses a machine principal with `403` `FORBIDDEN_DETAIL` and
+/// [`temper_services::auth::MACHINE_PRINCIPAL_REFUSAL`], before its body runs.
+///
+/// Holds the sealed [`HumanPrincipal`], which reads through to the authenticated identity
+/// (`auth.0.profile()`), and is what every act a machine may not take is typed to require.
 #[derive(Debug, Clone)]
-pub struct AuthUser(pub AuthenticatedProfile);
+pub struct AuthUser(pub HumanPrincipal);
 
 impl<S> FromRequestParts<S> for AuthUser
 where
@@ -31,21 +34,56 @@ where
         parts: &mut Parts,
         _state: &S,
     ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
-        let result = parts
-            .extensions
-            .get::<AuthenticatedProfile>()
-            .cloned()
-            .map(AuthUser)
-            .ok_or(ApiError::Unauthorized(
-                "Authentication required".to_string(),
-            ));
+        let result = planted(parts).and_then(|caller| match caller {
+            Caller::Human(human) => Ok(AuthUser(human)),
+            Caller::Machine(_) => Err(temper_services::auth::machine_principal_refused()),
+        });
         std::future::ready(result)
     }
 }
 
+/// The caller, **person or machine**. The explicit opt-in for content and workflow handlers — the
+/// acts a machine may take. Admitting a machine to a new handler means writing this type, and the
+/// route audit pins the set of handlers that do.
+#[derive(Debug, Clone)]
+pub struct AnyPrincipal(pub Caller);
+
+impl<S> FromRequestParts<S> for AnyPrincipal
+where
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
+        std::future::ready(planted(parts).map(AnyPrincipal))
+    }
+}
+
+/// The classified caller `require_auth` planted, or `401` when no auth layer ran.
+fn planted(parts: &Parts) -> Result<Caller, ApiError> {
+    parts
+        .extensions
+        .get::<super::Planted>()
+        .map(|planted| planted.0.clone())
+        .ok_or(ApiError::Unauthorized(
+            "Authentication required".to_string(),
+        ))
+}
+
+/// The classified caller `require_auth` planted, for the middleware layers that run after it.
+pub(super) fn planted_caller(request: &Request<Body>) -> Option<&Caller> {
+    request
+        .extensions()
+        .get::<super::Planted>()
+        .map(|planted| &planted.0)
+}
+
 /// Axum middleware that verifies a Bearer JWT, resolves or auto-provisions the
-/// corresponding profile, and injects [`AuthenticatedProfile`] into request
-/// extensions for downstream handlers.
+/// corresponding profile, classifies it as a person or a machine, and plants the classified
+/// [`Caller`] (in the module-private `Planted`) for the extractors and later layers.
 pub async fn require_auth(
     State(state): State<AppState>,
     mut request: Request<Body>,
@@ -116,7 +154,7 @@ pub async fn require_auth(
     //    longer builds an `AuthClaims` — it hands over a verified token and maps the
     //    refusal vocabulary to HTTP. That is what keeps the two surfaces from
     //    answering "who is this human" differently.
-    let authed = temper_services::auth::authenticate_token(&state, &raw, &token)
+    let caller = temper_services::auth::authenticate_caller(&state, &raw, &token)
         .await
         .map_err(|e| match e {
             // The seam has already logged the reason with the `sub`. The body NAMES the
@@ -137,15 +175,13 @@ pub async fn require_auth(
             | temper_services::auth::AuthzError::ProfileResolution(err)
             | temper_services::auth::AuthzError::Classification(err) => err,
             // Level 1 never runs the system-access gate; these are defensively
-            // unreachable from `authenticate_token`.
+            // unreachable from `authenticate_caller`.
             temper_services::auth::AuthzError::AccessCheck(_)
             | temper_services::auth::AuthzError::SystemAccessDenied { .. } => {
                 ApiError::Internal("unexpected system-access error from authenticate".to_string())
             }
         })?;
-    let profile = authed.profile().clone();
-
-    tracing::Span::current().record("profile_id", tracing::field::display(profile.id));
+    tracing::Span::current().record("profile_id", tracing::field::display(caller.profile().id));
 
     // 6. Optionally capture X-Temper-Device-Id.
     let device_id = request
@@ -158,8 +194,9 @@ pub async fn require_auth(
         request.extensions_mut().insert(id);
     }
 
-    // 7. Inject AuthenticatedProfile into extensions.
-    request.extensions_mut().insert(authed);
+    // 7. Plant the classified caller — the only identity extension, readable only through this
+    //    module's extractors.
+    request.extensions_mut().insert(super::Planted(caller));
 
     // 8. Continue.
     Ok(next.run(request).await)

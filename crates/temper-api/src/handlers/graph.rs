@@ -5,7 +5,7 @@ use axum::extract::{Path, Query, State};
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use temper_core::context_ref::parse_context_ref;
 use temper_core::types::graph_atlas::{AtlasEntry, AtlasSubgraph, SliceRequest};
 use temper_core::types::graph_context::ContextPanorama;
@@ -38,7 +38,7 @@ use temper_services::state::AppState;
 )]
 pub async fn cogmap_neighborhood_slice(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(cogmap_id): Path<Uuid>,
     Json(req): Json<SliceRequest>,
 ) -> ApiResult<Json<AtlasSubgraph>> {
@@ -66,7 +66,7 @@ pub async fn cogmap_neighborhood_slice(
 )]
 pub async fn cogmap_panorama(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(cogmap_id): Path<Uuid>,
     Query(q): Query<CogmapPanoramaQuery>,
 ) -> ApiResult<Json<TerritoryOverview>> {
@@ -95,7 +95,7 @@ pub async fn cogmap_panorama(
 )]
 pub async fn region_composition(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Query(q): Query<RegionCompositionQuery>,
 ) -> ApiResult<Json<AtlasSubgraph>> {
     let ids: Vec<Uuid> = q
@@ -135,7 +135,7 @@ pub async fn region_composition(
 )]
 pub async fn entry(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Query(q): Query<EntryQuery>,
 ) -> ApiResult<Json<AtlasEntry>> {
     let anchors: Vec<Uuid> = match q.places.as_deref() {
@@ -176,7 +176,7 @@ pub async fn entry(
 )]
 pub async fn traverse(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Query(q): Query<TraverseQuery>,
 ) -> ApiResult<Json<AtlasSubgraph>> {
     let ids: Vec<Uuid> = q
@@ -206,7 +206,7 @@ pub async fn traverse(
 )]
 pub async fn atlas_home(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
 ) -> ApiResult<Json<AtlasHome>> {
     graph_service::atlas_home(&state.pool, ProfileId::from(auth.0.profile().id))
         .await
@@ -297,7 +297,7 @@ fn parse_composition_target(
 )]
 pub async fn context_panorama(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Query(q): Query<ContextPanoramaQuery>,
 ) -> ApiResult<Json<ContextPanorama>> {
     let cref =
@@ -340,7 +340,7 @@ pub async fn context_panorama(
 )]
 pub async fn context_composition(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Query(q): Query<ContextCompositionQuery>,
 ) -> ApiResult<Json<AtlasSubgraph>> {
     let cref =

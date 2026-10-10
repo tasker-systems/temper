@@ -1,7 +1,7 @@
 //! HTTP handlers for the segmented (multi-block) ingest surface: append one segment, finalize
 //! the session, and read the currently-landed set back (the resume/progress query).
 //!
-//! Thin handlers only: `AuthUser` extractor → `DbBackend::with_proof` → dispatch the `Backend` trait
+//! Thin handlers only: `AnyPrincipal` extractor → `DbBackend::with_proof` → dispatch the `Backend` trait
 //! method (Task 2.2) → map errors via `ApiError`. The auth-before-write gate
 //! (`can_modify_resource`) lives in the `DbBackend` methods, not here — mirrors
 //! `handlers::ingest`.
@@ -14,7 +14,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use crate::middleware::surface::RequestSurface;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
@@ -44,7 +44,7 @@ use temper_workflow::operations::Backend;
 )]
 pub async fn append_block_handler(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Json(payload): Json<AppendBlockPayload>,
@@ -78,7 +78,7 @@ pub async fn append_block_handler(
 )]
 pub async fn finalize_handler(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Json(payload): Json<FinalizePayload>,
@@ -106,7 +106,7 @@ pub async fn finalize_handler(
 )]
 pub async fn list_blocks_handler(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<BlocksResponse>> {
     let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);

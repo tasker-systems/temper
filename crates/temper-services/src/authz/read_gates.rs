@@ -13,7 +13,7 @@ use temper_core::types::ids::ProfileId;
 
 use super::{Principal, ScopedAuthority};
 use crate::error::{ApiError, ApiResult};
-use crate::services::{access_service, team_service};
+use crate::services::team_service;
 
 /// The refusal both actor-history sites render — this gate and `admin_ledger_service::list_by_actor`,
 /// which answers the same question one layer up.
@@ -41,7 +41,8 @@ impl ScopedAuthority for TeamReadAuthority {
     type Subject = Uuid;
 
     async fn resolve(pool: &PgPool, caller: Principal<'_>, team_id: Uuid) -> ApiResult<Self> {
-        let caller = caller.profile_id();
+        let principal = caller;
+        let caller = principal.profile_id();
         // Membership first, matching the order this gate has always probed in: the common reader
         // is a member, and asking `is_system_admin` first would add a query to every one of them.
         if team_service::role_on_team(pool, team_id, caller)
@@ -50,7 +51,7 @@ impl ScopedAuthority for TeamReadAuthority {
         {
             return Ok(TeamReadAuthority::Member);
         }
-        Ok(if access_service::is_system_admin(pool, caller).await? {
+        Ok(if principal.system_admin(pool).await?.is_some() {
             TeamReadAuthority::SystemAdmin
         } else {
             TeamReadAuthority::None
@@ -96,13 +97,14 @@ impl ScopedAuthority for ActorHistoryAuthority {
     type Subject = ProfileId;
 
     async fn resolve(pool: &PgPool, caller: Principal<'_>, actor: ProfileId) -> ApiResult<Self> {
-        let caller = caller.profile_id();
+        let principal = caller;
+        let caller = principal.profile_id();
         // Self-read first, and it is free: no query at all. Probing `is_system_admin` ahead of it
         // would charge every principal a round-trip to read their own authorship.
         if caller == actor {
             return Ok(ActorHistoryAuthority::SelfActor);
         }
-        Ok(if access_service::is_system_admin(pool, caller).await? {
+        Ok(if principal.system_admin(pool).await?.is_some() {
             ActorHistoryAuthority::SystemAdmin
         } else {
             ActorHistoryAuthority::None

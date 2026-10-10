@@ -174,7 +174,7 @@ async fn admin_can_grant_and_revoke_cogmap_write(pool: PgPool) {
 
     let out = access_service::grant_capability(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, admin).await,
+        &temper_services::test_support::human_principal_for(&pool, admin).await,
         &write_grant(cogmap, grantee),
     )
     .await
@@ -187,7 +187,7 @@ async fn admin_can_grant_and_revoke_cogmap_write(pool: PgPool) {
 
     access_service::revoke_capability(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, admin).await,
+        &temper_services::test_support::human_principal_for(&pool, admin).await,
         &RevokeCapabilityRequest {
             subject_table: "kb_cogmaps".into(),
             subject_id: cogmap,
@@ -213,7 +213,7 @@ async fn non_granter_is_forbidden(pool: PgPool) {
 
     let err = access_service::grant_capability(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, stranger).await,
+        &temper_services::test_support::human_principal_for(&pool, stranger).await,
         &write_grant(cogmap, grantee),
     )
     .await
@@ -252,7 +252,7 @@ async fn a_delegate_confers_only_what_it_holds(pool: PgPool) {
     // Admin gives `delegate` read+grant (delegated administration) but NOT write.
     access_service::grant_capability(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, admin).await,
+        &temper_services::test_support::human_principal_for(&pool, admin).await,
         &read_and_grant(delegate),
     )
     .await
@@ -261,7 +261,7 @@ async fn a_delegate_confers_only_what_it_holds(pool: PgPool) {
     // It may NOT confer write, which it does not hold.
     let err = access_service::grant_capability(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, delegate).await,
+        &temper_services::test_support::human_principal_for(&pool, delegate).await,
         &write_grant(cogmap, grantee),
     )
     .await
@@ -279,7 +279,7 @@ async fn a_delegate_confers_only_what_it_holds(pool: PgPool) {
     // of which it holds. (Guards against "fixing" attenuation by breaking delegation outright.)
     access_service::grant_capability(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, delegate).await,
+        &temper_services::test_support::human_principal_for(&pool, delegate).await,
         &read_and_grant(grantee),
     )
     .await
@@ -288,7 +288,7 @@ async fn a_delegate_confers_only_what_it_holds(pool: PgPool) {
     // The admin arm stays unrestricted, so bootstrap and repair remain operable.
     access_service::grant_capability(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, admin).await,
+        &temper_services::test_support::human_principal_for(&pool, admin).await,
         &write_grant(cogmap, grantee),
     )
     .await
@@ -307,7 +307,7 @@ async fn a_delegate_cannot_escalate_itself(pool: PgPool) {
 
     access_service::grant_capability(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, admin).await,
+        &temper_services::test_support::human_principal_for(&pool, admin).await,
         &GrantCapabilityRequest {
             subject_table: "kb_cogmaps".into(),
             subject_id: cogmap,
@@ -324,7 +324,7 @@ async fn a_delegate_cannot_escalate_itself(pool: PgPool) {
 
     let err = access_service::grant_capability(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, delegate).await,
+        &temper_services::test_support::human_principal_for(&pool, delegate).await,
         &write_grant(cogmap, delegate),
     )
     .await
@@ -378,7 +378,7 @@ async fn a_can_grant_holder_cannot_administer_the_l0_kernel(pool: PgPool) {
 
     let err = access_service::grant_capability(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, holder).await,
+        &temper_services::test_support::human_principal_for(&pool, holder).await,
         &write_grant(l0, grantee),
     )
     .await

@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/compile_fail/unclassified_profile_cannot_take_a_human_act.rs:9:42
+  |
+9 |     let _ = context_service::share(pool, authed, uuid::Uuid::nil(), req).await;
+  |             ----------------------       ^^^^^^ expected `&HumanPrincipal`, found `&AuthenticatedProfile`
+  |             |
+  |             arguments to this function are incorrect
+  |
+  = note: expected reference `&HumanPrincipal`
+             found reference `&AuthenticatedProfile`
+note: function defined here
+ --> src/services/context_service.rs
+  |
+  | pub async fn share(
+  |              ^^^^^

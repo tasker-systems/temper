@@ -2,7 +2,7 @@ use axum::extract::{Path, State};
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use temper_core::types::api::EventCursorResponse;
 use temper_core::types::element_trail::{ElementKind, EventTrail};
 use temper_core::types::ids::{ContextId, ProfileId};
@@ -26,7 +26,7 @@ use temper_services::state::AppState;
 )]
 pub async fn cursor(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(kb_context_id): Path<Uuid>,
 ) -> ApiResult<Json<EventCursorResponse>> {
     let latest_event_id = event_service::latest_event_id_for_context(
@@ -55,7 +55,7 @@ pub async fn cursor(
 )]
 pub async fn element_trail(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path((kind, id)): Path<(String, Uuid)>,
 ) -> ApiResult<Json<EventTrail>> {
     let element_kind = match kind.as_str() {

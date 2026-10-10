@@ -3,7 +3,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::{AnyPrincipal, AuthUser};
 use crate::middleware::surface::RequestSurface;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
@@ -52,7 +52,7 @@ use temper_workflow::types::resource::{ContentResponse, DeleteResponse};
 )]
 pub async fn list(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Query(params): Query<ResourceListParams>,
 ) -> ApiResult<Json<ResourceListResponse>> {
     // `sections` is parsed inside `list_select`, not here: MCP and any other in-process caller
@@ -87,7 +87,7 @@ pub async fn list(
 )]
 pub async fn get(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(resource_id): Path<Uuid>,
     Query(query): Query<ResourceShowQuery>,
 ) -> ApiResult<Json<ResourceView>> {
@@ -144,7 +144,7 @@ pub async fn get(
 )]
 pub async fn get_content(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<ContentResponse>> {
     temper_services::backend::substrate_read::get_content_select(
@@ -171,7 +171,7 @@ pub async fn get_content(
 )]
 pub async fn provenance(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<BlockProvenanceRow>>> {
     temper_services::backend::substrate_read::resource_block_provenance_select(
@@ -215,7 +215,7 @@ pub async fn provenance(
 )]
 pub async fn read_block(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path((resource_id, block_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<axum::response::Response> {
     let read = temper_services::backend::substrate_read::block_read_select(
@@ -260,7 +260,7 @@ pub async fn read_block(
 )]
 pub async fn annotate(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Json(req): Json<ResourceAnnotateRequest>,
@@ -303,7 +303,7 @@ pub async fn annotate(
 )]
 pub async fn create(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Json(req): Json<ResourceCreateRequest>,
 ) -> ApiResult<Json<ResourceView>> {
@@ -369,7 +369,7 @@ pub async fn create(
 )]
 pub async fn update(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Json(req): Json<ResourceUpdateRequest>,
@@ -471,7 +471,7 @@ pub async fn update(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Query(act_in): Query<temper_core::types::authorship::ActInput>,

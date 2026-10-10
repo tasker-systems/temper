@@ -41,7 +41,8 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
   reblock `All`, cognitive-map reconcile on an admin-only map, and profile edits — now answers a
   machine with `403` `FORBIDDEN_DETAIL` and the fixed sentence "this action is not available to a
   machine principal". The erasure doors answer a machine `403` where they answer a non-admin person
-  `404`. People see no change. The OpenAPI response descriptions name the refusal; shapes are
+  `404`. `POST /api/teams` answers a machine this `403` in place of the `400` the change above
+  introduced. People see no change. The OpenAPI response descriptions name the refusal; shapes are
   otherwise unchanged. Who observes: an approved machine credential calling any refused act over
   HTTP or through MCP.
 pr: self

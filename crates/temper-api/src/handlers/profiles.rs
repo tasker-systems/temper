@@ -4,7 +4,7 @@ use axum::Json;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::{Profile, ProfileAuthLink, ProfileUpdateRequest, ProfileWithEntitlements};
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::{AnyPrincipal, AuthUser};
 use temper_services::error::{ApiResult, ErrorBody};
 use temper_services::services::{access_service, profile_service};
 use temper_services::state::AppState;
@@ -23,7 +23,7 @@ use temper_services::state::AppState;
 )]
 pub async fn get(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
 ) -> ApiResult<Json<ProfileWithEntitlements>> {
     let profile =
         profile_service::get_by_id(&state.pool, ProfileId::from(auth.0.profile().id)).await?;

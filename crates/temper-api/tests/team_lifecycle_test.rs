@@ -67,7 +67,7 @@ async fn create_root_team_makes_creator_owner(pool: PgPool) {
 
     let team = team_service::create_team(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, creator).await,
+        &temper_services::test_support::human_principal_for(&pool, creator).await,
         &req("alpha", None, None),
     )
     .await
@@ -92,7 +92,7 @@ async fn create_child_by_non_member_is_forbidden(pool: PgPool) {
 
     let parent = team_service::create_team(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, owner).await,
+        &temper_services::test_support::human_principal_for(&pool, owner).await,
         &req("parent", None, None),
     )
     .await
@@ -100,7 +100,7 @@ async fn create_child_by_non_member_is_forbidden(pool: PgPool) {
 
     let denied = team_service::create_team(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, stranger).await,
+        &temper_services::test_support::human_principal_for(&pool, stranger).await,
         &req("child", Some("parent"), None),
     )
     .await;
@@ -120,7 +120,7 @@ async fn create_child_as_owner_links_parent(pool: PgPool) {
     let owner = common::fixtures::create_test_profile(&pool, "owner@example.com").await;
     let parent = team_service::create_team(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, owner).await,
+        &temper_services::test_support::human_principal_for(&pool, owner).await,
         &req("parent", None, None),
     )
     .await
@@ -128,7 +128,7 @@ async fn create_child_as_owner_links_parent(pool: PgPool) {
 
     let child = team_service::create_team(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, owner).await,
+        &temper_services::test_support::human_principal_for(&pool, owner).await,
         &req("child", Some("+parent"), None),
     )
     .await
@@ -151,7 +151,7 @@ async fn create_child_as_maintainer_ok(pool: PgPool) {
     let maintainer = common::fixtures::create_test_profile(&pool, "maintainer@example.com").await;
     let parent = team_service::create_team(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, owner).await,
+        &temper_services::test_support::human_principal_for(&pool, owner).await,
         &req("p2", None, None),
     )
     .await
@@ -172,7 +172,7 @@ async fn create_child_as_maintainer_ok(pool: PgPool) {
 
     let child = team_service::create_team(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, maintainer).await,
+        &temper_services::test_support::human_principal_for(&pool, maintainer).await,
         &req("c2", Some("p2"), None),
     )
     .await;
@@ -190,7 +190,7 @@ async fn auto_join_role_forbidden_for_non_admin(pool: PgPool) {
 
     let denied = team_service::create_team(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, creator).await,
+        &temper_services::test_support::human_principal_for(&pool, creator).await,
         &req("everyone", None, Some(TeamRole::Watcher)),
     )
     .await;
@@ -210,7 +210,7 @@ async fn auto_join_role_admin_creates_and_backfills(pool: PgPool) {
 
     let team = team_service::create_team(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, admin).await,
+        &temper_services::test_support::human_principal_for(&pool, admin).await,
         &req("everyone", None, Some(TeamRole::Watcher)),
     )
     .await
@@ -236,7 +236,7 @@ async fn add_member_by_non_owner_is_forbidden(pool: PgPool) {
     let newbie = common::fixtures::create_test_profile(&pool, "newbie@example.com").await;
     let team = team_service::create_team(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, owner).await,
+        &temper_services::test_support::human_principal_for(&pool, owner).await,
         &req("t3", None, None),
     )
     .await
@@ -264,7 +264,7 @@ async fn add_member_by_owner_succeeds(pool: PgPool) {
     let newbie = common::fixtures::create_test_profile(&pool, "newbie3@example.com").await;
     let team = team_service::create_team(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, owner).await,
+        &temper_services::test_support::human_principal_for(&pool, owner).await,
         &req("t4", None, None),
     )
     .await
@@ -297,7 +297,7 @@ async fn duplicate_slug_is_conflict(pool: PgPool) {
     let creator = common::fixtures::create_test_profile(&pool, "dup@example.com").await;
     team_service::create_team(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, creator).await,
+        &temper_services::test_support::human_principal_for(&pool, creator).await,
         &req("dup-slug", None, None),
     )
     .await
@@ -305,7 +305,7 @@ async fn duplicate_slug_is_conflict(pool: PgPool) {
 
     let again = team_service::create_team(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, creator).await,
+        &temper_services::test_support::human_principal_for(&pool, creator).await,
         &req("dup-slug", None, None),
     )
     .await;
@@ -322,14 +322,14 @@ async fn list_teams_returns_callers_memberships(pool: PgPool) {
     let creator = common::fixtures::create_test_profile(&pool, "lister@example.com").await;
     team_service::create_team(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, creator).await,
+        &temper_services::test_support::human_principal_for(&pool, creator).await,
         &req("listed-a", None, None),
     )
     .await
     .expect("a");
     team_service::create_team(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, creator).await,
+        &temper_services::test_support::human_principal_for(&pool, creator).await,
         &req("listed-b", None, None),
     )
     .await
@@ -378,7 +378,7 @@ async fn http_create_child_of_foreign_team_is_403(pool: PgPool) {
     let owner = common::fixtures::create_test_profile(&app.pool, "http-owner@example.com").await;
     team_service::create_team(
         &app.pool,
-        &temper_services::test_support::authenticated_profile_for(&app.pool, owner).await,
+        &temper_services::test_support::human_principal_for(&app.pool, owner).await,
         &req("http-parent", None, None),
     )
     .await
@@ -414,7 +414,7 @@ async fn http_remove_member_returns_residual_reach_body(pool: PgPool) {
     let owner = common::fixtures::create_test_profile(&app.pool, &owner_email).await;
     let team = team_service::create_team(
         &app.pool,
-        &temper_services::test_support::authenticated_profile_for(&app.pool, owner).await,
+        &temper_services::test_support::human_principal_for(&app.pool, owner).await,
         &req("http-offboard", None, None),
     )
     .await

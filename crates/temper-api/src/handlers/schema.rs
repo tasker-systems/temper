@@ -20,7 +20,7 @@
 use axum::extract::Path;
 use axum::Json;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_workflow::schema::{DocTypeDescription, DocTypeSummary, OpenMetaConvention};
 
@@ -36,7 +36,7 @@ use temper_workflow::schema::{DocTypeDescription, DocTypeSummary, OpenMetaConven
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
 )]
-pub async fn list_doc_types(_auth: AuthUser) -> ApiResult<Json<Vec<DocTypeSummary>>> {
+pub async fn list_doc_types(_auth: AnyPrincipal) -> ApiResult<Json<Vec<DocTypeSummary>>> {
     Ok(Json(temper_workflow::schema::list_doc_types()))
 }
 
@@ -62,7 +62,7 @@ pub async fn list_doc_types(_auth: AuthUser) -> ApiResult<Json<Vec<DocTypeSummar
     )
 )]
 pub async fn describe_doc_type(
-    _auth: AuthUser,
+    _auth: AnyPrincipal,
     Path(name): Path<String>,
 ) -> ApiResult<Json<DocTypeDescription>> {
     // Not `?` on the workflow error: `DocType::from_str` refuses an unrecognized name with
@@ -90,7 +90,7 @@ pub async fn describe_doc_type(
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
 )]
-pub async fn describe_open_meta(_auth: AuthUser) -> ApiResult<Json<OpenMetaConvention>> {
+pub async fn describe_open_meta(_auth: AnyPrincipal) -> ApiResult<Json<OpenMetaConvention>> {
     let convention = temper_workflow::schema::describe_open_meta()
         .map_err(|e| ApiError::Internal(format!("open_meta schema unavailable: {e}")))?;
     Ok(Json(convention))
