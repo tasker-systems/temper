@@ -566,12 +566,16 @@ async fn the_actor_keeps_their_own_history_without_the_capability(pool: PgPool) 
 
 /// The other half of the decision: reading SOMEONE ELSE's history is an audit, and audits are
 /// admin-only. Self-gating widens the actor's own view; it must not widen anyone else's.
+///
+/// The audited actor is `owner_profile`, a non-admin, so the admin's read can only be admitted by
+/// `ActorHistoryAuthority`'s admin arm: reading its own history would resolve the self arm and
+/// prove nothing about the audit. The same call, the same subject, two readers.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn reading_another_actors_history_is_admin_only(pool: PgPool) {
     let f = admin_fixture(&pool).await;
     seed_admin_event(
         &pool,
-        f.admin_emitter,
+        f.owner_emitter,
         AnchorTable::Contexts,
         f.context_id,
         f.team_id,
@@ -581,7 +585,7 @@ async fn reading_another_actors_history_is_admin_only(pool: PgPool) {
     let err = admin_ledger_service::list_by_actor(
         &pool,
         &temper_services::test_support::human_principal_for(&pool, f.outsider_profile.uuid()).await,
-        f.admin_profile,
+        f.owner_profile,
         50,
         0,
     )
@@ -593,12 +597,12 @@ async fn reading_another_actors_history_is_admin_only(pool: PgPool) {
     let audit = admin_ledger_service::list_by_actor(
         &pool,
         &temper_services::test_support::human_principal_for(&pool, f.admin_profile.uuid()).await,
-        f.admin_profile,
+        f.owner_profile,
         50,
         0,
     )
     .await
-    .expect("an admin audits");
+    .expect("an admin audits another actor");
     assert_eq!(audit.len(), 1);
 }
 

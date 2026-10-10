@@ -18,8 +18,6 @@ mod common;
 use rmcp::model::{CallToolResult, ErrorCode};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use temper_core::context_ref::ContextOwnerRef;
-use temper_core::types::team::TeamCreateRequest;
 use temper_mcp::service::TemperMcpService;
 use uuid::Uuid;
 
@@ -39,9 +37,8 @@ struct Machine {
     context: Uuid,
 }
 
-/// The harness principal (a person, made system admin) creates a team and a team-owned context,
-/// then registers the machine through `POST /api/machine-clients` with a `member` seat on that
-/// team. The machine is approved, so it clears the system gate and meets each door's own answer.
+/// The harness principal registers the machine with a `member` seat on a team that owns a context
+/// (`common::register_team_machine`); the machine is approved.
 async fn machine(pool: sqlx::PgPool) -> Machine {
     let app = common::setup_relay(pool).await;
     let svc = app.mcp_relay_service().await;
@@ -50,66 +47,16 @@ async fn machine(pool: sqlx::PgPool) -> Machine {
 
 /// [`machine`] on an app and relay service the caller built — the blob family needs a store.
 async fn machine_on(app: common::E2eTestApp, svc: TemperMcpService) -> Machine {
-    let admin: Uuid = sqlx::query_scalar("SELECT id FROM kb_profiles WHERE email = $1")
-        .bind("e2e@test.example.com")
-        .fetch_one(&app.pool)
-        .await
-        .expect("harness principal");
-    common::make_system_admin(&app.pool, admin).await;
-
-    let slug = format!("mcp-reach-{}", &Uuid::now_v7().simple().to_string()[24..]);
-    let team = app
-        .client
-        .teams()
-        .create(&TeamCreateRequest {
-            slug: slug.clone(),
-            name: None,
-            parent: None,
-            auto_join_role: None,
-        })
-        .await
-        .expect("team")
-        .id;
-    let context = *app
-        .client
-        .contexts()
-        .create("mcp-reach", Some(ContextOwnerRef::Team(slug)))
-        .await
-        .expect("team context")
-        .id;
-
-    let resp = app
-        .reqwest_client
-        .post(app.url("/api/machine-clients"))
-        .bearer_auth(&app.token)
-        .json(&json!({
-            "client_id": MACHINE_CLIENT,
-            "label": "mcp reach",
-            "owner_team_id": null,
-            "teams": [{ "team_id": team, "role": "member" }],
-            "grants": [],
-        }))
-        .send()
-        .await
-        .expect("provision request");
-    assert_eq!(resp.status(), 200, "the admin registers the machine");
-    let client: Value = resp.json().await.expect("machine client");
-    let profile: Uuid = client["profile_id"]
-        .as_str()
-        .expect("profile_id")
-        .parse()
-        .expect("uuid");
-    common::approve(&app.pool, profile).await;
-
-    let parts = app.relay_parts_for(&common::generate_machine_jwt(MACHINE_CLIENT));
+    let m = common::register_team_machine(&app, MACHINE_CLIENT, "member").await;
+    let parts = app.relay_parts_for(&m.token);
     Machine {
         app,
         svc,
         parts,
-        profile,
-        admin,
-        team,
-        context,
+        profile: m.profile,
+        admin: m.admin,
+        team: m.team,
+        context: m.context,
     }
 }
 

@@ -93,6 +93,30 @@ impl E2eTestApp {
             .0
     }
 
+    /// The typed client presenting `token` instead of the harness principal's: the same config and
+    /// surface as [`Self::client`], so a second identity (a machine, a second person) drives the
+    /// production client methods.
+    pub fn client_for(&self, token: &str) -> temper_client::TemperClient {
+        let stored_auth = StoredAuth {
+            provider: Provider::Auth0 {
+                domain: "test".to_string(),
+            },
+            access_token: token.to_string().into(),
+            refresh_token: None,
+            expires_at: Utc::now() + Duration::hours(1),
+            profile_id: None,
+            device_id: Some("e2e-test-device".to_string()),
+        };
+        let store: std::sync::Arc<dyn temper_client::auth::TokenStore> =
+            std::sync::Arc::new(MemoryTokenStore::with_auth(stored_auth));
+        temper_client::config::build_client_from(
+            &self.config,
+            store,
+            temper_workflow::operations::Surface::CliCloud,
+        )
+        .expect("client for token")
+    }
+
     /// [`Self::relay_parts`] for an ARBITRARY minted token — the second identity of
     /// an owner/other test. Identity rides the bearer alone, so both identities can
     /// share the one MCP service.
@@ -1423,4 +1447,89 @@ pub async fn created_context_owner(pool: &PgPool, created: &serde_json::Value) -
         .fetch_one(pool)
         .await
         .expect("the created context's owner")
+}
+
+/// A machine registered through the real door with a seat on a team that owns a context.
+pub struct TeamMachine {
+    /// The machine's profile.
+    pub profile: uuid::Uuid,
+    /// The harness principal, a person made system admin to register the machine.
+    pub admin: uuid::Uuid,
+    /// The team the machine is seated on.
+    pub team: uuid::Uuid,
+    /// A context the team owns.
+    pub context: uuid::Uuid,
+    /// The machine's `client_credentials` bearer.
+    pub token: String,
+}
+
+/// The harness principal (a person, made system admin) creates a team and a team-owned context,
+/// then registers `client_id` through `POST /api/machine-clients` with a `role` seat on that team:
+/// agent profile, emitters and seat, as production provisions one. Machines are born `Denied`, so
+/// the machine is then approved and clears the system gate to meet each door's own answer.
+pub async fn register_team_machine(app: &E2eTestApp, client_id: &str, role: &str) -> TeamMachine {
+    let admin: uuid::Uuid = sqlx::query_scalar("SELECT id FROM kb_profiles WHERE email = $1")
+        .bind("e2e@test.example.com")
+        .fetch_one(&app.pool)
+        .await
+        .expect("harness principal");
+    make_system_admin(&app.pool, admin).await;
+
+    let team_slug = format!(
+        "{client_id}-{}",
+        &uuid::Uuid::now_v7().simple().to_string()[24..]
+    );
+    let team = app
+        .client
+        .teams()
+        .create(&temper_core::types::team::TeamCreateRequest {
+            slug: team_slug.clone(),
+            name: None,
+            parent: None,
+            auto_join_role: None,
+        })
+        .await
+        .expect("team")
+        .id;
+    let context = *app
+        .client
+        .contexts()
+        .create(
+            client_id,
+            Some(temper_core::context_ref::ContextOwnerRef::Team(team_slug)),
+        )
+        .await
+        .expect("team context")
+        .id;
+
+    let resp = app
+        .reqwest_client
+        .post(app.url("/api/machine-clients"))
+        .bearer_auth(&app.token)
+        .json(&serde_json::json!({
+            "client_id": client_id,
+            "label": client_id,
+            "owner_team_id": null,
+            "teams": [{ "team_id": team, "role": role }],
+            "grants": [],
+        }))
+        .send()
+        .await
+        .expect("provision request");
+    assert_eq!(resp.status(), 200, "the admin registers the machine");
+    let client: serde_json::Value = resp.json().await.expect("machine client");
+    let profile: uuid::Uuid = client["profile_id"]
+        .as_str()
+        .expect("profile_id")
+        .parse()
+        .expect("uuid");
+    approve(&app.pool, profile).await;
+
+    TeamMachine {
+        profile,
+        admin,
+        team,
+        context,
+        token: generate_machine_jwt(client_id),
+    }
 }

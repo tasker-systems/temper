@@ -527,6 +527,53 @@ async fn callback_with_an_unknown_identity_creates_no_profile(pool: PgPool) {
     );
 }
 
+/// **A machine never links a Slack account.** Linking vaults a credential grant, a person's act. A
+/// login whose profile carries a machine-client row classifies as a machine — even on a person's
+/// claims — and the callback refuses it before the link transaction opens: the same single page as
+/// every other refusal, and no directory row.
+///
+/// The profile is provisioned through the real login path, exactly as the linking tests' are, so
+/// the client row is the ONLY difference from a callback that links: `relinking_the_same_principal_
+/// is_idempotent` is the same flow without it, answering "Linked as".
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_callback_whose_login_is_a_machine_is_refused_before_any_link(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+
+    let sub = "idp-sub-machine-profile";
+    let email = "machine-profile-71e0d4@example.invalid";
+    provision_profile(&app, sub, email).await;
+    let profile = profile_id_for_sub(&pool, sub).await;
+    sqlx::query(
+        "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
+         VALUES ('slack-link-machine', 'test', $1, $1)",
+    )
+    .bind(profile)
+    .execute(&pool)
+    .await
+    .expect("register the profile as a machine client");
+    stub_token_endpoint(&app, sign_idp_access_token(&app.issuer(), sub, email)).await;
+
+    let state_nonce = mint_state_nonce(&app).await;
+    let body = app
+        .http
+        .get(app.callback_url(&state_nonce))
+        .send()
+        .await
+        .expect("GET callback")
+        .text()
+        .await
+        .expect("callback body");
+    assert!(
+        body.contains("No temper account is linked"),
+        "a machine login meets the single refusal: {body}"
+    );
+    assert_eq!(
+        count_slack_links(&pool).await,
+        0,
+        "a machine login writes no directory row"
+    );
+}
+
 /// **D6, the single-use invariant, end to end.**
 ///
 /// The intent burn is an atomic conditional UPDATE, so the second callback with the SAME URL
