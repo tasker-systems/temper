@@ -186,6 +186,18 @@ from temper.generated.models.facet_ack import FacetAck
 from temper.generated.models.facet_predicate import FacetPredicate
 from temper.generated.models.facet_retract_ack import FacetRetractAck
 from temper.generated.models.facet_set_request import FacetSetRequest
+from temper.generated.models.field_scrub_clearing_event import FieldScrubClearingEvent
+from temper.generated.models.field_scrub_execute_response import FieldScrubExecuteResponse
+from temper.generated.models.field_scrub_execute_response_one_of import FieldScrubExecuteResponseOneOf
+from temper.generated.models.field_scrub_execute_response_one_of1 import FieldScrubExecuteResponseOneOf1
+from temper.generated.models.field_scrub_families import FieldScrubFamilies
+from temper.generated.models.field_scrub_families_request import FieldScrubFamiliesRequest
+from temper.generated.models.field_scrub_family import FieldScrubFamily
+from temper.generated.models.field_scrub_held_paths import FieldScrubHeldPaths
+from temper.generated.models.field_scrub_plan import FieldScrubPlan
+from temper.generated.models.field_scrub_refusal_reason import FieldScrubRefusalReason
+from temper.generated.models.field_scrub_request_body import FieldScrubRequestBody
+from temper.generated.models.field_scrub_survey import FieldScrubSurvey
 from temper.generated.models.finalize_payload import FinalizePayload
 from temper.generated.models.fingerprint_match import FingerprintMatch
 from temper.generated.models.fold_relationship_request import FoldRelationshipRequest
@@ -369,6 +381,8 @@ from temper.generated.models.reweight_relationship_request import ReweightRelati
 from temper.generated.models.rotate_secret_request import RotateSecretRequest
 from temper.generated.models.score_kind import ScoreKind
 from temper.generated.models.scoring import Scoring
+from temper.generated.models.scrub_field_kind import ScrubFieldKind
+from temper.generated.models.scrubbed_field import ScrubbedField
 from temper.generated.models.search_params import SearchParams
 from temper.generated.models.search_reason import SearchReason
 from temper.generated.models.search_response import SearchResponse

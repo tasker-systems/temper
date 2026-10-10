@@ -41,7 +41,7 @@ Consequences worth internalizing before you act:
 | `admin slack` | Account links: `disconnect` (idempotent). |
 | `admin connection` | Provision and configure the authed link to a remote system (GitHub, Linear). See below — capability is derived, not flagged. |
 | `admin subscription` | Point a team/context/cogmap at a connection's events: `create`, `list`, `show`, `revoke`. The two-leg authz gate (authoring-team manage-capable **and** a reach grant on the connection) runs server-side. |
-| `admin erasure` | Permanent erasure: `resource`, `principal` (by pseudonym UUID), `block-history` (named blocks' revisions). Each **surveys by default** and acts only with `--execute`. See below. |
+| `admin erasure` | Permanent erasure: `resource`, `principal` (by pseudonym UUID), `block-history` (named blocks' revisions), `field` (a leaked title, origin URI or property, while the resource survives). Each **surveys by default** and acts only with `--execute`. See below. |
 | `admin reembed` / `admin reblock` | Corpus maintenance: re-embed stale vectors; run one bounded re-blocking step. Both are survey-first (`--dry-run`) and idempotent by design. |
 
 ## Resolving a person to an actionable id
@@ -93,7 +93,7 @@ resolvable.
 
 ## Erasure — the survey is the default
 
-`admin erasure resource|principal|block-history` are the only admin acts that cannot be undone,
+`admin erasure resource|principal|block-history|field` are the only admin acts that cannot be undone,
 so the command's default is the harmless half: without `--execute` it asks the survey door what
 the act **would** reach and leave, and records nothing. Survey, read it, then run the same command
 with `--execute`.
@@ -111,6 +111,16 @@ with `--execute`.
   survey reads `already_erased` with a non-empty `completion_fields`, and running `resource
   --execute` again completes it: one more record, naming only `redacted_fields`. With
   `completion_fields` empty, the act is refused `already_erased`.
+- `field <resource>` with no `--field` **lists** what can be scrubbed: the title, the origin URI
+  and each property family by its **handle** (an event id), with counts, dates, profile ids and
+  the sensitivity sweep's flags — never a key or a value. Pick the family by its handle; nobody
+  types the leaked text. Then survey with `--field title|origin_uri|property|properties` (and
+  `--family <handle>` for `property`).
+- **Keep is the default.** Without `--clear`, today's value stays and every earlier value of the
+  field is redacted; with nothing earlier, the act answers 400. **`--clear`** says today's value
+  is itself the leak: the act first replaces it (a placeholder title or origin URI, the type
+  `scrubbed` for `doc_type`, or an unset of the family) and then redacts every value the field
+  held. `properties` scrubs every family's earlier history and cannot be cleared.
 - A caller without system-admin standing is answered **404**, like the ledger.
 
 ## Maintenance

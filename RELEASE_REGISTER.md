@@ -32,6 +32,34 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 (`schemas/versions/<M.m>/`); the pin gate checks the record names a `spec-correction` row.
 
 ## Since v0.6.0 — unreleased
+- **Three new admin doors for the field scrub: `POST /api/admin/resources/field-scrub`, its read-only `/survey`, and `/families`; and `temper admin erasure field`**
+  The field scrub (field-grain scrub spec) redacts every prior value of a resource's title, origin
+  URI, one property family or every property family, from the ledger and the projection, while the
+  resource survives. Today's value is kept unless the request says `clear`, which first replaces it
+  (a placeholder title or origin URI, the type `scrubbed` for `doc_type`, or an unset of the family)
+  and then redacts every value the field held. A family is named by a handle, an event id, from the
+  new listing door; no request, answer, record or log line carries a key or a value. Three new
+  operation ids under the `Admin` tag (`admin_scrub_resource_field`,
+  `admin_survey_resource_field_scrub`, `admin_list_resource_field_families`), with new request,
+  survey, listing and execute schemas and a new refusal enum, `FieldScrubRefusalReason`
+  (`charter_resource`, `already_erased`, `sentinel_collision`, `projection_disagrees`). No existing
+  shape moves: `ResourceErasureRefusalReason`, which the erasure and block-history doors answer in,
+  is unchanged. The ledger gains the admin event `resource_scrubbed`; the existing
+  `resource_erasure_refused` payload schema gains the act value `field_scrub` and the two new
+  reasons, recorded beside that act only. A request that names a handle with a field that takes
+  none, `property` without one, `properties` with `clear`, a handle that is not a property family of
+  the resource, or (in keep mode) a field with nothing prior is a 400 that records nothing, checked
+  before any refusal is recorded. temperkb-client gains `list_resource_field_families`,
+  `survey_resource_field_scrub` and `scrub_resource_field`; the CLI gains `temper admin erasure field
+  <resource> [--field title|origin_uri|property|properties] [--family <uuid>] [--clear]
+  [--execute]`, which lists with no `--field`, surveys by default and acts only with `--execute`.
+  Who observes: system admins and SDK clients that call the new operations; a non-admin gets the
+  erasure doors' 404 with no ledger record. User-visible: operators only. Release relevance:
+  additive.
+pr: self
+classes: additive
+surfaces: http, clients, cli-stdout, schema
+status: signal-only
 - **An invitation redeems only for the person invited**
   `POST /api/invitations/accept` and `POST /api/invitations/decline` used to treat the token as
   bearer authority: whoever held it joined the team at the invited role (or declined it), whatever

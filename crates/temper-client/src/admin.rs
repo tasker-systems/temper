@@ -18,8 +18,9 @@ use temper_core::types::admin::{
 use temper_core::types::erasure::{
     BlockHistoryScrubExecuteResponse, BlockHistoryScrubRequestBody, BlockHistoryScrubSurvey,
     ErasureExecuteRequest, ErasureExecuteResponse, ErasureSurveyRequest, ErasureSurveyResponse,
-    ResourceErasureExecuteRequest, ResourceErasureExecuteResponse, ResourceErasureSurvey,
-    ResourceErasureSurveyRequest,
+    FieldScrubExecuteResponse, FieldScrubFamilies, FieldScrubFamiliesRequest,
+    FieldScrubRequestBody, FieldScrubSurvey, ResourceErasureExecuteRequest,
+    ResourceErasureExecuteResponse, ResourceErasureSurvey, ResourceErasureSurveyRequest,
 };
 use temper_core::types::reblock::{ReblockReceipt, ReblockRequest};
 use temper_core::types::team::TeamMemberRow;
@@ -391,7 +392,39 @@ impl<'a> AdminClient<'a> {
             .await
     }
 
-    /// Shared POST for the erasure family's six doors: a JSON body in, a JSON answer out.
+    /// List a resource's scrubbable fields (system admin only): the title, the origin URI and each
+    /// property family by its handle, with the sensitivity sweep's flags. No key text, no value.
+    /// Nothing is recorded or changed.
+    pub async fn list_resource_field_families(
+        &self,
+        body: &FieldScrubFamiliesRequest,
+    ) -> Result<FieldScrubFamilies> {
+        self.erasure_door(&ops::ADMIN_LIST_RESOURCE_FIELD_FAMILIES, body)
+            .await
+    }
+
+    /// Survey a field scrub (system admin only): the `plan` beside the family listing, or the
+    /// `refusal` the act would record. Nothing is recorded or changed.
+    pub async fn survey_resource_field_scrub(
+        &self,
+        body: &FieldScrubRequestBody,
+    ) -> Result<FieldScrubSurvey> {
+        self.erasure_door(&ops::ADMIN_SURVEY_RESOURCE_FIELD_SCRUB, body)
+            .await
+    }
+
+    /// Scrub a resource field's history (system admin only), keeping today's value unless the body
+    /// says `clear`. A refusal is an answer, not an error: the response's `status` says which.
+    /// Never retried.
+    pub async fn scrub_resource_field(
+        &self,
+        body: &FieldScrubRequestBody,
+    ) -> Result<FieldScrubExecuteResponse> {
+        self.erasure_door(&ops::ADMIN_SCRUB_RESOURCE_FIELD, body)
+            .await
+    }
+
+    /// Shared POST for the erasure family's nine doors: a JSON body in, a JSON answer out.
     async fn erasure_door<B, T>(&self, op: &ops::Op, body: &B) -> Result<T>
     where
         B: serde::Serialize + ?Sized,

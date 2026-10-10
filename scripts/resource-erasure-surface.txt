@@ -269,6 +269,7 @@ resource_erased:/ledger_remainder/*/paths/*               | structural          
 resource_erasure_refused:/detail                          | structural               | fixed text
 block_history_scrubbed:/targets/*/target                  | structural               | fixed strings
 block_history_scrubbed:/targets/*/outcome                 | structural               | fixed strings and counts
+resource_scrubbed:/redacted_fields/*/paths/*              | structural               | paths, never values
 principal_erased:/targets/*/target                        | structural               | the principal act's record
 principal_erased:/targets/*/outcome                       | structural               | the principal act's record
 principal_erased:/redacted_hashes/*                       | structural               | hashes

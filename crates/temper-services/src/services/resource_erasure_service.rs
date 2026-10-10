@@ -52,7 +52,8 @@ use temper_core::types::ids::{BlobId, EdgeId, EntityId, ProfileId, PropertyId, R
 use temper_core::types::workflow_job::{AnchorJobPayload, DispatchType, Persona};
 use temper_substrate::blob_store::BlobStore;
 use temper_substrate::payloads::{
-    ErasureAct, ErasureTargetOutcome, RedactedEventFields, ResourceErasureRefusalReason,
+    ErasureAct, ErasureTargetOutcome, RecordedRefusalReason, RedactedEventFields,
+    ResourceErasureRefusalReason,
 };
 use temper_substrate::writes::{release_blob_bytes, resolve_emitter};
 use temper_workflow::operations::Surface;
@@ -602,15 +603,16 @@ pub(super) fn between<'a>(s: &'a str, prefix: &str, suffix: &str) -> Option<&'a 
 
 /// Record an operator-facing refusal: ONE `resource_erasure_refused` event, nothing else mutated.
 /// Attributed to the operator through the request's surface, correlated by the attempt's
-/// reference. Both acts record their refusals here.
+/// reference. The erasure and the block history scrub record their refusals here; the field
+/// scrub, whose doors answer in their own vocabulary, records through [`record_refusal`].
 ///
 /// THE `act` RULE: the erasure records `p_act = NULL` and NULL blocks, so its refusal payloads
 /// carry neither key and stay the shape every earlier erasure refusal has (an absent `act` reads
 /// as [`ErasureAct::Erasure`]). The block history scrub records `p_act = 'block_history_scrub'`
 /// and the blocks the operator named, each a block of the resource: the scrub's doors check
-/// membership before they record a refusal. An empty `blocks` is passed as NULL; the SQL
-/// (`resource_erasure_refuse`, migration 20261003000210) accepts blocks only beside the scrub's
-/// act.
+/// membership before they record a refusal. The field scrub records `p_act = 'field_scrub'` and no
+/// blocks. An empty `blocks` is passed as NULL; the SQL (`resource_erasure_refuse`, migrations
+/// 20261003000210 and 20261018100020) accepts blocks only beside the block scrub's act.
 pub(super) async fn refuse(
     pool: &PgPool,
     attempt: &Attempt,
@@ -619,6 +621,26 @@ pub(super) async fn refuse(
     reason: ResourceErasureRefusalReason,
     detail: Option<ResourceErasureRefusalDetail>,
 ) -> ApiResult<ResourceErasureRefusal> {
+    let event_id = record_refusal(pool, attempt, act, blocks, reason.into(), detail).await?;
+    Ok(ResourceErasureRefusal {
+        request_reference: attempt.request_reference,
+        event_id,
+        reason,
+        detail,
+    })
+}
+
+/// Append the refusal [`refuse`] describes, in the ledger's own vocabulary
+/// ([`RecordedRefusalReason`], which serializes every value both door vocabularies share with the
+/// same spelling), and return its event id.
+pub(super) async fn record_refusal(
+    pool: &PgPool,
+    attempt: &Attempt,
+    act: ErasureAct,
+    blocks: &[Uuid],
+    reason: RecordedRefusalReason,
+    detail: Option<ResourceErasureRefusalDetail>,
+) -> ApiResult<Uuid> {
     let reason_str = serde_json::to_value(reason)
         .expect("a refusal reason always serializes")
         .as_str()
@@ -627,6 +649,7 @@ pub(super) async fn refuse(
     let recorded_act: Option<&str> = match act {
         ErasureAct::Erasure => None,
         ErasureAct::BlockHistoryScrub => Some("block_history_scrub"),
+        ErasureAct::FieldScrub => Some("field_scrub"),
     };
     let recorded_blocks: Option<&[Uuid]> = (!blocks.is_empty()).then_some(blocks);
 
@@ -644,13 +667,7 @@ pub(super) async fn refuse(
     .fetch_one(pool)
     .await?
     .ok_or_else(|| ApiError::Internal("resource_erasure_refuse returned no row".to_string()))?;
-
-    Ok(ResourceErasureRefusal {
-        request_reference: attempt.request_reference,
-        event_id,
-        reason,
-        detail,
-    })
+    Ok(event_id)
 }
 
 /// The operator's strikes, in the operator's order, each labelled with its verdict. Built from

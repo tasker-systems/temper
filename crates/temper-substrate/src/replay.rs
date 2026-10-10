@@ -129,8 +129,11 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
     ),
     (
         "kb_event_field_redactions",
-        // Projected from `resource_erased.redacted_fields` (spec D3); every column is payload-carried.
-        "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.event_id, t.path), '[]'::jsonb) FROM kb_event_field_redactions t",
+        // Projected from the `redacted_fields` of both authorising events, `resource_erased`
+        // (erasure spec D3) and `resource_scrubbed` (field-grain scrub spec S6.1); every column is
+        // payload-carried. `authority` completes the order: an erasure of a scrubbed path records
+        // a second row for the same `(event_id, path)`.
+        "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.event_id, t.path, t.authority), '[]'::jsonb) FROM kb_event_field_redactions t",
     ),
     (
         "kb_cogmap_lenses",
@@ -333,6 +336,8 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::ResourceErased
             | EventKind::ResourceErasureRefused
             | EventKind::BlockHistoryScrubbed
+            // The field scrub's record carries paths and a family handle, never content.
+            | EventKind::ResourceScrubbed
             // A delivery disposition (S2 chunk C) carries reasoning and confidence, not content:
             // no blocks, no chunks, no sidecar. A received webhook (S2 chunk B) carries the
             // remote's verbatim body — foreign content temper did not author and does not chunk.
@@ -604,8 +609,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
         // guard. `set_config(.., true)` scopes the setting to this transaction, so it ends at the
         // commit below or at the rollback an early `?` return causes when the transaction drops,
         // and the pooled connection never carries it to another user. The multi-statement Rust
-        // projectors (`project_property_unset`, `project_property_retracted`) get their atomicity
-        // from the same transaction.
+        // projector (`project_property_retracted`) gets its atomicity from the same transaction.
         let mut tx = pool.begin().await?;
         sqlx::query_scalar!("SELECT set_config('temper.replaying', 'on', true)")
             .fetch_one(&mut *tx)
@@ -752,11 +756,11 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 crate::events::project_property_retracted(&mut tx, id, &payload).await?;
             }
             // property_unset (the key-grain delete verb): payload-only projector, no sidecar —
-            // the shared `project_property_unset`, fire and replay ONE implementation since this
-            // event has no `_project_*` SQL function. The payload carries (owner, key), so
-            // replay re-folds the SAME key's live set; the `NOT is_folded` floor makes a
-            // re-application a zero-row no-op, never a resurrection. The write guard, the fold and
-            // the FTS rebuild are separate statements; the event's walk transaction holds all three.
+            // the shared `project_property_unset`, which calls `_project_property_unset`, the one
+            // body the fire path also reaches. The payload carries (owner, key), so replay re-folds
+            // the SAME key's live set; the `NOT is_folded` floor makes a re-application a zero-row
+            // no-op, never a resurrection. The write guard, the fold and the FTS rebuild run inside
+            // that one function call.
             EventKind::PropertyUnset => {
                 crate::events::project_property_unset(&mut tx, id, &payload).await?;
             }
@@ -1053,6 +1057,44 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     "block_history_scrubbed event {id} names no subject_ids"
                 );
                 apply_block_history_scrub(&mut tx, id).await?;
+            }
+            // The field scrub (field-grain scrub spec S8; migration 20261018100020). The arm projects
+            // only its redaction rows, at this event's position, through the one projector the live
+            // act calls (`_project_resource_scrubbed_redactions`). It applies no body and defers
+            // nothing: the events it redacted replay through their ordinary projectors from the
+            // ledger as it now stands, which is what the act's projection rewrite wrote (S4 step
+            // 6), and the act's own clearing events are ordinary events too, so their order inside
+            // the act's transaction does not matter.
+            //
+            // Then it rebuilds the subject's search vector (migration 20261018100040, S8 amended),
+            // as the live act does last. Renaming a `tags` / `keywords` / `descriptor` family
+            // removes the rebuilds its events triggered live, so without this the walk could end
+            // on an older vector than the live one. At this position the walk holds the state the
+            // live act ended in, so both rebuilds compute the same vector.
+            EventKind::ResourceScrubbed => {
+                let subject_table = payload["subject_table"]
+                    .as_str()
+                    .context("resource_scrubbed payload missing subject_table")?;
+                anyhow::ensure!(
+                    subject_table == "kb_resources",
+                    "resource_scrubbed event {id} names subject_table {subject_table:?}, not \
+                     kb_resources"
+                );
+                let subject: Uuid = payload["subject_id"]
+                    .as_str()
+                    .context("resource_scrubbed payload missing subject_id")?
+                    .parse()
+                    .with_context(|| format!("resource_scrubbed event {id} subject_id"))?;
+                sqlx::query!(
+                    "SELECT _project_resource_scrubbed_redactions($1, $2)",
+                    id,
+                    payload
+                )
+                .fetch_one(&mut *tx)
+                .await?;
+                sqlx::query!("SELECT _rebuild_resource_search_vector($1)", subject)
+                    .fetch_one(&mut *tx)
+                    .await?;
             }
             // A received webhook (S2 chunk B) touches no _project_* cognition half: intake appends
             // the event and projects delivery rows in Rust, in the same transaction. Without this
