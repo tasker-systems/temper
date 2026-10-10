@@ -101,7 +101,7 @@ class AccessApi:
             '201': "JoinRequest",
             '400': "ErrorBody",
             '401': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
             '409': "ErrorBody",
             '429': "ErrorBody",
         }
@@ -176,7 +176,7 @@ class AccessApi:
             '201': "JoinRequest",
             '400': "ErrorBody",
             '401': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
             '409': "ErrorBody",
             '429': "ErrorBody",
         }
@@ -251,7 +251,7 @@ class AccessApi:
             '201': "JoinRequest",
             '400': "ErrorBody",
             '401': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
             '409': "ErrorBody",
             '429': "ErrorBody",
         }
@@ -403,7 +403,7 @@ class AccessApi:
             '201': None,
             '400': "ErrorBody",
             '401': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -477,7 +477,7 @@ class AccessApi:
             '201': None,
             '400': "ErrorBody",
             '401': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -551,7 +551,7 @@ class AccessApi:
             '201': None,
             '400': "ErrorBody",
             '401': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -695,7 +695,7 @@ class AccessApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "JoinRequest",
             '401': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -763,7 +763,7 @@ class AccessApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "JoinRequest",
             '401': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -831,7 +831,7 @@ class AccessApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "JoinRequest",
             '401': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -959,7 +959,7 @@ class AccessApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "PublicSystemSettings",
             '401': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1027,7 +1027,7 @@ class AccessApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "PublicSystemSettings",
             '401': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1095,7 +1095,7 @@ class AccessApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "PublicSystemSettings",
             '401': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1223,7 +1223,7 @@ class AccessApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '401': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
             '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
@@ -1292,7 +1292,7 @@ class AccessApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '401': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
             '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
@@ -1361,7 +1361,7 @@ class AccessApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '401': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
             '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(

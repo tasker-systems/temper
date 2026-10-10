@@ -27,8 +27,11 @@ use crate::services::machine_authz::AuthorizedGrant;
 impl ScopedAuthority for GrantAuthority {
     type Subject = RefTarget;
 
-    async fn resolve(pool: &PgPool, caller: Principal<'_>, subject: RefTarget) -> ApiResult<Self> {
-        let principal = caller;
+    async fn resolve(
+        pool: &PgPool,
+        principal: Principal<'_>,
+        subject: RefTarget,
+    ) -> ApiResult<Self> {
         let caller = principal.profile_id();
         if principal.system_admin(pool).await?.is_some() {
             // The subject-liveness floor the delegated arm carries inside `can()` (migration

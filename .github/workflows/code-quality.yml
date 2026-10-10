@@ -125,6 +125,14 @@ jobs:
       - name: Check the committed skills/ projection is up to date (skills drift)
         run: bash .github/scripts/check-skills-drift.sh
 
+      # The machine-principal invariants hold because temper-services' test-only doors
+      # (`Principal::Bare`, `DbBackend::new`, `test_support`) are compiled out of shipped builds by
+      # Cargo features. This resolves each shipped package's normal dependency graph and fails if a
+      # workspace crate in it carries a test feature. Its harness is in quality-gate.yml's
+      # guard-tests; it runs here because `cargo tree` needs the toolchain.
+      - name: Check no test feature reaches a shipped build (production features)
+        run: bash .github/scripts/check-production-features.sh
+
       # And once more for `docs/reference/cli`, which is a projection of the BUILT binary's
       # `--help` tree. It runs here rather than in quality-gate.yml because the emit needs a compiled
       # temper; its harness is in guard-tests, stubbed, so the harness itself needs no toolchain.

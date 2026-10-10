@@ -400,9 +400,13 @@ mod tests {
     /// tests only need the rows to exist beforehand, so they arrange each on its own connection.
     async fn seed_link(pool: &PgPool, profile_id: Uuid, principal: &str) {
         let mut conn = pool.acquire().await.expect("acquire");
-        crate::services::slack_link_service::link_slack_principal(&mut conn, profile_id, principal)
-            .await
-            .expect("link");
+        crate::services::slack_link_service::link_slack_principal(
+            &mut conn,
+            &crate::test_support::human_principal_for(pool, profile_id).await,
+            principal,
+        )
+        .await
+        .expect("link");
     }
 
     /// Seal a grant for `principal` under `key`. The access token and TTL are fixed because no
@@ -415,12 +419,13 @@ mod tests {
         principal: &str,
         refresh_token: &str,
     ) {
+        let owner = crate::test_support::human_principal_for(pool, profile_id).await;
         let mut conn = pool.acquire().await.expect("acquire");
         crate::services::slack_grant_vault_service::store_grant(
             &mut conn,
             key,
             crate::services::slack_grant_vault_service::NewGrant {
-                profile_id,
+                owner: &owner,
                 slack_principal_id: principal,
                 refresh_token,
                 access_token: "at",

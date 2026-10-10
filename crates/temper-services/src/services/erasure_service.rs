@@ -643,8 +643,9 @@ mod tests {
     /// Bind a Slack principal through the REAL write helpers, so the act's deletions hit the
     /// rows the link flow actually produces.
     async fn seed_slack(pool: &PgPool, subject: Uuid, principal: &str) {
+        let owner = crate::test_support::human_principal_for(pool, subject).await;
         let mut conn = pool.acquire().await.expect("acquire");
-        slack_link_service::link_slack_principal(&mut conn, subject, principal)
+        slack_link_service::link_slack_principal(&mut conn, &owner, principal)
             .await
             .expect("link");
         let key = VaultKey::from_base64(&STANDARD.encode([3u8; 32])).expect("key");
@@ -652,7 +653,7 @@ mod tests {
             &mut conn,
             &key,
             slack_grant_vault_service::NewGrant {
-                profile_id: subject,
+                owner: &owner,
                 slack_principal_id: principal,
                 refresh_token: "rt",
                 access_token: "at",

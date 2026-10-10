@@ -50,10 +50,9 @@ async fn assert_machine_refusal(resp: reqwest::Response, door: &str) {
         temper_core::error::FORBIDDEN_DETAIL_CODE,
         "{door}: {body}"
     );
-    assert!(
-        body["error"]["message"]
-            .as_str()
-            .is_some_and(|m| m.contains(MACHINE_PRINCIPAL_REFUSAL)),
+    assert_eq!(
+        body["error"]["message"].as_str(),
+        Some(MACHINE_PRINCIPAL_REFUSAL),
         "{door}: {body}"
     );
 }
@@ -89,8 +88,9 @@ async fn a_person_reaches_both_profile_methods(pool: PgPool) {
     assert_eq!(body["display_name"], "renamed");
 }
 
-/// A machine keeps the profile read and is refused the profile write — at the tier, since the two
-/// methods of one path now sit behind different stacks.
+/// A machine keeps the profile read and is refused the profile write: the two methods of one path
+/// sit behind different stacks, and the write's refuses a machine. (The write's `AuthUser` refuses
+/// one too; `.github/scripts/audit-route-auth.sh` pins the tier's own refusal.)
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_machine_reads_its_profile_and_is_refused_the_write(pool: PgPool) {
     let machine = seed_machine(&pool).await;

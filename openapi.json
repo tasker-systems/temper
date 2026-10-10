@@ -1472,7 +1472,14 @@
             }
           },
           "403": {
-            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "409": {
             "description": "A request is already pending, or access is already granted",
@@ -1554,7 +1561,14 @@
             }
           },
           "403": {
-            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1585,7 +1599,14 @@
             }
           },
           "403": {
-            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "404": {
             "description": "No pending join request to withdraw",
@@ -1664,7 +1685,14 @@
             }
           },
           "403": {
-            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1719,7 +1747,14 @@
             }
           },
           "403": {
-            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2992,7 +3027,14 @@
             }
           },
           "403": {
-            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9451,7 +9493,14 @@
             }
           },
           "403": {
-            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9509,7 +9558,14 @@
             }
           },
           "403": {
-            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [

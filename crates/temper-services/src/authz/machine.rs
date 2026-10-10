@@ -22,8 +22,11 @@ impl ScopedAuthority for MachineAuthority {
     /// module doc — not an "unknown" to be skipped over.
     type Subject = Option<Uuid>;
 
-    async fn resolve(pool: &PgPool, caller: Principal<'_>, team: Option<Uuid>) -> ApiResult<Self> {
-        let principal = caller;
+    async fn resolve(
+        pool: &PgPool,
+        principal: Principal<'_>,
+        team: Option<Uuid>,
+    ) -> ApiResult<Self> {
         let caller = principal.profile_id();
         if principal.system_admin(pool).await?.is_some() {
             return Ok(MachineAuthority::SystemAdmin);

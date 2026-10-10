@@ -37,7 +37,7 @@ use temper_services::state::AppState;
     request_body = CreateRequestBody,
     security(("bearer_auth" = [])),
     responses(
-        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 201, description = "Join request created", body = JoinRequest),
         (status = 400, description = "The request is not legal from the caller's standing", body = ErrorBody),
         (status = 409, description = "A request is already pending, or access is already granted", body = ErrorBody),
@@ -73,7 +73,7 @@ pub async fn create_request(
     tag = "Access",
     security(("bearer_auth" = [])),
     responses(
-        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 200, description = "Own join request, or null if none exists", body = Option<JoinRequest>),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
@@ -94,7 +94,7 @@ pub async fn get_own_request(
     tag = "Access",
     security(("bearer_auth" = [])),
     responses(
-        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 204, description = "Pending join request withdrawn"),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "No pending join request to withdraw", body = ErrorBody),
@@ -123,7 +123,7 @@ pub async fn withdraw_request(
     request_body = CreateReviewBody,
     security(("bearer_auth" = [])),
     responses(
-        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 201, description = "Review request recorded"),
         (status = 400, description = "Only a revoked principal may request review", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
@@ -152,7 +152,7 @@ pub async fn create_review_request(
     tag = "Access",
     security(("bearer_auth" = [])),
     responses(
-        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 200, description = "Public system settings", body = PublicSystemSettings),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )

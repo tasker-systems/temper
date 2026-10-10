@@ -40,8 +40,7 @@ pub(crate) enum TeamReadAuthority {
 impl ScopedAuthority for TeamReadAuthority {
     type Subject = Uuid;
 
-    async fn resolve(pool: &PgPool, caller: Principal<'_>, team_id: Uuid) -> ApiResult<Self> {
-        let principal = caller;
+    async fn resolve(pool: &PgPool, principal: Principal<'_>, team_id: Uuid) -> ApiResult<Self> {
         let caller = principal.profile_id();
         // Membership first, matching the order this gate has always probed in: the common reader
         // is a member, and asking `is_system_admin` first would add a query to every one of them.
@@ -96,8 +95,7 @@ impl ScopedAuthority for ActorHistoryAuthority {
     /// The actor whose history is being read.
     type Subject = ProfileId;
 
-    async fn resolve(pool: &PgPool, caller: Principal<'_>, actor: ProfileId) -> ApiResult<Self> {
-        let principal = caller;
+    async fn resolve(pool: &PgPool, principal: Principal<'_>, actor: ProfileId) -> ApiResult<Self> {
         let caller = principal.profile_id();
         // Self-read first, and it is free: no query at all. Probing `is_system_admin` ahead of it
         // would charge every principal a round-trip to read their own authorship.

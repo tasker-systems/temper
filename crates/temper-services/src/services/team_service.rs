@@ -187,10 +187,10 @@ pub async fn create_team(
 
     // auto_join_role defines an everyone-pool — admin-gated.
     if req.auto_join_role.is_some()
-        && !crate::authz::Principal::Human(authed)
+        && crate::authz::Principal::Human(authed)
             .system_admin(pool)
             .await?
-            .is_some()
+            .is_none()
     {
         return Err(ApiError::Forbidden);
     }

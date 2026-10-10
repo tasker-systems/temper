@@ -1,7 +1,7 @@
 //! Every act a machine is refused, sent by a machine, through the real app.
 //!
 //! The operations come from [`temper_api::routes::openapi_spec`], restricted to those that declare
-//! `security` (every authenticated group; the public health check declares none), minus
+//! `security` (every documented operation but the public health check, which the test asserts), minus
 //! [`ADMITTED`]: the machine-admitting handlers, the ones taking `AnyPrincipal`. A route added to
 //! an authenticated group is therefore in this table without an edit.
 //!
@@ -137,21 +137,36 @@ const ADMITTED: &[(&str, &str)] = &[
     ("PUT", "/api/resources/{id}/meta"),         // handlers::meta::update_meta
 ];
 
+/// The one documented operation that is public by design.
+const PUBLIC: (&str, &str) = ("GET", "/api/health");
+
 /// Every authenticated operation in the published contract, as `(METHOD, path template)`.
+///
+/// "Authenticated" is read from each operation's `security` declaration, so this asserts that every
+/// documented operation but [`PUBLIC`] declares one: an authenticated handler that omitted it would
+/// otherwise drop out of the table silently.
 fn authenticated_operations() -> BTreeSet<(String, String)> {
     let spec = serde_json::to_value(temper_api::routes::openapi_spec()).expect("spec serializes");
     let mut out = BTreeSet::new();
+    let mut undeclared = Vec::new();
     for (path, item) in spec["paths"].as_object().expect("paths") {
         for (method, op) in item.as_object().expect("path item") {
             if !matches!(method.as_str(), "get" | "post" | "put" | "patch" | "delete") {
                 continue;
             }
+            let key = (method.to_uppercase(), path.clone());
             let secured = op["security"].as_array().is_some_and(|s| !s.is_empty());
             if secured {
-                out.insert((method.to_uppercase(), path.clone()));
+                out.insert(key);
+            } else if (key.0.as_str(), key.1.as_str()) != PUBLIC {
+                undeclared.push(format!("{} {}", key.0, key.1));
             }
         }
     }
+    assert!(
+        undeclared.is_empty(),
+        "documented operations declaring no `security`: {undeclared:?}"
+    );
     out
 }
 

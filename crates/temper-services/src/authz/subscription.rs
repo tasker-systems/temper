@@ -50,10 +50,9 @@ impl ScopedAuthority for SubscriptionAuthority {
 
     async fn resolve(
         pool: &PgPool,
-        caller: Principal<'_>,
+        principal: Principal<'_>,
         authoring_team: Uuid,
     ) -> ApiResult<Self> {
-        let principal = caller;
         let caller = principal.profile_id();
         // Role first, matching `TeamReadAuthority`'s ordering and for the same reason: the common
         // caller here is a team manager, and probing `is_system_admin` first would add a query to

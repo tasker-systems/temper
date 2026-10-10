@@ -532,12 +532,37 @@ async fn callback_with_an_unknown_identity_creates_no_profile(pool: PgPool) {
 /// claims — and the callback refuses it before the link transaction opens: the same single page as
 /// every other refusal, and no directory row.
 ///
-/// The profile is provisioned through the real login path, exactly as the linking tests' are, so
-/// the client row is the ONLY difference from a callback that links: `relinking_the_same_principal_
-/// is_idempotent` is the same flow without it, answering "Linked as".
+/// The refusal page is one sentence for every cause, so the test carries its own control: two
+/// profiles provisioned through the real login path, identical but for the client row. The one
+/// without it links; the one with it is refused.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_callback_whose_login_is_a_machine_is_refused_before_any_link(pool: PgPool) {
     let app = setup_slack_app(&pool).await;
+
+    // Mint the control's state before linking it: a linked principal is answered `linked` and
+    // gets no fresh intent.
+    let control_sub = "idp-sub-person-profile";
+    let control_email = "person-profile-0c3a51@example.invalid";
+    provision_profile(&app, control_sub, control_email).await;
+    stub_token_endpoint(
+        &app,
+        sign_idp_access_token(&app.issuer(), control_sub, control_email),
+    )
+    .await;
+    let body = app
+        .http
+        .get(app.callback_url(&mint_state_nonce(&app).await))
+        .send()
+        .await
+        .expect("GET callback")
+        .text()
+        .await
+        .expect("callback body");
+    assert!(
+        body.contains("Linked as"),
+        "the control login links: {body}"
+    );
+    let linked = count_slack_links(&pool).await;
 
     let sub = "idp-sub-machine-profile";
     let email = "machine-profile-71e0d4@example.invalid";
@@ -551,12 +576,14 @@ async fn a_callback_whose_login_is_a_machine_is_refused_before_any_link(pool: Pg
     .execute(&pool)
     .await
     .expect("register the profile as a machine client");
+    // The first-registered `/oauth/token` stub wins forever, so it is replaced, not shadowed (see
+    // `a_callback_for_a_principal_linked_to_another_profile_is_refused`).
+    app.idp.reset().await;
     stub_token_endpoint(&app, sign_idp_access_token(&app.issuer(), sub, email)).await;
 
-    let state_nonce = mint_state_nonce(&app).await;
     let body = app
         .http
-        .get(app.callback_url(&state_nonce))
+        .get(app.callback_url(&mint_state_nonce_for(&app, "slack:T0MACHINE00:U0MACHINE00").await))
         .send()
         .await
         .expect("GET callback")
@@ -569,7 +596,7 @@ async fn a_callback_whose_login_is_a_machine_is_refused_before_any_link(pool: Pg
     );
     assert_eq!(
         count_slack_links(&pool).await,
-        0,
+        linked,
         "a machine login writes no directory row"
     );
 }

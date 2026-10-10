@@ -57,7 +57,7 @@ fn entry_for(principal: String, outcome: DisconnectOutcome) -> SlackDisconnected
     tag = "Slack Link",
     security(("bearer_auth" = [])),
     responses(
-        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 200, description = "Disconnect completed (idempotent); `disconnected` lists every principal unbound", body = SlackDisconnectResponse),
         (status = 401, description = "Authentication required, or Slack account linking is not configured on this instance", body = temper_services::error::ErrorBody),
     )

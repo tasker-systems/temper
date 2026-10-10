@@ -61,8 +61,7 @@ impl ScopedAuthority for ContextAdminAuthority {
     /// shared to an enclosing team, explicit read-grant. A visibility-first ordering would render
     /// `404` to a system admin renaming a context they do not otherwise read — the exact actor the
     /// feature must admit.
-    async fn resolve(pool: &PgPool, caller: Principal<'_>, context_id: Uuid) -> ApiResult<Self> {
-        let principal = caller;
+    async fn resolve(pool: &PgPool, principal: Principal<'_>, context_id: Uuid) -> ApiResult<Self> {
         let caller = principal.profile_id();
         // 1. The object-side probe, unchanged and not re-derived: profile-owned ⇒ caller *is* the
         //    owner; team-owned ⇒ `can_manage` (Owner|Maintainer) by DIRECT membership. A missing

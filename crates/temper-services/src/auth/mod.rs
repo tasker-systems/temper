@@ -429,14 +429,6 @@ impl Caller {
     pub fn profile_id(&self) -> ProfileId {
         ProfileId::from(self.authenticated().profile.id)
     }
-
-    /// The human proof, or `None` for a machine.
-    pub fn as_human(&self) -> Option<&HumanPrincipal> {
-        match self {
-            Self::Human(h) => Some(h),
-            Self::Machine(_) => None,
-        }
-    }
 }
 
 /// **The one classification.** An authenticated profile ⇒ a [`Caller`], and the only constructor
@@ -607,13 +599,6 @@ pub const MACHINE_PRINCIPAL_REFUSAL: &str = "this action is not available to a m
 /// `FORBIDDEN_DETAIL_CODE` with [`MACHINE_PRINCIPAL_REFUSAL`].
 pub fn machine_principal_refused() -> ApiError {
     ApiError::ForbiddenDetail(MACHINE_PRINCIPAL_REFUSAL.to_string())
-}
-
-impl Caller {
-    /// The human proof, or the machine refusal — for a surface gating an act a machine may not take.
-    pub fn require_human(&self) -> ApiResult<&HumanPrincipal> {
-        self.as_human().ok_or_else(machine_principal_refused)
-    }
 }
 
 #[cfg(all(test, feature = "test-db"))]
@@ -1339,7 +1324,7 @@ mod tests {
         );
     }
 
-    // ── Caller classification (D1) ──────────────────────────────────────────────────────────
+    // ── Caller classification ───────────────────────────────────────────────────────────────
     //
     // One witness per arm of `classify_caller`. The claims-only and revoked-row cases are the two
     // that isolate a conjunct: the first proves machine claims decide on their own (no row is

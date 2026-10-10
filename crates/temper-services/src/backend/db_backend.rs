@@ -5572,7 +5572,7 @@ mod tests {
     }
 }
 
-/// The seam's two admin-only arms mint `SystemAdmin` from the classified caller (D2): a machine is
+/// The seam's two admin-only arms mint `SystemAdmin` from the classified caller: a machine is
 /// refused even when the database would call its profile an admin, and an admin person still passes.
 /// The machine here is `test_support::governed_machine_caller` — a boolean read would admit it, so
 /// each machine assertion fails if its arm stops deciding through the type.

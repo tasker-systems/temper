@@ -229,13 +229,12 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<CallbackOutc
     //
     // A principal binds ONCE. If it is already bound to a different profile the write is
     // refused rather than moved — see `link_slack_principal` and spec D4.
-    let outcome = slack_link_service::link_slack_principal(
-        &mut tx,
-        profile.profile().id,
-        &intent.slack_principal_id,
-    )
-    .await
-    .map_err(|_| "Something went wrong saving the link. Mention @temper again.".to_string())?;
+    let outcome =
+        slack_link_service::link_slack_principal(&mut tx, &profile, &intent.slack_principal_id)
+            .await
+            .map_err(|_| {
+                "Something went wrong saving the link. Mention @temper again.".to_string()
+            })?;
 
     if outcome == slack_link_service::SlackLinkOutcome::AlreadyLinkedToAnotherProfile {
         tracing::warn!(
@@ -302,7 +301,7 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<CallbackOutc
         &mut tx,
         &cfg.vault_key,
         slack_grant_vault_service::NewGrant {
-            profile_id: profile.profile().id,
+            owner: &profile,
             slack_principal_id: &intent.slack_principal_id,
             refresh_token,
             access_token: &tokens.access_token,
