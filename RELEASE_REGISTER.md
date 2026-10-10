@@ -32,6 +32,21 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 (`schemas/versions/<M.m>/`); the pin gate checks the record names a `spec-correction` row.
 
 ## Since v0.6.0 — unreleased
+- **Erasing a person now clears the heading text of the chunks it empties**
+  The principal erasure act emptied a governed chunk's prose and vector but left
+  `kb_chunks.header_path`, the chunk's markdown heading trail, so a heading naming the subject
+  survived the act. The act now nulls it, by the same hash and governed-home predicate as the prose.
+  A same-hash chunk in a home the subject does not govern keeps its own heading, as before. The
+  survey door, the execute door's response and the recorded `principal_erased` targets gain a
+  `kb_chunks.header_path` target, outcome `erased`, when the act will null one; it is omitted when
+  there is none. The migration also nulls the trail for every `principal_erased` event already in
+  the ledger, so replay agrees with live for erasures executed before it. Existing target shapes are
+  unchanged. Who observes: system admins reading a survey or an erasure record. Release relevance:
+  behavioral.
+pr: self
+classes: behavioral
+surfaces: http
+status: signal-only
 - **A machine principal never governs a team, and never holds a governance grant**
   A machine principal (a profile registered as a machine client, revoked or not) now holds every
   team at `member` or below, its own personal team included, and can never be a system admin. New
