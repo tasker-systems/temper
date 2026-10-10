@@ -34,7 +34,7 @@ class ErasureExecuteResponse(BaseModel):
     """ # noqa: E501
     already_erased: StrictBool
     blob_strikes: List[BlobStrikeView]
-    estate_stragglers: Optional[Annotated[int, Field(strict=True, ge=0)]] = Field(default=None, description="Live resources still homed in the estate after the act committed: created there while the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which erases them.")
+    estate_stragglers: Optional[Annotated[int, Field(strict=True, ge=0)]] = Field(default=None, description="Live resources and blobs still homed in the estate after the act committed: created there while the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which erases them. Absent when the count could not be read: unknown, never zero.")
     event_id: UUID
     redacted_hashes: List[StrictStr] = Field(description="The redacted set (D2): content hashes only.")
     resource_erasures: Optional[List[EstateResourceErasure]] = Field(default=None, description="The resource erasures the act ran over the estate, in the order it ran them.")
@@ -109,6 +109,11 @@ class ErasureExecuteResponse(BaseModel):
                 if _item_targets:
                     _items.append(_item_targets.to_dict())
             _dict['targets'] = _items
+        # set to None if estate_stragglers (nullable) is None
+        # and model_fields_set contains the field
+        if self.estate_stragglers is None and "estate_stragglers" in self.model_fields_set:
+            _dict['estate_stragglers'] = None
+
         return _dict
 
     @classmethod

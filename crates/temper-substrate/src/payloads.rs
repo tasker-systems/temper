@@ -1557,14 +1557,12 @@ pub struct PrincipalErased {
     pub targets: Vec<ErasureTargetOutcome>,
     /// The estate the act reached (20261021100000, person-erasure design D1): the subject's @me
     /// contexts and their personal team's contexts, in id order. The redaction reads it back from
-    /// here, so replay reaches the set live reached.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// here, so replay reaches the set live reached. Required, and written even when empty: the
+    /// redaction raises without it, and no `principal_erased` predates it (the migration guards).
     pub estate_contexts: Vec<Uuid>,
     /// The resource erasures the act ran over the estate, in the order it ran them (D4).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resource_erasures: Vec<EstateResourceErasureRef>,
     /// The estate's charters, emptied and held until map-grain erasure (D3).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub charters_held: Vec<Uuid>,
 }
 

@@ -578,12 +578,6 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
     // One that touches R then projects over what the live act had already erased, the walk
     // diverges (D14) rather than aborting on the write guard (see `temper.replaying` below), and
     // the byte-identity diff reports it.
-    //
-    // `principal_erased` joins the deferral (person-erasure design D7, 2026-10-10): since
-    // 20261021100000 the person act runs N resource erasures under its request reference and
-    // appends `principal_erased` last, so its span holds their events too. Every erasure in a
-    // span, person or resource, is collected at the span's last event and applied there in the
-    // live act's order (see [`apply_deferred`]), whatever order their ids sort in.
     let apply_after: HashMap<Uuid, Uuid> = sqlx::query!(
         r#"SELECT er.id,
                   (SELECT s.id FROM kb_events s
@@ -591,8 +585,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                       AND s.occurred_at = er.occurred_at
                     ORDER BY s.id DESC LIMIT 1) AS "apply_after!"
              FROM kb_events er JOIN kb_event_types et ON et.id = er.event_type_id
-            WHERE et.name IN ('resource_erased', 'principal_erased')
-              AND er.correlation_id IS NOT NULL"#
+            WHERE et.name = 'resource_erased' AND er.correlation_id IS NOT NULL"#
     )
     .fetch_all(pool)
     .await?
@@ -600,8 +593,8 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
     .filter(|r| r.apply_after != r.id)
     .map(|r| (r.id, r.apply_after))
     .collect();
-    // Deferred applications, keyed by the event after which they run.
-    let mut pending: HashMap<Uuid, Vec<Deferred>> = HashMap::new();
+    // Deferred applications, keyed by the event after which they run: (subject, erasure event).
+    let mut pending: HashMap<Uuid, Vec<(Uuid, Uuid)>> = HashMap::new();
     for r in events {
         let id: Uuid = r.get(0);
         let name: String = r.get(1);
@@ -949,10 +942,6 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // ONE redaction definition — the Beat 2 migration header's demand ("the replay
             // pre-pass (Beat 3) must call the same function, never a second body"); re-implementing
             // any of it here would be two definitions of erasure that drift.
-            // Since 20261021100000 "the event's position" is the END of the act's span, like
-            // `ResourceErased` below: the person act's resource erasures share its span and ran
-            // before its body live, so the body is deferred and applied after theirs
-            // (`apply_deferred`, person-erasure design D7).
             EventKind::PrincipalErased => {
                 let subject: Uuid = payload["subject_id"]
                     .as_str()
@@ -969,29 +958,17 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                             .context("redacted_hashes must carry hash strings")
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                // The resource erasures the act ran, in the order it ran them (20261021100000).
-                // Their bodies must apply before this one, as they did live (design D7).
-                let order: Vec<Uuid> = payload["resource_erasures"]
-                    .as_array()
-                    .context("principal_erased payload missing resource_erasures")?
-                    .iter()
-                    .map(|e| {
-                        e["event"]
-                            .as_str()
-                            .context("resource_erasures entry missing event")?
-                            .parse::<Uuid>()
-                            .context("resource_erasures event is not a uuid")
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                // Always deferred, to the span's last event or to this one when it is the last:
-                // the flush below the match then orders it after the span's resource erasures.
-                let after = apply_after.get(&id).copied().unwrap_or(id);
-                pending.entry(after).or_default().push(Deferred::Principal {
+                // Macro form, like the ContextRetired/Restored/ResourceReblocked arms: a fixed
+                // function call with bound parameters — the audit's `dynamic-table` reason does
+                // not cover it, so it converts and gains a `.sqlx` entry.
+                sqlx::query!(
+                    "SELECT _erasure_apply_redaction($1,$2,$3)",
                     subject,
-                    hashes,
-                    erasure: id,
-                    order,
-                });
+                    &hashes,
+                    id
+                )
+                .fetch_one(&mut *tx)
+                .await?;
             }
             // Admin-ledger events are NULL-anchored (the cognition firewall, spec 2026-07-16): they
             // ride kb_events but touch no _project_* cognition half, so the walk is a no-op. The
@@ -1051,13 +1028,10 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 )
                 .fetch_one(&mut *tx)
                 .await?;
-                // Deferred to the span's last event, or to this one when it is the last: either
-                // way the flush below the match applies it, in act order with the span's others.
-                let after = apply_after.get(&id).copied().unwrap_or(id);
-                pending
-                    .entry(after)
-                    .or_default()
-                    .push(Deferred::Resource { subject, erasure: id });
+                match apply_after.get(&id) {
+                    Some(after) => pending.entry(*after).or_default().push((subject, id)),
+                    None => apply_resource_erasure(&mut tx, subject, id).await?,
+                }
             }
             // The block history scrub (spec 2026-09-28, D11; migration 20261003000210). It applies
             // AT THIS EVENT'S POSITION, with no `apply_after` deferral: the erasure above waits for
@@ -1154,79 +1128,13 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .await?;
             }
         }
-        // The erasures deferred to this event (D14, see `apply_after`) apply now, after it.
-        if let Some(due) = pending.remove(&id) {
-            apply_deferred(&mut tx, due).await?;
+        // An erasure deferred to this event (D14, see `apply_after`) applies now, after it.
+        for (subject, erasure) in pending.remove(&id).unwrap_or_default() {
+            apply_resource_erasure(&mut tx, subject, erasure).await?;
         }
         tx.commit().await?;
     }
     restore_table(pool, "kb_team_cogmaps", &snap.team_cogmaps).await?;
-    Ok(())
-}
-
-/// An erasure whose body waits for the end of its act's span (D14; person-erasure design D7).
-enum Deferred {
-    /// A `resource_erased`: the subject resource and the erasure event.
-    Resource { subject: Uuid, erasure: Uuid },
-    /// A `principal_erased`: the subject profile, its `redacted_hashes`, the event, and the
-    /// `resource_erased` events its act ran, in the order it ran them.
-    Principal {
-        subject: Uuid,
-        hashes: Vec<String>,
-        erasure: Uuid,
-        order: Vec<Uuid>,
-    },
-}
-
-/// Apply one span's deferred erasures in the live act's order: the resource erasures a person act
-/// lists, in its `resource_erasures` order; then any other resource erasure, by event id (a
-/// standalone act's span holds one); then the person act's own body, which ran last live. Live and
-/// replay then apply the same bodies in the same order, so no argument that they commute is
-/// needed. One that does not: a charter's embeddings are nulled by the person body, and a resource
-/// erasure's step (7c) recomputes a live region's centroid from its members' current embeddings.
-async fn apply_deferred(conn: &mut sqlx::PgConnection, due: Vec<Deferred>) -> Result<()> {
-    let mut resources: Vec<(usize, Uuid, Uuid)> = Vec::new();
-    let mut principals: Vec<(Uuid, Vec<String>, Uuid)> = Vec::new();
-    let mut listed: HashMap<Uuid, usize> = HashMap::new();
-    for d in &due {
-        if let Deferred::Principal { order, .. } = d {
-            for (i, e) in order.iter().enumerate() {
-                listed.insert(*e, i);
-            }
-        }
-    }
-    for d in due {
-        match d {
-            Deferred::Resource { subject, erasure } => {
-                let rank = listed.get(&erasure).copied().unwrap_or(usize::MAX);
-                resources.push((rank, erasure, subject));
-            }
-            Deferred::Principal {
-                subject,
-                hashes,
-                erasure,
-                ..
-            } => principals.push((erasure, hashes, subject)),
-        }
-    }
-    resources.sort();
-    principals.sort_by_key(|p| p.0);
-    for (_, erasure, subject) in resources {
-        apply_resource_erasure(&mut *conn, subject, erasure).await?;
-    }
-    for (erasure, hashes, subject) in principals {
-        // Macro form, like the ContextRetired/Restored/ResourceReblocked arms: a fixed function
-        // call with bound parameters — the audit's `dynamic-table` reason does not cover it, so
-        // it converts and gains a `.sqlx` entry.
-        sqlx::query!(
-            "SELECT _erasure_apply_redaction($1,$2,$3)",
-            subject,
-            &hashes,
-            erasure
-        )
-        .fetch_one(&mut *conn)
-        .await?;
-    }
     Ok(())
 }
 

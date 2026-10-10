@@ -28,8 +28,15 @@
 --      member, and arms 12 and 13 reach every estate context.
 --   6. The principal_erased payload_schema gains the three optional keys.
 --
--- Bodies (2) and (5) are their latest definitions (20261020100000) except for the lines named above
--- and their comments.
+-- Bodies (2) and (5) are their latest definitions (20261020100000) except for the lines named above,
+-- their comments, and two narrowings in (2) that follow from the act erasing every non-charter estate
+-- resource itself: the artifact-content targets name charters' artifacts only, and the watermark
+-- counts are keyed by estate membership, as arm 12 is.
+--
+-- Replay is unchanged. Its PrincipalErased arm runs the redaction at the event's position, and the
+-- resource_erased arms run theirs at the end of the act's span (D14). The two commute: the
+-- redaction's hash arms reach only charters, which no write path homes in a context, and its other
+-- arms touch rows no resource erasure body reads.
 --
 -- Additive: one new function and CREATE OR REPLACE with every signature unchanged. A binary without
 -- this migration calls the same functions and reads the same keys it read before; the new keys in
@@ -622,6 +629,11 @@ DECLARE
     v_out      jsonb;
     v_erasures jsonb := '[]'::jsonb;
     v_refs     jsonb;
+    v_estate   uuid[];
+    v_rid      uuid;
+    v_erased   boolean;
+    v_homed    boolean;
+    v_raced    integer := 0;
 BEGIN
     -- The request reference is the correlation id of every event the act appends: the resource
     -- erasures' events, the strikes and the completion. Replay finds the act's span by it (D7).
@@ -645,20 +657,45 @@ BEGIN
     --    is passed: the strike loop below strikes every live blob homed in the estate. Each takes
     --    its own resource's locks as it reaches it, in id order, so two person acts cannot
     --    deadlock on them. A raise from any of them (a raced fold or remote source) aborts the
-    --    whole act; the service retries it. ──────────────────────────────────────────────────
+    --    whole act; the service retries it.
+    --
+    --    The plan was read before any of these locks, so each resource is decided again under its
+    --    own: the act queue, then the row, the order resource_erasure_execute itself takes them
+    --    (both are re-entrant in this transaction). A resource another act erased completely
+    --    since the plan, or one moved out of the estate since, is skipped and counted; the kind
+    --    recorded is the state found here, not the plan's prediction. ─────────────────────────
+    v_estate := ARRAY(SELECT jsonb_array_elements_text(v_plan->'estate_contexts')::uuid);
     FOR v_row IN
         SELECT r FROM jsonb_array_elements(v_plan->'resources') r
          WHERE r->>'disposition' IN ('erase', 'complete')
     LOOP
-        v_out := resource_erasure_execute((v_row->>'resource_id')::uuid, p_operator, p_emitter,
-                                          p_request_ref, '{}'::uuid[]);
+        v_rid := (v_row->>'resource_id')::uuid;
+        PERFORM pg_advisory_xact_lock(_resource_act_queue_key(v_rid));
+        SELECT r.erased_at IS NOT NULL,
+               EXISTS (SELECT 1 FROM kb_resource_homes h
+                        WHERE h.resource_id = r.id AND h.anchor_table = 'kb_contexts'
+                          AND h.anchor_id = ANY(v_estate))
+          INTO v_erased, v_homed
+          FROM kb_resources r WHERE r.id = v_rid
+           FOR UPDATE;
+        IF NOT coalesce(v_homed, false)
+           OR (v_erased AND resource_erasure_completion_fields(v_rid) = '[]'::jsonb) THEN
+            v_raced := v_raced + 1;
+            CONTINUE;
+        END IF;
+        v_out := resource_erasure_execute(v_rid, p_operator, p_emitter, p_request_ref, '{}'::uuid[]);
         -- Keyed `resource` and `event`, never `resource_id`: the completion payload carries no
         -- key a trail function joins on (the D2 shape), so no resource's trail ever reaches it.
         v_erasures := v_erasures || jsonb_build_array(jsonb_build_object(
-            'resource', v_row->>'resource_id',
+            'resource', v_rid,
             'event',    v_out->>'event_id',
-            'kind',     CASE v_row->>'disposition' WHEN 'erase' THEN 'erasure' ELSE 'completion' END));
+            'kind',     CASE WHEN v_erased THEN 'completion' ELSE 'erasure' END));
     END LOOP;
+    IF v_raced > 0 THEN
+        v_targets := v_targets || jsonb_build_array(jsonb_build_object(
+            'target',  'kb_resources',
+            'outcome', v_raced || ' estate resource(s) erased or moved by another act after the plan; skipped'));
+    END IF;
 
     -- ── The strike loop: the plan's would-strike rows, IN ORDER, through the wrapper —
     -- per-row blob_delete('blob_erased', …) events exactly as before (the pairing with the
@@ -983,7 +1020,12 @@ BEGIN
     --     slug-specific — the walk's context_renamed never touches is_active), so the
     --     verbatim restore carries the retired state and the diff stays byte-identical.
     --     Idempotent: replay re-runs this arm against already-retired input rows.
-    --     Every estate context is retired, the personal team's included (R1).
+    --     Every estate context is retired, the personal team's included (R1). A personal-team
+    --     context is NOT closed as firmly as an @me one: context_restore admits any owner or
+    --     maintainer of the owning team, and the act leaves the personal team's membership as
+    --     it found it, so a co-admin the subject added can restore it. What that re-exposes is
+    --     only a resource created there during the act (husks stay inactive). Refusing that
+    --     restore is the evented-retirement task's (R7).
     UPDATE kb_contexts g
        SET is_active = false
       WHERE g.is_active
@@ -994,11 +1036,12 @@ $$
 
 ;
 
--- Section 6. The principal_erased payload_schema, re-registered with the three new optional keys
--- (estate_contexts, resource_erasures, charters_held). None is required and the schema sets no
--- additionalProperties, so every payload valid before stays valid. The literal is the committed
--- fixture crates/temper-substrate/tests/fixtures/payloads/principal_erased.v1.schema.json, pasted
--- byte for byte; payload_schema.rs pins the two together.
+-- Section 6. The principal_erased payload_schema, re-registered with the three new keys
+-- (estate_contexts, resource_erasures, charters_held), required: the act always writes them and the
+-- redaction reads estate_contexts back. Section 0 guarantees no earlier payload exists to fail
+-- them. The literal is the committed fixture
+-- crates/temper-substrate/tests/fixtures/payloads/principal_erased.v1.schema.json, pasted byte for
+-- byte; payload_schema.rs pins the two together.
 UPDATE kb_event_types
    SET payload_schema = $JS$
 {
@@ -1027,7 +1070,7 @@ UPDATE kb_event_types
       }
     },
     "estate_contexts": {
-      "description": "The estate the act reached (20261021100000, person-erasure design D1): the subject's @me\ncontexts and their personal team's contexts, in id order. The redaction reads it back from\nhere, so replay reaches the set live reached.",
+      "description": "The estate the act reached (20261021100000, person-erasure design D1): the subject's @me\ncontexts and their personal team's contexts, in id order. The redaction reads it back from\nhere, so replay reaches the set live reached. Required, and written even when empty: the\nredaction raises without it, and no `principal_erased` predates it (the migration guards).",
       "type": "array",
       "items": {
         "type": "string",
@@ -1066,7 +1109,10 @@ UPDATE kb_event_types
   },
   "required": [
     "subject_table",
-    "subject_id"
+    "subject_id",
+    "estate_contexts",
+    "resource_erasures",
+    "charters_held"
   ],
   "$defs": {
     "AnchorTable": {
@@ -1144,8 +1190,11 @@ UPDATE kb_event_types
 $JS$::jsonb
  WHERE name = 'principal_erased';
 
+COMMENT ON FUNCTION _erasure_apply_redaction(uuid, text[], uuid) IS
+    'The person act''s identity redaction and estate closure (20261021100000). Reads the estate it reaches from its principal_erased event (estate_contexts: the subject''s @me and personal-team contexts) and raises without it. Every non-charter estate resource has already been erased by resource erasure in the same transaction, so the hash arms (chunk and block content, embeddings, header_path, search vectors, subject-kind artifact content) reach only a charter the act holds; kb_erased_content is first-admit refilled from the event''s hashes. It also tombstones the profile, scrubs the personal team''s slug and name, deletes the no-FK Slack stores, unclaims the auth-link identifiers, sentinels the entity names, nulls the formation watermark of every anchor whose live regions hold an estate member and of every estate context, and retires every estate context. Event-free and idempotent: the act calls it, and replay calls the same function at the event''s position.';
+
 SELECT declare_migration(
     20261021100000,
     'additive',
-    'One new function (_erasure_estate_contexts), the principal_erased payload_schema re-registered with three optional keys (none required; every payload valid before stays valid), and CREATE OR REPLACE of principal_erasure_survey_plan, principal_erasure_survey, principal_erasure_execute and _erasure_apply_redaction with signatures unchanged, plus a guard that raises if a principal_erased event already exists. The person act now runs resource_erasure_execute over every estate resource (the @me and personal-team contexts), and its event gains estate_contexts, resource_erasures and charters_held. A binary without this migration keeps working: no table, column, constraint or grant changes, and the functions are called as before; their results only gain keys.'
+    'One new function (_erasure_estate_contexts), the principal_erased payload_schema re-registered with three new required keys (Section 0 refuses a ledger holding any earlier principal_erased payload), a COMMENT, and CREATE OR REPLACE of principal_erasure_survey_plan, principal_erasure_survey, principal_erasure_execute and _erasure_apply_redaction with signatures unchanged, plus a guard that raises if a principal_erased event already exists. The person act now runs resource_erasure_execute over every estate resource (the @me and personal-team contexts), and its event gains estate_contexts, resource_erasures and charters_held. A binary without this migration keeps working: no table, column, constraint or grant changes, and the functions are called as before; their results only gain keys.'
 );

@@ -38,8 +38,9 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
   It now runs resource erasure on every resource homed in the subject's `@me` contexts and their
   personal team's contexts, so each becomes a husk with its ledger trail rewritten, then scrubs
   identity as before. `POST /api/admin/erasure`'s completion gains `resource_erasures` and
-  `estate_stragglers`; `POST /api/admin/erasure/survey` gains `estate` and `resources`; all are
-  new fields with defaults, and every existing field keeps its shape. `redacted_hashes` now holds
+  `estate_stragglers` (live resources and files still homed in the estate after commit; absent
+  when it could not be counted); `POST /api/admin/erasure/survey` gains `estate` and `resources`;
+  all are new fields with defaults, and every existing field keeps its shape. `redacted_hashes` now holds
   only the hashes the act still empties itself (struck blobs), and the per-content-table targets
   appear only for those. The `principal_erased` payload gains three optional keys. Who observes:
   system admins running or surveying a person erasure. Release relevance: behavioral, plus additive

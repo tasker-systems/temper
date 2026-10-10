@@ -18978,9 +18978,12 @@
                 }
               },
               "estate_stragglers": {
-                "type": "integer",
+                "type": [
+                  "integer",
+                  "null"
+                ],
                 "format": "int32",
-                "description": "Live resources still homed in the estate after the act committed: created there while\nthe act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which erases them.",
+                "description": "Live resources and blobs still homed in the estate after the act committed: created\nthere while the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which\nerases them. Absent when the count could not be read: unknown, never zero.",
                 "minimum": 0
               },
               "event_id": {

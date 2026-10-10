@@ -310,7 +310,6 @@ struct ErasedWorld {
     subject_artifact: Uuid,
     subject_artifact_hash: String,
     team_artifact: Uuid,
-    team_artifact_content: serde_json::Value,
 }
 
 async fn assert_redacted_shape(pool: &PgPool, w: &ErasedWorld) {
@@ -417,7 +416,6 @@ async fn assert_redacted_shape(pool: &PgPool, w: &ErasedWorld) {
         serde_json::json!({}),
         "another principal's kind namespace on an estate resource is emptied with it"
     );
-    let _ = &w.team_artifact_content;
 }
 
 fn diff_projections(before: &[(String, serde_json::Value)], after: &[(String, serde_json::Value)]) {
@@ -605,7 +603,6 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
         subject_artifact,
         subject_artifact_hash,
         team_artifact,
-        team_artifact_content,
     };
     assert_redacted_shape(&pool, &world).await;
 
@@ -748,7 +745,7 @@ async fn post_erasure_recommits_survive_replay(pool: sqlx::PgPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
-    let (resource, chunk_hash) = seed_resource(
+    let (_, chunk_hash) = seed_resource(
         &pool,
         subject,
         emitter,
@@ -757,12 +754,6 @@ async fn post_erasure_recommits_survive_replay(pool: sqlx::PgPool) {
         "the secret plan prose",
     )
     .await;
-    let block: Uuid =
-        sqlx::query_scalar("SELECT id FROM kb_content_blocks WHERE resource_id = $1 LIMIT 1")
-            .bind(resource)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
     let bytes = b"\x89PNG-secret-bytes".to_vec();
     let store = InMemoryBlobStore::default();
     let (blob, blob_hash) = seed_blob(&pool, &store, home, subject, emitter, &bytes).await;
@@ -807,7 +798,6 @@ async fn post_erasure_recommits_survive_replay(pool: sqlx::PgPool) {
     // (b) A text write: NEW prose → NEW hash. Since 20261021100000 the erased resource is a husk
     //     and refuses every write (the write floor), so the lawful post-erasure text is a NEW
     //     resource, written into the home after the act (the straggler shape D9 reports).
-    let _ = block;
     let new_prose = "a wholly different and lawful assertion";
     let (_, new_hash) =
         seed_resource(&pool, subject, emitter, home, "later notes", new_prose).await;

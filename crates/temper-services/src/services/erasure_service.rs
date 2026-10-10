@@ -68,8 +68,9 @@ pub struct ErasureCompletion {
     pub already_erased: bool,
     /// The resource erasures the act ran over the estate, in the order it ran them (D4).
     pub resource_erasures: Vec<EstateResourceErasure>,
-    /// Live resources still homed in the estate once the act committed (D9, ruled Q3).
-    pub estate_stragglers: u32,
+    /// Live resources and live blobs still homed in the estate once the act committed (D9, ruled
+    /// Q3). `None` when the count could not be read: unknown is never reported as zero.
+    pub estate_stragglers: Option<u32>,
 }
 
 /// The jsonb `principal_erasure_execute` returns, before mapping onto the typed outcome.
@@ -190,7 +191,15 @@ pub async fn execute_erasure(
         match result {
             Ok(raw) => break raw,
             Err(err) if is_retryable_act_error(&err) && retries < MAX_ACT_RETRIES => retries += 1,
-            Err(err) => return Err(err.into()),
+            // Scrubbed, as the resource door does: an exhausted retry on a redaction-row
+            // collision is a unique violation, which the generic mapping would render as a 409
+            // "already exists" that misdescribes it.
+            Err(err) => {
+                return Err(ApiError::internal_scrubbed(
+                    "principal erasure act failed",
+                    err,
+                ))
+            }
         }
     }
     .ok_or_else(|| ApiError::Internal("principal_erasure_execute returned no row".to_string()))?;
@@ -232,28 +241,34 @@ pub async fn execute_erasure(
     })
 }
 
-/// Live resources still homed in the estate contexts the act recorded, charters aside: a resource
-/// created in one after the act's plan read the estate and committed before the act retired the
-/// context (D9). Ruled Q3 (2026-10-10): reported, not locked against. Re-running the act erases
-/// them. A failed read is logged and reported as zero rather than failing an act that committed.
-async fn estate_stragglers(pool: &PgPool, estate: &[Uuid]) -> u32 {
+/// Live resources and live blobs still homed in the estate contexts the act recorded, charters
+/// aside: one created there after the act's plan read the estate and committed before the act
+/// retired the context (D9). Ruled Q3 (2026-10-10): reported, not locked against. Re-running the
+/// act erases them. A failed read is logged and answered `None`, never zero: the act has
+/// committed, so it must not fail, and an unknown count must not read as a clean estate.
+async fn estate_stragglers(pool: &PgPool, estate: &[Uuid]) -> Option<u32> {
     let count = sqlx::query_scalar!(
-        r#"SELECT count(*) AS "n!"
-             FROM kb_resource_homes h
-             JOIN kb_resources r ON r.id = h.resource_id
-            WHERE h.anchor_table = 'kb_contexts'
-              AND h.anchor_id = ANY($1)
-              AND r.erased_at IS NULL
-              AND NOT EXISTS (SELECT 1 FROM kb_cogmaps m WHERE m.telos_resource_id = r.id)"#,
+        r#"SELECT (SELECT count(*)
+                     FROM kb_resource_homes h
+                     JOIN kb_resources r ON r.id = h.resource_id
+                    WHERE h.anchor_table = 'kb_contexts'
+                      AND h.anchor_id = ANY($1)
+                      AND r.erased_at IS NULL
+                      AND NOT EXISTS (SELECT 1 FROM kb_cogmaps m WHERE m.telos_resource_id = r.id))
+                + (SELECT count(*)
+                     FROM kb_blobs b
+                    WHERE b.home_table = 'kb_contexts'
+                      AND b.home_id = ANY($1)
+                      AND b.content_type IS NOT NULL) AS "n!""#,
         estate,
     )
     .fetch_one(pool)
     .await;
     match count {
-        Ok(n) => u32::try_from(n).unwrap_or(u32::MAX),
+        Ok(n) => Some(u32::try_from(n).unwrap_or(u32::MAX)),
         Err(e) => {
-            tracing::warn!(error = %e, "failed to count the estate's remaining live resources after erasure; reported as 0");
-            0
+            tracing::warn!(error = %e, "failed to count the estate's remaining live resources and blobs after erasure; reported as unknown");
+            None
         }
     }
 }

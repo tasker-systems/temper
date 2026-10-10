@@ -578,6 +578,96 @@ async fn the_record_names_the_resource_erasures_in_order(pool: PgPool) {
     }
 }
 
+/// FAILS IF the act trusts its plan past the locks: a standalone resource erasure that commits
+/// while the person act waits on that resource leaves it a complete husk, and the person act must
+/// skip it and complete, not raise `already erased`. Found by the code review of 5282bfb71.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_resource_erased_while_the_act_waits_is_skipped_not_fatal(pool: PgPool) {
+    let p = person(&pool).await;
+    let x = resource(&pool, &p, p.me, "x", "x body", None).await;
+    let y = resource(&pool, &p, p.me, "y", "y body", None).await;
+    let admin = operator(&pool).await;
+    // A standalone resource act on x, left uncommitted: it holds x's queue and row locks.
+    let mut held = pool.begin().await.unwrap();
+    let _: serde_json::Value =
+        sqlx::query_scalar("SELECT resource_erasure_execute($1, $2, $3, $4, '{}'::uuid[])")
+            .bind(x.uuid())
+            .bind(p.profile)
+            .bind(p.emitter)
+            .bind(Uuid::now_v7())
+            .fetch_one(&mut *held)
+            .await
+            .unwrap();
+    let pool2 = pool.clone();
+    let subject = p.profile;
+    let act = tokio::spawn(async move {
+        execute_erasure(
+            &pool2,
+            &admin,
+            ProfileId::from(subject),
+            Uuid::now_v7(),
+            Surface::ApiHttp,
+        )
+        .await
+    });
+    // The person act plans x as `erase` and waits on x's lock; then the standalone act commits.
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    held.commit().await.unwrap();
+    let completion = act.await.unwrap().expect("the person act completes");
+
+    assert_eq!(
+        completion
+            .resource_erasures
+            .iter()
+            .map(|e| e.resource_id)
+            .collect::<Vec<_>>(),
+        vec![y.uuid()],
+        "only y is erased by the person act; x was erased by the act that held it"
+    );
+    assert!(
+        completion.targets.iter().any(|t| t.target == "kb_resources"
+            && t.outcome
+                == "1 estate resource(s) erased or moved by another act after the plan; skipped"),
+        "the raced resource is counted: {:?}",
+        completion.targets
+    );
+    assert_eq!(
+        completion.estate_stragglers,
+        Some(0),
+        "nothing live is left in the estate"
+    );
+}
+
+/// FAILS IF a subject with no personal team, and an estate holding no resource, breaks the act or
+/// its replay: the estate is the `@me` contexts alone, and the record says so.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_subject_with_no_personal_team_and_an_empty_estate_erases_and_replays(pool: PgPool) {
+    let p = person(&pool).await;
+    sqlx::query("UPDATE kb_teams SET personal_of = NULL WHERE personal_of = $1")
+        .bind(p.profile)
+        .execute(&pool)
+        .await
+        .expect("detach the personal team");
+    let completion = erase(&pool, p.profile).await;
+    assert!(completion.resource_erasures.is_empty());
+    let payload: serde_json::Value =
+        sqlx::query_scalar("SELECT payload FROM kb_events WHERE id = $1")
+            .bind(completion.event_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(payload["estate_contexts"], serde_json::json!([p.me.uuid()]));
+    let before = replay::dump_projections(&pool).await.unwrap();
+    let snap = replay::snapshot(&pool).await.unwrap();
+    reset_namespace(&pool).await;
+    replay::replay(&pool, &snap).await.unwrap();
+    let after = replay::dump_projections(&pool).await.unwrap();
+    for ((table_a, x), (table_b, y)) in before.iter().zip(after.iter()) {
+        assert_eq!(table_a, table_b);
+        assert_eq!(x, y, "projection table {table_a} diverged under replay");
+    }
+}
+
 /// Reset the schema in the current database to a clean, un-seeded baseline (the erasure replay
 /// suite's helper; the substrate's own lives in its test tree, which this crate cannot import).
 async fn reset_namespace(pool: &PgPool) {
@@ -602,8 +692,9 @@ async fn reset_namespace(pool: &PgPool) {
 
 /// W4. FAILS IF replay of the combined act diverges from live. The world holds what W1, W2, W5 and
 /// W6 hold together, so one span carries several resource erasures, a completion pass, their edge
-/// folds and the completion, whose ids sort in no fixed order within the millisecond: replay must
-/// apply every body at the span's end, in the act's order (design D7).
+/// folds and the completion. Replay applies each resource body at the span's end (D14) and the
+/// person body at its own event; the two commute (see the migration header), and this is what
+/// checks it.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn replay_of_the_estate_act_is_byte_identical(pool: PgPool) {
     let p = person(&pool).await;

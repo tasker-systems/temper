@@ -20,7 +20,7 @@ module Temper::Generated
 
     attr_accessor :blob_strikes
 
-    # Live resources still homed in the estate after the act committed: created there while the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which erases them.
+    # Live resources and blobs still homed in the estate after the act committed: created there while the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which erases them. Absent when the count could not be read: unknown, never zero.
     attr_accessor :estate_stragglers
 
     attr_accessor :event_id
@@ -99,6 +99,7 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'estate_stragglers',
       ])
     end
 
@@ -246,11 +247,7 @@ module Temper::Generated
     # Custom attribute writer method with validation
     # @param [Object] estate_stragglers Value to be assigned
     def estate_stragglers=(estate_stragglers)
-      if estate_stragglers.nil?
-        fail ArgumentError, 'estate_stragglers cannot be nil'
-      end
-
-      if estate_stragglers < 0
+      if !estate_stragglers.nil? && estate_stragglers < 0
         fail ArgumentError, 'invalid value for "estate_stragglers", must be greater than or equal to 0.'
       end
 

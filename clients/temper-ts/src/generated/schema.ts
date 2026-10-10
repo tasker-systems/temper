@@ -6146,10 +6146,11 @@ export interface components {
             blob_strikes: components["schemas"]["BlobStrikeView"][];
             /**
              * Format: int32
-             * @description Live resources still homed in the estate after the act committed: created there while
-             *     the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which erases them.
+             * @description Live resources and blobs still homed in the estate after the act committed: created
+             *     there while the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which
+             *     erases them. Absent when the count could not be read: unknown, never zero.
              */
-            estate_stragglers?: number;
+            estate_stragglers?: number | null;
             /** Format: uuid */
             event_id: string;
             /** @description The redacted set (D2): content hashes only. */
