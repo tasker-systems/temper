@@ -1065,6 +1065,12 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // ledger as it now stands, which is what the act's projection rewrite wrote (S4 step
             // 6), and the act's own clearing events are ordinary events too, so their order inside
             // the act's transaction does not matter.
+            //
+            // Then it rebuilds the subject's search vector (migration 20261018100040, S8 amended),
+            // as the live act does last. Renaming a `tags` / `keywords` / `descriptor` family
+            // removes the rebuilds its events triggered live, so without this the walk could end
+            // on an older vector than the live one. At this position the walk holds the state the
+            // live act ended in, so both rebuilds compute the same vector.
             EventKind::ResourceScrubbed => {
                 let subject_table = payload["subject_table"]
                     .as_str()
@@ -1074,6 +1080,11 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     "resource_scrubbed event {id} names subject_table {subject_table:?}, not \
                      kb_resources"
                 );
+                let subject: Uuid = payload["subject_id"]
+                    .as_str()
+                    .context("resource_scrubbed payload missing subject_id")?
+                    .parse()
+                    .with_context(|| format!("resource_scrubbed event {id} subject_id"))?;
                 sqlx::query!(
                     "SELECT _project_resource_scrubbed_redactions($1, $2)",
                     id,
@@ -1081,6 +1092,9 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 )
                 .fetch_one(&mut *tx)
                 .await?;
+                sqlx::query!("SELECT _rebuild_resource_search_vector($1)", subject)
+                    .fetch_one(&mut *tx)
+                    .await?;
             }
             // A received webhook (S2 chunk B) touches no _project_* cognition half: intake appends
             // the event and projects delivery rows in Rust, in the same transaction. Without this

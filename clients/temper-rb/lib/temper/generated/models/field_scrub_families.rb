@@ -16,7 +16,7 @@ require 'time'
 module Temper::Generated
   # The family listing door's answer.
   class FieldScrubFamilies < ApiModelBase
-    # The title, then the origin URI, then each property family by its handle.
+    # The title, then the origin URI, then each property family by its handle. Empty for an erased resource or a charter, which the act refuses before it reads a family.
     attr_accessor :families
 
     # A `kb_resources.id` value.

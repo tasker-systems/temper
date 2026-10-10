@@ -29,7 +29,7 @@ class FieldScrubFamilies(BaseModel):
     """
     The family listing door's answer.
     """ # noqa: E501
-    families: List[FieldScrubFamily] = Field(description="The title, then the origin URI, then each property family by its handle.")
+    families: List[FieldScrubFamily] = Field(description="The title, then the origin URI, then each property family by its handle. Empty for an erased resource or a charter, which the act refuses before it reads a family.")
     resource: UUID = Field(description="A `kb_resources.id` value.")
     __properties: ClassVar[List[str]] = ["families", "resource"]
 

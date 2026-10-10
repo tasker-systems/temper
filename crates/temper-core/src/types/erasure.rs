@@ -562,7 +562,8 @@ pub struct FieldScrubFamily {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct FieldScrubFamilies {
     pub resource: ResourceId,
-    /// The title, then the origin URI, then each property family by its handle.
+    /// The title, then the origin URI, then each property family by its handle. Empty for an erased
+    /// resource or a charter, which the act refuses before it reads a family.
     pub families: Vec<FieldScrubFamily>,
 }
 

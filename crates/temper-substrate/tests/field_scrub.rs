@@ -2346,3 +2346,476 @@ async fn replay_refuses_a_resource_scrubbed_naming_another_table(pool: PgPool) {
         "{chain}"
     );
 }
+
+// ── Review fixes (migration 20261018100040) ─────────────────────────────────────────────────────
+//
+// Each witness below fails against 20261018100030's functions, as its FAILS IF says. The bite for
+// the verifier witnesses: drop the exact-sentinel check from `kb_events_redaction_in_trail` (its
+// second EXISTS in the scrub loop) and the split, merge and facet forgeries are admitted.
+
+/// A `property_asserted` of `key` on `resource` with the explicit id `id`, projected now: an event
+/// whose id was minted before events that committed ahead of it (an inversion across
+/// transactions, erasure D14). Appended as the write path appends it, with the id chosen.
+async fn assert_at(
+    pool: &PgPool,
+    emitter: EntityId,
+    resource: ResourceId,
+    id: Uuid,
+    key: &str,
+    value: serde_json::Value,
+) {
+    let payload = serde_json::json!({
+        "property_id": Uuid::now_v7(),
+        "owner": {"table": "kb_resources", "id": resource.uuid()},
+        "property_key": key,
+        "value": value,
+        "weight": 1.0,
+    });
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO kb_events (id, event_type_id, emitter_entity_id, producing_anchor_table, \
+                                producing_anchor_id, payload, category) \
+         SELECT $1, et.id, $2, a.anchor_table, a.anchor_id, $3, 'domain' \
+           FROM kb_event_types et, _property_owner_anchor('kb_resources', $4) a \
+          WHERE et.name = 'property_asserted'",
+    )
+    .bind(id)
+    .bind(emitter)
+    .bind(&payload)
+    .bind(resource.uuid())
+    .execute(&mut *tx)
+    .await
+    .expect("the inverted event appends");
+    sqlx::query("SELECT _project_property_asserted($1, $2)")
+        .bind(id)
+        .bind(&payload)
+        .execute(&mut *tx)
+        .await
+        .expect("the inverted event projects");
+    tx.commit().await.unwrap();
+}
+
+/// A scrub may not split a family across two key sentinels (S7: the sentinel is
+/// `scrubbed-key-<the family's handle>`, exactly). A and U are the colour family's at-or-before-
+/// the-unset events. Renaming U to any other sentinel-shaped key is refused; so is renaming A
+/// alone, which would let a second statement under a second record rename U to its own handle's
+/// sentinel. Renaming both to the family's own sentinel in one statement is admitted.
+///
+/// FAILS IF: the verifier admits a renamed key by its shape alone (20261018100010's
+/// `_erasure_sentinel_admits` pattern), so U lands on `scrubbed-key-<another uuid>` and replay of
+/// the unset folds nothing of A's; or it admits a statement that renames part of a family's prior
+/// key text.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_scrub_refuses_a_family_split_across_two_key_sentinels(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let f = families(&pool, owner, emitter, home).await;
+    let rf = redacted(&[(f.a, "property_key"), (f.u, "property_key")]);
+    let split = format!(
+        "UPDATE kb_events SET payload = jsonb_set(payload, '{{property_key}}', \
+                 to_jsonb(CASE WHEN id = '{u}' THEN '{other}' ELSE '{own}' END)) \
+          WHERE id IN ({list})",
+        u = f.u,
+        other = key_sentinel(Uuid::now_v7()),
+        own = key_sentinel(f.a),
+        list = in_list(&[f.a, f.u]),
+    );
+
+    // Across two statements: renaming A alone leaves U the family's only carrier of the text, so
+    // U's handle becomes U and a second record could rename it to `scrubbed-key-<U>`.
+    append_only(
+        "part of the family's prior key text renamed",
+        scrub(
+            &pool,
+            emitter,
+            f.r,
+            property_family(f.a),
+            redacted(&[(f.a, "property_key")]),
+            &key_rewrite(&[f.a], &key_sentinel(f.a)),
+        )
+        .await,
+    );
+    append_only(
+        "the family's unset renamed to another sentinel",
+        scrub(
+            &pool,
+            emitter,
+            f.r,
+            property_family(f.a),
+            rf.clone(),
+            &split,
+        )
+        .await,
+    );
+    admitted(
+        "both renamed to the family's own sentinel",
+        scrub(
+            &pool,
+            emitter,
+            f.r,
+            property_family(f.a),
+            rf,
+            &key_rewrite(&[f.a, f.u], &key_sentinel(f.a)),
+        )
+        .await,
+    );
+}
+
+/// A scrub may not rename a family onto another family's sentinel, nor onto key text the owner
+/// typed in a sentinel's shape (S7). Both families are unset, so every rename is otherwise prior;
+/// only the sentinel differs.
+///
+/// FAILS IF: the verifier admits a renamed key by shape, so `colour` merges into `shade` (whose own
+/// scrub would write `scrubbed-key-<shade>`) or into the planted key, and replay of either unset
+/// folds the other family's rows.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_scrub_refuses_a_family_renamed_onto_another_familys_sentinel(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-merge", &[]).await;
+    set(&pool, emitter, r, "colour", "blue").await;
+    unset(&pool, emitter, r, "colour").await;
+    set(&pool, emitter, r, "shade", "dark").await;
+    unset(&pool, emitter, r, "shade").await;
+    let planted = key_sentinel(Uuid::now_v7());
+    set(&pool, emitter, r, &planted, "typed in the sentinel's shape").await;
+    let a = property_events(&pool, "property_set", r, "colour").await[0];
+    let u = property_events(&pool, "property_unset", r, "colour").await[0];
+    let shade = property_events(&pool, "property_set", r, "shade").await[0];
+    let rf = redacted(&[(a, "property_key"), (u, "property_key")]);
+
+    for (what, onto) in [
+        ("colour renamed onto shade's sentinel", key_sentinel(shade)),
+        ("colour renamed onto a planted sentinel-shaped key", planted),
+    ] {
+        append_only(
+            what,
+            scrub(
+                &pool,
+                emitter,
+                r,
+                property_family(a),
+                rf.clone(),
+                &key_rewrite(&[a, u], &onto),
+            )
+            .await,
+        );
+    }
+    admitted(
+        "colour renamed onto its own sentinel",
+        scrub(
+            &pool,
+            emitter,
+            r,
+            property_family(a),
+            rf,
+            &key_rewrite(&[a, u], &key_sentinel(a)),
+        )
+        .await,
+    );
+}
+
+/// A scrub may not map two facet inner keys onto one sentinel (S7: each inner key takes
+/// `scrubbed-facet-<id of the first event naming it>-<its position there>`). E1 {a} and E2 {b} are
+/// folded by the whole-facet set, so both are prior; renaming E2's `b` onto E1's `a` sentinel is
+/// refused, and each onto its own is admitted.
+///
+/// FAILS IF: the verifier admits a facet value by shape and mark count alone, so `b` merges into
+/// `a` and a later inner-key fold of either reaches both.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_scrub_refuses_two_facet_inner_keys_mapped_onto_one_sentinel(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-facet-forge", &[]).await;
+    facet(&pool, emitter, r, serde_json::json!({"a": "1"})).await;
+    facet(&pool, emitter, r, serde_json::json!({"b": "2"})).await;
+    set_value(&pool, emitter, r, "facet", serde_json::json!({"z": "9"})).await;
+    let asserted = property_events(&pool, "property_asserted", r, "facet").await;
+    let (e1, e2) = (asserted[0], asserted[1]);
+    let handle = handle_of(&pool, r, "facet").await;
+    assert_eq!(handle, e1);
+    let rf = redacted(&[(e1, "value"), (e2, "value")]);
+    let merged = format!(
+        "UPDATE kb_events SET payload = jsonb_set(payload, '{{value}}', \
+                 jsonb_build_object('scrubbed-facet-{e1}-1', 'erased')) \
+          WHERE id IN ({})",
+        in_list(&[e1, e2])
+    );
+    let own = format!(
+        "UPDATE kb_events SET payload = jsonb_set(payload, '{{value}}', \
+                 jsonb_build_object('scrubbed-facet-' || id::text || '-1', 'erased')) \
+          WHERE id IN ({})",
+        in_list(&[e1, e2])
+    );
+
+    append_only(
+        "two inner keys onto one sentinel",
+        scrub(
+            &pool,
+            emitter,
+            r,
+            property_family(handle),
+            rf.clone(),
+            &merged,
+        )
+        .await,
+    );
+    admitted(
+        "each inner key onto its own sentinel",
+        scrub(&pool, emitter, r, property_family(handle), rf, &own).await,
+    );
+}
+
+/// Security review F1: the owner types a key in the shape of family F's sentinel,
+/// `scrubbed-key-<F>`, as family G. F's scrub refuses (`sentinel collision`), as S7 rules. G's own
+/// clear-mode scrub then renames G's key text to G's own sentinel, though it already had a
+/// sentinel's shape, so F's scrub completes afterwards and no event of R carries F's key text.
+///
+/// FAILS IF: the derivation treats any sentinel-shaped key as already done, so G keeps
+/// `scrubbed-key-<F>` after its own scrub and F stays refused for good; or replay diverges.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_key_typed_in_anothers_sentinel_shape_is_renamed_by_its_own_scrub(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-planted", &[]).await;
+    set(&pool, emitter, r, "secretkey", "one").await;
+    set(&pool, emitter, r, "secretkey", "two").await;
+    let f = handle_of(&pool, r, "secretkey").await;
+    set(&pool, emitter, r, &key_sentinel(f), "planted").await;
+    let g = handle_of(&pool, r, &key_sentinel(f)).await;
+
+    refused_with(
+        &pool,
+        r,
+        "property",
+        Some(f),
+        true,
+        "resource_field_scrub_execute: sentinel collision",
+    )
+    .await;
+
+    act(&pool, r, "property", Some(g), true).await;
+    let g_events: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e WHERE e.payload#>>'{owner,id}' = $1 \
+            AND e.payload->>'property_key' = $2 ORDER BY e.id",
+    )
+    .bind(r.uuid().to_string())
+    .bind(key_sentinel(g))
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        g_events.len(),
+        2,
+        "G's set and its clearing unset take G's own sentinel"
+    );
+    assert_eq!(
+        property_events(&pool, "property_set", r, &key_sentinel(f))
+            .await
+            .len(),
+        0,
+        "no event still carries F's sentinel as key text"
+    );
+
+    act(&pool, r, "property", Some(f), true).await;
+    let carrying: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events \
+          WHERE payload#>>'{owner,id}' = $1 AND payload::text LIKE '%secretkey%'",
+    )
+    .bind(r.uuid().to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(carrying, 0, "no event of R still carries F's key text");
+
+    assert_replay_byte_identical(&pool, "after scrubbing a planted family, then F").await;
+}
+
+/// Verifier review F2 (S6.3): a `property_asserted` whose id sorts between the set and the unset
+/// but whose projection landed after the unset holds a live row under the real key. Its key text is
+/// not prior: the act holds it as `current`, the verifier refuses a rename of it, and its live row
+/// keeps a key text the family listing still names. Renaming the rest of the family keeps replay
+/// identical: the renamed unset folds only the renamed rows, as live did. (Without the scrub, this
+/// inversion diverges on replay by itself, erasure D14: the real-keyed unset would fold the row.)
+///
+/// FAILS IF: key text at or before the unset is prior though its event asserts a live row, so the
+/// act renames it (the live row keeps the real key under an event that no longer names it, and
+/// replay folds it at the renamed unset), or the verifier admits that rename.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_key_whose_event_asserts_a_live_row_is_kept_though_it_sorts_before_the_unset(
+    pool: PgPool,
+) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-inverted-key", &[]).await;
+    set(&pool, emitter, r, "secretkey", "one").await;
+    let e1 = property_events(&pool, "property_set", r, "secretkey").await[0];
+    unset(&pool, emitter, r, "secretkey").await;
+    let u = property_events(&pool, "property_unset", r, "secretkey").await[0];
+    // Sorts just before the unset, as an id minted before it in a transaction committed after it.
+    let inverted = Uuid::from_u128(u.as_u128() - 1);
+    assert_at(
+        &pool,
+        emitter,
+        r,
+        inverted,
+        "secretkey",
+        serde_json::json!("live-value"),
+    )
+    .await;
+    assert!(
+        e1 < inverted && inverted < u,
+        "the asserted's id sorts between the set and the unset"
+    );
+
+    append_only(
+        "the live event's key renamed with the family",
+        scrub(
+            &pool,
+            emitter,
+            r,
+            property_family(e1),
+            redacted(&[
+                (e1, "property_key"),
+                (inverted, "property_key"),
+                (u, "property_key"),
+            ]),
+            &key_rewrite(&[e1, inverted, u], &key_sentinel(e1)),
+        )
+        .await,
+    );
+
+    let p = plan(&pool, r, "property", Some(e1), false).await;
+    assert_eq!(
+        p["kept"],
+        serde_json::json!([held(inverted, &["property_key", "value"], "current")])
+    );
+
+    let out = act(&pool, r, "property", Some(e1), false).await;
+
+    assert_eq!(
+        pairs(&out["redacted_fields"]),
+        vec![
+            pair(e1, &["property_key", "value"]),
+            pair(u, &["property_key"])
+        ]
+    );
+    assert_eq!(
+        payload_of(&pool, inverted).await["property_key"],
+        "secretkey"
+    );
+    assert_eq!(
+        rows_of(&pool, inverted).await,
+        vec![(
+            "secretkey".to_string(),
+            serde_json::json!("live-value"),
+            false
+        )]
+    );
+    assert!(
+        listing(&pool, r)
+            .await
+            .iter()
+            .any(|row| row["family"] == inverted.to_string() && row["live"] == true),
+        "the live row's family is listed by the inverted event, the first still carrying its key"
+    );
+
+    assert_replay_byte_identical(&pool, "after scrubbing around an inverted live key").await;
+}
+
+/// Replay review F1 (S8 amended): a clear-mode scrub of a `tags` family renames every event that
+/// rebuilt R's search vector live. `keywords`, asserted after the tag, rebuilds nothing on its own,
+/// so live the vector reached `kwterm` only at the act's clearing unset. The act rebuilds the vector
+/// last and replay's arm rebuilds it at the record, so replay ends on the live vector, and the
+/// secret tag is in neither.
+///
+/// FAILS IF: the replay arm does not rebuild the subject's vector (replay ends on the vector the
+/// create left, without `kwterm`), or the live vector still matches the cleared tag.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_cleared_tags_family_leaves_the_search_vector_replay_reaches(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-vector", &[]).await;
+    set(&pool, emitter, r, "tags", "secretword").await;
+    let keywords = serde_json::json!("kwterm");
+    write(
+        &pool,
+        SeedAction::PropertyAssert {
+            resource: r,
+            key: "keywords",
+            value: &keywords,
+            weight: 1.0,
+            emitter,
+        },
+    )
+    .await;
+    let handle = handle_of(&pool, r, "tags").await;
+
+    act(&pool, r, "property", Some(handle), true).await;
+
+    let live = search_vector(&pool, r)
+        .await
+        .expect("the resource has a vector");
+    assert!(!vector_matches(&pool, r, "secretword").await, "{live}");
+    assert!(vector_matches(&pool, r, "kwterm").await, "{live}");
+
+    assert_replay_byte_identical(&pool, "after clearing a tags family").await;
+    assert_eq!(
+        search_vector(&pool, r).await.as_deref(),
+        Some(live.as_str()),
+        "replay ends on the live search vector"
+    );
+}
+
+/// Locking review F1 (S2, S4): clear mode is not repeatable. Once a clear has landed, the same clear
+/// of the title, a property family (by the handle the listing now gives it) or `doc_type` raises
+/// `already cleared` and records nothing; the plan, which the survey renders, answers
+/// `already_cleared`, and a keep-mode plan of the cleared title has nothing prior. Those two answers
+/// are what the field scrub's reconcile hint reads as "the act landed".
+///
+/// FAILS IF: a repeated clear appends a second placeholder, unset or type and a second
+/// `resource_scrubbed`, or the plan does not say the field is already cleared.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_clear_that_landed_answers_already_cleared_and_records_nothing(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "scrub-clear-twice", &[]).await;
+    retitle(&pool, emitter, r, "a leaked title").await;
+    set(&pool, emitter, r, "secretkey", "one").await;
+    set(&pool, emitter, r, "secretkey", "two").await;
+    let key = handle_of(&pool, r, "secretkey").await;
+    let doc_type = resource_events(&pool, "resource_created", r).await[0];
+    const ALREADY: &str = "resource_field_scrub_execute: already cleared";
+
+    act(&pool, r, "title", None, true).await;
+    assert_eq!(
+        plan(&pool, r, "title", None, true).await["refusal"],
+        "already_cleared"
+    );
+    assert_eq!(
+        plan(&pool, r, "title", None, false).await["refusal"],
+        "nothing_prior"
+    );
+    refused_with(&pool, r, "title", None, true, ALREADY).await;
+
+    act(&pool, r, "property", Some(key), true).await;
+    let renamed: Uuid = sqlx::query_scalar(
+        "SELECT handle FROM _field_scrub_property_events($1) WHERE event_id = $2",
+    )
+    .bind(r.uuid())
+    .bind(key)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        plan(&pool, r, "property", Some(renamed), true).await["refusal"],
+        "already_cleared"
+    );
+    refused_with(&pool, r, "property", Some(renamed), true, ALREADY).await;
+
+    act(&pool, r, "property", Some(doc_type), true).await;
+    refused_with(&pool, r, "property", Some(doc_type), true, ALREADY).await;
+
+    let records: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'resource_scrubbed' AND e.payload->>'subject_id' = $1",
+    )
+    .bind(r.uuid().to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(records, 3, "one record per clear that landed");
+}

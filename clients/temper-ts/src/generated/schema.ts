@@ -660,7 +660,7 @@ export interface paths {
         put?: never;
         /**
          * List a resource's scrubbable fields
-         * @description Lists what a field scrub can name on a resource, without recording or changing anything: the title, the origin URI and each resource-owned property family by its handle (the id of the first event still carrying its key text), with its event count, whether it is live or unset, when and by which profile it was first seen, the JSON type of its latest value, and the sensitivity sweep's flags. No key text and no value. Requires a system admin. Any other caller gets 404, decided before any lookup.
+         * @description Lists what a field scrub can name on a resource, without recording or changing anything: the title, the origin URI and each resource-owned property family by its handle (the id of the first event still carrying its key text), with its event count, whether it is live or unset, when and by which profile it was first seen, the JSON type of its latest value, and the sensitivity sweep's flags. No key text and no value. An erased resource or a charter, which the act refuses before it reads a family, lists nothing. Requires a system admin. Any other caller gets 404, decided before any lookup.
          */
         post: operations["admin_list_resource_field_families"];
         delete?: never;
@@ -683,7 +683,7 @@ export interface paths {
         put?: never;
         /**
          * Survey a field scrub
-         * @description Reports what the field scrub would do, without recording or changing anything: the ledger paths it would redact, the paths it keeps (today's value) or cannot reach and why, the folded property rows it would rewrite, and the events `clear` would append, beside the family listing with the sensitivity sweep's flags. For a charter, an erased resource, a sentinel collision or a title or origin URI whose latest event disagrees with the projection it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the request and its handle are well formed. In keep mode a plan with no `redacted_fields` means nothing is prior, which the act answers 400. Requires a system admin. Any other caller gets 404, decided before any lookup.
+         * @description Reports what the field scrub would do, without recording or changing anything: the ledger paths it would redact, the paths it keeps (today's value) or cannot reach and why, the folded property rows it would rewrite, and the events `clear` would append, beside the family listing with the sensitivity sweep's flags. For a charter, an erased resource, a sentinel collision or a title or origin URI whose latest event disagrees with the projection it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the request and its handle are well formed. In keep mode a plan with no `redacted_fields` means nothing is prior, which the act answers 400; with `clear`, a field already cleared is answered 400 here as the act answers it. Requires a system admin. Any other caller gets 404, decided before any lookup.
          */
         post: operations["admin_survey_resource_field_scrub"];
         delete?: never;
@@ -6420,7 +6420,10 @@ export interface components {
         };
         /** @description The family listing door's answer. */
         FieldScrubFamilies: {
-            /** @description The title, then the origin URI, then each property family by its handle. */
+            /**
+             * @description The title, then the origin URI, then each property family by its handle. Empty for an erased
+             *     resource or a charter, which the act refuses before it reads a family.
+             */
             families: components["schemas"]["FieldScrubFamily"][];
             resource: components["schemas"]["ResourceId"];
         };
@@ -12605,7 +12608,7 @@ export interface operations {
                     "application/json": components["schemas"]["FieldScrubExecuteResponse"];
                 };
             };
-            /** @description A handle with a field that takes none, `property` without a handle, `properties` with `clear`, a handle that is not a property family of the resource (checked before any refusal), or, in keep mode, nothing prior to scrub; nothing was scrubbed or recorded */
+            /** @description A handle with a field that takes none, `property` without a handle, `properties` with `clear`, a handle that is not a property family of the resource (checked before any refusal), in keep mode nothing prior to scrub, or with `clear` a field already cleared (the placeholder title or origin URI, the placeholder type, or a family with no live row); nothing was scrubbed or recorded */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -12736,7 +12739,7 @@ export interface operations {
                     "application/json": components["schemas"]["FieldScrubSurvey"];
                 };
             };
-            /** @description A handle with a field that takes none, `property` without a handle, `properties` with `clear`, or a handle that is not a property family of the resource, whatever the resource's state (checked before any refusal is reported) */
+            /** @description A handle with a field that takes none, `property` without a handle, `properties` with `clear`, or a handle that is not a property family of the resource, whatever the resource's state (checked before any refusal is reported); or, with `clear`, a field already cleared, as the act answers it */
             400: {
                 headers: {
                     [name: string]: unknown;

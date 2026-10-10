@@ -314,6 +314,69 @@ async fn a_scrubbed_ledger_finding_closes_as_sentinel(pool: PgPool) {
     assert_closures(&pool, LEDGER, created, SENTINEL, "the prior title").await;
 }
 
+/// Security review F2 (S9): a `resource_scrubbed` record and its redaction rows, written without the
+/// rewrite they authorise (projected by hand; the verifier runs only on an UPDATE of the ledger),
+/// close nothing: the ledger still holds the title. The real act then closes the same finding.
+///
+/// FAILS IF the ledger arm closes a scrub row's finding without reading the event's value at the
+/// row's path (migration 20261018100030 counted the row and its record only).
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_scrub_record_without_its_rewrite_closes_nothing(pool: PgPool) {
+    enable_seeded_detectors(&pool).await;
+    let w = world(&pool).await;
+    let r = resource(&pool, &w, &format!("Payroll for {SSN_A}")).await;
+    retitle(&pool, &w, r, "Payroll").await;
+    sweep(&pool).await;
+    let created = events(&pool, "resource_created", r, None).await[0];
+    assert_closures(&pool, LEDGER, created, OPEN, "before anything").await;
+
+    let mut tx = pool.begin().await.unwrap();
+    let record = serde_json::json!({
+        "subject_table": "kb_resources",
+        "subject_id": r.uuid(),
+        "field": {"kind": "title"},
+        "redacted_fields": [{"event": created, "paths": ["title"]}],
+    });
+    let forged: Uuid =
+        sqlx::query_scalar("SELECT _event_append('resource_scrubbed', $1, NULL, NULL, $2)")
+            .bind(w.emitter)
+            .bind(&record)
+            .fetch_one(&mut *tx)
+            .await
+            .expect("the record appends");
+    sqlx::query("SELECT _project_resource_scrubbed_redactions($1, $2)")
+        .bind(forged)
+        .bind(&record)
+        .execute(&mut *tx)
+        .await
+        .expect("its rows project");
+    let held: String = sqlx::query_scalar("SELECT payload->>'title' FROM kb_events WHERE id = $1")
+        .bind(created)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    assert!(held.contains(SSN_A), "the ledger still holds the title");
+    let forged_closures: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT c.closed_by FROM sensitivity.findings f \
+           LEFT JOIN sensitivity.finding_closure c ON c.finding_id = f.id \
+          WHERE f.surface = $1 AND f.target_id = $2",
+    )
+    .bind(LEDGER)
+    .bind(created)
+    .fetch_all(&mut *tx)
+    .await
+    .unwrap();
+    tx.rollback().await.unwrap();
+    assert!(
+        !forged_closures.is_empty() && forged_closures.iter().all(Option::is_none),
+        "a record and rows with no rewrite close nothing: {forged_closures:?}"
+    );
+
+    scrub(&pool, &w, r, "title", None, false).await;
+
+    assert_closures(&pool, LEDGER, created, SENTINEL, "after the real act").await;
+}
+
 // ── Witness 5: a kept current value stays open ──────────────────────────────────────────────
 
 /// FAILS IF closure reaches past what the act rewrote: keep mode leaves today's title in the

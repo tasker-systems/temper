@@ -749,6 +749,99 @@ async fn a_foreign_handle_on_an_erased_or_charter_resource_is_400_and_records_no
     assert_eq!(answer["reason"], "charter_resource", "{answer}");
 }
 
+// ── WITNESS: the listing of a resource the act refuses is empty ─────────────────────────────────
+
+/// Locking review F2 (S1, S5): the listing door answers an erased resource or a charter with no
+/// families, as the survey answers them with no listing; the act refuses both before it reads a
+/// family. The bite: a live resource's listing names its title and its family.
+///
+/// FAILS IF the listing door renders the families of an erased resource or a charter.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_listing_of_an_erased_or_charter_resource_is_empty(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (token, _) = provision_operator(&app, "fs-list-op", "fs-list-op@example.com").await;
+    let erased = subject(&app).await;
+    set_property(&app.pool, erased, "colour", "blue").await;
+    erase(&app, &token, erased).await;
+    let charter = subject(&app).await;
+    set_property(&app.pool, charter, "colour", "blue").await;
+    make_charter(&app.pool, charter).await;
+    let live = subject(&app).await;
+    set_property(&app.pool, live, "colour", "blue").await;
+
+    for resource in [erased, charter] {
+        let listing: Value = serde_json::from_str(
+            &post_text(
+                &app,
+                &token,
+                FAMILIES,
+                &json!({ "resource": resource }),
+                200,
+            )
+            .await,
+        )
+        .expect("the listing");
+        assert_eq!(listing["families"], json!([]), "{listing}");
+    }
+    let listing: Value = serde_json::from_str(
+        &post_text(&app, &token, FAMILIES, &json!({ "resource": live }), 200).await,
+    )
+    .expect("the listing");
+    let families = listing["families"].as_array().expect("families");
+    assert_eq!(families[0]["field"], "title", "{listing}");
+    assert!(
+        families.iter().any(|f| f["field"] == "property"),
+        "{listing}"
+    );
+}
+
+// ── WITNESS: a clear that landed is a 400 at both doors ──────────────────────────────────────────
+
+/// Locking review F1 (S2, S4): once a clear has landed, the same clear is a 400 naming the field as
+/// already cleared, at the execute door and the survey door alike, and records nothing: the
+/// survey's answer is what the field scrub's reconcile hint tells an operator to read after a lost
+/// answer. The bite: the first clear of each field completes.
+///
+/// FAILS IF a repeated clear completes (a second placeholder or unset, a second
+/// `resource_scrubbed`), records a refusal, or the survey renders a plan instead of the 400.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_clear_that_landed_is_400_already_cleared_and_records_nothing(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (token, _) = provision_operator(&app, "fs-again-op", "fs-again-op@example.com").await;
+    let resource = subject(&app).await;
+    set_property(&app.pool, resource, "colour", "blue").await;
+    set_property(&app.pool, resource, "colour", "green").await;
+    let handle = handle_of(&app, &token, resource, "colour").await;
+
+    let title = json!({ "resource": resource, "field": "title", "clear": true });
+    let family =
+        json!({ "resource": resource, "field": "property", "family": handle, "clear": true });
+    for body in [&title, &family] {
+        let answer: Value =
+            serde_json::from_str(&post_text(&app, &token, EXECUTE, body, 200).await)
+                .expect("the tagged outcome");
+        assert_eq!(answer["status"], "completed", "{answer}");
+    }
+    assert_eq!(count_events(&app.pool, Some("resource_scrubbed")).await, 2);
+
+    let events_before = count_events(&app.pool, None).await;
+    for body in [&title, &family] {
+        for door in [EXECUTE, SURVEY] {
+            let text = post_text(&app, &token, door, body, 400).await;
+            assert!(text.contains("already cleared"), "{door} {body}: {text}");
+            assert!(
+                !text.contains("resource_field_scrub"),
+                "{door}: the raise text never reaches a response: {text}"
+            );
+        }
+    }
+    assert_eq!(
+        count_events(&app.pool, None).await,
+        events_before,
+        "a repeated clear records NOTHING"
+    );
+}
+
 // ── WITNESS: an unknown body field is refused at every door ──────────────────────────────────
 
 /// FAILS IF any door accepts a body carrying an unknown field (a caller-chosen

@@ -3325,7 +3325,7 @@ class AdminApi:
     ) -> FieldScrubFamilies:
         """List a resource's scrubbable fields
 
-        Lists what a field scrub can name on a resource, without recording or changing anything: the title, the origin URI and each resource-owned property family by its handle (the id of the first event still carrying its key text), with its event count, whether it is live or unset, when and by which profile it was first seen, the JSON type of its latest value, and the sensitivity sweep's flags. No key text and no value. Requires a system admin. Any other caller gets 404, decided before any lookup.
+        Lists what a field scrub can name on a resource, without recording or changing anything: the title, the origin URI and each resource-owned property family by its handle (the id of the first event still carrying its key text), with its event count, whether it is live or unset, when and by which profile it was first seen, the JSON type of its latest value, and the sensitivity sweep's flags. No key text and no value. An erased resource or a charter, which the act refuses before it reads a family, lists nothing. Requires a system admin. Any other caller gets 404, decided before any lookup.
 
         :param field_scrub_families_request: (required)
         :type field_scrub_families_request: FieldScrubFamiliesRequest
@@ -3400,7 +3400,7 @@ class AdminApi:
     ) -> ApiResponse[FieldScrubFamilies]:
         """List a resource's scrubbable fields
 
-        Lists what a field scrub can name on a resource, without recording or changing anything: the title, the origin URI and each resource-owned property family by its handle (the id of the first event still carrying its key text), with its event count, whether it is live or unset, when and by which profile it was first seen, the JSON type of its latest value, and the sensitivity sweep's flags. No key text and no value. Requires a system admin. Any other caller gets 404, decided before any lookup.
+        Lists what a field scrub can name on a resource, without recording or changing anything: the title, the origin URI and each resource-owned property family by its handle (the id of the first event still carrying its key text), with its event count, whether it is live or unset, when and by which profile it was first seen, the JSON type of its latest value, and the sensitivity sweep's flags. No key text and no value. An erased resource or a charter, which the act refuses before it reads a family, lists nothing. Requires a system admin. Any other caller gets 404, decided before any lookup.
 
         :param field_scrub_families_request: (required)
         :type field_scrub_families_request: FieldScrubFamiliesRequest
@@ -3475,7 +3475,7 @@ class AdminApi:
     ) -> RESTResponseType:
         """List a resource's scrubbable fields
 
-        Lists what a field scrub can name on a resource, without recording or changing anything: the title, the origin URI and each resource-owned property family by its handle (the id of the first event still carrying its key text), with its event count, whether it is live or unset, when and by which profile it was first seen, the JSON type of its latest value, and the sensitivity sweep's flags. No key text and no value. Requires a system admin. Any other caller gets 404, decided before any lookup.
+        Lists what a field scrub can name on a resource, without recording or changing anything: the title, the origin URI and each resource-owned property family by its handle (the id of the first event still carrying its key text), with its event count, whether it is live or unset, when and by which profile it was first seen, the JSON type of its latest value, and the sensitivity sweep's flags. No key text and no value. An erased resource or a charter, which the act refuses before it reads a family, lists nothing. Requires a system admin. Any other caller gets 404, decided before any lookup.
 
         :param field_scrub_families_request: (required)
         :type field_scrub_families_request: FieldScrubFamiliesRequest
@@ -7794,7 +7794,7 @@ class AdminApi:
     ) -> FieldScrubSurvey:
         """Survey a field scrub
 
-        Reports what the field scrub would do, without recording or changing anything: the ledger paths it would redact, the paths it keeps (today's value) or cannot reach and why, the folded property rows it would rewrite, and the events `clear` would append, beside the family listing with the sensitivity sweep's flags. For a charter, an erased resource, a sentinel collision or a title or origin URI whose latest event disagrees with the projection it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the request and its handle are well formed. In keep mode a plan with no `redacted_fields` means nothing is prior, which the act answers 400. Requires a system admin. Any other caller gets 404, decided before any lookup.
+        Reports what the field scrub would do, without recording or changing anything: the ledger paths it would redact, the paths it keeps (today's value) or cannot reach and why, the folded property rows it would rewrite, and the events `clear` would append, beside the family listing with the sensitivity sweep's flags. For a charter, an erased resource, a sentinel collision or a title or origin URI whose latest event disagrees with the projection it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the request and its handle are well formed. In keep mode a plan with no `redacted_fields` means nothing is prior, which the act answers 400; with `clear`, a field already cleared is answered 400 here as the act answers it. Requires a system admin. Any other caller gets 404, decided before any lookup.
 
         :param field_scrub_request_body: (required)
         :type field_scrub_request_body: FieldScrubRequestBody
@@ -7870,7 +7870,7 @@ class AdminApi:
     ) -> ApiResponse[FieldScrubSurvey]:
         """Survey a field scrub
 
-        Reports what the field scrub would do, without recording or changing anything: the ledger paths it would redact, the paths it keeps (today's value) or cannot reach and why, the folded property rows it would rewrite, and the events `clear` would append, beside the family listing with the sensitivity sweep's flags. For a charter, an erased resource, a sentinel collision or a title or origin URI whose latest event disagrees with the projection it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the request and its handle are well formed. In keep mode a plan with no `redacted_fields` means nothing is prior, which the act answers 400. Requires a system admin. Any other caller gets 404, decided before any lookup.
+        Reports what the field scrub would do, without recording or changing anything: the ledger paths it would redact, the paths it keeps (today's value) or cannot reach and why, the folded property rows it would rewrite, and the events `clear` would append, beside the family listing with the sensitivity sweep's flags. For a charter, an erased resource, a sentinel collision or a title or origin URI whose latest event disagrees with the projection it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the request and its handle are well formed. In keep mode a plan with no `redacted_fields` means nothing is prior, which the act answers 400; with `clear`, a field already cleared is answered 400 here as the act answers it. Requires a system admin. Any other caller gets 404, decided before any lookup.
 
         :param field_scrub_request_body: (required)
         :type field_scrub_request_body: FieldScrubRequestBody
@@ -7946,7 +7946,7 @@ class AdminApi:
     ) -> RESTResponseType:
         """Survey a field scrub
 
-        Reports what the field scrub would do, without recording or changing anything: the ledger paths it would redact, the paths it keeps (today's value) or cannot reach and why, the folded property rows it would rewrite, and the events `clear` would append, beside the family listing with the sensitivity sweep's flags. For a charter, an erased resource, a sentinel collision or a title or origin URI whose latest event disagrees with the projection it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the request and its handle are well formed. In keep mode a plan with no `redacted_fields` means nothing is prior, which the act answers 400. Requires a system admin. Any other caller gets 404, decided before any lookup.
+        Reports what the field scrub would do, without recording or changing anything: the ledger paths it would redact, the paths it keeps (today's value) or cannot reach and why, the folded property rows it would rewrite, and the events `clear` would append, beside the family listing with the sensitivity sweep's flags. For a charter, an erased resource, a sentinel collision or a title or origin URI whose latest event disagrees with the projection it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the request and its handle are well formed. In keep mode a plan with no `redacted_fields` means nothing is prior, which the act answers 400; with `clear`, a field already cleared is answered 400 here as the act answers it. Requires a system admin. Any other caller gets 404, decided before any lookup.
 
         :param field_scrub_request_body: (required)
         :type field_scrub_request_body: FieldScrubRequestBody

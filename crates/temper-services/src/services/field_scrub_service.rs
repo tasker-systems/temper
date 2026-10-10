@@ -15,9 +15,10 @@
 //! record nothing, whatever state the resource is in: both are checked before any refusal is
 //! recorded, the handle through the act's own predicate (`_resource_field_scrub_request_fault`),
 //! so a recorded refusal only ever names a real family of the resource (S4). A keep-mode request
-//! with nothing prior is a 400 the act raises. A refusal the act raises (a charter, an erased
-//! resource, a sentinel collision, a projection that disagrees) is recorded through
-//! `resource_erasure_refuse` with the field scrub's act and no blocks.
+//! with nothing prior, and a clear of a field already cleared (migration 20261018100040), are 400s
+//! the act raises. A refusal the act raises (a charter, an erased resource, a sentinel collision, a
+//! projection that disagrees) is recorded through `resource_erasure_refuse` with the field scrub's
+//! act and no blocks.
 //!
 //! NO TEXT CROSSES (S1): a request names a field by kind and a family by an event id; every 400
 //! here names only those; the listing, the plan and the record carry ids, counts, dates, profile
@@ -171,6 +172,8 @@ enum FieldScrubFailure {
     NotFound,
     Fault(RequestFault),
     NothingPrior,
+    /// A clear of a field already cleared (migration 20261018100040).
+    AlreadyCleared,
     /// A deadlock.
     Retryable,
     Other,
@@ -194,7 +197,8 @@ fn kind_name(kind: ScrubFieldKind) -> &'static str {
 /// families is [`ApiError::BadRequest`], for every state of the resource, checked before the act
 /// runs and before any refusal is recorded. A charter, an erased resource, a sentinel collision or
 /// a projection that disagrees is then a recorded refusal naming the field scrub. A keep-mode
-/// request with nothing prior is [`ApiError::BadRequest`]: nothing was scrubbed or recorded.
+/// request with nothing prior, and a clear of a field already cleared, are
+/// [`ApiError::BadRequest`]: nothing was scrubbed or recorded.
 pub async fn execute_field_scrub(
     pool: &PgPool,
     admin: &SystemAdmin,
@@ -335,6 +339,16 @@ fn nothing_prior(field: ScrubFieldKind) -> ApiError {
     ))
 }
 
+/// The 400 for a clear of a field already cleared: the placeholder title or origin URI, the
+/// placeholder type, or a family with no live row. A retried clear whose first run landed reads it.
+fn already_cleared(field: ScrubFieldKind) -> ApiError {
+    ApiError::BadRequest(format!(
+        "field {} is already cleared: today's value is the placeholder, or the family has no live \
+         row; nothing was scrubbed (a scrub without clear redacts what is prior)",
+        kind_name(field)
+    ))
+}
+
 /// Run the act, retrying a deadlock up to `MAX_ACT_RETRIES` times (each retry is a fresh
 /// statement and transaction), and map every other failure through the classifier.
 async fn run_act(
@@ -416,6 +430,7 @@ fn failure_error(
         FieldScrubFailure::NotFound => ApiError::NotFound(RESOURCE_NOT_FOUND.to_string()),
         FieldScrubFailure::Fault(fault) => fault_message(fault, request.field, request.family),
         FieldScrubFailure::NothingPrior => nothing_prior(request.field),
+        FieldScrubFailure::AlreadyCleared => already_cleared(request.field),
         FieldScrubFailure::Charter
         | FieldScrubFailure::AlreadyErased
         | FieldScrubFailure::SentinelCollision
@@ -466,6 +481,7 @@ fn classify_field_scrub_raise(rest: &str) -> FieldScrubFailure {
         "sentinel collision" => FieldScrubFailure::SentinelCollision,
         "projection disagrees" => FieldScrubFailure::ProjectionDisagrees,
         "nothing prior to scrub" => FieldScrubFailure::NothingPrior,
+        "already cleared" => FieldScrubFailure::AlreadyCleared,
         _ if rest.starts_with("charter resource") => FieldScrubFailure::Charter,
         _ if between(rest, "resource ", " not found").is_some() => FieldScrubFailure::NotFound,
         _ => match classify_fault(rest) {
@@ -506,7 +522,8 @@ fn classify_fault(fault: &str) -> Option<RequestFault> {
 /// one of the resource's families is a 400 whatever the resource's state. Then a charter, an
 /// erased resource, a sentinel collision or a projection that disagrees answers the refusal the act
 /// would record, with no plan. In keep mode, a plan with no `redacted_fields` is the act's 400:
-/// nothing prior.
+/// nothing prior. In clear mode, a field already cleared is the act's 400, answered here as the act
+/// answers it (the plan's `already_cleared`): the survey of a clear that landed says so.
 pub async fn survey_field_scrub(
     pool: &PgPool,
     _admin: &SystemAdmin,
@@ -569,6 +586,8 @@ pub async fn survey_field_scrub(
         // Keep mode with nothing prior: the plan says so with an empty `redacted_fields`, and the
         // act answers it 400. Never under `clear`, whose clearing event makes the field prior.
         Some("nothing_prior") | None => {}
+        // Clear mode on a field already cleared: the act's 400, and nothing to plan.
+        Some("already_cleared") => return Err(already_cleared(request.field)),
         Some(_) => {
             return Err(ApiError::Internal(
                 "field scrub survey: the plan named a refusal this service does not know"
@@ -728,6 +747,30 @@ mod classifier_tests {
             act("projection disagrees"),
             FieldScrubFailure::ProjectionDisagrees
         );
+    }
+
+    #[test]
+    fn already_cleared_is_its_own_400() {
+        assert_eq!(act("already cleared"), FieldScrubFailure::AlreadyCleared);
+        let request = FieldScrubRequest {
+            resource: ResourceId::from(id()),
+            field: ScrubFieldKind::Title,
+            family: None,
+            clear: true,
+            surface: Surface::ApiHttp,
+        };
+        let err = failure_error(
+            FieldScrubFailure::AlreadyCleared,
+            &request,
+            sqlx::Error::RowNotFound,
+            "field scrub failed",
+        );
+        match err {
+            ApiError::BadRequest(msg) => {
+                assert!(msg.contains("field title is already cleared"), "{msg}")
+            }
+            other => panic!("already cleared is a 400, got {other:?}"),
+        }
     }
 
     #[test]

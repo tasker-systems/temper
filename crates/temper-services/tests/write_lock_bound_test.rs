@@ -826,6 +826,117 @@ async fn the_field_scrub_completes_under_a_session_lock_timeout_and_queues_write
     );
 }
 
+/// **A clear-mode field scrub completes under any session bound, and writers queue behind it**
+/// (locking review F3). Clear mode does more inside the act's locks than keep mode: it appends a
+/// `property_unset` of the family and projects it (`_project_property_unset`: the write guard, the
+/// fold, and for `tags` the search-vector rebuild) before it redacts. The first writer holds the
+/// floor; the clear waits it out under a tight session bound and completes; a second writer
+/// arriving meanwhile queues behind it; and the unset landed, folding the family's live row.
+///
+/// FAILS IF any step clear mode adds before the redaction can be cut off by the session's
+/// `lock_timeout` (the act's `SET lock_timeout = 0` not covering it), or lets the second writer's
+/// floor be granted while the act waits.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_clear_mode_field_scrub_completes_under_a_session_lock_timeout_and_queues_writers(
+    pool: PgPool,
+) {
+    use temper_services::backend::write_floor::modify_floor_in_tx;
+
+    let (_, profile, resource) = seed(&pool, "field-cleared@example.com").await;
+    let emitter = web_emitter(&pool, profile).await;
+    sqlx::query(
+        "SELECT property_set(jsonb_build_object(\
+             'property_id',  uuid_generate_v7(), \
+             'owner',        jsonb_build_object('table', 'kb_resources', 'id', $1::uuid), \
+             'property_key', 'tags', \
+             'value',        to_jsonb('a-leaked-tag'::text), \
+             'weight',       1.0), $2)",
+    )
+    .bind(uuid::Uuid::from(resource))
+    .bind(emitter)
+    .execute(&pool)
+    .await
+    .expect("fixture: the tags family is set");
+    let family: uuid::Uuid = sqlx::query_scalar(
+        "SELECT DISTINCT handle FROM _field_scrub_property_events($1) WHERE key_text = 'tags'",
+    )
+    .bind(uuid::Uuid::from(resource))
+    .fetch_one(&pool)
+    .await
+    .expect("fixture: the tags family's handle");
+
+    let mut first = pool.begin().await.expect("begin");
+    modify_floor_in_tx(&mut first, ProfileId::from(profile), resource)
+        .await
+        .expect("the first writer is admitted");
+
+    let scrub_pool = pool.clone();
+    let scrub = tokio::spawn(async move {
+        let mut conn = scrub_pool.acquire().await.expect("acquire");
+        sqlx::query("SET lock_timeout = '100ms'")
+            .execute(&mut *conn)
+            .await
+            .expect("a tight session bound");
+        let done = sqlx::query(
+            "SELECT resource_field_scrub_execute($1, 'property', $2, true, $3, $4, $5)",
+        )
+        .bind(uuid::Uuid::from(resource))
+        .bind(family)
+        .bind(profile)
+        .bind(emitter)
+        .bind(uuid::Uuid::now_v7())
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string());
+        let _ = sqlx::query("RESET lock_timeout").execute(&mut *conn).await;
+        done
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // A second writer arrives while the scrub waits: it must queue, not join the first.
+    let second_pool = pool.clone();
+    let second = tokio::spawn(async move {
+        let mut tx = second_pool.begin().await.expect("begin");
+        let asked = Instant::now();
+        let floored = modify_floor_in_tx(&mut tx, ProfileId::from(profile), resource).await;
+        let waited = asked.elapsed();
+        tx.rollback().await.expect("end");
+        (floored, waited)
+    });
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    first.rollback().await.expect("the first writer ends");
+
+    scrub
+        .await
+        .expect("scrub task")
+        .expect("the clear completes whatever lock_timeout its session carries");
+    let (floored, waited) = second.await.expect("second writer");
+    assert!(
+        floored.is_ok(),
+        "the second writer is admitted after the scrub: {floored:?}"
+    );
+    assert!(
+        waited >= Duration::from_millis(600),
+        "the second writer queued behind the waiting clear rather than joining the first writer: \
+         waited {waited:?}"
+    );
+    let (unsets, live): (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+                  WHERE t.name = 'property_unset' AND e.payload#>>'{owner,id}' = $1::text), \
+                (SELECT count(*) FROM kb_properties \
+                  WHERE owner_table = 'kb_resources' AND owner_id = $1 AND NOT is_folded \
+                    AND property_key IN ('tags', 'scrubbed-key-' || $2::text))",
+    )
+    .bind(uuid::Uuid::from(resource))
+    .bind(family)
+    .fetch_one(&pool)
+    .await
+    .expect("the unset's effect");
+    assert_eq!(unsets, 1, "the clear appended its unset");
+    assert_eq!(live, 0, "the unset folded the family's live row");
+}
+
 /// **A field scrub and an erasure of one resource, scrub first** (field-grain scrub review focus
 /// 5). The scrub holds R's act queue in an open transaction; the erasure arrives and waits on the
 /// queue; the scrub commits, and the erasure then completes over the scrubbed ledger, leaving both
