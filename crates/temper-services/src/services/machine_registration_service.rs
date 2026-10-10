@@ -9,7 +9,8 @@
 //! under D11 gating-team membership confers no system access, and a machine holds membership only
 //! where someone with authority over the team chose it — the explicit `teams` reach, bounded by
 //! `machine_authz`. Its personal team still sits under `temper-system`, so what reaches every
-//! member of the root through ancestry reaches the machine too.
+//! member of the root through ancestry reaches the machine too. It holds that team as `member`,
+//! never `owner`: a machine never governs (`20261017100000_machines_never_govern.sql`).
 //!
 //! Authorization happens HERE, not in the handler (B2 D3): `provision` and `issue` resolve the
 //! caller's authority through `machine_authz` before opening the transaction, so a rejected
