@@ -315,6 +315,16 @@ jobs:
       - name: Guard test — check-no-process-artifacts
         run: bash .github/scripts/test-check-no-process-artifacts.sh
 
+      # The release-signing chain triggers on exactly what it triggers on today. Installed clients
+      # accept an attestation only if it was signed on refs/heads/main, and a `merge_group` (or any
+      # PR) trigger would sign as another ref — see the script's header. Ungated, here, because the
+      # change that breaks it is a workflows-only PR.
+      - name: Check the release chain's triggers (signing identity stays refs/heads/main)
+        run: bash .github/scripts/check-release-chain-triggers.sh
+
+      - name: Guard test — check-release-chain-triggers
+        run: bash .github/scripts/test-check-release-chain-triggers.sh
+
       # THE GATE ITSELF — public-surface drift: fenced `temper …` invocations in
       # README.md and docs/ must resolve against the committed cli-reference tree
       # (kept binary-equal by check-cli-reference-drift in rust-quality — prose ==

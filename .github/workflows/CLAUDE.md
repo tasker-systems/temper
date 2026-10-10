@@ -86,7 +86,47 @@ can be queued. CodeQL still runs in the queue (uniform, as above) and still fans
 
 The post-merge run on `main` stays. The queue makes it redundant as a merge-skew check (the
 queue tested that exact commit), but it is still what refreshes the default branch's CodeQL
-analyses that the `code_scanning` rule diffs every PR against.
+analyses that the `code_scanning` rule diffs every PR against. It does not run on every main
+commit: a concurrency group holds one pending run, so a burst of merges skips the middle ones
+(the comment on `concurrency:` in `ci.yml`). The queue verdict is what every commit carries.
+
+### The queue's settings are load-bearing — they live in the ruleset, not this tree
+
+Nothing in this repository can enforce these; they are set on the `no-merge-main` ruleset's
+merge-queue rule, and each one is here because something in this tree depends on it.
+
+- **Merge method: merge commit.** Not squash, not rebase. PRs land as regular merges so each
+  PR's own commits stay reachable and every main commit is a `Merge pull request #N` that
+  names its PR — the per-PR traceability the project relies on.
+- **Maximum pull requests merged at once: 1.** Every PR lands as its own push to main. Three
+  things assume one merge per push, and a multi-PR push breaks each of them:
+  - `release-tag.yml` tags the commit the push lands on. A release PR batched with later
+    entries would be tagged on the batch tip — the release would carry PRs its own
+    "Merges since" list never showed, and the tag would no longer point at reviewed source.
+  - `scripts/vercel-ignore-build.sh` falls back to `HEAD~1` on production; across a batch it
+    would see the last merge only and could skip a build — and its migration apply.
+  - `detect-ci-scope.sh` diffs a push to main against `HEAD~1`, the same way.
+
+  This is NOT a queue of one. Build concurrency is separate: several entries are tested at
+  once, each stacked on the ones ahead of it, and each still merges on its own. What a larger
+  merge size would add is fewer CI runs per PR, and it is only safe once all three of the above
+  stop assuming one merge per push.
+- **Require branches to be up to date: off.** The queue replaces it; leaving it on brings the
+  merge-main-back-in loop straight back.
+- **Adding a PR to the queue is the merge.** The maintainer merges — merge is the review gate,
+  not just a CI gate — so agent sessions do not add PRs to the queue or enable auto-merge, and
+  nothing enables auto-merge for Dependabot. The supply-chain review's premise that a dependency
+  bump reaches main only through a human merge depends on it.
+
+### The release chain never runs on a queue ref
+
+`release-tag.yml`, `release.yml` and `build-cli-binaries.yml` get no `merge_group` trigger, and
+`check-release-chain-triggers.sh` (in `guard-tests`) fails if any of them gains a trigger at all.
+Installed clients accept an attestation only when it was signed on `refs/heads/main`, and npm
+and crates.io trusted publishing match `release-tag.yml` as the entry workflow. A queue run
+signs as `gh-readonly-queue/main/...` and runs before the merge. The queue changes none of
+this as long as releases keep entering through a VERSION push to main — which a queue merge
+still is.
 
 Vercel skips previews of `gh-readonly-queue/*` branches (`scripts/vercel-ignore-build.sh`):
 the PR had its own preview and the commit is on main minutes later.

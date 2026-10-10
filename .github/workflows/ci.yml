@@ -37,11 +37,19 @@ permissions:
 #   32609251193, 32609474823), and only the last one's verdict gated anything. At ~67
 #   minutes of compute per run that is ~400 minutes to answer one question.
 #
-#   The post-merge run on main is the OPPOSITE case and must never be cancelled. It is the
-#   only thing that catches semantic merge skew — a PR that was green against its own base
-#   but is wrong against the main it landed on — and each merge commit's run is the only
-#   run that commit will ever get. Cancelling one because the next merge arrived would
-#   leave a commit on main with no verdict at all.
+#   The post-merge run on main is the OPPOSITE case and is never cancelled from here. It
+#   used to be the only thing that caught semantic merge skew — a PR that was green against
+#   its own base but wrong against the main it landed on. The merge queue now catches that
+#   BEFORE the merge: main is fast-forwarded to the exact commit the queue tested, so every
+#   main commit already carries a verdict. The run on main stays for what only it does —
+#   refreshing the default branch's CodeQL analyses (see codeql.yml).
+#
+#   `cancel-in-progress: false` is NOT a guarantee that every push to main runs. GitHub keeps
+#   one running and ONE pending run per concurrency group: a third push while one runs and
+#   one waits cancels the waiting one. A burst of queue merges therefore runs main's CI on
+#   the first and the last, not every commit between. That is acceptable only because the
+#   queue verdict covers each of them and the latest CodeQL upload is the one the
+#   code_scanning rule reads — do not read a missing run on main as a missing verdict.
 #
 #   `cancel-in-progress` therefore reads the event rather than being a constant, and the
 #   group keys on the PR number so two PRs never contend, falling back to the ref for
