@@ -23,7 +23,11 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
-use rand::RngCore as _;
+// rand 0.10 renamed `OsRng` to `SysRng` and made it fallible (`TryRng`); `UnwrapErr` restores
+// the infallible `Rng` interface with 0.8's semantics — an OS RNG failure panics.
+use rand::rand_core::UnwrapErr;
+use rand::rngs::SysRng;
+use rand::Rng as _;
 
 /// The extended-nonce width XChaCha20-Poly1305 uses. Stored per row.
 pub const NONCE_LEN: usize = 24;
@@ -85,7 +89,7 @@ impl VaultKey {
     /// fresh random every call.
     pub fn encrypt(&self, plaintext: &[u8], aad: &[u8]) -> ([u8; NONCE_LEN], Vec<u8>) {
         let mut nonce_bytes = [0u8; NONCE_LEN];
-        rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
+        UnwrapErr(SysRng).fill_bytes(&mut nonce_bytes);
         let nonce = XNonce::from_slice(&nonce_bytes);
         // In-memory AEAD over a small buffer does not fail in practice; the only documented error
         // is a length overflow that a token-sized plaintext cannot reach. Treat it as unreachable
