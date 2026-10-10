@@ -271,6 +271,12 @@ pub async fn add_member(
             "cannot grant owner via add_member; use ownership transfer".to_string(),
         ));
     }
+    crate::services::machine_authz::refuse_machine_above_ceiling(
+        pool,
+        ProfileId::from(req.profile_id),
+        req.role,
+    )
+    .await?;
 
     // `DO NOTHING` + `RETURNING` yields no row on conflict, so an existing membership is
     // detected by the same statement that would have written it — no separate existence check
@@ -584,6 +590,12 @@ pub async fn change_role(
             "cannot grant owner via role change; use ownership transfer".to_string(),
         ));
     }
+    crate::services::machine_authz::refuse_machine_above_ceiling(
+        pool,
+        ProfileId::from(target),
+        new_role,
+    )
+    .await?;
 
     let (_current_role, source) = load_member(pool, team_id, target)
         .await?

@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_profiles (handle, display_name) VALUES ('soon-agent', 'Soon') RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1dd0bf20c5dd28a0b8c0cbccfadef9b56d4ebc8cc37b6cd7ff1c6679521abfd1"
+}

@@ -45,13 +45,37 @@ use crate::services::{access_service, team_service};
 /// Compared by [`TeamRole::rank`] rather than matched as a set, so a role introduced above
 /// `member` is barred by construction instead of by remembering to edit a `matches!` arm.
 ///
-/// **This bounds conferred reach, not every `kb_team_members` row a machine appears in.** An
-/// agent profile owns its own `personal-<handle>` team, because `sync_personal_team` gives every
-/// profile that on insert — so a live machine principal does and should read back as `owner`
-/// there. A personal team gates nothing and is not reachable through `apply_reach`; do not read
-/// such a row as a breach of this ceiling, and do not "fix" it. (Checked against prod
-/// 2026-07-20: one registration, `owner` on its own personal team only, no `maintainer` anywhere.)
+/// **It bounds every `kb_team_members` row a machine holds, however the row came about** —
+/// registration reach, `team_service::add_member` / `change_role`, `access_service::promote_admin`,
+/// and its own personal team, which it holds as `member` like any other (ruled 2026-10-09). The
+/// services refuse through [`refuse_machine_above_ceiling`]; the database refuses the same rows
+/// underneath them (`20261017100000_machines_never_govern.sql`), and caps a profile's existing
+/// roles the moment it becomes a machine — which is how registration's personal-team `owner` row,
+/// written before the client row exists, comes out as `member`.
 const MAX_MACHINE_TEAM_ROLE: TeamRole = TeamRole::Member;
+
+/// Whether `role` is above what any machine may hold.
+pub(crate) fn exceeds_machine_ceiling(role: TeamRole) -> bool {
+    role.rank() > MAX_MACHINE_TEAM_ROLE.rank()
+}
+
+/// Refuse putting `target` at `role` when `target` is a machine principal and `role` is above the
+/// ceiling. The readable refusal for a human-facing act that names a target (adding a member,
+/// changing a role); the database trigger underneath is the floor, not the message.
+pub(crate) async fn refuse_machine_above_ceiling(
+    pool: &PgPool,
+    target: ProfileId,
+    role: TeamRole,
+) -> ApiResult<()> {
+    if exceeds_machine_ceiling(role)
+        && crate::services::machine_client_service::is_machine_profile(pool, target).await?
+    {
+        return Err(ApiError::BadRequest(
+            "a machine principal cannot hold a team role above 'member'".to_string(),
+        ));
+    }
+    Ok(())
+}
 
 /// The caller's authority over a machine registration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,14 +213,12 @@ pub(crate) async fn authorize_registration<'a>(
         // `owner` no longer mints an `is_system_admin` principal (governance grant
         // is separate), but the role ceiling is still enforced because a governing
         // role on any team is too much authority for an unattended credential.
-        // `apply_reach`'s raw
-        // `ON CONFLICT DO UPDATE SET role` is not a shortcut around a governed human path — it
-        // is the ONLY path to these roles for a machine (no ownership-transfer operation exists:
-        // task 019f77a2-4860-7300-a04e-df0d750dc4c7), so this is the only place to stop it.
+        // `apply_reach` writes with a raw `ON CONFLICT DO UPDATE SET role`, so this check is
+        // what keeps a registration from conferring such a role; the database refuses it too.
         //
         // Reach stays unchecked for admins (D3 preserved) — an admin may still put a machine on
         // any team it likes, at any role up to the ceiling.
-        if role.rank() > MAX_MACHINE_TEAM_ROLE.rank() {
+        if exceeds_machine_ceiling(role) {
             return Err(ApiError::Forbidden);
         }
     }

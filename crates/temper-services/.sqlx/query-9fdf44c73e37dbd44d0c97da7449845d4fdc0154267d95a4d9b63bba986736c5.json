@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_machine_clients (client_id, issuer, label, profile_id, team_id, registered_by_profile_id) VALUES ('soon-agent', 'auth0-m2m', 'soon', $1, NULL, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9fdf44c73e37dbd44d0c97da7449845d4fdc0154267d95a4d9b63bba986736c5"
+}

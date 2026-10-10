@@ -1219,4 +1219,254 @@ mod tests {
             "both mint doors must land on the registrar's own actor axis, not the machine's",
         );
     }
+
+    // ── A machine never governs (20261017100000_machines_never_govern.sql) ──────────────────
+
+    /// The SQLSTATE a refusing trigger raises. Asserting it (not just "an error") is what makes a
+    /// DB witness bite on its own trigger rather than on any failure.
+    fn is_check_violation(err: &sqlx::Error) -> bool {
+        err.as_database_error()
+            .and_then(|d| d.code())
+            .is_some_and(|c| c == "23514")
+    }
+
+    async fn personal_team_role(pool: &PgPool, profile: Uuid) -> String {
+        sqlx::query_scalar!(
+            r#"SELECT tm.role::text AS "role!" FROM kb_team_members tm
+                 JOIN kb_teams t ON t.id = tm.team_id
+                WHERE t.personal_of = $1 AND tm.profile_id = $1"#,
+            profile,
+        )
+        .fetch_one(pool)
+        .await
+        .expect("personal team row")
+    }
+
+    async fn plain_team(pool: &PgPool, slug: &str) -> Uuid {
+        sqlx::query_scalar!(
+            "INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id",
+            slug,
+        )
+        .fetch_one(pool)
+        .await
+        .expect("team")
+    }
+
+    /// Registration writes the personal-team `owner` row before the client row exists; the client
+    /// row's insert must cap it.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_new_machine_holds_its_personal_team_as_member(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let machine = approved_machine(&pool, admin, "capped-agent").await;
+        assert_eq!(personal_team_role(&pool, machine).await, "member");
+    }
+
+    /// The cap is about becoming a machine, not about registration: a profile already holding
+    /// `maintainer` elsewhere is capped the moment a client row names it.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn becoming_a_machine_caps_every_role_the_profile_holds(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let profile: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ('soon-agent', 'Soon') \
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("profile");
+        let team = plain_team(&pool, "elsewhere").await;
+        sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'maintainer')",
+            team,
+            profile,
+        )
+        .execute(&pool)
+        .await
+        .expect("maintainer while still a person");
+
+        sqlx::query!(
+            "INSERT INTO kb_machine_clients \
+               (client_id, issuer, label, profile_id, team_id, registered_by_profile_id) \
+             VALUES ('soon-agent', 'auth0-m2m', 'soon', $1, NULL, $2)",
+            profile,
+            *admin,
+        )
+        .execute(&pool)
+        .await
+        .expect("become a machine");
+
+        let above: i64 = sqlx::query_scalar!(
+            r#"SELECT count(*) AS "n!" FROM kb_team_members
+                WHERE profile_id = $1 AND role < 'member'::team_role"#,
+            profile,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+        assert_eq!(above, 0, "no role above member survives becoming a machine");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn the_database_refuses_a_machine_above_member(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let machine = approved_machine(&pool, admin, "floor-agent").await;
+        let team = plain_team(&pool, "floor").await;
+
+        let err = sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'maintainer')",
+            team,
+            machine,
+        )
+        .execute(&pool)
+        .await
+        .expect_err("a machine cannot be inserted above member");
+        assert!(is_check_violation(&err), "{err}");
+
+        let err = sqlx::query!(
+            r#"UPDATE kb_team_members SET role = 'owner'
+                WHERE profile_id = $1
+                  AND team_id = (SELECT id FROM kb_teams WHERE personal_of = $1)"#,
+            machine,
+        )
+        .execute(&pool)
+        .await
+        .expect_err("a machine cannot be raised above member, even on its personal team");
+        assert!(is_check_violation(&err), "{err}");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn the_database_refuses_a_machine_a_governance_grant(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let machine = approved_machine(&pool, admin, "gov-agent").await;
+        let err = sqlx::query_scalar!(
+            "SELECT principal_governance_set($1, true, $2, NULL)",
+            machine,
+            *admin,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect_err("a machine cannot hold governance");
+        assert!(is_check_violation(&err), "{err}");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_governing_profile_cannot_become_a_machine(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let err = sqlx::query!(
+            "INSERT INTO kb_machine_clients \
+               (client_id, issuer, label, profile_id, team_id, registered_by_profile_id) \
+             VALUES ('admin-agent', 'auth0-m2m', 'admin', $1, NULL, $1)",
+            *admin,
+        )
+        .execute(&pool)
+        .await
+        .expect_err("a profile holding governance cannot become a machine");
+        assert!(is_check_violation(&err), "{err}");
+    }
+
+    /// Each service refusal is asserted by its own message, so with the service guard removed the
+    /// trigger's error (a different variant) fails the test: each witness bites on its own guard.
+    fn is_machine_refusal(err: &crate::error::ApiError) -> bool {
+        matches!(err, crate::error::ApiError::BadRequest(m) if m.contains("machine principal"))
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn add_member_refuses_a_machine_above_member(pool: PgPool) {
+        use temper_core::types::team::{AddMemberRequest, TeamRole};
+        let admin = seed_admin(&pool).await;
+        let machine = approved_machine(&pool, admin, "add-agent").await;
+        let team = plain_team(&pool, "add-team").await;
+        sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner')",
+            team,
+            *admin,
+        )
+        .execute(&pool)
+        .await
+        .expect("admin owns the team");
+
+        let err = crate::services::team_service::add_member(
+            &pool,
+            admin,
+            team,
+            &AddMemberRequest {
+                profile_id: machine,
+                role: TeamRole::Maintainer,
+            },
+        )
+        .await
+        .expect_err("a machine cannot be added as maintainer");
+        assert!(is_machine_refusal(&err), "{err:?}");
+
+        crate::services::team_service::add_member(
+            &pool,
+            admin,
+            team,
+            &AddMemberRequest {
+                profile_id: machine,
+                role: TeamRole::Member,
+            },
+        )
+        .await
+        .expect("a machine may be added as member");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn change_role_refuses_a_machine_above_member(pool: PgPool) {
+        use temper_core::types::team::TeamRole;
+        let admin = seed_admin(&pool).await;
+        let machine = approved_machine(&pool, admin, "role-agent").await;
+        let team = plain_team(&pool, "role-team").await;
+        sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) \
+             VALUES ($1, $2, 'owner'), ($1, $3, 'member')",
+            team,
+            *admin,
+            machine,
+        )
+        .execute(&pool)
+        .await
+        .expect("admin owns the team; the machine is a member");
+
+        let err = crate::services::team_service::change_role(
+            &pool,
+            admin,
+            team,
+            machine,
+            TeamRole::Maintainer,
+        )
+        .await
+        .expect_err("a machine cannot be raised to maintainer");
+        assert!(is_machine_refusal(&err), "{err:?}");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn promote_admin_refuses_a_machine(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let machine = approved_machine(&pool, admin, "promo-agent").await;
+        let gate = crate::auth::require_system_admin_by_id(&pool, admin)
+            .await
+            .expect("the seeded admin is an admin");
+        let err = access_service::promote_admin(&pool, &gate, machine, None)
+            .await
+            .expect_err("a machine cannot be promoted");
+        assert!(is_machine_refusal(&err), "{err:?}");
+    }
+
+    /// Pin, not a bite: capping the personal team at `member` takes nothing a machine uses on its
+    /// own content — its default context is profile-owned.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_capped_machine_still_authors_its_default_context(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let machine = approved_machine(&pool, admin, "author-agent").await;
+        let authors: bool = sqlx::query_scalar!(
+            r#"SELECT context_authorable_by_profile($1, c.id) AS "a!: bool"
+                 FROM kb_contexts c
+                WHERE c.owner_table = 'kb_profiles' AND c.owner_id = $1 AND c.slug = 'default'"#,
+            machine,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("default context");
+        assert!(authors);
+    }
 }

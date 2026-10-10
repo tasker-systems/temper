@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_machine_clients (client_id, issuer, label, profile_id, team_id, registered_by_profile_id) VALUES ('admin-agent', 'auth0-m2m', 'admin', $1, NULL, $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "eca3815deab456854c9248f60efc91bb252ba19146593eb446804b74634dbb11"
+}
