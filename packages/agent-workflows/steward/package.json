@@ -18,7 +18,7 @@
     "typecheck": "tsc"
   },
   "dependencies": {
-    "@vercel/connect": "0.2.2",
+    "@vercel/connect": "2.4.1",
     "ai": "^7.0.0",
     "eve": "^0.18.1",
     "openapi-fetch": "^0.17.0",
