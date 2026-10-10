@@ -6,7 +6,11 @@ use crate::error::{Result, TemperError};
 use base64::Engine as _;
 use ed25519_dalek::SigningKey;
 use pkcs8::EncodePrivateKey;
-use rand::RngCore as _;
+// rand 0.10 renamed `OsRng` to `SysRng` and made it fallible (`TryRng`); `UnwrapErr` restores
+// the infallible `Rng` interface with 0.8's semantics — an OS RNG failure panics.
+use rand::rand_core::UnwrapErr;
+use rand::rngs::SysRng;
+use rand::Rng as _;
 use std::collections::BTreeMap;
 
 /// A generated AS signing key: the PKCS#8 PEM plus its published key id.
@@ -23,7 +27,7 @@ pub fn generate_signing_key(
     now_yyyymm: &str,
 ) -> Result<GeneratedKey> {
     let mut secret = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut secret);
+    UnwrapErr(SysRng).fill_bytes(&mut secret);
     let signing = SigningKey::from_bytes(&secret);
     let pem = signing
         .to_pkcs8_pem(pkcs8::LineEnding::LF)
@@ -36,7 +40,7 @@ pub fn generate_signing_key(
 /// Generate a strong shared reconcile secret: 32 random bytes, base64 (standard, padded).
 pub fn generate_reconcile_secret() -> String {
     let mut bytes = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    UnwrapErr(SysRng).fill_bytes(&mut bytes);
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
