@@ -5,7 +5,11 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use rand::RngCore as _;
+// rand 0.10 renamed `OsRng` to `SysRng` and made it fallible (`TryRng`); `UnwrapErr` restores
+// the infallible `Rng` interface with 0.8's semantics — an OS RNG failure panics.
+use rand::rand_core::UnwrapErr;
+use rand::rngs::SysRng;
+use rand::Rng as _;
 use sha2::{Digest, Sha256};
 
 /// Prefix on temper-minted client ids, distinguishing them from Auth0 client ids at a glance.
@@ -40,7 +44,7 @@ pub struct MintedSecret {
 /// Mint a 32-byte random secret (base64url-no-pad) and its SHA-256 hex.
 pub fn mint_secret() -> MintedSecret {
     let mut bytes = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    UnwrapErr(SysRng).fill_bytes(&mut bytes);
     let plaintext = URL_SAFE_NO_PAD.encode(bytes);
     let hash = sha256_hex(&plaintext);
     MintedSecret { plaintext, hash }
@@ -49,7 +53,7 @@ pub fn mint_secret() -> MintedSecret {
 /// Mint a temper client id: `tmpr_` + base64url of 16 random bytes.
 pub fn mint_client_id() -> String {
     let mut bytes = [0u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    UnwrapErr(SysRng).fill_bytes(&mut bytes);
     format!("{CLIENT_ID_PREFIX}{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 

@@ -6,7 +6,11 @@
 //! `can_manage`. Tokens are 128-bit CSPRNG values, never UUIDs (which are
 //! time-sortable and guessable).
 
-use rand::RngCore;
+// rand 0.10 renamed `OsRng` to `SysRng` and made it fallible (`TryRng`); `UnwrapErr` restores
+// the infallible `Rng` interface with 0.8's semantics — an OS RNG failure panics.
+use rand::rand_core::UnwrapErr;
+use rand::rngs::SysRng;
+use rand::Rng as _;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -28,7 +32,7 @@ pub struct CreateInvitationParams {
 /// Mint a 128-bit capability token, hex-encoded (32 chars). CSPRNG-backed —
 /// NOT a UUID (which is time-sortable and guessable).
 fn mint_token() -> String {
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = UnwrapErr(SysRng);
     format!("{:016x}{:016x}", rng.next_u64(), rng.next_u64())
 }
 
