@@ -64,7 +64,8 @@ pub async fn require_system_access(
         // did both before this layer runs. Unreachable from `require_system_access`.
         Err(
             temper_services::auth::AuthzError::Refused(_)
-            | temper_services::auth::AuthzError::EmailResolution(_),
+            | temper_services::auth::AuthzError::EmailResolution(_)
+            | temper_services::auth::AuthzError::Classification(_),
         ) => {
             return Err(ApiError::Internal(
                 "unexpected authentication error from require_system_access".to_string(),

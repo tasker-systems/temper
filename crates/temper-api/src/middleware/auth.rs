@@ -134,7 +134,8 @@ pub async fn require_auth(
                 ApiError::Unauthorized("account is deactivated".to_string())
             }
             temper_services::auth::AuthzError::EmailResolution(err)
-            | temper_services::auth::AuthzError::ProfileResolution(err) => err,
+            | temper_services::auth::AuthzError::ProfileResolution(err)
+            | temper_services::auth::AuthzError::Classification(err) => err,
             // Level 1 never runs the system-access gate; these are defensively
             // unreachable from `authenticate_token`.
             temper_services::auth::AuthzError::AccessCheck(_)

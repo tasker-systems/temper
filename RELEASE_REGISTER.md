@@ -32,6 +32,22 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 (`schemas/versions/<M.m>/`); the pin gate checks the record names a `spec-correction` row.
 
 ## Since v0.6.0 — unreleased
+- **A machine principal reaches only content and workflow; every other act refuses it with `403`**
+  A machine credential (a profile registered as a machine client, revoked or not) may still act on
+  resources, edges, properties, contexts, cognitive maps, blobs, data artifacts, schemas, search
+  and query, the steward, invocation and auditor workflows, read its own profile, and list and read
+  its teams. Every other act — membership and invitations, access requests, sharing and grants,
+  credentials (machine clients, connections, subscriptions), governance and every admin door,
+  reblock `All`, cognitive-map reconcile on an admin-only map, and profile edits — now answers a
+  machine with `403` `FORBIDDEN_DETAIL` and the fixed sentence "this action is not available to a
+  machine principal". The erasure doors answer a machine `403` where they answer a non-admin person
+  `404`. People see no change. The OpenAPI response descriptions name the refusal; shapes are
+  otherwise unchanged. Who observes: an approved machine credential calling any refused act over
+  HTTP or through MCP.
+pr: self
+classes: additive, behavioral
+surfaces: http, mcp, clients
+status: signal-only
 - **Erasing a person now clears the heading text of the chunks it empties**
   The principal erasure act emptied a governed chunk's prose and vector but left
   `kb_chunks.header_path`, the chunk's markdown heading trail, so a heading naming the subject

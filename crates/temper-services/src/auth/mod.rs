@@ -30,6 +30,9 @@
 //! - [`resolve_federated_human`] — the federated path. An assertion already
 //!   authenticated out-of-band (SAML/HMAC, no JWT) ⇒ resolved-or-JIT'd profile.
 //! - [`require_system_access`] — Level 2, consuming proof of Level 1.
+//! - [`authenticate_caller`] / [`authenticate_caller_existing_only`] — the two token paths above,
+//!   followed by the one human-or-machine classification. Yield a [`Caller`] holding exactly one
+//!   of [`HumanPrincipal`] / [`MachinePrincipal`].
 //!
 //! Two levels form a typestate chain:
 //! 1. `authenticate` (crate-private, reached only via [`authenticate_token`]) — resolve
@@ -93,6 +96,10 @@ pub enum AuthzError {
         profile_id: uuid::Uuid,
         refusal: temper_principal::Refusal,
     },
+    /// Classifying the authenticated profile as human or machine (`classify_caller`) could not
+    /// read whether it is a machine. Always an internal error: the request is refused without
+    /// telling the client anything about its credential, and never falls through to the human arm.
+    Classification(ApiError),
 }
 
 /// **The token path.** A verified JWT ⇒ an authenticated, active profile.
@@ -326,6 +333,144 @@ impl AuthenticatedProfile {
     pub fn into_profile(self) -> Profile {
         self.profile
     }
+}
+
+/// Proof that the caller is a **person**: authenticated, and classified human by `classify_caller`.
+///
+/// SEALED like [`AuthenticatedProfile`]: the field is private and `classify_caller` is the only
+/// constructor, so holding one means the classification ran and said human. There is no conversion
+/// from [`MachinePrincipal`] or from a bare [`AuthenticatedProfile`] — that absence is the guarantee,
+/// and the acts a machine may not take are typed to require this proof.
+///
+/// `Clone` because a request extension and an extractor both hand out owned values; cloning a proof
+/// yields a proof of the same kind, never of the other.
+#[derive(Debug, Clone)]
+pub struct HumanPrincipal(AuthenticatedProfile);
+
+impl HumanPrincipal {
+    /// The authenticated identity this proof was minted for.
+    pub fn authenticated(&self) -> &AuthenticatedProfile {
+        &self.0
+    }
+
+    /// The person's profile id.
+    pub fn profile_id(&self) -> ProfileId {
+        ProfileId::from(self.0.profile.id)
+    }
+}
+
+/// Proof that the caller is a **machine**: authenticated, and classified machine by
+/// `classify_caller`. Sealed exactly as [`HumanPrincipal`] is; the two have no conversion between
+/// them, so a machine can never be handed to an act that requires a person.
+#[derive(Debug, Clone)]
+pub struct MachinePrincipal(AuthenticatedProfile);
+
+impl MachinePrincipal {
+    /// The authenticated identity this proof was minted for.
+    pub fn authenticated(&self) -> &AuthenticatedProfile {
+        &self.0
+    }
+
+    /// The machine's profile id.
+    pub fn profile_id(&self) -> ProfileId {
+        ProfileId::from(self.0.profile.id)
+    }
+}
+
+/// A classified caller: exactly one of the two proofs. Minted only by `classify_caller`, and since
+/// each arm wraps a sealed proof, holding a `Caller` means the classification ran — the variants are
+/// public so a surface can match on them, not so it can build one.
+#[derive(Debug, Clone)]
+pub enum Caller {
+    Human(HumanPrincipal),
+    Machine(MachinePrincipal),
+}
+
+impl Caller {
+    /// The authenticated identity, whichever kind the caller is.
+    pub fn authenticated(&self) -> &AuthenticatedProfile {
+        match self {
+            Self::Human(h) => h.authenticated(),
+            Self::Machine(m) => m.authenticated(),
+        }
+    }
+
+    /// The caller's profile id, whichever kind the caller is.
+    pub fn profile_id(&self) -> ProfileId {
+        ProfileId::from(self.authenticated().profile.id)
+    }
+
+    /// The human proof, or `None` for a machine.
+    pub fn as_human(&self) -> Option<&HumanPrincipal> {
+        match self {
+            Self::Human(h) => Some(h),
+            Self::Machine(_) => None,
+        }
+    }
+}
+
+/// **The one classification.** An authenticated profile ⇒ a [`Caller`], and the only constructor
+/// of [`HumanPrincipal`] and [`MachinePrincipal`].
+///
+/// - Machine claims ⇒ `Machine`. No read: G3 already refused a machine token with no client row.
+/// - Human claims and `is_machine_profile` (any client row, revoked or not) ⇒ `Machine`, logged. No
+///   profile moves between kinds today, so this arm is unreachable — but a profile that is a machine
+///   at all is never handed a person's proof on the strength of its token's shape.
+/// - Human claims and no client row ⇒ `Human`.
+///
+/// A failed read refuses with [`AuthzError::Classification`] — a 5xx, never a 401/403 telling the
+/// client its credential is bad, and never a fall-through to the human arm.
+pub(crate) async fn classify_caller(
+    pool: &PgPool,
+    authed: AuthenticatedProfile,
+) -> Result<Caller, AuthzError> {
+    if authed.claims.principal_kind == PrincipalKind::Machine {
+        return Ok(Caller::Machine(MachinePrincipal(authed)));
+    }
+
+    let profile_id = ProfileId::from(authed.profile.id);
+    let is_machine = crate::services::machine_client_service::is_machine_profile(pool, profile_id)
+        .await
+        .map_err(|err| {
+            tracing::error!(%profile_id, ?err, "caller classification: machine-profile read failed");
+            AuthzError::Classification(ApiError::Internal(
+                "failed to classify the caller".to_string(),
+            ))
+        })?;
+
+    if is_machine {
+        tracing::warn!(
+            %profile_id,
+            "caller classification: human-shaped token resolved to a machine profile; classified as machine"
+        );
+        return Ok(Caller::Machine(MachinePrincipal(authed)));
+    }
+
+    Ok(Caller::Human(HumanPrincipal(authed)))
+}
+
+/// [`authenticate_token`], then `classify_caller`: a verified JWT ⇒ a classified [`Caller`]. The
+/// entry point for a surface's authed requests, so classification lives in this module with the
+/// proofs it mints.
+pub async fn authenticate_caller(
+    state: &AppState,
+    raw: &RawJwtClaims,
+    token: &str,
+) -> Result<Caller, AuthzError> {
+    let authed = authenticate_token(state, raw, token).await?;
+    classify_caller(&state.pool, authed).await
+}
+
+/// [`authenticate_token_existing_only`], then `classify_caller` — the lookup-only path, for a
+/// credential act outside the request middleware (the Slack account-link callback), which must not
+/// be the one door that skips classification.
+pub async fn authenticate_caller_existing_only(
+    state: &AppState,
+    raw: &RawJwtClaims,
+    token: &str,
+) -> Result<Caller, AuthzError> {
+    let authed = authenticate_token_existing_only(state, raw, token).await?;
+    classify_caller(&state.pool, authed).await
 }
 
 /// Proof that a profile passed **both** levels: authenticated *and*
@@ -1141,6 +1286,131 @@ mod tests {
         assert!(
             !still_unverified,
             "signing in with no email claim must not mark an unverified email verified"
+        );
+    }
+
+    // ── Caller classification (D1) ──────────────────────────────────────────────────────────
+    //
+    // One witness per arm of `classify_caller`. The claims-only and revoked-row cases are the two
+    // that isolate a conjunct: the first proves machine claims decide on their own (no row is
+    // read), the second that the any-row definition — not the unrevoked one — is the one read.
+
+    /// Seed a `kb_machine_clients` row for an existing profile, optionally already revoked.
+    async fn seed_client_row(pool: &PgPool, profile_id: uuid::Uuid, revoked: bool) {
+        sqlx::query!(
+            "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id, revoked_at) \
+             VALUES ($1, 'test', $2, $2, CASE WHEN $3 THEN now() ELSE NULL END)",
+            format!("client-{profile_id}"),
+            profile_id,
+            revoked,
+        )
+        .execute(pool)
+        .await
+        .expect("seed client row");
+    }
+
+    /// Capture what `tracing` emits while `fut` runs, on this thread.
+    async fn captured_logs<F: std::future::Future>(fut: F) -> (F::Output, String) {
+        #[derive(Clone, Default)]
+        struct Buf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Buf {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("log buffer").extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let buf = Buf::default();
+        let sink = buf.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || sink.clone())
+            .with_ansi(false)
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        let out = fut.await;
+        drop(guard);
+        let logs = String::from_utf8(buf.0.lock().expect("log buffer").clone()).expect("utf8 logs");
+        (out, logs)
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn human_claims_with_no_client_row_classify_human(pool: PgPool) {
+        let authed = authenticate(&pool, &claims("classify-human", "h@example.test"))
+            .await
+            .expect("authenticate");
+
+        let caller = classify_caller(&pool, authed).await.expect("classify");
+
+        assert!(matches!(caller, Caller::Human(_)), "got {caller:?}");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn human_claims_with_a_revoked_client_row_classify_machine(pool: PgPool) {
+        let authed = authenticate(&pool, &claims("classify-revoked", "r@example.test"))
+            .await
+            .expect("authenticate");
+        seed_client_row(&pool, authed.profile.id, true).await;
+
+        let caller = classify_caller(&pool, authed).await.expect("classify");
+
+        assert!(
+            matches!(caller, Caller::Machine(_)),
+            "a profile that was ever a machine is a machine, revoked or not; got {caller:?}"
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn human_claims_with_a_live_client_row_classify_machine_and_log_it(pool: PgPool) {
+        let authed = authenticate(&pool, &claims("classify-mismatch", "m@example.test"))
+            .await
+            .expect("authenticate");
+        let profile_id = authed.profile.id;
+        seed_client_row(&pool, profile_id, false).await;
+
+        let (caller, logs) = captured_logs(classify_caller(&pool, authed)).await;
+        let caller = caller.expect("classify");
+
+        assert!(matches!(caller, Caller::Machine(_)), "got {caller:?}");
+        assert!(
+            logs.contains("human-shaped token resolved to a machine profile")
+                && logs.contains(&profile_id.to_string()),
+            "the mismatch must be logged with the profile id; logs: {logs}"
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn machine_claims_classify_machine_without_reading_a_row(pool: PgPool) {
+        // Machine claims over a profile with NO client row — a state G3 makes unreachable in
+        // production — so the claims are the only thing that can make this a machine.
+        let authed = authenticate(&pool, &claims("classify-claims", "c@example.test"))
+            .await
+            .expect("authenticate");
+        let machine =
+            gate_resolved_profile(&pool, authed.into_profile(), &machine_claims("claims-only"))
+                .await
+                .expect("gate");
+
+        let caller = classify_caller(&pool, machine).await.expect("classify");
+
+        assert!(matches!(caller, Caller::Machine(_)), "got {caller:?}");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_failed_machine_read_refuses_as_internal_never_human(pool: PgPool) {
+        let authed = authenticate(&pool, &claims("classify-fail", "f@example.test"))
+            .await
+            .expect("authenticate");
+        pool.close().await;
+
+        let err = classify_caller(&pool, authed)
+            .await
+            .expect_err("a failed read must refuse, not fall through to Human");
+
+        assert!(
+            matches!(err, AuthzError::Classification(ApiError::Internal(_))),
+            "got {err:?}"
         );
     }
 }

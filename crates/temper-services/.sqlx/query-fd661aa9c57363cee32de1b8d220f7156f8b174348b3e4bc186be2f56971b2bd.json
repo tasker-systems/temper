@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id, revoked_at) VALUES ($1, 'test', $2, $2, CASE WHEN $3 THEN now() ELSE NULL END)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fd661aa9c57363cee32de1b8d220f7156f8b174348b3e4bc186be2f56971b2bd"
+}

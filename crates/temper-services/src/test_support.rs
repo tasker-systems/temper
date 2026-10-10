@@ -92,6 +92,65 @@ pub async fn authenticated_profile_for(
         .expect("seeded fixture must pass the Level-1 gate")
 }
 
+/// Mint a real `HumanPrincipal` for a seeded profile — [`authenticated_profile_for`], then the actual
+/// classification. Panics if the profile is a machine (it has a client row): the classification
+/// runs for real, so a fixture cannot hand a machine a person's proof.
+pub async fn human_principal_for(pool: &PgPool, profile_id: Uuid) -> crate::auth::HumanPrincipal {
+    let authed = authenticated_profile_for(pool, profile_id).await;
+    match crate::auth::classify_caller(pool, authed)
+        .await
+        .expect("classification must read")
+    {
+        crate::auth::Caller::Human(human) => human,
+        crate::auth::Caller::Machine(_) => {
+            panic!("profile {profile_id} is a machine; it cannot be minted a HumanPrincipal")
+        }
+    }
+}
+
+/// Mint a real `MachinePrincipal` for a seeded **machine** profile: a machine token's claims through
+/// the actual Level-1 gate and classification. Panics if the profile has no `kb_machine_clients` row,
+/// because production refuses a machine token without one (G3) — a machine fixture must be one.
+pub async fn machine_principal_for(
+    pool: &PgPool,
+    profile_id: Uuid,
+) -> crate::auth::MachinePrincipal {
+    use temper_core::types::ids::ProfileId;
+    use temper_core::types::{AuthClaims, PrincipalKind};
+
+    assert!(
+        crate::services::machine_client_service::is_machine_profile(
+            pool,
+            ProfileId::from(profile_id)
+        )
+        .await
+        .expect("read machine-ness"),
+        "profile {profile_id} has no machine client row; seed one before minting a MachinePrincipal"
+    );
+    let profile = crate::services::profile_service::get_by_id(pool, ProfileId::from(profile_id))
+        .await
+        .expect("load seeded profile");
+    let claims = AuthClaims {
+        principal_kind: PrincipalKind::Machine,
+        provider: crate::auth::MACHINE_PROVIDER_TAG.to_string(),
+        external_user_id: format!("test-client-{profile_id}"),
+        email: String::new(),
+        email_verified: None,
+        exp: 0,
+        iat: 0,
+    };
+    let authed = crate::auth::gate_resolved_profile(pool, profile, &claims)
+        .await
+        .expect("seeded fixture must pass the Level-1 gate");
+    match crate::auth::classify_caller(pool, authed)
+        .await
+        .expect("classification must read")
+    {
+        crate::auth::Caller::Machine(machine) => machine,
+        crate::auth::Caller::Human(_) => unreachable!("machine claims always classify Machine"),
+    }
+}
+
 /// Mint a real, sealed `SystemAdmin` proof — seeding a fresh approved-admin operator and passing it
 /// through the actual `require_system_admin` gate. For mechanics tests that must *call* a proof-gated
 /// admin fn but do not themselves exercise the gate; the seal has no test bypass, so the honest path
