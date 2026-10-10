@@ -15,6 +15,6 @@ name = "temper_auth"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 url = "2"
-rand = "0.8"
+rand = "0.10"
 sha2 = "0.10"
 base64 = "0.22"

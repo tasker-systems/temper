@@ -790,7 +790,7 @@
             }
           },
           "400": {
-            "description": "The profile or team cannot be promoted into",
+            "description": "The profile or team cannot be promoted into, or the profile is a machine principal (a machine never governs)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14057,7 +14057,7 @@
             }
           },
           "400": {
-            "description": "The `personal-` slug prefix is reserved for personal teams"
+            "description": "The `personal-` slug prefix is reserved for personal teams, or the caller is a machine principal (a team's creator becomes its owner, and a machine never governs)"
           },
           "403": {
             "description": "Forbidden (child requires owner/maintainer; auto_join_role requires admin)"
@@ -14478,7 +14478,7 @@
             }
           },
           "400": {
-            "description": "Cannot grant owner via add_member; use ownership transfer"
+            "description": "Cannot grant owner via add_member (use ownership transfer), or the target is a machine principal and the role is above `member`"
           },
           "403": {
             "description": "Forbidden (caller is not owner/maintainer)"
@@ -14557,7 +14557,7 @@
             "description": "Member not found"
           },
           "409": {
-            "description": "Cannot remove last owner or SAML-provisioned row"
+            "description": "Cannot remove the last owner, a SAML-provisioned row, or a profile from its own personal team"
           }
         },
         "security": [
@@ -14617,7 +14617,7 @@
             }
           },
           "400": {
-            "description": "Cannot grant owner via role change"
+            "description": "Cannot grant owner via role change, or the target is a machine principal and the role is above `member`"
           },
           "403": {
             "description": "Forbidden (not owner/maintainer)"
