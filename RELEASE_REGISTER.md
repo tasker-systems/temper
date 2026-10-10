@@ -32,6 +32,23 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 (`schemas/versions/<M.m>/`); the pin gate checks the record names a `spec-correction` row.
 
 ## Since v0.6.0 — unreleased
+- **Erasing a person now erases every resource in their @me and personal-team contexts, ledger included**
+  The principal erasure act emptied its estate's prose by content hash and left titles, origins,
+  properties, edge labels and every ledger copy; its estate was the subject's `@me` contexts only.
+  It now runs resource erasure on every resource homed in the subject's `@me` contexts and their
+  personal team's contexts, so each becomes a husk with its ledger trail rewritten, then scrubs
+  identity as before. `POST /api/admin/erasure`'s completion gains `resource_erasures` and
+  `estate_stragglers` (live resources and files still homed in the estate after commit; absent
+  when it could not be counted); `POST /api/admin/erasure/survey` gains `estate` and `resources`;
+  all are new fields with defaults, and every existing field keeps its shape. `redacted_hashes` now holds
+  only the hashes the act still empties itself (struck blobs), and the per-content-table targets
+  appear only for those. The `principal_erased` payload gains three optional keys. Who observes:
+  system admins running or surveying a person erasure. Release relevance: behavioral, plus additive
+  response fields.
+pr: self
+classes: additive, behavioral
+surfaces: http, clients, schema
+status: signal-only
 - **Erasing a person now clears the heading text of the chunks it empties**
   The principal erasure act emptied a governed chunk's prose and vector but left
   `kb_chunks.header_path`, the chunk's markdown heading trail, so a heading naming the subject

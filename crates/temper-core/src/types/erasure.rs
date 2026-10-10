@@ -343,6 +343,71 @@ pub struct BlobStrikeView {
     pub released: bool,
 }
 
+/// What the person act does with one resource of the estate (person-erasure design D2, 2026-10-10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum EstateDisposition {
+    /// Live or soft-deleted: resource erasure runs on it.
+    Erase,
+    /// Already erased, with ledger paths still to rewrite: resource erasure's completion pass runs.
+    Complete,
+    /// Already erased and complete: nothing to do.
+    Skip,
+    /// A cogmap's charter: its text is emptied and it is held until map-grain erasure.
+    Charter,
+}
+
+/// The estate's size, by disposition: the survey's first answer (2g).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct EstateCounts {
+    pub erase: u32,
+    pub complete: u32,
+    pub skip: u32,
+    pub charter: u32,
+    pub total: u32,
+}
+
+/// One estate resource in the survey, in the order the act takes them (resource id). The counts
+/// come from that resource's own erasure survey; the full plan is the resource survey door's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct EstateResourcePlan {
+    pub resource_id: Uuid,
+    pub disposition: EstateDisposition,
+    /// Edges the resource erasure would fold.
+    #[serde(default)]
+    pub edges: u32,
+    /// Entries in the resource erasure's named remainder.
+    #[serde(default)]
+    pub remainder: u32,
+    /// Entries in the resource erasure's ledger remainder.
+    #[serde(default)]
+    pub ledger_remainder: u32,
+    /// Ledger events whose fields the resource erasure would rewrite.
+    #[serde(default)]
+    pub redacted_fields: u32,
+}
+
+/// Whether a resource erasure the person act ran was a first erasure or a completion pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum EstateErasureKind {
+    Erasure,
+    Completion,
+}
+
+/// One resource erasure the person act ran: its `resource_erased` event, in act order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct EstateResourceErasure {
+    pub resource_id: Uuid,
+    pub event_id: Uuid,
+    pub kind: EstateErasureKind,
+}
+
 /// The survey door's request: the subject as the pseudonym UUID, and nothing else. No
 /// request_reference — nothing is requested (ruled 2026-09-12: a survey attempt is not an
 /// erasure request, so no reference is minted and no refusal would be recorded).
@@ -377,6 +442,12 @@ pub struct ErasureSurveyResponse {
     /// Per-target outcomes and the named remainder, exactly as the record would carry them.
     pub targets: Vec<ErasureTargetOutcome>,
     pub blob_strikes: Vec<BlobStrikeView>,
+    /// The estate's size by disposition: the subject's @me and personal-team contexts' resources.
+    #[serde(default)]
+    pub estate: EstateCounts,
+    /// Every estate resource, in the order the act would take it.
+    #[serde(default)]
+    pub resources: Vec<EstateResourcePlan>,
 }
 
 /// What the door's act did: the completion, in full or as the no-op completion on an
@@ -399,6 +470,14 @@ pub enum ErasureExecuteResponse {
         /// actor and deserves the same facts.
         targets: Vec<ErasureTargetOutcome>,
         blob_strikes: Vec<BlobStrikeView>,
+        /// The resource erasures the act ran over the estate, in the order it ran them.
+        #[serde(default)]
+        resource_erasures: Vec<EstateResourceErasure>,
+        /// Live resources and blobs still homed in the estate after the act committed: created
+        /// there while the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which
+        /// erases them. Absent when the count could not be read: unknown, never zero.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        estate_stragglers: Option<u32>,
     },
 }
 

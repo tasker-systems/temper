@@ -278,14 +278,17 @@ async fn attach_blob_to_resource(
     .expect("seed blob-resource edge");
 }
 
-/// A context OWNED by the subject's personal team (the trigger made the team at profile
-/// insert) — team governance, disposition iii's not-governed home.
+/// A context owned by a team that is NOT the subject's personal team — team governance,
+/// disposition iii's not-governed home.
 async fn seed_team_context(pool: &PgPool, handle: &str) -> Uuid {
     let context = Uuid::now_v7();
     sqlx::query(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-                 SELECT $1, 'kb_teams', t.id, 'shared', 'Shared' \
-                   FROM kb_teams t WHERE t.slug = 'personal-' || $2",
+        // A team the subject does NOT own personally: since 20261021100000 the personal team's
+        // contexts are the estate (R1), so a not-governed team home is another team.
+        "WITH t AS (INSERT INTO kb_teams (slug, name) VALUES ('shared-' || $2, 'Shared') \
+                   RETURNING id) \
+         INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
+                 SELECT $1, 'kb_teams', t.id, 'shared', 'Shared' FROM t",
     )
     .bind(context)
     .bind(handle)
@@ -573,8 +576,31 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
         .targets
         .iter()
         .any(|t| t.target == "kb_contexts.is_active" && t.outcome == "retired"));
-    assert!(survey.redacted_hashes.contains(&world.chunk_hash));
-    assert!(survey.redacted_hashes.contains(&world.block_hash));
+    // Since 20261021100000 the estate's text is emptied by resource erasure, row by row, and the
+    // redacted set is the struck blobs' hashes (D5, ruled Q1): no text hash rides it.
+    assert!(!survey.redacted_hashes.contains(&world.chunk_hash));
+    assert!(!survey.redacted_hashes.contains(&world.block_hash));
+    // The estate is surveyed first by count (2g): the one resource, for erasure.
+    assert_eq!(survey.estate.total, 1, "one estate resource");
+    assert_eq!(survey.estate.erase, 1, "and it is for erasure");
+    assert_eq!(
+        survey
+            .resources
+            .iter()
+            .map(|r| r.resource_id)
+            .collect::<Vec<_>>(),
+        completion
+            .resource_erasures
+            .iter()
+            .map(|e| e.resource_id)
+            .collect::<Vec<_>>(),
+        "the survey's resources are the act's resource erasures, in order"
+    );
+    assert!(
+        survey.resources[0].edges >= 1,
+        "the attached guest blob's relation is an edge the erasure folds: {:?}",
+        survey.resources
+    );
     assert!(survey.redacted_hashes.contains(&sole_hash));
     assert!(
         survey.redacted_hashes.contains(&shared_hash),

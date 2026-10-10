@@ -20,10 +20,16 @@ module Temper::Generated
 
     attr_accessor :blob_strikes
 
+    # Live resources and blobs still homed in the estate after the act committed: created there while the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which erases them. Absent when the count could not be read: unknown, never zero.
+    attr_accessor :estate_stragglers
+
     attr_accessor :event_id
 
     # The redacted set (D2): content hashes only.
     attr_accessor :redacted_hashes
+
+    # The resource erasures the act ran over the estate, in the order it ran them.
+    attr_accessor :resource_erasures
 
     attr_accessor :status
 
@@ -57,8 +63,10 @@ module Temper::Generated
       {
         :'already_erased' => :'already_erased',
         :'blob_strikes' => :'blob_strikes',
+        :'estate_stragglers' => :'estate_stragglers',
         :'event_id' => :'event_id',
         :'redacted_hashes' => :'redacted_hashes',
+        :'resource_erasures' => :'resource_erasures',
         :'status' => :'status',
         :'targets' => :'targets'
       }
@@ -79,8 +87,10 @@ module Temper::Generated
       {
         :'already_erased' => :'Boolean',
         :'blob_strikes' => :'Array<BlobStrikeView>',
+        :'estate_stragglers' => :'Integer',
         :'event_id' => :'String',
         :'redacted_hashes' => :'Array<String>',
+        :'resource_erasures' => :'Array<EstateResourceErasure>',
         :'status' => :'String',
         :'targets' => :'Array<ErasureTargetOutcome>'
       }
@@ -89,6 +99,7 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'estate_stragglers',
       ])
     end
 
@@ -122,6 +133,10 @@ module Temper::Generated
         self.blob_strikes = nil
       end
 
+      if attributes.key?(:'estate_stragglers')
+        self.estate_stragglers = attributes[:'estate_stragglers']
+      end
+
       if attributes.key?(:'event_id')
         self.event_id = attributes[:'event_id']
       else
@@ -134,6 +149,12 @@ module Temper::Generated
         end
       else
         self.redacted_hashes = nil
+      end
+
+      if attributes.key?(:'resource_erasures')
+        if (value = attributes[:'resource_erasures']).is_a?(Array)
+          self.resource_erasures = value
+        end
       end
 
       if attributes.key?(:'status')
@@ -164,6 +185,10 @@ module Temper::Generated
         invalid_properties.push('invalid value for "blob_strikes", blob_strikes cannot be nil.')
       end
 
+      if !@estate_stragglers.nil? && @estate_stragglers < 0
+        invalid_properties.push('invalid value for "estate_stragglers", must be greater than or equal to 0.')
+      end
+
       if @event_id.nil?
         invalid_properties.push('invalid value for "event_id", event_id cannot be nil.')
       end
@@ -189,6 +214,7 @@ module Temper::Generated
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @already_erased.nil?
       return false if @blob_strikes.nil?
+      return false if !@estate_stragglers.nil? && @estate_stragglers < 0
       return false if @event_id.nil?
       return false if @redacted_hashes.nil?
       return false if @status.nil?
@@ -216,6 +242,16 @@ module Temper::Generated
       end
 
       @blob_strikes = blob_strikes
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] estate_stragglers Value to be assigned
+    def estate_stragglers=(estate_stragglers)
+      if !estate_stragglers.nil? && estate_stragglers < 0
+        fail ArgumentError, 'invalid value for "estate_stragglers", must be greater than or equal to 0.'
+      end
+
+      @estate_stragglers = estate_stragglers
     end
 
     # Custom attribute writer method with validation
@@ -265,8 +301,10 @@ module Temper::Generated
       self.class == o.class &&
           already_erased == o.already_erased &&
           blob_strikes == o.blob_strikes &&
+          estate_stragglers == o.estate_stragglers &&
           event_id == o.event_id &&
           redacted_hashes == o.redacted_hashes &&
+          resource_erasures == o.resource_erasures &&
           status == o.status &&
           targets == o.targets
     end
@@ -280,7 +318,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [already_erased, blob_strikes, event_id, redacted_hashes, status, targets].hash
+      [already_erased, blob_strikes, estate_stragglers, event_id, redacted_hashes, resource_erasures, status, targets].hash
     end
 
     # Builds the object from hash

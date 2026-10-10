@@ -218,6 +218,11 @@ __all__ = [
     "ErrorBody",
     "ErrorDetail",
     "ErrorDetails",
+    "EstateCounts",
+    "EstateDisposition",
+    "EstateErasureKind",
+    "EstateResourceErasure",
+    "EstateResourcePlan",
     "EventCursorResponse",
     "EventTrail",
     "ExactArm",
@@ -698,6 +703,11 @@ from temper.generated.models.erasure_target_outcome import ErasureTargetOutcome 
 from temper.generated.models.error_body import ErrorBody as ErrorBody
 from temper.generated.models.error_detail import ErrorDetail as ErrorDetail
 from temper.generated.models.error_details import ErrorDetails as ErrorDetails
+from temper.generated.models.estate_counts import EstateCounts as EstateCounts
+from temper.generated.models.estate_disposition import EstateDisposition as EstateDisposition
+from temper.generated.models.estate_erasure_kind import EstateErasureKind as EstateErasureKind
+from temper.generated.models.estate_resource_erasure import EstateResourceErasure as EstateResourceErasure
+from temper.generated.models.estate_resource_plan import EstateResourcePlan as EstateResourcePlan
 from temper.generated.models.event_cursor_response import EventCursorResponse as EventCursorResponse
 from temper.generated.models.event_trail import EventTrail as EventTrail
 from temper.generated.models.exact_arm import ExactArm as ExactArm
