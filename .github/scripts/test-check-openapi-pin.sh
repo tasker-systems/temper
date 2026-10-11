@@ -60,10 +60,11 @@ reset_fixtures() {
   write_version
   write_pin 0.5 "$(base_contract)"
   base_contract > "$EMIT"
-  rm -f "$REGISTER"
+  rm -rf "$REGISTER"
 }
 
-REGISTER="${WORK}/RELEASE_REGISTER.md"
+REGISTER="${WORK}/release-register"
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 run_gate() { bash "$CHECK" --emitted "$EMIT" --pin-dir "$PINDIR" --version-file "$VERFILE" --register "$REGISTER" 2>&1; }
 
 echo "test-check-openapi-pin"
@@ -194,14 +195,22 @@ else bad "unparseable committed contract: fails closed, never renders as a pass"
 # The fixture's correction: the pinned GET answer declared `score` required, and the corrected
 # shape drops that. On its own that is the #906 omit-class (case 4), so without the record it fails.
 SURVIVOR='/api/blobs/{id}'
-ROW='Blob reads document what the server always returned'
+ROW='blob-reads-document-what-the-server-returned'
 corrected_head() { jq -S '.paths["/api/blobs/{id}"].get.responses["200"].content["application/json"].schema.required = []' "$EMIT"; }
-write_register() { # $1 = classes
-  printf '# Release-verdict register\n\n- **%s**\n  Prose.\npr: self\nclasses: %s\nsurfaces: http\nstatus: signal-only\n- **Another row**\n  Prose.\npr: self\nclasses: spec-correction\nsurfaces: http\nstatus: signal-only\n' "$ROW" "$1" > "$REGISTER"
+entry_toml() { # $1 = title, $2 = classes ("a, b")
+  printf 'title = "%s"\npr = "self"\nclasses = [%s]\nsurfaces = ["http"]\nstatus = "signal-only"\nbody = "Prose."\n' \
+    "$1" "$(printf '%s' "$2" | awk -F', *' '{ for (i = 1; i <= NF; i++) printf "%s\"%s\"", (i > 1 ? ", " : ""), $i }')"
 }
-write_corrections() { # $1 = register row title, $2 = path, $3 = the head to record from
+write_register() { # $1 = classes for the entry under probe
+  rm -rf "$REGISTER"
+  mkdir -p "${REGISTER}/unreleased"
+  cp "${REPO}/release-register/vocabulary.toml" "${REGISTER}/vocabulary.toml"
+  entry_toml "Blob reads document what the server always returned" "$1" > "${REGISTER}/unreleased/${ROW}.toml"
+  entry_toml "Another entry" "spec-correction" > "${REGISTER}/unreleased/another-entry.toml"
+}
+write_corrections() { # $1 = register entry id, $2 = path, $3 = the head to record from
   jq -n --arg row "$1" --arg p "$2" --slurpfile h "$3" \
-    '{corrections: [{path: $p, method: "get", register_row: $row, reason: "fixture", operation: $h[0].paths["/api/blobs/{id}"].get}]}' \
+    '{corrections: [{path: $p, method: "get", register_entry: $row, reason: "fixture", operation: $h[0].paths["/api/blobs/{id}"].get}]}' \
     > "${PINDIR}/0.5/corrections.json"
 }
 corrected_setup() { # $1 = classes for the row
@@ -241,15 +250,24 @@ else bad "corrections: movement elsewhere still fails beside an applied correcti
 corrected_setup "behavioral"
 out="$(run_gate)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'not spec-correction'; then
-  ok "corrections: a row not declared spec-correction fails"
-else bad "corrections: a row not declared spec-correction fails" "exit=$rc" "$out"; fi
+  ok "corrections: an entry not declared spec-correction fails"
+else bad "corrections: an entry not declared spec-correction fails" "exit=$rc" "$out"; fi
 
 corrected_setup "behavioral, spec-correction"
-write_corrections "A row nobody wrote" "$SURVIVOR" "$EMIT"
+write_corrections "an-entry-nobody-wrote" "$SURVIVOR" "$EMIT"
 out="$(run_gate)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'does not carry'; then
-  ok "corrections: a register row that does not exist fails"
-else bad "corrections: a register row that does not exist fails" "exit=$rc" "$out"; fi
+  ok "corrections: a register entry that does not exist fails"
+else bad "corrections: a register entry that does not exist fails" "exit=$rc" "$out"; fi
+
+# W8 — a correction outlives its entry's roll: the entry moved to a rolled window still resolves.
+corrected_setup "behavioral, spec-correction"
+mkdir -p "${REGISTER}/v0.5.0"
+mv "${REGISTER}/unreleased/${ROW}.toml" "${REGISTER}/v0.5.0/${ROW}.toml"
+out="$(run_gate)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '1 recorded correction(s) applied'; then
+  ok "W8: a correction whose entry was rolled into v0.5.0/ still resolves"
+else bad "W8: a correction whose entry was rolled still resolves" "exit=$rc" "$out"; fi
 
 corrected_setup "behavioral, spec-correction"
 write_corrections "$ROW" "/api/nowhere" "$EMIT"

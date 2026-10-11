@@ -45,12 +45,14 @@
 # RECORDED CORRECTIONS
 # --------------------
 # A pin can carry `corrections.json` beside it: operations whose pinned shape described a
-# request or answer the server never made, each with the shape it is corrected to and the
-# RELEASE_REGISTER.md row that declares it `spec-correction` (the review-owned class; see the
-# register header). The gate replaces each named operation in the pin with its RECORDED corrected
+# request or answer the server never made, each with the shape it is corrected to and the id of
+# the release-register entry that declares it `spec-correction` (`register_entry`; the
+# review-owned class, see release-register/README.md). The id is resolved through the register's
+# one reader, tools/manifest/manifest.py, across unreleased/ and every rolled v<x.y.z>/ — a
+# correction outlives its entry's roll. The gate replaces each named operation in the pin with its RECORDED corrected
 # shape before comparing, so the record is a corrected baseline, never a waiver: a later change to
 # a corrected operation is judged against the recorded shape like any other movement. A correction
-# that names an operation the pin does not have, names an operation twice, or names a register row
+# that names an operation the pin does not have, names an operation twice, or names a register entry
 # that is missing or not declared `spec-correction` fails the gate.
 #
 # ACCEPTED RESIDUE
@@ -72,7 +74,7 @@
 #   --emitted FILE       the committed contract (default: openapi.json at repo root)
 #   --pin-dir DIR        the pin tree (default: schemas/versions)
 #   --version-file FILE  the VERSION file (default: VERSION at repo root)
-#   --register FILE      the release register (default: RELEASE_REGISTER.md at repo root)
+#   --register DIR       the release register (default: release-register at repo root)
 #
 # Exit 0 = the committed contract is unchanged or grew against the current pin.
 # Exit 1 = it moved, or the gate could not look.
@@ -161,27 +163,24 @@ CORRECTED_NOTE=""
 if [ -f "$CORRECTIONS" ]; then
     jq -e '.corrections | type == "array" and length > 0 and all(.[];
             (.path | type) == "string" and (.method | type) == "string"
-            and (.register_row | type) == "string" and (.reason | type) == "string"
+            and (.register_entry | type) == "string" and (.reason | type) == "string"
             and (.operation | type) == "object")' "$CORRECTIONS" >/dev/null 2>&1 \
-        || fail "${CORRECTIONS} is not a non-empty \`corrections\` array whose every entry carries path, method, register_row, reason and operation."
+        || fail "${CORRECTIONS} is not a non-empty \`corrections\` array whose every entry carries path, method, register_entry, reason and operation."
     DUPES="$(jq -r '[.corrections[] | "\(.method | ascii_upcase) \(.path)"] | group_by(.) | map(select(length > 1) | .[0]) | .[]' "$CORRECTIONS")"
     [ -z "$DUPES" ] || fail "${CORRECTIONS} corrects the same operation more than once: ${DUPES}"
     UNKNOWN="$(jq -r --slurpfile pin "$TMP_BASE" '.corrections[] | select($pin[0].paths[.path][.method] == null) | "\(.method | ascii_upcase) \(.path)"' "$CORRECTIONS")"
     [ -z "$UNKNOWN" ] || fail "${CORRECTIONS} corrects an operation the ${PIN_NAME} pin does not have: ${UNKNOWN}. A correction amends a pinned shape; growth needs no record."
-    REGISTER="${REGISTER_ARG:-RELEASE_REGISTER.md}"
-    [ -f "$REGISTER" ] || fail "${CORRECTIONS} names register rows, but there is no register at ${REGISTER} to check them against."
-    while IFS= read -r ROW; do
-        # The row's bold title line, then its own `classes:` line before the next row begins.
-        CLASSES="$(awk -v title="- **${ROW}**" '
-            $0 == title { inrow = 1; next }
-            inrow && /^- \*\*/ { exit }
-            inrow && /^classes:/ { print; exit }' "$REGISTER")"
-        [ -n "$CLASSES" ] || fail "${CORRECTIONS} names register row \"${ROW}\", which ${REGISTER} does not carry. Every correction is declared there first."
-        case "$CLASSES" in
-            *spec-correction*) : ;;
-            *) fail "register row \"${ROW}\" is named by ${CORRECTIONS} but declares ${CLASSES#classes: }, not spec-correction." ;;
+    REGISTER="${REGISTER_ARG:-release-register}"
+    [ -d "$REGISTER" ] || fail "${CORRECTIONS} names register entries, but there is no register at ${REGISTER} to check them against."
+    while IFS= read -r ENTRY; do
+        RESOLVED="$(python3 "${SCRIPT_DIR}/../../tools/manifest/manifest.py" register resolve "$ENTRY" --dir "$REGISTER" 2>&1)" \
+            || fail "${CORRECTIONS} names register entry \"${ENTRY}\", which ${REGISTER} does not carry. Every correction is declared there first. ${RESOLVED}"
+        CLASSES="$(printf '%s' "$RESOLVED" | cut -f2)"
+        case ", ${CLASSES}," in
+            *", spec-correction,"*) : ;;
+            *) fail "register entry \"${ENTRY}\" is named by ${CORRECTIONS} but declares ${CLASSES}, not spec-correction." ;;
         esac
-    done < <(jq -r '.corrections[].register_row' "$CORRECTIONS" | LC_ALL=C sort -u)
+    done < <(jq -r '.corrections[].register_entry' "$CORRECTIONS" | LC_ALL=C sort -u)
     jq -S --slurpfile c "$CORRECTIONS" \
         'reduce $c[0].corrections[] as $x (.; .paths[$x.path][$x.method] = $x.operation)' \
         "$TMP_BASE" > "${TMP_BASE}.c" && mv "${TMP_BASE}.c" "$TMP_BASE" \

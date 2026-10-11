@@ -1,0 +1,26 @@
+# A release-register entry. Scaffold one with:
+#   python3 tools/manifest/manifest.py register new <id>
+# which copies this file to release-register/unreleased/<id>.toml. The id is the file name:
+# lowercase kebab-case, at most 64 characters, never renamed once merged (corrections.json
+# cites entries by id). Every key below is required, and the empty values fail validation
+# until you fill them in. The vocabulary is release-register/vocabulary.toml; what each
+# token means is release-register/README.md.
+
+# One line: the change, stated as what is now true.
+title = ""
+
+# "self" (the number is unknowable before you push), or the PR number.
+pr = "self"
+
+# A subset of vocabulary.toml's `classes`, e.g. ["additive"] or ["additive", "behavioral"].
+classes = []
+
+# A subset of vocabulary.toml's `surfaces`, e.g. ["http", "clients"].
+surfaces = []
+
+# "signal-only", "open", "satisfied", or "blocked:<release-class>".
+status = ""
+
+# What changed behind which shape · who observes it · user visibility · release relevance.
+body = '''
+'''

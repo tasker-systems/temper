@@ -55,7 +55,7 @@ dependencies = [
 ]
 
 [tasks.wire-register-crosscheck]
-description = "Fail if this branch's wire changes carry no RELEASE_REGISTER.md declaration row, or declare a class their openapi.json diff contradicts"
+description = "Fail if this branch's wire changes add no release-register entry, or declare a class their openapi.json diff contradicts"
 # The declared-class gate (shared-semver-policy spec §4), joined to local `check` on
 # 2026-09-10 — PR #874's session is the case it closes: a wire-touching branch passed a
 # fully green local `cargo make check` and failed CI twice on the register (a missing row,
@@ -84,6 +84,13 @@ fi
 exec bash .github/scripts/wire-class-crosscheck.sh --base "${base}"
 '''
 
+[tasks.register]
+description = "Print the release register's unreleased window as markdown (never commit the output)"
+# The register is one TOML file per entry (release-register/unreleased/<id>.toml), so there is no
+# single file to read. This renders one on demand. Committing the rendering would recreate the
+# single file every PR edits, and with it the conflicts the per-entry layout removed.
+script = ["python3 ${CARGO_MAKE_WORKING_DIRECTORY}/tools/manifest/manifest.py register render"]
+
 [tasks.openapi-pin-check]
 description = "Fail if the committed openapi.json moves beyond the current pinned minor contract (additive-only within a pin)"
 # The pinned-contract gate (2026-09-16): each released minor pins its contract under
@@ -96,7 +103,7 @@ description = "Fail if the committed openapi.json moves beyond the current pinne
 # release PR. Until one of those, this gate reads red, which is the discipline
 # speaking.
 #
-# Unlike wire-register-crosscheck this NEVER skips: it needs only jq and files — no
+# Unlike wire-register-crosscheck this NEVER skips: it needs only jq, python3 (the register reader) and files — no
 # git derivation, no toolchain — so local and CI semantics are identical. The verdict
 # is the shared comparator's (wire-shape.jq / wire-shape-lib.jq); the full discipline
 # (pin cutting, the retirement release) is documented in RELEASING.md's versioning

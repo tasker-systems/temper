@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # wire-class-crosscheck.sh — every PR that moves a wire surface declares its compat class in
-# RELEASE_REGISTER.md, and CI fails the PRs that say nothing, or whose declaration their own
-# openapi diff contradicts.
+# the release register (release-register/unreleased/<id>.toml), and CI fails the PRs that say
+# nothing, or whose declaration their own openapi diff contradicts.
 #
 # WHY THIS EXISTS
 # ---------------
@@ -9,7 +9,7 @@
 # temper-artifacts/specs/2026-09-09-shared-semver-policy-design.md, §4, decision D-S4) makes the
 # compatibility gate a declared-class mechanism: per-PR class declaration, CI verifying only the
 # mechanical half, human judgment owning the behavioral half, and a release-verdict register that
-# gates releases. The register row is the DURABLE declaration, because a merged PR body is not in
+# gates releases. The register entry is the DURABLE declaration, because a merged PR body is not in
 # the tree and the release calculator diffs the tree — declare_migration's lesson carried over:
 # "the declaration must live in the artifact the tooling reads".
 #
@@ -36,12 +36,19 @@
 #
 # WHAT IS CHECKED
 # ---------------
-#   1. PRESENCE — a wire-touched path changed and the diff adds no register row naming this
-#      PR: FAIL, naming the wire files. The row, not the file, is what is checked: a PR that
-#      edits the register without adding its own row still fails.
-#   2. PARSE — when RELEASE_REGISTER.md changed, every machine line (`pr:`, `classes:`,
-#      `surfaces:`, `status:`) must be well-formed against the register header's own
-#      vocabulary. Malformed: FAIL, naming the line.
+#   1. PRESENCE — a wire-touched path changed and the diff adds no register entry naming this
+#      PR: FAIL, naming the wire files. An entry is a file the diff ADDS under
+#      release-register/unreleased/ (`git diff -M --diff-filter=A`) whose `pr` is "self" or this
+#      PR's number. Editing someone else's entry is `M` and renaming one is `R`; neither is a
+#      declaration, so a PR that only does either still fails.
+#   2. PARSE — when release-register/ changed, the whole register must validate through the one
+#      reader, tools/manifest/manifest.py: every entry's keys, types and vocabulary (read from
+#      release-register/vocabulary.toml, never from this script), ids, and layout. Malformed:
+#      FAIL, naming the file and the key.
+#   2a. THE OLD FILE — RELEASE_REGISTER.md exists: FAIL, naming the new location. The register
+#      became one file per entry on 2026-10-11; an agent or person acting on a stale instruction
+#      would otherwise recreate the old file, and check 1 alone would report only that an entry
+#      is missing.
 #   3. SHAPE HONESTY — when openapi.json changed, this PR's own row(s) must declare a shape
 #      class, and the declaration must survive the actual diff:
 #        shape moved (anything beyond `.info.version`, jq-compared) and no `shape-breaking`
@@ -88,25 +95,21 @@
 # change behavior behind an unchanged shape — that is the behavioral class, which this gate is
 # barred from certifying either way (above); review owns it, and the pass message says so.
 #
-# THE pr: self SENTINEL
-# ---------------------
-# The row describing the PR that carries it is written `pr: self` — the number is unknowable
-# before push, and presence is what CI verifies, not the number. `pr: <the real number>` is
-# equally legal once known; CI (which knows the number, via GITHUB_PR_NUMBER) and --pr accept
-# either.
+# THE pr = "self" SENTINEL
+# ------------------------
+# The entry describing the PR that carries it is written `pr = "self"` — the number is
+# unknowable before push, and presence is what CI verifies, not the number. `pr = <the real
+# number>` is equally legal once known; CI (which knows the number, via GITHUB_PR_NUMBER) and
+# --pr accept either.
 #
 # ACCEPTED RESIDUE
 # ----------------
 # * Shape movement is measured on openapi.json only. MCP output and CLI stdout are contract
 #   surface (spec §3) whose shape no committed artifact records, so no mechanical half exists
 #   for them — their classes are owned by review, exactly like the behavioral class.
-# * An unknown machine-looking field (`claas: additive`) is not flagged; only the four
-#   documented fields are parsed. The release calculator reads the same four, so a typo'd
-#   field surfaces as a missing declaration at release time — and check 1 already fails the
-#   row this PR owes.
-# * `surfaces:` is validated beyond the three fields the predicate names, because the register
-#   header documents its vocabulary and a machine-line validator that skips a machine line is
-#   a hole the file's own contract already closes.
+# * An entry must be committed or staged to be seen: `git diff <base>` lists tracked paths, so
+#   an untracked new entry is invisible locally (CI and pre-push run on commits, where it is not).
+#   The presence failure says so.
 #
 # USAGE
 #   .github/scripts/wire-class-crosscheck.sh                # CI / local: derive from git
@@ -114,12 +117,14 @@
 #
 # Fixture seams (each replaces one git derivation; what the harness feeds):
 #   --wire-touched FILE      file of changed paths, one per line
-#   --added-register FILE    file of added register machine lines, verbatim (`pr: self`, ...)
+#   --added-entries DIR      directory of entry files to treat as the ones this diff adds
 #   --shape-verdict moved|unchanged|undeterminable
 #   --dependency-only FILE   file of wire paths whose change is dependency-only (else, in
 #                            fixture mode, none are; in git mode the classifier decides)
-#   --register FILE          parse target (default: RELEASE_REGISTER.md at the repo root;
-#                            the diff/presence half always reads the repo's own register)
+#   --register-dir DIR       the register to validate, and whose vocabulary added entries are
+#                            read against (default: release-register at the repo root)
+#   --legacy-register PATH   the old single file whose existence fails check 2a (default:
+#                            RELEASE_REGISTER.md at the repo root)
 #   --pr N                   this PR's number (else GITHUB_PR_NUMBER; else `self` only)
 #   --base REF               diff base (else the incumbents' candidate list)
 #
@@ -131,22 +136,25 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-REGISTER_FILE="RELEASE_REGISTER.md"
+REGISTER_DIR="release-register"
 REGISTER_EXPLICIT=0
+LEGACY_REGISTER="RELEASE_REGISTER.md"
+MANIFEST_PY="tools/manifest/manifest.py"
 PR_NUMBER="${GITHUB_PR_NUMBER:-}"
 BASE_ARG=""
 WIRE_TOUCHED_FILE=""
-ADDED_REGISTER_FILE=""
+ADDED_ENTRIES_DIR=""
 SHAPE_VERDICT_ARG=""
 DEPENDENCY_ONLY_FILE=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --register)       REGISTER_FILE="${2:-}"; REGISTER_EXPLICIT=1; shift 2 ;;
+        --register-dir)   REGISTER_DIR="${2:-}"; REGISTER_EXPLICIT=1; shift 2 ;;
+        --legacy-register) LEGACY_REGISTER="${2:-}"; shift 2 ;;
         --pr)             PR_NUMBER="${2:-}"; shift 2 ;;
         --base)           BASE_ARG="${2:-}"; shift 2 ;;
         --wire-touched)   WIRE_TOUCHED_FILE="${2:-}"; shift 2 ;;
-        --added-register) ADDED_REGISTER_FILE="${2:-}"; shift 2 ;;
+        --added-entries)  ADDED_ENTRIES_DIR="${2:-}"; shift 2 ;;
         --shape-verdict)  SHAPE_VERDICT_ARG="${2:-}"; shift 2 ;;
         --dependency-only) DEPENDENCY_ONLY_FILE="${2:-}"; shift 2 ;;
         *) echo "wire-class-crosscheck: unknown argument: $1" >&2; exit 1 ;;
@@ -177,9 +185,9 @@ derive_base() {
 
 CHANGED_FILE="$(mktemp)"
 WIRE_FILES="$(mktemp)"
-ADDED_LINES="$(mktemp)"
+ADDED_ROWS="$(mktemp)"
 DEP_FILES="$(mktemp)"
-trap 'rm -f "$CHANGED_FILE" "$WIRE_FILES" "$ADDED_LINES" "$DEP_FILES"' EXIT
+trap 'rm -f "$CHANGED_FILE" "$WIRE_FILES" "$ADDED_ROWS" "$DEP_FILES"' EXIT
 
 if [ -n "$WIRE_TOUCHED_FILE" ]; then
     cp "$WIRE_TOUCHED_FILE" "$CHANGED_FILE"
@@ -284,68 +292,36 @@ if [ "$DEP_COUNT" -gt 0 ]; then
 fi
 
 REGISTER_IN_DIFF=0
-if [ -z "$WIRE_TOUCHED_FILE" ] && grep -qx "RELEASE_REGISTER.md" "$CHANGED_FILE"; then
+if [ -z "$WIRE_TOUCHED_FILE" ] && grep -q "^release-register/" "$CHANGED_FILE"; then
     REGISTER_IN_DIFF=1
 fi
 
-# ── Check 2: parse — every machine line in the register is well-formed ──────────────────────────
+# ── Check 2: parse — the whole register validates through the one reader ───────────────────────
 # Runs when the register changed in this diff, or when a parse target was named explicitly
 # (the fixture seam). A malformed register is FATAL and first: a declaration nobody can parse
 # is not a declaration, and the shape ruling below would be reading garbage.
 if [ "$REGISTER_IN_DIFF" -eq 1 ] || [ "$REGISTER_EXPLICIT" -eq 1 ]; then
-    if [ ! -f "$REGISTER_FILE" ]; then
-        echo "wire-class-crosscheck: FAILED — register file not found: ${REGISTER_FILE}" >&2
-        exit 1
-    fi
-    PARSE_OUT="$(awk '
-        function flag(msg) {
-            printf "%s:%d: %s\n", FILENAME, FNR, orig
-            printf "        %s\n", msg
-        }
-        {
-            orig = $0
-            if ($0 !~ /^(pr|classes|surfaces|status):/) next
-            field = $0; sub(/:.*/, "", field)
-            value = $0; sub(/^[^:]*:[[:space:]]*/, "", value)
-            if (field == "pr") {
-                if (value == "") flag("pr: is empty — a row must name its PR (a number, or a sentinel: pre-policy, goal, self)")
-                else if (value !~ /^(self|goal|pre-policy|[0-9]+)$/) flag("pr: \x27" value "\x27 — expected a PR number or one of the sentinels: pre-policy, goal, self")
-            } else if (field == "classes") {
-                if (value == "") { flag("classes: is empty — silence is not a classification"); next }
-                n = split(value, toks, /[[:space:],]+/)
-                for (i = 1; i <= n; i++)
-                    if (toks[i] != "" && toks[i] !~ /^(additive|shape-breaking|behavioral|retirement-train|spec-correction)$/)
-                        flag("classes: \x27" toks[i] "\x27 is not one of: additive, shape-breaking, behavioral, retirement-train, spec-correction")
-                if (value ~ /retirement-train/ && value !~ /shape-breaking/)
-                    flag("classes: \x27retirement-train\x27 is a routing, never a class on its own — it rides a shape-breaking row (D-C2)")
-                if (value ~ /spec-correction/ && value ~ /shape-breaking/)
-                    flag("classes: \x27spec-correction\x27 and \x27shape-breaking\x27 contradict — a correction brings the contract to what the server always did; a break changes what it does")
-            } else if (field == "surfaces") {
-                if (value == "") { flag("surfaces: is empty — name the surfaces this row speaks for"); next }
-                n = split(value, toks, /[[:space:],]+/)
-                for (i = 1; i <= n; i++)
-                    if (toks[i] != "" && toks[i] !~ /^(http|mcp|cli-stdout|clients|schema|internal)$/)
-                        flag("surfaces: \x27" toks[i] "\x27 is not one of: http, mcp, cli-stdout, clients, schema, internal")
-            } else {
-                if (value == "") { flag("status: is empty"); next }
-                if (value == "open" || value == "signal-only" || value == "satisfied") next
-                if (value ~ /^blocked:/) {
-                    if (substr(value, 9) == "") flag("status: \x27blocked:\x27 names no release class — everything after \x27blocked:\x27 is the class name, free text, never tokenized")
-                    next
-                }
-                flag("status: \x27" value "\x27 — expected open, signal-only, satisfied, or blocked:<release-class>")
-            }
-        }
-    ' "$REGISTER_FILE")"
-    if [ -n "$PARSE_OUT" ]; then
-        echo "wire-class-crosscheck: FAILED — the register (${REGISTER_FILE}) is malformed."
+    if ! PARSE_OUT="$(python3 "$MANIFEST_PY" register validate --dir "$REGISTER_DIR" 2>&1)"; then
+        echo "wire-class-crosscheck: FAILED — the register (${REGISTER_DIR}) is malformed."
         echo
         printf '%s\n' "$PARSE_OUT"
         echo
-        echo "The register header documents the machine fields; fix the lines named above first —"
-        echo "a declaration nobody can parse is not a declaration (spec §4.1)."
+        echo "Fix the entries named above first — a declaration nobody can parse is not a"
+        echo "declaration (spec §4.1)."
         exit 1
     fi
+fi
+
+# ── Check 2a: the old single-file register never comes back ─────────────────────────────────────
+if [ -e "$LEGACY_REGISTER" ]; then
+    echo "wire-class-crosscheck: FAILED — ${LEGACY_REGISTER} exists."
+    echo
+    echo "  The register is one TOML file per entry since 2026-10-11. Declare this PR's class in"
+    echo "  release-register/unreleased/<id>.toml instead:"
+    echo "    python3 tools/manifest/manifest.py register new <id>"
+    echo "  and delete ${LEGACY_REGISTER}. The old file's history is release-register/HISTORY.md;"
+    echo "  the contract is release-register/README.md."
+    exit 1
 fi
 
 # ── Not wire-touched: nothing to cross-check ────────────────────────────────────────────────────
@@ -353,7 +329,7 @@ WIRE_COUNT="$(grep -c . "$WIRE_FILES" || true)"
 WIRE_COUNT="${WIRE_COUNT:-0}"
 if [ "$WIRE_COUNT" -eq 0 ]; then
     if [ "$DEP_COUNT" -gt 0 ]; then
-        echo "wire-class-crosscheck: PASS — every wire-tree change is dependency-only; no register row is owed."
+        echo "wire-class-crosscheck: PASS — every wire-tree change is dependency-only; no register entry is owed."
     elif [ "$REGISTER_IN_DIFF" -eq 1 ] || [ "$REGISTER_EXPLICIT" -eq 1 ]; then
         echo "wire-class-crosscheck: PASS — no wire paths changed; the register edit validated."
     else
@@ -378,53 +354,51 @@ for pre in $WIRE_PREFIXES; do
 done
 printf '%s' "$WIRE_LIST"
 
-# ── This PR's own rows, from the register lines this diff ADDS ──────────────────────────────────
-# A row counts only when the diff adds its `pr:` line — declaring by editing someone else's
-# row is not declaring. Fields are read as a consecutive block, so classes land with the pr:
-# they belong to.
-added_register_lines() {
-    if [ -n "$ADDED_REGISTER_FILE" ]; then
-        cat "$ADDED_REGISTER_FILE"
+# ── This PR's own entries: the entry files this diff ADDS ───────────────────────────────────────
+# An entry counts only when the diff adds its file — `-M` makes a rename an `R`, never an `A`,
+# so moving someone else's entry is not declaring, and editing one is an `M`.
+added_entry_files() {
+    if [ -n "$ADDED_ENTRIES_DIR" ]; then
+        find "$ADDED_ENTRIES_DIR" -maxdepth 1 -name '*.toml' | sort
         return 0
     fi
     derive_base || return 1
-    git diff "$BASE" -- RELEASE_REGISTER.md 2>/dev/null \
-        | grep -E '^\+' | grep -vE '^\+\+\+ ' | sed 's/^+//'
+    git diff -M --name-only --diff-filter=A "$BASE" -- 'release-register/unreleased/*.toml' 2>/dev/null
 }
 
-added_register_lines > "$ADDED_LINES" || ADDED_LINES_DERIV_FAILED=1
+ADDED_FILES=()
+if ADDED_LIST="$(added_entry_files)"; then
+    while IFS= read -r f; do [ -n "$f" ] && ADDED_FILES+=("$f"); done <<< "$ADDED_LIST"
+else
+    ADDED_DERIV_FAILED=1
+fi
 
-# Added lines → records of `pr<TAB>classes`. A `classes:` line attaches to the most recent
-# added `pr:` line, so an edit to someone else's row never masquerades as this PR's row;
-# a row with no classes reads "-", which no vocabulary check can mistake for a class.
-added_records() {
-    awk '
-        function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
-        function flush() { if (pr != "") printf "%s\t%s\n", pr, (cls == "" ? "-" : cls) }
-        # Machine fields are matched after stripping leading whitespace: a row
-        # authored inside list context arrives indented, and an indented `pr:`
-        # must still name its PR (the #899 find — three consecutive PRs authored
-        # an indented row before this tolerated it).
-        { line = $0; sub(/^[[:space:]]+/, "", line) }
-        /^pr:/      { flush(); pr = trim(substr(line, 4)); cls = ""; next }
-        /^classes:/ { if (pr != "") { c = trim(substr(line, 10)); cls = (cls == "" ? c : cls ", " c) } next }
-        { next }
-        END { flush() }
-    ' "$ADDED_LINES"
-}
+if [ "${#ADDED_FILES[@]}" -gt 0 ]; then
+    # The reader validates each added entry against the register's vocabulary and streams
+    # `pr<TAB>classes<TAB>surfaces<TAB>status<TAB>title<TAB>id`; a malformed added entry is
+    # reported as itself rather than as a missing declaration.
+    if ! python3 "$MANIFEST_PY" register rows --dir "$REGISTER_DIR" --files "${ADDED_FILES[@]}" > "$ADDED_ROWS" 2>"${ADDED_ROWS}.err"; then
+        echo "wire-class-crosscheck: FAILED — an entry this diff adds is malformed."
+        echo
+        cat "${ADDED_ROWS}.err"
+        rm -f "${ADDED_ROWS}.err"
+        exit 1
+    fi
+    rm -f "${ADDED_ROWS}.err"
+fi
 
 SELF_CLASSES=""
 HAS_OWN_ROW=0
-if [ "${ADDED_LINES_DERIV_FAILED:-0}" -eq 1 ]; then
+if [ "${ADDED_DERIV_FAILED:-0}" -eq 1 ]; then
     SELF_CLASSES="<deriv-failed>"
 else
-    while IFS=$'\t' read -r r_pr r_cls; do
+    while IFS=$'\t' read -r r_pr r_cls _ _ _ r_id; do
         [ -z "${r_pr:-}" ] && continue
         if [ "$r_pr" = "self" ] || { [ -n "$PR_NUMBER" ] && [ "$r_pr" = "$PR_NUMBER" ]; }; then
             HAS_OWN_ROW=1
             SELF_CLASSES="${SELF_CLASSES} ${r_cls}"
         fi
-    done < <(added_records)
+    done < "$ADDED_ROWS"
 fi
 
 classes_contain() {
@@ -439,23 +413,24 @@ classes_contain() {
     esac
 }
 
-echo "── register row for this PR ──"
+echo "── register entry for this PR ──"
 if [ "$HAS_OWN_ROW" -eq 1 ]; then
     printf '  found — declared classes:%s\n' "$SELF_CLASSES"
 else
-    echo "  none — no added register row names this PR (pr: self$( [ -n "$PR_NUMBER" ] && printf ' or pr: %s' "$PR_NUMBER" ))"
+    echo "  none — no added register entry names this PR (pr = \"self\"$( [ -n "$PR_NUMBER" ] && printf ' or pr = %s' "$PR_NUMBER" ))"
 fi
 
 PROBLEMS=""
 
 # ── Check 1: presence ───────────────────────────────────────────────────────────────────────────
 if [ "$HAS_OWN_ROW" -eq 0 ]; then
-    PROBLEMS="  RELEASE_REGISTER.md adds no register row for this PR, while wire-touched paths changed:"$'\n'
+    PROBLEMS="  This diff adds no register entry for this PR, while wire-touched paths changed:"$'\n'
     PROBLEMS="${PROBLEMS}${WIRE_LIST}"
-    PROBLEMS="${PROBLEMS}  Every wire-touching PR lands its own declaration row in RELEASE_REGISTER.md, under"$'\n'
-    PROBLEMS="${PROBLEMS}  '## Since <version> — unreleased', with the four machine fields (pr: self is legal —"$'\n'
-    PROBLEMS="${PROBLEMS}  the number is unknowable before push): pr:, classes:, surfaces:, status:. The register"$'\n'
-    PROBLEMS="${PROBLEMS}  row is the durable declaration; the PR template field is only the authoring act (spec §4)."$'\n'
+    PROBLEMS="${PROBLEMS}  Every wire-touching PR adds its own entry, release-register/unreleased/<id>.toml"$'\n'
+    PROBLEMS="${PROBLEMS}  (python3 tools/manifest/manifest.py register new <id>), with pr = \"self\" (legal — the"$'\n'
+    PROBLEMS="${PROBLEMS}  number is unknowable before push), classes, surfaces, status, title and body. The entry"$'\n'
+    PROBLEMS="${PROBLEMS}  is the durable declaration; the PR template field is only the authoring act (spec §4)."$'\n'
+    PROBLEMS="${PROBLEMS}  A new entry must be committed or staged (git add) for the diff to see it."$'\n'
 fi
 
 # ── Check 3: shape honesty ──────────────────────────────────────────────────────────────────────
@@ -523,40 +498,40 @@ if grep -qx "openapi.json" "$WIRE_FILES"; then
     case "$SHAPE_VERDICT" in
         moved)
             if classes_contain "$SELF_CLASSES" "spec-correction"; then
-                SHAPE_NOTE="  shape moved and the row declares spec-correction: PASS, NOTED. The contract described"
+                SHAPE_NOTE="  shape moved and the entry declares spec-correction: PASS, NOTED. The contract described"
                 SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
-                SHAPE_NOTE="${SHAPE_NOTE}  what the server never did; this is review-owned — the row must name what the server"
+                SHAPE_NOTE="${SHAPE_NOTE}  what the server never did; this is review-owned — the entry must name what the server"
                 SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
                 SHAPE_NOTE="${SHAPE_NOTE}  always did and why both skew directions hold. CI cannot check that claim."
             elif classes_contain "$SELF_CLASSES" "shape-breaking"; then
                 if classes_contain "$SELF_CLASSES" "retirement-train"; then
-                    SHAPE_NOTE="  shape moved and the row routes to the retirement train — this is the era release's"
+                    SHAPE_NOTE="  shape moved and the entry routes to the retirement train — this is the era release's"
                     SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
                     SHAPE_NOTE="${SHAPE_NOTE}  own movement (D-C4): this release PR moves M and cuts the next pin (RELEASING.md"
                     SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
                     SHAPE_NOTE="${SHAPE_NOTE}  step 3), which turns the pin gate green."
                 else
-                    PROBLEMS="${PROBLEMS}  openapi.json moved and this PR's row declares shape-breaking with no routing. Below"
+                    PROBLEMS="${PROBLEMS}  openapi.json moved and this PR's entry declares shape-breaking with no routing. Below"
                     PROBLEMS="${PROBLEMS}"$'\n'
                     PROBLEMS="${PROBLEMS}  the era level that declaration is a refusal, not a schedule (D-C2): convert the"
                     PROBLEMS="${PROBLEMS}"$'\n'
                     PROBLEMS="${PROBLEMS}  movement to the deprecation path — keep serving the existing rendering under a"
                     PROBLEMS="${PROBLEMS}"$'\n'
-                    PROBLEMS="${PROBLEMS}  record, land the corrected signal additively, re-declare the row (additive +"
+                    PROBLEMS="${PROBLEMS}  record, land the corrected signal additively, re-declare the entry (additive +"
                     PROBLEMS="${PROBLEMS}"$'\n'
                     PROBLEMS="${PROBLEMS}  behavioral, the #906 pattern) — or wait for the retirement release train and name"
                     PROBLEMS="${PROBLEMS}"$'\n'
-                    PROBLEMS="${PROBLEMS}  \"retirement-train\" in the row. A version bump alone never launders a break into safety."
+                    PROBLEMS="${PROBLEMS}  \"retirement-train\" in the entry. A version bump alone never launders a break into safety."
                     PROBLEMS="${PROBLEMS}"$'\n'
                 fi
             else
-                PROBLEMS="${PROBLEMS}  openapi.json moved beyond .info.version and this PR's register row(s) declare no"
+                PROBLEMS="${PROBLEMS}  openapi.json moved beyond .info.version and this PR's register entries declare no"
                 PROBLEMS="${PROBLEMS}"$'\n'
                 PROBLEMS="${PROBLEMS}  shape-breaking class (declared:${SELF_CLASSES:- <none>}). A rename, removal, type change, or"
                 PROBLEMS="${PROBLEMS}"$'\n'
                 PROBLEMS="${PROBLEMS}  envelope change is a shape break: below the era level it converts to the deprecation"
                 PROBLEMS="${PROBLEMS}"$'\n'
-                PROBLEMS="${PROBLEMS}  path (re-declare the row additive + behavioral) or waits for the retirement release"
+                PROBLEMS="${PROBLEMS}  path (re-declare the entry additive + behavioral) or waits for the retirement release"
                 PROBLEMS="${PROBLEMS}"$'\n'
                 PROBLEMS="${PROBLEMS}  train (D-C2) — the routing is owed, on the record, in this PR."
                 PROBLEMS="${PROBLEMS}"$'\n'
@@ -570,13 +545,13 @@ if grep -qx "openapi.json" "$WIRE_FILES"; then
             elif classes_contain "$SELF_CLASSES" "shape-breaking"; then
                 SHAPE_NOTE="  shape grew, but the register declares shape-breaking: PASS, NOTED. Honest"
                 SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
-                SHAPE_NOTE="${SHAPE_NOTE}  over-declaration never fails here (the sqlx gate's asymmetry); the row's routing"
+                SHAPE_NOTE="${SHAPE_NOTE}  over-declaration never fails here (the sqlx gate's asymmetry); the entry's routing"
                 SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
                 SHAPE_NOTE="${SHAPE_NOTE}  — convert or wait for the retirement train (D-C2) — still governs the release"
                 SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
                 SHAPE_NOTE="${SHAPE_NOTE}  it lands in."
             else
-                PROBLEMS="${PROBLEMS}  openapi.json changed and this PR's register row(s) declare neither additive nor"
+                PROBLEMS="${PROBLEMS}  openapi.json changed and this PR's register entries declare neither additive nor"
                 PROBLEMS="${PROBLEMS}"$'\n'
                 PROBLEMS="${PROBLEMS}  shape-breaking (declared:${SELF_CLASSES:- <none>}). 'behavioral' does not answer the shape"
                 PROBLEMS="${PROBLEMS}"$'\n'
@@ -596,11 +571,11 @@ if grep -qx "openapi.json" "$WIRE_FILES"; then
                 SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
                 SHAPE_NOTE="${SHAPE_NOTE}  honest over-declaration would train under-declaration (the sqlx gate's asymmetry)."
                 SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
-                SHAPE_NOTE="${SHAPE_NOTE}  The row's routing — convert or wait for the retirement train (D-C2) — is what"
+                SHAPE_NOTE="${SHAPE_NOTE}  The entry's routing — convert or wait for the retirement train (D-C2) — is what"
                 SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
                 SHAPE_NOTE="${SHAPE_NOTE}  keeps the declaration from dangling."
             else
-                PROBLEMS="${PROBLEMS}  openapi.json changed and this PR's register row(s) declare neither additive nor"
+                PROBLEMS="${PROBLEMS}  openapi.json changed and this PR's register entries declare neither additive nor"
                 PROBLEMS="${PROBLEMS}"$'\n'
                 PROBLEMS="${PROBLEMS}  shape-breaking (declared:${SELF_CLASSES:- <none>}). A version bump alone is additive — it"
                 PROBLEMS="${PROBLEMS}"$'\n'
@@ -628,11 +603,11 @@ if [ -n "$PROBLEMS" ]; then
     echo
     echo "The declared-class gate: spec of record temper-artifacts/specs/2026-09-09-shared-semver-policy-design.md §4,"
     echo "as amended by the compat-deprecation regime (temper-artifacts/specs/2026-09-22-compat-semver-policy-amendment-design.md, D-C2)."
-    echo "The register header (RELEASE_REGISTER.md) documents the machine fields and the vocabularies."
+    echo "release-register/README.md documents the entry keys; release-register/vocabulary.toml defines the tokens."
     exit 1
 fi
 
-echo "wire-class-crosscheck: PASS — presence, parse, and shape honesty hold (register row and wire diff agree)."
+echo "wire-class-crosscheck: PASS — presence, parse, and shape honesty hold (register entry and wire diff agree)."
 [ -n "$SHAPE_NOTE" ] && { printf '%s\n' "$SHAPE_NOTE"; echo; }
 echo "Verified: the mechanical half only. CI is structurally barred from certifying the behavioral"
 echo "class — behavior is not in the diff; that half is owned by review and the merge decision (spec §4)."

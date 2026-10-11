@@ -170,7 +170,7 @@
 //! - A read on an invisible/absent resource (artifact list) answers `[]` on the direct
 //!   path — the wire's read route answers the same way, so this face is carried.
 //!
-//! The register row (RELEASE_REGISTER.md, the beat G4 row) names the same set.
+//! The register row (release-register/HISTORY.md, the beat G4 row) names the same set.
 
 mod common;
 

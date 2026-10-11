@@ -439,8 +439,8 @@ jobs:
 
       # The wire half of the declared-class gate (shared-semver-policy spec §4, D-S4): every PR
       # touching a wire surface (temper-api/temper-mcp/temper-mcp-server/temper-client, openapi.json, clients/,
-      # packages/) lands its compat-class row in RELEASE_REGISTER.md, and this cross-check
-      # verifies the mechanical half — row presence, register well-formedness, and that the
+      # packages/) adds its compat-class entry, release-register/unreleased/<id>.toml, and this
+      # cross-check verifies the mechanical half — entry presence, register well-formedness, and that the
       # declared shape class survives the actual openapi diff (anything beyond .info.version).
       # It sits below the SQL cross-check deliberately: same predicate, same asymmetry, second
       # wire. And it is MORE barred than that one — behavior is not in any diff, so a green
@@ -471,8 +471,9 @@ jobs:
       # era. Where the cross-check above makes a break SIGNALED, this makes it
       # AVOIDABLE: a moved verdict is a shape break, which converts to the deprecation
       # path or waits for the retirement release train — the PR that moves M cuts the
-      # next pin. Needs only jq (preinstalled on the runner), so it
-      # lives in this job; its harness runs below.
+      # next pin. Needs only jq and python3 (both preinstalled on the runner; python3
+      # reads the register's spec-correction entries), so it lives in this job; its
+      # harness runs below.
       - name: The committed contract stays inside its pinned minor (additive-only within a pin)
         run: bash .github/scripts/check-openapi-pin.sh
 
@@ -490,12 +491,31 @@ jobs:
 
       # The release calculator's Gate 1 — the retirement-train trigger (D-C1/D-C2):
       # a routed row refuses a patch next and takes the era bump under --minor;
-      # bare shape-breaking and converted rows compute a patch. Pure bash: the
-      # harness sandboxes a fresh copy of the release tree, feeds fixture
-      # registers through the real window parser, and stubs only detect-changes
-      # (the git-diff seam) so the class booleans are fixed input.
-      - name: Guard test — calculate-versions (retirement-train trigger)
+      # bare shape-breaking and converted rows compute a patch. The harness
+      # sandboxes a fresh copy of the release tree and the register reader, feeds
+      # fixture registers through them, and stubs only detect-changes (the git-diff
+      # seam) so the class booleans are fixed input. It also holds W6: an entry the
+      # current release's tag already shipped, still unrolled, refuses.
+      - name: Guard test — calculate-versions (retirement-train trigger, unrolled window)
         run: bash .github/scripts/test-calculate-versions.sh
+
+      # The release register is one TOML file per entry, read through ONE reader
+      # (tools/manifest/manifest.py; spec temper-artifacts:specs/2026-10-11-release-
+      # register-entries-design.md). The crosscheck validates it when a PR touches it;
+      # this step validates it on every change, so a register that went bad another
+      # way (a vocabulary edit, a merge) is caught here rather than at release time.
+      - name: The release register validates (one reader, vocabulary as data)
+        run: python3 tools/manifest/manifest.py register validate
+
+      # The reader's harness: each mutation of a well-formed entry fails naming its
+      # file and key; the vocabulary is data (W3); and W1 — two PRs' entries merge
+      # cleanly where the same two declarations in one file conflict.
+      - name: Guard test — manifest register reader
+        run: python3 .github/scripts/test-manifest-register.py
+
+      # The roll moves exactly the entries the tag's own tree carries (W7).
+      - name: Guard test — roll-register
+        run: bash .github/scripts/test-roll-register.sh
 
       # The release's version writer, run against the repository's own Cargo.toml: every
       # temperkb-* [workspace.dependencies] spec must move with the anchor whatever keys follow

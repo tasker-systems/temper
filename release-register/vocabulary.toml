@@ -1,0 +1,26 @@
+# release-register/vocabulary.toml — the ONLY definition of what a register entry may say.
+#
+# tools/manifest/manifest.py validates every entry against this file, and every reader of the
+# register (the PR gate, the release calculator, release-prepare, the pin check) reads through
+# it. No reader holds its own copy of these lists, so README.md describes the tokens in prose
+# and never restates them as a list. Add a token here and it is accepted everywhere at once.
+#
+# What each token means is README.md's job. What the reader enforces beyond membership, because
+# it is semantics rather than vocabulary:
+#   * `retirement-train` only alongside `shape-breaking` (D-C2);
+#   * `spec-correction` never alongside `shape-breaking`;
+#   * `status` may also be `blocked:<release-class>`, the class as free text, never tokenized.
+
+# What kind of change an entry declares. `behavioral` is review-owned: CI cannot see it.
+classes = ["additive", "shape-breaking", "behavioral", "retirement-train", "spec-correction"]
+
+# Which surfaces the entry speaks for. The calculator's Gate 3 intersects these with the
+# surfaces a release ships.
+surfaces = ["http", "mcp", "cli-stdout", "clients", "schema", "internal"]
+
+# Where the entry stands for the next release. `open` gates the release until carried.
+status = ["open", "signal-only", "satisfied"]
+
+# `pr` is a positive PR number, or one of these. `self` is legal because a PR's number is
+# unknowable before it is pushed; the gate accepts `self` or the PR's own number.
+pr_sentinels = ["self", "goal", "pre-policy"]

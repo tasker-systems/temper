@@ -82,6 +82,25 @@ crates/temper-mcp/CLAUDE.md" \
     "RUN_TEST_RUST=false" \
     "RUN_TEST_TYPESCRIPT=false"
 
+# --- the release register is classed with the docs (its gates run in guard-tests) ---
+# One TOML file per entry since 2026-10-11; a roll PR or a status flip touches only these and
+# scoped docs-only when the register was one `.md` file. Kept that way, not sent to full CI.
+run_test "release-register entries only: docs-only scope" \
+    "release-register/unreleased/some-entry.toml
+release-register/v0.6.1/rolled-entry.toml
+release-register/vocabulary.toml" \
+    "DOCS_ONLY=true" \
+    "RUN_CODE_QUALITY=false" \
+    "RUN_TEST_RUST=false" \
+    "RUN_TEST_TYPESCRIPT=false"
+
+# The register's reader is NOT classed with it: tools/manifest/ is code, and it runs full CI.
+run_test "the register's reader (tools/manifest/) is not docs" \
+    "release-register/unreleased/some-entry.toml
+tools/manifest/manifest.py" \
+    "DOCS_ONLY=false" \
+    "RUN_TEST_RUST=true"
+
 # --- single rust source file: full CI ---
 run_test "rust source change: full CI" \
     "crates/temper-services/src/services/search_service.rs" \

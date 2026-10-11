@@ -173,7 +173,18 @@ HAS_NON_DOC=false
 # RUST_COUPLED below, whose veto is what makes this test safe rather than merely
 # usually-right. Do not restate the old claim that a doc file cannot affect a
 # build — it can, and three of them did.
-if changes_match '\.(md|txt|adoc)$'; then
+#
+# The release register (`release-register/`) is classed with the docs. It is one TOML file per
+# entry since 2026-10-11, so the extension test alone would send a register-only change (a roll
+# PR after every release, a status flip) to full CI, where the single-file `.md` register it
+# replaced scoped docs-only. Its only CI readers are bash gates in quality-gate.yml's
+# `guard-tests` job (wire-class-crosscheck.sh, check-openapi-pin.sh, the register validate step
+# and the reader's harnesses), which runs on every change; no `include_str!` reaches it, and
+# nothing in cargo or bun builds it. It is the same claim the doc trees' gates make below.
+# DOCS_CLASS_PATTERN is a regex over changed paths: a match is "classed with the docs" —
+# documentation by extension, or the register — and needs nothing beyond guard-tests.
+DOCS_CLASS_PATTERN='\.(md|txt|adoc)$|^release-register/'
+if changes_match "$DOCS_CLASS_PATTERN"; then
     HAS_DOCS=true
 fi
 
@@ -184,7 +195,7 @@ if changes_match '^\.github/scripts/detect-ci-scope'; then
 fi
 
 # Any non-doc file present means we cannot treat the change as docs-only.
-NON_DOC_FILES="$(echo "$CHANGED_FILES" | grep -vE '\.(md|txt|adoc)$' || true)"
+NON_DOC_FILES="$(echo "$CHANGED_FILES" | grep -vE "$DOCS_CLASS_PATTERN" || true)"
 if [ -n "$NON_DOC_FILES" ]; then
     HAS_NON_DOC=true
 fi
@@ -246,7 +257,7 @@ NON_PRODUCT_ROOTS='^scripts/wayfind-spike/|^internal/'
 
 # FAIL CLOSED on an empty pattern. `grep -vE ''` matches EVERY line, so an empty
 # NON_PRODUCT_ROOTS would strip the whole changed-file list, leave
-# LOAD_BEARING_FILES empty, and silently turn off the entire pipeline for every
+# FILES_REQUIRING_CI empty, and silently turn off the entire pipeline for every
 # PR. That is the worst reachable failure of this script, and it is one deleted
 # string away — so it is checked rather than trusted. Erroring here fails
 # detect-scope, which ci-success treats as FATAL.
@@ -256,11 +267,13 @@ if [ -z "$NON_PRODUCT_ROOTS" ]; then
     exit 1
 fi
 
-# Files that are neither documentation nor inside a non-product root — i.e. the
-# ones that can actually move a job outcome. Empty means nothing load-bearing
-# changed. `__force_full_ci__` (the no-diff safety fallback) has no doc
-# extension and matches no root, so it lands here and correctly forces a run.
-LOAD_BEARING_FILES="$(echo "$CHANGED_FILES" | grep -vE '\.(md|txt|adoc)$' | grep -vE "$NON_PRODUCT_ROOTS" || true)"
+# FILES_REQUIRING_CI: the changed files that oblige the pipeline to run — every
+# file that is neither documentation (DOCS_CLASS_PATTERN, the release register included)
+# nor inside a non-product root, so the ones that can actually move a job
+# outcome. Empty means the scoped jobs may all skip (SKIP_ALL, below; the
+# guard-tests job runs regardless). `__force_full_ci__` (the no-diff safety
+# fallback) matches neither pattern, so it lands here and correctly forces a run.
+FILES_REQUIRING_CI="$(echo "$CHANGED_FILES" | grep -vE "$DOCS_CLASS_PATTERN" | grep -vE "$NON_PRODUCT_ROOTS" || true)"
 
 HAS_NON_PRODUCT=false
 if changes_match "$NON_PRODUCT_ROOTS"; then
@@ -487,8 +500,8 @@ if [ "$HAS_DOCS" = "true" ] && [ "$HAS_NON_DOC" = "false" ] && \
     DOCS_ONLY=true
 fi
 
-# skip_all: NOTHING load-bearing changed — every file is documentation or lives
-# in a non-product root. This is the predicate the job flags gate on; DOCS_ONLY
+# skip_all: no changed file requires CI (FILES_REQUIRING_CI is empty) — every
+# file is documentation or lives in a non-product root. This is the predicate the job flags gate on; DOCS_ONLY
 # is the strictly narrower "and they were all docs", kept as its own output
 # because it is what the annotation and the historical consumers mean by it.
 # Reporting DOCS_ONLY=true for a change full of `.sql` and `.tsv` would be a
@@ -499,7 +512,7 @@ fi
 # of DOCS_ONLY, so every escape hatch DOCS_ONLY honours must be honoured again
 # or the wider predicate would quietly reopen what the narrower one closed.
 SKIP_ALL=false
-if [ -z "$LOAD_BEARING_FILES" ] && [ "$HAS_SELF" = "false" ] && \
+if [ -z "$FILES_REQUIRING_CI" ] && [ "$HAS_SELF" = "false" ] && \
    [ "$HAS_RUST_COUPLED" = "false" ]; then
     SKIP_ALL=true
 fi

@@ -19,7 +19,8 @@
 ## Compat class
 
 <!-- Declared wire-compat class(es): `additive` / `shape-breaking` / `behavioral`. List every
-     class this PR carries, plus the row it lands in RELEASE_REGISTER.md (same PR). `none` only
+     class this PR carries, plus the entry it adds, release-register/unreleased/<id>.toml (same
+     PR; `python3 tools/manifest/manifest.py register new <id>`). `none` only
      when no wire surface changes (HTTP/MCP shapes, CLI stdout, client skins). Schema-only PRs
      declare in the migration itself (`declare_migration`) — sqlx-schema-crosscheck owns that
      gate, the register is not read for migrations. CI checks the declaration against the diff;

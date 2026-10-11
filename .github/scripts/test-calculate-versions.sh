@@ -13,12 +13,13 @@
 #
 # WHAT THE FIXTURES EXERCISE, AND WHAT THEY CANNOT
 # ------------------------------------------------
-# Registers flow through the REAL parser — register_window_rows and
-# field_has_token in lib/common.sh, reached via --register (the flag exists
-# for harness fixtures). The tools/scripts/release tree is copied fresh into
-# a sandbox per run, so the code under test is the current tree and the
-# copied REPO_ROOT resolves into the sandbox: a fixture VERSION, no leaf
-# version files. The one seam replaced is detect-changes.sh — the git-diff
+# Registers flow through the REAL reader — register_window_rows in
+# lib/common.sh, which calls tools/manifest/manifest.py, reached via
+# --register (the flag exists for harness fixtures) — and field_has_token.
+# The tools/scripts/release and tools/manifest trees are copied fresh into a
+# sandbox per run, so the code under test is the current tree and the copied
+# REPO_ROOT resolves into the sandbox: a fixture VERSION, no leaf version
+# files, and the repo's own release-register/vocabulary.toml. The one seam replaced is detect-changes.sh — the git-diff
 # input, not the parser, whose class booleans would otherwise depend on
 # ambient history (a depth-2 CI checkout and a full local clone diff
 # differently). The stub emits fixed KEY=VALUEs with CORE_CHANGED=true.
@@ -28,6 +29,11 @@
 #
 # Bite direction: reverting the trigger to any-shape-breaking-fires reds the
 # no-refusal arms; neutering the gate reds the refusal arm.
+#
+# W6 (spec D6, temper-artifacts:specs/2026-10-11-release-register-entries-design.md):
+# the sandbox is made a git repo so a tag can carry an entry. An unreleased/
+# entry the current release's tag already shipped refuses; the same entry
+# rolled computes. Neutering the unrolled guard reds the refusal arm.
 #
 #   bash .github/scripts/test-calculate-versions.sh
 
@@ -49,6 +55,7 @@ bad() { echo "  FAIL: $1"; shift; printf '    %s\n' "$@"; FAIL=$((FAIL + 1)); }
 # the git diff.
 mkdir -p "${WORK}/tools/scripts"
 cp -R "${REPO}/tools/scripts/release" "${WORK}/tools/scripts/release"
+cp -R "${REPO}/tools/manifest" "${WORK}/tools/manifest"
 chmod +x "${WORK}/tools/scripts/release/calculate-versions.sh"
 echo "0.5.0" > "${WORK}/VERSION"
 cat > "${WORK}/tools/scripts/release/detect-changes.sh" <<'STUB'
@@ -64,25 +71,26 @@ STUB
 chmod +x "${WORK}/tools/scripts/release/detect-changes.sh"
 CALC="${WORK}/tools/scripts/release/calculate-versions.sh"
 
-REG="${WORK}/register.md"
-make_register() { # $1 = pr value, $2 = classes value
-  cat > "$REG" <<MD
-# Release-verdict register
-
-## Since v0.5.0 — unreleased
-
-- **Citation 1 — the row under probe**
-  Prose.
-pr: $1
-classes: $2
-surfaces: http
-status: signal-only
-MD
+REG="${WORK}/release-register"
+make_register() { # $1 = pr value (TOML), $2 = classes (TOML array body)
+  rm -rf "$REG"
+  mkdir -p "${REG}/unreleased"
+  cp "${REPO}/release-register/vocabulary.toml" "${REG}/vocabulary.toml"
+  cat > "${REG}/unreleased/under-probe.toml" <<TOML
+title    = "Citation 1 — the row under probe"
+pr       = $1
+classes  = [$2]
+surfaces = ["http"]
+status   = "signal-only"
+body = """
+Prose.
+"""
+TOML
 }
 
 # Every probe runs the copied calculator against a fixture register, so the
 # row grammar is read by the real window parser.
-run_calc() { # $1 = register path, remaining args passed through (e.g. --minor)
+run_calc() { # $1 = register directory, remaining args passed through (e.g. --minor)
   local reg="$1"; shift
   bash "$CALC" --register "$reg" "$@" 2>&1
 }
@@ -91,7 +99,7 @@ echo "test-calculate-versions"
 echo
 
 # ── 1. TRIGGER — a routed row refuses a patch next, naming its row ──────────────
-make_register 943 "shape-breaking, retirement-train"
+make_register 943 '"shape-breaking", "retirement-train"'
 out="$(run_calc "$REG")"; rc=$?
 if [ "$rc" -ne 0 ] \
     && printf '%s' "$out" | grep -q 'require --minor' \
@@ -101,25 +109,50 @@ if [ "$rc" -ne 0 ] \
 else bad "routed row refuses a patch next, naming the row" "exit=$rc" "$out"; fi
 
 # ── 2. TRIGGER — the routed row under --minor computes the era bump ─────────────
-make_register 943 "shape-breaking, retirement-train"
+make_register 943 '"shape-breaking", "retirement-train"'
 out="$(run_calc "$REG" --minor)"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'NEXT_CORE_VERSION=0.6.0'; then
   ok "routed row with --minor computes the era bump (0.5.0 -> 0.6.0)"
 else bad "routed row with --minor computes the era bump (0.5.0 -> 0.6.0)" "exit=$rc" "$out"; fi
 
 # ── 3. TRIGGER — a bare shape-breaking row computes a patch, no refusal ─────────
-make_register 901 shape-breaking
+make_register 901 '"shape-breaking"'
 out="$(run_calc "$REG")"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'NEXT_CORE_VERSION=0.5.1'; then
   ok "bare shape-breaking row computes a patch without refusal"
 else bad "bare shape-breaking row computes a patch without refusal" "exit=$rc" "$out"; fi
 
 # ── 4. TRIGGER — a converted row (additive + behavioral) computes a patch ───────
-make_register 906 "additive, behavioral"
+make_register 906 '"additive", "behavioral"'
 out="$(run_calc "$REG")"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'NEXT_CORE_VERSION=0.5.1'; then
   ok "converted row (additive + behavioral) computes a patch without refusal"
 else bad "converted row (additive + behavioral) computes a patch without refusal" "exit=$rc" "$out"; fi
+
+# ── 5. W6 — an entry the current release's tag shipped, still unrolled, refuses ──
+# The sandbox becomes a repo whose v0.5.0 tag carries the entry; VERSION is 0.5.0.
+make_register 906 '"additive"'
+sandbox_git() { git -C "$WORK" -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c tag.gpgsign=false "$@"; }
+sandbox_git init -q -b main
+sandbox_git add -A
+sandbox_git commit -q -m "v0.5.0"
+sandbox_git tag v0.5.0
+out="$(run_calc "$REG")"; rc=$?
+if [ "$rc" -ne 0 ] \
+    && printf '%s' "$out" | grep -q 'still holds entries that v0.5.0 shipped' \
+    && printf '%s' "$out" | grep -q 'under-probe' \
+    && printf '%s' "$out" | grep -q 'roll-register.sh v0.5.0'; then
+  ok "W6: an unreleased entry the current tag shipped refuses, naming it and the roll command"
+else bad "W6: an unreleased entry the current tag shipped refuses" "exit=$rc" "$out"; fi
+
+# ── 6. W6 — the same entry, rolled, computes; an entry merged after the tag still counts ──
+mkdir -p "${REG}/v0.5.0"
+mv "${REG}/unreleased/under-probe.toml" "${REG}/v0.5.0/under-probe.toml"
+sed 's/the row under probe/merged after the tag/' "${REG}/v0.5.0/under-probe.toml" > "${REG}/unreleased/after-tag.toml"
+out="$(run_calc "$REG")"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'REGISTER_ROWS=1$'; then
+  ok "W6: rolled, the window computes, counting only the entry merged after the tag"
+else bad "W6: rolled, the window computes, counting only the entry after the tag" "exit=$rc" "$out"; fi
 
 echo
 echo "  ${PASS} passed, ${FAIL} failed"

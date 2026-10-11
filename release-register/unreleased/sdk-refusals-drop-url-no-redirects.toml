@@ -1,0 +1,21 @@
+title    = "The SDKs' endpoint refusals no longer repeat the URL they refused, and their token requests follow no redirect"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+`require_endpoint` / `requireEndpoint` / `validate_endpoint` in temper-py, temper-rb, temper-ts
+and `temperkb-client` still refuse the same values with the same error types. The "not a parseable
+URL", "must be an absolute http(s) URL", "invalid port" and query/fragment messages used to append
+the raw value, and those checks run before the userinfo check, so a mistyped
+`htps://id:secret@host` (or a secret in a query) was copied into the exception and on into logs.
+Each message now names the parameter and the reason only, and chains no exception that quotes
+it: temper-rb raises with `cause: nil` (Ruby attached URI's own error, whose message is the whole
+value), and temper-py raises outside the `except` (the port error quoted a prefix of a password
+containing `/`). Separately, temper-ts's `ClientCredentials` mint and `temperkb-client`'s
+refresh-token grant and login code exchange no longer follow redirects: a 307/308 resent the form
+(client secret, refresh token, or code and verifier) to a URL nothing had vetted, and a 3xx is now
+a failed request. temper-py and temper-rb already did not follow them. Who observes: callers that
+display or match on these messages; a token endpoint that relies on redirecting. User-visible:
+yes. Release relevance: behavioral.
+'''

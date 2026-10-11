@@ -1,0 +1,22 @@
+title    = "The network door's degrade detector becomes a root-span field, `relay_trust`, and the MCP edge's JWT-failure line drops to `debug`"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+The API's relay-trust middleware recorded each degraded or trusted relay as a `debug` event
+(`counter = "relayed_surface_degraded"` / `"relayed_surface_trusted"`), below the `info` filter
+the span exporter applies, so production never saw it. It now records `relay_trust` on the
+request's `http_request` root span: `trusted`, `no_credential`, `invalid_credential`,
+`carrier_missing` or `carrier_refused`, and nothing for direct traffic or while the API has no
+service secret. Which requests are honored is unchanged; the events are gone. Separately,
+`require_mcp_auth` logged a failed JWT check at `warn`, a line any caller could trigger with a
+garbage bearer; it now logs at `debug`, as the API's own check does, and records why on the
+`mcp_request` root span as `auth_failure` (`missing_bearer`, `unknown_kid`, `expired`,
+`invalid_audience`, `invalid_issuer`, `invalid_signature`, … or `malformed`). Separately, the
+CORS allowlist arm (`CORS_ORIGINS` naming origins, on both the API and MCP doors) answers a
+preflight by echoing the headers it names instead of `*`, which the Fetch standard never lets
+cover `Authorization`, so an allowlisted browser client can now send its bearer. Who observes:
+operators, through exported spans (the new fields) and logs (the missing `warn`); browser
+clients on an allowlisted origin. User-visible: no. Release relevance: behavioral.
+'''
