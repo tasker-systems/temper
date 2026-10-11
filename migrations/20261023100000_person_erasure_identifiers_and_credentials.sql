@@ -23,7 +23,8 @@
 --   3. kb_principal_standing_events admits one update: the person act nulling the reason of a
 --      tombstoned subject's row.
 --   4. The `principal` ledger authority reaches the subject's own admin events: the standing and
---      governance reasons (to null) and the disconnected Slack id (to `erased-<event id>`).
+--      governance reasons and an erasure refusal's detail (to null), and the disconnected Slack id
+--      (to `erased-<event id>`).
 --   5. principal_erasure_survey_plan: the new arms' targets, the retained categories, and
 --      `retained under policy <name>` for each kept category.
 --   6. principal_erasure_execute: records `retained`, and leaves retained ledger paths unrewritten.
@@ -55,7 +56,8 @@ CREATE TABLE kb_erasure_retention_policies (
     category          text        NOT NULL UNIQUE
                                   CHECK (category IN ('standing-reasons', 'governance-reasons',
                                                       'join-request-notes', 'review-request-notes',
-                                                      'credential-replay-evidence')),
+                                                      'credential-replay-evidence',
+                                                      'erasure-refusal-details')),
     basis             text        NOT NULL CHECK (length(btrim(basis)) > 0),
     period            interval    NOT NULL CHECK (period > interval '0'),
     set_by_profile_id uuid        NOT NULL REFERENCES kb_profiles(id),
@@ -137,7 +139,8 @@ LANGUAGE sql IMMUTABLE AS $$
         ('context_restored',             'to_slug',            'context-slug'),
         ('principal_standing_changed',   'reason',             'principal-reason'),
         ('principal_governance_changed', 'reason',             'principal-reason'),
-        ('slack_principal_disconnected', 'slack_principal_id', 'slack-principal')
+        ('slack_principal_disconnected', 'slack_principal_id', 'slack-principal'),
+        ('principal_erasure_refused',    'detail',             'principal-reason')
 $$;
 
 -- The person act's scope. The name is R7's and is kept, because the projector, the verifier and
@@ -161,14 +164,14 @@ AS $$
       FROM kb_events e
       JOIN kb_event_types t ON t.id = e.event_type_id
      WHERE t.name IN ('principal_standing_changed', 'principal_governance_changed',
-                      'slack_principal_disconnected')
+                      'slack_principal_disconnected', 'principal_erasure_refused')
        AND e.payload ->> 'subject_table' = 'kb_profiles'
        AND e.payload ->> 'subject_id' = p_subject::text;
 $$;
 
 COMMENT ON FUNCTION _principal_erasure_context_events(uuid, uuid[]) IS
 $c$The person act's ledger scope: the context events of the subject's estate (R7) and the subject's
-own standing, governance and Slack-disconnect events (R3). The projector, the verifier and the plan
+own standing, governance, Slack-disconnect and erasure-refusal events (R3). The projector, the verifier and the plan
 read it; the name predates the second half.$c$;
 
 -- The new classes' sentinels: a reason becomes null, a Slack id `erased-<event id>`.
@@ -298,6 +301,7 @@ LANGUAGE sql IMMUTABLE AS $$
     SELECT CASE
         WHEN p_event_type = 'principal_standing_changed'   AND p_path = 'reason' THEN 'standing-reasons'
         WHEN p_event_type = 'principal_governance_changed' AND p_path = 'reason' THEN 'governance-reasons'
+        WHEN p_event_type = 'principal_erasure_refused'    AND p_path = 'detail' THEN 'erasure-refusal-details'
     END;
 $$;
 
@@ -811,16 +815,19 @@ BEGIN
                    'target',  'kb_events.payload (' || k.cls || ')',
                    'outcome', 'retained under policy ' || k.policy) ORDER BY k.cls)
           FROM (SELECT DISTINCT
-                       CASE t.name WHEN 'principal_standing_changed' THEN 'standing reasons'
-                                   ELSE 'governance reasons' END AS cls,
+                       CASE t.name WHEN 'principal_standing_changed'   THEN 'standing reasons'
+                                   WHEN 'principal_governance_changed' THEN 'governance reasons'
+                                   ELSE 'erasure-refusal details' END AS cls,
                        _erasure_retained_by(v_retained,
-                           _principal_erasure_path_category(t.name, 'reason')) AS policy
+                           _principal_erasure_path_category(t.name, p.path)) AS policy
                   FROM kb_events e
                   JOIN kb_event_types t ON t.id = e.event_type_id
-                 WHERE t.name IN ('principal_standing_changed', 'principal_governance_changed')
+                  JOIN _principal_erasure_redact_paths() p ON p.event_type = t.name
+                 WHERE t.name IN ('principal_standing_changed', 'principal_governance_changed',
+                                  'principal_erasure_refused')
                    AND e.payload ->> 'subject_table' = 'kb_profiles'
                    AND e.payload ->> 'subject_id' = p_subject::text
-                   AND jsonb_typeof(e.payload -> 'reason') = 'string') k
+                   AND jsonb_typeof(e.payload -> p.path) = 'string') k
          WHERE k.policy IS NOT NULL), '[]'::jsonb);
     SELECT count(*) INTO v_n FROM kb_data_artifacts da
       JOIN kb_data_artifact_content dac ON dac.artifact_id = da.id
@@ -1035,7 +1042,7 @@ BEGIN
         v_targets := v_targets || jsonb_build_array(jsonb_build_object(
             'target',  'kb_events.payload',
             'outcome', v_n
-                       || ' admin event(s) about the subject; reasons erased and Slack ids sentinel-scrubbed'));
+                       || ' admin event(s) about the subject; reasons and refusal details erased and Slack ids sentinel-scrubbed'));
     END IF;
 
     -- What the subject wrote outside the estate (R8, disposition iii): it stays, and the record
@@ -1929,6 +1936,11 @@ UPDATE kb_event_types
           "description": "`kb_oauth_refresh_replays`: the evidence that one of the subject's refresh tokens was\ncopied. Kept with its tokens, which stay revoked with their claims and hash erased.",
           "type": "string",
           "const": "credential-replay-evidence"
+        },
+        {
+          "description": "The ledger's `principal_erasure_refused.detail`: the operator's stated reason an earlier\nerasure of the subject was refused (the obligation held, the part that could not be\nhonoured).",
+          "type": "string",
+          "const": "erasure-refusal-details"
         }
       ]
     }

@@ -65,6 +65,10 @@ pub enum RetentionCategory {
     /// `kb_oauth_refresh_replays`: the evidence that one of the subject's refresh tokens was
     /// copied. Kept with its tokens, which stay revoked with their claims and hash erased.
     CredentialReplayEvidence,
+    /// The ledger's `principal_erasure_refused.detail`: the operator's stated reason an earlier
+    /// erasure of the subject was refused (the obligation held, the part that could not be
+    /// honoured).
+    ErasureRefusalDetails,
 }
 
 impl RetentionCategory {
@@ -76,6 +80,7 @@ impl RetentionCategory {
             Self::JoinRequestNotes => "join-request-notes",
             Self::ReviewRequestNotes => "review-request-notes",
             Self::CredentialReplayEvidence => "credential-replay-evidence",
+            Self::ErasureRefusalDetails => "erasure-refusal-details",
         }
     }
 }

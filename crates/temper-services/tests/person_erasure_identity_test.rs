@@ -20,9 +20,7 @@ use temper_core::types::ids::ProfileId;
 use temper_services::auth_config::AuthMode;
 use temper_services::services::erasure_service::{execute_erasure, ErasureCompletion, ErasureEnv};
 use temper_services::services::grant_crypto::VaultKey;
-use temper_services::services::slack_disconnect_service::{
-    disconnect_slack_principal, DisconnectRequest,
-};
+use temper_services::services::slack_disconnect_service::{disconnect_own, DisconnectRequest};
 use temper_services::services::{slack_grant_vault_service, slack_link_service};
 use temper_workflow::operations::Surface;
 
@@ -173,8 +171,9 @@ async fn link_email(pool: &PgPool, profile: Uuid, email: &str, verified: bool) {
 
 /// A Slack auth link through the real link helper.
 async fn link_slack(pool: &PgPool, subject: Uuid, principal: &str) {
+    let owner = temper_services::test_support::human_principal_for(pool, subject).await;
     let mut conn = pool.acquire().await.unwrap();
-    slack_link_service::link_slack_principal(&mut conn, subject, principal)
+    slack_link_service::link_slack_principal(&mut conn, &owner, principal)
         .await
         .expect("link");
 }
@@ -185,12 +184,13 @@ fn vault_key() -> VaultKey {
 
 /// A vault grant through the real vault helper. It need not have a link: a grant can outlive one.
 async fn vault_grant(pool: &PgPool, subject: Uuid, principal: &str) {
+    let owner = temper_services::test_support::human_principal_for(pool, subject).await;
     let mut conn = pool.acquire().await.unwrap();
     slack_grant_vault_service::store_grant(
         &mut conn,
         &vault_key(),
         slack_grant_vault_service::NewGrant {
-            profile_id: subject,
+            owner: &owner,
             slack_principal_id: principal,
             refresh_token: "rt",
             access_token: "at",
@@ -545,7 +545,8 @@ async fn entity_metadata_and_staged_uploads_are_gone(pool: PgPool) {
 }
 
 /// FAILS IF free text about the subject survives, in its row or on the ledger: a standing reason, a
-/// governance reason, join and review notes, or the disconnected Slack id in its ledger record.
+/// governance reason, an earlier erasure refusal's detail, join and review notes, or the
+/// disconnected Slack id in its ledger record.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn free_text_about_the_subject_is_erased_in_rows_and_ledger(pool: PgPool) {
     let p = person(&pool).await;
@@ -592,9 +593,9 @@ async fn free_text_about_the_subject_is_erased_in_rows_and_ledger(pool: PgPool) 
     .unwrap();
     // A disconnect through the real service writes the Slack id onto the ledger.
     link_slack(&pool, p.profile, "slack:T1:UJANEROE").await;
-    disconnect_slack_principal(
+    disconnect_own(
         &pool,
-        ProfileId::from(p.profile),
+        &temper_services::test_support::human_principal_for(&pool, p.profile).await,
         DisconnectRequest {
             slack_principal_id: "slack:T1:UJANEROE",
             key: &vault_key(),
@@ -605,6 +606,16 @@ async fn free_text_about_the_subject_is_erased_in_rows_and_ledger(pool: PgPool) 
     )
     .await
     .unwrap();
+    // An earlier refusal to erase them, its detail naming them (ruled 2026-10-11: rewritten like
+    // the other admin free text, unless a policy keeps it).
+    sqlx::query("SELECT principal_erasure_refuse($1, $2, $3, gen_random_uuid(), 'independent_obligation', $4)")
+        .bind(p.profile)
+        .bind(admin.profile)
+        .bind(admin.emitter)
+        .bind("legal hold: Jane Roe refusal")
+        .execute(&pool)
+        .await
+        .unwrap();
     assert!(
         ledger_quoting(&pool, ABOUT).await > 0,
         "the world holds the text first"
@@ -651,6 +662,18 @@ async fn free_text_about_the_subject_is_erased_in_rows_and_ledger(pool: PgPool) 
     .await
     .unwrap();
     assert_eq!(rows, 3, "standing reason, governance reason and Slack id");
+    assert_eq!(
+        ledger_quoting(&pool, "Jane Roe refusal").await,
+        0,
+        "nor the detail of an earlier refusal to erase them"
+    );
+    let detail_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_event_field_redactions WHERE authority = 'principal' AND path = 'detail'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(detail_rows, 1, "rewritten under the act's own authority");
 }
 
 /// FAILS IF a category the deployment's policy names is not kept, or is kept without the record
@@ -1117,9 +1140,9 @@ async fn replay_reproduces_the_admin_event_rewrite_and_the_kept_category(pool: P
         .await
         .unwrap();
     link_slack(&pool, p.profile, "slack:T1:UJANEROE").await;
-    disconnect_slack_principal(
+    disconnect_own(
         &pool,
-        ProfileId::from(p.profile),
+        &temper_services::test_support::human_principal_for(&pool, p.profile).await,
         DisconnectRequest {
             slack_principal_id: "slack:T1:UJANEROE",
             key: &vault_key(),

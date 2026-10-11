@@ -96,6 +96,7 @@ pub enum CliRetentionCategory {
     JoinRequestNotes,
     ReviewRequestNotes,
     CredentialReplayEvidence,
+    ErasureRefusalDetails,
 }
 
 impl From<CliRetentionCategory> for temper_core::types::erasure::RetentionCategory {
@@ -109,6 +110,7 @@ impl From<CliRetentionCategory> for temper_core::types::erasure::RetentionCatego
             CliRetentionCategory::CredentialReplayEvidence => {
                 RetentionCategory::CredentialReplayEvidence
             }
+            CliRetentionCategory::ErasureRefusalDetails => RetentionCategory::ErasureRefusalDetails,
         }
     }
 }

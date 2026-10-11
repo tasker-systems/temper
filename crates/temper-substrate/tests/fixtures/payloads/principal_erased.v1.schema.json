@@ -234,6 +234,11 @@
           "description": "`kb_oauth_refresh_replays`: the evidence that one of the subject's refresh tokens was\ncopied. Kept with its tokens, which stay revoked with their claims and hash erased.",
           "type": "string",
           "const": "credential-replay-evidence"
+        },
+        {
+          "description": "The ledger's `principal_erasure_refused.detail`: the operator's stated reason an earlier\nerasure of the subject was refused (the obligation held, the part that could not be\nhonoured).",
+          "type": "string",
+          "const": "erasure-refusal-details"
         }
       ]
     }
