@@ -173,7 +173,16 @@ HAS_NON_DOC=false
 # RUST_COUPLED below, whose veto is what makes this test safe rather than merely
 # usually-right. Do not restate the old claim that a doc file cannot affect a
 # build — it can, and three of them did.
-if changes_match '\.(md|txt|adoc)$'; then
+#
+# The release register (`release-register/`) is classed with the docs. It is one TOML file per
+# entry since 2026-10-11, so the extension test alone would send a register-only change (a roll
+# PR after every release, a status flip) to full CI, where the single-file `.md` register it
+# replaced scoped docs-only. Its only CI readers are bash gates in quality-gate.yml's
+# `guard-tests` job (wire-class-crosscheck.sh, check-openapi-pin.sh, the register validate step
+# and the reader's harnesses), which runs on every change; no `include_str!` reaches it, and
+# nothing in cargo or bun builds it. It is the same claim the doc trees' gates make below.
+DOC_PATHS='\.(md|txt|adoc)$|^release-register/'
+if changes_match "$DOC_PATHS"; then
     HAS_DOCS=true
 fi
 
@@ -184,7 +193,7 @@ if changes_match '^\.github/scripts/detect-ci-scope'; then
 fi
 
 # Any non-doc file present means we cannot treat the change as docs-only.
-NON_DOC_FILES="$(echo "$CHANGED_FILES" | grep -vE '\.(md|txt|adoc)$' || true)"
+NON_DOC_FILES="$(echo "$CHANGED_FILES" | grep -vE "$DOC_PATHS" || true)"
 if [ -n "$NON_DOC_FILES" ]; then
     HAS_NON_DOC=true
 fi
@@ -260,7 +269,7 @@ fi
 # ones that can actually move a job outcome. Empty means nothing load-bearing
 # changed. `__force_full_ci__` (the no-diff safety fallback) has no doc
 # extension and matches no root, so it lands here and correctly forces a run.
-LOAD_BEARING_FILES="$(echo "$CHANGED_FILES" | grep -vE '\.(md|txt|adoc)$' | grep -vE "$NON_PRODUCT_ROOTS" || true)"
+LOAD_BEARING_FILES="$(echo "$CHANGED_FILES" | grep -vE "$DOC_PATHS" | grep -vE "$NON_PRODUCT_ROOTS" || true)"
 
 HAS_NON_PRODUCT=false
 if changes_match "$NON_PRODUCT_ROOTS"; then

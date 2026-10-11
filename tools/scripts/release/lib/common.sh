@@ -207,69 +207,37 @@ update_package_json_version() {
 }
 
 # ---------------------------------------------------------------------------
-# Release-verdict register parsing (spec §4.1 — the register is in the tree,
-# so the release calculator reads it; PR bodies are not)
+# Release-verdict register (spec §4.1 — the register is in the tree, so the
+# release calculator reads it; PR bodies are not). Since 2026-10-11 the register
+# is one TOML file per entry under release-register/, and every reader goes
+# through ONE parser, tools/manifest/manifest.py (spec of record:
+# temper-artifacts:specs/2026-10-11-release-register-entries-design.md).
 # ---------------------------------------------------------------------------
 
-# Stream the rows of the register's `## Since <version>` windows as
-# TAB-separated lines:  pr <TAB> classes <TAB> surfaces <TAB> status <TAB> citation
+MANIFEST_PY="${REPO_ROOT}/tools/manifest/manifest.py"
+REGISTER_DIR_DEFAULT="${REPO_ROOT}/release-register"
+
+# Stream one register window's entries as TAB-separated lines, sorted by id:
+#   pr <TAB> classes <TAB> surfaces <TAB> status <TAB> title <TAB> id
 #
-# Rows are `- **citation**` bullets; fields are column-0 lines directly beneath
-# them (pr: / classes: / surfaces: / status:). `status: blocked:<class>` is
-# carried verbatim after the colon — the blocked release-class is free text,
-# never tokenized. Sections other than `## Since ...` (pre-policy history) are
-# excluded: the calculator gates on the unreleased window only.
+# $1 = the register directory; $2 = the window (default: unreleased).
+# The reader validates the whole register first and refuses to stream rows from
+# a malformed one. Every field is non-empty and none holds a TAB, so the
+# `IFS=$'\t' read` callers below cannot shift a column — the defect the old
+# markdown parser had: an entry with no `status:` streamed an empty field, the
+# read collapsed it, and the row fell out of every count (three rows of the
+# v0.6.0 window, found during the conversion).
 register_window_rows() {
-    local file="$1"
-    if [[ ! -f "$file" ]]; then
+    local dir="$1" window="${2:-unreleased}"
+    if [[ ! -d "$dir" ]]; then
         # The register is the durable home of the declared-class gate (spec
         # §4.1); the calculator is the last line before a release. A missing
         # register must not render as "zero rows" — that would silence both
         # gates. The --register flag exists for harness fixtures.
-        log_error "Release register not found: $file"
+        log_error "Release register not found: $dir"
         return 1
     fi
-
-    local in_window=false citation="" pr="" classes="" surfaces="" status=""
-
-    flush_row() {
-        if [[ "$in_window" == "true" && -n "$citation" ]]; then
-            printf '%s\t%s\t%s\t%s\t%s\n' "$pr" "$classes" "$surfaces" "$status" "$citation"
-        fi
-        citation=""; pr=""; classes=""; surfaces=""; status=""
-    }
-
-    local line
-    while IFS= read -r line; do
-        case "$line" in
-            '## '*)
-                flush_row
-                if [[ "$line" == '## Since '* ]]; then
-                    in_window=true
-                else
-                    in_window=false
-                fi
-                ;;
-            '- **'*)
-                flush_row
-                if [[ "$in_window" == "true" ]]; then
-                    citation="${line#- \*\*}"
-                    citation="${citation%\*\*}"
-                fi
-                ;;
-            pr:*|classes:*|surfaces:*|status:*)
-                if [[ "$in_window" == "true" ]]; then
-                    case "$line" in
-                        pr:*)       pr="${line#pr: }" ;;
-                        classes:*)  classes="${line#classes: }" ;;
-                        surfaces:*) surfaces="${line#surfaces: }" ;;
-                        status:*)   status="${line#status: }" ;;
-                    esac
-                fi
-                ;;
-        esac
-    done < "$file"
-    flush_row
+    python3 "$MANIFEST_PY" register rows --dir "$dir" --window "$window"
 }
 
 # True if a comma/space-separated field list contains $2 as a token.

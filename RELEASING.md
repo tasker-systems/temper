@@ -95,17 +95,19 @@ first release claims it — no local bootstrap upload.
    (Vercel) validate it on each deployment target before it can reach that target's
    production.
 
-2. **Consult the register — and roll it.** [RELEASE_REGISTER.md](RELEASE_REGISTER.md) is the
-   release-verdict register: a release whose surface class has an open gated entry
-   waits. `tools/scripts/release/calculate-versions.sh` reads it — a retirement-train
-   row refuses to compute a patch next (re-run with `--minor`; M is the reserved era
-   level, moved only by the retirement release Pete calls), and a blocked row refuses
-   a client-skin release unless the verdict owner's decision is passed explicitly.
-   **The release is not done until the register is rolled**: move the shipped rows
-   under a `## Shipped in <V>` section and retitle the window to `## Since <V> —
-   unreleased`. An unrolled window double-counts — the calculator reads the whole
-   `## Since` section, so rows that already shipped inflate the next release's
-   roll-up and its class arithmetic.
+2. **Consult the register — and roll it.** [release-register/](release-register/README.md)
+   is the release-verdict register, one TOML file per entry: a release whose surface
+   class has an open gated entry waits. `tools/scripts/release/calculate-versions.sh`
+   reads its `unreleased/` window — a retirement-train entry refuses to compute a patch
+   next (re-run with `--minor`; M is the reserved era level, moved only by the
+   retirement release Pete calls), and a blocked entry refuses a client-skin release
+   unless the verdict owner's decision is passed explicitly. `cargo make register`
+   prints the window. **The release is not done until the register is rolled**: once
+   the tag `v<V>` exists, run `tools/scripts/release/roll-register.sh v<V>` and land
+   the moves it stages as the roll PR. It moves exactly the entries the tag's tree
+   carries into `release-register/v<V>/`; an entry merged after the tag stays open. A
+   skipped roll no longer double-counts silently: the calculator refuses while
+   `unreleased/` holds an entry the current release's tag already shipped.
 
 3. **Bump `VERSION` on `main`.** The release spine in
    [`tools/scripts/release/`](tools/scripts/release/) does the arithmetic from the
@@ -198,12 +200,13 @@ What shares the number, what releases independently (spec §3):
 
 Every PR that touches a wire surface (`crates/temper-api/`, `crates/temper-mcp/`,
 `crates/temper-client/`, `openapi.json`, `clients/`, `packages/`) declares its compat
-class in [RELEASE_REGISTER.md](RELEASE_REGISTER.md): `additive` (floor P bump at the
+class in a release-register entry, `release-register/unreleased/<id>.toml` (see
+[release-register/README.md](release-register/README.md)): `additive` (floor P bump at the
 next release), `shape-breaking` (below the era level this routes — D-C2: convert the
 movement to the deprecation path and re-declare the row `additive` + `behavioral`, or
 wait for the retirement release train and name `retirement-train` in the row; a routed
 row requires `--minor`, the era release), or `behavioral` (meaning behind an unchanged
-shape changed — a register entry, never silent; no version bump). CI verifies row presence
+shape changed — a register entry, never silent; no version bump). CI verifies entry presence
 and shape-diff honesty; it is structurally barred from certifying the behavioral
 class — that half is owned by review ("does this change the meaning behind an
 unchanged shape for any existing client?") and the merge decision.
@@ -230,7 +233,7 @@ same comparator the declared-class gate uses (`wire-shape-lib.jq` — one
 definition). A `moved` verdict names each movement and is a **shape break**:
 below the era level it has two routes (D-C2) — convert to the deprecation path
 (keep serving the existing rendering under a record, land the corrected signal
-additively, re-declare the register row), or wait for the retirement release
+additively, re-declare the register entry), or wait for the retirement release
 train, which moves M and cuts the next pin in its own release PR, turning the
 gate green (D-C4). A retirement release is therefore expected to read red
 against the current pin until its own PR cuts the new one — that red is the

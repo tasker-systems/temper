@@ -1,6 +1,6 @@
 #![cfg(feature = "test-db")]
 //! A read-only machine principal aimed at a write door is refused by the door's gate — `403` —
-//! never a `500` (resource erasure 2c; `RELEASE_REGISTER.md`'s "Resource erasure 2c" row: "A
+//! never a `500` (resource erasure 2c; `release-register/HISTORY.md`'s "Resource erasure 2c" row: "A
 //! principal with no emitter to resolve (a read-only machine client) is refused by the gate (`403`)
 //! on create and on these doors, where it got `500`").
 //!

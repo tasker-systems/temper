@@ -32,48 +32,60 @@ ok()  { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 bad() { echo "  FAIL: $1"; shift; printf '    %s\n' "$@"; FAIL=$((FAIL + 1)); }
 
 WIRE="${WORK}/wire.txt"
-ADDED="${WORK}/added.txt"
-REG="${WORK}/register.md"
+ADDED="${WORK}/added"
+REG="${WORK}/release-register"
+LEGACY="${WORK}/RELEASE_REGISTER.md"
+REPO="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# A minimal well-formed register, as the header documents it.
+# A minimal well-formed register: the repo's own vocabulary and one prior PR's entry.
 reset_register() {
-  cat > "$REG" <<'MD'
-# Release-verdict register
-
-## Since v0.4.0 — unreleased
-
-- **Citation 1 — some prior PR's behavioral row**
-  Prose.
-pr: 867
-classes: behavioral
-surfaces: http
-status: open
-MD
+  rm -rf "$REG"
+  mkdir -p "${REG}/unreleased"
+  cp "${REPO}/release-register/vocabulary.toml" "${REG}/vocabulary.toml"
+  cat > "${REG}/unreleased/prior-row.toml" <<'TOML'
+title    = "Citation 1 — some prior PR's behavioral entry"
+pr       = 867
+classes  = ["behavioral"]
+surfaces = ["http"]
+status   = "open"
+body = """
+Prose.
+"""
+TOML
 }
 
 reset_fixtures() {
   reset_register
   : > "$WIRE"
-  : > "$ADDED"
+  rm -rf "$ADDED" "$LEGACY"
+  mkdir -p "$ADDED"
+  OWN=0
 }
 
-add_own_row() { # $1 = pr value, $2 = classes value
-  cat >> "$ADDED" <<MD
-- **Citation N — this PR's row**
-  Prose.
-pr: $1
-classes: $2
-surfaces: http
-status: signal-only
-MD
+# "a, b" -> "\"a\", \"b\"" (a TOML array body); a bare number stays a number.
+toml_list() { printf '%s' "$1" | awk -F', *' '{ for (i = 1; i <= NF; i++) printf "%s\"%s\"", (i > 1 ? ", " : ""), $i }'; }
+toml_pr() { case "$1" in *[!0-9]*) printf '"%s"' "$1" ;; *) printf '%s' "$1" ;; esac; }
+
+add_own_row() { # $1 = pr value, $2 = classes value ("a, b"); one entry file the diff adds
+  OWN=$((OWN + 1))
+  cat > "${ADDED}/this-pr-${OWN}.toml" <<TOML
+title    = "Citation N — this PR's entry"
+pr       = $(toml_pr "$1")
+classes  = [$(toml_list "$2")]
+surfaces = ["http"]
+status   = "signal-only"
+body = """
+Prose.
+"""
+TOML
 }
 
-# Every probe runs in full fixture mode: all three evidence seams supplied, so the harness
-# never touches git and stays pure bash.
+# Every probe runs in full fixture mode: all evidence seams supplied, so the harness never
+# touches git and stays pure bash (plus the python3 reader the gate itself calls).
 run_check() { # $1 = shape verdict, remaining args passed through (e.g. --pr 501)
   local sv="$1"; shift
-  bash "$CHECK" --wire-touched "$WIRE" --added-register "$ADDED" \
-      --shape-verdict "$sv" --register "$REG" "$@" 2>&1
+  bash "$CHECK" --wire-touched "$WIRE" --added-entries "$ADDED" \
+      --shape-verdict "$sv" --register-dir "$REG" --legacy-register "$LEGACY" "$@" 2>&1
 }
 
 echo "test-wire-class-crosscheck"
@@ -92,7 +104,7 @@ printf '%s\n' "openapi.json" "clients/temper-rb/lib/temper/generated.rb" > "$WIR
 add_own_row 867 behavioral   # a row lands in this diff — but it names ANOTHER PR
 out="$(run_check unchanged)"; rc=$?
 if [ "$rc" -ne 0 ] \
-    && printf '%s' "$out" | grep -q 'adds no register row for this PR' \
+    && printf '%s' "$out" | grep -q 'adds no register entry for this PR' \
     && printf '%s' "$out" | grep -q 'openapi.json'; then
   ok "presence: wire-touched with no own row fails, naming the wire files"
 else bad "presence: wire-touched with no own row fails, naming the wire files" "exit=$rc" "$out"; fi
@@ -115,25 +127,25 @@ if [ "$rc" -eq 0 ]; then
   ok "pr: <real number> satisfies presence when --pr matches"
 else bad "pr: <real number> satisfies presence when --pr matches" "exit=$rc" "$out"; fi
 out="$(run_check unchanged --pr 502)"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'adds no register row for this PR'; then
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'adds no register entry for this PR'; then
   ok "--pr naming a different number than the row: still fails presence"
 else bad "--pr naming a different number than the row: still fails presence" "exit=$rc" "$out"; fi
 
 # ── 5. PARSE — an invalid classes token fails, naming the line ──────────────────────────────────
 reset_fixtures
 printf '%s\n' "crates/temper-mcp/src/lib.rs" > "$WIRE"
-sed 's/^classes: behavioral$/classes: breaking/' "$REG" > "${REG}.tmp" && mv "${REG}.tmp" "$REG"
+sed -i 's/^classes  = \["behavioral"\]$/classes  = ["breaking"]/' "${REG}/unreleased/prior-row.toml"
 out="$(run_check unchanged)"; rc=$?
 if [ "$rc" -ne 0 ] \
     && printf '%s' "$out" | grep -q "classes: 'breaking' is not one of" \
-    && printf '%s' "$out" | grep -q 'register.md:'; then
-  ok "parse: 'breaking' fails, naming the file and line"
-else bad "parse: 'breaking' fails, naming the file and line" "exit=$rc" "$out"; fi
+    && printf '%s' "$out" | grep -q 'prior-row.toml: classes:'; then
+  ok "parse: 'breaking' fails, naming the file and key"
+else bad "parse: 'breaking' fails, naming the file and key" "exit=$rc" "$out"; fi
 
 # ── 5b. PARSE — retirement-train without shape-breaking fails (a routing is never a class) ──────
 reset_fixtures
 printf '%s\n' "crates/temper-mcp/src/lib.rs" > "$WIRE"
-sed 's/^classes: behavioral$/classes: additive, retirement-train/' "$REG" > "${REG}.tmp" && mv "${REG}.tmp" "$REG"
+sed -i 's/^classes  = \["behavioral"\]$/classes  = ["additive", "retirement-train"]/' "${REG}/unreleased/prior-row.toml"
 out="$(run_check unchanged)"; rc=$?
 if [ "$rc" -ne 0 ] \
     && printf '%s' "$out" | grep -q "a routing, never a class on its own"; then
@@ -143,7 +155,7 @@ else bad "parse: 'retirement-train' without 'shape-breaking' fails the co-occurr
 # ── 5c. PARSE — spec-correction with shape-breaking contradicts ──────────────────────────────────
 reset_fixtures
 printf '%s\n' "crates/temper-mcp/src/lib.rs" > "$WIRE"
-sed 's/^classes: behavioral$/classes: shape-breaking, spec-correction/' "$REG" > "${REG}.tmp" && mv "${REG}.tmp" "$REG"
+sed -i 's/^classes  = \["behavioral"\]$/classes  = ["shape-breaking", "spec-correction"]/' "${REG}/unreleased/prior-row.toml"
 out="$(run_check unchanged)"; rc=$?
 if [ "$rc" -ne 0 ] \
     && printf '%s' "$out" | grep -q "'spec-correction' and 'shape-breaking' contradict"; then
@@ -153,7 +165,7 @@ else bad "parse: 'spec-correction' with 'shape-breaking' fails the contradiction
 # ── 6. PARSE — a nameless blocker (empty after blocked:) fails ──────────────────────────────────
 reset_fixtures
 printf '%s\n' "crates/temper-mcp/src/lib.rs" > "$WIRE"
-sed 's/^status: open$/status: blocked:/' "$REG" > "${REG}.tmp" && mv "${REG}.tmp" "$REG"
+sed -i 's/^status   = "open"$/status   = "blocked:"/' "${REG}/unreleased/prior-row.toml"
 out="$(run_check unchanged)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "names no release class"; then
   ok "parse: 'blocked:' with no class name fails"
@@ -162,7 +174,7 @@ else bad "parse: 'blocked:' with no class name fails" "exit=$rc" "$out"; fi
 # ── 7. PARSE — a non-numeric, non-sentinel pr: fails ────────────────────────────────────────────
 reset_fixtures
 printf '%s\n' "crates/temper-mcp/src/lib.rs" > "$WIRE"
-sed 's/^pr: 867$/pr: 867a/' "$REG" > "${REG}.tmp" && mv "${REG}.tmp" "$REG"
+sed -i 's/^pr       = 867$/pr       = "867a"/' "${REG}/unreleased/prior-row.toml"
 out="$(run_check unchanged)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "pr: '867a'"; then
   ok "parse: 'pr: 867a' fails the pr vocabulary"
@@ -275,7 +287,7 @@ reset_fixtures
 printf '%s\n' "crates/temper-api/src/routes.rs" "crates/temper-api/src/handlers/erasure.rs" > "$WIRE"
 out="$(run_check unchanged)"; rc=$?
 if [ "$rc" -ne 0 ] \
-    && printf '%s' "$out" | grep -q 'adds no register row for this PR' \
+    && printf '%s' "$out" | grep -q 'adds no register entry for this PR' \
     && printf '%s' "$out" | grep -q 'crates/temper-api/'; then
   ok "temper-api wire paths with no own row: fails, naming them (the #871 class)"
 else bad "temper-api wire paths with no own row: fails, naming them (the #871 class)" "exit=$rc" "$out"; fi
@@ -530,7 +542,7 @@ reset_fixtures
 printf '%s\n' "clients/temper-ts/package.json" "clients/temper-ts/src/index.ts" > "$WIRE"
 printf '%s\n' "clients/temper-ts/package.json" > "$DEPS"
 out="$(run_check unchanged --dependency-only "$DEPS")"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'adds no register row for this PR' \
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'adds no register entry for this PR' \
     && printf '%s' "$out" | grep -q 'clients/ (1 file(s))'; then
   ok "dependency-only seam: a bump beside a code edit still owes the row for the code"
 else bad "dependency-only seam: a bump beside a code edit still owes the row for the code" "exit=$rc" "$out"; fi
@@ -547,7 +559,7 @@ classify_probe() { # $1 = path, $2 = base content, $3 = head content ("" = file 
   git -C "$repo" add -A
   local out rc
   out="$(cd "$repo" && bash "$CHECK" --base HEAD 2>&1)"; rc=$?
-  if { [ "$4" = pass ] && [ "$rc" -eq 0 ]; } || { [ "$4" = fail ] && [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'adds no register row'; }; then
+  if { [ "$4" = pass ] && [ "$rc" -eq 0 ]; } || { [ "$4" = fail ] && [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'adds no register entry'; }; then
     ok "$5"
   else bad "$5" "exit=$rc" "$out"; fi
 }
@@ -596,6 +608,80 @@ classify_probe crates/temper-api/Cargo.toml "$CT_BASE" "$(printf '%s\n\n[depende
   fail "classifier: a non-dependency table after a [dependencies.<name>] table stays on the wire"
 classify_probe crates/temper-api/src/lib.rs 'fn a() {}' 'fn b() {}' \
   fail "classifier: source files are never dependency-only"
+
+# ── 18. W9 — the old single-file register never quietly comes back ──────────────────────────────
+reset_fixtures
+printf '%s\n' "openapi.json" > "$WIRE"
+add_own_row self additive
+printf '# Release-verdict register\n' > "$LEGACY"
+out="$(run_check unchanged)"; rc=$?
+if [ "$rc" -ne 0 ] \
+    && printf '%s' "$out" | grep -q 'RELEASE_REGISTER.md exists' \
+    && printf '%s' "$out" | grep -q 'release-register/unreleased/<id>.toml'; then
+  ok "W9: RELEASE_REGISTER.md existing fails, naming the new location — even beside a valid entry"
+else bad "W9: RELEASE_REGISTER.md existing fails, naming the new location" "exit=$rc" "$out"; fi
+
+# ── 19. W2 — in git mode, only an ADDED entry is a declaration ──────────────────────────────────
+# The fixture seams above bypass git; this arm runs the gate's own derivation. A sandbox repo
+# carries the gate, the reader and a register whose base holds another PR's entry; each branch
+# touches a wire path and does one thing to the register.
+GITBOX="${WORK}/gitbox"
+mkdir -p "${GITBOX}/.github/scripts" "${GITBOX}/tools" "${GITBOX}/clients"
+cp "${REPO}/.github/scripts/wire-class-crosscheck.sh" "${REPO}/.github/scripts/"wire-shape*.jq "${GITBOX}/.github/scripts/"
+cp -R "${REPO}/tools/manifest" "${GITBOX}/tools/manifest"
+reset_register
+cp -R "$REG" "${GITBOX}/release-register"
+echo "v1" > "${GITBOX}/clients/thing.txt"
+gb() { git -C "$GITBOX" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+gb init -q -b main
+gb add -A
+gb commit -q -m base
+BASE_SHA="$(gb rev-parse HEAD)"
+git_mode_check() { (cd "$GITBOX" && bash .github/scripts/wire-class-crosscheck.sh --base "$BASE_SHA" --shape-verdict unchanged 2>&1); }
+
+gb checkout -q -b edits-another main
+echo "v2" > "${GITBOX}/clients/thing.txt"
+sed -i 's/^status   = "open"$/status   = "satisfied"/' "${GITBOX}/release-register/unreleased/prior-row.toml"
+sed -i 's/^pr       = 867$/pr       = "self"/' "${GITBOX}/release-register/unreleased/prior-row.toml"
+gb commit -q -am "edit someone else's entry into pr = self"
+out="$(git_mode_check)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'adds no register entry for this PR'; then
+  ok "W2: editing another PR's entry (even into pr = self) is not a declaration"
+else bad "W2: editing another PR's entry is not a declaration" "exit=$rc" "$out"; fi
+
+gb checkout -q -b renames-another main
+echo "v2" > "${GITBOX}/clients/thing.txt"
+# Renamed AND re-pointed at this PR: the masquerade `-M` exists to stop. Without rename
+# detection the move reads as an added file whose pr is "self", and it would count.
+gb mv release-register/unreleased/prior-row.toml release-register/unreleased/mine-now.toml
+sed -i 's/^pr       = 867$/pr       = "self"/' "${GITBOX}/release-register/unreleased/mine-now.toml"
+gb commit -q -am "rename someone else's entry and re-point it at this PR"
+out="$(git_mode_check)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'adds no register entry for this PR'; then
+  ok "W2: renaming another PR's entry (and re-pointing it at this PR) is not a declaration"
+else bad "W2: renaming another PR's entry is not a declaration" "exit=$rc" "$out"; fi
+
+gb checkout -q -b adds-own main
+echo "v2" > "${GITBOX}/clients/thing.txt"
+ADDED_SAVE="$ADDED"; ADDED="${GITBOX}/release-register/unreleased"; OWN=0
+add_own_row self behavioral
+ADDED="$ADDED_SAVE"
+gb add -A
+gb commit -q -m "add this PR's own entry"
+out="$(git_mode_check)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'found — declared classes: behavioral'; then
+  ok "W2: adding this PR's own entry declares it"
+else bad "W2: adding this PR's own entry declares it" "exit=$rc" "$out"; fi
+
+gb checkout -q -b adds-malformed main
+echo "v2" > "${GITBOX}/clients/thing.txt"
+printf 'title = "x"\n' > "${GITBOX}/release-register/unreleased/half-written.toml"
+gb add -A
+gb commit -q -m "add a malformed entry"
+out="$(git_mode_check)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'half-written.toml: pr: missing'; then
+  ok "W2: a malformed added entry fails as itself, naming the file and key"
+else bad "W2: a malformed added entry fails as itself" "exit=$rc" "$out"; fi
 
 echo
 echo "  ${PASS} passed, ${FAIL} failed"

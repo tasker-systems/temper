@@ -160,13 +160,13 @@ print_leaf_row "temper-ui" UI
 print_leaf_row "temper-cloud" CLOUD
 
 echo ""
-echo "  Register roll-up (window since ${REGISTER_WINDOW:-<no '## Since' section>}): ${REGISTER_ROWS} rows"
+echo "  Register roll-up (window since ${REGISTER_WINDOW}): ${REGISTER_ROWS} entries"
 echo "    classes: additive ${REGISTER_ADDITIVE}, shape-breaking ${REGISTER_SHAPE_BREAKING}, behavioral ${REGISTER_BEHAVIORAL}"
 echo "    status:  open ${REGISTER_OPEN}, signal-only ${REGISTER_SIGNAL_ONLY}, blocked ${REGISTER_BLOCKED}"
 
 # Named roll-up, read fresh from the register (same parser the gates used)
-REGISTER_FILE="${REPO_ROOT}/RELEASE_REGISTER.md"
-register_window_rows "$REGISTER_FILE" | while IFS=$'\t' read -r r_pr r_classes r_surfaces r_status r_citation; do
+REGISTER_DIR="$REGISTER_DIR_DEFAULT"
+register_window_rows "$REGISTER_DIR" | while IFS=$'\t' read -r r_pr r_classes r_surfaces r_status r_citation r_id; do
     [[ -n "$r_citation" ]] || continue
     case "$r_status" in
         open)
@@ -233,44 +233,38 @@ log_section "Bumping versions"
 "${SCRIPT_DIR}/update-versions.sh" ${UPDATE_ARGS}
 
 # ---------------------------------------------------------------------------
-# The release's own declaration row
+# The release's own declaration entry
 # ---------------------------------------------------------------------------
 # A release PR touches every version site — wire-touched paths by the
-# crosscheck's definition — and the gate demands a row from every wire-touched
-# PR. The row is the release's: version-only restale, additive (the D-S3
-# baseline — no shape movement), pr: self (the number is unknowable until the
-# PR exists). Authored here so no release lands on the operator's memory of
-# the crosscheck's failure (the 0.5.0 and 0.5.1 cuts both needed a hand-added
-# row before this landed).
-REGISTER_TMP="$(mktemp)"
-cat > "$REGISTER_TMP" <<ROW
-- **This release — the ${NEXT_CORE_VERSION} fleet alignment: VERSION ${CURRENT_CORE_VERSION} → ${NEXT_CORE_VERSION} across crates, packages, and clients**
-  The release train's own wire delta is none: version fields and the generated
-  cores re-stale with the bump (the D-S3 baseline — no shape movement); the
-  P floor rides the additive rows already in this window.
-pr: self
-classes: additive
-surfaces: http, clients
-status: signal-only
-ROW
-if grep -q "This release — the ${NEXT_CORE_VERSION} fleet alignment" "$REGISTER_FILE"; then
-    log_info "Register already carries this release's row"
+# crosscheck's definition — and the gate demands an entry from every
+# wire-touched PR. The entry is the release's: version-only restale, additive
+# (the D-S3 baseline — no shape movement), pr = "self" (the number is
+# unknowable until the PR exists). Authored here so no release lands on the
+# operator's memory of the crosscheck's failure (the 0.5.0 and 0.5.1 cuts both
+# needed a hand-added row before this landed). It is its own file, so it can
+# never collide with an entry another PR adds while the release is in flight.
+# The id is kebab-case (no dots), so the version is spelled with hyphens: release-v0-6-1.
+RELEASE_ENTRY="${REGISTER_DIR}/unreleased/release-v${NEXT_CORE_VERSION//./-}.toml"
+if [[ -f "$RELEASE_ENTRY" ]]; then
+    log_info "Register already carries this release's entry"
 else
-    # `|| true`: a register whose window was not renamed at the previous
-    # release (no `## Since v<current>` section) makes grep exit 1 on no-match,
-    # and pipefail + set -e would kill the script silently before the empty
-    # case below is ever reached — the 0.5.2 prep died exactly there.
-    WINDOW_LINE="$(grep -n "^## Since v${CURRENT_CORE_VERSION}" "$REGISTER_FILE" | head -1 | cut -d: -f1 || true)"
-    if [ -n "$WINDOW_LINE" ]; then
-        awk -v n="$WINDOW_LINE" 'NR==n {print; while ((getline r < rowfile) > 0) print r; next} {print}' \
-            rowfile="$REGISTER_TMP" "$REGISTER_FILE" > "$REGISTER_FILE.tmp" \
-            && mv "$REGISTER_FILE.tmp" "$REGISTER_FILE"
-    else
-        { printf '\n## Since %s — unreleased\n\n' "$CURRENT_CORE_VERSION"; cat "$REGISTER_TMP"; } >> "$REGISTER_FILE"
-    fi
-    echo "==> Added the release's register row under the ${CURRENT_CORE_VERSION} window"
+    cat > "$RELEASE_ENTRY" <<ENTRY
+title    = "This release — the ${NEXT_CORE_VERSION} fleet alignment: VERSION ${CURRENT_CORE_VERSION} → ${NEXT_CORE_VERSION} across crates, packages, and clients"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "clients"]
+status   = "signal-only"
+body = '''
+The release train's own wire delta is none: version fields and the generated
+cores re-stale with the bump (the D-S3 baseline — no shape movement); the
+P floor rides the additive entries already in this window.
+'''
+ENTRY
+    python3 "$MANIFEST_PY" register validate --dir "$REGISTER_DIR" >/dev/null \
+        || die "The release entry ${RELEASE_ENTRY} does not validate — see the reader's output above."
+    git add "$RELEASE_ENTRY"
+    echo "==> Added the release's register entry: ${RELEASE_ENTRY#"${REPO_ROOT}"/}"
 fi
-rm -f "$REGISTER_TMP"
 
 # ---------------------------------------------------------------------------
 # Regenerate the version-restaled artifacts
@@ -327,7 +321,7 @@ fi
 COMPAT_CLASSES="${COMPAT_CLASSES#, }"
 [[ -z "$COMPAT_CLASSES" ]] && COMPAT_CLASSES="none declared in the window"
 
-OPEN_LIST="$(register_window_rows "$REGISTER_FILE" | awk -F'\t' '$4 == "open" { print $1 }' | awk '!seen[$0]++' | awk '{ n++; prs = prs (n > 1 ? ", " : "") "pr:" $1 } END { print prs }')"
+OPEN_LIST="$(register_window_rows "$REGISTER_DIR" | awk -F'\t' '$4 == "open" { print $1 }' | awk '!seen[$0]++' | awk '{ n++; prs = prs (n > 1 ? ", " : "") "pr:" $1 } END { print prs }')"
 
 PR_BODY="## What"$'\n\n'
 PR_BODY+="Prepare release v${NEXT_CORE_VERSION}: the shared-version bump across every version site (VERSION, workspace crates, client skins, npm packages), with the release-verdict register rolled up below."$'\n\n'
@@ -337,7 +331,7 @@ PR_BODY+="## Verification"$'\n\n'
 PR_BODY+="- \`SQLX_OFFLINE=true cargo check --workspace\` green on this branch (run in preparation)."$'\n'
 PR_BODY+="- Roll-up reproducible with: \`tools/scripts/release/calculate-versions.sh\`."$'\n\n'
 PR_BODY+="## Compat class"$'\n\n'
-PR_BODY+="${COMPAT_CLASSES} — rows live in [RELEASE_REGISTER.md](RELEASE_REGISTER.md) under \`## Since ${REGISTER_WINDOW}\`: ${REGISTER_OPEN} open${OPEN_LIST:+ (${OPEN_LIST})}, ${REGISTER_SIGNAL_ONLY} signal-only, ${REGISTER_BLOCKED} blocked."$'\n\n'
+PR_BODY+="${COMPAT_CLASSES} — entries live in [release-register/unreleased/](release-register/unreleased/) (the window since ${REGISTER_WINDOW}): ${REGISTER_OPEN} open${OPEN_LIST:+ (${OPEN_LIST})}, ${REGISTER_SIGNAL_ONLY} signal-only, ${REGISTER_BLOCKED} blocked."$'\n\n'
 PR_BODY+="### Version Changes"$'\n\n'
 PR_BODY+="| Component | Current | Next |"$'\n'
 PR_BODY+="|-----------|---------|------|"$'\n'

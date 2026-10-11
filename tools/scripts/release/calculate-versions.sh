@@ -43,7 +43,7 @@
 #
 # Usage:
 #   ./tools/scripts/release/calculate-versions.sh [--minor] [--override-blocker]
-#       [--register PATH] [--rb] [--py] [--ts] [--telemetry] [--ui] [--cloud] [--from TAG]
+#       [--register DIR] [--rb] [--py] [--ts] [--telemetry] [--ui] [--cloud] [--from TAG]
 #
 # Output (eval-safe KEY=VALUE on stdout; warnings and refusals on stderr):
 #   CHANGES_BASE_REF=... and the detect-changes class booleans (re-emitted)
@@ -71,7 +71,7 @@ source "${SCRIPT_DIR}/lib/common.sh"
 MINOR=false
 MAJOR=false
 OVERRIDE_BLOCKER=false
-REGISTER_FILE="${REPO_ROOT}/RELEASE_REGISTER.md"
+REGISTER_DIR="$REGISTER_DIR_DEFAULT"
 RB_RELEASE=false
 PY_RELEASE=false
 TS_RELEASE=false
@@ -85,8 +85,8 @@ while [[ $# -gt 0 ]]; do
         --minor)            MINOR=true; shift ;;
         --major)            MAJOR=true; shift ;;
         --override-blocker) OVERRIDE_BLOCKER=true; shift ;;
-        --register)         REGISTER_FILE="$2"; shift 2 ;;
-        --register=*)       REGISTER_FILE="${1#*=}"; shift ;;
+        --register)         REGISTER_DIR="$2"; shift 2 ;;
+        --register=*)       REGISTER_DIR="${1#*=}"; shift ;;
         --rb)               RB_RELEASE=true; shift ;;
         --py)               PY_RELEASE=true; shift ;;
         --ts)               TS_RELEASE=true; shift ;;
@@ -125,11 +125,29 @@ echo "CURRENT_CORE_VERSION=${CURRENT_CORE_VERSION}"
 # ---------------------------------------------------------------------------
 REGISTER_ROWS_FILE="$(mktemp)"
 trap 'rm -f "$REGISTER_ROWS_FILE"' EXIT
-register_window_rows "$REGISTER_FILE" > "$REGISTER_ROWS_FILE"
+register_window_rows "$REGISTER_DIR" > "$REGISTER_ROWS_FILE"
 
-REGISTER_WINDOW=""
-if [[ -f "$REGISTER_FILE" ]]; then
-    REGISTER_WINDOW=$(awk '/^## Since /{print $3; exit}' "$REGISTER_FILE")
+# The window is everything since the current release, so it is named for it.
+REGISTER_WINDOW="v${CURRENT_CORE_VERSION}"
+
+# An unrolled window fails loudly (spec D6). Rolling moves the entries a release
+# shipped out of unreleased/ (roll-register.sh). A skipped roll used to inflate
+# the next release's roll-up silently: the calculator read every row in the
+# window, shipped ones included. Now an unreleased/ entry that the current
+# release's tag already carries is a shipped entry nobody rolled.
+if git -C "$REPO_ROOT" rev-parse -q --verify "refs/tags/${REGISTER_WINDOW}" >/dev/null 2>&1; then
+    UNROLLED=""
+    while IFS= read -r shipped; do
+        id="$(basename "$shipped" .toml)"
+        [[ -f "${REGISTER_DIR}/unreleased/${id}.toml" ]] && UNROLLED+="${id} "
+    done < <(git -C "$REPO_ROOT" ls-tree --name-only "${REGISTER_WINDOW}" -- release-register/unreleased/ | grep '\.toml$' || true)
+    if [[ -n "$UNROLLED" ]]; then
+        log_error "release-register/unreleased/ still holds entries that ${REGISTER_WINDOW} shipped:"
+        for id in $UNROLLED; do log_error "  ${id}"; done
+        die "Refusing to count a shipped entry twice. Roll the register first: tools/scripts/release/roll-register.sh ${REGISTER_WINDOW}"
+    fi
+else
+    log_warn "Tag ${REGISTER_WINDOW} is not present locally (git fetch --tags), so an unrolled register window cannot be detected."
 fi
 
 # ---------------------------------------------------------------------------
@@ -145,7 +163,7 @@ BEHAVIORAL_ROWS=0
 TOTAL_ROWS=0
 BLOCKED_CLASSES=""
 
-while IFS=$'\t' read -r r_pr r_classes r_surfaces r_status r_citation; do
+while IFS=$'\t' read -r r_pr r_classes r_surfaces r_status r_citation r_id; do
     [[ -n "$r_citation" ]] || continue
     TOTAL_ROWS=$((TOTAL_ROWS + 1))
 
@@ -196,7 +214,7 @@ echo "REGISTER_BLOCKED_CLASSES=\"${BLOCKED_CLASSES%; }\""
 # declared-class gate fails it on the PR); historical rows read as history.
 if [[ "$RETIREMENT_TRAIN_ROWS" -gt 0 && "$MINOR" != "true" ]]; then
     log_error "Retirement-train rows in the release window require --minor (M is the reserved era level — it moves only in a retirement release, D-C1):"
-    while IFS=$'\t' read -r r_pr r_classes r_surfaces r_status r_citation; do
+    while IFS=$'\t' read -r r_pr r_classes r_surfaces r_status r_citation r_id; do
         if field_has_token "$r_classes" "shape-breaking" && field_has_token "$r_classes" "retirement-train"; then
             log_error "  pr:${r_pr} — ${r_citation}"
         fi
@@ -238,7 +256,7 @@ fi
 # Gate 3: open rows intersecting the released surfaces print the checklist
 # warning (the checklist consults the register — spec §4.1).
 OPEN_WARNING_EMITTED=false
-while IFS=$'\t' read -r r_pr r_classes r_surfaces r_status r_citation; do
+while IFS=$'\t' read -r r_pr r_classes r_surfaces r_status r_citation r_id; do
     [[ "$r_status" == "open" ]] || continue
     if surfaces_intersect "$r_surfaces" "$RELEASE_SURFACES"; then
         log_warn "Register open row gates this release (pr:${r_pr}, surfaces: ${r_surfaces}):"
