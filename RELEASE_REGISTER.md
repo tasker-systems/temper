@@ -38,7 +38,9 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
   (revoking pending ones; an invitation to an address they never verified is left and named by
   count); deletes the login flows and refresh tokens bound to their profile, and refresh tokens
   never bound but theirs by the instance's login provider and `sub`, with their replay records;
-  revokes in temper and empties the credential of every connection homed in their estate or whose machine principal
+  ends every refresh chain of theirs, so a rotation racing the act mints no successor (the AS's
+  refresh gate also refuses an erased principal, and a successor that arrives behind the act is
+  not stored, the AS's existing no-refresh-token answer); revokes in temper and empties the credential of every connection homed in their estate or whose machine principal
   they are (provider-side tokens are not revoked there); empties their entities' metadata; deletes
   their staged uploads; reaches Slack stores through the vault's own profile, not only a current
   link; nulls standing, join and review free text about them; and rewrites the ledger's standing
