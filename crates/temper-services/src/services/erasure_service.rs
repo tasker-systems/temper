@@ -1697,6 +1697,7 @@ mod tests {
                         | "resource_erasures"
                         | "charters_held"
                         | "redacted_fields"
+                        | "retained"
                 ),
                 "unexpected payload key {key:?} — the payload must never carry a trail join-key shape"
             );
