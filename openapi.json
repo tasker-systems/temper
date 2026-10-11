@@ -6699,6 +6699,9 @@
           },
           "409": {
             "description": "The restored address collided under a concurrent write"
+          },
+          "410": {
+            "description": "The context was erased with its owner and cannot be restored"
           }
         },
         "security": [
@@ -18983,7 +18986,7 @@
                   "null"
                 ],
                 "format": "int32",
-                "description": "Live resources and blobs still homed in the estate after the act committed: created\nthere while the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which\nerases them. Absent when the count could not be read: unknown, never zero.",
+                "description": "Live resources and blobs still homed in the estate after the act committed, and\ncontexts of the estate not yet erased: created there while the act ran (ruled Q3,\n2026-10-10). Non-zero means run the act again, which erases them. Absent when the count\ncould not be read: unknown, never zero.",
                 "minimum": 0
               },
               "event_id": {

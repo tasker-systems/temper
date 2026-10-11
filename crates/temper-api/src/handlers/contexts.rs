@@ -183,6 +183,7 @@ pub async fn delete(
         (status = 403, description = "Caller may read but not administer this context"),
         (status = 404, description = "Context not found, or not retired (uniform — no existence oracle)"),
         (status = 409, description = "The restored address collided under a concurrent write"),
+        (status = 410, description = "The context was erased with its owner and cannot be restored"),
     )
 )]
 pub async fn restore(
