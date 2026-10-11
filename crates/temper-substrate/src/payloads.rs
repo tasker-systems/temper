@@ -24,7 +24,8 @@ use std::collections::{BTreeMap, HashMap};
 // below embed some of them, re-exported here so `payloads::` stays a complete vocabulary.
 pub use temper_core::types::erasure::{
     ErasureAct, ErasureTargetOutcome, RecordedRefusalReason, RedactedEventFields,
-    ResourceErasureRefusalReason, ScrubFieldKind, ScrubbedField,
+    ResourceErasureRefusalReason, RetainedCategory, RetentionCategory, ScrubFieldKind,
+    ScrubbedField,
 };
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::property_owner::PropertyOwner;
@@ -1570,6 +1571,11 @@ pub struct PrincipalErased {
     /// Required, and written even when empty: no `principal_erased` predates it (the migration
     /// guards).
     pub redacted_fields: Vec<RedactedEventFields>,
+    /// The categories the deployment's retention policy kept (20261023100000, R4), as the policy
+    /// stood when the act ran. The redaction reads them back from here, as it reads the estate, so
+    /// replay keeps what live kept. Required, and written even when empty: no `principal_erased`
+    /// predates it (the migration guards).
+    pub retained: Vec<RetainedCategory>,
 }
 
 /// One resource erasure a person act ran: its subject and its `resource_erased` event. Keyed
@@ -2252,8 +2258,15 @@ mod tests {
                 event: EventId::from(Uuid::now_v7()),
                 paths: vec!["from_name".into(), "from_slug".into()],
             }],
+            retained: vec![RetainedCategory {
+                category: RetentionCategory::StandingReasons,
+                policy: "security-audit".into(),
+                basis: "GDPR 17(3)(e)".into(),
+                period: "1 year".into(),
+            }],
         };
         let v = serde_json::to_value(&erased).unwrap();
+        assert_eq!(v["retained"][0]["category"], "standing-reasons");
         assert!(
             !v.to_string().contains("resource_id"),
             "no trail join key rides the completion payload"

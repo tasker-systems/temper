@@ -83,7 +83,7 @@ kb_profile_auth_links.linked_at           | none          | n-a       |
 kb_entities.id                            | reference     | pseudonym | what kb_events points at; undeletable once any event exists
 kb_entities.profile_id                    | reference     | pseudonym | the link erasure breaks
 kb_entities.name                          | identifier    | full      | agent-instance name; may embed a person's name; REACHED at erase time: sentineled to 'erased-' || the entity's own id (the (profile_id, name) UNIQUE grain forbids one shared sentinel), the entity UUID kept as the pseudonym (20260909000025)
-kb_entities.metadata                      | incidental    | full      | launch metadata (model, platform, persona)
+kb_entities.metadata                      | incidental    | full      | launch metadata (model, platform, persona); REACHED at erase time (20261023100000): emptied to '{}'
 kb_entities.created                       | none          | n-a       |
 
 # ── the ledger: immutable by trigger, so every ceiling here is `none` ────────────────────────
@@ -121,13 +121,16 @@ kb_cogmaps.telos_centroid                 | derived       | recompute | an immut
 kb_contexts.telos_centroid                | derived       | recompute | an immutable copy also rides kb_events.payload
 
 # ── external identifiers ─────────────────────────────────────────────────────────────────────
-kb_team_invitations.invited_email         | identifier    | full      | an email for someone who may have NO profile at all
-kb_slack_link_intents.slack_principal_id  | identifier    | full      | no profile FK; an unconsumed intent is reachable only by this value
-kb_slack_grant_vault.slack_principal_id   | identifier    | full      |
-kb_slack_grant_vault.rt_ciphertext        | identifier    | full      | AEAD-sealed Slack refresh token — the durable grant (found by the `bytes` derivation; invisible to every type-keyed source before it)
+kb_team_invitations.invited_email         | identifier    | full      | an email for someone who may have NO profile at all; REACHED at erase time (20261023100000): invitations sent by or to the subject sentineled to 'erased-' || id, token replaced, pending ones revoked
+kb_slack_link_intents.slack_principal_id  | identifier    | full      | no profile FK; an unconsumed intent is reachable only by this value; REACHED at erase time (20261023100000): deleted, matched through a Slack auth link or a vault row of the subject
+kb_slack_grant_vault.slack_principal_id   | identifier    | full      | REACHED at erase time (20261023100000): deleted, matched through a Slack auth link or the vault row's own profile_id; the grant is revoked at Slack first, best-effort
+kb_slack_grant_vault.rt_ciphertext        | identifier    | full      | AEAD-sealed Slack refresh token — the durable grant (found by the `bytes` derivation; invisible to every type-keyed source before it); REACHED at erase time (20261023100000): revoked at Slack best-effort, then deleted; a failed revoke re-seals the token into kb_erasure_slack_revocations
 kb_slack_grant_vault.at_ciphertext        | identifier    | full      | AEAD-sealed cached Slack access token
 kb_slack_grant_vault.rt_nonce             | none          | n-a       | per-row random AEAD nonce — no personal data
 kb_slack_grant_vault.at_nonce             | none          | n-a       | per-row random AEAD nonce — no personal data
+kb_erasure_slack_revocations.rt_ciphertext | identifier   | full      | a Slack refresh token whose revoke failed during an erasure, re-sealed under the row id; no Slack id or profile beside it; NULLed by the erasure drain at revocation or at the cap
+kb_erasure_slack_revocations.rt_nonce     | none          | n-a       | per-row random AEAD nonce — no personal data
+kb_erasure_retention_policies.set_by_profile_id | reference | pseudonym | the operator who set the policy
 kb_saml_idp.email_attr                    | none          | n-a       | an attribute NAME, not a value
 _sqlx_migrations.checksum                 | none          | n-a       | test/migration bookkeeping bytea, not user data
 
@@ -135,16 +138,16 @@ _sqlx_migrations.checksum                 | none          | n-a       | test/mig
 kb_properties.property_value              | incidental    | full      | the projection is erasable; its copy in kb_events.payload is not
 kb_workflow_jobs.payload                  | incidental    | full      |
 kb_invocations.outcome                    | incidental    | full      |
-kb_connections.credential                 | incidental    | full      | an external account binding
-kb_connections.observed_reach             | incidental    | full      |
+kb_connections.credential                 | incidental    | full      | an external account binding; REACHED at erase time (20261023100000): revoked in temper and NULLed for connections homed in the estate or whose profile is the subject; provider-side tokens are not revoked (task 01a128a4-5a16-7724-8e57-3dc2f2327f0f)
+kb_connections.observed_reach             | incidental    | full      | REACHED at erase time (20261023100000): NULLed with the credential
 kb_connections.tool_manifest              | none          | n-a       | the provider's tool schema
 kb_data_artifact_content.content          | content       | full      | REACHED at erase time for the subject's OWN kind namespace: emptied ('{}') where the resource is homed in the subject's personal contexts and kind_owner IS the subject's profile — artifact id and both content_hash columns kept (D3's retention shape). The kind namespace is frozen at commit (identity-as-input), so a RESOURCE REHOMED into the subject's context pulls another principal's namespace inside a governed home: that content is the disposition-iii remainder, named in the act's targets, never struck. Not admitted to kb_erased_content: no artifact consult site exists — the tombstone keeps the subject from re-committing (20260909000025)
-kb_blob_upload_segments.bytes             | content       | full      | raw staged bytes (D7 transport state); pre-ledger, no event/replay copy; segments cascade when the session row goes
+kb_blob_upload_segments.bytes             | content       | full      | raw staged bytes (D7 transport state); pre-ledger, no event/replay copy; segments cascade when the session row goes; REACHED at erase time (20261023100000): sessions owned by the subject or homed in the estate deleted; segments cascade
 kb_data_artifact_shapes.schema            | none          | n-a       | a JSON schema
 kb_data_artifact_verdicts.detail          | incidental    | full      |
 kb_subscriptions.selector                 | none          | n-a       |
-kb_oauth_flow.claims                      | identifier    | full      | IdP claims carry email and name
-kb_oauth_refresh_tokens.claims            | identifier    | full      | IdP claims carry email and name
+kb_oauth_flow.claims                      | identifier    | full      | IdP claims carry email and name; REACHED at erase time (20261023100000): flows bound to the subject or naming their provider id or email deleted
+kb_oauth_refresh_tokens.claims            | identifier    | full      | IdP claims carry email and name; REACHED at erase time (20261023100000): tokens deleted with their replay rows; under a credential-replay-evidence policy kept revoked with claims emptied and hash replaced
 
 # ── pseudonymous references; each ceases to identify when the profile is tombstoned ──────────
 kb_access_grants.granted_by_profile_id    | reference     | pseudonym |

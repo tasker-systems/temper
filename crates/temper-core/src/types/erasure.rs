@@ -40,6 +40,62 @@ pub struct RedactedEventFields {
     pub paths: Vec<String>,
 }
 
+/// What a deployment's retention policy may keep through a person erasure (R4 of the 2026-10-10
+/// erasure inventory). The act removes every identifier of the subject and every free-text field
+/// about them by default; a category here is kept only when an organisation names it in a policy
+/// with a stated basis and period, and the record then names it `retained under policy <name>`.
+///
+/// Free text and replay evidence only. Identifiers and live credentials are not retainable: a
+/// deployment cannot keep a usable credential or a direct identifier of an erased person, so no
+/// value here names one. The SQL CHECK on `kb_erasure_retention_policies.category` is the same
+/// closed set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum RetentionCategory {
+    /// `kb_principal_standing_events.reason` and its ledger copy `principal_standing_changed.reason`.
+    StandingReasons,
+    /// The ledger's `principal_governance_changed.reason`.
+    GovernanceReasons,
+    /// `kb_join_requests.message` and `.decision_note` of the subject's requests.
+    JoinRequestNotes,
+    /// `kb_principal_review_requests.message` and `.decision_note` of the subject's requests.
+    ReviewRequestNotes,
+    /// `kb_oauth_refresh_replays`: the evidence that one of the subject's refresh tokens was
+    /// copied. Kept with its tokens, which stay revoked with their claims and hash erased.
+    CredentialReplayEvidence,
+}
+
+impl RetentionCategory {
+    /// The wire spelling, the one the SQL CHECK and the ledger carry.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::StandingReasons => "standing-reasons",
+            Self::GovernanceReasons => "governance-reasons",
+            Self::JoinRequestNotes => "join-request-notes",
+            Self::ReviewRequestNotes => "review-request-notes",
+            Self::CredentialReplayEvidence => "credential-replay-evidence",
+        }
+    }
+}
+
+/// One category a person erasure kept under the deployment's retention policy, as the act's record
+/// carries it: the policy as it stood when the act ran, so the record stays true after the policy
+/// changes and replay keeps exactly what the live act kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct RetainedCategory {
+    pub category: RetentionCategory,
+    /// The policy's name.
+    pub policy: String,
+    /// The stated basis, e.g. `GDPR 17(3)(e) / CCPA 105(d)(1)`.
+    pub basis: String,
+    /// The stated period, as Postgres renders the interval (`1 year`).
+    pub period: String,
+}
+
 // The erasure and block history scrub doors answer in this enum. The ledger records refusals in
 // `RecordedRefusalReason`, which carries every value here and the field scrub's.
 /// The closed refusal vocabulary for `resource_erasure_refused` (resource erasure spec D5, D11).
