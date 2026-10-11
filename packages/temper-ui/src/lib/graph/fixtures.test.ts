@@ -91,13 +91,14 @@ describe('the harness builds a whole view for every scenario', () => {
 		expect(Object.keys(viewFor(harness, name)).sort()).toEqual(Object.keys(GRAPH_VIEW_KEYS).sort());
 	});
 
-	it.each(
-		analysisScenarioNames(analysis),
-	)('analysis anchor "%s" builds the full AnalysisViewData key set', (name) => {
-		expect(Object.keys(analysisViewFor(analysis, name)).sort()).toEqual(
-			Object.keys(ANALYSIS_VIEW_KEYS).sort(),
-		);
-	});
+	it.each(analysisScenarioNames(analysis))(
+		'analysis anchor "%s" builds the full AnalysisViewData key set',
+		(name) => {
+			expect(Object.keys(analysisViewFor(analysis, name)).sort()).toEqual(
+				Object.keys(ANALYSIS_VIEW_KEYS).sort(),
+			);
+		},
+	);
 });
 
 // ── 2. The positive leak guard ──────────────────────────────────────────────────────────────────

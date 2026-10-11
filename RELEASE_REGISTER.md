@@ -32,6 +32,17 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 (`schemas/versions/<M.m>/`); the pin gate checks the record names a `spec-correction` row.
 
 ## Since v0.6.0 — unreleased
+- **Bun-workspace minor/patch dependency refresh (temper-cloud, temper-ui)**
+  Minor and patch bumps across the root bun workspace — among them svelte 5.57, tailwindcss 4.3,
+  marked 18.1, zod 4.6, jose, pino, docx, xml-crypto, @vercel/functions, @huggingface/hub — with
+  onnxruntime held at the version @huggingface/transformers pins. No route, response shape, or
+  client surface changes; the source edits are Biome 2.5 formatting, import order, and two test
+  assertions. Who observes: temper-ui users, only if an upstream minor changed rendering or
+  validation behind an unchanged API. Release relevance: behavioral, dependency-only.
+pr: self
+classes: behavioral
+surfaces: internal
+status: signal-only
 - **Erasing a person now erases every resource in their @me and personal-team contexts, ledger included**
   The principal erasure act emptied its estate's prose by content hash and left titles, origins,
   properties, edge labels and every ledger copy; its estate was the subject's `@me` contexts only.

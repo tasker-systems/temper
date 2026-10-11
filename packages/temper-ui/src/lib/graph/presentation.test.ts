@@ -73,15 +73,12 @@ describe('the arm is said without naming an act, by the read that produced it', 
 	 */
 	const declared = [...ENTRY_ARMS, ...COMPOSITION_ARMS];
 
-	test.each([
-		'region',
-		'salience',
-		'wayfind',
-		'survey',
-		'follow-from',
-	])('no arm phrase any read declares contains %s', (word) => {
-		for (const arm of declared) expect(arm.label.toLowerCase()).not.toContain(word);
-	});
+	test.each(['region', 'salience', 'wayfind', 'survey', 'follow-from'])(
+		'no arm phrase any read declares contains %s',
+		(word) => {
+			for (const arm of declared) expect(arm.label.toLowerCase()).not.toContain(word);
+		},
+	);
 
 	test('the composition still says exactly what it always said', () => {
 		expect(COMPOSITION_ARMS.map((a) => a.label)).toEqual([
