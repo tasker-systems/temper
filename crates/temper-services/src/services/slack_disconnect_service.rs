@@ -119,47 +119,22 @@ pub async fn disconnect_slack_principal(
     .await?;
 
     // 2. Revoke. Best-effort in ExternalIdp mode; real and atomic in AS mode.
-    let idp_revocation = match (&refresh_token, req.mode) {
+    let idp_revocation = match &refresh_token {
         // No grant on file (or one we could not open — see
         // `take_refresh_token_for_disconnect`), so nothing was attempted.
-        (None, _) => IdpRevocation::NotAttempted,
-        (Some(rt), AuthMode::TemperAs) => {
-            // The AS issued this token and stores it locally, so revocation is a
-            // row update in THIS transaction — no network, no failure mode.
-            //
-            // Zero rows matched maps to `Failed`, NOT `NotAttempted`: we had a
-            // grant and we DID attempt to revoke it, and the attempt found no
-            // AS row. That is the silent-failure case the pinned-hash test below
-            // exists to guard (a digest drift between Rust and the TypeScript
-            // writer matches nothing and would otherwise report success).
-            if revoke_as_refresh_token(&mut tx, rt).await? {
-                IdpRevocation::Revoked
-            } else {
-                tracing::warn!(
-                    principal = %req.slack_principal_id,
-                    "slack disconnect: AS-mode revocation matched no refresh-token row. The local \
-                     grant was destroyed; the AS row (if any) is still live."
-                );
-                IdpRevocation::Failed
-            }
-        }
-        (Some(rt), AuthMode::ExternalIdp) => {
-            match oauth_client::revoke_grant(&req.revoke_url, req.client_id, rt).await {
-                Ok(()) => IdpRevocation::Revoked,
-                Err(e) => {
-                    // Principal + error only. Never the token. The error text is
-                    // bounded — it quotes the IdP response, not our config.
-                    let err_text = e.to_string();
-                    tracing::warn!(
-                        principal = %req.slack_principal_id,
-                        error = %crate::error::bounded(&err_text),
-                        "slack disconnect: IdP revocation failed; destroying the local grant \
-                         anyway. The grant may remain live at the IdP until it expires — \
-                         revoke it out-of-band if that matters."
-                    );
-                    IdpRevocation::Failed
-                }
-            }
+        None => IdpRevocation::NotAttempted,
+        Some(rt) => {
+            revoke_at_idp(
+                &mut tx,
+                rt,
+                &IdpRevokeTarget {
+                    mode: req.mode,
+                    revoke_url: &req.revoke_url,
+                    client_id: req.client_id,
+                },
+                req.slack_principal_id,
+            )
+            .await?
         }
     };
 
@@ -244,6 +219,69 @@ pub async fn disconnect_slack_principal(
         grant_deleted,
         intents_deleted,
         idp_revocation,
+    })
+}
+
+/// Where a Slack refresh token is revoked, and as which client.
+#[derive(Debug, Clone, Copy)]
+pub struct IdpRevokeTarget<'a> {
+    pub mode: AuthMode,
+    pub revoke_url: &'a str,
+    pub client_id: &'a str,
+}
+
+/// Revoke one refresh token: locally in AS mode, in the caller's transaction, or at the IdP's
+/// revoke endpoint, best-effort. The one revoke both a disconnect and a person erasure run
+/// (`erasure_slack_revocation_service`). `label` names the grant in logs — a principal, or a
+/// retry row's id — and is never the token.
+///
+/// Never returns [`IdpRevocation::NotAttempted`]: a token was in hand, so an attempt was made.
+pub async fn revoke_at_idp(
+    conn: &mut sqlx::PgConnection,
+    refresh_token: &str,
+    target: &IdpRevokeTarget<'_>,
+    label: &str,
+) -> ApiResult<IdpRevocation> {
+    Ok(match target.mode {
+        AuthMode::TemperAs => {
+            // The AS issued this token and stores it locally, so revocation is a
+            // row update in THIS transaction — no network, no failure mode.
+            //
+            // Zero rows matched maps to `Failed`, NOT `NotAttempted`: we had a
+            // grant and we DID attempt to revoke it, and the attempt found no
+            // AS row. That is the silent-failure case the pinned-hash test below
+            // exists to guard (a digest drift between Rust and the TypeScript
+            // writer matches nothing and would otherwise report success).
+            if revoke_as_refresh_token(conn, refresh_token).await? {
+                IdpRevocation::Revoked
+            } else {
+                tracing::warn!(
+                    grant = %label,
+                    "slack revoke: AS-mode revocation matched no refresh-token row. The local \
+                     grant is destroyed; the AS row (if any) is still live."
+                );
+                IdpRevocation::Failed
+            }
+        }
+        AuthMode::ExternalIdp => {
+            match oauth_client::revoke_grant(target.revoke_url, target.client_id, refresh_token)
+                .await
+            {
+                Ok(()) => IdpRevocation::Revoked,
+                Err(e) => {
+                    // The label and the error only. Never the token. The error text is
+                    // bounded — it quotes the IdP response, not our config.
+                    let err_text = e.to_string();
+                    tracing::warn!(
+                        grant = %label,
+                        error = %crate::error::bounded(&err_text),
+                        "slack revoke: IdP revocation failed. The grant may remain live at the \
+                         IdP until it expires."
+                    );
+                    IdpRevocation::Failed
+                }
+            }
+        }
     })
 }
 

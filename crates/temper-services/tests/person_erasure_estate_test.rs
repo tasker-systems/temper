@@ -190,6 +190,7 @@ async fn erase(
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
+        None,
     )
     .await
     .expect("the person act completes")
@@ -607,6 +608,7 @@ async fn a_resource_erased_while_the_act_waits_is_skipped_not_fatal(pool: PgPool
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            None,
         )
         .await
     });

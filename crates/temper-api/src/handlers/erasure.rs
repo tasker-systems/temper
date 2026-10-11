@@ -34,8 +34,13 @@ use temper_core::types::erasure::{
 use temper_core::types::ids::ProfileId;
 use temper_services::auth::SystemAdmin;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
+use temper_services::link_provider::{self, LinkProvider};
 use temper_services::services::erasure_fence_service::{self, DrainSummary};
 use temper_services::services::erasure_service;
+use temper_services::services::erasure_slack_revocation_service::{
+    self, SlackRevocationDrain, SlackRevokeConfig,
+};
+use temper_services::services::slack_disconnect_service::IdpRevokeTarget;
 use temper_services::state::AppState;
 
 use crate::middleware::auth::AuthUser;
@@ -102,12 +107,14 @@ pub async fn execute(
     Json(body): Json<ErasureExecuteRequest>,
 ) -> ApiResult<Json<ErasureExecuteResponse>> {
     let admin = require_erasure_operator(&state, &auth, "erasure.execute").await?;
+    let provider = slack_link_provider(&state);
     let c = erasure_service::execute_erasure(
         &state.pool,
         &admin,
         ProfileId::from(body.subject),
         body.request_reference,
         surface,
+        slack_revoke_config(&state, provider.as_ref()).as_ref(),
     )
     .await?;
 
@@ -126,7 +133,33 @@ pub async fn execute(
             .collect(),
         resource_erasures: c.resource_erasures,
         estate_stragglers: c.estate_stragglers,
+        slack_revocation: c.slack_revocation,
     }))
+}
+
+/// The instance's Slack revoke endpoint and its client, or `None` where Slack linking is not
+/// configured. The provider owns the strings [`slack_revoke_config`] borrows.
+fn slack_link_provider(state: &AppState) -> Option<LinkProvider> {
+    let cfg = state.config.slack_link.as_ref()?;
+    Some(link_provider::derive(&state.config.auth, cfg))
+}
+
+/// What revoking a Slack grant needs: the vault key, and where and as whom to revoke. The same
+/// endpoint and client a disconnect revokes at (`handlers::slack_disconnect`).
+fn slack_revoke_config<'a>(
+    state: &'a AppState,
+    provider: Option<&'a LinkProvider>,
+) -> Option<SlackRevokeConfig<'a>> {
+    let cfg = state.config.slack_link.as_ref()?;
+    let provider = provider?;
+    Some(SlackRevokeConfig {
+        key: &cfg.vault_key,
+        target: IdpRevokeTarget {
+            mode: state.config.auth.mode,
+            revoke_url: &provider.revoke_url,
+            client_id: &cfg.client_id,
+        },
+    })
 }
 
 /// `POST /api/admin/erasure/survey` — the read-only survey beside the execute door (task
@@ -185,6 +218,9 @@ pub struct FenceDrainResponse {
     #[serde(flatten)]
     pub drain: DrainSummary,
     pub store_configured: bool,
+    /// The Slack revocations erasures queued (`erasure_slack_revocation_service`), retried on the
+    /// same tick.
+    pub slack_revocations: SlackRevocationDrain,
 }
 
 /// `GET|POST /api/erasure/drain` — one byte-delete fence tick.
@@ -202,7 +238,7 @@ pub async fn drain(
 ) -> ApiResult<Json<FenceDrainResponse>> {
     crate::handlers::embed::require_dispatch_secret(&state, &headers, "erasure delete drain")?;
 
-    match state.blob_store.as_deref() {
+    let (drain, store_configured) = match state.blob_store.as_deref() {
         Some(store) => {
             let summary = erasure_fence_service::drain(&state.pool, store).await?;
             tracing::info!(
@@ -214,10 +250,7 @@ pub async fn drain(
                 failed = summary.failed,
                 "erasure fence drain pass complete"
             );
-            Ok(Json(FenceDrainResponse {
-                drain: summary,
-                store_configured: true,
-            }))
+            (summary, true)
         }
         None => {
             let summary = erasure_fence_service::drain_without_store(&state.pool).await?;
@@ -227,10 +260,30 @@ pub async fn drain(
                 store_configured = false,
                 "erasure fence seed-only pass complete (no provider configured)"
             );
-            Ok(Json(FenceDrainResponse {
-                drain: summary,
-                store_configured: false,
-            }))
+            (summary, false)
         }
-    }
+    };
+
+    // The Slack revocations erasures queued: a sibling pass on the same tick, after the fence. It
+    // runs with or without Slack configured — without it, only the rows past their window are
+    // emptied, so a deployment that lost its configuration still never keeps a token past it.
+    let provider = slack_link_provider(&state);
+    let slack_revocations = erasure_slack_revocation_service::drain(
+        &state.pool,
+        slack_revoke_config(&state, provider.as_ref()).as_ref(),
+    )
+    .await?;
+    tracing::info!(
+        attempted = slack_revocations.attempted,
+        revoked = slack_revocations.revoked,
+        retrying = slack_revocations.retrying,
+        abandoned = slack_revocations.abandoned,
+        "erasure Slack revocation pass complete"
+    );
+
+    Ok(Json(FenceDrainResponse {
+        drain,
+        store_configured,
+        slack_revocations,
+    }))
 }

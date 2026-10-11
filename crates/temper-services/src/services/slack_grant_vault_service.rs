@@ -440,6 +440,92 @@ pub async fn take_refresh_token_for_disconnect(
     }
 }
 
+/// One of an erasure subject's vault grants, opened for revocation. `refresh_token` is `None` when
+/// the row could not be opened (key rotated, row tampered): there is nothing usable to revoke.
+pub struct SubjectGrant {
+    pub slack_principal_id: String,
+    pub refresh_token: Option<String>,
+}
+
+impl std::fmt::Debug for SubjectGrant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubjectGrant")
+            .field("slack_principal_id", &self.slack_principal_id)
+            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "redacted"))
+            .finish()
+    }
+}
+
+/// Every vault grant a person erasure reaches (`_erasure_subject_slack_principals`: through a Slack
+/// auth link or the row's own `profile_id`), opened while the ciphertext still exists — the act
+/// deletes the rows. Read-only: the act, not this, destroys them.
+pub async fn grants_for_erasure(
+    conn: &mut sqlx::PgConnection,
+    key: &VaultKey,
+    subject: Uuid,
+) -> ApiResult<Vec<SubjectGrant>> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT slack_principal_id, rt_nonce, rt_ciphertext
+          FROM kb_slack_grant_vault
+         WHERE slack_principal_id IN (SELECT _erasure_subject_slack_principals($1))
+         ORDER BY slack_principal_id
+        "#,
+        subject
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let refresh_token = decrypt_to_string(
+                key,
+                &r.rt_nonce,
+                &r.rt_ciphertext,
+                &aad(&r.slack_principal_id, FIELD_RT),
+            )
+            .ok();
+            if refresh_token.is_none() {
+                tracing::warn!(
+                    principal = %r.slack_principal_id,
+                    "erasure: a Slack grant could not be opened (key rotated, or the row was \
+                     tampered with). It is destroyed with the subject's other stores and cannot \
+                     be revoked at Slack."
+                );
+            }
+            SubjectGrant {
+                slack_principal_id: r.slack_principal_id,
+                refresh_token,
+            }
+        })
+        .collect())
+}
+
+/// Associated data for a token queued for revocation after an erasure: bound to the queue row's
+/// own id, because the row holds no Slack principal to bind it to.
+fn revocation_aad(row: Uuid) -> Vec<u8> {
+    let mut v = b"erasure-revocation".to_vec();
+    v.push(0);
+    v.extend_from_slice(row.as_bytes());
+    v
+}
+
+/// Seal a refresh token for `kb_erasure_slack_revocations` row `row`.
+pub fn seal_for_revocation(key: &VaultKey, row: Uuid, refresh_token: &str) -> (Vec<u8>, Vec<u8>) {
+    let (nonce, ciphertext) = key.encrypt(refresh_token.as_bytes(), &revocation_aad(row));
+    (nonce.to_vec(), ciphertext)
+}
+
+/// Open a token sealed by [`seal_for_revocation`] for the same row.
+pub fn open_for_revocation(
+    key: &VaultKey,
+    row: Uuid,
+    nonce: &[u8],
+    ciphertext: &[u8],
+) -> ApiResult<String> {
+    decrypt_to_string(key, nonce, ciphertext, &revocation_aad(row))
+}
+
 /// Open a stored `(nonce, ciphertext)` pair to a UTF-8 token string, under the `aad` it was sealed
 /// with. A decrypt failure means the key changed, the row was tampered, or the ciphertext was
 /// transplanted from another principal/field (AAD mismatch); a non-UTF-8 payload means the same

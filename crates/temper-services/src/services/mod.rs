@@ -18,6 +18,7 @@ pub mod edge_service;
 pub mod embed_service;
 pub mod erasure_fence_service;
 pub mod erasure_service;
+pub mod erasure_slack_revocation_service;
 pub mod event_service;
 pub mod evidential_standing_service;
 pub mod facet_service;

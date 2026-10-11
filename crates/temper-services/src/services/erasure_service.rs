@@ -25,6 +25,7 @@ use uuid::Uuid;
 
 use temper_core::types::erasure::{
     EstateCounts, EstateErasureKind, EstateResourceErasure, EstateResourcePlan,
+    SlackRevocationTally,
 };
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_substrate::payloads::ErasureTargetOutcome;
@@ -33,6 +34,7 @@ use temper_workflow::operations::Surface;
 
 use crate::auth::SystemAdmin;
 use crate::error::{ApiError, ApiResult};
+use crate::services::erasure_slack_revocation_service::{self, SlackRevokeConfig};
 use crate::services::resource_erasure_service::{
     is_retryable_act_error, queue_region_settling, MAX_ACT_RETRIES,
 };
@@ -71,6 +73,8 @@ pub struct ErasureCompletion {
     /// Live resources and live blobs still homed in the estate once the act committed (D9, ruled
     /// Q3). `None` when the count could not be read: unknown is never reported as zero.
     pub estate_stragglers: Option<u32>,
+    /// What happened to the subject's Slack grants at Slack before the act destroyed them.
+    pub slack_revocation: SlackRevocationTally,
 }
 
 /// The jsonb `principal_erasure_execute` returns, before mapping onto the typed outcome.
@@ -149,6 +153,7 @@ pub async fn execute_erasure(
     subject: ProfileId,
     request_reference: Uuid,
     surface: Surface,
+    slack: Option<&SlackRevokeConfig<'_>>,
 ) -> ApiResult<ErasureCompletion> {
     let operator = admin.actor();
     // The emitter resolves on the pool, before the transaction opens (a read, not part of the
@@ -172,6 +177,16 @@ pub async fn execute_erasure(
         return Err(ApiError::NotFound("profile not found".to_string()));
     }
 
+    // The subject's Slack grants are revoked at Slack BEFORE the act, while their ciphertext still
+    // exists: the act destroys it, and Slack's revoke takes the token itself (ruled 2026-10-10).
+    // Once, outside the retry loop below, so a retried act never re-asks Slack. A grant whose
+    // revoke failed is queued for the drain in each attempt's own transaction, beside the act, so
+    // a failed attempt queues nothing. `slack` is `None` where linking is not configured: no grant
+    // can be opened, and the tally says how many were destroyed unrevoked.
+    let (slack_revocation, pending) =
+        erasure_slack_revocation_service::revoke_before_erasure(pool, subject.uuid(), slack)
+            .await?;
+
     // The act runs resource erasure once per estate resource (20261021100000), so it fails
     // retryably where that act does: a deadlock, a raced edge fold, a remote source that gained or
     // lost a citer, a collision on the redaction rows (D8). The act is one statement and one
@@ -179,14 +194,21 @@ pub async fn execute_erasure(
     // the post-conflict state.
     let mut retries = 0;
     let raw = loop {
-        let result = sqlx::query_scalar!(
-            r#"SELECT principal_erasure_execute($1, $2, $3, $4) AS "outcome: serde_json::Value""#,
-            subject.uuid(),
-            operator.uuid(),
-            emitter.uuid(),
-            request_reference,
-        )
-        .fetch_one(pool)
+        let result = async {
+            let mut tx = pool.begin().await?;
+            erasure_slack_revocation_service::queue_pending(&mut tx, &pending).await?;
+            let raw = sqlx::query_scalar!(
+                r#"SELECT principal_erasure_execute($1, $2, $3, $4) AS "outcome: serde_json::Value""#,
+                subject.uuid(),
+                operator.uuid(),
+                emitter.uuid(),
+                request_reference,
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            Ok::<_, sqlx::Error>(raw)
+        }
         .await;
         match result {
             Ok(raw) => break raw,
@@ -228,6 +250,7 @@ pub async fn execute_erasure(
         targets: wire.targets,
         blob_strikes,
         already_erased: wire.already_erased,
+        slack_revocation,
         resource_erasures: wire
             .resource_erasures
             .into_iter()
@@ -727,6 +750,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::CliCloud,
+            None,
         )
         .await
         .expect("the operator's act completes");
@@ -770,6 +794,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            None,
         )
         .await
         .expect("the operator's act completes");
@@ -857,6 +882,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            None,
         )
         .await
         .expect("completes");
@@ -1035,6 +1061,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            None,
         )
         .await
         .expect("completes");
@@ -1161,6 +1188,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            None,
         )
         .await
         .expect("completes");
@@ -1311,6 +1339,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            None,
         )
         .await
         .expect("completes");
@@ -1390,6 +1419,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            None,
         )
         .await
         .expect("completes");
@@ -1439,6 +1469,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            None,
         )
         .await
         .expect("completes");
@@ -1543,6 +1574,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            None,
         )
         .await
         .expect("first act completes");
@@ -1553,6 +1585,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            None,
         )
         .await
         .expect("re-erase completes");
@@ -1637,6 +1670,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            None,
         )
         .await
         .expect("completes");

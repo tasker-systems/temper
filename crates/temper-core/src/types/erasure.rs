@@ -96,6 +96,23 @@ pub struct RetainedCategory {
     pub period: String,
 }
 
+/// What a person erasure did about the subject's Slack grants at Slack, before it destroyed temper's
+/// copies (ruled 2026-10-10). Counts, never principals: the answer goes to an operator about an
+/// erased person.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct SlackRevocationTally {
+    /// Grants Slack (or the AS) confirmed revoked.
+    pub revoked: u32,
+    /// Grants whose revoke failed and is pending: the token is held, sealed, for the erasure drain
+    /// to retry until it succeeds or the retry window closes.
+    pub queued: u32,
+    /// Grants that could not be revoked at all: the row could not be opened, or Slack linking is
+    /// not configured on this instance. Destroyed in temper; they may stay live at Slack until they
+    /// expire.
+    pub not_attempted: u32,
+}
+
 // The erasure and block history scrub doors answer in this enum. The ledger records refusals in
 // `RecordedRefusalReason`, which carries every value here and the field scrub's.
 /// The closed refusal vocabulary for `resource_erasure_refused` (resource erasure spec D5, D11).
@@ -535,6 +552,10 @@ pub enum ErasureExecuteResponse {
         /// could not be read: unknown, never zero.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         estate_stragglers: Option<u32>,
+        /// What happened to the subject's Slack grants at Slack before the act destroyed them:
+        /// revoked, queued for retry, or never attempted. Counts only.
+        #[serde(default)]
+        slack_revocation: SlackRevocationTally,
     },
 }
 

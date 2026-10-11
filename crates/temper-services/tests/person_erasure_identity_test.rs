@@ -99,6 +99,7 @@ async fn erase(pool: &PgPool, subject: Uuid) -> ErasureCompletion {
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
+        None,
     )
     .await
     .expect("the person act completes")
@@ -738,5 +739,200 @@ async fn the_principal_authority_reaches_only_the_subjects_own_admin_events(pool
     assert!(
         err.to_string().contains("append-only"),
         "refused by the ledger verifier: {err}"
+    );
+}
+
+// ── Slack revocation at Slack (ruled 2026-10-10: best-effort before the act, a bounded retry). ──
+
+use temper_services::services::erasure_slack_revocation_service::{self, SlackRevokeConfig};
+use temper_services::services::slack_disconnect_service::IdpRevokeTarget;
+use wiremock::matchers::{body_string_contains, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+async fn erase_with_slack(pool: &PgPool, subject: Uuid, revoke_url: &str) -> ErasureCompletion {
+    let op = person(pool).await;
+    temper_services::test_support::approved_admin(pool, op.profile).await;
+    let admin = temper_services::test_support::system_admin_proof_for(pool, op.profile).await;
+    let key = vault_key();
+    let cfg = SlackRevokeConfig {
+        key: &key,
+        target: IdpRevokeTarget {
+            mode: AuthMode::ExternalIdp,
+            revoke_url,
+            client_id: "slack-client",
+        },
+    };
+    execute_erasure(
+        pool,
+        &admin,
+        ProfileId::from(subject),
+        Uuid::now_v7(),
+        Surface::ApiHttp,
+        Some(&cfg),
+    )
+    .await
+    .expect("the person act completes")
+}
+
+/// A revoke endpoint that answers `status` to every revoke of the token "rt".
+async fn slack_answering(status: u16) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/revoke"))
+        .and(body_string_contains("token=rt"))
+        .respond_with(ResponseTemplate::new(status))
+        .mount(&server)
+        .await;
+    server
+}
+
+async fn queued(pool: &PgPool) -> Vec<(Uuid, Option<Vec<u8>>, Option<Vec<u8>>, Option<String>)> {
+    sqlx::query_as(
+        "SELECT id, rt_nonce, rt_ciphertext, outcome FROM kb_erasure_slack_revocations ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// FAILS IF the act destroys the subject's Slack grants without first asking Slack to revoke them,
+/// through a link or only through the vault's own profile.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_subjects_slack_grants_are_revoked_at_slack_before_the_act(pool: PgPool) {
+    let p = person(&pool).await;
+    link_slack(&pool, p.profile, "slack:T1:ULINKED").await;
+    vault_grant(&pool, p.profile, "slack:T1:ULINKED").await;
+    vault_grant(&pool, p.profile, "slack:T1:UORPHAN").await;
+    let slack = slack_answering(200).await;
+
+    let c = erase_with_slack(&pool, p.profile, &format!("{}/oauth/revoke", slack.uri())).await;
+
+    assert_eq!(c.slack_revocation.revoked, 2, "both grants revoked at Slack");
+    assert_eq!(c.slack_revocation.queued, 0);
+    assert_eq!(
+        slack.received_requests().await.unwrap().len(),
+        2,
+        "Slack was asked once per grant"
+    );
+    assert!(queued(&pool).await.is_empty(), "nothing to retry");
+}
+
+/// FAILS IF a grant whose revoke fails is either destroyed unrevoked with no retry, or kept beside
+/// anything that names its owner. The failed token is queued, sealed under the queue row's id, and
+/// the vault row is gone.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_failed_revoke_is_queued_sealed_and_names_no_one(pool: PgPool) {
+    let p = person(&pool).await;
+    vault_grant(&pool, p.profile, "slack:T1:UJANEROE").await;
+    let slack = slack_answering(503).await;
+
+    let c = erase_with_slack(&pool, p.profile, &format!("{}/oauth/revoke", slack.uri())).await;
+
+    assert_eq!(c.slack_revocation.queued, 1, "the failed revoke is queued");
+    let rows = queued(&pool).await;
+    assert_eq!(rows.len(), 1);
+    let (id, nonce, ciphertext, outcome) = &rows[0];
+    assert_eq!(outcome, &None, "pending");
+    let row: serde_json::Value = sqlx::query_scalar(
+        "SELECT to_jsonb(r) FROM kb_erasure_slack_revocations r WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let text = row.to_string();
+    assert!(
+        !text.contains("UJANEROE") && !text.contains(&p.profile.to_string()),
+        "the queued row names neither the Slack principal nor the profile: {text}"
+    );
+    let rt = temper_services::services::slack_grant_vault_service::open_for_revocation(
+        &vault_key(),
+        *id,
+        nonce.as_deref().unwrap(),
+        ciphertext.as_deref().unwrap(),
+    )
+    .expect("sealed under its own id");
+    assert_eq!(rt, "rt");
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM kb_slack_grant_vault WHERE profile_id = $1", p.profile)
+            .await,
+        0,
+        "the vault row is destroyed"
+    );
+}
+
+/// FAILS IF the drain neither retries a queued revoke nor empties the token once Slack confirms:
+/// a revoke that fails stays queued with a later attempt, and one that succeeds keeps only its
+/// outcome.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_drain_retries_a_queued_revoke_until_slack_confirms(pool: PgPool) {
+    let p = person(&pool).await;
+    vault_grant(&pool, p.profile, "slack:T1:UJANEROE").await;
+    let down = slack_answering(503).await;
+    erase_with_slack(&pool, p.profile, &format!("{}/oauth/revoke", down.uri())).await;
+
+    let key = vault_key();
+    fn cfg<'a>(key: &'a VaultKey, url: &'a str) -> SlackRevokeConfig<'a> {
+        SlackRevokeConfig {
+            key,
+            target: IdpRevokeTarget {
+                mode: AuthMode::ExternalIdp,
+                revoke_url: url,
+                client_id: "slack-client",
+            },
+        }
+    }
+    let down_url = format!("{}/oauth/revoke", down.uri());
+    let still_down = erasure_slack_revocation_service::drain(&pool, Some(&cfg(&key, &down_url)))
+        .await
+        .unwrap();
+    assert_eq!((still_down.attempted, still_down.retrying), (1, 1));
+    let later: bool = sqlx::query_scalar(
+        "SELECT next_attempt_at > now() AND attempts = 1 FROM kb_erasure_slack_revocations",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(later, "a failed retry waits before the next");
+
+    // Due again; Slack is back.
+    sqlx::query("UPDATE kb_erasure_slack_revocations SET next_attempt_at = now()")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let up = slack_answering(200).await;
+    let up_url = format!("{}/oauth/revoke", up.uri());
+    let back = erasure_slack_revocation_service::drain(&pool, Some(&cfg(&key, &up_url)))
+        .await
+        .unwrap();
+    assert_eq!(back.revoked, 1);
+    let rows = queued(&pool).await;
+    assert_eq!(
+        (rows[0].1.is_none(), rows[0].2.is_none(), rows[0].3.as_deref()),
+        (true, true, Some("revoked")),
+        "the token is emptied and only the outcome stays"
+    );
+}
+
+/// FAILS IF a queued token can outlive its retry window, even on a deployment with Slack no
+/// longer configured.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_queued_token_never_outlives_its_window(pool: PgPool) {
+    let p = person(&pool).await;
+    vault_grant(&pool, p.profile, "slack:T1:UJANEROE").await;
+    let down = slack_answering(503).await;
+    erase_with_slack(&pool, p.profile, &format!("{}/oauth/revoke", down.uri())).await;
+    sqlx::query("UPDATE kb_erasure_slack_revocations SET give_up_at = now() - interval '1 second'")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let tick = erasure_slack_revocation_service::drain(&pool, None).await.unwrap();
+
+    assert_eq!(tick.abandoned, 1);
+    let rows = queued(&pool).await;
+    assert_eq!(
+        (rows[0].1.is_none(), rows[0].2.is_none(), rows[0].3.as_deref()),
+        (true, true, Some("abandoned")),
     );
 }

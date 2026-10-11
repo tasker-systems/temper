@@ -461,6 +461,7 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
+        None,
     )
     .await
     .expect("the act completes");
@@ -632,6 +633,7 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
+        None,
     )
     .await
     .expect("the re-erase completes");
