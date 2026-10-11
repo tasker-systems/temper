@@ -11,7 +11,7 @@
 //! way: a person who is being erased should not leave a grant live at Slack because Slack was down
 //! for a minute. The failed token is re-sealed under the queue row's own id, beside no Slack id and
 //! no profile, in the SAME transaction as the act — a failed act queues nothing — and the erasure
-//! drain tick retries it with backoff until Slack confirms or [`GIVE_UP_AFTER`] passes. Either way
+//! drain tick retries it with backoff until Slack confirms or [`GIVE_UP_AFTER_SECONDS`] passes. Either way
 //! the secret columns are emptied and only the outcome stays.
 
 use sqlx::PgPool;
@@ -221,8 +221,7 @@ pub async fn drain(
             }
             Some(IdpRevocation::Failed | IdpRevocation::NotAttempted) => {
                 // One minute, doubling, capped.
-                let wait =
-                    (60.0 * 2f64.powi(row.attempts.clamp(0, 20))).min(MAX_BACKOFF_SECONDS);
+                let wait = (60.0 * 2f64.powi(row.attempts.clamp(0, 20))).min(MAX_BACKOFF_SECONDS);
                 sqlx::query!(
                     r#"UPDATE kb_erasure_slack_revocations
                           SET attempts = attempts + 1,

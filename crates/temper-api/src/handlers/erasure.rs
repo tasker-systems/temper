@@ -36,11 +36,11 @@ use temper_services::auth::SystemAdmin;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::link_provider::{self, LinkProvider};
 use temper_services::services::erasure_fence_service::{self, DrainSummary};
-use temper_services::services::{erasure_retention_service, erasure_service};
 use temper_services::services::erasure_slack_revocation_service::{
     self, SlackRevocationDrain, SlackRevokeConfig,
 };
 use temper_services::services::slack_disconnect_service::IdpRevokeTarget;
+use temper_services::services::{erasure_retention_service, erasure_service};
 use temper_services::state::AppState;
 
 use crate::middleware::auth::AuthUser;

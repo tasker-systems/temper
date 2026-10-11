@@ -32,6 +32,29 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 (`schemas/versions/<M.m>/`); the pin gate checks the record names a `spec-correction` row.
 
 ## Since v0.6.0 — unreleased
+- **Erasing a person now removes their identifiers everywhere and revokes their live credentials**
+  The principal erasure act removed the profile's and the auth links' identifiers and left the
+  like kinds. It now also sentinels invitation emails sent by or to the subject (revoking pending
+  ones); deletes their login flows and refresh tokens, with their replay records; revokes in temper
+  and empties the credential of every connection homed in their estate or whose machine principal
+  they are (provider-side tokens are not revoked there); empties their entities' metadata; deletes
+  their staged uploads; reaches Slack stores through the vault's own profile, not only a current
+  link; nulls standing, join and review free text about them; and rewrites the ledger's standing
+  and governance reasons and disconnected Slack ids about them. Before destroying a Slack grant the
+  service revokes it at Slack; a failed revoke is queued, sealed and naming no one, and the
+  existing erasure drain cron retries it for up to seven days. A deployment can keep a category of
+  free text or replay evidence through a new admin door, `GET`/`PUT /api/admin/erasure/retention`
+  and `DELETE /api/admin/erasure/retention/{category}` (CLI: `temper admin erasure retention`);
+  the act records each kept category as `retained under policy <name>`, and the `principal_erased`
+  payload gains the required key `retained`. `POST /api/admin/erasure`'s completion gains
+  `slack_revocation` (counts, with a default); every existing field keeps its shape. Who observes:
+  system admins running or surveying a person erasure or setting a retention policy, and anyone
+  whose invitation, login or connection belonged to an erased person. Release relevance:
+  behavioral, plus an additive response field and three new admin routes.
+pr: self
+classes: additive, behavioral
+surfaces: http, clients, cli-stdout, schema
+status: signal-only
 - **Erasing a person now erases their contexts' names, and an erased context can no longer be restored**
   The principal erasure act retired its estate contexts with an un-evented update and left their
   names and slugs, in `kb_contexts` and in every earlier `context_renamed`, `context_retired` and

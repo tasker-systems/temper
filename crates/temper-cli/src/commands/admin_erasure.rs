@@ -676,19 +676,53 @@ mod tests {
 
         #[test]
         fn setting_a_retention_policy_names_its_basis_and_period() {
-            let base = ["temper", "admin", "erasure", "retention", "set", "standing-reasons"];
+            let base = [
+                "temper",
+                "admin",
+                "erasure",
+                "retention",
+                "set",
+                "standing-reasons",
+            ];
             let with = |extra: &[&str]| parses(&[&base[..], extra].concat());
-            assert!(with(&["--name", "audit", "--basis", "GDPR 17(3)(e)", "--period", "1 year"]));
-            assert!(!with(&["--name", "audit", "--period", "1 year"]), "no basis");
+            assert!(with(&[
+                "--name",
+                "audit",
+                "--basis",
+                "GDPR 17(3)(e)",
+                "--period",
+                "1 year"
+            ]));
+            assert!(
+                !with(&["--name", "audit", "--period", "1 year"]),
+                "no basis"
+            );
             assert!(!with(&["--name", "audit", "--basis", "b"]), "no period");
             assert!(
-                !parses(&["temper", "admin", "erasure", "retention", "set", "emails",
-                          "--name", "a", "--basis", "b", "--period", "1 year"]),
+                !parses(&[
+                    "temper",
+                    "admin",
+                    "erasure",
+                    "retention",
+                    "set",
+                    "emails",
+                    "--name",
+                    "a",
+                    "--basis",
+                    "b",
+                    "--period",
+                    "1 year"
+                ]),
                 "an identifier is not a retainable category"
             );
             assert!(parses(&["temper", "admin", "erasure", "retention", "list"]));
             assert!(parses(&[
-                "temper", "admin", "erasure", "retention", "remove", "credential-replay-evidence"
+                "temper",
+                "admin",
+                "erasure",
+                "retention",
+                "remove",
+                "credential-replay-evidence"
             ]));
         }
 
@@ -767,7 +801,9 @@ mod tests {
                     for arg in form.get_arguments() {
                         let id = arg.get_id().as_str().to_ascii_lowercase();
                         assert!(
-                            !id.contains("token") && !id.contains("bearer") && !id.contains("secret"),
+                            !id.contains("token")
+                                && !id.contains("bearer")
+                                && !id.contains("secret"),
                             "`admin erasure {} {}` takes `{id}`, which could carry a credential",
                             act.get_name(),
                             form.get_name()
@@ -775,7 +811,10 @@ mod tests {
                     }
                 }
             }
-            assert_eq!(acts, 5, "retention, resource, principal, block-history, field");
+            assert_eq!(
+                acts, 5,
+                "retention, resource, principal, block-history, field"
+            );
         }
     }
 }

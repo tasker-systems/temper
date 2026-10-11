@@ -451,7 +451,10 @@ impl std::fmt::Debug for SubjectGrant {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SubjectGrant")
             .field("slack_principal_id", &self.slack_principal_id)
-            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "redacted"))
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "redacted"),
+            )
             .finish()
     }
 }

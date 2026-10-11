@@ -235,8 +235,16 @@ async fn invitations_sent_by_or_to_the_subject_keep_no_identifier(pool: PgPool) 
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(email, format!("erased-{id}"), "the email is the row's sentinel");
-        assert_eq!(token, format!("erased-{id}"), "the token can no longer be presented");
+        assert_eq!(
+            email,
+            format!("erased-{id}"),
+            "the email is the row's sentinel"
+        );
+        assert_eq!(
+            token,
+            format!("erased-{id}"),
+            "the token can no longer be presented"
+        );
         assert!(revoked, "a pending invitation is revoked");
     }
     let kept: String =
@@ -245,7 +253,10 @@ async fn invitations_sent_by_or_to_the_subject_keep_no_identifier(pool: PgPool) 
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(kept, "someone@elsewhere.test", "other people's invitations stay");
+    assert_eq!(
+        kept, "someone@elsewhere.test",
+        "other people's invitations stay"
+    );
     assert_eq!(outcome_of(&c, "kb_team_invitations.invited_email").len(), 1);
 }
 
@@ -306,7 +317,11 @@ async fn no_live_credential_of_the_subject_survives(pool: PgPool) {
         }
     };
     let bound = token(Some(p.profile), serde_json::json!({"sub": "x"})).await;
-    token(None, serde_json::json!({"sub": format!("auth0|{}", p.profile)})).await;
+    token(
+        None,
+        serde_json::json!({"sub": format!("auth0|{}", p.profile)}),
+    )
+    .await;
     let others = token(Some(other.profile), serde_json::json!({"sub": "y"})).await;
     sqlx::query(
         "INSERT INTO kb_oauth_refresh_replays (token_id, chain_id, profile_id, client_id, rotated_at, first_age_seconds) \
@@ -367,7 +382,10 @@ async fn no_live_credential_of_the_subject_survives(pool: PgPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(left, 0, "no login, refresh or Slack credential of the subject survives");
+    assert_eq!(
+        left, 0,
+        "no login, refresh or Slack credential of the subject survives"
+    );
 
     for id in [estate_homed, own] {
         let (revoked, credential, reach): (bool, Option<serde_json::Value>, Option<serde_json::Value>) =
@@ -388,10 +406,18 @@ async fn no_live_credential_of_the_subject_survives(pool: PgPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(!revoked && credential.is_some(), "the team's connection stays live");
+    assert!(
+        !revoked && credential.is_some(),
+        "the team's connection stays live"
+    );
 
     assert_eq!(
-        count(&pool, "SELECT count(*) FROM kb_oauth_refresh_tokens WHERE id = $1", others).await,
+        count(
+            &pool,
+            "SELECT count(*) FROM kb_oauth_refresh_tokens WHERE id = $1",
+            others
+        )
+        .await,
         1,
         "another person's token stays"
     );
@@ -451,13 +477,23 @@ async fn entity_metadata_and_staged_uploads_are_gone(pool: PgPool) {
     );
     for id in [owned, homed] {
         assert_eq!(
-            count(&pool, "SELECT count(*) FROM kb_blob_upload_segments WHERE upload_id = $1", id).await,
+            count(
+                &pool,
+                "SELECT count(*) FROM kb_blob_upload_segments WHERE upload_id = $1",
+                id
+            )
+            .await,
             0,
             "staged bytes of the subject's, or in their estate, are gone"
         );
     }
     assert_eq!(
-        count(&pool, "SELECT count(*) FROM kb_blob_upload_segments WHERE upload_id = $1", others).await,
+        count(
+            &pool,
+            "SELECT count(*) FROM kb_blob_upload_segments WHERE upload_id = $1",
+            others
+        )
+        .await,
         1,
         "another person's upload elsewhere stays"
     );
@@ -525,7 +561,10 @@ async fn free_text_about_the_subject_is_erased_in_rows_and_ledger(pool: PgPool) 
     )
     .await
     .unwrap();
-    assert!(ledger_quoting(&pool, ABOUT).await > 0, "the world holds the text first");
+    assert!(
+        ledger_quoting(&pool, ABOUT).await > 0,
+        "the world holds the text first"
+    );
     assert!(ledger_quoting(&pool, "UJANEROE").await > 0);
 
     let c = erase(&pool, p.profile).await;
@@ -542,8 +581,16 @@ async fn free_text_about_the_subject_is_erased_in_rows_and_ledger(pool: PgPool) 
     .await
     .unwrap();
     assert_eq!(rows, 0, "no row keeps free text about the subject");
-    assert_eq!(ledger_quoting(&pool, ABOUT).await, 0, "the ledger keeps no reason about them");
-    assert_eq!(ledger_quoting(&pool, "UJANEROE").await, 0, "nor their Slack id");
+    assert_eq!(
+        ledger_quoting(&pool, ABOUT).await,
+        0,
+        "the ledger keeps no reason about them"
+    );
+    assert_eq!(
+        ledger_quoting(&pool, "UJANEROE").await,
+        0,
+        "nor their Slack id"
+    );
     assert!(
         outcome_of(&c, "kb_events.payload")
             .iter()
@@ -635,7 +682,13 @@ async fn a_retained_category_is_kept_and_named_in_the_record(pool: PgPool) {
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn kept_replay_evidence_keeps_no_usable_token(pool: PgPool) {
     let p = person(&pool).await;
-    set_policy(&pool, "copy-forensics", "credential-replay-evidence", p.profile).await;
+    set_policy(
+        &pool,
+        "copy-forensics",
+        "credential-replay-evidence",
+        p.profile,
+    )
+    .await;
     let token: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_oauth_refresh_tokens (token_hash, client_id, claims, expires_at, profile_id) \
               VALUES ('live-hash', 'c', $1, now() + interval '1 day', $2) RETURNING id",
@@ -665,9 +718,18 @@ async fn kept_replay_evidence_keeps_no_usable_token(pool: PgPool) {
     .unwrap();
     assert!(revoked, "the kept token is revoked");
     assert_eq!(claims, serde_json::json!({}), "and names no one");
-    assert_eq!(hash, format!("erased-{token}"), "and no presented token can match it");
     assert_eq!(
-        count(&pool, "SELECT count(*) FROM kb_oauth_refresh_replays WHERE token_id = $1", token).await,
+        hash,
+        format!("erased-{token}"),
+        "and no presented token can match it"
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM kb_oauth_refresh_replays WHERE token_id = $1",
+            token
+        )
+        .await,
         1,
         "the evidence stays"
     );
@@ -684,11 +746,13 @@ async fn kept_replay_evidence_keeps_no_usable_token(pool: PgPool) {
 async fn the_principal_authority_reaches_only_the_subjects_own_admin_events(pool: PgPool) {
     let p = person(&pool).await;
     let stranger = person(&pool).await;
-    sqlx::query("SELECT principal_standing_apply($1, 'revoke', 'revoked', NULL, 'about the stranger')")
-        .bind(stranger.profile)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "SELECT principal_standing_apply($1, 'revoke', 'revoked', NULL, 'about the stranger')",
+    )
+    .bind(stranger.profile)
+    .execute(&pool)
+    .await
+    .unwrap();
     let theirs: Uuid = sqlx::query_scalar(
         "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
           WHERE t.name = 'principal_standing_changed' AND e.payload->>'subject_id' = $1::text",
@@ -713,12 +777,13 @@ async fn the_principal_authority_reaches_only_the_subjects_own_admin_events(pool
         "retained": [],
         "redacted_fields": [{"event": theirs, "paths": ["reason"]}],
     });
-    let ev: Uuid = sqlx::query_scalar("SELECT _event_append('principal_erased', $1, NULL, NULL, $2)")
-        .bind(p.emitter)
-        .bind(&record)
-        .fetch_one(&mut *tx)
-        .await
-        .unwrap();
+    let ev: Uuid =
+        sqlx::query_scalar("SELECT _event_append('principal_erased', $1, NULL, NULL, $2)")
+            .bind(p.emitter)
+            .bind(&record)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
     sqlx::query(
         "INSERT INTO kb_event_field_redactions (event_id, path, redacted_by, authority) \
               VALUES ($1, 'reason', $2, 'principal')",
@@ -807,7 +872,10 @@ async fn the_subjects_slack_grants_are_revoked_at_slack_before_the_act(pool: PgP
 
     let c = erase_with_slack(&pool, p.profile, &format!("{}/oauth/revoke", slack.uri())).await;
 
-    assert_eq!(c.slack_revocation.revoked, 2, "both grants revoked at Slack");
+    assert_eq!(
+        c.slack_revocation.revoked, 2,
+        "both grants revoked at Slack"
+    );
     assert_eq!(c.slack_revocation.queued, 0);
     assert_eq!(
         slack.received_requests().await.unwrap().len(),
@@ -833,13 +901,12 @@ async fn a_failed_revoke_is_queued_sealed_and_names_no_one(pool: PgPool) {
     assert_eq!(rows.len(), 1);
     let (id, nonce, ciphertext, outcome) = &rows[0];
     assert_eq!(outcome, &None, "pending");
-    let row: serde_json::Value = sqlx::query_scalar(
-        "SELECT to_jsonb(r) FROM kb_erasure_slack_revocations r WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let row: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(r) FROM kb_erasure_slack_revocations r WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     let text = row.to_string();
     assert!(
         !text.contains("UJANEROE") && !text.contains(&p.profile.to_string()),
@@ -854,8 +921,12 @@ async fn a_failed_revoke_is_queued_sealed_and_names_no_one(pool: PgPool) {
     .expect("sealed under its own id");
     assert_eq!(rt, "rt");
     assert_eq!(
-        count(&pool, "SELECT count(*) FROM kb_slack_grant_vault WHERE profile_id = $1", p.profile)
-            .await,
+        count(
+            &pool,
+            "SELECT count(*) FROM kb_slack_grant_vault WHERE profile_id = $1",
+            p.profile
+        )
+        .await,
         0,
         "the vault row is destroyed"
     );
@@ -908,7 +979,11 @@ async fn the_drain_retries_a_queued_revoke_until_slack_confirms(pool: PgPool) {
     assert_eq!(back.revoked, 1);
     let rows = queued(&pool).await;
     assert_eq!(
-        (rows[0].1.is_none(), rows[0].2.is_none(), rows[0].3.as_deref()),
+        (
+            rows[0].1.is_none(),
+            rows[0].2.is_none(),
+            rows[0].3.as_deref()
+        ),
         (true, true, Some("revoked")),
         "the token is emptied and only the outcome stays"
     );
@@ -927,12 +1002,18 @@ async fn a_queued_token_never_outlives_its_window(pool: PgPool) {
         .await
         .unwrap();
 
-    let tick = erasure_slack_revocation_service::drain(&pool, None).await.unwrap();
+    let tick = erasure_slack_revocation_service::drain(&pool, None)
+        .await
+        .unwrap();
 
     assert_eq!(tick.abandoned, 1);
     let rows = queued(&pool).await;
     assert_eq!(
-        (rows[0].1.is_none(), rows[0].2.is_none(), rows[0].3.as_deref()),
+        (
+            rows[0].1.is_none(),
+            rows[0].2.is_none(),
+            rows[0].3.as_deref()
+        ),
         (true, true, Some("abandoned")),
     );
 }

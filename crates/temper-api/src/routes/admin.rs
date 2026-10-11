@@ -79,7 +79,10 @@ pub(super) fn admin_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::erasure::execute))
         .routes(routes!(handlers::erasure::survey))
         // The person act's retention policy (R4): what it keeps, named in its record.
-        .routes(routes!(handlers::erasure::list_retention, handlers::erasure::set_retention))
+        .routes(routes!(
+            handlers::erasure::list_retention,
+            handlers::erasure::set_retention
+        ))
         .routes(routes!(handlers::erasure::remove_retention))
         .routes(routes!(handlers::resource_erasure::execute))
         .routes(routes!(handlers::resource_erasure::survey))

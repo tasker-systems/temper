@@ -605,7 +605,11 @@ async fn an_operator_sets_lists_and_removes_the_retention_policy(pool: PgPool) {
     });
 
     let resp = put(&outsider, policy.clone()).await.unwrap();
-    assert_eq!(resp.status().as_u16(), 404, "a non-operator is answered absent");
+    assert_eq!(
+        resp.status().as_u16(),
+        404,
+        "a non-operator is answered absent"
+    );
     let resp = app
         .client
         .get(&url)
@@ -625,7 +629,10 @@ async fn an_operator_sets_lists_and_removes_the_retention_policy(pool: PgPool) {
     let bad_period = serde_json::json!({
         "name": "x", "category": "governance-reasons", "basis": "b", "period": "forever",
     });
-    assert_eq!(put(&token, bad_period).await.unwrap().status().as_u16(), 400);
+    assert_eq!(
+        put(&token, bad_period).await.unwrap().status().as_u16(),
+        400
+    );
     let identifier = serde_json::json!({
         "name": "x", "category": "emails", "basis": "b", "period": "1 year",
     });
@@ -644,5 +651,9 @@ async fn an_operator_sets_lists_and_removes_the_retention_policy(pool: PgPool) {
         .unwrap();
     assert_eq!(resp.status().as_u16(), 200);
     let body: Value = resp.json().await.unwrap();
-    assert_eq!(body["policies"], serde_json::json!([]), "the category is no longer kept");
+    assert_eq!(
+        body["policies"],
+        serde_json::json!([]),
+        "the category is no longer kept"
+    );
 }
