@@ -47,7 +47,9 @@
 #     statement reaches is the act's own witnesses' job. Where a handled column keeps rows tied to R
 #     that the act leaves, the line's note says so. The check reads statements, not control flow:
 #     an UPDATE under a branch never taken, after a RETURN, or with a WHERE that matches nothing
-#     still binds.
+#     still binds. The one such RETURN today is the block-set form: called with p_blocks (the block
+#     history scrub, its only caller) the function returns after step 3, so every line here past
+#     step 3 binds while the scrub reaches none of them.
 #   * Derivation without reference. A vector computed from R's content is tied to R by no key: a
 #     region's centroid (a mean over its members) and a context's telos_centroid (a mean over its
 #     goals). The walk reaches both tables by other paths, so both have lines, but nothing structural
@@ -115,12 +117,12 @@ kb_edges.label                          | handled:D2.9  | D4 edge label: NULL, o
 kb_remote_sources.uri                   | repointed:D2.9:kb_block_provenance.source_id | outside the walk (see header). The original row is deleted only when nothing else cites it; a URL another resource still cites stays, named by id in the remainder (D8)
 
 # ── out of scope: the ledger (cut 2) ────────────────────────────────────────────────────────
-kb_events.payload                       | out-of-scope  | the ledger: cut 1 leaves payloads unchanged and names the unreached paths of R's own trail in the record; cut 2 redacts them (D3) under D9's payload half. Events outside R's trail that quote R are not named
-kb_events.metadata                      | out-of-scope  | the ledger: authorship reasoning, rationale, persona and model are cut 2's (D4 sentinel class), under D9's payload half; the fence walks AgentAuthorship's schema
+kb_events.payload                       | out-of-scope  | the ledger, not this section's: the act rewrites the free text of R's own trail events path by path (cut 2, 20261009100000), declared under [payload] below, and this section's binding cannot see a payload rewrite. Events outside R's trail that quote R are not named
+kb_events.metadata                      | out-of-scope  | the ledger, not this section's: authorship reasoning, rationale, persona and model on R's trail events are rewritten to the authorship sentinel (cut 2), declared by [payload]'s metadata: lines; the fence walks AgentAuthorship's schema
 
-# ── out of scope: derived vectors (filed under the erasure goal) ───────────────────────────
+# ── derived vectors ──────────────────────────────────────────────────────────────────────────
 kb_cogmap_regions.centroid              | handled:D2.6  | a FOLDED region holding R as a member is zeroed (never recomputed; R's vector was recoverable from it). A LIVE region holding R is recomputed over the survivors by _resource_erasure_recompute_live_centroids, which the body PERFORMs: a recompute is not an erasure constant, so this fence does not bind it; the act's witnesses do. The re-form the service queues after commit then folds a clean row; a materialize already in flight at the act, which loaded R live, is followed by the region drain's erased-member gate (region_clocks::tick), which re-forms the anchor's default-lens regions (ruled 2026-10-04). Every materialize recomputes, under its anchor lock and before it folds, the live regions of its lens that list an erased resource (_region_recompute_erased_member_centroids, ruled 2026-10-08)
-kb_contexts.telos_centroid              | handled:D2.6  | R's home context's snapshot nulled beside its watermark, whatever R's doc type; the drain's materialize re-arms it from the live telos, which already excludes R. The copies in region_materialized / salience_refreshed payloads are named in ledger_remainder when R is a goal, for cut 2 (ruled 2026-10-04)
+kb_contexts.telos_centroid              | handled:D2.6  | R's home context's snapshot nulled beside its watermark, whatever R's doc type; the drain's materialize re-arms it from the live telos, which already excludes R. The copies in region_materialized / salience_refreshed payloads are named in ledger_remainder when R is a goal: the ledger exception does not reach them, so they are a permanent remainder (ruled 2026-10-04)
 kb_cogmaps.telos_centroid               | out-of-scope  | derived from the charter's content, so R-derived only when R is the charter, which the act refuses (D5). The map-grain task owns it
 
 # ── out of scope: the map's text ────────────────────────────────────────────────────────────
@@ -146,9 +148,10 @@ kb_blob_upload_segments.bytes           | out-of-scope  | staged upload bytes, r
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 # [payload] — D9's payload half: what the act does with every free-text path on the ledger.
 #
-# Cut 1 writes nothing to the ledger, so today every `redact` line is NAMED, not reached: the act's
-# record lists those paths of R's own trail events in `ledger_remainder`. Cut 2 (D3) generates the
-# verifier's allowlist from the `redact` lines, so a path the verifier admits is a reviewed line here.
+# Cut 2 is live (20261009100000): the act rewrites every `redact` path of R's own trail events to
+# its class sentinel and records the paths in `redacted_fields`; a husk erased under cut 1 is brought
+# up by the completion pass (20261010100000). The verifier's allowlist, _erasure_redact_paths(), is
+# held equal to the `redact` lines, so a path the verifier admits is a reviewed line here.
 #
 # WHAT IS NOMINATED. resource_erasure_surface_test walks, for every registered event type, both its
 # committed schema snapshot (temper-substrate tests/fixtures/payloads) and its registered
@@ -175,7 +178,8 @@ kb_blob_upload_segments.bytes           | out-of-scope  | staged upload bytes, r
 # A qualified line refines its unqualified line, which must exist; the most specific line wins.
 #
 # disposition
-#   redact:<class>   cut 2 redacts it to the D4 sentinel of <class>; named in ledger_remainder now.
+#   redact:<class>   the act rewrites it to the D4 sentinel of <class> and records it in
+#                    redacted_fields.
 #                    Classes: title, origin-uri, remote-source-url, property-key, property-value,
 #                    facet-value, doc-type, artifact-family, edge-label, reason, scar, authorship.
 #   structural       a hash, a vocabulary word or a record's own fixed text; kept (F3)
