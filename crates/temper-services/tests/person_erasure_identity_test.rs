@@ -1329,3 +1329,182 @@ async fn an_invitation_to_an_unverified_address_is_named_not_reached(pool: PgPoo
     assert_eq!(outcomes.len(), 1, "{:?}", c.targets);
     assert!(outcomes[0].contains("1 invitation(s)"), "{}", outcomes[0]);
 }
+
+// ── A refresh rotation racing the act (2026-10-11) ──────────────────────────────────────────────
+//
+// The AS rotates in two autocommit statements: it retires the presented token, then inserts the
+// successor (`packages/temper-cloud/src/oauth/flow.ts`, `rotateRefreshToken` then
+// `storeRefreshToken`, whose INSERT is copied below verbatim). These witnesses run the act and the
+// successor's insert on two connections, in both orders.
+
+/// `storeRefreshToken`'s statement, verbatim but for the binds.
+const STORE_SUCCESSOR: &str = "INSERT INTO kb_oauth_refresh_tokens ( \
+      id, token_hash, client_id, claims, expires_at, chain_expires_at, chain_id, profile_id, audience \
+    ) \
+    SELECT \
+      g.new_id, $1, 'c', $2::jsonb, \
+      LEAST(now() + interval '1 day', now() + interval '90 days'), \
+      now() + interval '90 days', \
+      COALESCE($3::uuid, g.new_id), \
+      $4, \
+      NULL \
+    FROM (SELECT uuid_generate_v7() AS new_id) g \
+    WHERE ($4::uuid IS NULL \
+           OR principal_may_refresh($4::uuid)) \
+      AND NOT EXISTS ( \
+            SELECT 1 FROM kb_oauth_refresh_chain_ends \
+             WHERE chain_id = $3::uuid \
+          ) \
+    RETURNING chain_id";
+
+/// A subject with an `auth0` link, approved standing, and one live token of chain `chain`, bound
+/// to their profile or unbound (matched by provider and `sub`). The token is then retired, as the
+/// rotation's first statement retires it.
+async fn rotating_subject(pool: &PgPool, bound: bool) -> (Person, Uuid, Uuid, String) {
+    let p = person(pool).await;
+    temper_services::test_support::approve(pool, p.profile).await;
+    let sub = format!("auth0|{}", p.profile);
+    sqlx::query(
+        "INSERT INTO kb_profile_auth_links (id, profile_id, auth_provider, auth_provider_user_id) \
+              VALUES (gen_random_uuid(), $1, 'auth0', $2)",
+    )
+    .bind(p.profile)
+    .bind(&sub)
+    .execute(pool)
+    .await
+    .unwrap();
+    let chain = Uuid::now_v7();
+    let first: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_oauth_refresh_tokens (token_hash, client_id, claims, expires_at, chain_id, profile_id) \
+              VALUES (gen_random_uuid()::text, 'c', jsonb_build_object('sub', $1::text), \
+                      now() + interval '1 day', $2, $3) RETURNING id",
+    )
+    .bind(&sub)
+    .bind(chain)
+    .bind(bound.then_some(p.profile))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE kb_oauth_refresh_tokens SET revoked_at = now(), rotated_at = now() WHERE id = $1",
+    )
+    .bind(first)
+    .execute(pool)
+    .await
+    .unwrap();
+    (p, chain, first, sub)
+}
+
+/// The act, begun on its own connection and left uncommitted, told the provider as the door tells it.
+async fn act_in_flight(pool: &PgPool, subject: Uuid) -> sqlx::Transaction<'static, sqlx::Postgres> {
+    let op = person(pool).await;
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('temper.erasure_auth_provider', 'auth0', true)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("SELECT principal_erasure_execute($1, $2, $3, $4)")
+        .bind(subject)
+        .bind(op.profile)
+        .bind(op.emitter)
+        .bind(Uuid::now_v7())
+        .execute(&mut *tx)
+        .await
+        .expect("the act runs");
+    tx
+}
+
+/// Wait until some backend is blocked on a lock: the other side of the race is waiting.
+async fn until_a_backend_waits(pool: &PgPool) {
+    for _ in 0..200 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity \
+              WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        if waiting > 0 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("the racing statement never waited on a lock");
+}
+
+async fn chain_tokens(pool: &PgPool, chain: Uuid) -> i64 {
+    count(
+        pool,
+        "SELECT count(*) FROM kb_oauth_refresh_tokens WHERE chain_id = $1",
+        chain,
+    )
+    .await
+}
+
+/// FAILS IF a successor inserted while the act is in flight survives it: the insert waits on the
+/// act, and once the act commits it is refused, so the rotation mints no refresh credential.
+/// Bound and unbound chains alike.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_rotation_finishing_during_the_act_mints_nothing(pool: PgPool) {
+    for bound in [true, false] {
+        let (p, chain, _, sub) = rotating_subject(&pool, bound).await;
+        let act = act_in_flight(&pool, p.profile).await;
+        let insert = {
+            let pool = pool.clone();
+            let claims = serde_json::json!({ "sub": sub });
+            let owner = bound.then_some(p.profile);
+            tokio::spawn(async move {
+                sqlx::query_scalar::<_, Uuid>(STORE_SUCCESSOR)
+                    .bind(Uuid::now_v7().to_string())
+                    .bind(claims)
+                    .bind(chain)
+                    .bind(owner)
+                    .fetch_optional(&pool)
+                    .await
+            })
+        };
+        until_a_backend_waits(&pool).await;
+        act.commit().await.unwrap();
+        let minted = insert.await.unwrap().expect("the insert completes");
+        assert_eq!(minted, None, "bound={bound}: no successor is minted");
+        assert_eq!(
+            chain_tokens(&pool, chain).await,
+            0,
+            "bound={bound}: the chain holds nothing"
+        );
+    }
+}
+
+/// FAILS IF a successor committed while the act waits on it survives the act: the insert holds its
+/// locks first, the act waits, and the act's second sweep reaches the row that committed.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_rotation_holding_its_locks_before_the_act_is_swept(pool: PgPool) {
+    for bound in [true, false] {
+        let (p, chain, _, sub) = rotating_subject(&pool, bound).await;
+        let mut rotation = pool.begin().await.unwrap();
+        let minted = sqlx::query_scalar::<_, Uuid>(STORE_SUCCESSOR)
+            .bind(Uuid::now_v7().to_string())
+            .bind(serde_json::json!({ "sub": sub }))
+            .bind(chain)
+            .bind(bound.then_some(p.profile))
+            .fetch_optional(&mut *rotation)
+            .await
+            .unwrap();
+        assert!(
+            minted.is_some(),
+            "bound={bound}: the successor is inserted, not yet committed"
+        );
+        let act = {
+            let pool = pool.clone();
+            tokio::spawn(async move { act_in_flight(&pool, p.profile).await.commit().await })
+        };
+        until_a_backend_waits(&pool).await;
+        rotation.commit().await.unwrap();
+        act.await.unwrap().expect("the act commits");
+        assert_eq!(
+            chain_tokens(&pool, chain).await,
+            0,
+            "bound={bound}: the successor is swept"
+        );
+    }
+}

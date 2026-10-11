@@ -122,6 +122,77 @@ BEGIN
 END;
 $$;
 
+-- Section 3a. No refresh credential is minted for an erased person (2026-10-11).
+-- The AS's refresh gate also refuses a tombstoned profile. Admission (standing) is unchanged by an
+-- erasure, so without this an erased person's bound chain would read `may refresh`. Otherwise the
+-- latest definition (20260825000010).
+CREATE OR REPLACE FUNCTION principal_may_refresh(p_profile_id UUID) RETURNS BOOLEAN
+LANGUAGE SQL STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM kb_principal_standing s
+         WHERE s.profile_id = p_profile_id
+           AND s.state NOT IN ('revoked', 'deactivated')
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM kb_profiles p
+         WHERE p.id = p_profile_id AND p.tombstoned_at IS NOT NULL
+    )
+$$;
+
+COMMENT ON FUNCTION principal_may_refresh IS
+  'May the AS mint this principal a new token pair? False once admission has ENDED (revoked / '
+  'deactivated), once the principal is erased (tombstoned, 20261023100000), and on absence. '
+  'Deliberately NOT has_system_access: denied and requested principals hold tokens legitimately, '
+  'to reach the ungated join-request surface.';
+
+-- The AS's predicate above, and its chain-end check, run in the INSERT's own snapshot, which a
+-- person erasure committing while the insert waits on the profile's row lock does not reach: the
+-- insert would land behind the act. This trigger re-asks after the wait. It locks, for share, the
+-- owner profile and the chain's latest predecessor — rows the act locks — so it waits for an act in
+-- flight, and a locking read returns the committed row. A successor whose owner is now tombstoned,
+-- or whose chain is now ended, is not inserted: the AS reads no row back and issues no refresh
+-- token, its existing refusal path (issueTokenPair). Unbound and first-of-chain rows lock what
+-- they have.
+CREATE FUNCTION kb_oauth_refresh_tokens_refuse_erased()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_tombstoned timestamptz;
+BEGIN
+    IF NEW.profile_id IS NOT NULL THEN
+        SELECT p.tombstoned_at INTO v_tombstoned
+          FROM kb_profiles p WHERE p.id = NEW.profile_id
+           FOR SHARE;
+        IF v_tombstoned IS NOT NULL THEN
+            RETURN NULL;
+        END IF;
+    END IF;
+    IF NEW.chain_id IS DISTINCT FROM NEW.id THEN
+        PERFORM 1 FROM kb_oauth_refresh_tokens t
+          WHERE t.chain_id = NEW.chain_id
+          ORDER BY t.id DESC
+          LIMIT 1
+            FOR SHARE;
+        IF EXISTS (SELECT 1 FROM kb_oauth_refresh_chain_ends e WHERE e.chain_id = NEW.chain_id) THEN
+            RETURN NULL;
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER kb_oauth_refresh_tokens_refuse_erased
+    BEFORE INSERT ON kb_oauth_refresh_tokens
+    FOR EACH ROW EXECUTE FUNCTION kb_oauth_refresh_tokens_refuse_erased();
+
+COMMENT ON TABLE kb_oauth_refresh_chain_ends IS
+  'Ended chains: one of their tokens was presented after rotation (the AS replay responder), or '
+  'their principal was erased (20261023100000). Consulted by the AS before minting a successor, and '
+  'by kb_oauth_refresh_tokens_refuse_erased after any wait, so a rotation already past its own '
+  'guard cannot revive an ended chain.';
+
 -- Section 4. The `principal` authority reaches the subject's own admin events.
 -- The allowlist gains the subject's standing and governance reasons and the disconnected Slack id.
 -- Disjoint from _erasure_redact_paths by event type, as before.
@@ -1373,6 +1444,8 @@ DECLARE
     -- The categories the deployment's retention policy kept, read from THIS event's payload like
     -- the estate (20261023100000, R4): live and replay keep the same set whatever the policy says
     -- since. Required for the same reason the estate is: no principal_erased predates the key.
+    v_chains   uuid[];
+    v_pass     integer;
     v_retained jsonb := (SELECT e.payload -> 'retained' FROM kb_events e
                           WHERE e.id = p_event AND e.payload ? 'retained');
 BEGIN
@@ -1510,27 +1583,9 @@ BEGIN
      WHERE i.id IN (SELECT _erasure_subject_invitations(p_subject))
        AND i.invited_email IS DISTINCT FROM 'erased-' || i.id::text;
 
-    --      Login-provider rows. A flow is transient and deleted. A refresh token is a live
-    --      credential: revoked and deleted, with its replay evidence, which RESTRICTs the token's
-    --      delete. When a policy keeps that evidence, the tokens stay as its referents: revoked,
-    --      claims emptied, the hash replaced so no presented token can match one.
+    --      Login flows: transient, deleted. The refresh tokens are swept after the tombstone (7a).
     DELETE FROM kb_oauth_flow f
      WHERE f.id IN (SELECT _erasure_subject_oauth_flows(p_subject));
-    IF _erasure_retained_by(v_retained, 'credential-replay-evidence') IS NULL THEN
-        DELETE FROM kb_oauth_refresh_replays r
-         WHERE r.profile_id = p_subject
-            OR r.token_id IN (SELECT _erasure_subject_refresh_tokens(p_subject));
-        DELETE FROM kb_oauth_refresh_tokens t
-         WHERE t.id IN (SELECT _erasure_subject_refresh_tokens(p_subject));
-    ELSE
-        UPDATE kb_oauth_refresh_tokens t
-           SET revoked_at = COALESCE(t.revoked_at, v_occurred),
-               claims     = '{}'::jsonb,
-               token_hash = 'erased-' || t.id::text
-         WHERE t.id IN (SELECT _erasure_subject_refresh_tokens(p_subject))
-           AND (t.claims <> '{}'::jsonb OR t.token_hash <> 'erased-' || t.id::text
-                OR t.revoked_at IS NULL);
-    END IF;
 
     --      The subject's connections (ruled 2026-10-10: homed in the estate, or the subject's own
     --      machine principal). Revoked in temper and the external binding emptied. The broker is not
@@ -1562,6 +1617,49 @@ BEGIN
            preferences   = '{}'::jsonb,
            tombstoned_at = COALESCE(pr.tombstoned_at, v_occurred)
       WHERE pr.id = p_subject;
+
+    -- (7a) The subject's refresh tokens: live credentials, revoked and deleted with their replay
+    --      evidence, which RESTRICTs a token's delete. When a policy keeps that evidence, the tokens
+    --      stay as its referents: revoked, claims emptied, the hash replaced so no presented token
+    --      can match one. Before (9), which unclaims the provider ids unbound tokens are matched by.
+    --
+    --      A rotation racing the act must not leave a successor (2026-10-11). The AS rotates in two
+    --      statements with no transaction across them: it retires the presented token, then inserts
+    --      the successor. So, in this order:
+    --        * After the tombstone (7), whose row lock the successor's insert meets: an insert that
+    --          locked the profile first commits before (7) proceeds and is swept below; one that
+    --          comes after waits for this act and is refused by kb_oauth_refresh_tokens_refuse_erased
+    --          once it sees the tombstone.
+    --        * Every chain of the subject is ENDED (kb_oauth_refresh_chain_ends, the replay
+    --          responder's marker), so storeRefreshToken and that trigger refuse any successor.
+    --        * The sweep runs twice. The trigger locks a successor's predecessor for share, so the
+    --          first sweep can wait on an insert in flight; the second statement takes a fresh
+    --          snapshot and reaches the successor that committed meanwhile.
+    v_chains := ARRAY(SELECT DISTINCT t.chain_id FROM kb_oauth_refresh_tokens t
+                       WHERE t.id IN (SELECT _erasure_subject_refresh_tokens(p_subject)));
+    INSERT INTO kb_oauth_refresh_chain_ends (chain_id, ended_at)
+    SELECT c, v_occurred FROM unnest(v_chains) AS c
+    ON CONFLICT (chain_id) DO NOTHING;
+    FOR v_pass IN 1 .. 2 LOOP
+        IF _erasure_retained_by(v_retained, 'credential-replay-evidence') IS NULL THEN
+            DELETE FROM kb_oauth_refresh_replays r
+             WHERE r.profile_id = p_subject
+                OR r.chain_id = ANY(v_chains)
+                OR r.token_id IN (SELECT _erasure_subject_refresh_tokens(p_subject));
+            DELETE FROM kb_oauth_refresh_tokens t
+             WHERE t.chain_id = ANY(v_chains)
+                OR t.id IN (SELECT _erasure_subject_refresh_tokens(p_subject));
+        ELSE
+            UPDATE kb_oauth_refresh_tokens t
+               SET revoked_at = COALESCE(t.revoked_at, v_occurred),
+                   claims     = '{}'::jsonb,
+                   token_hash = 'erased-' || t.id::text
+             WHERE (t.chain_id = ANY(v_chains)
+                    OR t.id IN (SELECT _erasure_subject_refresh_tokens(p_subject)))
+               AND (t.claims <> '{}'::jsonb OR t.token_hash <> 'erased-' || t.id::text
+                    OR t.revoked_at IS NULL);
+        END IF;
+    END LOOP;
 
     -- (8) The no-FK external identifiers (D5 blind-spot row 3): they identify the person
     --     through an EXTERNAL system, so the pseudonym break does not cover them — deleted,
@@ -1955,5 +2053,5 @@ COMMENT ON FUNCTION _erasure_apply_redaction(uuid, text[], uuid) IS
 SELECT declare_migration(
     20261023100000,
     'additive',
-    'Two new tables (kb_erasure_retention_policies, empty; kb_erasure_slack_revocations, empty); new SQL functions for the person act''s reach (_erasure_retention_snapshot, _erasure_retained_by, _principal_erasure_path_category, _erasure_subject_emails, _erasure_subject_invitations, _erasure_subject_oauth_flows, _erasure_auth_provider, _erasure_subject_unbound_refresh_tokens, _erasure_subject_refresh_tokens, _erasure_subject_connections, _erasure_subject_uploads, _erasure_subject_slack_principals); _principal_erasure_redacted_fields dropped and re-created with a third argument, its only callers being the two functions this migration replaces; the principal_erased payload_schema re-registered with one new required key (Section 0 refuses a ledger holding any earlier principal_erased payload); and CREATE OR REPLACE, every signature unchanged, of kb_principal_standing_events_append_only, _principal_erasure_redact_paths, _principal_erasure_context_events, _erasure_sentinel_exact, _erasure_sentinel_admits, principal_erasure_survey_plan, principal_erasure_execute and _erasure_apply_redaction. A binary without this migration keeps working: it calls the same functions with the same arguments. What changes is what the act removes, and that the standing log admits one update, the act''s reason null for a tombstoned subject.'
+    'Two new tables (kb_erasure_retention_policies, empty; kb_erasure_slack_revocations, empty); new SQL functions for the person act''s reach (_erasure_retention_snapshot, _erasure_retained_by, _principal_erasure_path_category, _erasure_subject_emails, _erasure_subject_invitations, _erasure_subject_oauth_flows, _erasure_auth_provider, _erasure_subject_unbound_refresh_tokens, _erasure_subject_refresh_tokens, _erasure_subject_connections, _erasure_subject_uploads, _erasure_subject_slack_principals); _principal_erasure_redacted_fields dropped and re-created with a third argument, its only callers being the two functions this migration replaces; the principal_erased payload_schema re-registered with one new required key (Section 0 refuses a ledger holding any earlier principal_erased payload); and CREATE OR REPLACE, every signature unchanged, of kb_principal_standing_events_append_only, _principal_erasure_redact_paths, _principal_erasure_context_events, _erasure_sentinel_exact, _erasure_sentinel_admits, principal_erasure_survey_plan, principal_erasure_execute and _erasure_apply_redaction. A binary without this migration keeps working: it calls the same functions with the same arguments. What changes is what the act removes; that the standing log admits one update, the act''s reason null for a tombstoned subject; that principal_may_refresh (signature unchanged) also refuses a tombstoned principal; and a new BEFORE INSERT trigger on kb_oauth_refresh_tokens that skips a successor whose owner is tombstoned or whose chain is ended, after waiting on any erasure in flight. An AS meeting it reads no row back, its existing refusal path.'
 );

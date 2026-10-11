@@ -453,7 +453,8 @@ export async function findRotatedToken(
  * and `storeRefreshToken` refuses to mint into a chain that carries one — so the count below is an
  * honest report of what this statement took, and never the thing the ending depends on.
  *
- * Written by this responder only. The administrative revokers keep the one-token-pair excursion
+ * Written by this responder and by a person erasure, which ends every chain of the erased principal
+ * (migration 20261023100000). The standing revokers keep the one-token-pair excursion
  * `standing_service::apply` states for itself; widening the marker to them would change a
  * documented behaviour in another crate.
  */
