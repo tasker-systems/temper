@@ -11,7 +11,6 @@
 
 mod common;
 
-use temper_core::types::ids::ProfileId;
 use uuid::Uuid;
 
 use temper_services::services::access_service;
@@ -46,9 +45,13 @@ async fn denied_profile(pool: &sqlx::PgPool, email: &str) -> Uuid {
     profile
 }
 
-fn request_for(profile: Uuid) -> access_service::CreateJoinRequestParams {
+/// The requester, minted through the real gate and classification.
+async fn person(pool: &sqlx::PgPool, profile: Uuid) -> temper_services::auth::HumanPrincipal {
+    temper_services::test_support::human_principal_for(pool, profile).await
+}
+
+fn request() -> access_service::CreateJoinRequestParams {
     access_service::CreateJoinRequestParams {
-        profile_id: ProfileId::from(profile),
         message: None,
         source: "test".to_owned(),
         accepted_terms_version: None,
@@ -126,9 +129,10 @@ async fn a_principal_at_the_decided_cap_is_refused(pool: sqlx::PgPool) {
     )
     .await;
 
-    let err = access_service::create_join_request(&pool, request_for(profile), None)
-        .await
-        .expect_err("a principal at the cap must be refused");
+    let err =
+        access_service::create_join_request(&pool, &person(&pool, profile).await, request(), None)
+            .await
+            .expect_err("a principal at the cap must be refused");
     let temper_services::error::ApiError::BadRequest(reason) = &err else {
         panic!(
             "the cap refusal rides the standing machine's vocabulary, not the seam's: got {err:?}"
@@ -158,17 +162,23 @@ async fn the_boundary_is_the_cap_itself(pool: sqlx::PgPool) {
     .await;
 
     // Row cap-1: the pump still turns for a genuine applicant.
-    access_service::create_join_request(&pool, request_for(profile), None)
+    access_service::create_join_request(&pool, &person(&pool, profile).await, request(), None)
         .await
         .expect("a principal under the cap files");
-    access_service::withdraw_request(&pool, ProfileId::from(profile))
+    access_service::withdraw_request(&pool, &person(&pool, profile).await)
         .await
         .expect("withdraw");
 
     // Now at the cap via the machine's own lifecycle, not seeding: the next refuses.
     assert!(
         matches!(
-            access_service::create_join_request(&pool, request_for(profile), None).await,
+            access_service::create_join_request(
+                &pool,
+                &person(&pool, profile).await,
+                request(),
+                None
+            )
+            .await,
             Err(temper_services::error::ApiError::BadRequest(_))
         ),
         "the request after the cycle that reached the cap must refuse"
@@ -212,7 +222,7 @@ async fn the_cap_never_strands_a_pending_request(pool: sqlx::PgPool) {
         .await
         .expect("set standing to requested");
 
-    access_service::withdraw_request(&pool, ProfileId::from(profile))
+    access_service::withdraw_request(&pool, &person(&pool, profile).await)
         .await
         .expect("withdrawal stays available at the cap");
 }

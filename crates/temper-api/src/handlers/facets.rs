@@ -2,7 +2,7 @@ use axum::extract::{Path, Query, State};
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use crate::middleware::surface::RequestSurface;
 use temper_core::types::authorship::ActInput;
 use temper_core::types::facet_requests::{
@@ -36,7 +36,7 @@ use temper_workflow::operations::{Backend, RetractFacet, SetFacet};
 )]
 pub async fn set_facet(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Json(req): Json<FacetSetRequest>,
 ) -> ApiResult<Json<FacetAck>> {
@@ -96,7 +96,7 @@ pub async fn set_facet(
 )]
 pub async fn set_edge_facet(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(edge_handle): Path<Uuid>,
     Json(req): Json<EdgeFacetSetRequest>,
@@ -150,7 +150,7 @@ pub async fn set_edge_facet(
 )]
 pub async fn retract_edge_facet(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path((edge_handle, property_id)): Path<(Uuid, Uuid)>,
     Query(act_in): Query<ActInput>,
@@ -189,7 +189,7 @@ pub async fn retract_edge_facet(
 )]
 pub async fn list_edge_facets(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(edge_handle): Path<Uuid>,
 ) -> ApiResult<Json<EdgeFacetsResponse>> {
     let facets = temper_services::services::edge_service::list_edge_facets(
@@ -243,7 +243,7 @@ pub async fn list_edge_facets(
 )]
 pub async fn list_resource_facets(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<ResourceFacetsResponse>> {
     let facets = temper_services::services::facet_service::list_resource_facets(

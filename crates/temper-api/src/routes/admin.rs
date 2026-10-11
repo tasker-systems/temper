@@ -1,5 +1,5 @@
 //! The system-admin surface: every route whose ONLY authorization is the sealed `&SystemAdmin`
-//! proof. Same middleware tier as `gated_routes` (system access, then auth), and documented
+//! proof. The gated stack plus the machine refusal (`Tier::HumanGated`), and documented
 //! under the `Admin` tag like any other route.
 //!
 //! **Membership rule.** A route belongs here when its handler mints `&SystemAdmin` via

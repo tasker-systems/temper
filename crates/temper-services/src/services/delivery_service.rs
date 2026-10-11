@@ -39,7 +39,7 @@ use temper_core::types::delivery::{
 use temper_core::types::ids::ProfileId;
 use temper_substrate::payloads::{AnchorTable, EventRef, RefRel, RefTarget};
 
-use crate::auth::AuthenticatedProfile;
+use crate::auth::HumanPrincipal;
 use crate::error::{ApiError, ApiResult};
 use crate::services::{connection_service, subscription_service};
 
@@ -172,7 +172,7 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<Delivery> {
 /// [`get`], gated through the delivery's own subscription.
 pub async fn get_for_caller(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     id: Uuid,
 ) -> ApiResult<Delivery> {
     let delivery = get(pool, id).await?;
@@ -192,7 +192,7 @@ const DELIVERY_REFUSAL: &str = "delivery not found or not readable";
 /// error passes through.
 async fn authorize_through_subscription(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     delivery: &Delivery,
 ) -> ApiResult<temper_core::types::subscription::Subscription> {
     subscription_service::get_for_caller(pool, authed, delivery.subscription_id)
@@ -214,7 +214,7 @@ async fn authorize_through_subscription(
 /// `No phantom backlog` negative implemented as an API.
 pub async fn list_for_subscription(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     subscription_id: Uuid,
     limit: i64,
     offset: i64,
@@ -254,7 +254,7 @@ pub async fn list_for_subscription(
 /// would destroy the record of why the judgment was made under uncertainty.
 pub async fn list_undetermined(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     subscription_id: Uuid,
 ) -> ApiResult<Vec<Delivery>> {
     subscription_service::get_for_caller(pool, authed, subscription_id).await?;
@@ -290,7 +290,7 @@ pub async fn list_undetermined(
 /// quietness. Reading them in any other order would report a broken connection as a quiet one.
 pub async fn declaration_liveness(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     subscription_id: Uuid,
 ) -> ApiResult<DeclarationLiveness> {
     let sub = subscription_service::get_for_caller(pool, authed, subscription_id).await?;
@@ -369,7 +369,7 @@ pub async fn declaration_liveness(
 /// `scoped_at` moves, both on the ledger-visible row.
 pub async fn record_scope(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     delivery_id: Uuid,
     req: &RecordScopeRequest,
 ) -> ApiResult<Delivery> {
@@ -446,7 +446,7 @@ pub async fn record_scope(
 /// remove.
 pub async fn record_disposition(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     delivery_id: Uuid,
     req: &RecordDispositionRequest,
 ) -> ApiResult<Delivery> {
@@ -718,7 +718,7 @@ mod tests {
         .expect("receive webhook");
         let rows = list_for_subscription(
             pool,
-            &crate::test_support::authenticated_profile_for(pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(pool, admin.uuid()).await,
             sub,
             50,
             0,
@@ -739,7 +739,7 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn the_erasure_survey_names_the_deliveries_that_may_quote_the_resource(pool: PgPool) {
         let (admin, _team, ctx, conn, sub) = seed_world(&pool).await;
-        let authed = crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await;
+        let authed = crate::test_support::human_principal_for(&pool, admin.uuid()).await;
         let emitter: Uuid =
             sqlx::query_scalar("SELECT emitter_entity_id FROM kb_connections WHERE id = $1")
                 .bind(conn)
@@ -1031,7 +1031,7 @@ mod tests {
             counts.push(
                 list_for_subscription(
                     &pool,
-                    &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                    &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                     *s,
                     50,
                     0,
@@ -1065,7 +1065,7 @@ mod tests {
 
         let rows = list_for_subscription(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             sub,
             50,
             0,
@@ -1118,7 +1118,7 @@ mod tests {
         let (_e, d) = deliver_one(&pool, conn, sub, admin).await;
         let scoped = record_scope(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordScopeRequest {
                 status: DeliveryStatus::InScope,
@@ -1139,7 +1139,7 @@ mod tests {
         let (_e, d) = deliver_one(&pool, conn, sub, admin).await;
         let err = record_scope(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordScopeRequest {
                 status: DeliveryStatus::Undetermined,
@@ -1159,7 +1159,7 @@ mod tests {
         let (_e, d) = deliver_one(&pool, conn, sub, admin).await;
         record_scope(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordScopeRequest {
                 status: DeliveryStatus::Undetermined,
@@ -1172,7 +1172,7 @@ mod tests {
         // It is on the DLQ read, and it says what stopped it.
         let stuck = list_undetermined(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             sub,
         )
         .await
@@ -1194,7 +1194,7 @@ mod tests {
         let (_e, d) = deliver_one(&pool, conn, sub, admin).await;
         record_scope(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordScopeRequest {
                 status: DeliveryStatus::InScope,
@@ -1205,7 +1205,7 @@ mod tests {
         .expect("scope");
         record_disposition(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordDispositionRequest {
                 disposition: Disposition::Declined,
@@ -1219,7 +1219,7 @@ mod tests {
 
         let err = record_scope(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordScopeRequest {
                 status: DeliveryStatus::OutOfScope,
@@ -1239,7 +1239,7 @@ mod tests {
         let (webhook_event, d) = deliver_one(&pool, conn, sub, admin).await;
         record_scope(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordScopeRequest {
                 status: DeliveryStatus::InScope,
@@ -1251,7 +1251,7 @@ mod tests {
 
         let judged = record_disposition(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordDispositionRequest {
                 disposition: Disposition::Declined,
@@ -1299,7 +1299,7 @@ mod tests {
         let (_e, d) = deliver_one(&pool, conn, sub, admin).await;
         record_scope(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordScopeRequest {
                 status: DeliveryStatus::InScope,
@@ -1310,7 +1310,7 @@ mod tests {
         .expect("scope");
         let judged = record_disposition(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordDispositionRequest {
                 disposition: Disposition::Acted,
@@ -1335,7 +1335,7 @@ mod tests {
         let (_e, d) = deliver_one(&pool, conn, sub, admin).await;
         record_scope(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordScopeRequest {
                 status: DeliveryStatus::InScope,
@@ -1346,7 +1346,7 @@ mod tests {
         .expect("scope");
         let err = record_disposition(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordDispositionRequest {
                 disposition: Disposition::Declined,
@@ -1366,7 +1366,7 @@ mod tests {
         let (_e, d) = deliver_one(&pool, conn, sub, admin).await;
         let err = record_disposition(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordDispositionRequest {
                 disposition: Disposition::Acted,
@@ -1386,7 +1386,7 @@ mod tests {
         let (_e, d) = deliver_one(&pool, conn, sub, admin).await;
         record_scope(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordScopeRequest {
                 status: DeliveryStatus::OutOfScope,
@@ -1397,7 +1397,7 @@ mod tests {
         .expect("scope");
         let err = record_disposition(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordDispositionRequest {
                 disposition: Disposition::Declined,
@@ -1422,7 +1422,7 @@ mod tests {
         let (_e, d) = deliver_one(&pool, conn, sub, admin).await;
         record_scope(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordScopeRequest {
                 status: DeliveryStatus::InScope,
@@ -1434,7 +1434,7 @@ mod tests {
 
         let rows = list_for_subscription(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             sub,
             50,
             0,
@@ -1466,7 +1466,7 @@ mod tests {
         }
         let rows = list_for_subscription(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             sub,
             50,
             0,
@@ -1492,7 +1492,7 @@ mod tests {
         let stranger = seed_plain_profile(&pool).await;
         let err = list_for_subscription(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, stranger.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, stranger.uuid()).await,
             sub,
             50,
             0,
@@ -1513,7 +1513,7 @@ mod tests {
         deliver_one(&pool, conn, sub, admin).await;
         let live = declaration_liveness(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             sub,
         )
         .await
@@ -1550,7 +1550,7 @@ mod tests {
         assert_eq!(
             declaration_liveness(
                 &pool,
-                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                 typo
             )
             .await
@@ -1564,7 +1564,7 @@ mod tests {
         assert_eq!(
             declaration_liveness(
                 &pool,
-                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                 typo
             )
             .await
@@ -1586,7 +1586,7 @@ mod tests {
         assert_eq!(
             declaration_liveness(
                 &pool,
-                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                 typo
             )
             .await
@@ -1603,14 +1603,14 @@ mod tests {
         let (admin, _t, _c, _conn, sub) = seed_world(&pool).await;
         crate::services::subscription_service::revoke(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             sub,
         )
         .await
         .expect("revoke");
         let live = declaration_liveness(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             sub,
         )
         .await
@@ -1633,7 +1633,7 @@ mod tests {
         let (_e, d) = deliver_one(&pool, conn, sub, admin).await;
         record_scope(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordScopeRequest {
                 status: DeliveryStatus::Undetermined,
@@ -1645,7 +1645,7 @@ mod tests {
         assert_eq!(
             list_undetermined(
                 &pool,
-                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                 sub
             )
             .await
@@ -1656,7 +1656,7 @@ mod tests {
 
         let judged = record_disposition(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordDispositionRequest {
                 disposition: Disposition::Declined,
@@ -1671,7 +1671,7 @@ mod tests {
         assert!(
             list_undetermined(
                 &pool,
-                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                 sub
             )
             .await
@@ -1732,7 +1732,7 @@ mod tests {
         assert_eq!(
             declaration_liveness(
                 &pool,
-                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                 fresh
             )
             .await
@@ -1758,7 +1758,7 @@ mod tests {
         let (_e, d) = deliver_one(&pool, conn, sub, admin).await;
         record_scope(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordScopeRequest {
                 status: DeliveryStatus::InScope,
@@ -1769,7 +1769,7 @@ mod tests {
         .expect("scope");
         record_disposition(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordDispositionRequest {
                 disposition: Disposition::Acted,
@@ -1783,7 +1783,7 @@ mod tests {
 
         let err = record_scope(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordScopeRequest {
                 status: DeliveryStatus::Undetermined,
@@ -1810,7 +1810,7 @@ mod tests {
         let (_e, d) = deliver_one(&pool, conn, sub, admin).await;
         record_scope(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordScopeRequest {
                 status: DeliveryStatus::InScope,
@@ -1822,7 +1822,7 @@ mod tests {
 
         let err = record_disposition(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             d.id,
             &RecordDispositionRequest {
                 disposition: Disposition::Declined,
@@ -1856,7 +1856,7 @@ mod tests {
 
         let err = crate::services::subscription_service::create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &temper_core::types::subscription::CreateSubscriptionRequest {
                 subscriber_table: "kb_contexts".into(),
                 subscriber_id: ctx,
@@ -1892,7 +1892,7 @@ mod tests {
 
         let err = crate::services::subscription_service::create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &temper_core::types::subscription::CreateSubscriptionRequest {
                 subscriber_table: "kb_contexts".into(),
                 subscriber_id: ctx,
@@ -1935,7 +1935,7 @@ mod tests {
 
         crate::services::subscription_service::create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &temper_core::types::subscription::CreateSubscriptionRequest {
                 subscriber_table: "kb_contexts".into(),
                 subscriber_id: ctx,
@@ -1962,7 +1962,7 @@ mod tests {
 
         crate::services::subscription_service::create(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &temper_core::types::subscription::CreateSubscriptionRequest {
                 subscriber_table: "kb_contexts".into(),
                 subscriber_id: ctx,
@@ -1987,7 +1987,7 @@ mod tests {
         let (admin, _t, _c, conn, sub) = seed_world(&pool).await;
         let (_e, d) = deliver_one(&pool, conn, sub, admin).await;
         let stranger = seed_plain_profile(&pool).await;
-        let prober = crate::test_support::authenticated_profile_for(&pool, stranger.uuid()).await;
+        let prober = crate::test_support::human_principal_for(&pool, stranger.uuid()).await;
         let scope = RecordScopeRequest {
             status: DeliveryStatus::InScope,
             reason: None,

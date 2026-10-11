@@ -111,10 +111,11 @@ fingerprint() {
     | shasum -a 256 | cut -c1-12
 }
 
-# A gate is not always one file. `MachineAuthority`'s arms live in `services/machine_authz.rs` and
-# `GrantAuthority`'s in `access_service.rs`, while their resolvers live in `authz/` — so a
-# fingerprint over the authz module alone would cover the resolver and MISS a new admitting arm,
-# which is the widening shape this guard exists to catch. Each gate therefore names its PARTS:
+# A gate is not always one file. `MachineRegistrationAuthority`'s arms live in
+# `services/machine_authz.rs` and `GrantAuthority`'s in `access_service.rs`, while their resolvers
+# live in `authz/` — so a fingerprint over the authz module alone would cover the resolver and MISS
+# a new admitting arm, which is the widening shape this guard exists to catch. Each gate therefore
+# names its PARTS:
 #
 #   file:<path>              the whole module, comments stripped
 #   block:enum:<N>:<path>    just enum N { … }, brace-counted
@@ -135,7 +136,7 @@ audit_gate|file:crates/temper-services/src/authz/audit_gate.rs
 connection|file:crates/temper-services/src/authz/connection.rs
 context_admin|file:crates/temper-services/src/authz/context_admin.rs
 grant|file:crates/temper-services/src/authz/grant.rs;block:enum:GrantAuthority:crates/temper-services/src/services/access_service.rs
-machine|file:crates/temper-services/src/authz/machine.rs;block:enum:MachineAuthority:crates/temper-services/src/services/machine_authz.rs;block:const:MAX_MACHINE_TEAM_ROLE:crates/temper-services/src/services/machine_authz.rs;block:fn:authorize_registration:crates/temper-services/src/services/machine_authz.rs;block:fn:contain_target_team:crates/temper-services/src/services/machine_authz.rs;block:fn:contain_reach:crates/temper-services/src/services/machine_authz.rs
+machine|file:crates/temper-services/src/authz/machine.rs;block:enum:MachineRegistrationAuthority:crates/temper-services/src/services/machine_authz.rs;block:const:MAX_MACHINE_TEAM_ROLE:crates/temper-services/src/services/machine_authz.rs;block:fn:authorize_registration:crates/temper-services/src/services/machine_authz.rs;block:fn:contain_target_team:crates/temper-services/src/services/machine_authz.rs;block:fn:contain_reach:crates/temper-services/src/services/machine_authz.rs
 read_gates|file:crates/temper-services/src/authz/read_gates.rs
 ledger_subject|block:fn:readable_event_types:crates/temper-services/src/services/admin_ledger_service.rs
 subscription|file:crates/temper-services/src/authz/subscription.rs
@@ -217,6 +218,24 @@ current_gates() {
 # (`check_cogmap_authorable_in_tx`), so that arm cannot widen unseen. Claim files about bind/unbind
 # rebound to `two_sided`, and genesis's reserved-id claims to `is_system_admin`. Re-read the one
 # claim still bound to `reconcile_regime` (handlers/cognitive_maps.rs, reconcile's 403): holds.
+# REVIEWED 2026-10-10 (machines reach only content and workflow) — `context_admin`, `grant`,
+# `ledger_subject`, `machine`, `read_gates`, `reconcile_regime`, `subscription`, `two_sided` all
+# re-fingerprinted by one change: each admin arm now decides by MINTING `SystemAdmin` from the
+# classified caller (`Principal::system_admin` / `require_system_admin(&HumanPrincipal)`) instead
+# of reading `is_system_admin` for a bare id, and `machine`'s registration/containment helpers take
+# `&HumanPrincipal`. Every gate NARROWED: a person's admission is unchanged, and a machine — never
+# an admin under the #1089 triggers — is now kept off every admin arm by the type. Re-read the
+# claims bound to these gates (access, admin_directory, admin_ledger, cognitive_maps, embed,
+# erasure, field_scrub, machine_clients, openapi, resource_erasure): each states what a system
+# admin may do, which still holds for a person. No over-claim.
+# REVIEWED 2026-10-10 (machines reach only content and workflow, review fixes) — `context_admin`,
+# `grant`, `machine`, `read_gates`, `subscription`, `two_sided` re-fingerprinted by a rename only:
+# each `resolve` names its parameter `principal` and drops `let principal = caller;`. No decision
+# moved; the claims bound to them are unchanged in truth.
+# REVIEWED 2026-10-10 (machines reach only content and workflow, naming) — `connection` and
+# `machine` re-fingerprinted by renaming `MachineAuthority` to `MachineRegistrationAuthority` (it is
+# the caller's authority OVER a machine registration; the old name read as authority held BY a
+# machine). Rename and rustfmt only; no decision moved.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -244,7 +263,7 @@ claim crates/temper-cli/src/cli.rs 16 -
 claim crates/temper-cli/src/commands/admin_erasure.rs 1 -
 claim crates/temper-cli/src/commands/admin.rs 4 -
 claim crates/temper-cli/src/commands/admin_connection.rs 2 connection
-claim crates/temper-cli/src/commands/admin_machine.rs 3 machine
+claim crates/temper-cli/src/commands/admin_machine.rs 2 machine
 claim crates/temper-cli/src/commands/admin_saml.rs 1 -
 claim crates/temper-cli/src/commands/admin_slack.rs 1 -
 claim crates/temper-cli/src/commands/admin_subscription.rs 2 subscription
@@ -271,15 +290,15 @@ claim crates/temper-services/src/services/subscription_service.rs 6 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
 claim crates/temper-services/src/services/team_service.rs 2 require_manage_on_team,can_manage
 gate audit_gate 05a9b61226c4
-gate connection 30434edb8ee6
-gate context_admin 6bd5aa70ab69
-gate grant 693218eba938
-gate machine deb27d461b57
-gate reconcile_regime f9833fb81725
-gate read_gates 5b394645d054
-gate ledger_subject 595564c89c9c
-gate subscription 97b9a90d234d
-gate two_sided 4fb1fb73d559
+gate connection 586029b73345
+gate context_admin bce45d31795d
+gate grant 2aa83e237c3e
+gate machine 967fea32d269
+gate reconcile_regime 76ead78c03ac
+gate read_gates 7d576b5dacc8
+gate ledger_subject 0b4a1f659c60
+gate subscription 81f65a7118cf
+gate two_sided 7822960e4ffa
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e

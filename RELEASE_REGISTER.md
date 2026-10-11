@@ -38,8 +38,7 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
   (revoking pending ones; an invitation to an address they never verified is left and named by
   count); deletes the login flows and refresh tokens bound to their profile, and refresh tokens
   never bound but theirs by the instance's login provider and `sub`, with their replay records;
-  revokes in temper
-  and empties the credential of every connection homed in their estate or whose machine principal
+  revokes in temper and empties the credential of every connection homed in their estate or whose machine principal
   they are (provider-side tokens are not revoked there); empties their entities' metadata; deletes
   their staged uploads; reaches Slack stores through the vault's own profile, not only a current
   link; nulls standing, join and review free text about them; and rewrites the ledger's standing
@@ -57,6 +56,27 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 pr: self
 classes: additive, behavioral
 surfaces: http, clients, cli-stdout, schema
+status: signal-only
+- **A machine principal reaches only content and workflow; every other act refuses it with `403`**
+  A machine credential (a profile registered as a machine client, revoked or not) may still act on
+  resources, edges, properties, contexts, cognitive maps, blobs, data artifacts, schemas, search
+  and query, the steward, invocation and auditor workflows, read its own profile, and list and read
+  its teams. Every other act — membership and invitations, access requests, sharing, transfer and
+  grants, credentials (machine clients, connections, subscriptions), governance and every admin
+  door, Slack disconnect, and profile edits — now answers a machine with `403` `FORBIDDEN_DETAIL`
+  and the fixed sentence "this action is not available to a machine principal": 81 operations, each
+  of whose OpenAPI `403` description now names it. The erasure doors answer a machine `403` where
+  they answer a non-admin person `404`. `POST /api/teams`, which refused a machine caller with
+  `400` (the row "A machine principal never governs a team, and never holds a governance grant"),
+  now refuses it with this `403`.
+  Through MCP, `context_manage`'s share, unshare and transfer refuse a machine as the caller's own
+  error carrying the sentence, where the relayed refusal had surfaced as an internal error. Acts
+  that need system-admin standing (reblock `all`, reconcile on an admin-only map) already refused
+  every machine and still do, unchanged. People see no change, and shapes are unchanged. Who
+  observes: an approved machine credential calling a refused act over HTTP or through MCP.
+pr: self
+classes: additive, behavioral
+surfaces: http, mcp, clients
 status: signal-only
 - **Erasing a person now erases their contexts' names, and an erased context can no longer be restored**
   The principal erasure act retired its estate contexts with an un-evented update and left their

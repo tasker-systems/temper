@@ -96,15 +96,15 @@ run_case "(a) a NEW elevation claim reds trigger 1" \
 
 # ── (b)+(c) trigger 2 — the gate moved underneath the prose ───────────────────────────────────
 #
-# A real widening in miniature: MachineAuthority gains an arm. No string anywhere changes — which
-# is the entire point, and exactly why a claim-only baseline stays green here.
+# A real widening in miniature: MachineRegistrationAuthority gains an arm. No string anywhere
+# changes — which is the entire point, and exactly why a claim-only baseline stays green here.
 T2="$WORK/t2"; make_fixture "$T2"
 # The arms live in `services/machine_authz.rs`, NOT in `authz/machine.rs` — which is exactly the
 # split that made the first version of this guard fingerprint the resolver and miss a new arm. The
 # fixture edits where the arms actually are, and asserts it landed, so this case cannot silently
 # become a no-op the way it did once already.
 MACHINE_ARMS="$T2/crates/temper-services/src/services/machine_authz.rs"
-perl -0pi -e 's/(enum MachineAuthority \{)/$1\n    TeamMaintainer,/' "$MACHINE_ARMS"
+perl -0pi -e 's/(enum MachineRegistrationAuthority \{)/$1\n    TeamMaintainer,/' "$MACHINE_ARMS"
 grep -q 'TeamMaintainer' "$MACHINE_ARMS" \
     || { echo "  FAIL  (b) fixture did not apply — the enum shape moved"; FAIL=$((FAIL + 1)); }
 run_case "(b) a WIDENED gate reds trigger 2, with no string changed" \

@@ -36,7 +36,7 @@ async fn an_admin(pool: &PgPool, handle: &str) -> uuid::Uuid {
 
 /// Mint the `SystemAdmin` proof for an admin profile — the capability the migrated acts require.
 async fn admin_proof(pool: &PgPool, admin_id: uuid::Uuid) -> SystemAdmin {
-    let a = test_support::authenticated_profile_for(pool, admin_id).await;
+    let a = test_support::human_principal_for(pool, admin_id).await;
     require_system_admin(pool, &a)
         .await
         .expect("admin mints a proof")
@@ -147,7 +147,7 @@ async fn demote_admin_requires_the_caller_be_admin(pool: PgPool) {
     let non_admin = a_profile(&pool, "not-admin").await;
     test_support::approve(&pool, non_admin).await; // has access, not governance
 
-    let authed = test_support::authenticated_profile_for(&pool, non_admin).await;
+    let authed = test_support::human_principal_for(&pool, non_admin).await;
     let err = require_system_admin(&pool, &authed)
         .await
         .expect_err("a non-admin may not mint an admin proof");

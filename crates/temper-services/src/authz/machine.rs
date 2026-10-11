@@ -14,34 +14,38 @@ use temper_core::types::team::TeamRole;
 use super::{Principal, ScopedAuthority};
 use crate::error::{ApiError, ApiResult};
 use crate::services::machine_client_service::{self, MACHINE_CLIENT_REFUSAL};
-use crate::services::{access_service, machine_authz::MachineAuthority, team_service};
+use crate::services::{machine_authz::MachineRegistrationAuthority, team_service};
 
 #[async_trait]
-impl ScopedAuthority for MachineAuthority {
+impl ScopedAuthority for MachineRegistrationAuthority {
     /// The team that owns (or will own) the machine. `None` is a real, denied case — see the
     /// module doc — not an "unknown" to be skipped over.
     type Subject = Option<Uuid>;
 
-    async fn resolve(pool: &PgPool, caller: Principal<'_>, team: Option<Uuid>) -> ApiResult<Self> {
-        let caller = caller.profile_id();
-        if access_service::is_system_admin(pool, caller).await? {
-            return Ok(MachineAuthority::SystemAdmin);
+    async fn resolve(
+        pool: &PgPool,
+        principal: Principal<'_>,
+        team: Option<Uuid>,
+    ) -> ApiResult<Self> {
+        let caller = principal.profile_id();
+        if principal.system_admin(pool).await?.is_some() {
+            return Ok(MachineRegistrationAuthority::SystemAdmin);
         }
 
         let Some(team_id) = team else {
-            return Ok(MachineAuthority::None);
+            return Ok(MachineRegistrationAuthority::None);
         };
 
         Ok(
             match team_service::role_on_team(pool, team_id, caller).await? {
-                Some(TeamRole::Owner) => MachineAuthority::TeamOwner,
-                _ => MachineAuthority::None,
+                Some(TeamRole::Owner) => MachineRegistrationAuthority::TeamOwner,
+                _ => MachineRegistrationAuthority::None,
             },
         )
     }
 
     fn is_denial(&self) -> bool {
-        matches!(self, MachineAuthority::None)
+        matches!(self, MachineRegistrationAuthority::None)
     }
 
     fn denial() -> ApiError {
@@ -52,10 +56,10 @@ impl ScopedAuthority for MachineAuthority {
 /// May this caller act on **this machine client** — the per-row gate behind get, revoke and
 /// secret rotation?
 ///
-/// [`MachineAuthority`] is keyed on a team, which is right for registration (the caller names the
-/// team that will own the machine, and there is no row yet). A per-row act is keyed on the row:
-/// the owning team is read from it, never supplied, and the policy is then `MachineAuthority`'s,
-/// **called, not restated**.
+/// [`MachineRegistrationAuthority`] is keyed on a team, which is right for registration (the caller
+/// names the team that will own the machine, and there is no row yet). A per-row act is keyed on
+/// the row: the owning team is read from it, never supplied, and the policy is then
+/// `MachineRegistrationAuthority`'s, **called, not restated**.
 ///
 /// **Its refusal is `NotFound`, not `Forbidden`, and that is the reason it exists.** Keyed on the
 /// team, a refusal arrived only after the row was loaded, so a missing id answered 404 and a
@@ -88,12 +92,20 @@ impl ScopedAuthority for MachineClientControlAuthority {
         let client = machine_client_service::get(pool, machine_client).await?;
 
         Ok(
-            match <MachineAuthority as ScopedAuthority>::resolve(pool, caller, client.team_id)
-                .await?
+            match <MachineRegistrationAuthority as ScopedAuthority>::resolve(
+                pool,
+                caller,
+                client.team_id,
+            )
+            .await?
             {
-                MachineAuthority::SystemAdmin => MachineClientControlAuthority::SystemAdmin,
-                MachineAuthority::TeamOwner => MachineClientControlAuthority::OwnerOfOwningTeam,
-                MachineAuthority::None => {
+                MachineRegistrationAuthority::SystemAdmin => {
+                    MachineClientControlAuthority::SystemAdmin
+                }
+                MachineRegistrationAuthority::TeamOwner => {
+                    MachineClientControlAuthority::OwnerOfOwningTeam
+                }
+                MachineRegistrationAuthority::None => {
                     super::log_concealed_refusal(caller, "machine_client");
                     MachineClientControlAuthority::None
                 }

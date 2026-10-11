@@ -34,7 +34,7 @@ opentelemetry = "0.32"
 # Cloud's own OTLP examples commonly set that variable, so an operator following vendor docs would get
 # a total blackout. It also shrinks the payload, which is billed.
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "reqwest-rustls", "internal-logs", "gzip-http"] }
-opentelemetry-semantic-conventions = "0.32"
+opentelemetry-semantic-conventions = "0.33"
 opentelemetry_sdk = "0.32"
 # `rt` for `spawn_blocking` and `time` for the flush budget — see `export::flush_within_budget`,
 # which exists so a vendor round trip cannot block a Tokio worker or lengthen a response without bound.

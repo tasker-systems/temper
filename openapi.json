@@ -55,7 +55,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -121,7 +121,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -199,7 +199,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -287,7 +287,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -375,7 +375,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -473,7 +473,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -632,7 +632,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -717,7 +717,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -810,7 +810,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -876,7 +876,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -939,7 +939,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1034,7 +1034,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1110,7 +1110,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1173,7 +1173,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1251,7 +1251,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1324,7 +1324,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1390,7 +1390,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1463,6 +1463,16 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1549,6 +1559,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1570,6 +1590,16 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1653,6 +1683,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1698,6 +1738,16 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1770,7 +1820,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2102,7 +2152,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2241,7 +2291,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2334,7 +2384,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2430,7 +2480,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2526,7 +2576,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2612,7 +2662,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2708,7 +2758,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2794,7 +2844,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2890,7 +2940,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2985,7 +3035,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3214,6 +3264,16 @@
           },
           "401": {
             "description": "Authentication required, or Slack account linking is not configured on this instance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4716,7 +4776,14 @@
             }
           },
           "403": {
-            "description": "Caller may not administer grants on this map"
+            "description": "Caller may not administer grants on this map; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -4766,7 +4833,14 @@
             }
           },
           "403": {
-            "description": "Caller may not administer grants on this map"
+            "description": "Caller may not administer grants on this map; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -5267,7 +5341,14 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin and does not both administer the map and manage the team"
+            "description": "Caller is not a system admin and does not both administer the map and manage the team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -5334,7 +5415,14 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin and does not both administer the map and manage the team"
+            "description": "Caller is not a system admin and does not both administer the map and manage the team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -5404,7 +5492,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5470,7 +5558,7 @@
             }
           },
           "403": {
-            "description": "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5555,7 +5643,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5623,7 +5711,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5728,7 +5816,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5843,7 +5931,7 @@
             }
           },
           "403": {
-            "description": "The caller controls the connection but does not own or maintain the receiving team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "The caller controls the connection but does not own or maintain the receiving team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5931,7 +6019,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6026,7 +6114,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6131,7 +6219,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6722,7 +6810,14 @@
             }
           },
           "403": {
-            "description": "Caller may not transfer this context to this team"
+            "description": "Caller may not transfer this context to this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "404": {
             "description": "Context or team not found"
@@ -7234,7 +7329,14 @@
             }
           },
           "403": {
-            "description": "Caller may not share this context into this team"
+            "description": "Caller may not share this context into this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -7301,7 +7403,14 @@
             }
           },
           "403": {
-            "description": "Caller may not unshare this context from this team"
+            "description": "Caller may not unshare this context from this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -7452,7 +7561,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8581,7 +8690,14 @@
             "description": "Invitation expired or already declined"
           },
           "403": {
-            "description": "The invitation is addressed to someone else: only the account whose verified email it names may redeem it"
+            "description": "The invitation is addressed to someone else: only the account whose verified email it names may redeem it; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "404": {
             "description": "Unknown token"
@@ -8638,7 +8754,14 @@
             "description": "Invitation was already accepted"
           },
           "403": {
-            "description": "The invitation is addressed to someone else: only the account whose verified email it names may decline it"
+            "description": "The invitation is addressed to someone else: only the account whose verified email it names may decline it; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "404": {
             "description": "Unknown token"
@@ -8684,6 +8807,16 @@
                   "items": {
                     "$ref": "#/components/schemas/InviteeInvitation"
                   }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -8741,6 +8874,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PendingInvitationCounts"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -9037,7 +9180,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9103,7 +9246,7 @@
             }
           },
           "403": {
-            "description": "Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9196,7 +9339,7 @@
             }
           },
           "403": {
-            "description": "Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9271,7 +9414,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9339,7 +9482,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9444,7 +9587,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9559,7 +9702,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9674,6 +9817,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9722,6 +9875,16 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12663,7 +12826,7 @@
             }
           },
           "403": {
-            "description": "Caller may not administer grants on this resource",
+            "description": "Caller may not administer grants on this resource; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12740,7 +12903,7 @@
             }
           },
           "403": {
-            "description": "Caller may not administer grants on this resource",
+            "description": "Caller may not administer grants on this resource; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13266,7 +13429,14 @@
             }
           },
           "403": {
-            "description": "Forbidden: not the owner and no admin reach over the resource and target. An unknown id answers the same 403"
+            "description": "Forbidden: not the owner and no admin reach over the resource and target. An unknown id answers the same 403; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "404": {
             "description": "Not answered: an unknown id answers 403, as a resource the caller has no authority over"
@@ -13984,7 +14154,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14050,7 +14220,7 @@
             }
           },
           "403": {
-            "description": "Caller is neither a system admin nor an owner or maintainer of the authoring team, the authoring team has no read-reach on the connection, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is neither a system admin nor an owner or maintainer of the authoring team, the authoring team has no read-reach on the connection, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14138,7 +14308,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14206,7 +14376,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14309,7 +14479,14 @@
             "description": "The `personal-` slug prefix is reserved for personal teams, or the caller is a machine principal (a team's creator becomes its owner, and a machine never governs)"
           },
           "403": {
-            "description": "Forbidden (child requires owner/maintainer; auto_join_role requires admin)"
+            "description": "Forbidden (child requires owner/maintainer; auto_join_role requires admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "409": {
             "description": "Team slug already exists"
@@ -14402,7 +14579,14 @@
             "description": "Team soft-deleted"
           },
           "403": {
-            "description": "Forbidden (caller is not the owner)"
+            "description": "Forbidden (caller is not the owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "404": {
             "description": "Team not found or already soft-deleted"
@@ -14458,7 +14642,14 @@
             }
           },
           "403": {
-            "description": "Forbidden (caller is not owner/maintainer)"
+            "description": "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "404": {
             "description": "Team not found or soft-deleted"
@@ -14521,7 +14712,14 @@
             }
           },
           "403": {
-            "description": "Forbidden (caller is not owner/maintainer)"
+            "description": "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -14584,7 +14782,14 @@
             "description": "Only a pending invitation can be revoked"
           },
           "403": {
-            "description": "Forbidden (caller is not owner/maintainer)"
+            "description": "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "404": {
             "description": "Invitation not found for this team"
@@ -14657,7 +14862,14 @@
             "description": "Owner role cannot be invited"
           },
           "403": {
-            "description": "Forbidden (caller is not owner/maintainer)"
+            "description": "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "409": {
             "description": "A pending invitation already exists for this email"
@@ -14730,7 +14942,14 @@
             "description": "Cannot grant owner via add_member (use ownership transfer), or the target is a machine principal and the role is above `member`"
           },
           "403": {
-            "description": "Forbidden (caller is not owner/maintainer)"
+            "description": "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "409": {
             "description": "Already a member of this team; change the role with PATCH /api/teams/{id}/members/{profile_id}"
@@ -14800,7 +15019,14 @@
             }
           },
           "403": {
-            "description": "Forbidden (not owner/maintainer and not self)"
+            "description": "Forbidden (not owner/maintainer and not self); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "404": {
             "description": "Member not found"
@@ -14869,7 +15095,14 @@
             "description": "Cannot grant owner via role change, or the target is a machine principal and the role is above `member`"
           },
           "403": {
-            "description": "Forbidden (not owner/maintainer)"
+            "description": "Forbidden (not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "404": {
             "description": "Member not found"
@@ -14942,7 +15175,14 @@
             }
           },
           "403": {
-            "description": "Forbidden (caller does not manage the team, or target not a member)"
+            "description": "Forbidden (caller does not manage the team, or target not a member); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [

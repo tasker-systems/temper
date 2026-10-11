@@ -14,7 +14,7 @@ use temper_core::types::machine::MachineClient;
 
 use temper_principal::{Act, ActorAuthority, Standing};
 
-use crate::auth::AuthenticatedProfile;
+use crate::auth::HumanPrincipal;
 use crate::authz::{MachineClientControlAuthority, Principal};
 use crate::error::{ApiError, ApiResult};
 use crate::services::standing_service::{self, ApplyStandingParams};
@@ -131,7 +131,7 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<MachineClient> {
 /// (`MACHINE_CLIENT_REFUSAL`) — see `authz::MachineClientControlAuthority`.
 pub async fn get_for_caller(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     id: Uuid,
 ) -> ApiResult<MachineClient> {
     authorize_control(pool, authed, id).await?;
@@ -141,12 +141,8 @@ pub async fn get_for_caller(
 /// The per-row gate every act on an existing machine client passes first: a system admin, or the
 /// owner of the machine's owning team, keyed on the row (B2 D5). A refusal is indistinguishable
 /// from a missing id. Ahead of any write, so a rejected act never touches the row.
-async fn authorize_control(
-    pool: &PgPool,
-    authed: &AuthenticatedProfile,
-    id: Uuid,
-) -> ApiResult<()> {
-    crate::authz::authorize::<MachineClientControlAuthority>(pool, Principal::Proof(authed), id)
+async fn authorize_control(pool: &PgPool, authed: &HumanPrincipal, id: Uuid) -> ApiResult<()> {
+    crate::authz::authorize::<MachineClientControlAuthority>(pool, Principal::Human(authed), id)
         .await?;
     Ok(())
 }
@@ -159,11 +155,14 @@ async fn authorize_control(
 /// yields NULL, which falls open.
 pub async fn list(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     include_revoked: bool,
 ) -> ApiResult<Vec<MachineClient>> {
     let caller = ProfileId::from(authed.profile().id);
-    let is_admin = crate::services::access_service::is_system_admin(pool, caller).await?;
+    let is_admin = crate::authz::Principal::Human(authed)
+        .system_admin(pool)
+        .await?
+        .is_some();
 
     let rows = sqlx::query_as!(
         MachineClient,
@@ -194,11 +193,7 @@ pub async fn list(
 /// Mark a client dead. Idempotent in effect but not in record: a second revoke of an
 /// already-revoked row is a no-op that returns the existing row (the first revoker and
 /// first timestamp are the truth). Grants and memberships are deliberately untouched (D11).
-pub async fn revoke(
-    pool: &PgPool,
-    id: Uuid,
-    authed: &AuthenticatedProfile,
-) -> ApiResult<MachineClient> {
+pub async fn revoke(pool: &PgPool, id: Uuid, authed: &HumanPrincipal) -> ApiResult<MachineClient> {
     let revoker = ProfileId::from(authed.profile().id);
     // Auth before writes, keyed on the existing row's owning team (B2 D5).
     authorize_control(pool, authed, id).await?;
@@ -256,7 +251,7 @@ const MAX_ROTATION_GRACE_SECONDS: i64 = 7 * 24 * 3_600;
 /// window outside `[0, MAX_ROTATION_GRACE_SECONDS]`.
 pub async fn rotate_secret(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     id: Uuid,
     grace_seconds: i64,
 ) -> ApiResult<temper_core::types::machine::IssuedMachineCredential> {
@@ -537,7 +532,7 @@ mod tests {
 
         let cred = svc::rotate_secret(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             id,
             3600,
         )
@@ -584,7 +579,7 @@ mod tests {
             matches!(
                 svc::rotate_secret(
                     &pool,
-                    &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                    &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                     id,
                     -1
                 )
@@ -598,7 +593,7 @@ mod tests {
             matches!(
                 svc::rotate_secret(
                     &pool,
-                    &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                    &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                     id,
                     999_999_999
                 )
@@ -618,7 +613,7 @@ mod tests {
 
         let err = svc::rotate_secret(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             id,
             3600,
         )
@@ -638,7 +633,7 @@ mod tests {
         let revoked = svc::revoke(
             &pool,
             id,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
         )
         .await
         .expect("revoke");
@@ -647,7 +642,7 @@ mod tests {
 
         let active = svc::list(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             false,
         )
         .await
@@ -656,7 +651,7 @@ mod tests {
 
         let all = svc::list(
             &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             true,
         )
         .await
@@ -753,7 +748,7 @@ mod tests {
         svc::revoke(
             &pool,
             f.machine_id,
-            &crate::test_support::authenticated_profile_for(&pool, f.admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, f.admin.uuid()).await,
         )
         .await
         .unwrap();
@@ -803,7 +798,7 @@ mod tests {
         svc::revoke(
             &pool,
             f.machine_id,
-            &crate::test_support::authenticated_profile_for(&pool, f.admin.uuid()).await,
+            &crate::test_support::human_principal_for(&pool, f.admin.uuid()).await,
         )
         .await
         .expect("credential revocation must succeed even with nothing to revoke on standing");
@@ -882,7 +877,7 @@ mod tests {
         // The prober is a team owner too — just not of any team that owns a target.
         let prober_profile = seed_agent_link(&pool, "probe-agent").await;
         team_owned_by(&pool, "probe-own-team", prober_profile).await;
-        let prober = crate::test_support::authenticated_profile_for(&pool, prober_profile).await;
+        let prober = crate::test_support::human_principal_for(&pool, prober_profile).await;
         let missing = Uuid::now_v7();
 
         let targets = [

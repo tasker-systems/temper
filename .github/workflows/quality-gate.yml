@@ -352,6 +352,9 @@ jobs:
       - name: Guard test — audit-route-auth (per-builder layer wiring)
         run: bash .github/scripts/test-audit-route-auth.sh
 
+      - name: Guard test — check-production-features (no test feature in a shipped graph)
+        run: bash .github/scripts/test-check-production-features.sh
+
       - name: Guard test — audit-mcp-route-auth (router freeze + block-level wiring)
         run: bash .github/scripts/test-audit-mcp-route-auth.sh
 

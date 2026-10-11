@@ -36,7 +36,7 @@ use temper_core::types::query_params::SubscriptionListQuery as ListQuery;
         (status = 200, description = "The created subscription", body = Subscription),
         (status = 400, description = "Unknown `subscriber_table`, a subscriber not linked to the authoring team, or a selector that can never match", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is neither a system admin nor an owner or maintainer of the authoring team, the authoring team has no read-reach on the connection, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is neither a system admin nor an owner or maintainer of the authoring team, the authoring team has no read-reach on the connection, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 409, description = "A subscription with the same authoring team, connection and selector already exists, live or revoked", body = ErrorBody),
         (status = 422, description = "The body is JSON but not the expected shape, e.g. an unknown selector `kind` (a plain-text rejection, not an ErrorBody)"),
     )
@@ -62,7 +62,7 @@ pub async fn create(
     responses(
         (status = 200, description = "The subscriptions visible to the caller", body = Vec<Subscription>),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
     )
 )]
 pub async fn list(
@@ -88,7 +88,7 @@ pub async fn list(
     responses(
         (status = 200, description = "The subscription", body = Subscription),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such subscription, or one the caller may not act on: the two are answered identically", body = ErrorBody),
     )
 )]
@@ -114,7 +114,7 @@ pub async fn get(
     responses(
         (status = 200, description = "The revoked subscription", body = Subscription),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such subscription, or one the caller may not act on: the two are answered identically", body = ErrorBody),
     )
 )]

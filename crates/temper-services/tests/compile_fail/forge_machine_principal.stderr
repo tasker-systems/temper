@@ -1,0 +1,12 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> tests/compile_fail/forge_machine_principal.rs:7:5
+  |
+7 |     MachinePrincipal(authed)
+  |     ^^^^^^^^^^^^^^^^
+  |
+  = note: a struct named `MachinePrincipal` exists in another namespace
+note: constructor is not visible here due to private fields
+ --> src/auth/mod.rs
+  |
+  | pub struct MachinePrincipal(AuthenticatedProfile);
+  |                             ^^^^^^^^^^^^^^^^^^^^ private field

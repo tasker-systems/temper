@@ -95,7 +95,7 @@ pub(crate) async fn require_erasure_operator(
     responses(
         (status = 200, description = "The erasure completed (`already_erased` on a repeat)", body = ErasureExecuteResponse),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "Caller is not a system admin, answered before any lookup; or, for an admin, the subject does not exist", body = ErrorBody),
         (status = 422, description = "The body is JSON but not the expected shape, e.g. a missing or unknown field (a plain-text rejection, not an ErrorBody)"),
     )
@@ -212,7 +212,7 @@ fn slack_revoke_config<'a>(
     responses(
         (status = 200, description = "What the erasure act would do; nothing is recorded or changed", body = ErasureSurveyResponse),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "Caller is not a system admin, answered before any lookup; or, for an admin, the subject does not exist", body = ErrorBody),
         (status = 422, description = "The body is JSON but not the expected shape, e.g. a missing or unknown field (a plain-text rejection, not an ErrorBody)"),
     )
@@ -332,7 +332,7 @@ pub async fn drain(
     responses(
         (status = 200, description = "The retention policy", body = RetentionPolicies),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "Caller is not a system admin", body = ErrorBody),
     )
 )]
@@ -360,7 +360,7 @@ pub async fn list_retention(
         (status = 200, description = "The retention policy after the change", body = RetentionPolicies),
         (status = 400, description = "A malformed name, an empty basis, or a period that is not a positive interval", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "Caller is not a system admin", body = ErrorBody),
         (status = 409, description = "The name already names another category's policy", body = ErrorBody),
         (status = 422, description = "The body is JSON but not the expected shape (a plain-text rejection, not an ErrorBody)"),
@@ -390,7 +390,7 @@ pub async fn set_retention(
     responses(
         (status = 200, description = "The retention policy after the change", body = RetentionPolicies),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "Caller is not a system admin", body = ErrorBody),
     )
 )]

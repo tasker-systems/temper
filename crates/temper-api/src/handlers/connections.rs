@@ -40,7 +40,7 @@ use temper_core::types::query_params::ConnectionListQuery as ListQuery;
         (status = 200, description = "The provisioned connection", body = Connection),
         (status = 400, description = "`provider` or `name` is empty, or `name` has no characters usable in a slug", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 409, description = "No free slug could be derived from `name`", body = ErrorBody),
     )
 )]
@@ -65,7 +65,7 @@ pub async fn provision(
     responses(
         (status = 200, description = "The connections visible to the caller", body = Vec<Connection>),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
     )
 )]
 pub async fn list(
@@ -90,7 +90,7 @@ pub async fn list(
     responses(
         (status = 200, description = "The connection", body = Connection),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such connection, or one the caller may not act on: the two are answered identically", body = ErrorBody),
     )
 )]
@@ -116,7 +116,7 @@ pub async fn get(
     responses(
         (status = 200, description = "The revoked connection", body = Connection),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such connection, or one the caller may not act on: the two are answered identically", body = ErrorBody),
     )
 )]
@@ -146,7 +146,7 @@ pub async fn revoke(
         (status = 200, description = "The updated connection and the verification result", body = AttachCredentialResponse),
         (status = 400, description = "`broker` or `connector` is empty, or the broker rejected the connector", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such connection, or one the caller may not act on: the two are answered identically", body = ErrorBody),
         (status = 409, description = "The connection is revoked", body = ErrorBody),
     )
@@ -187,7 +187,7 @@ pub async fn attach_credential(
     responses(
         (status = 200, description = "The updated connection", body = Connection),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such connection, or one the caller may not act on: the two are answered identically", body = ErrorBody),
         (status = 409, description = "The connection is revoked", body = ErrorBody),
     )
@@ -217,7 +217,7 @@ pub async fn set_webhook_events(
     responses(
         (status = 200, description = "The updated connection", body = Connection),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such connection, or one the caller may not act on: the two are answered identically", body = ErrorBody),
         (status = 409, description = "The connection is revoked", body = ErrorBody),
     )
@@ -249,7 +249,7 @@ pub async fn set_tool_manifest(
         (status = 200, description = "The connection, with any affirmation recorded", body = Connection),
         (status = 400, description = "`affirm_reach` was given but the connection has no reach gap to acknowledge", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "The caller controls the connection but does not own or maintain the receiving team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "The caller controls the connection but does not own or maintain the receiving team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such connection, or one the caller does not control (answered identically); or, for a system admin, no such receiving team", body = ErrorBody),
         (status = 409, description = "The connection declares a remote reach that must be affirmed; resend with `affirm_reach`", body = ErrorBody),
     )
@@ -280,7 +280,7 @@ pub async fn grant_reach(
     responses(
         (status = 200, description = "The connection", body = Connection),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such connection, or one the caller may not act on: the two are answered identically", body = ErrorBody),
     )
 )]

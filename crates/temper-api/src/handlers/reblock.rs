@@ -13,7 +13,7 @@
 use axum::extract::State;
 use axum::Json;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use crate::middleware::surface::RequestSurface;
 use temper_core::types::reblock::{ReblockReceipt, ReblockRequest, DEFAULT_REBLOCK_LIMIT};
 use temper_services::backend::DbBackend;
@@ -60,7 +60,7 @@ use temper_workflow::operations::{Backend, ReblockResources};
 )]
 pub async fn reblock(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Json(req): Json<ReblockRequest>,
 ) -> ApiResult<Json<ReblockReceipt>> {

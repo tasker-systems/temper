@@ -293,7 +293,7 @@ async fn a_read_grant_reads_facets_and_still_cannot_assert_one(pool: PgPool) {
 
     access_service::grant_capability(
         &pool,
-        &temper_services::test_support::authenticated_profile_for(&pool, admin).await,
+        &temper_services::test_support::human_principal_for(&pool, admin).await,
         &GrantCapabilityRequest {
             subject_table: "kb_resources".into(),
             subject_id: Uuid::from(resource),

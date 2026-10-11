@@ -1,7 +1,7 @@
 use axum::extract::State;
 use axum::Json;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use temper_core::types::api::{SearchParams, SearchResponse};
 use temper_core::types::ids::ProfileId;
 use temper_services::error::{ApiResult, ErrorBody};
@@ -37,7 +37,7 @@ use temper_services::state::AppState;
 /// Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe.
 pub async fn search(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Json(params): Json<SearchParams>,
 ) -> ApiResult<Json<SearchResponse>> {
     let response = temper_services::backend::substrate_read::search_select(

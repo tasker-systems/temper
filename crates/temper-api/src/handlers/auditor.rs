@@ -49,7 +49,7 @@ use axum::http::HeaderMap;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use crate::middleware::surface::RequestSurface;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult};
@@ -98,7 +98,7 @@ fn validate_cap(cap: Option<i64>) -> ApiResult<()> {
 )]
 pub async fn sweep(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Query(q): Query<SweepQuery>,
 ) -> ApiResult<Json<Vec<AuditSweepRow>>> {
     validate_cap(q.cap)?;
@@ -124,7 +124,7 @@ pub async fn sweep(
 )]
 pub async fn dispatch(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     headers: HeaderMap,
     Json(req): Json<AuditorDispatchTickRequest>,
@@ -194,7 +194,7 @@ pub async fn dispatch(
 )]
 pub async fn complete(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(cogmap): Path<Uuid>,
 ) -> ApiResult<Json<AuditorJobCompleteAck>> {

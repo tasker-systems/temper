@@ -4,7 +4,7 @@ use axum::Json;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::{Profile, ProfileAuthLink, ProfileUpdateRequest, ProfileWithEntitlements};
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::{AnyPrincipal, AuthUser};
 use temper_services::error::{ApiResult, ErrorBody};
 use temper_services::services::{access_service, profile_service};
 use temper_services::state::AppState;
@@ -23,7 +23,7 @@ use temper_services::state::AppState;
 )]
 pub async fn get(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
 ) -> ApiResult<Json<ProfileWithEntitlements>> {
     let profile =
         profile_service::get_by_id(&state.pool, ProfileId::from(auth.0.profile().id)).await?;
@@ -45,6 +45,7 @@ pub async fn get(
     request_body = ProfileUpdateRequest,
     security(("bearer_auth" = [])),
     responses(
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 200, description = "Updated profile", body = Profile),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
@@ -60,7 +61,7 @@ pub async fn update(
     // (synthesized on read), so there is nothing to persist.
     profile_service::update(
         &state.pool,
-        ProfileId::from(auth.0.profile().id),
+        &auth.0,
         req.display_name.as_deref(),
         req.preferences.as_ref(),
     )
@@ -75,6 +76,7 @@ pub async fn update(
     tag = "Profile",
     security(("bearer_auth" = [])),
     responses(
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 200, description = "Linked auth providers", body = Vec<ProfileAuthLink>),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
@@ -83,7 +85,7 @@ pub async fn list_auth_links(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<Json<Vec<ProfileAuthLink>>> {
-    profile_service::list_auth_links(&state.pool, ProfileId::from(auth.0.profile().id))
+    profile_service::list_auth_links(&state.pool, &auth.0)
         .await
         .map(Json)
 }
