@@ -103,7 +103,7 @@ pub async fn human_principal_for(pool: &PgPool, profile_id: Uuid) -> crate::auth
     {
         crate::auth::Caller::Human(human) => human,
         crate::auth::Caller::Machine(_) => {
-            panic!("profile {profile_id} is a machine; it cannot be minted a HumanPrincipal")
+            panic!("the profile is a machine; it cannot be minted a HumanPrincipal")
         }
     }
 }
@@ -135,7 +135,7 @@ pub async fn machine_principal_for(
         )
         .await
         .expect("read machine-ness"),
-        "profile {profile_id} has no machine client row; seed one before minting a MachinePrincipal"
+        "the profile has no machine client row; seed one before minting a MachinePrincipal"
     );
     let profile = crate::services::profile_service::get_by_id(pool, ProfileId::from(profile_id))
         .await
