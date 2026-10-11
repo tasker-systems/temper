@@ -16,7 +16,6 @@ Run: python3 .github/scripts/test-manifest-register.py
 """
 
 import os
-import runpy
 import shutil
 import subprocess
 import sys
