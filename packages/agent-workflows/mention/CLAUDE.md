@@ -16,7 +16,7 @@ only, `POST /internal/slack/mint` asks for that person's access token. The four 
 | ---------- | ---- | ------ |
 | `unlinked` | not called | ephemeral authorize-URL prompt, **drop** |
 | `linked` | `token` | **dispatch** — `return { auth }` |
-| `linked` | `refused` / `not_vaulted` | ephemeral "no stored credential, retrying won't fix it, re-link", **drop** |
+| `linked` | `refused` / `not_vaulted` | ephemeral "no working stored credential, retrying won't fix it, re-link", **drop** — includes an **expired** grant (below) |
 | `linked` | `refused` / `standing` | ephemeral "an admin has to approve your access" — **never** re-link, **drop** |
 | `linked` | `refused` / `not_linked` | ephemeral "mention me again for a fresh link" (the link vanished mid-mention), **drop** |
 
@@ -37,6 +37,18 @@ only, `POST /internal/slack/mint` asks for that person's access token. The four 
 > is workspace-isolated and cannot import the ts-rs export in temper-ui. Emitting it here and
 > gating the drift is Task 8/9 of the linked-identity plan. Until then a `never` binding at each
 > switch is the only thing that notices a new Rust variant, and it only notices at compile time.
+
+**An expired grant is `not_vaulted`, not an error.** The vaulted refresh token has a lifetime at
+the IdP (Auth0's inactivity/absolute expiry; the AS's `AS_REFRESH_TTL_SECONDS`), so a user who goes
+long enough between mentions comes back to a dead grant. The server recognises the IdP's
+`invalid_grant` refusal (`oauth_client::refresh_grant` → `RefreshOutcome::GrantRejected`), deletes
+the dead vault row under the mint's row lock, and answers `refused` / `not_vaulted` — whose reply is
+the true one: retrying won't fix it, reconnect. Before that it surfaced as a **401 from the mint**,
+which `requestMintedToken` throws on, which lands in the channel's catch-all "try again in a moment"
+— a retry that could never succeed. Any *other* IdP refusal (`invalid_client`, a 5xx) is still a
+401: those are deployment or transient faults and must not discard a user's grant. So a mint 401 in
+this agent's log now means a signature/secret mismatch or an IdP-side outage — check temper-api's
+log for which.
 
 **The mint is PRE-FLIGHTED in `onAppMention`, deliberately.** The connection's `getToken` mints
 too, so a successful turn mints twice — that is cheap on purpose: the server hands back the

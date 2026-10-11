@@ -221,10 +221,13 @@ pub async fn store_grant(
 /// rotation is an IdP side effect that is not part of this transaction, so if the process dies or
 /// the COMMIT fails AFTER Auth0 returns a rotated RT but BEFORE the `UPDATE` commits, the row keeps
 /// the now-dead RT and the next mint trips reuse-detection, bricking the grant until the user
-/// re-links. No row lock can make an external HTTP effect atomic with a local commit. Two
-/// mitigations belong at the deployment layer, not here: enable Auth0 refresh-token rotation
-/// **leeway** (a grace window that tolerates a brief RT reuse), and treat a bricked grant as a
-/// re-link prompt. See the T3 spec's "grant vault" section.
+/// re-links. No row lock can make an external HTTP effect atomic with a local commit. The
+/// mitigation belongs at the deployment layer: enable Auth0 refresh-token rotation **leeway** (a
+/// grace window that tolerates a brief RT reuse). The recovery is re-link, and that part IS here: a
+/// grant the IdP refuses as `invalid_grant` — bricked this way, or simply aged past the IdP's
+/// refresh-token lifetime — has its dead row dropped and reports [`LinkRefusal::NotVaulted`], whose
+/// reply tells the user to reconnect, rather than an error the agent can only call transient. See
+/// the T3 spec's "grant vault" section.
 ///
 /// A principal whose standing does not admit them mints nothing — the decision is delegated to
 /// [`super::slack_link_state::resolve`] (which calls `temper_principal::admit`), so a `deactivated`
@@ -332,7 +335,34 @@ pub async fn mint_access_token(
         rt_ciphertext,
         &aad(slack_principal_id, FIELD_RT),
     )?;
-    let tokens = oauth_client::refresh_grant(token_url, client_id, &refresh_token).await?;
+    let tokens = match oauth_client::refresh_grant(token_url, client_id, &refresh_token).await? {
+        oauth_client::RefreshOutcome::Refreshed(tokens) => tokens,
+        oauth_client::RefreshOutcome::GrantRejected => {
+            // The IdP says the grant family is dead: the RT aged out (the common case — a user who
+            // has not mentioned @temper for longer than the IdP's refresh-token lifetime), was
+            // rotated out by the dual-write window above, or was revoked. Nothing retries into a
+            // token, and the only remedy is a fresh consent — which is exactly what `NotVaulted`
+            // already means to the agent ("retrying won't fix it; reconnect").
+            //
+            // The row is DELETED rather than left in place, under the lock this transaction
+            // already holds, so the vault keeps meaning "holds a grant that can mint":
+            //   - leaving it would re-present the dead RT to the IdP on every mention (each one a
+            //     fresh reuse-detection signal) and keep `vaulted` true while every mint refuses;
+            //   - there is nothing to revoke — the IdP has just told us the grant is not live —
+            //     so the revoke-before-delete ordering disconnect needs does not apply;
+            //   - the link row is untouched, so the user is linked-not-vaulted, a state this
+            //     ladder already names and the agent already has a true reply for.
+            // Not an error: an `Err` here is a 401 to the agent, which can only say "try again".
+            sqlx::query!(
+                "DELETE FROM kb_slack_grant_vault WHERE slack_principal_id = $1",
+                slack_principal_id,
+            )
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            return Ok(MintOutcome::Refused(LinkRefusal::NotVaulted));
+        }
+    };
 
     // Auth0 rotates, so the response's RT supersedes the spent one. A provider that does not
     // rotate omits it (RFC 6749 §6: keep the existing RT); keep the one we hold in that case
