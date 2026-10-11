@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! The statement reader both erasure fences bind with: `resource_erasure_surface_test.rs` against
 //! the resource act's body, `personal_data_surface_test.rs` against the person act's. One copy, so
 //! the two fences cannot disagree about what an erasing statement is.
@@ -191,12 +190,6 @@ pub fn assignments<'a>(t: &'a [String], key: &str) -> Vec<&'a [String]> {
         }
     }
     out
-}
-
-/// Whether `expr` reads `column`, bare or qualified: an assignment of the column's own value.
-pub fn reads_column(expr: &[String], column: &str) -> bool {
-    expr.iter()
-        .any(|tok| tok == column || tok.rsplit_once('.').is_some_and(|(_, col)| col == column))
 }
 
 pub fn deletes_from(t: &[String], table: &str) -> bool {

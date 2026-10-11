@@ -36,9 +36,7 @@ mod erasure_binding;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use erasure_binding::{
-    assignments, deletes_from, is_erasure_value, is_identity, reads_column, tokens,
-};
+use erasure_binding::{assignments, deletes_from, is_erasure_value, is_identity, tokens};
 use sqlx::PgPool;
 
 /// The declaration half. Read from the shipped file so the manifest and this test cannot drift.
@@ -271,6 +269,12 @@ async fn redaction_body(pool: &PgPool) -> String {
     .fetch_one(pool)
     .await
     .expect("read the D2 function's live definition")
+}
+
+/// Whether `expr` reads `column`, bare or qualified: an assignment of the column's own value.
+fn reads_column(expr: &[String], column: &str) -> bool {
+    expr.iter()
+        .any(|tok| tok == column || tok.rsplit_once('.').is_some_and(|(_, col)| col == column))
 }
 
 /// Whether `body` does what `disposition` claims for `key`.
