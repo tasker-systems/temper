@@ -4288,9 +4288,7 @@ impl Backend for DbBackend {
         cmd: StewardDispatchTick,
     ) -> Result<CommandOutput<Vec<temper_core::types::workflow_job::ClaimedJob>>, TemperError> {
         use crate::services::{steward_service, workflow_job_service};
-        use temper_core::types::workflow_job::{
-            DEFAULT_STEWARD_DISPATCH_CAP, DEFAULT_STEWARD_LEASE_SECONDS,
-        };
+        use temper_core::types::workflow_job::{clamp_steward_cap, DEFAULT_STEWARD_LEASE_SECONDS};
 
         // 1. Reap stale leases (crashed runs → retry/dead) before claiming.
         workflow_job_service::reap(&self.pool, "lease expired").await?;
@@ -4318,7 +4316,9 @@ impl Backend for DbBackend {
         //    `self.profile_id` also scopes the claim, exactly as it scopes step 2's sweep — see
         //    `workflow_job_service::claim`'s doc comment for why passing the same principal here
         //    cannot claim less than this tick just enqueued.
-        let cap = cmd.cap.unwrap_or(DEFAULT_STEWARD_DISPATCH_CAP) as i32;
+        //    `clamp_steward_cap` bounds the claim to `[1, MAX_STEWARD_DISPATCH_CAP]`; a bare `as i32`
+        //    would wrap a large `cap` negative and reach Postgres as a negative LIMIT.
+        let cap = clamp_steward_cap(cmd.cap);
         let claimed = workflow_job_service::claim(
             &self.pool,
             Persona::Steward.as_str(),

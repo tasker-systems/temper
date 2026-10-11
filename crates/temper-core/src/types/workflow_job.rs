@@ -17,6 +17,20 @@ pub const DEFAULT_STEWARD_LEASE_SECONDS: i32 = 600;
 /// most-drifted-first, so the cap is meaningful; richer prioritization is deferred.
 pub const DEFAULT_STEWARD_DISPATCH_CAP: i64 = 10;
 
+/// The ceiling on a caller-supplied steward `cap`. Each claimed job fans out to one agent session,
+/// so this bounds how many sessions ONE tick may start. Ten times the default, the same ratio as
+/// [`MAX_AUDITOR_DISPATCH_CAP`]: a backlog after an outage drains in a few ticks, and no request
+/// can claim every pending job at once.
+pub const MAX_STEWARD_DISPATCH_CAP: i64 = 100;
+
+/// Resolve a caller-supplied steward `cap` into the `int` the claim takes. The same clamp as
+/// [`clamp_auditor_cap`], for the same reason: `cap.unwrap_or(DEFAULT) as i32` wraps, so
+/// `{"cap": 2147483648}` reached Postgres as `LIMIT -2147483648` and answered with a 500.
+pub fn clamp_steward_cap(cap: Option<i64>) -> i32 {
+    cap.unwrap_or(DEFAULT_STEWARD_DISPATCH_CAP)
+        .clamp(1, MAX_STEWARD_DISPATCH_CAP) as i32
+}
+
 /// Lease for a claimed embed job (issue #299). Like the steward lease it MUST exceed the Vercel
 /// function timeout (300s) so a genuinely-running embed is never reaped mid-flight.
 pub const DEFAULT_EMBED_LEASE_SECONDS: i32 = 600;
@@ -348,6 +362,27 @@ mod cap_tests {
         assert_eq!(clamp_auditor_cap(Some(7)), 7);
         assert_eq!(clamp_auditor_cap(Some(500)), 500);
         assert_eq!(clamp_auditor_cap(None), DEFAULT_AUDITOR_DISPATCH_CAP as i32);
+    }
+
+    /// The steward's twin of the wrap: before its clamp, the steward tick still cast with `as i32`.
+    #[test]
+    fn a_steward_cap_past_i32_is_clamped_to_the_ceiling_not_wrapped() {
+        assert_eq!(clamp_steward_cap(Some(2_147_483_648)), 100);
+        assert_eq!(clamp_steward_cap(Some(i64::MAX)), 100);
+    }
+
+    #[test]
+    fn a_non_positive_steward_cap_is_clamped_to_one() {
+        assert_eq!(clamp_steward_cap(Some(-1)), 1);
+        assert_eq!(clamp_steward_cap(Some(0)), 1);
+        assert_eq!(clamp_steward_cap(Some(i64::MIN)), 1);
+    }
+
+    #[test]
+    fn an_in_range_steward_cap_and_the_default_pass_through() {
+        assert_eq!(clamp_steward_cap(Some(7)), 7);
+        assert_eq!(clamp_steward_cap(Some(100)), 100);
+        assert_eq!(clamp_steward_cap(None), DEFAULT_STEWARD_DISPATCH_CAP as i32);
     }
 }
 

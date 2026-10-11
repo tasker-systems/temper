@@ -150,7 +150,10 @@ pub async fn candidates(
     operation_id = "steward_dispatch",
     security(("bearer_auth" = [])),
     request_body = DispatchTickRequest,
-    responses((status = 200, description = "Jobs claimed for fan-out", body = DispatchTickResponse))
+    responses(
+        (status = 200, description = "Jobs claimed for fan-out", body = DispatchTickResponse),
+        (status = 400, description = "cap below 1"),
+    )
 )]
 pub async fn dispatch(
     State(state): State<AppState>,
@@ -188,6 +191,10 @@ pub async fn dispatch(
             None
         }
     });
+
+    // The same two layers as the auditor tick: a non-positive `cap` is the caller's fault and a 400
+    // here; the service clamps whatever reaches it into `[1, MAX_STEWARD_DISPATCH_CAP]`.
+    super::auditor::validate_cap(req.cap)?;
 
     let cmd = StewardDispatchTick {
         threshold: req.threshold,

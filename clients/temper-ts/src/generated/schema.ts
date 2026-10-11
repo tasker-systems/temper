@@ -20112,6 +20112,13 @@ export interface operations {
                     "application/json": components["schemas"]["DispatchTickResponse"];
                 };
             };
+            /** @description cap below 1 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     steward_sweep: {
