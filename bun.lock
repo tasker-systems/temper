@@ -5,8 +5,8 @@
     "": {
       "devDependencies": {
         "@vercel/blob": "^2",
-        "onnxruntime-common": "1.30.0",
-        "onnxruntime-node": "1.30.0",
+        "onnxruntime-common": "1.21.0",
+        "onnxruntime-node": "1.21.0",
         "typescript": "^5.8",
       },
     },
@@ -21,8 +21,8 @@
         "@node-saml/node-saml": "^5",
         "@vercel/blob": "^2",
         "jose": "^6",
-        "onnxruntime-common": "1.30.0",
-        "onnxruntime-node": "1.30.0",
+        "onnxruntime-common": "1.21.0",
+        "onnxruntime-node": "1.21.0",
         "pino": "^10.4.0",
         "uuidv7": "^1.2.1",
         "workflow": "^0",
