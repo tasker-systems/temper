@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT EXISTS(SELECT 1 FROM kb_teams WHERE slug = $1)",
+  "query": "SELECT personal_of IS NOT NULL AS \"personal!\" FROM kb_teams WHERE slug = $1",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "exists",
+        "name": "personal!",
         "type_info": "Bool"
       }
     ],
@@ -18,5 +18,5 @@
       null
     ]
   },
-  "hash": "0b3c19cfaa4bcaa8b625445f0652ba43538c57ca1813487d28f80f414dcaeded"
+  "hash": "eeeed56e9fc7ca66d0fb292a8c4c1f7c677c6413954cd2a7884715cb350e401c"
 }

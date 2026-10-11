@@ -1,0 +1,21 @@
+title    = "The gating team can no longer be someone's personal team"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "cli-stdout", "schema"]
+status   = "signal-only"
+body = '''
+`PATCH /api/access/admin/settings` (and `temper admin settings --gating-team`) now answers a
+`gating_team_slug` naming a personal team with `400`, saying why. It used to accept it, and erasing
+that person would then erase every resource in the gating team's contexts. Migration
+`20261025100000` holds the same rule in the database for the writers outside that door — the
+operator root-step template and hand-written SQL, refused as a check violation — on both tables: a
+changed gating slug naming a team that carries `personal_of`, and such a team arriving at the gating
+slug. Both triggers take one transaction advisory lock (`_gating_team_lock()`), so concurrent writes
+on the two tables cannot commit the combination together. Genesis skips the gating slug the way it
+skips a taken one, so a new profile whose `personal-<handle>` is the gating slug gets
+`personal-<handle>-N` instead of a failed sign-up. The migration refuses to apply to a deployment
+already in the refused state, naming the slug. Request and response shapes are unchanged, and the
+`400` was already documented. Who observes: an admin or operator pointing the gating team at a
+personal team; operators reading `kb_teams`. Release relevance: additive (the triggers and lock
+helper), behavioral (the refusal, genesis's skip).
+'''

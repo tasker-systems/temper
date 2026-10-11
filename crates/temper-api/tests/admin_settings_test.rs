@@ -125,6 +125,40 @@ async fn update_settings_rejects_nonexistent_gating_team(pool: sqlx::PgPool) {
     ));
 }
 
+/// Person erasure erases everything in the subject's personal team, so a personal team as the
+/// gating team would let one erasure take the instance's org-wide content with it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn update_settings_refuses_a_personal_team_as_gating_team(pool: sqlx::PgPool) {
+    reset_settings(&pool).await;
+    let admin = admin_proof(&pool).await;
+    let profile = common::fixtures::create_test_profile(&pool, "personal@test.example.com").await;
+    let personal_slug: String =
+        sqlx::query_scalar("SELECT slug FROM kb_teams WHERE personal_of = $1")
+            .bind(profile)
+            .fetch_one(&pool)
+            .await
+            .expect("genesis made the profile a personal team");
+
+    let req = UpdateSettingsRequest {
+        gating_team_slug: Some(personal_slug.clone()),
+        ..Default::default()
+    };
+    let err = access_service::update_system_settings(&pool, &admin, &req)
+        .await
+        .expect_err("a personal team must be refused as the gating team");
+    let temper_services::error::ApiError::BadRequest(msg) = err else {
+        panic!("expected BadRequest, got {err:?}");
+    };
+    assert!(msg.contains("personal team"), "the refusal says why: {msg}");
+
+    let slug: Option<String> =
+        sqlx::query_scalar("SELECT gating_team_slug FROM kb_system_settings WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .expect("read settings");
+    assert_eq!(slug, None, "the refused write changed nothing");
+}
+
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn promote_admin_rejects_nonexistent_team(pool: sqlx::PgPool) {
     reset_settings(&pool).await;

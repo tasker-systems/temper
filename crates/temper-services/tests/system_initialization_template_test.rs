@@ -71,3 +71,51 @@ async fn the_root_step_template_bootstraps_a_first_admin(pool: PgPool) {
 async fn the_root_step_template_creates_a_custom_gating_team(pool: PgPool) {
     bootstraps_a_first_admin(&pool, "acme-gate").await;
 }
+
+/// The first admin's own personal team is the slug an operator is most likely to paste by mistake.
+/// The template refuses it, and its one transaction leaves neither the slug nor the admin behind.
+#[sqlx::test(migrations = "../../migrations")]
+async fn the_root_step_template_refuses_a_personal_gating_team(pool: PgPool) {
+    let admin: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_profiles (handle, display_name) VALUES ('first-admin', 'First Admin') \
+         RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the first admin has signed in once");
+    let personal: String = sqlx::query_scalar("SELECT slug FROM kb_teams WHERE personal_of = $1")
+        .bind(admin)
+        .fetch_one(&pool)
+        .await
+        .expect("genesis made the admin a personal team");
+    let before: Option<String> =
+        sqlx::query_scalar("SELECT gating_team_slug FROM kb_system_settings WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .expect("read settings");
+
+    // One connection, rolled back after: the failure lands inside the template's own BEGIN, and a
+    // connection left in an aborted transaction must not go back to the pool.
+    let mut conn = pool.acquire().await.expect("connection");
+    let err = sqlx::raw_sql(&with_variables(&personal, admin))
+        .execute(&mut *conn)
+        .await
+        .expect_err("a personal team must be refused as the gating team");
+    let _ = sqlx::raw_sql("ROLLBACK").execute(&mut *conn).await;
+    drop(conn);
+    assert!(
+        err.to_string().contains("personal team"),
+        "the refusal says why: {err}"
+    );
+
+    let (slug, governs): (Option<String>, bool) = sqlx::query_as(
+        "SELECT (SELECT gating_team_slug FROM kb_system_settings WHERE id = 1), \
+                is_system_admin($1)",
+    )
+    .bind(admin)
+    .fetch_one(&pool)
+    .await
+    .expect("read the outcome");
+    assert_eq!(slug, before, "the gating slug is unchanged");
+    assert!(!governs, "the refused root step promoted nobody");
+}
