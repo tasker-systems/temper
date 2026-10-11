@@ -46,6 +46,16 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 pr: self
 classes: additive, behavioral
 surfaces: clients, internal
+- **Bun-workspace minor/patch dependency refresh (temper-cloud, temper-ui)**
+  Minor and patch bumps across the root bun workspace — among them svelte 5.57, tailwindcss 4.3,
+  marked 18.1, zod 4.6, jose, pino, docx, xml-crypto, @vercel/functions, @huggingface/hub — with
+  onnxruntime held at the version @huggingface/transformers pins. No route, response shape, or
+  client surface changes; the source edits are Biome 2.5 formatting, import order, and two test
+  assertions. Who observes: temper-ui users, only if an upstream minor changed rendering or
+  validation behind an unchanged API. Release relevance: behavioral, dependency-only.
+pr: self
+classes: behavioral
+surfaces: internal
 - **A machine principal reaches only content and workflow; every other act refuses it with `403`**
   A machine credential (a profile registered as a machine client, revoked or not) may still act on
   resources, edges, properties, contexts, cognitive maps, blobs, data artifacts, schemas, search
