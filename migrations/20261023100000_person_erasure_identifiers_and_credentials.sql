@@ -153,6 +153,13 @@ COMMENT ON FUNCTION principal_may_refresh IS
 -- or whose chain is now ended, is not inserted: the AS reads no row back and issues no refresh
 -- token, its existing refusal path (issueTokenPair). Unbound and first-of-chain rows lock what
 -- they have.
+--
+-- The trigger runs on every rotation, so its predecessor read must be an index probe. The only
+-- chain_id index covers live rows, and the predecessor was retired by the rotation's first
+-- statement, so without this one the read is a sequential scan of the table on every refresh.
+CREATE INDEX idx_kb_oauth_refresh_tokens_chain
+    ON kb_oauth_refresh_tokens (chain_id, id DESC);
+
 CREATE FUNCTION kb_oauth_refresh_tokens_refuse_erased()
 RETURNS trigger
 LANGUAGE plpgsql
