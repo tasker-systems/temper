@@ -3621,6 +3621,7 @@ class ContextsApi:
             '403': None,
             '404': None,
             '409': None,
+            '410': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -3694,6 +3695,7 @@ class ContextsApi:
             '403': None,
             '404': None,
             '409': None,
+            '410': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -3767,6 +3769,7 @@ class ContextsApi:
             '403': None,
             '404': None,
             '409': None,
+            '410': None,
         }
         response_data = self.api_client.call_api(
             *_param,

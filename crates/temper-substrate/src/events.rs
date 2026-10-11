@@ -52,6 +52,10 @@ pub enum EventKind {
     /// The reverse of [`EventKind::ContextRetired`]: `is_active` back to true, slug re-derived.
     /// Fires from `context_restore`.
     ContextRestored,
+    /// An estate context erased by the person act (20261022100000, R7): retired, its name and slug
+    /// replaced by the sentinels the payload carries. Fires only from `principal_erasure_execute`;
+    /// `_project_context_erased` is the pure re-apply replay calls.
+    ContextErased,
     RelationshipAsserted,
     RelationshipRetyped,
     RelationshipReweighted,
@@ -218,6 +222,7 @@ impl EventKind {
             EventKind::ContextRenamed => "context_renamed",
             EventKind::ContextRetired => "context_retired",
             EventKind::ContextRestored => "context_restored",
+            EventKind::ContextErased => "context_erased",
             EventKind::RelationshipAsserted => "relationship_asserted",
             EventKind::RelationshipRetyped => "relationship_retyped",
             EventKind::RelationshipReweighted => "relationship_reweighted",
@@ -278,6 +283,7 @@ impl EventKind {
             "context_renamed" => EventKind::ContextRenamed,
             "context_retired" => EventKind::ContextRetired,
             "context_restored" => EventKind::ContextRestored,
+            "context_erased" => EventKind::ContextErased,
             "relationship_asserted" => EventKind::RelationshipAsserted,
             "relationship_retyped" => EventKind::RelationshipRetyped,
             "relationship_reweighted" => EventKind::RelationshipReweighted,
