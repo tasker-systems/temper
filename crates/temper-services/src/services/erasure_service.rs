@@ -213,7 +213,7 @@ pub async fn execute_erasure(
     for e in &wire.resource_erasures {
         queue_region_settling(pool, ResourceId::from(e.resource), emitter).await;
     }
-    let estate_stragglers = estate_stragglers(pool, &wire.estate_contexts).await;
+    let estate_stragglers = estate_stragglers(pool, subject.uuid(), &wire.estate_contexts).await;
 
     // The per-row verdicts live in the payload's targets; the strikes are re-matched out of
     // them so the typed outcome can carry what a fence needs without re-deriving from prose.
@@ -243,12 +243,20 @@ pub async fn execute_erasure(
 
 /// Live resources and live blobs still homed in the estate contexts the act recorded, charters
 /// aside: one created there after the act's plan read the estate and committed before the act
-/// retired the context (D9). Ruled Q3 (2026-10-10): reported, not locked against. Re-running the
-/// act erases them. A failed read is logged and answered `None`, never zero: the act has
+/// retired the context (D9). Plus every context of the subject's estate, as it stands now, with
+/// no `context_erased`: one created in their `@me` or personal team while the act ran (R7).
+/// Ruled Q3 (2026-10-10): reported, not locked against. Re-running the act erases them. A failed read is logged and answered `None`, never zero: the act has
 /// committed, so it must not fail, and an unknown count must not read as a clean estate.
-async fn estate_stragglers(pool: &PgPool, estate: &[Uuid]) -> Option<u32> {
+async fn estate_stragglers(pool: &PgPool, subject: Uuid, estate: &[Uuid]) -> Option<u32> {
     let count = sqlx::query_scalar!(
         r#"SELECT (SELECT count(*)
+                     FROM _erasure_estate_contexts($2) g
+                    WHERE NOT EXISTS (SELECT 1 FROM kb_events e
+                                        JOIN kb_event_types t ON t.id = e.event_type_id
+                                       WHERE t.name = 'context_erased'
+                                         AND e.producing_anchor_table = 'kb_contexts'
+                                         AND e.producing_anchor_id = g))
+                + (SELECT count(*)
                      FROM kb_resource_homes h
                      JOIN kb_resources r ON r.id = h.resource_id
                     WHERE h.anchor_table = 'kb_contexts'
@@ -261,6 +269,7 @@ async fn estate_stragglers(pool: &PgPool, estate: &[Uuid]) -> Option<u32> {
                       AND b.home_id = ANY($1)
                       AND b.content_type IS NOT NULL) AS "n!""#,
         estate,
+        subject,
     )
     .fetch_one(pool)
     .await;
@@ -1091,7 +1100,7 @@ mod tests {
             "the other home's search vector survives"
         );
 
-        // CUSTODY CLOSURE (arm 13): the subject's governed context is retired — the
+        // CUSTODY CLOSURE (context_erased since 20261022100000): the subject's governed context is retired — the
         // subject-liveness floor (20260902000010) then denies every live principal's access
         // into the estate, grants and all — while the other principal's context stays live.
         let (subject_ctx_active,): (bool,) =
@@ -1653,6 +1662,7 @@ mod tests {
                         | "estate_contexts"
                         | "resource_erasures"
                         | "charters_held"
+                        | "redacted_fields"
                 ),
                 "unexpected payload key {key:?} — the payload must never carry a trail join-key shape"
             );
@@ -1684,6 +1694,9 @@ mod tests {
             "owner_profile_id",
             "edge_id",
             "blob_id",
+            // A context's own events key it `context_id`; the record names the estate's context
+            // events in redacted_fields by `event`, never by that key.
+            "context_id",
         ] {
             assert!(
                 !payload_str.contains(forbidden),

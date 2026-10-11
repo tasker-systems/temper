@@ -176,6 +176,11 @@ pub async fn get_visible(
 /// the read refusals above rather than a fourth copy of the same defence.
 pub(crate) const CONTEXT_REFUSAL: &str = "context not found or not readable";
 
+/// The refusal for restoring a context the person-erasure act erased (migration
+/// `20261022100000`, R7). A 410, not a 404: the caller administers the context (the gate has
+/// already passed), so its existence is no secret from them, and it is gone for good.
+const CONTEXT_ERASED: &str = "context was erased with its owner and cannot be restored";
+
 /// The refusal the two **self-namespace** arms render — `@me/slug` and `+team/slug`, where the
 /// caller either owns the namespace or is a member of it, so echoing the slug they supplied
 /// discloses nothing. [`CONTEXT_REFUSAL`]'s doc records that exemption for `@me`.
@@ -1333,6 +1338,10 @@ pub async fn retire(
 /// **Auth before writes**, the same gate as [`retire`]: `ContextAdminAuthority` — own the
 /// context, or manage its owning team, or be an instance administrator.
 ///
+/// **An erased context is refused with 410**, whoever asks: the person-erasure act erased it,
+/// and erased stays erased. Checked here so the caller gets the refusal before any slug is
+/// derived; `context_restore` refuses it again in its own transaction (SQLSTATE `TE001`).
+///
 /// **Fetching `cur` here is the subtle part.** The context is retired, so anything that reads
 /// through the read predicate will not find it. This copies `retire`'s own `cur` fetch
 /// verbatim (`:985-996`) — it is already `is_active`-BLIND because it reads `kb_contexts` by
@@ -1358,6 +1367,21 @@ pub async fn restore(
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| ApiError::NotFound(CONTEXT_REFUSAL.to_string()))?;
+
+    let erased = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM kb_events e
+                 JOIN kb_event_types t ON t.id = e.event_type_id
+                WHERE t.name = 'context_erased'
+                  AND e.producing_anchor_table = 'kb_contexts'
+                  AND e.producing_anchor_id = $1) AS "erased!""#,
+        context_id,
+    )
+    .fetch_one(pool)
+    .await?;
+    if erased {
+        return Err(ApiError::Gone(CONTEXT_ERASED.to_string()));
+    }
 
     // Re-derived from the untouched name, not the mangled retired slug — `next_unique_context_slug`
     // is `is_active`-BLIND for the same reason `retire`'s call is: the freed-then-reclaimed slug
@@ -1467,6 +1491,7 @@ fn map_context_write_err(e: anyhow::Error) -> ApiError {
             Some("42501") => return ApiError::Forbidden,
             Some("23505") => return ApiError::Conflict(CONTEXT_SLUG_TAKEN.to_string()),
             Some("P0002") => return ApiError::NotFound(CONTEXT_REFUSAL.to_string()),
+            Some("TE001") => return ApiError::Gone(CONTEXT_ERASED.to_string()),
             _ => {}
         }
     }
@@ -1554,6 +1579,17 @@ mod write_err_mapper_tests {
         match map_context_write_err(substrate_err("P0002")) {
             ApiError::NotFound(msg) => assert_eq!(msg, CONTEXT_REFUSAL),
             other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    /// `context_restore`'s refusal of an erased context, lost to the race the service's own
+    /// pre-check cannot close (the act committed between the two), renders the same 410 the
+    /// pre-check does.
+    #[test]
+    fn an_erased_context_refusal_renders_gone() {
+        match map_context_write_err(substrate_err("TE001")) {
+            ApiError::Gone(msg) => assert_eq!(msg, CONTEXT_ERASED),
+            other => panic!("expected Gone, got {other:?}"),
         }
     }
 

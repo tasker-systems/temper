@@ -6146,9 +6146,10 @@ export interface components {
             blob_strikes: components["schemas"]["BlobStrikeView"][];
             /**
              * Format: int32
-             * @description Live resources and blobs still homed in the estate after the act committed: created
-             *     there while the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which
-             *     erases them. Absent when the count could not be read: unknown, never zero.
+             * @description Live resources and blobs still homed in the estate after the act committed, and
+             *     contexts of the estate not yet erased: created there while the act ran (ruled Q3,
+             *     2026-10-10). Non-zero means run the act again, which erases them. Absent when the count
+             *     could not be read: unknown, never zero.
              */
             estate_stragglers?: number | null;
             /** Format: uuid */
@@ -15428,6 +15429,13 @@ export interface operations {
             };
             /** @description The restored address collided under a concurrent write */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The context was erased with its owner and cannot be restored */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };

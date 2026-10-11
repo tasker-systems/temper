@@ -473,9 +473,10 @@ pub enum ErasureExecuteResponse {
         /// The resource erasures the act ran over the estate, in the order it ran them.
         #[serde(default)]
         resource_erasures: Vec<EstateResourceErasure>,
-        /// Live resources and blobs still homed in the estate after the act committed: created
-        /// there while the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which
-        /// erases them. Absent when the count could not be read: unknown, never zero.
+        /// Live resources and blobs still homed in the estate after the act committed, and
+        /// contexts of the estate not yet erased: created there while the act ran (ruled Q3,
+        /// 2026-10-10). Non-zero means run the act again, which erases them. Absent when the count
+        /// could not be read: unknown, never zero.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         estate_stragglers: Option<u32>,
     },

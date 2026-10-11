@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM kb_events e\n                 JOIN kb_event_types t ON t.id = e.event_type_id\n                WHERE t.name = 'context_erased'\n                  AND e.producing_anchor_table = 'kb_contexts'\n                  AND e.producing_anchor_id = $1) AS \"erased!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "erased!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "78a152cdfc18f7777d83045512bbd4d0fe629a8c312214b8de1748d1045cde15"
+}

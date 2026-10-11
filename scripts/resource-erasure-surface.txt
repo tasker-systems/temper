@@ -273,6 +273,7 @@ resource_scrubbed:/redacted_fields/*/paths/*              | structural          
 principal_erased:/targets/*/target                        | structural               | the principal act's record
 principal_erased:/targets/*/outcome                       | structural               | the principal act's record
 principal_erased:/redacted_hashes/*                       | structural               | hashes
+principal_erased:/redacted_fields/*/paths/*               | structural               | ledger paths the person act rewrote; paths only, never values
 principal_erasure_refused:/detail                         | structural               | fixed text
 
 # ── out of scope: not the resource's text ───────────────────────────────────────────────────
@@ -309,17 +310,20 @@ slack_principal_disconnected:/slack_principal_id          | structural          
 subscription_delivery_disposed:/disposition               | structural               | disposition vocabulary
 subscription_delivery_disposed:/rationale                 | out-of-scope             | another principal's judgment of a webhook (Q1); listed by event (arm 3) and by delivery (arm 5)
 context_renamed:*                                         | permissive               | fields from payloads.rs ContextRenamed
-context_renamed:/from_name                                | out-of-scope             | a context's name, its owner's; not R's text
-context_renamed:/to_name                                  | out-of-scope             | a context's name, its owner's; not R's text
-context_renamed:/from_slug                                | out-of-scope             | a context's slug, its owner's; not R's text
-context_renamed:/to_slug                                  | out-of-scope             | a context's slug, its owner's; not R's text
+context_renamed:/from_name                                | out-of-scope             | a context's name, its owner's; not R's text; the person act rewrites it (20261022100000)
+context_renamed:/to_name                                  | out-of-scope             | a context's name, its owner's; not R's text; the person act rewrites it (20261022100000)
+context_renamed:/from_slug                                | out-of-scope             | a context's slug, its owner's; not R's text; the person act rewrites it (20261022100000)
+context_renamed:/to_slug                                  | out-of-scope             | a context's slug, its owner's; not R's text; the person act rewrites it (20261022100000)
 context_retired:*                                         | permissive               | fields from payloads.rs ContextRetired
-context_retired:/from_slug                                | out-of-scope             | a context's slug, its owner's; not R's text
-context_retired:/to_slug                                  | out-of-scope             | a context's slug, its owner's; not R's text
+context_retired:/from_slug                                | out-of-scope             | a context's slug, its owner's; not R's text; the person act rewrites it (20261022100000)
+context_retired:/to_slug                                  | out-of-scope             | a context's slug, its owner's; not R's text; the person act rewrites it (20261022100000)
 context_restored:*                                        | permissive               | fields from payloads.rs ContextRestored
-context_restored:/from_slug                               | out-of-scope             | a context's slug, its owner's; not R's text
-context_restored:/to_slug                                 | out-of-scope             | a context's slug, its owner's; not R's text
+context_restored:/from_slug                               | out-of-scope             | a context's slug, its owner's; not R's text; the person act rewrites it (20261022100000)
+context_restored:/to_slug                                 | out-of-scope             | a context's slug, its owner's; not R's text; the person act rewrites it (20261022100000)
 context_reassigned:*                                      | permissive               | fields from payloads.rs ContextReassigned
+context_erased:*                                          | permissive               | written only by principal_erasure_execute (20261022100000): context_id and the two sentinels
+context_erased:/to_name                                   | structural               | the sentinel `erased`, never a name
+context_erased:/to_slug                                   | structural               | the sentinel `erased-<context id>`, never a slug
 context_reassigned:/from_owner_table                      | structural               | an owner table name
 context_reassigned:/to_owner_table                        | structural               | an owner table name
 delegated_launch:*                                        | permissive               | fields from payloads.rs DelegatedLaunch
