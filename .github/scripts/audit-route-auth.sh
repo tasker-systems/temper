@@ -628,21 +628,64 @@ fi
 # plainly, nothing mounts through `.route(`/`.nest(`/`.fallback(`, and a `.merge(` takes only another
 # auth-covered group.
 GROUP_FILES=""
+# The route scan reads routes/*.rs only; a module nested beneath it would be read by nothing.
+if [ -d "$ROUTES" ]; then
+  NESTED="$(find "$ROUTES" -mindepth 2 -name '*.rs' | sort)"
+  if [[ -n "$NESTED" ]]; then
+    echo "audit-route-auth: FAIL — a Rust file nested under the routes module, which no check reads:" >&2
+    printf '  %s\n' $NESTED >&2
+    fail=1
+  fi
+fi
 for f in $ROUTES_FILES; do
   if grep -Eq "fn (${AUTH_COVERED})\(" "$f"; then GROUP_FILES="${GROUP_FILES} ${f}"; fi
 done
 UNNAMED_MOUNTS=""
 for f in $GROUP_FILES; do
-  # The source before the file's test module (a `#[cfg(test)]` on its own line followed by a `mod`;
-  # a test-only `use` or item does not end the scan), comments stripped so prose cannot match or
-  # mask a mount, flattened so a multi-line `routes!(` or `use` is one match.
+  # The file's source with comments and test modules removed, flattened so a multi-line `routes!(`
+  # or `use` is one match. Comments go first — `//` and `/* */`, but never inside a string literal,
+  # so a URL in a string cannot cut off the code after it. Then each test module is skipped and the
+  # scan resumes after it: a `#[cfg(test)]` line whose next item is `mod x;` drops that one line,
+  # and `mod x {` drops through its matching close brace (braces counted outside strings). A
+  # test-only `use` or item ends nothing, and no test module, wherever it sits, hides what follows.
   body="$(awk '
-    pending && /^[[:space:]]*$/ { held = held $0 "\n"; next }
-    pending && /^[[:space:]]*(pub(\([a-z]+\))?[[:space:]]+)?mod[[:space:]]/ { exit }
-    pending { printf "%s", held; pending = 0; held = "" }
-    /^[[:space:]]*#\[cfg\(test\)\][[:space:]]*$/ { pending = 1; held = $0 "\n"; next }
-    { print }
-  ' "$f" | sed -E 's://.*$::' | tr '\n' ' ')"
+    function strip(line,    out, i, n, c, d, inq) {
+      out = ""; inq = 0; n = length(line)
+      for (i = 1; i <= n; i++) {
+        c = substr(line, i, 1); d = substr(line, i + 1, 1)
+        if (inblk) { if (c == "*" && d == "/") { inblk = 0; i++ } ; continue }
+        if (inq) { out = out c; if (c == "\\") { out = out d; i++ } else if (c == "\"") inq = 0; continue }
+        if (c == "\"") { inq = 1; out = out c; continue }
+        if (c == "/" && d == "/") break
+        if (c == "/" && d == "*") { inblk = 1; i++; continue }
+        out = out c
+      }
+      return out
+    }
+    function braces(line,    t, o, cl) {
+      t = line; gsub(/"([^"\\]|\\.)*"/, "", t)
+      o = gsub(/\{/, "{", t); cl = gsub(/\}/, "}", t)
+      return o - cl
+    }
+    { line = strip($0) }
+    skipping { depth += braces(line); if (depth <= 0) skipping = 0; next }
+    pending && line ~ /^[[:space:]]*$/ { next }
+    pending && line ~ /^[[:space:]]*(pub(\([a-z]+\))?[[:space:]]+)?mod[[:space:]]/ {
+      pending = 0
+      if (line ~ /;[[:space:]]*$/) next
+      depth = braces(line); skipping = (depth > 0)
+      next
+    }
+    pending { pending = 0; print held }
+    line ~ /^[[:space:]]*#\[cfg\(test\)\][[:space:]]*$/ { pending = 1; held = line; next }
+    { print line }
+  ' "$f" | tr '\n' ' ')"
+  # The scan must still hold every group the file defines; a body that lost one read nothing of it.
+  for g in $(grep -Eo "fn (${AUTH_COVERED})\(" "$f" | sed -E 's/^fn //; s/\($//' | sort -u); do
+    if ! printf '%s' "$body" | grep -Eq "fn ${g}\("; then
+      UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: ${g} is not in the scanned source (a test-module skip swallowed it)"$'\n'
+    fi
+  done
   while IFS= read -r arg; do
     [[ -z "$arg" ]] && continue
     if ! [[ "$arg" =~ ^handlers::[a-z_0-9]+::[a-z_0-9]+$ ]]; then
@@ -653,7 +696,7 @@ for f in $GROUP_FILES; do
     [[ -z "$r" ]] && continue
     UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: ${r} (a .routes( argument that is not routes!(...))"$'\n'
   done < <(printf '%s' "$body" | grep -Eo '\.routes[[:space:]]*\([[:space:]]*[^[:space:]]{1,40}' | grep -Ev '\.routes[[:space:]]*\([[:space:]]*routes!\(' || true)
-  for hit in $(printf '%s' "$body" | grep -Eo '\.(route|route_service|nest|nest_service|fallback|fallback_service)[[:space:]]*\(' | tr -d ' (' || true); do
+  for hit in $(printf '%s' "$body" | grep -Eo '(\.|::)(route|route_service|nest|nest_service|fallback|fallback_service|merge|routes)[[:space:]]*\(' | grep -Ev '^\.(merge|routes)' | tr -d ' (' || true); do
     UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: ${hit}("$'\n'
   done
   while IFS= read -r m; do

@@ -531,6 +531,46 @@ run_test "an identity extractor redefined by a type alias: fails" "$REAL_ROUTES"
     "an identity extractor imported under another name"
 unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
 
+# --- (w) no test module, wherever it sits, hides what follows it; nor does a string or comment ---
+for spelling in test_mod_decl test_mod_block test_mod_pub_crate block_comment url_string call_form; do
+  FIX="${FIXTURE_DIR}/scan_${spelling}"
+  copy_module "$FIX"
+  python3 - "$FIX/gated.rs" "$spelling" <<'PYEOF2'
+import sys
+p, spelling = sys.argv[1], sys.argv[2]
+s = open(p).read()
+a = "use crate::handlers;\n"
+assert a in s
+b = "        .routes(routes!(handlers::resources::get_content))"
+assert b in s
+alias = "use crate::handlers::teams as t;\n"
+mount = b + "\n        .routes(routes!(t::create))"
+if spelling == "test_mod_decl":
+    s = s.replace(a, a + "#[cfg(test)]\nmod tests;\n" + alias, 1).replace(b, mount, 1)
+elif spelling == "test_mod_block":
+    s = s.replace(a, a + "#[cfg(test)]\n\n\nmod probe {\n    fn x() { let _ = \"}\"; }\n}\n" + alias, 1).replace(b, mount, 1)
+elif spelling == "test_mod_pub_crate":
+    s = s.replace(a, a + "#[cfg(test)]\npub(crate) mod probe {}\n" + alias, 1).replace(b, mount, 1)
+elif spelling == "block_comment":
+    s = s.replace(a, a + "/*\n#[cfg(test)]\nmod x\n*/\n" + alias, 1).replace(b, mount, 1)
+elif spelling == "url_string":
+    s = s.replace(b, b + '.layer(tag("http://x")).route("/evil", axum::routing::get(handlers::teams::create))', 1)
+else:
+    s = s.replace(b, b + '\n        ;\n    let _ = OpenApiRouter::route(OpenApiRouter::new(), "/evil", axum::routing::get(handlers::teams::create))', 1)
+open(p, "w").write(s)
+PYEOF2
+  run_test "a mount hidden by ${spelling}: fails" "$FIX" 1 \
+      "an auth-covered group mounts a route not named handlers::<mod>::<fn>"
+done
+
+# --- (x) a route module nested under routes/ (read by no check) fails ---
+FIX="${FIXTURE_DIR}/nested_routes_file"
+copy_module "$FIX"
+mkdir -p "$FIX/gated"
+printf 'pub(super) fn admin_routes() {}\n' > "$FIX/gated/inner.rs"
+run_test "a Rust file nested under routes/: fails" "$FIX" 1 \
+    "a Rust file nested under the routes module"
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
 [ "$FAIL" -eq 0 ]

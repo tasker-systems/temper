@@ -12,8 +12,8 @@
 # production with every other gate green.
 #
 # So for each shipped package this resolves its NORMAL (and build) dependency graph with
-# `cargo tree -e normal,build --target all` (every platform the release matrix builds, not just the
-# host), which is the feature set a release build compiles, and fails if any
+# `cargo tree -e normal,build --target all` (features unified across every target, a superset of
+# any one platform's release build), and fails if any
 # workspace crate in it carries a feature whose name contains `test` — every test-gating feature in
 # this workspace does (`test-db`, `test-harness`, `test-embed`, `test-support`,
 # `integration-tests`, `artifact-tests`). It also fails if `temper-services` stops appearing under
