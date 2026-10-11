@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM kb_erasure_retention_policies WHERE category = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f10ab853e44ff37a7aba2650e5c919d3cbaa33d4fd69430c47529f434a673b71"
+}

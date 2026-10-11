@@ -78,6 +78,9 @@ pub(super) fn admin_routes() -> OpenApiRouter<AppState> {
         // the doors themselves are documented.
         .routes(routes!(handlers::erasure::execute))
         .routes(routes!(handlers::erasure::survey))
+        // The person act's retention policy (R4): what it keeps, named in its record.
+        .routes(routes!(handlers::erasure::list_retention, handlers::erasure::set_retention))
+        .routes(routes!(handlers::erasure::remove_retention))
         .routes(routes!(handlers::resource_erasure::execute))
         .routes(routes!(handlers::resource_erasure::survey))
         .routes(routes!(handlers::block_history_scrub::execute))
@@ -102,7 +105,7 @@ mod tests {
     /// The admin group's documented surface, pinned by operation id. A route added here, dropped
     /// from here, or moved back to an undocumented plain mount changes this set and fails —
     /// the review the move deserves happens at the diff of this list.
-    const ADMIN_OPERATIONS: [&str; 29] = [
+    const ADMIN_OPERATIONS: [&str; 32] = [
         "admin_list_join_requests",
         "admin_count_join_requests",
         "admin_review_join_request",
@@ -124,6 +127,9 @@ mod tests {
         "admin_reembed",
         "admin_erase_principal",
         "admin_survey_principal_erasure",
+        "admin_list_erasure_retention",
+        "admin_set_erasure_retention",
+        "admin_remove_erasure_retention",
         "admin_erase_resource",
         "admin_survey_resource_erasure",
         "admin_scrub_block_history",

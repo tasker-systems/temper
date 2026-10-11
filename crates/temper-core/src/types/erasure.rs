@@ -96,6 +96,42 @@ pub struct RetainedCategory {
     pub period: String,
 }
 
+/// One retention policy as the door reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct RetentionPolicy {
+    pub name: String,
+    pub category: RetentionCategory,
+    pub basis: String,
+    /// The period, as Postgres renders the interval (`1 year`).
+    pub period: String,
+    /// The operator who last set it.
+    pub set_by: ProfileId,
+    pub updated: chrono::DateTime<chrono::Utc>,
+}
+
+/// The retention door's list answer: every policy, in category order. Empty means a person erasure
+/// keeps nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct RetentionPolicies {
+    pub policies: Vec<RetentionPolicy>,
+}
+
+/// Set the policy for one category: create it, or replace the category's existing policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(deny_unknown_fields)]
+pub struct RetentionPolicySet {
+    /// A slug: lower-case letters, digits and hyphens, starting with a letter or digit.
+    pub name: String,
+    pub category: RetentionCategory,
+    /// The stated basis, e.g. `GDPR 17(3)(e) / CCPA 105(d)(1)`. Required.
+    pub basis: String,
+    /// The period, as a Postgres interval (`1 year`, `90 days`). Must be positive.
+    pub period: String,
+}
+
 /// What a person erasure did about the subject's Slack grants at Slack, before it destroyed temper's
 /// copies (ruled 2026-10-10). Counts, never principals: the answer goes to an operator about an
 /// erased person.

@@ -22,21 +22,21 @@
 //! the fail-closed-variable hazard `require_dispatch_secret` exists to avoid), GET+POST on one
 //! handler, excluded from the contract entirely.
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use serde::Serialize;
 
 use temper_core::types::erasure::{
     BlobStrikeView, ErasureExecuteRequest, ErasureExecuteResponse, ErasureSurveyRequest,
-    ErasureSurveyResponse,
+    ErasureSurveyResponse, RetentionCategory, RetentionPolicies, RetentionPolicySet,
 };
 use temper_core::types::ids::ProfileId;
 use temper_services::auth::SystemAdmin;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::link_provider::{self, LinkProvider};
 use temper_services::services::erasure_fence_service::{self, DrainSummary};
-use temper_services::services::erasure_service;
+use temper_services::services::{erasure_retention_service, erasure_service};
 use temper_services::services::erasure_slack_revocation_service::{
     self, SlackRevocationDrain, SlackRevokeConfig,
 };
@@ -286,4 +286,92 @@ pub async fn drain(
         store_configured,
         slack_revocations,
     }))
+}
+
+/// `GET /api/admin/erasure/retention` — the deployment's retention policy for person erasure.
+///
+/// Gated like the erasure doors (`require_erasure_operator`): a caller who is not a system admin
+/// gets 404 and nothing is recorded.
+#[utoipa::path(
+    get,
+    operation_id = "admin_list_erasure_retention",
+    summary = "List the erasure retention policy",
+    description = "Lists the categories a person erasure keeps, each with its policy's name, basis and period. Empty by default: the act then keeps nothing. Requires a system admin. Any other caller gets 404.",
+    path = "/api/admin/erasure/retention",
+    tag = "Admin",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The retention policy", body = RetentionPolicies),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
+        (status = 404, description = "Caller is not a system admin", body = ErrorBody),
+    )
+)]
+pub async fn list_retention(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<RetentionPolicies>> {
+    let admin = require_erasure_operator(&state, &auth, "erasure.retention.list").await?;
+    Ok(Json(
+        erasure_retention_service::list(&state.pool, &admin).await?,
+    ))
+}
+
+/// `PUT /api/admin/erasure/retention` — set the policy for one category.
+#[utoipa::path(
+    put,
+    operation_id = "admin_set_erasure_retention",
+    summary = "Set an erasure retention policy",
+    description = "Names a category a person erasure keeps, with the basis and the period, replacing the category's existing policy. Only free text and replay evidence can be kept; identifiers and credentials cannot. The act records each kept category and its policy. Nothing deletes kept data when the period ends. Requires a system admin. Any other caller gets 404.",
+    path = "/api/admin/erasure/retention",
+    tag = "Admin",
+    request_body = RetentionPolicySet,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The retention policy after the change", body = RetentionPolicies),
+        (status = 400, description = "A malformed name, an empty basis, or a period that is not a positive interval", body = ErrorBody),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
+        (status = 404, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 409, description = "The name already names another category's policy", body = ErrorBody),
+        (status = 422, description = "The body is JSON but not the expected shape (a plain-text rejection, not an ErrorBody)"),
+    )
+)]
+pub async fn set_retention(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<RetentionPolicySet>,
+) -> ApiResult<Json<RetentionPolicies>> {
+    let admin = require_erasure_operator(&state, &auth, "erasure.retention.set").await?;
+    Ok(Json(
+        erasure_retention_service::set(&state.pool, &admin, &body).await?,
+    ))
+}
+
+/// `DELETE /api/admin/erasure/retention/{category}` — stop keeping a category.
+#[utoipa::path(
+    delete,
+    operation_id = "admin_remove_erasure_retention",
+    summary = "Remove an erasure retention policy",
+    description = "Stops keeping a category: a person erasure run afterwards removes it. Removing a category with no policy is a no-op. Requires a system admin. Any other caller gets 404.",
+    path = "/api/admin/erasure/retention/{category}",
+    tag = "Admin",
+    params(("category" = RetentionCategory, Path, description = "The category to stop keeping")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The retention policy after the change", body = RetentionPolicies),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
+        (status = 404, description = "Caller is not a system admin", body = ErrorBody),
+    )
+)]
+pub async fn remove_retention(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(category): Path<RetentionCategory>,
+) -> ApiResult<Json<RetentionPolicies>> {
+    let admin = require_erasure_operator(&state, &auth, "erasure.retention.remove").await?;
+    Ok(Json(
+        erasure_retention_service::remove(&state.pool, &admin, category).await?,
+    ))
 }

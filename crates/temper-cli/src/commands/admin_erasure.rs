@@ -26,7 +26,7 @@ use temper_core::types::erasure::{
     BlockHistoryScrubExecuteResponse, BlockHistoryScrubRequestBody, ErasureExecuteRequest,
     ErasureSurveyRequest, FieldScrubExecuteResponse, FieldScrubFamiliesRequest,
     FieldScrubRequestBody, ResourceErasureExecuteRequest, ResourceErasureExecuteResponse,
-    ResourceErasureSurveyRequest, ScrubFieldKind,
+    ResourceErasureSurveyRequest, RetentionPolicySet, ScrubFieldKind,
 };
 
 fn parse_resource(resource: &str) -> Result<uuid::Uuid> {
@@ -164,6 +164,49 @@ async fn principal_to(
         })
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)?;
+    emit(&answer, fmt, out)
+}
+
+/// `temper admin erasure retention` — list, set or remove the categories a person erasure keeps.
+/// Every form answers the policy as it stands after the call.
+pub async fn retention_remote(
+    client: &temper_client::TemperClient,
+    action: crate::cli::AdminRetentionAction,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    retention_to(client, action, fmt, &mut std::io::stdout()).await
+}
+
+async fn retention_to(
+    client: &temper_client::TemperClient,
+    action: crate::cli::AdminRetentionAction,
+    fmt: crate::format::OutputFormat,
+    out: &mut impl Write,
+) -> Result<()> {
+    use crate::cli::AdminRetentionAction;
+    let admin = client.admin();
+    let answer = match action {
+        AdminRetentionAction::List => admin.list_erasure_retention().await,
+        AdminRetentionAction::Set {
+            category,
+            name,
+            basis,
+            period,
+        } => {
+            admin
+                .set_erasure_retention(&RetentionPolicySet {
+                    name,
+                    category: category.into(),
+                    basis,
+                    period,
+                })
+                .await
+        }
+        AdminRetentionAction::Remove { category } => {
+            admin.remove_erasure_retention(category.into()).await
+        }
+    }
+    .map_err(crate::actions::runtime::client_err_to_temper)?;
     emit(&answer, fmt, out)
 }
 
@@ -625,9 +668,28 @@ mod tests {
                     | A::Principal { execute, .. }
                     | A::BlockHistory { execute, .. }
                     | A::Field { execute, .. } => execute,
+                    A::Retention { .. } => unreachable!("no bare form above is a retention call"),
                 };
                 assert!(!execute, "`{}` would act", args.join(" "));
             }
+        }
+
+        #[test]
+        fn setting_a_retention_policy_names_its_basis_and_period() {
+            let base = ["temper", "admin", "erasure", "retention", "set", "standing-reasons"];
+            let with = |extra: &[&str]| parses(&[&base[..], extra].concat());
+            assert!(with(&["--name", "audit", "--basis", "GDPR 17(3)(e)", "--period", "1 year"]));
+            assert!(!with(&["--name", "audit", "--period", "1 year"]), "no basis");
+            assert!(!with(&["--name", "audit", "--basis", "b"]), "no period");
+            assert!(
+                !parses(&["temper", "admin", "erasure", "retention", "set", "emails",
+                          "--name", "a", "--basis", "b", "--period", "1 year"]),
+                "an identifier is not a retainable category"
+            );
+            assert!(parses(&["temper", "admin", "erasure", "retention", "list"]));
+            assert!(parses(&[
+                "temper", "admin", "erasure", "retention", "remove", "credential-replay-evidence"
+            ]));
         }
 
         #[test]
@@ -700,16 +762,20 @@ mod tests {
             let mut acts = 0;
             for act in erasure.get_subcommands() {
                 acts += 1;
-                for arg in act.get_arguments() {
-                    let id = arg.get_id().as_str().to_ascii_lowercase();
-                    assert!(
-                        !id.contains("token") && !id.contains("bearer") && !id.contains("secret"),
-                        "`admin erasure {}` takes `{id}`, which could carry a credential",
-                        act.get_name()
-                    );
+                // The retention group's own forms (list, set, remove) are checked with it.
+                for form in std::iter::once(act).chain(act.get_subcommands()) {
+                    for arg in form.get_arguments() {
+                        let id = arg.get_id().as_str().to_ascii_lowercase();
+                        assert!(
+                            !id.contains("token") && !id.contains("bearer") && !id.contains("secret"),
+                            "`admin erasure {} {}` takes `{id}`, which could carry a credential",
+                            act.get_name(),
+                            form.get_name()
+                        );
+                    }
                 }
             }
-            assert_eq!(acts, 4, "resource, principal, block-history, field");
+            assert_eq!(acts, 5, "retention, resource, principal, block-history, field");
         }
     }
 }

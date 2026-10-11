@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_erasure_slack_revocations\n              SET key_version = NULL, rt_nonce = NULL, rt_ciphertext = NULL,\n                  resolved_at = now(), outcome = 'abandoned'\n            WHERE resolved_at IS NULL AND give_up_at <= now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "b3d90043e9726b4af042afedab73d46206a254a5d2dfffabb800fe0d93f07f99"
+}

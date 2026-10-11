@@ -577,3 +577,72 @@ async fn the_admin_ledger_lists_both_families_with_the_subject_only_as_a_pseudon
         "the subject_id (the pseudonym) is the only name the record carries"
     );
 }
+
+// ── WITNESS: the retention door (R4) ─────────────────────────────────────────────────────────
+
+/// FAILS IF the retention policy cannot be set, listed and removed through HTTP by an operator, if
+/// it admits an identifier as a retainable category or a period that is not an interval, or if a
+/// non-operator can read or change it (answered 404, like every erasure door).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_operator_sets_lists_and_removes_the_retention_policy(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (token, operator) =
+        provision_and_make_operator(&app, "auth0|retention-op", "op@x.test").await;
+    let (outsider, _) = provision_non_operator(&app, "auth0|retention-out", "out@x.test").await;
+    let url = app.url("/api/admin/erasure/retention");
+    let put = |token: &str, body: Value| {
+        app.client
+            .put(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .json(&body)
+            .send()
+    };
+    let policy = serde_json::json!({
+        "name": "security-audit",
+        "category": "standing-reasons",
+        "basis": "GDPR 17(3)(e)",
+        "period": "1 year",
+    });
+
+    let resp = put(&outsider, policy.clone()).await.unwrap();
+    assert_eq!(resp.status().as_u16(), 404, "a non-operator is answered absent");
+    let resp = app
+        .client
+        .get(&url)
+        .header("Authorization", format!("Bearer {outsider}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 404);
+
+    let resp = put(&token, policy).await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["policies"][0]["category"], "standing-reasons");
+    assert_eq!(body["policies"][0]["period"], "1 year");
+    assert_eq!(body["policies"][0]["set_by"], operator.to_string());
+
+    let bad_period = serde_json::json!({
+        "name": "x", "category": "governance-reasons", "basis": "b", "period": "forever",
+    });
+    assert_eq!(put(&token, bad_period).await.unwrap().status().as_u16(), 400);
+    let identifier = serde_json::json!({
+        "name": "x", "category": "emails", "basis": "b", "period": "1 year",
+    });
+    assert_eq!(
+        put(&token, identifier).await.unwrap().status().as_u16(),
+        422,
+        "an identifier is not a retainable category"
+    );
+
+    let resp = app
+        .client
+        .delete(app.url("/api/admin/erasure/retention/standing-reasons"))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["policies"], serde_json::json!([]), "the category is no longer kept");
+}

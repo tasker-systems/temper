@@ -17,6 +17,7 @@ pub mod drain_span;
 pub mod edge_service;
 pub mod embed_service;
 pub mod erasure_fence_service;
+pub mod erasure_retention_service;
 pub mod erasure_service;
 pub mod erasure_slack_revocation_service;
 pub mod event_service;
