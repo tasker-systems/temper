@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_erasure_retention_policies (name, category, basis, period, set_by_profile_id)\n           VALUES ($1, $2, $3, $4::text::interval, $5)\n           ON CONFLICT (category) DO UPDATE\n              SET name = EXCLUDED.name, basis = EXCLUDED.basis, period = EXCLUDED.period,\n                  set_by_profile_id = EXCLUDED.set_by_profile_id, updated = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "897e8da37c939dd7951cf33b02733056392b862b393faed63fce0d9ec265a3c5"
+}

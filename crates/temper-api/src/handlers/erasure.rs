@@ -22,20 +22,25 @@
 //! the fail-closed-variable hazard `require_dispatch_secret` exists to avoid), GET+POST on one
 //! handler, excluded from the contract entirely.
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use serde::Serialize;
 
 use temper_core::types::erasure::{
     BlobStrikeView, ErasureExecuteRequest, ErasureExecuteResponse, ErasureSurveyRequest,
-    ErasureSurveyResponse,
+    ErasureSurveyResponse, RetentionCategory, RetentionPolicies, RetentionPolicySet,
 };
 use temper_core::types::ids::ProfileId;
 use temper_services::auth::SystemAdmin;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
+use temper_services::link_provider::{self, LinkProvider};
 use temper_services::services::erasure_fence_service::{self, DrainSummary};
-use temper_services::services::erasure_service;
+use temper_services::services::erasure_slack_revocation_service::{
+    self, SlackRevocationDrain, SlackRevokeConfig,
+};
+use temper_services::services::slack_disconnect_service::IdpRevokeTarget;
+use temper_services::services::{erasure_retention_service, erasure_service};
 use temper_services::state::AppState;
 
 use crate::middleware::auth::AuthUser;
@@ -102,12 +107,17 @@ pub async fn execute(
     Json(body): Json<ErasureExecuteRequest>,
 ) -> ApiResult<Json<ErasureExecuteResponse>> {
     let admin = require_erasure_operator(&state, &auth, "erasure.execute").await?;
+    let provider = slack_link_provider(&state);
     let c = erasure_service::execute_erasure(
         &state.pool,
         &admin,
         ProfileId::from(body.subject),
         body.request_reference,
         surface,
+        &erasure_service::ErasureEnv {
+            slack: slack_revoke_config(&state, provider.as_ref()),
+            auth_provider: Some(&state.config.auth_provider_name),
+        },
     )
     .await?;
 
@@ -126,7 +136,62 @@ pub async fn execute(
             .collect(),
         resource_erasures: c.resource_erasures,
         estate_stragglers: c.estate_stragglers,
+        slack_revocation: c.slack_revocation,
     }))
+}
+
+/// The Slack revocations erasures queued: a sibling pass on the drain tick, after the fence. It
+/// runs with or without Slack configured — without it, only the rows past their window are
+/// emptied, so a deployment that lost its configuration still never keeps a token past it.
+async fn slack_revocation_pass(state: &AppState) -> ApiResult<SlackRevocationDrain> {
+    let provider = slack_link_provider(state);
+    let pass = erasure_slack_revocation_service::drain(
+        &state.pool,
+        slack_revoke_config(state, provider.as_ref()).as_ref(),
+    )
+    .await?;
+    tracing::info!(
+        attempted = pass.attempted,
+        revoked = pass.revoked,
+        retrying = pass.retrying,
+        abandoned = pass.abandoned,
+        "erasure Slack revocation pass complete"
+    );
+    Ok(pass)
+}
+
+/// A fence failure still runs the Slack pass, so a queued token's window is never extended by an
+/// unrelated error; the tick then answers the fence's error.
+async fn slack_pass_then(state: &AppState, fence_error: ApiError) -> ApiError {
+    if let Err(e) = slack_revocation_pass(state).await {
+        tracing::warn!(error = %e, "erasure Slack revocation pass failed after a fence error");
+    }
+    fence_error
+}
+
+/// The instance's Slack revoke endpoint and its client, or `None` where Slack linking is not
+/// configured. The provider owns the strings [`slack_revoke_config`] borrows.
+fn slack_link_provider(state: &AppState) -> Option<LinkProvider> {
+    let cfg = state.config.slack_link.as_ref()?;
+    Some(link_provider::derive(&state.config.auth, cfg))
+}
+
+/// What revoking a Slack grant needs: the vault key, and where and as whom to revoke. The same
+/// endpoint and client a disconnect revokes at (`handlers::slack_disconnect`).
+fn slack_revoke_config<'a>(
+    state: &'a AppState,
+    provider: Option<&'a LinkProvider>,
+) -> Option<SlackRevokeConfig<'a>> {
+    let cfg = state.config.slack_link.as_ref()?;
+    let provider = provider?;
+    Some(SlackRevokeConfig {
+        key: &cfg.vault_key,
+        target: IdpRevokeTarget {
+            mode: state.config.auth.mode,
+            revoke_url: &provider.revoke_url,
+            client_id: &cfg.client_id,
+        },
+    })
 }
 
 /// `POST /api/admin/erasure/survey` — the read-only survey beside the execute door (task
@@ -158,8 +223,13 @@ pub async fn survey(
     Json(body): Json<ErasureSurveyRequest>,
 ) -> ApiResult<Json<ErasureSurveyResponse>> {
     let admin = require_erasure_operator(&state, &auth, "erasure.survey").await?;
-    let prediction =
-        erasure_service::survey_erasure(&state.pool, &admin, ProfileId::from(body.subject)).await?;
+    let prediction = erasure_service::survey_erasure(
+        &state.pool,
+        &admin,
+        ProfileId::from(body.subject),
+        Some(&state.config.auth_provider_name),
+    )
+    .await?;
 
     Ok(Json(ErasureSurveyResponse {
         subject: prediction.subject.uuid(),
@@ -185,6 +255,9 @@ pub struct FenceDrainResponse {
     #[serde(flatten)]
     pub drain: DrainSummary,
     pub store_configured: bool,
+    /// The Slack revocations erasures queued (`erasure_slack_revocation_service`), retried on the
+    /// same tick.
+    pub slack_revocations: SlackRevocationDrain,
 }
 
 /// `GET|POST /api/erasure/drain` — one byte-delete fence tick.
@@ -202,9 +275,13 @@ pub async fn drain(
 ) -> ApiResult<Json<FenceDrainResponse>> {
     crate::handlers::embed::require_dispatch_secret(&state, &headers, "erasure delete drain")?;
 
-    match state.blob_store.as_deref() {
+    let (drain, store_configured) = match state.blob_store.as_deref() {
         Some(store) => {
-            let summary = erasure_fence_service::drain(&state.pool, store).await?;
+            let summary = erasure_fence_service::drain(&state.pool, store).await;
+            let summary = match summary {
+                Ok(summary) => summary,
+                Err(e) => return Err(slack_pass_then(&state, e).await),
+            };
             tracing::info!(
                 seeded = summary.seeded,
                 unparseable_verdicts = summary.unparseable_verdicts,
@@ -214,23 +291,116 @@ pub async fn drain(
                 failed = summary.failed,
                 "erasure fence drain pass complete"
             );
-            Ok(Json(FenceDrainResponse {
-                drain: summary,
-                store_configured: true,
-            }))
+            (summary, true)
         }
         None => {
-            let summary = erasure_fence_service::drain_without_store(&state.pool).await?;
+            let summary = match erasure_fence_service::drain_without_store(&state.pool).await {
+                Ok(summary) => summary,
+                Err(e) => return Err(slack_pass_then(&state, e).await),
+            };
             tracing::info!(
                 seeded = summary.seeded,
                 unparseable_verdicts = summary.unparseable_verdicts,
                 store_configured = false,
                 "erasure fence seed-only pass complete (no provider configured)"
             );
-            Ok(Json(FenceDrainResponse {
-                drain: summary,
-                store_configured: false,
-            }))
+            (summary, false)
         }
-    }
+    };
+
+    let slack_revocations = slack_revocation_pass(&state).await?;
+
+    Ok(Json(FenceDrainResponse {
+        drain,
+        store_configured,
+        slack_revocations,
+    }))
+}
+
+/// `GET /api/admin/erasure/retention` — the deployment's retention policy for person erasure.
+///
+/// Gated like the erasure doors (`require_erasure_operator`): a caller who is not a system admin
+/// gets 404 and nothing is recorded.
+#[utoipa::path(
+    get,
+    operation_id = "admin_list_erasure_retention",
+    summary = "List the erasure retention policy",
+    description = "Lists the categories a person erasure keeps, each with its policy's name, basis and period. Empty by default: the act then keeps nothing. Requires a system admin. Any other caller gets 404.",
+    path = "/api/admin/erasure/retention",
+    tag = "Admin",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The retention policy", body = RetentionPolicies),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
+        (status = 404, description = "Caller is not a system admin", body = ErrorBody),
+    )
+)]
+pub async fn list_retention(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<RetentionPolicies>> {
+    let admin = require_erasure_operator(&state, &auth, "erasure.retention.list").await?;
+    Ok(Json(
+        erasure_retention_service::list(&state.pool, &admin).await?,
+    ))
+}
+
+/// `PUT /api/admin/erasure/retention` — set the policy for one category.
+#[utoipa::path(
+    put,
+    operation_id = "admin_set_erasure_retention",
+    summary = "Set an erasure retention policy",
+    description = "Names a category a person erasure keeps, with the basis and the period, replacing the category's existing policy. Only free text and replay evidence can be kept; identifiers and credentials cannot. The act records each kept category and its policy. Nothing deletes kept data when the period ends. Requires a system admin. Any other caller gets 404.",
+    path = "/api/admin/erasure/retention",
+    tag = "Admin",
+    request_body = RetentionPolicySet,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The retention policy after the change", body = RetentionPolicies),
+        (status = 400, description = "A malformed name, an empty basis, or a period that is not a positive interval", body = ErrorBody),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
+        (status = 404, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 409, description = "The name already names another category's policy", body = ErrorBody),
+        (status = 422, description = "The body is JSON but not the expected shape (a plain-text rejection, not an ErrorBody)"),
+    )
+)]
+pub async fn set_retention(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<RetentionPolicySet>,
+) -> ApiResult<Json<RetentionPolicies>> {
+    let admin = require_erasure_operator(&state, &auth, "erasure.retention.set").await?;
+    Ok(Json(
+        erasure_retention_service::set(&state.pool, &admin, &body).await?,
+    ))
+}
+
+/// `DELETE /api/admin/erasure/retention/{category}` — stop keeping a category.
+#[utoipa::path(
+    delete,
+    operation_id = "admin_remove_erasure_retention",
+    summary = "Remove an erasure retention policy",
+    description = "Stops keeping a category: a person erasure run afterwards removes it. Removing a category with no policy is a no-op. Requires a system admin. Any other caller gets 404.",
+    path = "/api/admin/erasure/retention/{category}",
+    tag = "Admin",
+    params(("category" = RetentionCategory, Path, description = "The category to stop keeping")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The retention policy after the change", body = RetentionPolicies),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
+        (status = 404, description = "Caller is not a system admin", body = ErrorBody),
+    )
+)]
+pub async fn remove_retention(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(category): Path<RetentionCategory>,
+) -> ApiResult<Json<RetentionPolicies>> {
+    let admin = require_erasure_operator(&state, &auth, "erasure.retention.remove").await?;
+    Ok(Json(
+        erasure_retention_service::remove(&state.pool, &admin, category).await?,
+    ))
 }

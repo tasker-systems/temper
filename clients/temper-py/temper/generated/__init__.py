@@ -418,6 +418,10 @@ __all__ = [
     "ResourceUpdateRequest",
     "ResourceView",
     "RestoreContextOutcome",
+    "RetentionCategory",
+    "RetentionPolicies",
+    "RetentionPolicy",
+    "RetentionPolicySet",
     "RetireContextOutcome",
     "ReturnSpec",
     "RetypeRelationshipRequest",
@@ -451,6 +455,7 @@ __all__ = [
     "SlackDisconnectRequest",
     "SlackDisconnectResponse",
     "SlackDisconnectedPrincipal",
+    "SlackRevocationTally",
     "SliceRequest",
     "SortOrder",
     "StageDisposition",
@@ -903,6 +908,10 @@ from temper.generated.models.resource_sort_field import ResourceSortField as Res
 from temper.generated.models.resource_update_request import ResourceUpdateRequest as ResourceUpdateRequest
 from temper.generated.models.resource_view import ResourceView as ResourceView
 from temper.generated.models.restore_context_outcome import RestoreContextOutcome as RestoreContextOutcome
+from temper.generated.models.retention_category import RetentionCategory as RetentionCategory
+from temper.generated.models.retention_policies import RetentionPolicies as RetentionPolicies
+from temper.generated.models.retention_policy import RetentionPolicy as RetentionPolicy
+from temper.generated.models.retention_policy_set import RetentionPolicySet as RetentionPolicySet
 from temper.generated.models.retire_context_outcome import RetireContextOutcome as RetireContextOutcome
 from temper.generated.models.return_spec import ReturnSpec as ReturnSpec
 from temper.generated.models.retype_relationship_request import RetypeRelationshipRequest as RetypeRelationshipRequest
@@ -936,6 +945,7 @@ from temper.generated.models.share_context_request import ShareContextRequest as
 from temper.generated.models.slack_disconnect_request import SlackDisconnectRequest as SlackDisconnectRequest
 from temper.generated.models.slack_disconnect_response import SlackDisconnectResponse as SlackDisconnectResponse
 from temper.generated.models.slack_disconnected_principal import SlackDisconnectedPrincipal as SlackDisconnectedPrincipal
+from temper.generated.models.slack_revocation_tally import SlackRevocationTally as SlackRevocationTally
 from temper.generated.models.slice_request import SliceRequest as SliceRequest
 from temper.generated.models.sort_order import SortOrder as SortOrder
 from temper.generated.models.stage_disposition import StageDisposition as StageDisposition

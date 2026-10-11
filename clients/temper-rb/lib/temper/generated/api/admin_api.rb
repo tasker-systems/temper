@@ -657,6 +657,70 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # List the erasure retention policy
+    # Lists the categories a person erasure keeps, each with its policy's name, basis and period. Empty by default: the act then keeps nothing. Requires a system admin. Any other caller gets 404.
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [RetentionPolicies]
+    def admin_list_erasure_retention(opts = {})
+      data, _status_code, _headers = admin_list_erasure_retention_with_http_info(opts)
+      data
+    end
+
+    # List the erasure retention policy
+    # Lists the categories a person erasure keeps, each with its policy&#39;s name, basis and period. Empty by default: the act then keeps nothing. Requires a system admin. Any other caller gets 404.
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(RetentionPolicies, Integer, Hash)>] RetentionPolicies data, response status code and response headers
+    def admin_list_erasure_retention_with_http_info(opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: AdminApi.admin_list_erasure_retention ...'
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/admin/erasure/retention'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'RetentionPolicies'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"AdminApi.admin_list_erasure_retention",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: AdminApi#admin_list_erasure_retention\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # List pending join requests
     # Every join request still awaiting a decision, with the requesting profile's handle, display name and email. Requires a system admin.
     # @param [Hash] opts the optional parameters
@@ -1307,6 +1371,76 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Remove an erasure retention policy
+    # Stops keeping a category: a person erasure run afterwards removes it. Removing a category with no policy is a no-op. Requires a system admin. Any other caller gets 404.
+    # @param category [RetentionCategory] The category to stop keeping
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [RetentionPolicies]
+    def admin_remove_erasure_retention(category, opts = {})
+      data, _status_code, _headers = admin_remove_erasure_retention_with_http_info(category, opts)
+      data
+    end
+
+    # Remove an erasure retention policy
+    # Stops keeping a category: a person erasure run afterwards removes it. Removing a category with no policy is a no-op. Requires a system admin. Any other caller gets 404.
+    # @param category [RetentionCategory] The category to stop keeping
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(RetentionPolicies, Integer, Hash)>] RetentionPolicies data, response status code and response headers
+    def admin_remove_erasure_retention_with_http_info(category, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: AdminApi.admin_remove_erasure_retention ...'
+      end
+      # verify the required parameter 'category' is set
+      if @api_client.config.client_side_validation && category.nil?
+        fail ArgumentError, "Missing the required parameter 'category' when calling AdminApi.admin_remove_erasure_retention"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/admin/erasure/retention/{category}'.sub('{category}', CGI.escape(category.to_s).gsub('.', '%2E'))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'RetentionPolicies'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"AdminApi.admin_remove_erasure_retention",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:DELETE, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: AdminApi#admin_remove_erasure_retention\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Approve or reject a join request
     # Records the decision on a pending join request, with an optional note. Requires a system admin.
     # @param id [String] Join request ID
@@ -1615,6 +1749,81 @@ module Temper::Generated
       data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
       if @api_client.config.debugging
         @api_client.config.logger.debug "API called: AdminApi#admin_scrub_resource_field\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # Set an erasure retention policy
+    # Names a category a person erasure keeps, with the basis and the period, replacing the category's existing policy. Only free text and replay evidence can be kept; identifiers and credentials cannot. The act records each kept category and its policy. Nothing deletes kept data when the period ends. Requires a system admin. Any other caller gets 404.
+    # @param retention_policy_set [RetentionPolicySet] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [RetentionPolicies]
+    def admin_set_erasure_retention(retention_policy_set, opts = {})
+      data, _status_code, _headers = admin_set_erasure_retention_with_http_info(retention_policy_set, opts)
+      data
+    end
+
+    # Set an erasure retention policy
+    # Names a category a person erasure keeps, with the basis and the period, replacing the category&#39;s existing policy. Only free text and replay evidence can be kept; identifiers and credentials cannot. The act records each kept category and its policy. Nothing deletes kept data when the period ends. Requires a system admin. Any other caller gets 404.
+    # @param retention_policy_set [RetentionPolicySet] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(RetentionPolicies, Integer, Hash)>] RetentionPolicies data, response status code and response headers
+    def admin_set_erasure_retention_with_http_info(retention_policy_set, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: AdminApi.admin_set_erasure_retention ...'
+      end
+      # verify the required parameter 'retention_policy_set' is set
+      if @api_client.config.client_side_validation && retention_policy_set.nil?
+        fail ArgumentError, "Missing the required parameter 'retention_policy_set' when calling AdminApi.admin_set_erasure_retention"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/admin/erasure/retention'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(retention_policy_set)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'RetentionPolicies'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"AdminApi.admin_set_erasure_retention",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:PUT, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: AdminApi#admin_set_erasure_retention\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
       end
       return data, status_code, headers
     end

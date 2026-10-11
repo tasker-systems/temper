@@ -128,7 +128,7 @@ jobs:
         run: npm test
 
       # eve resolves the agent by DISCOVERY at build time — authored instructions, channels,
-      # routes, and now `agent/instrumentation.ts`. typecheck and vitest are both blind to a
+      # routes, and now `agent/instrumentation/`. typecheck and vitest are both blind to a
       # discovery break, so build here (as the `mention` job does). `connections/temper.ts`
       # resolves TEMPER_MCP_URL at module load, so discovery needs the variable PRESENT, not
       # correct — `.invalid` is reserved by RFC 2606 and can never resolve.

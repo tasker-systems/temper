@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT name, category, basis, period::text AS \"period!\", set_by_profile_id, updated\n             FROM kb_erasure_retention_policies\n            ORDER BY category",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "category",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "basis",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "period!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "set_by_profile_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "d1c61239a00602c2c5f56a4f5b3045ae46aa01ccea335421ebd9d71ef9fb4d96"
+}

@@ -790,6 +790,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            &Default::default(),
         )
         .await
         .expect("the act completes")

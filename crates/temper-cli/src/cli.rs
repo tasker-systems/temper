@@ -88,6 +88,33 @@ impl From<CliScrubField> for temper_core::types::erasure::ScrubFieldKind {
     }
 }
 
+/// A category a person erasure may keep (`temper admin erasure retention`).
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CliRetentionCategory {
+    StandingReasons,
+    GovernanceReasons,
+    JoinRequestNotes,
+    ReviewRequestNotes,
+    CredentialReplayEvidence,
+    ErasureRefusalDetails,
+}
+
+impl From<CliRetentionCategory> for temper_core::types::erasure::RetentionCategory {
+    fn from(c: CliRetentionCategory) -> Self {
+        use temper_core::types::erasure::RetentionCategory;
+        match c {
+            CliRetentionCategory::StandingReasons => RetentionCategory::StandingReasons,
+            CliRetentionCategory::GovernanceReasons => RetentionCategory::GovernanceReasons,
+            CliRetentionCategory::JoinRequestNotes => RetentionCategory::JoinRequestNotes,
+            CliRetentionCategory::ReviewRequestNotes => RetentionCategory::ReviewRequestNotes,
+            CliRetentionCategory::CredentialReplayEvidence => {
+                RetentionCategory::CredentialReplayEvidence
+            }
+            CliRetentionCategory::ErasureRefusalDetails => RetentionCategory::ErasureRefusalDetails,
+        }
+    }
+}
+
 /// Per-act agent-authorship + invocation-correlation flags shared by every authored-write CLI
 /// command (resource create, edge assert/fold) via `#[command(flatten)]`. All optional and
 /// available to any caller — agent-driven CLI is the *expected* case, not a restricted one.
@@ -1649,7 +1676,7 @@ pub enum AdminAction {
         action: AdminProfilesAction,
     },
     /// Erase a resource or a principal, or scrub a resource's block history or one of its fields.
-    /// Surveys by default; --execute acts
+    /// Surveys by default; --execute acts. `retention` sets what a principal erasure keeps
     Erasure {
         #[command(subcommand)]
         action: AdminErasureAction,
@@ -1757,8 +1784,43 @@ pub enum AdminAction {
 /// thing that erases. The answer prints in full — targets, remainder, ledger remainder, refusal
 /// reason — and a refused act exits non-zero. A caller who is not a system admin is answered 404
 /// (never 403), whatever the subject.
+#[derive(Subcommand, Debug)]
+pub enum AdminRetentionAction {
+    /// List the categories a person erasure keeps
+    List,
+    /// Keep a category, replacing the category's existing policy. The erasure record names it
+    /// `retained under policy <name>`. Nothing deletes kept data when the period ends
+    Set {
+        /// The category to keep
+        #[arg(value_enum)]
+        category: CliRetentionCategory,
+        /// The policy's name: a slug (lower-case letters, digits, hyphens)
+        #[arg(long)]
+        name: String,
+        /// The stated basis, e.g. "GDPR 17(3)(e) / CCPA 105(d)(1)"
+        #[arg(long)]
+        basis: String,
+        /// The period, as an interval, e.g. "1 year" or "90 days"
+        #[arg(long)]
+        period: String,
+    },
+    /// Stop keeping a category
+    Remove {
+        /// The category to stop keeping
+        #[arg(value_enum)]
+        category: CliRetentionCategory,
+    },
+}
+
 #[derive(Debug, clap::Subcommand)]
 pub enum AdminErasureAction {
+    /// The deployment's retention policy: what a person erasure keeps, by category, each with a
+    /// stated basis and period. Empty by default, and the act then keeps nothing. Only free text
+    /// and replay evidence can be kept; identifiers and credentials cannot
+    Retention {
+        #[command(subcommand)]
+        action: AdminRetentionAction,
+    },
     /// Erase a resource. The survey counts the blocks, revisions, chunks, artifacts and edges the
     /// act would reach, and names what it would leave as remainder
     Resource {

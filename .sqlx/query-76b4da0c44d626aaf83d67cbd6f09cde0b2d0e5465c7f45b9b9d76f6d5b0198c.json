@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"n!\" FROM kb_slack_grant_vault\n                WHERE slack_principal_id IN (SELECT _erasure_subject_slack_principals($1))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "76b4da0c44d626aaf83d67cbd6f09cde0b2d0e5465c7f45b9b9d76f6d5b0198c"
+}

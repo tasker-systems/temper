@@ -485,6 +485,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/erasure/retention": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the erasure retention policy
+         * @description Lists the categories a person erasure keeps, each with its policy's name, basis and period. Empty by default: the act then keeps nothing. Requires a system admin. Any other caller gets 404.
+         */
+        get: operations["admin_list_erasure_retention"];
+        /**
+         * Set an erasure retention policy
+         * @description Names a category a person erasure keeps, with the basis and the period, replacing the category's existing policy. Only free text and replay evidence can be kept; identifiers and credentials cannot. The act records each kept category and its policy. Nothing deletes kept data when the period ends. Requires a system admin. Any other caller gets 404.
+         */
+        put: operations["admin_set_erasure_retention"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/erasure/retention/{category}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove an erasure retention policy
+         * @description Stops keeping a category: a person erasure run afterwards removes it. Removing a category with no policy is a no-op. Requires a system admin. Any other caller gets 404.
+         */
+        delete: operations["admin_remove_erasure_retention"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/erasure/survey": {
         parameters: {
             query?: never;
@@ -6158,6 +6208,11 @@ export interface components {
             redacted_hashes: string[];
             /** @description The resource erasures the act ran over the estate, in the order it ran them. */
             resource_erasures?: components["schemas"]["EstateResourceErasure"][];
+            /**
+             * @description What happened to the subject's Slack grants at Slack before the act destroyed them:
+             *     revoked, queued for retry, or never attempted. Counts only.
+             */
+            slack_revocation?: components["schemas"]["SlackRevocationTally"];
             /** @enum {string} */
             status: "completed";
             /**
@@ -9679,6 +9734,48 @@ export interface components {
             slug_changed: boolean;
         };
         /**
+         * @description What a deployment's retention policy may keep through a person erasure (R4 of the 2026-10-10
+         *     erasure inventory). The act removes every identifier of the subject and every free-text field
+         *     about them by default; a category here is kept only when an organisation names it in a policy
+         *     with a stated basis and period, and the record then names it `retained under policy <name>`.
+         *
+         *     Free text and replay evidence only. Identifiers and live credentials are not retainable: a
+         *     deployment cannot keep a usable credential or a direct identifier of an erased person, so no
+         *     value here names one. The SQL CHECK on `kb_erasure_retention_policies.category` is the same
+         *     closed set.
+         * @enum {string}
+         */
+        RetentionCategory: "standing-reasons" | "governance-reasons" | "join-request-notes" | "review-request-notes" | "credential-replay-evidence" | "erasure-refusal-details";
+        /**
+         * @description The retention door's list answer: every policy, in category order. Empty means a person erasure
+         *     keeps nothing.
+         */
+        RetentionPolicies: {
+            policies: components["schemas"]["RetentionPolicy"][];
+        };
+        /** @description One retention policy as the door reports it. */
+        RetentionPolicy: {
+            basis: string;
+            category: components["schemas"]["RetentionCategory"];
+            name: string;
+            /** @description The period, as Postgres renders the interval (`1 year`). */
+            period: string;
+            /** @description The operator who last set it. */
+            set_by: components["schemas"]["ProfileId"];
+            /** Format: date-time */
+            updated: string;
+        };
+        /** @description Set the policy for one category: create it, or replace the category's existing policy. */
+        RetentionPolicySet: {
+            /** @description The stated basis, e.g. `GDPR 17(3)(e) / CCPA 105(d)(1)`. Required. */
+            basis: string;
+            category: components["schemas"]["RetentionCategory"];
+            /** @description A slug: lower-case letters, digits and hyphens, starting with a letter or digit. */
+            name: string;
+            /** @description The period, as a Postgres interval (`1 year`, `90 days`). Must be positive. */
+            period: string;
+        };
+        /**
          * @description What retire hands back. The caller needs BOTH halves to undo it: the read floor hides the
          *     context and the slug moved, so the ref they arrived with no longer names the row (spec §2.4.1).
          */
@@ -10167,6 +10264,37 @@ export interface components {
             intents_deleted: number;
             /** @description The WHOLE opaque Slack principal that was unbound. Never split. */
             slack_principal_id: string;
+        };
+        /**
+         * @description What a person erasure did about the subject's Slack grants at Slack, before it destroyed temper's
+         *     copies (ruled 2026-10-10). Counts, never principals: the answer goes to an operator about an
+         *     erased person.
+         */
+        SlackRevocationTally: {
+            /**
+             * Format: int32
+             * @description Grants whose revoke was attempted and failed where no retry can succeed: in AS mode, no AS
+             *     row matched the token. Destroyed in temper; not queued.
+             */
+            failed?: number;
+            /**
+             * Format: int32
+             * @description Grants that could not be revoked at all: the row could not be opened, or Slack linking is
+             *     not configured on this instance. Destroyed in temper; they may stay live at Slack until they
+             *     expire.
+             */
+            not_attempted: number;
+            /**
+             * Format: int32
+             * @description Grants whose revoke failed and is pending: the token is held, sealed, for the erasure drain
+             *     to retry until it succeeds or the retry window closes.
+             */
+            queued: number;
+            /**
+             * Format: int32
+             * @description Grants Slack (or the AS) confirmed revoked.
+             */
+            revoked: number;
         };
         /**
          * @description R4 request: focus seeds (required, non-empty), BFS depth, and an optional
@@ -12296,6 +12424,188 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    admin_list_erasure_retention: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The retention policy */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetentionPolicies"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_set_erasure_retention: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetentionPolicySet"];
+            };
+        };
+        responses: {
+            /** @description The retention policy after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetentionPolicies"];
+                };
+            };
+            /** @description A malformed name, an empty basis, or a period that is not a positive interval */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The name already names another category's policy */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The body is JSON but not the expected shape (a plain-text rejection, not an ErrorBody) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    admin_remove_erasure_retention: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description The category to stop keeping */
+                category: components["schemas"]["RetentionCategory"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The retention policy after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetentionPolicies"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };

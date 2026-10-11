@@ -44,7 +44,7 @@ export default defineMcpClientConnection({
     : process.env.TEMPER_CONNECT_CONNECTOR
       ? connect({ connector: process.env.TEMPER_CONNECT_CONNECTOR, principalType: "app" })
       : { getToken: async () => ({ token: requireEnv("TEMPER_TOKEN") }) },
-  // Trace propagation. When OTLP export is configured, `agent/instrumentation.ts` enables
+  // Trace propagation. When OTLP export is configured, `agent/instrumentation/otel.ts` enables
   // undici auto-instrumentation, which injects a per-request `traceparent` naming a real
   // exported span — so we must NOT also stamp a static one here (it would be a second,
   // ambiguous header; see `otlpExportConfigured`). Without export, keep the session-derived

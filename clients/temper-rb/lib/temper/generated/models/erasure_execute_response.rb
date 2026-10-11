@@ -31,6 +31,9 @@ module Temper::Generated
     # The resource erasures the act ran over the estate, in the order it ran them.
     attr_accessor :resource_erasures
 
+    # What happened to the subject's Slack grants at Slack before the act destroyed them: revoked, queued for retry, or never attempted. Counts only.
+    attr_accessor :slack_revocation
+
     attr_accessor :status
 
     # Per-target outcomes and the named remainder (D6's accepted-in-part arm): the operator sees the `independent_obligation` remainder AT THE DOOR, not only in the ledger — the completion's own payload is the audit, but the door's caller is the actor and deserves the same facts.
@@ -67,6 +70,7 @@ module Temper::Generated
         :'event_id' => :'event_id',
         :'redacted_hashes' => :'redacted_hashes',
         :'resource_erasures' => :'resource_erasures',
+        :'slack_revocation' => :'slack_revocation',
         :'status' => :'status',
         :'targets' => :'targets'
       }
@@ -91,6 +95,7 @@ module Temper::Generated
         :'event_id' => :'String',
         :'redacted_hashes' => :'Array<String>',
         :'resource_erasures' => :'Array<EstateResourceErasure>',
+        :'slack_revocation' => :'SlackRevocationTally',
         :'status' => :'String',
         :'targets' => :'Array<ErasureTargetOutcome>'
       }
@@ -155,6 +160,10 @@ module Temper::Generated
         if (value = attributes[:'resource_erasures']).is_a?(Array)
           self.resource_erasures = value
         end
+      end
+
+      if attributes.key?(:'slack_revocation')
+        self.slack_revocation = attributes[:'slack_revocation']
       end
 
       if attributes.key?(:'status')
@@ -305,6 +314,7 @@ module Temper::Generated
           event_id == o.event_id &&
           redacted_hashes == o.redacted_hashes &&
           resource_erasures == o.resource_erasures &&
+          slack_revocation == o.slack_revocation &&
           status == o.status &&
           targets == o.targets
     end
@@ -318,7 +328,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [already_erased, blob_strikes, estate_stragglers, event_id, redacted_hashes, resource_erasures, status, targets].hash
+      [already_erased, blob_strikes, estate_stragglers, event_id, redacted_hashes, resource_erasures, slack_revocation, status, targets].hash
     end
 
     # Builds the object from hash

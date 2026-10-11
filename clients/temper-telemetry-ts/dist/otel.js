@@ -123,19 +123,43 @@ export function telemetrySampler() {
     return new AlwaysOnSampler();
 }
 /**
- * Build and register the tracer provider — **once**. Idempotent, so a repeated
- * side-effecting call (dev HMR, multiple entrypoints) does not double-register.
+ * The exporting span processors for a pipeline someone ELSE owns — the eve agents, where eve
+ * (≥0.62) registers the one tracer provider and takes destinations as
+ * `otelIntegration({ spanProcessors })`. eve refuses to start if anything else has registered a
+ * global provider first, so {@link initTelemetry} is not an option there; this is its export half,
+ * without the registration.
  *
- * Mirrors the Rust "no endpoint ⇒ no export" rule: when no OTLP endpoint is configured
- * the provider is never built, span creation stays a no-op, and we never
- * default to `localhost:4318`. An endpoint that is not https off loopback is refused the same
- * way (see `resolveExport`). The exporter is handed the vetted traces URL and reads the headers
- * from the standard env itself.
+ * The same rules as `initTelemetry`, from the same resolution: no endpoint, the kill switch, or a
+ * refused endpoint ⇒ `[]` (logged once, never thrown), so a destination built from it exports
+ * nothing. Otherwise the {@link McpNegotiationStatusProcessor} when `mcpEndpoint` parses, AHEAD of
+ * the batching OTLP exporter (handed the vetted URL; headers from `OTEL_EXPORTER_OTLP_HEADERS`) —
+ * ahead, because under eve only its `onEnd` runs (see `mcp-negotiation.ts`).
+ *
+ * Service name, sampler and HTTP instrumentation are the owner's to set (eve: `otel({ sampler,
+ * instrumentations })`, with `OTEL_SERVICE_NAME` honored by eve's own registration).
  */
-export function initTelemetry({ serviceName, instrumentHttp = false, mcpEndpoint }) {
-    if (provider)
-        return;
+export function otlpSpanProcessors({ mcpEndpoint } = {}) {
     const resolution = resolveExport(process.env);
+    if (resolution.kind !== 'export') {
+        logNoExport(resolution);
+        return [];
+    }
+    const spanProcessors = buildSpanProcessors(resolution, mcpEndpoint);
+    console.info(`[telemetry] span export enabled → ${resolution.host} (${resolution.variable})` +
+        (spanProcessors.length > 1 ? ` (+mcp negotiation status reset for ${mcpEndpoint})` : ''));
+    return spanProcessors;
+}
+/**
+ * The HTTP client auto-instrumentation {@link initTelemetry} registers under `instrumentHttp`, as
+ * instances for a provider owner to register (eve: `otel({ instrumentations })`). Dynamic import
+ * for the same reason as there: consumers that never ask do not load the packages.
+ */
+export async function httpInstrumentations() {
+    const { UndiciInstrumentation } = await import('@opentelemetry/instrumentation-undici');
+    return [new UndiciInstrumentation()];
+}
+/** Report why span export is off — the one place each non-export resolution is worded. */
+function logNoExport(resolution) {
     switch (resolution.kind) {
         case 'disabled':
             console.info('[telemetry] OTEL_SDK_DISABLED=true; span export disabled');
@@ -147,16 +171,15 @@ export function initTelemetry({ serviceName, instrumentHttp = false, mcpEndpoint
             console.error(`[telemetry] ${resolution.reason}`);
             return;
     }
-    // An `OTEL_SERVICE_NAME` env value (project-scoped on Vercel) wins over the passed
-    // name; otherwise the consumer's name is authoritative.
-    const resolvedServiceName = process.env.OTEL_SERVICE_NAME?.trim() || serviceName;
-    tracerName = resolvedServiceName;
+}
+/** The MCP negotiation reset (when the endpoint parses) ahead of the batching OTLP exporter. */
+function buildSpanProcessors(resolution, mcpEndpoint) {
     // `url` is the vetted one, so the exporter never resolves an endpoint of its own (see
     // `resolveExport`); headers stay in env (`OTEL_EXPORTER_OTLP_HEADERS`), shared with the Rust side.
     const exporter = new OTLPTraceExporter({ url: resolution.url });
     const spanProcessors = [];
-    // Runs ahead of the exporting processor for readability only — it acts in `onEnding`,
-    // which fires before any processor's `onEnd`, so the outcome does not depend on order.
+    // Ahead of the exporting processor. Under a provider that calls `onEnding` the order does not
+    // matter (it fires before any `onEnd`); under eve, which forwards only `onEnd`, it does.
     if (mcpEndpoint) {
         const key = negotiationKey(mcpEndpoint);
         if (key) {
@@ -171,6 +194,31 @@ export function initTelemetry({ serviceName, instrumentHttp = false, mcpEndpoint
     // the Rust `flush_within_budget`. The batch timer alone is unsafe on Vercel: the
     // sandbox freezes between invocations and the timer may never fire.
     spanProcessors.push(new BatchSpanProcessor(exporter));
+    return spanProcessors;
+}
+/**
+ * Build and register the tracer provider — **once**. Idempotent, so a repeated
+ * side-effecting call (dev HMR, multiple entrypoints) does not double-register.
+ *
+ * Mirrors the Rust "no endpoint ⇒ no export" rule: when no OTLP endpoint is configured
+ * the provider is never built, span creation stays a no-op, and we never
+ * default to `localhost:4318`. An endpoint that is not https off loopback is refused the same
+ * way (see `resolveExport`). The exporter is handed the vetted traces URL and reads the headers
+ * from the standard env itself.
+ */
+export function initTelemetry({ serviceName, instrumentHttp = false, mcpEndpoint }) {
+    if (provider)
+        return;
+    const resolution = resolveExport(process.env);
+    if (resolution.kind !== 'export') {
+        logNoExport(resolution);
+        return;
+    }
+    // An `OTEL_SERVICE_NAME` env value (project-scoped on Vercel) wins over the passed
+    // name; otherwise the consumer's name is authoritative.
+    const resolvedServiceName = process.env.OTEL_SERVICE_NAME?.trim() || serviceName;
+    tracerName = resolvedServiceName;
+    const spanProcessors = buildSpanProcessors(resolution, mcpEndpoint);
     const built = new NodeTracerProvider({
         resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: resolvedServiceName }),
         sampler: telemetrySampler(),

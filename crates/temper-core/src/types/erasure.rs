@@ -40,6 +40,124 @@ pub struct RedactedEventFields {
     pub paths: Vec<String>,
 }
 
+/// What a deployment's retention policy may keep through a person erasure (R4 of the 2026-10-10
+/// erasure inventory). The act removes every identifier of the subject and every free-text field
+/// about them by default; a category here is kept only when an organisation names it in a policy
+/// with a stated basis and period, and the record then names it `retained under policy <name>`.
+///
+/// Free text and replay evidence only. Identifiers and live credentials are not retainable: a
+/// deployment cannot keep a usable credential or a direct identifier of an erased person, so no
+/// value here names one. The SQL CHECK on `kb_erasure_retention_policies.category` is the same
+/// closed set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum RetentionCategory {
+    /// `kb_principal_standing_events.reason` and its ledger copy `principal_standing_changed.reason`.
+    StandingReasons,
+    /// The ledger's `principal_governance_changed.reason`.
+    GovernanceReasons,
+    /// `kb_join_requests.message` and `.decision_note` of the subject's requests.
+    JoinRequestNotes,
+    /// `kb_principal_review_requests.message` and `.decision_note` of the subject's requests.
+    ReviewRequestNotes,
+    /// `kb_oauth_refresh_replays`: the evidence that one of the subject's refresh tokens was
+    /// copied. Kept with its tokens, which stay revoked with their claims and hash erased.
+    CredentialReplayEvidence,
+    /// The ledger's `principal_erasure_refused.detail`: the operator's stated reason an earlier
+    /// erasure of the subject was refused (the obligation held, the part that could not be
+    /// honoured).
+    ErasureRefusalDetails,
+}
+
+impl RetentionCategory {
+    /// The wire spelling, the one the SQL CHECK and the ledger carry.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::StandingReasons => "standing-reasons",
+            Self::GovernanceReasons => "governance-reasons",
+            Self::JoinRequestNotes => "join-request-notes",
+            Self::ReviewRequestNotes => "review-request-notes",
+            Self::CredentialReplayEvidence => "credential-replay-evidence",
+            Self::ErasureRefusalDetails => "erasure-refusal-details",
+        }
+    }
+}
+
+/// One category a person erasure kept under the deployment's retention policy, as the act's record
+/// carries it: the policy as it stood when the act ran, so the record stays true after the policy
+/// changes and replay keeps exactly what the live act kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct RetainedCategory {
+    pub category: RetentionCategory,
+    /// The policy's name.
+    pub policy: String,
+    /// The stated basis, e.g. `GDPR 17(3)(e) / CCPA 105(d)(1)`.
+    pub basis: String,
+    /// The stated period, as Postgres renders the interval (`1 year`).
+    pub period: String,
+}
+
+/// One retention policy as the door reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct RetentionPolicy {
+    pub name: String,
+    pub category: RetentionCategory,
+    pub basis: String,
+    /// The period, as Postgres renders the interval (`1 year`).
+    pub period: String,
+    /// The operator who last set it.
+    pub set_by: ProfileId,
+    pub updated: chrono::DateTime<chrono::Utc>,
+}
+
+/// The retention door's list answer: every policy, in category order. Empty means a person erasure
+/// keeps nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct RetentionPolicies {
+    pub policies: Vec<RetentionPolicy>,
+}
+
+/// Set the policy for one category: create it, or replace the category's existing policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(deny_unknown_fields)]
+pub struct RetentionPolicySet {
+    /// A slug: lower-case letters, digits and hyphens, starting with a letter or digit.
+    pub name: String,
+    pub category: RetentionCategory,
+    /// The stated basis, e.g. `GDPR 17(3)(e) / CCPA 105(d)(1)`. Required.
+    pub basis: String,
+    /// The period, as a Postgres interval (`1 year`, `90 days`). Must be positive.
+    pub period: String,
+}
+
+/// What a person erasure did about the subject's Slack grants at Slack, before it destroyed temper's
+/// copies (ruled 2026-10-10). Counts, never principals: the answer goes to an operator about an
+/// erased person.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct SlackRevocationTally {
+    /// Grants Slack (or the AS) confirmed revoked.
+    pub revoked: u32,
+    /// Grants whose revoke failed and is pending: the token is held, sealed, for the erasure drain
+    /// to retry until it succeeds or the retry window closes.
+    pub queued: u32,
+    /// Grants that could not be revoked at all: the row could not be opened, or Slack linking is
+    /// not configured on this instance. Destroyed in temper; they may stay live at Slack until they
+    /// expire.
+    pub not_attempted: u32,
+    /// Grants whose revoke was attempted and failed where no retry can succeed: in AS mode, no AS
+    /// row matched the token. Destroyed in temper; not queued.
+    #[serde(default)]
+    pub failed: u32,
+}
+
 // The erasure and block history scrub doors answer in this enum. The ledger records refusals in
 // `RecordedRefusalReason`, which carries every value here and the field scrub's.
 /// The closed refusal vocabulary for `resource_erasure_refused` (resource erasure spec D5, D11).
@@ -479,6 +597,10 @@ pub enum ErasureExecuteResponse {
         /// could not be read: unknown, never zero.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         estate_stragglers: Option<u32>,
+        /// What happened to the subject's Slack grants at Slack before the act destroyed them:
+        /// revoked, queued for retry, or never attempted. Counts only.
+        #[serde(default)]
+        slack_revocation: SlackRevocationTally,
     },
 }
 

@@ -137,3 +137,43 @@ describe('McpNegotiationStatusProcessor', () => {
 		expect(exporter.getFinishedSpans()[0].status.code).toBe(SpanStatusCode.ERROR);
 	});
 });
+
+/**
+ * eve (≥0.62) owns the tracer provider and wraps authored processors in one that forwards only
+ * `onStart` and `onEnd` — never `onEnding` (`PrivateSpanFilteringProcessor`). This stands in for
+ * that wrapper, so the reset is pinned on the path the eve agents actually run.
+ */
+describe('McpNegotiationStatusProcessor under a wrapper that forwards only onEnd', () => {
+	beforeEach(() => {
+		exporter = new InMemorySpanExporter();
+		const inner = [
+			new McpNegotiationStatusProcessor(ENDPOINT_KEY),
+			new SimpleSpanProcessor(exporter)
+		];
+		provider = new NodeTracerProvider({
+			spanProcessors: [
+				{
+					onStart: (span, ctx) => {
+						for (const p of inner) p.onStart(span, ctx);
+					},
+					onEnd: (span) => {
+						for (const p of inner) p.onEnd(span);
+					},
+					forceFlush: async () => {},
+					shutdown: async () => {}
+				}
+			]
+		});
+	});
+
+	// FAILS IF: the reset lives only in `onEnding`, which this wrapper — like eve's — never calls.
+	it('still clears the status of the GET → 405 negotiation', () => {
+		const span = exportClientSpan({ method: 'GET', status: 405, url: MCP_ENDPOINT });
+		expect(span.status.code).toBe(SpanStatusCode.UNSET);
+	});
+
+	it('still leaves any other 405 alone', () => {
+		const span = exportClientSpan({ method: 'POST', status: 405, url: MCP_ENDPOINT });
+		expect(span.status.code).toBe(SpanStatusCode.ERROR);
+	});
+});

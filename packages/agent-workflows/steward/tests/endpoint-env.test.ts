@@ -170,7 +170,9 @@ describe("no read of TEMPER_API_URL / TEMPER_MCP_URL bypasses the gate", () => {
    * span-matching hint and never puts a credential on it. An exact line, not the whole file, so a
    * credential use added there is still caught.
    */
-  const NO_CREDENTIAL = new Set(["instrumentation.ts: mcpEndpoint: process.env.TEMPER_MCP_URL,"]);
+  const NO_CREDENTIAL = new Set([
+    "instrumentation/otlp.ts: spanProcessors: otlpSpanProcessors({ mcpEndpoint: process.env.TEMPER_MCP_URL }),",
+  ]);
   const GATED_FILES = [
     "connections/temper.ts",
     "schedules/auditor.ts",

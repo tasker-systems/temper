@@ -25,6 +25,7 @@ use uuid::Uuid;
 
 use temper_core::types::erasure::{
     EstateCounts, EstateErasureKind, EstateResourceErasure, EstateResourcePlan,
+    SlackRevocationTally,
 };
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_substrate::payloads::ErasureTargetOutcome;
@@ -33,6 +34,7 @@ use temper_workflow::operations::Surface;
 
 use crate::auth::SystemAdmin;
 use crate::error::{ApiError, ApiResult};
+use crate::services::erasure_slack_revocation_service::{self, SlackRevokeConfig};
 use crate::services::resource_erasure_service::{
     is_retryable_act_error, queue_region_settling, MAX_ACT_RETRIES,
 };
@@ -71,6 +73,8 @@ pub struct ErasureCompletion {
     /// Live resources and live blobs still homed in the estate once the act committed (D9, ruled
     /// Q3). `None` when the count could not be read: unknown is never reported as zero.
     pub estate_stragglers: Option<u32>,
+    /// What happened to the subject's Slack grants at Slack before the act destroyed them.
+    pub slack_revocation: SlackRevocationTally,
 }
 
 /// The jsonb `principal_erasure_execute` returns, before mapping onto the typed outcome.
@@ -134,6 +138,31 @@ struct SurveyOutcomeWire {
     resources: Vec<EstateResourcePlan>,
 }
 
+/// What the act needs from the instance beyond the database: how to revoke Slack grants, and which
+/// login provider this instance's tokens resolve through (`AUTH_PROVIDER_NAME`). `Default` is
+/// neither: Slack grants are destroyed unrevoked and refresh tokens never bound to a profile are
+/// not attributed, and the record says both.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ErasureEnv<'a> {
+    pub slack: Option<SlackRevokeConfig<'a>>,
+    pub auth_provider: Option<&'a str>,
+}
+
+/// Tell the act, for this transaction only, which login provider the subject's unbound refresh
+/// tokens resolve through (`_erasure_auth_provider`).
+async fn set_auth_provider(
+    conn: &mut sqlx::PgConnection,
+    provider: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "SELECT set_config('temper.erasure_auth_provider', $1, true)",
+        provider.unwrap_or("")
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 /// Execute the erasure act for `subject`, as the operator `admin` names.
 ///
 /// The [`SystemAdmin`] proof is the authority: the gate ran where the proof was minted, before
@@ -149,6 +178,7 @@ pub async fn execute_erasure(
     subject: ProfileId,
     request_reference: Uuid,
     surface: Surface,
+    env: &ErasureEnv<'_>,
 ) -> ApiResult<ErasureCompletion> {
     let operator = admin.actor();
     // The emitter resolves on the pool, before the transaction opens (a read, not part of the
@@ -172,6 +202,21 @@ pub async fn execute_erasure(
         return Err(ApiError::NotFound("profile not found".to_string()));
     }
 
+    // The subject's Slack grants are revoked at Slack BEFORE the act, while their ciphertext still
+    // exists: the act destroys it, and Slack's revoke takes the token itself (ruled 2026-10-10).
+    // Once, outside the retry loop below, so a retried act never re-asks Slack. A grant whose
+    // revoke failed is queued for the drain in each attempt's own transaction, beside the act, so
+    // a failed attempt queues nothing. `slack` is `None` where linking is not configured: no grant
+    // can be opened, and the tally says how many were destroyed unrevoked. A grant linked between
+    // this read and the act is destroyed unrevoked and uncounted: a narrow race, named here so the
+    // tally is not read as complete.
+    let (slack_revocation, pending) = erasure_slack_revocation_service::revoke_before_erasure(
+        pool,
+        subject.uuid(),
+        env.slack.as_ref(),
+    )
+    .await?;
+
     // The act runs resource erasure once per estate resource (20261021100000), so it fails
     // retryably where that act does: a deadlock, a raced edge fold, a remote source that gained or
     // lost a citer, a collision on the redaction rows (D8). The act is one statement and one
@@ -179,14 +224,22 @@ pub async fn execute_erasure(
     // the post-conflict state.
     let mut retries = 0;
     let raw = loop {
-        let result = sqlx::query_scalar!(
-            r#"SELECT principal_erasure_execute($1, $2, $3, $4) AS "outcome: serde_json::Value""#,
-            subject.uuid(),
-            operator.uuid(),
-            emitter.uuid(),
-            request_reference,
-        )
-        .fetch_one(pool)
+        let result = async {
+            let mut tx = pool.begin().await?;
+            set_auth_provider(&mut tx, env.auth_provider).await?;
+            erasure_slack_revocation_service::queue_pending(&mut tx, &pending).await?;
+            let raw = sqlx::query_scalar!(
+                r#"SELECT principal_erasure_execute($1, $2, $3, $4) AS "outcome: serde_json::Value""#,
+                subject.uuid(),
+                operator.uuid(),
+                emitter.uuid(),
+                request_reference,
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            Ok::<_, sqlx::Error>(raw)
+        }
         .await;
         match result {
             Ok(raw) => break raw,
@@ -195,10 +248,19 @@ pub async fn execute_erasure(
             // collision is a unique violation, which the generic mapping would render as a 409
             // "already exists" that misdescribes it.
             Err(err) => {
+                // The grants revoked above stay revoked: Slack cannot un-revoke them. The vault rows
+                // and links stand until the act is re-run, which destroys them.
+                if slack_revocation.revoked > 0 {
+                    tracing::warn!(
+                        revoked = slack_revocation.revoked,
+                        "principal erasure failed after revoking the subject's Slack grants at \
+                         Slack; re-run the erasure to destroy temper's copies"
+                    );
+                }
                 return Err(ApiError::internal_scrubbed(
                     "principal erasure act failed",
                     err,
-                ))
+                ));
             }
         }
     }
@@ -228,6 +290,7 @@ pub async fn execute_erasure(
         targets: wire.targets,
         blob_strikes,
         already_erased: wire.already_erased,
+        slack_revocation,
         resource_erasures: wire
             .resource_erasures
             .into_iter()
@@ -357,6 +420,7 @@ pub async fn survey_erasure(
     pool: &PgPool,
     _admin: &SystemAdmin,
     subject: ProfileId,
+    auth_provider: Option<&str>,
 ) -> ApiResult<ErasureSurvey> {
     // Operator-only from here: existence may be disclosed (and as an error, not a ledger row).
     let exists: Option<Uuid> = sqlx::query_scalar!(
@@ -369,11 +433,13 @@ pub async fn survey_erasure(
         return Err(ApiError::NotFound("profile not found".to_string()));
     }
 
+    let mut tx = pool.begin().await?;
+    set_auth_provider(&mut tx, auth_provider).await?;
     let raw = sqlx::query_scalar!(
         r#"SELECT principal_erasure_survey($1) AS "survey: serde_json::Value""#,
         subject.uuid(),
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?
     .ok_or_else(|| ApiError::Internal("principal_erasure_survey returned no row".to_string()))?;
     let wire: SurveyOutcomeWire = serde_json::from_value(raw)
@@ -728,6 +794,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::CliCloud,
+            &Default::default(),
         )
         .await
         .expect("the operator's act completes");
@@ -771,6 +838,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            &Default::default(),
         )
         .await
         .expect("the operator's act completes");
@@ -858,6 +926,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            &Default::default(),
         )
         .await
         .expect("completes");
@@ -1036,6 +1105,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            &Default::default(),
         )
         .await
         .expect("completes");
@@ -1162,6 +1232,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            &Default::default(),
         )
         .await
         .expect("completes");
@@ -1312,6 +1383,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            &Default::default(),
         )
         .await
         .expect("completes");
@@ -1391,6 +1463,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            &Default::default(),
         )
         .await
         .expect("completes");
@@ -1440,6 +1513,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            &Default::default(),
         )
         .await
         .expect("completes");
@@ -1544,6 +1618,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            &Default::default(),
         )
         .await
         .expect("first act completes");
@@ -1554,6 +1629,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            &Default::default(),
         )
         .await
         .expect("re-erase completes");
@@ -1638,6 +1714,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
+            &Default::default(),
         )
         .await
         .expect("completes");
@@ -1664,6 +1741,7 @@ mod tests {
                         | "resource_erasures"
                         | "charters_held"
                         | "redacted_fields"
+                        | "retained"
                 ),
                 "unexpected payload key {key:?} — the payload must never carry a trail join-key shape"
             );
