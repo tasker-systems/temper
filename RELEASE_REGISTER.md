@@ -42,7 +42,8 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
   they are (provider-side tokens are not revoked there); empties their entities' metadata; deletes
   their staged uploads; reaches Slack stores through the vault's own profile, not only a current
   link; nulls standing, join and review free text about them; and rewrites the ledger's standing
-  and governance reasons and disconnected Slack ids about them. Before destroying a Slack grant the
+  and governance reasons, an earlier erasure refusal's detail, and disconnected Slack ids about
+  them. Before destroying a Slack grant the
   service revokes it at Slack; a failed revoke is queued, sealed and naming no one, and the
   existing erasure drain cron retries it for up to seven days. A deployment can keep a category of
   free text or replay evidence through a new admin door, `GET`/`PUT /api/admin/erasure/retention`

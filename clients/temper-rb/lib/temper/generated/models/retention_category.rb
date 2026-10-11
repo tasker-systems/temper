@@ -20,9 +20,10 @@ module Temper::Generated
     JOIN_REQUEST_NOTES = "join-request-notes".freeze
     REVIEW_REQUEST_NOTES = "review-request-notes".freeze
     CREDENTIAL_REPLAY_EVIDENCE = "credential-replay-evidence".freeze
+    ERASURE_REFUSAL_DETAILS = "erasure-refusal-details".freeze
 
     def self.all_vars
-      @all_vars ||= [STANDING_REASONS, GOVERNANCE_REASONS, JOIN_REQUEST_NOTES, REVIEW_REQUEST_NOTES, CREDENTIAL_REPLAY_EVIDENCE].freeze
+      @all_vars ||= [STANDING_REASONS, GOVERNANCE_REASONS, JOIN_REQUEST_NOTES, REVIEW_REQUEST_NOTES, CREDENTIAL_REPLAY_EVIDENCE, ERASURE_REFUSAL_DETAILS].freeze
     end
 
     # Builds the enum from string

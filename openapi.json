@@ -1896,7 +1896,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1972,7 +1972,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2069,7 +2069,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -25527,7 +25527,8 @@
           "governance-reasons",
           "join-request-notes",
           "review-request-notes",
-          "credential-replay-evidence"
+          "credential-replay-evidence",
+          "erasure-refusal-details"
         ]
       },
       "RetentionPolicies": {

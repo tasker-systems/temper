@@ -460,7 +460,7 @@ Keep a category, replacing the category's existing policy. The erasure record na
 Usage: temper admin erasure retention set [OPTIONS] --name <NAME> --basis <BASIS> --period <PERIOD> <CATEGORY>
 
 Arguments:
-  <CATEGORY>  The category to keep [possible values: standing-reasons, governance-reasons, join-request-notes, review-request-notes, credential-replay-evidence]
+  <CATEGORY>  The category to keep [possible values: standing-reasons, governance-reasons, join-request-notes, review-request-notes, credential-replay-evidence, erasure-refusal-details]
 
 Options:
       --name <NAME>        The policy's name: a slug (lower-case letters, digits, hyphens)
@@ -481,7 +481,7 @@ Stop keeping a category
 Usage: temper admin erasure retention remove [OPTIONS] <CATEGORY>
 
 Arguments:
-  <CATEGORY>  The category to stop keeping [possible values: standing-reasons, governance-reasons, join-request-notes, review-request-notes, credential-replay-evidence]
+  <CATEGORY>  The category to stop keeping [possible values: standing-reasons, governance-reasons, join-request-notes, review-request-notes, credential-replay-evidence, erasure-refusal-details]
 
 Options:
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)

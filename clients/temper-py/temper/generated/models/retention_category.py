@@ -31,6 +31,7 @@ class RetentionCategory(str, Enum):
     JOIN_MINUS_REQUEST_MINUS_NOTES = 'join-request-notes'
     REVIEW_MINUS_REQUEST_MINUS_NOTES = 'review-request-notes'
     CREDENTIAL_MINUS_REPLAY_MINUS_EVIDENCE = 'credential-replay-evidence'
+    ERASURE_MINUS_REFUSAL_MINUS_DETAILS = 'erasure-refusal-details'
 
     @classmethod
     def from_json(cls, json_str: str) -> Self:
