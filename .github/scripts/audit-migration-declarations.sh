@@ -28,12 +28,23 @@
 #
 #   A. every migration version is declared by SOME migration file;
 #   B. every declared version corresponds to a migration file that exists;
-#   C. every class token is one of the two, and every reason is non-empty.
+#   C. every class token is one of the two, and every reason is non-empty;
+#   D. no two migration files share a version;
+#   E. no version is declared twice (a reclassification is not a declaration, so it does not count).
 #
 # A and B together already catch the copy-paste that a filename-match rule was meant to catch:
 # paste another migration's version into a new one and your own version is declared nowhere, so A
 # fails. They also mean there is no legacy exemption carved out anywhere — the 148 are covered
 # because something declares them, not because they are excused.
+#
+# D and E are the merge collision, which A–C pass. Two branches cut from the same main each add
+# the next timestamp; each is green alone, and once both land main holds two files of one version,
+# each declaring it. Every set above is still satisfied. sqlx refuses it only at apply time: on a
+# fresh database the second file's `_sqlx_migrations` row collides, and on a deployed one that
+# already applied the first it is a checksum `VersionMismatch` that halts the deploy. The ledger
+# refuses nothing: `kb_migration_ledger` is keyed by its own uuid, so a second declaration is just
+# the newer row `migration_current` reads. [observed — 2026-10-11] #1109 and #1111 both took
+# 20261023100000, and this script passed the merged tree.
 #
 # TWO PARSING DECISIONS, BOTH LOAD-BEARING
 # ----------------------------------------
@@ -130,7 +141,9 @@ parse_declarations() {
 
 # ── Collect the two sets ────────────────────────────────────────────────────────────────────────
 FILE_VERSIONS=""      # every migration file's own version
+FILE_OWNERS=""        # `version<TAB>file`, one per migration file (D)
 DECLARED_VERSIONS=""  # every version some file DECLARES
+DECLARERS=""          # `version<TAB>file`, one per declare call (E)
 ALL_NAMED_VERSIONS="" # every version any call names, declaration or reclassification
 PROBLEMS=""
 
@@ -150,6 +163,7 @@ for f in "${FILES[@]}"; do
         ''|*[!0-9]*) PROBLEMS="${PROBLEMS}  ${base}: filename does not begin with a numeric version"$'\n'; continue ;;
     esac
     FILE_VERSIONS="${FILE_VERSIONS}${fver}"$'\n'
+    FILE_OWNERS="${FILE_OWNERS}${fver}"$'\t'"${base}"$'\n'
 
     # Split the four fields BY HAND rather than with `IFS=$'\t' read -r ver cls rsn kind`.
     #
@@ -173,7 +187,10 @@ for f in "${FILES[@]}"; do
         [ "$LIST_ONLY" -eq 1 ] && printf '%s\t%s\t%s\n' "$ver" "$cls" "$rsn"
 
         # A reclassification revises a version that already shipped; it never declares one.
-        [ "$kind" = "declare" ] && DECLARED_VERSIONS="${DECLARED_VERSIONS}${ver}"$'\n'
+        if [ "$kind" = "declare" ]; then
+            DECLARED_VERSIONS="${DECLARED_VERSIONS}${ver}"$'\n'
+            DECLARERS="${DECLARERS}${ver}"$'\t'"${base}"$'\n'
+        fi
         # Either kind must still name a REAL migration, so a typo is caught in both.
         ALL_NAMED_VERSIONS="${ALL_NAMED_VERSIONS}${ver}"$'\n'
 
@@ -210,6 +227,21 @@ if [ -n "$GHOSTS" ]; then
         PROBLEMS="${PROBLEMS}  ${v}: named by a declare/reclassify call, but no migration file has that version. A copy-pasted or mistyped version argument."$'\n'
     done <<< "$GHOSTS"
 fi
+
+# D and E — one version, more than one owner. Each offender is reported once, naming every file
+# involved, so the message says which two branches collided.
+report_duplicates() {
+    local pairs="$1" template="$2" v files
+    while read -r v; do
+        [ -z "$v" ] && continue
+        files="$(printf '%s' "$pairs" | awk -F'\t' -v v="$v" '$1 == v { print $2 }' | paste -sd ',' - | sed 's/,/, /g')"
+        PROBLEMS="${PROBLEMS}  ${v}: $(printf "$template" "$files")"$'\n'
+    done <<< "$(printf '%s' "$pairs" | cut -f1 | sort | uniq -d)"
+}
+report_duplicates "$FILE_OWNERS" \
+    "more than one migration file has this version (%s). Renumber the newer one past the latest version on main, in its file name and its declare_migration call."
+report_duplicates "$DECLARERS" \
+    "declared more than once (by %s). A version declares once; revising a class is reclassify_migration's job."
 
 if [ -n "$PROBLEMS" ]; then
     echo "audit-migration-declarations: FAILED"
