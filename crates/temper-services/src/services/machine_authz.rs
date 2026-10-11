@@ -79,7 +79,7 @@ pub(crate) async fn refuse_machine_above_ceiling(
 
 /// The caller's authority over a machine registration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MachineAuthority {
+pub(crate) enum MachineRegistrationAuthority {
     /// A system admin (a `kb_principal_governance` grant). Full, unchecked reach (Phase A D5).
     SystemAdmin,
     /// Owner of the team that owns (or will own) the machine. Reach is contained.
@@ -98,12 +98,12 @@ pub(crate) async fn authorize(
     pool: &PgPool,
     caller: crate::authz::Principal<'_>,
     team: Option<Uuid>,
-) -> ApiResult<MachineAuthority> {
+) -> ApiResult<MachineRegistrationAuthority> {
     // The policy itself is this enum's `ScopedAuthority` impl (`authz/machine.rs`). This wrapper
     // keeps the non-denial arms as a bare value for the two callers that branch on them, while the
     // gate renders refusal — so a denial still surfaces as `Forbidden`, from one place.
     Ok(
-        crate::authz::authorize::<MachineAuthority>(pool, caller, team)
+        crate::authz::authorize::<MachineRegistrationAuthority>(pool, caller, team)
             .await?
             .authority(),
     )
@@ -225,11 +225,11 @@ pub(crate) async fn authorize_registration<'a>(
 
     match authority {
         // Phase A D5: a system admin may confer any reach on a machine.
-        MachineAuthority::SystemAdmin => Ok(AuthorizedReach {
+        MachineRegistrationAuthority::SystemAdmin => Ok(AuthorizedReach {
             teams,
             grants: AuthorizedReach::seal(grants),
         }),
-        MachineAuthority::TeamOwner => {
+        MachineRegistrationAuthority::TeamOwner => {
             contain_reach(pool, authed, teams, grants).await?;
             Ok(AuthorizedReach {
                 teams,
@@ -238,7 +238,7 @@ pub(crate) async fn authorize_registration<'a>(
         }
         // Unreachable — `authorize` refuses a denial before returning. Enumerated rather than
         // `_ =>` so that a future arm cannot land here and fall into an authorizing branch.
-        MachineAuthority::None => Err(ApiError::Forbidden),
+        MachineRegistrationAuthority::None => Err(ApiError::Forbidden),
     }
 }
 
@@ -278,18 +278,20 @@ fn parse_team_role(role: &str) -> ApiResult<TeamRole> {
 /// `temper-artifacts:specs/2026-07-22-scoped-authority-policy-layer-design.md` §6.1.
 pub(crate) async fn contain_target_team(
     pool: &PgPool,
-    authority: MachineAuthority,
+    authority: MachineRegistrationAuthority,
     caller: ProfileId,
     team_id: Uuid,
 ) -> ApiResult<()> {
     match authority {
-        MachineAuthority::SystemAdmin => team_service::require_team_exists(pool, team_id).await,
-        MachineAuthority::TeamOwner => {
+        MachineRegistrationAuthority::SystemAdmin => {
+            team_service::require_team_exists(pool, team_id).await
+        }
+        MachineRegistrationAuthority::TeamOwner => {
             team_service::require_manage_on_team(pool, team_id, caller).await
         }
         // Unreachable for the same reason as `authorize_registration`'s arm, and enumerated for
         // the same reason.
-        MachineAuthority::None => Err(ApiError::Forbidden),
+        MachineRegistrationAuthority::None => Err(ApiError::Forbidden),
     }
 }
 
@@ -418,7 +420,7 @@ mod tests {
         )
         .await
         .expect("a team owner may register for their own team");
-        assert_eq!(authority, MachineAuthority::TeamOwner);
+        assert_eq!(authority, MachineRegistrationAuthority::TeamOwner);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -483,7 +485,7 @@ mod tests {
         )
         .await
         .expect("an admin may register a teamless machine");
-        assert_eq!(authority, MachineAuthority::SystemAdmin);
+        assert_eq!(authority, MachineRegistrationAuthority::SystemAdmin);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]

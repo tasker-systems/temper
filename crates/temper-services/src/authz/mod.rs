@@ -18,9 +18,9 @@
 //! # Why it exists
 //!
 //! Three domains had independently grown the same shape — resolve the caller's authority over a
-//! subject into a typed enum, then act under it (`GrantAuthority`, `MachineAuthority`, and
-//! temper-principal's `ActorAuthority`) — and one of them, `AuthorizedReach`, had also grown the
-//! sealed proof-about-a-value that makes the unchecked path unrepresentable. This module names
+//! subject into a typed enum, then act under it (`GrantAuthority`, `MachineRegistrationAuthority`,
+//! and temper-principal's `ActorAuthority`) — and one of them, `AuthorizedReach`, had also grown
+//! the sealed proof-about-a-value that makes the unchecked path unrepresentable. This module names
 //! that shape once so the remaining gates inherit it instead of re-deriving it.
 //!
 //! Design: `temper-artifacts:specs/2026-07-22-scoped-authority-policy-layer-design.md`.
@@ -151,9 +151,10 @@ impl Principal<'_> {
 /// A domain's answer to "what authority does this caller hold over this subject?"
 ///
 /// Implemented by each domain's own authority enum. The arms stay domain-specific on purpose:
-/// `GrantAuthority::Delegated` carries an attenuation obligation that `MachineAuthority::TeamOwner`
-/// does not, and collapsing them into one shared enum would erase a distinction the compiler is
-/// currently keeping for us. Same shape, different intent, separate types.
+/// `GrantAuthority::Delegated` carries an attenuation obligation that
+/// `MachineRegistrationAuthority::TeamOwner` does not, and collapsing them into one shared enum
+/// would erase a distinction the compiler is currently keeping for us. Same shape, different
+/// intent, separate types.
 // `#[async_trait]` stamps a bare `#[must_use]` on each method whose return it boxes into a
 // `Pin<Box<dyn Future>>` — already `#[must_use]` — which clippy 1.99's `double_must_use` rejects.
 // The attribute is the macro's, not ours; the allow is scoped to this trait's expansion.
@@ -336,7 +337,7 @@ mod tests {
     use crate::services::access_service::GrantAuthority;
     use crate::services::connection_service::CONNECTION_REFUSAL;
     use crate::services::context_service::CONTEXT_REFUSAL;
-    use crate::services::machine_authz::MachineAuthority;
+    use crate::services::machine_authz::MachineRegistrationAuthority;
     use crate::services::machine_client_service::MACHINE_CLIENT_REFUSAL;
     use crate::services::subscription_service::SUBSCRIPTION_REFUSAL;
 
@@ -414,7 +415,10 @@ mod tests {
 
     #[test]
     fn machine_authority_denies_in_one_voice() {
-        assert_one_voice("MachineAuthority", MachineAuthority::None);
+        assert_one_voice(
+            "MachineRegistrationAuthority",
+            MachineRegistrationAuthority::None,
+        );
     }
 
     #[test]
@@ -646,8 +650,8 @@ mod admin_rung_tests {
     );
     rung!(
         machine_authority_admin_arm_is_minted_from_a_person,
-        crate::services::machine_authz::MachineAuthority,
-        crate::services::machine_authz::MachineAuthority::SystemAdmin,
+        crate::services::machine_authz::MachineRegistrationAuthority,
+        crate::services::machine_authz::MachineRegistrationAuthority::SystemAdmin,
         None::<Uuid>
     );
     rung!(

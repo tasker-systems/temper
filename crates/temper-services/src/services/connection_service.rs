@@ -1,13 +1,13 @@
 //! Persistence for `kb_connections` — temper's authed link to a remote system.
 //!
 //! A connection is a machine principal wearing an integration's clothes, so authorization is
-//! `MachineAuthority`'s policy **verbatim**: a system admin, or the OWNER of the team that owns
-//! the connection, with a teamless connection failing closed. Provisioning asks it directly
-//! (`machine_authz::authorize`, keyed on the team the caller names); every act on an existing
-//! connection asks it through `authz::ConnectionControlAuthority`, keyed on the row, whose refusal
-//! is indistinguishable from a missing id. Calling the machine gate rather than restating it is
-//! deliberate — tighten that predicate and this surface tightens with it. There is no second copy
-//! of the policy to drift.
+//! `MachineRegistrationAuthority`'s policy **verbatim**: a system admin, or the OWNER of the team
+//! that owns the connection, with a teamless connection failing closed. Provisioning asks it
+//! directly (`machine_authz::authorize`, keyed on the team the caller names); every act on an
+//! existing connection asks it through `authz::ConnectionControlAuthority`, keyed on the row, whose
+//! refusal is indistinguishable from a missing id. Calling the machine gate rather than restating
+//! it is deliberate — tighten that predicate and this surface tightens with it. There is no second
+//! copy of the policy to drift.
 //!
 //! Writes are admin-driven and rare. Nothing here emits a ledger event: an admin creating a
 //! connection is not a receipt of anything external, and this goal's own invariant is that *the
@@ -518,9 +518,10 @@ pub async fn set_tool_manifest(
 /// Auth before writes, on **both** teams in play — they are different questions, and they are now
 /// one gate: `crate::authz::ConnectionAuthority`. It composes, rather than restates, the two:
 ///
-/// 1. *May you act on this connection?* — `MachineAuthority`, keyed on the connection's own owning
-///    team: a system admin, or the OWNER of that team; a teamless connection fails closed. The SAME
-///    policy as every other connection mutator, CALLED not restated. It deliberately does NOT route
+/// 1. *May you act on this connection?* — `MachineRegistrationAuthority`, keyed on the
+///    connection's own owning team: a system admin, or the OWNER of that team; a teamless
+///    connection fails closed. The SAME policy as every other connection mutator, CALLED not
+///    restated. It deliberately does NOT route
 ///    through `access_service::can_administer_grant`, whose `can_grant` seam has no bootstrap
 ///    holder for a connection subject.
 /// 2. *May you hand read-reach to THAT team?* — `machine_authz::contain_target_team`: a
@@ -1685,9 +1686,9 @@ mod tests {
         assert!(!after.is_reach_capable());
     }
 
-    /// The mutators pass `ConnectionControlAuthority` — `MachineAuthority`'s policy, keyed on the
-    /// EXISTING row's owning team. A maintainer is not an owner, and is refused as if the connection
-    /// did not exist.
+    /// The mutators pass `ConnectionControlAuthority` — `MachineRegistrationAuthority`'s policy,
+    /// keyed on the EXISTING row's owning team. A maintainer is not an owner, and is refused as if
+    /// the connection did not exist.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_mere_maintainer_cannot_attach_a_credential(pool: PgPool) {
         let admin = seed_admin(&pool).await;
