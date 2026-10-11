@@ -31,6 +31,23 @@ This repo ships a temper skill that teaches the workflow. Install it with
 `temper skill install --target claude`. The skill teaches session lifecycle, grounding, and
 outcome registers — read it after install.
 
+## Commit attribution
+
+**Do not add `Co-Authored-By:` trailers to commits.** This overrides Claude Code's default
+attribution lines. The CLA check counts every co-author email as a contributor who must sign
+the CLA, so a `Co-Authored-By: Claude … <noreply@anthropic.com>` trailer fails it even when the
+author, committer and pusher are all a signed human.
+
+AI assistance is still credited, with email-free trailers the CLA check does not parse:
+
+```
+Assisted-by: Claude Code
+Claude-Session: <session url>   # when the session has one
+```
+
+PR descriptions are unaffected — keep their attribution as is. Details in
+[internal/agents/conventions.md](internal/agents/conventions.md#commit-attribution).
+
 ## Where specs and plans go
 
 **Not in this repository.** Specs, plans, reviews, spikes and handoffs live in

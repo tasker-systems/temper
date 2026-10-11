@@ -23,6 +23,24 @@ These patterns are observed in recent history rather than rigidly enforced. Matc
 
 Self-contained features sometimes use a plain narrative title with no prefix (e.g. "Limb 1 — relationship events + edge projection", "Add offline_access scope and refresh_token grant support"). That's fine when the PR is its own story; reach for a prefix when the change is one beat of a longer arc.
 
+### Commit attribution
+
+Commits carry **no `Co-Authored-By:` trailers**. The CLA check on this organization's repositories
+reads every co-author trailer as a contributor and requires each one's email to have signed the
+CLA. An agent co-author line (`Co-Authored-By: Claude … <noreply@anthropic.com>`) is an email no
+one can sign for, so it fails the check even when the commit's author, committer and pusher are
+all a signed human.
+
+AI assistance is credited with trailers that name no email, which the CLA check ignores:
+
+```
+Assisted-by: Claude Code
+Claude-Session: https://claude.ai/code/session_…   (when the session has one)
+```
+
+This applies to commit messages only. PR descriptions keep whatever attribution line the agent
+normally adds — the CLA check does not read them.
+
 ### Bundling fixes into the PR that surfaced them
 
 If a fix's story is "this PR's tests / new code path surfaced a pre-existing bug," bundle it into the same PR rather than extracting. The narrative stays cohesive: one PR, one explanation. Examples in history: PR #69 bundled the empty-body dedup fix into Phase 3a's PR because workspace feature unification first exposed it under that test suite.

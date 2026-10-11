@@ -30,6 +30,14 @@ This repo ships a temper skill that teaches the workflow. Install it with
 `temper skill install --target opencode` (or `--target claude` for Claude Code). The skill teaches
 session lifecycle, grounding, and outcome registers — read it after install.
 
+## Commit attribution
+
+**Do not add `Co-Authored-By:` trailers to commits.** The CLA check counts every co-author email
+as a contributor who must sign the CLA, so an agent co-author trailer fails it even when the
+human author has signed. Credit AI assistance with an email-free trailer instead
+(`Assisted-by: <agent name>`). Details in
+[internal/agents/conventions.md](internal/agents/conventions.md#commit-attribution).
+
 ## Where specs and plans go
 
 **Not in this repository.** Specs, plans, reviews, spikes and handoffs live in the
