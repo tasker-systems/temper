@@ -62,7 +62,10 @@ percent-encoding = "2"
 jsonschema = "0.45"
 
 [features]
-test-db = []
+# Implies test-harness: this crate's own integration suites (`tests/*.rs`) drive `DbBackend::new`,
+# which exists only under the harness, so a single-crate `--features test-db` run must build it.
+# The reverse is what the comment below forbids.
+test-db = ["test-harness"]
 # Deliberately NARROWER than test-db: gates only the test-only constructors a foreign
 # crate's harness builds (`JwksKeyStore::with_static_key`). It must NOT coincide with
 # test-db, because feature unification in a `--workspace` build would then compile this

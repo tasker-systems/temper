@@ -42,7 +42,7 @@ use temper_core::types::query_params::MachineClientListQuery as ListQuery;
         (status = 200, description = "The registered machine client", body = MachineClient),
         (status = 400, description = "Unknown team role in `teams`", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 409, description = "The `client_id` is already registered", body = ErrorBody),
     )
 )]
@@ -72,7 +72,7 @@ pub async fn provision(
         (status = 200, description = "The new machine client, bound to the inherited profile", body = MachineClient),
         (status = 400, description = "The source client cannot be rebound (e.g. already revoked)", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such machine client", body = ErrorBody),
         (status = 409, description = "The new `client_id` is already registered", body = ErrorBody),
     )
@@ -104,7 +104,7 @@ pub async fn rebind(
     responses(
         (status = 200, description = "The machine clients visible to the caller", body = Vec<MachineClient>),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
     )
 )]
 pub async fn list(
@@ -129,7 +129,7 @@ pub async fn list(
     responses(
         (status = 200, description = "The machine client", body = MachineClient),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such machine client, or one the caller may not act on: the two are answered identically", body = ErrorBody),
     )
 )]
@@ -155,7 +155,7 @@ pub async fn get(
     responses(
         (status = 200, description = "The revoked machine client", body = MachineClient),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such machine client, or one the caller may not act on: the two are answered identically", body = ErrorBody),
     )
 )]
@@ -182,7 +182,7 @@ pub async fn revoke(
         (status = 200, description = "The new machine client and its one-time `client_secret`", body = IssuedMachineCredential),
         (status = 400, description = "Unknown team role in `teams`", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
     )
 )]
 pub async fn issue(
@@ -208,7 +208,7 @@ pub async fn issue(
         (status = 200, description = "The machine client and its new one-time `client_secret`", body = IssuedMachineCredential),
         (status = 400, description = "`grace_seconds` is out of range, the client was not issued by temper, or the client is revoked", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such machine client, or one the caller may not act on: the two are answered identically", body = ErrorBody),
     )
 )]

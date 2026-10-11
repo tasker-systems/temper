@@ -16,7 +16,7 @@ use temper_core::types::slack::IdpRevocation;
 
 use super::grant_crypto::VaultKey;
 use super::slack_grant_vault_service;
-use crate::auth::SystemAdmin;
+use crate::auth::{HumanPrincipal, SystemAdmin};
 use crate::auth_config::AuthMode;
 use crate::error::{ApiError, ApiResult};
 use crate::oauth_client;
@@ -50,8 +50,22 @@ pub struct DisconnectRequest<'a> {
     pub client_id: &'a str,
 }
 
+/// Unbind one of the caller's own Slack principals — the self-serve arm, where the actor is the
+/// subject being unbound. A person's act: the `&HumanPrincipal` is what refuses a machine.
+///
+/// The caller names only its own principals; the handler derives them from the caller's own link
+/// rows, so there is no input to forge.
+pub async fn disconnect_own(
+    pool: &PgPool,
+    who: &HumanPrincipal,
+    req: DisconnectRequest<'_>,
+) -> ApiResult<DisconnectOutcome> {
+    disconnect_slack_principal(pool, who.profile_id(), req).await
+}
+
 /// Unbind a Slack principal: revoke the grant, then delete identity, secret and
-/// intents in one transaction.
+/// intents in one transaction. Crate-private: the two doors are [`disconnect_own`] (a person
+/// unbinding themselves) and [`admin_disconnect_slack_principal`] (an operator, by proof).
 ///
 /// Idempotent — disconnecting an unlinked principal succeeds quietly, with both
 /// booleans false, no intents swept, and [`IdpRevocation::NotAttempted`].
@@ -67,7 +81,7 @@ pub struct DisconnectRequest<'a> {
 /// struct means the admin arm passes `admin.actor()` from its proof and a caller
 /// has no field in which to supply an operator id that disagrees with who
 /// actually authorized the act.
-pub async fn disconnect_slack_principal(
+pub(crate) async fn disconnect_slack_principal(
     pool: &PgPool,
     actor: ProfileId,
     req: DisconnectRequest<'_>,
@@ -386,9 +400,13 @@ mod tests {
     /// tests only need the rows to exist beforehand, so they arrange each on its own connection.
     async fn seed_link(pool: &PgPool, profile_id: Uuid, principal: &str) {
         let mut conn = pool.acquire().await.expect("acquire");
-        crate::services::slack_link_service::link_slack_principal(&mut conn, profile_id, principal)
-            .await
-            .expect("link");
+        crate::services::slack_link_service::link_slack_principal(
+            &mut conn,
+            &crate::test_support::human_principal_for(pool, profile_id).await,
+            principal,
+        )
+        .await
+        .expect("link");
     }
 
     /// Seal a grant for `principal` under `key`. The access token and TTL are fixed because no
@@ -401,12 +419,13 @@ mod tests {
         principal: &str,
         refresh_token: &str,
     ) {
+        let owner = crate::test_support::human_principal_for(pool, profile_id).await;
         let mut conn = pool.acquire().await.expect("acquire");
         crate::services::slack_grant_vault_service::store_grant(
             &mut conn,
             key,
             crate::services::slack_grant_vault_service::NewGrant {
-                profile_id,
+                owner: &owner,
                 slack_principal_id: principal,
                 refresh_token,
                 access_token: "at",

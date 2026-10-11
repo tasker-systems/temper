@@ -271,11 +271,15 @@ pub enum SlackLinkOutcome {
 /// either write runs. As two independent autocommits, a process death between them produced
 /// exactly that unrecoverable state with no page ever rendering. The executor type forces the
 /// callback to span both in one transaction.
+///
+/// **Takes `&HumanPrincipal`.** Linking binds a credential grant to a profile, a person's act: a
+/// machine never links a Slack account.
 pub async fn link_slack_principal(
     conn: &mut sqlx::PgConnection,
-    profile_id: Uuid,
+    linker: &crate::auth::HumanPrincipal,
     slack_principal_id: &str,
 ) -> ApiResult<SlackLinkOutcome> {
+    let profile_id = linker.profile().id;
     let row = sqlx::query!(
         r#"
         INSERT INTO kb_profile_auth_links
@@ -313,9 +317,13 @@ mod tests {
     /// not that atomicity, so they hand it a connection straight off the pool.
     async fn link(pool: &PgPool, profile_id: Uuid, principal: &str) -> SlackLinkOutcome {
         let mut conn = pool.acquire().await.expect("acquire");
-        link_slack_principal(&mut conn, profile_id, principal)
-            .await
-            .expect("link")
+        link_slack_principal(
+            &mut conn,
+            &crate::test_support::human_principal_for(pool, profile_id).await,
+            principal,
+        )
+        .await
+        .expect("link")
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -552,9 +560,13 @@ mod tests {
 
         let mut tx = pool.begin().await.expect("begin");
         assert_eq!(
-            link_slack_principal(&mut tx, profile_id, PRINCIPAL)
-                .await
-                .expect("link"),
+            link_slack_principal(
+                &mut tx,
+                &crate::test_support::human_principal_for(&pool, profile_id).await,
+                PRINCIPAL
+            )
+            .await
+            .expect("link"),
             SlackLinkOutcome::Linked,
         );
         tx.rollback().await.expect("rollback");

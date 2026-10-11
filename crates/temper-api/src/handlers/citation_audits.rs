@@ -2,7 +2,7 @@ use axum::extract::{Path, State};
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use crate::middleware::surface::RequestSurface;
 use temper_core::types::authorship::ActContext;
 use temper_core::types::citation_audit::{
@@ -52,7 +52,7 @@ use temper_workflow::operations::{Backend, RecordCitationAudit};
 )]
 pub async fn record(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Json(req): Json<CitationAuditRequest>,
@@ -124,7 +124,7 @@ pub async fn record(
 )]
 pub async fn record_for_block(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Json(req): Json<BlockCitationAuditRequest>,
 ) -> ApiResult<Json<Uuid>> {
@@ -186,7 +186,7 @@ pub async fn record_for_block(
 )]
 pub async fn list(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<CitationAuditRow>>> {
     citation_audit_service::list_citation_audits(

@@ -29,7 +29,7 @@ use temper_services::state::AppState;
 use temper_substrate::payloads::{AnchorRef, AnchorTable};
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use crate::middleware::surface::RequestSurface;
 use temper_core::types::query_params::{BlobListQuery, SegmentQuery};
 
@@ -63,7 +63,7 @@ use temper_core::types::query_params::{BlobListQuery, SegmentQuery};
 )]
 pub async fn commit(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     mut multipart: Multipart,
 ) -> ApiResult<Json<BlobCommitResponse>> {
@@ -200,7 +200,7 @@ pub async fn commit(
 )]
 pub async fn get(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(blob_id): Path<Uuid>,
 ) -> ApiResult<Response> {
     let store = state
@@ -241,7 +241,7 @@ pub async fn get(
 }
 
 // ── Segmented upload (S3, D7) ─────────────────────────────────────────────────────
-// Thin handlers, the `segments.rs` shape: AuthUser extractor → service → ApiError. The
+// Thin handlers, the `segments.rs` shape: AnyPrincipal extractor → service → ApiError. The
 // gates live in the service (owner-equality on the session row; the F-2 standing two-step
 // at begin and again at finalize); the wrapper stays the sole cap/allowlist authority.
 
@@ -284,7 +284,7 @@ fn parse_home_table(table: &str) -> ApiResult<AnchorTable> {
 )]
 pub async fn begin_upload(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Json(payload): Json<BlobUploadBeginRequest>,
 ) -> ApiResult<Json<BlobUploadBeginResponse>> {
     if state.blob_store.is_none() || state.config.blob.is_none() {
@@ -340,7 +340,7 @@ pub async fn begin_upload(
 )]
 pub async fn append_segment(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(upload_id): Path<Uuid>,
     Query(q): Query<SegmentQuery>,
     body: Bytes,
@@ -384,7 +384,7 @@ pub async fn append_segment(
 )]
 pub async fn upload_progress(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(upload_id): Path<Uuid>,
 ) -> ApiResult<Json<BlobUploadProgress>> {
     // No disabled gate here: begin refuses an unconfigured instance, so no session can
@@ -423,7 +423,7 @@ pub async fn upload_progress(
 )]
 pub async fn finalize_upload(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(upload_id): Path<Uuid>,
     Json(payload): Json<BlobUploadFinalizeRequest>,
@@ -459,7 +459,7 @@ pub async fn finalize_upload(
 }
 
 // ── Blob list + relations (S4) ────────────────────────────────────────────────────
-// Same thin shape as every handler in this file: AuthUser → service → ApiError. The
+// Same thin shape as every handler in this file: AnyPrincipal → service → ApiError. The
 // gates live in the service (the NAMED predicates) — these handlers parse wire strings
 // and route, never restate visibility.
 
@@ -485,7 +485,7 @@ pub async fn finalize_upload(
 )]
 pub async fn list(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Query(q): Query<BlobListQuery>,
 ) -> ApiResult<Json<Vec<BlobSummary>>> {
     if state.blob_store.is_none() {
@@ -529,7 +529,7 @@ pub async fn list(
 )]
 pub async fn relate(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(blob_id): Path<Uuid>,
     Json(req): Json<BlobRelationAssertRequest>,
@@ -571,7 +571,7 @@ pub async fn relate(
 )]
 pub async fn relations(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(blob_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<temper_core::types::blob::BlobRelationRow>>> {
     // Blob-scoped read, so the same disabled refusal as `get`: an unconfigured instance
@@ -619,7 +619,7 @@ pub async fn relations(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(blob_id): Path<Uuid>,
     Query(act_in): Query<temper_core::types::authorship::ActInput>,

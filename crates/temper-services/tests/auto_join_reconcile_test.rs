@@ -22,7 +22,7 @@ async fn a_profile(pool: &PgPool, handle: &str) -> Uuid {
 
 /// Mint the `SystemAdmin` proof for an admin profile — the capability the acts require.
 async fn admin_proof(pool: &PgPool, admin_id: Uuid) -> SystemAdmin {
-    let a = test_support::authenticated_profile_for(pool, admin_id).await;
+    let a = test_support::human_principal_for(pool, admin_id).await;
     require_system_admin(pool, &a)
         .await
         .expect("admin mints a proof")

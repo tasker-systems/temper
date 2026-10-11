@@ -27,6 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AUDIT_SCRIPT="${SCRIPT_DIR}/audit-route-auth.sh"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 REAL_ROUTES="${REPO_ROOT}/crates/temper-api/src/routes"
+REAL_API_SRC="${REPO_ROOT}/crates/temper-api/src"
 PASS=0
 FAIL=0
 
@@ -45,7 +46,12 @@ run_test() {
 
     local output actual_exit
     set +e
-    output="$(ROUTES_FILE="$routes_path" bash "$AUDIT_SCRIPT" 2>&1)"
+    # FIX_HANDLERS_DIR / FIX_API_SRC_DIR point the handler checks (e)/(f) and the source check (g)
+    # at fixture copies; unset, the auditor reads the live tree.
+    output="$(ROUTES_FILE="$routes_path" \
+        HANDLERS_DIR="${FIX_HANDLERS_DIR:-${REPO_ROOT}/crates/temper-api/src/handlers}" \
+        API_SRC_DIR="${FIX_API_SRC_DIR:-${REPO_ROOT}/crates/temper-api/src}" \
+        bash "$AUDIT_SCRIPT" 2>&1)"
     actual_exit=$?
     set -e
 
@@ -220,6 +226,377 @@ open(p, "w").write(s)
 PYEOF
 run_test "Gated arm's auth/system-access pair swapped: fails" "$FIX" 1 \
     "order pin"
+
+# --- (i) the order pins are bounded by arm: a name missing from its OWN arm fails even when a later
+#     arm still has it ---
+# The Gated arm losing require_system_access while HumanGated keeps it: an unbounded sequential
+# search would find HumanGated's occurrence and pass over a gated tier that admits the unapproved.
+FIX="${FIXTURE_DIR}/gated_arm_no_system_access"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+head, rest = s.split("Tier::Gated => router", 1)
+arm, tail = rest.split("Tier::HumanGated =>", 1)
+cut = """            .layer(from_fn_with_state(
+                state.clone(),
+                system_access::require_system_access,
+            ))
+"""
+assert cut in arm, "Gated arm's system-access layer not found"
+s = head + "Tier::Gated => router" + arm.replace(cut, "", 1) + "Tier::HumanGated =>" + tail
+open(p, "w").write(s)
+PYEOF
+run_test "Gated arm missing require_system_access (HumanGated still has it): fails" "$FIX" 1 \
+    "'system_access::require_system_access' not found in apply_tier's 'Tier::Gated =>' arm"
+
+# The admin tier losing its machine refusal while HumanAuthOnly keeps one.
+FIX="${FIXTURE_DIR}/human_gated_no_refusal"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+head, rest = s.split("Tier::HumanGated => router", 1)
+arm, tail = rest.split("Tier::InternalHmac", 1)
+cut = "            .layer(from_fn(auth::refuse_machine))\n"
+assert cut in arm, "HumanGated arm's refusal not found"
+s = head + "Tier::HumanGated => router" + arm.replace(cut, "", 1) + "Tier::InternalHmac" + tail
+open(p, "w").write(s)
+PYEOF
+run_test "HumanGated arm missing refuse_machine (HumanAuthOnly still has it): fails" "$FIX" 1 \
+    "'auth::refuse_machine' not found in apply_tier's 'Tier::HumanGated =>' arm"
+
+# The refusal moved INNER to require_system_access — composed from the Gated arm instead of spelled
+# out: an unapproved machine would be told it lacks system access, not that it is a machine.
+FIX="${FIXTURE_DIR}/human_gated_refusal_innermost"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+head, rest = s.split("Tier::HumanGated => router", 1)
+arm, tail = rest.split("Tier::InternalHmac", 1)
+refusal = "            .layer(from_fn(auth::refuse_machine))\n"
+assert refusal in arm
+arm = arm.replace(refusal, "", 1)
+arm = "\n" + refusal + arm.lstrip("\n")
+s = head + "Tier::HumanGated => router" + arm + "Tier::InternalHmac" + tail
+open(p, "w").write(s)
+PYEOF
+run_test "HumanGated refusal moved inner to require_system_access: fails" "$FIX" 1 \
+    "'auth::refuse_machine' not found in apply_tier's 'Tier::HumanGated =>' arm (after offset"
+
+# --- (j) a human-only row quietly moved to a machine-admitting tier fails ---
+FIX="${FIXTURE_DIR}/admin_tier_admits_machines"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+a = 'key: "admin_routes", tier: Tier::HumanGated,'
+assert a in s
+s = s.replace(a, 'key: "admin_routes", tier: Tier::Gated,', 1)
+open(p, "w").write(s)
+PYEOF
+run_test "admin_routes tier relaxed to Gated: fails" "$FIX" 1 \
+    "table row changed"
+
+# --- (k) the machine-admitting status group gaining a handler fails ---
+FIX="${FIXTURE_DIR}/status_group_grows"
+copy_module "$FIX"
+python3 - "$FIX/auth_only.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+a = "OpenApiRouter::new().routes(routes!(handlers::profiles::get))"
+assert a in s
+s = s.replace(a, a + "\n        .routes(routes!(handlers::profiles::update))", 1)
+open(p, "w").write(s)
+PYEOF
+run_test "a handler added to auth_only_status_routes: fails" "$FIX" 1 \
+    "the auth_only_status group's handler set changed"
+
+# --- (l) a handler that names no identity extractor fails (e) ---
+FIX_SRC="${FIXTURE_DIR}/src_no_extractor"
+cp -R "$REAL_API_SRC" "$FIX_SRC"
+python3 - "$FIX_SRC/handlers/access.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+a = "    State(state): State<AppState>,\n    _auth: AuthUser,\n) -> ApiResult<Json<PublicSystemSettings>> {"
+assert a in s, "get_settings signature not found"
+s = s.replace(a, "    State(state): State<AppState>,\n) -> ApiResult<Json<PublicSystemSettings>> {", 1)
+open(p, "w").write(s)
+PYEOF
+FIX_HANDLERS_DIR="$FIX_SRC/handlers" FIX_API_SRC_DIR="$FIX_SRC"
+run_test "an auth-covered handler with no extractor: fails" "$REAL_ROUTES" 1 \
+    "names no identity extractor"
+unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
+
+# --- (m) a new machine-admitting (AnyPrincipal) handler fails (f) ---
+FIX_SRC="${FIXTURE_DIR}/src_new_any_principal"
+cp -R "$REAL_API_SRC" "$FIX_SRC"
+python3 - "$FIX_SRC/handlers/access.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+a = "    _auth: AuthUser,\n) -> ApiResult<Json<PublicSystemSettings>> {"
+assert a in s, "get_settings signature not found"
+s = s.replace(a, "    _auth: AnyPrincipal,\n) -> ApiResult<Json<PublicSystemSettings>> {", 1)
+open(p, "w").write(s)
+PYEOF
+FIX_HANDLERS_DIR="$FIX_SRC/handlers" FIX_API_SRC_DIR="$FIX_SRC"
+run_test "a handler newly taking AnyPrincipal: fails" "$REAL_ROUTES" 1 \
+    "the set of machine-admitting (AnyPrincipal) handlers changed"
+unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
+
+# --- (n) a raw caller proof read from extensions outside middleware/ fails (g) ---
+# Two spellings: the field form on one line, and a method form split across lines with a
+# path-qualified type — the second is what a line grep for a bare type name misses.
+for spelling in field split; do
+  FIX_SRC="${FIXTURE_DIR}/src_raw_proof_${spelling}"
+  cp -R "$REAL_API_SRC" "$FIX_SRC"
+  python3 - "$FIX_SRC/handlers/health.rs" "$spelling" <<'PYEOF'
+import sys
+p, spelling = sys.argv[1], sys.argv[2]
+s = open(p).read()
+if spelling == "field":
+    s += "\nfn peek(parts: &axum::http::request::Parts) -> bool { parts.extensions.get::<Caller>().is_some() }\n"
+else:
+    s += "\nfn peek(req: &axum::http::Request<axum::body::Body>) -> bool {\n    req.extensions()\n        .get::<temper_services::auth::Caller>()\n        .is_some()\n}\n"
+open(p, "w").write(s)
+PYEOF
+  FIX_HANDLERS_DIR="$FIX_SRC/handlers" FIX_API_SRC_DIR="$FIX_SRC"
+  run_test "a raw Caller read from extensions outside middleware (${spelling}): fails" "$REAL_ROUTES" 1 \
+      "a raw caller proof read from request extensions outside middleware/"
+  unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
+done
+
+# --- (o) a route an auth-covered group mounts by anything but its handler's path fails (h) ---
+# Three spellings the name-based checks and the refusal table cannot see: a handler through an
+# aliased module import, a raw `.route(` (no OpenAPI entry either), and a `.merge(` of a router
+# that is not a group function.
+for spelling in alias raw_route foreign_merge; do
+  FIX="${FIXTURE_DIR}/unnamed_mount_${spelling}"
+  copy_module "$FIX"
+  python3 - "$FIX/gated.rs" "$spelling" <<'PYEOF2'
+import sys
+p, spelling = sys.argv[1], sys.argv[2]
+s = open(p).read()
+a = "use crate::handlers;\n"
+assert a in s
+b = "        .routes(routes!(handlers::resources::get_content))"
+assert b in s
+if spelling == "alias":
+    s = s.replace(a, a + "use crate::handlers::teams as t;\n", 1)
+    s = s.replace(b, b + "\n        .routes(routes!(t::create))", 1)
+elif spelling == "raw_route":
+    s = s.replace(b, b + '\n        .route("/api/probe", axum::routing::post(handlers::teams::create))', 1)
+else:
+    s = s.replace(b, b + "\n        .merge(probe_router())", 1)
+open(p, "w").write(s)
+PYEOF2
+  run_test "an auth-covered group mounting a route by ${spelling}: fails" "$FIX" 1 \
+      "an auth-covered group mounts a route not named handlers::<mod>::<fn>"
+done
+
+# --- (p) the HumanAuthOnly arm losing its machine refusal fails (bounded order pin) ---
+FIX="${FIXTURE_DIR}/human_auth_only_no_refusal"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF2'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+head, rest = s.split("Tier::HumanAuthOnly => router", 1)
+arm, tail = rest.split("Tier::Gated =>", 1)
+cut = "            .layer(from_fn(auth::refuse_machine))\n"
+assert cut in arm, "HumanAuthOnly arm's refusal not found"
+s = head + "Tier::HumanAuthOnly => router" + arm.replace(cut, "", 1) + "Tier::Gated =>" + tail
+open(p, "w").write(s)
+PYEOF2
+run_test "HumanAuthOnly arm missing refuse_machine: fails" "$FIX" 1 \
+    "'auth::refuse_machine' not found in apply_tier's 'Tier::HumanAuthOnly =>' arm"
+
+# --- (q) the person-only self-service row relaxed to the machine-admitting tier fails ---
+FIX="${FIXTURE_DIR}/auth_only_tier_admits_machines"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF2'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+a = 'key: "auth_only_routes", tier: Tier::HumanAuthOnly,'
+assert a in s
+s = s.replace(a, 'key: "auth_only_routes", tier: Tier::AuthOnly,', 1)
+open(p, "w").write(s)
+PYEOF2
+run_test "auth_only_routes tier relaxed to AuthOnly: fails" "$FIX" 1 \
+    "table row changed"
+
+# --- (r) a handler naming two identity extractors fails (e) ---
+FIX_SRC="${FIXTURE_DIR}/src_two_extractors"
+cp -R "$REAL_API_SRC" "$FIX_SRC"
+python3 - "$FIX_SRC/handlers/access.rs" <<'PYEOF2'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+a = "    _auth: AuthUser,\n) -> ApiResult<Json<PublicSystemSettings>> {"
+assert a in s, "get_settings signature not found"
+s = s.replace(a, "    _auth: AuthUser,\n    _also: AnyPrincipal,\n) -> ApiResult<Json<PublicSystemSettings>> {", 1)
+open(p, "w").write(s)
+PYEOF2
+FIX_HANDLERS_DIR="$FIX_SRC/handlers" FIX_API_SRC_DIR="$FIX_SRC"
+run_test "an auth-covered handler naming two extractors: fails" "$REAL_ROUTES" 1 \
+    "names 2 identity extractors"
+unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
+
+# --- (s) an identity extractor imported under another name fails (e2) ---
+FIX_SRC="${FIXTURE_DIR}/src_aliased_extractor"
+cp -R "$REAL_API_SRC" "$FIX_SRC"
+python3 - "$FIX_SRC/handlers/health.rs" <<'PYEOF2'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = "use crate::middleware::auth::AnyPrincipal as Person;\n" + s
+open(p, "w").write(s)
+PYEOF2
+FIX_HANDLERS_DIR="$FIX_SRC/handlers" FIX_API_SRC_DIR="$FIX_SRC"
+run_test "an identity extractor imported under another name: fails" "$REAL_ROUTES" 1 \
+    "an identity extractor imported under another name"
+unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
+
+# --- (t) a raw caller proof taken as an `Extension<…>` extractor fails (g) ---
+FIX_SRC="${FIXTURE_DIR}/src_raw_proof_extension"
+cp -R "$REAL_API_SRC" "$FIX_SRC"
+python3 - "$FIX_SRC/handlers/health.rs" <<'PYEOF2'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s += "\nasync fn peek(axum::Extension(_c): axum::Extension<Caller>) {}\n"
+open(p, "w").write(s)
+PYEOF2
+FIX_HANDLERS_DIR="$FIX_SRC/handlers" FIX_API_SRC_DIR="$FIX_SRC"
+run_test "a raw Caller taken as Extension<…> outside middleware: fails" "$REAL_ROUTES" 1 \
+    "a raw caller proof read from request extensions outside middleware/"
+unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
+
+# --- (u) the evasions the first cut of (h) missed ---
+# A test-only item or a comment naming `#[cfg(test)]` must not end the scan; a `.routes(` of a
+# helper, a braced or renaming import, and a `.merge(` of a non-group router all fail.
+for spelling in cfg_test_use cfg_test_comment helper_call braced_use renamed_macro foreign_group_merge; do
+  FIX="${FIXTURE_DIR}/evasion_${spelling}"
+  copy_module "$FIX"
+  python3 - "$FIX/gated.rs" "$spelling" <<'PYEOF2'
+import sys
+p, spelling = sys.argv[1], sys.argv[2]
+s = open(p).read()
+a = "use crate::handlers;\n"
+assert a in s
+b = "        .routes(routes!(handlers::resources::get_content))"
+assert b in s
+if spelling == "cfg_test_use":
+    s = s.replace(a, a + "#[cfg(test)]\nuse std::fmt;\nuse crate::handlers::teams as t;\n", 1)
+    s = s.replace(b, b + "\n        .routes(routes!(t::create))", 1)
+elif spelling == "cfg_test_comment":
+    s = s.replace(a, a + "// see #[cfg(test)] below\nuse crate::handlers::teams as t;\n", 1)
+    s = s.replace(b, b + "\n        .routes(routes!(t::create))", 1)
+elif spelling == "helper_call":
+    s = s.replace(b, b + "\n        .routes(probe())", 1)
+elif spelling == "braced_use":
+    s = s.replace(a, a + "use crate::{handlers::teams as t};\n", 1)
+    s = s.replace(b, b + "\n        .routes(routes!(t::create))", 1)
+elif spelling == "renamed_macro":
+    s = s.replace("use utoipa_axum::routes;\n", "use utoipa_axum::routes;\nuse utoipa_axum::routes as r;\n", 1)
+else:
+    s = s.replace(b, b + "\n        .merge(extra_routes())", 1)
+open(p, "w").write(s)
+PYEOF2
+  run_test "an auth-covered group mounting by ${spelling}: fails" "$FIX" 1 \
+      "an auth-covered group mounts a route not named handlers::<mod>::<fn>"
+done
+
+# --- (v) an identity extractor redefined by a type alias fails (e2) ---
+FIX_SRC="${FIXTURE_DIR}/src_type_alias_extractor"
+cp -R "$REAL_API_SRC" "$FIX_SRC"
+python3 - "$FIX_SRC/handlers/access.rs" <<'PYEOF2'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = "type AuthUser = crate::middleware::auth::AnyPrincipal;\n" + s
+open(p, "w").write(s)
+PYEOF2
+FIX_HANDLERS_DIR="$FIX_SRC/handlers" FIX_API_SRC_DIR="$FIX_SRC"
+run_test "an identity extractor redefined by a type alias: fails" "$REAL_ROUTES" 1 \
+    "an identity extractor imported under another name"
+unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
+
+# --- (w) no test module, wherever it sits, hides what follows it; nor does a string or comment ---
+for spelling in test_mod_decl test_mod_block test_mod_pub_crate block_comment url_string call_form; do
+  FIX="${FIXTURE_DIR}/scan_${spelling}"
+  copy_module "$FIX"
+  python3 - "$FIX/gated.rs" "$spelling" <<'PYEOF2'
+import sys
+p, spelling = sys.argv[1], sys.argv[2]
+s = open(p).read()
+a = "use crate::handlers;\n"
+assert a in s
+b = "        .routes(routes!(handlers::resources::get_content))"
+assert b in s
+alias = "use crate::handlers::teams as t;\n"
+mount = b + "\n        .routes(routes!(t::create))"
+if spelling == "test_mod_decl":
+    s = s.replace(a, a + "#[cfg(test)]\nmod tests;\n" + alias, 1).replace(b, mount, 1)
+elif spelling == "test_mod_block":
+    s = s.replace(a, a + "#[cfg(test)]\n\n\nmod probe {\n    fn x() { let _ = \"}\"; }\n}\n" + alias, 1).replace(b, mount, 1)
+elif spelling == "test_mod_pub_crate":
+    s = s.replace(a, a + "#[cfg(test)]\npub(crate) mod probe {}\n" + alias, 1).replace(b, mount, 1)
+elif spelling == "block_comment":
+    s = s.replace(a, a + "/*\n#[cfg(test)]\nmod x\n*/\n" + alias, 1).replace(b, mount, 1)
+elif spelling == "url_string":
+    s = s.replace(b, b + '.layer(tag("http://x")).route("/evil", axum::routing::get(handlers::teams::create))', 1)
+else:
+    s = s.replace(b, b + '\n        ;\n    let _ = OpenApiRouter::route(OpenApiRouter::new(), "/evil", axum::routing::get(handlers::teams::create))', 1)
+open(p, "w").write(s)
+PYEOF2
+  run_test "a mount hidden by ${spelling}: fails" "$FIX" 1 \
+      "an auth-covered group mounts a route not named handlers::<mod>::<fn>"
+done
+
+# --- (x) a route module nested under routes/ (read by no check) fails ---
+FIX="${FIXTURE_DIR}/nested_routes_file"
+copy_module "$FIX"
+mkdir -p "$FIX/gated"
+printf 'pub(super) fn admin_routes() {}\n' > "$FIX/gated/inner.rs"
+run_test "a Rust file nested under routes/: fails" "$FIX" 1 \
+    "a Rust file nested under the routes module"
+
+# --- (y) the lexer fails closed: a raw or multi-line string cannot open a comment that hides a
+#     mount, a char-literal brace cannot misplace a test module's end, and a router method passed
+#     as a path is a mount ---
+for spelling in raw_string_slash_star multiline_string_slash_star char_brace_in_test_mod method_path; do
+  FIX="${FIXTURE_DIR}/lexer_${spelling}"
+  copy_module "$FIX"
+  python3 - "$FIX/gated.rs" "$spelling" <<'PYEOF2'
+import sys
+p, spelling = sys.argv[1], sys.argv[2]
+s = open(p).read()
+b = "        .routes(routes!(handlers::resources::get_content))"
+assert b in s
+evil = '\n        .route("/evil", axum::routing::get(handlers::teams::create))'
+if spelling == "raw_string_slash_star":
+    s = s.replace(b, b + '\n        .layer(make_layer(r#"say "hi /* glob"#))' + evil, 1)
+elif spelling == "multiline_string_slash_star":
+    s = s.replace(b, b + '\n        .layer(make_layer("first line\nsrc/* glob"))' + evil, 1)
+elif spelling == "char_brace_in_test_mod":
+    s += "\n#[cfg(test)]\nmod probe {\n    const OPEN: char = '{';\n}\n\nfn extra() { OpenApiRouter::new()" + evil + "; }\n"
+else:
+    s = s.replace(b, b + "\n        ;\n    let _ = [OpenApiRouter::new()].into_iter().fold(OpenApiRouter::new(), OpenApiRouter::merge)", 1)
+open(p, "w").write(s)
+PYEOF2
+  run_test "a mount hidden by ${spelling}: fails" "$FIX" 1 \
+      "an auth-covered group mounts a route not named handlers::<mod>::<fn>"
+done
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"

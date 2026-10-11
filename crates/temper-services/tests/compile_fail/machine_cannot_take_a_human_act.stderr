@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/compile_fail/machine_cannot_take_a_human_act.rs:9:42
+  |
+9 |     let _ = context_service::share(pool, machine, uuid::Uuid::nil(), req).await;
+  |             ----------------------       ^^^^^^^ expected `&HumanPrincipal`, found `&MachinePrincipal`
+  |             |
+  |             arguments to this function are incorrect
+  |
+  = note: expected reference `&HumanPrincipal`
+             found reference `&MachinePrincipal`
+note: function defined here
+ --> src/services/context_service.rs
+  |
+  | pub async fn share(
+  |              ^^^^^

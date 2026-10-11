@@ -13,6 +13,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::auth::HumanPrincipal;
 use crate::backend::write_floor;
 use crate::error::{ApiError, ApiResult};
 use crate::services::team_service::{can_manage, role_on_team};
@@ -89,10 +90,11 @@ async fn admin_reach(
 /// and what kind of home it has, to any caller.
 pub async fn reassign_resource(
     pool: &PgPool,
-    caller: ProfileId,
+    caller: &HumanPrincipal,
     resource_id: Uuid,
     to_profile_id: Uuid,
 ) -> ApiResult<()> {
+    let caller = caller.profile_id();
     // Auth before writes: current owner, or an admin with reach over the resource+target. An
     // unknown id has no owner and no reach, so it is refused like any other resource.
     let Some(home) = home_of(pool, resource_id).await? else {
@@ -238,11 +240,12 @@ pub async fn team_scoped_owned(
 /// liveness floor, is skipped, and is not among them.
 pub async fn reassign_team_resources(
     pool: &PgPool,
-    caller: ProfileId,
+    caller: &HumanPrincipal,
     team_id: Uuid,
     from_profile_id: Uuid,
     to_profile_id: Uuid,
 ) -> ApiResult<Vec<Uuid>> {
+    let caller = caller.profile_id();
     // A soft-deleted team is inert — it confers no reassignment authority.
     // (`role_on_team` is is_active-blind; team_service gates is_active at each call
     // site, so we do the same here.)
@@ -496,9 +499,14 @@ mod tests {
         let ctx = mk_context(&pool, "alice-ctx", alice).await;
         let r = mk_homed_resource(&pool, ctx, alice).await;
 
-        reassign_resource(&pool, alice, r, *bob)
-            .await
-            .expect("owner reassigns");
+        reassign_resource(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *alice).await,
+            r,
+            *bob,
+        )
+        .await
+        .expect("owner reassigns");
 
         assert_eq!(owner_of(&pool, r).await, *bob);
         assert!(visible_to(&pool, bob, r).await, "new owner sees it");
@@ -514,7 +522,14 @@ mod tests {
         let bob = mk_profile(&pool, "bob").await;
         let ctx = mk_context(&pool, "c", alice).await;
         let r = mk_homed_resource(&pool, ctx, alice).await;
-        reassign_resource(&pool, alice, r, *bob).await.unwrap();
+        reassign_resource(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *alice).await,
+            r,
+            *bob,
+        )
+        .await
+        .unwrap();
         let n = sqlx::query_scalar!(
             "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id=e.event_type_id \
              WHERE t.name='resource_reassigned' AND (e.payload->>'resource_id')::uuid=$1",
@@ -532,9 +547,14 @@ mod tests {
         let alice = mk_profile(&pool, "alice").await;
         let ctx = mk_context(&pool, "c", alice).await;
         let r = mk_homed_resource(&pool, ctx, alice).await;
-        reassign_resource(&pool, alice, r, *alice)
-            .await
-            .expect("idempotent no-op");
+        reassign_resource(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *alice).await,
+            r,
+            *alice,
+        )
+        .await
+        .expect("idempotent no-op");
         assert_eq!(owner_of(&pool, r).await, *alice);
     }
 
@@ -545,9 +565,14 @@ mod tests {
         let bob = mk_profile(&pool, "bob").await;
         let ctx = mk_context(&pool, "c", alice).await;
         let r = mk_homed_resource(&pool, ctx, alice).await;
-        let err = reassign_resource(&pool, mallory, r, *bob)
-            .await
-            .unwrap_err();
+        let err = reassign_resource(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *mallory).await,
+            r,
+            *bob,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
     }
 
@@ -568,9 +593,14 @@ mod tests {
             ("another's context-homed resource", in_context),
             ("another's cogmap-homed resource", in_cogmap),
         ] {
-            let err = reassign_resource(&pool, mallory, id, *mallory)
-                .await
-                .unwrap_err();
+            let err = reassign_resource(
+                &pool,
+                &crate::test_support::human_principal_for(&pool, *mallory).await,
+                id,
+                *mallory,
+            )
+            .await
+            .unwrap_err();
             assert!(matches!(err, ApiError::Forbidden), "{what}: {err:?}");
         }
     }
@@ -580,7 +610,14 @@ mod tests {
         let alice = mk_profile(&pool, "alice").await;
         let bob = mk_profile(&pool, "bob").await;
         let r = mk_cogmap_homed_resource(&pool, alice).await;
-        let err = reassign_resource(&pool, alice, r, *bob).await.unwrap_err();
+        let err = reassign_resource(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *alice).await,
+            r,
+            *bob,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::BadRequest(_)));
         assert_eq!(owner_of(&pool, r).await, *alice, "owner unchanged");
     }
@@ -597,9 +634,14 @@ mod tests {
         share_ctx(&pool, ctx, team).await;
         let r = mk_homed_resource(&pool, ctx, alice).await;
 
-        reassign_resource(&pool, admin, r, *steward)
-            .await
-            .expect("admin reassigns to member");
+        reassign_resource(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
+            r,
+            *steward,
+        )
+        .await
+        .expect("admin reassigns to member");
         assert_eq!(owner_of(&pool, r).await, *steward);
     }
 
@@ -613,9 +655,14 @@ mod tests {
         let ctx = mk_context(&pool, "shared", alice).await;
         share_ctx(&pool, ctx, team).await;
         let r = mk_homed_resource(&pool, ctx, alice).await;
-        let err = reassign_resource(&pool, admin, r, *outsider)
-            .await
-            .unwrap_err();
+        let err = reassign_resource(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
+            r,
+            *outsider,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
     }
 
@@ -629,9 +676,14 @@ mod tests {
         add_member(&pool, team, steward, "member").await;
         let ctx = mk_context(&pool, "private", alice).await; // NOT shared
         let r = mk_homed_resource(&pool, ctx, alice).await;
-        let err = reassign_resource(&pool, admin, r, *steward)
-            .await
-            .unwrap_err();
+        let err = reassign_resource(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
+            r,
+            *steward,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
     }
 
@@ -641,7 +693,14 @@ mod tests {
         let ctx = mk_context(&pool, "c", alice).await;
         let r = mk_homed_resource(&pool, ctx, alice).await;
         let ghost = Uuid::now_v7(); // never inserted
-        let err = reassign_resource(&pool, alice, r, ghost).await.unwrap_err();
+        let err = reassign_resource(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *alice).await,
+            r,
+            ghost,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::BadRequest(_)));
         assert_eq!(owner_of(&pool, r).await, *alice, "owner unchanged");
     }
@@ -660,9 +719,14 @@ mod tests {
         let r = mk_homed_resource(&pool, ctx, alice).await;
         soft_delete_team(&pool, team).await;
 
-        let err = reassign_resource(&pool, admin, r, *steward)
-            .await
-            .unwrap_err();
+        let err = reassign_resource(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
+            r,
+            *steward,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
         assert_eq!(owner_of(&pool, r).await, *alice, "owner unchanged");
     }
@@ -680,9 +744,15 @@ mod tests {
         let r = mk_homed_resource(&pool, shared, leaver).await;
         soft_delete_team(&pool, team).await;
 
-        let err = reassign_team_resources(&pool, admin, team, *leaver, *steward)
-            .await
-            .unwrap_err();
+        let err = reassign_team_resources(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
+            team,
+            *leaver,
+            *steward,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
         assert_eq!(owner_of(&pool, r).await, *leaver, "owner unchanged");
     }
@@ -702,9 +772,14 @@ mod tests {
         let r = mk_homed_resource(&pool, ctx, alice).await;
         retire_ctx(&pool, ctx).await;
 
-        let err = reassign_resource(&pool, admin, r, *steward)
-            .await
-            .unwrap_err();
+        let err = reassign_resource(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
+            r,
+            *steward,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
         assert_eq!(owner_of(&pool, r).await, *alice, "owner unchanged");
     }
@@ -719,9 +794,14 @@ mod tests {
         let r = mk_homed_resource(&pool, ctx, alice).await;
         retire_ctx(&pool, ctx).await;
 
-        reassign_resource(&pool, alice, r, *bob)
-            .await
-            .expect("owner reassigns out of a retired context");
+        reassign_resource(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *alice).await,
+            r,
+            *bob,
+        )
+        .await
+        .expect("owner reassigns out of a retired context");
         assert_eq!(owner_of(&pool, r).await, *bob);
     }
 
@@ -744,9 +824,15 @@ mod tests {
         let out_scope = mk_homed_resource(&pool, retired, leaver).await; // retired → stays
         retire_ctx(&pool, retired).await;
 
-        let moved = reassign_team_resources(&pool, admin, team, *leaver, *steward)
-            .await
-            .expect("live team, reduced scope");
+        let moved = reassign_team_resources(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
+            team,
+            *leaver,
+            *steward,
+        )
+        .await
+        .expect("live team, reduced scope");
 
         assert_eq!(moved, vec![in_scope]);
         assert_eq!(owner_of(&pool, in_scope).await, *steward);
@@ -771,9 +857,15 @@ mod tests {
         let out_scope = mk_homed_resource(&pool, private, leaver).await; // owned, not scoped → stays
         let not_leaver = mk_homed_resource(&pool, shared, other).await; // scoped, other owner → stays
 
-        let moved = reassign_team_resources(&pool, admin, team, *leaver, *steward)
-            .await
-            .expect("bulk reassign");
+        let moved = reassign_team_resources(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
+            team,
+            *leaver,
+            *steward,
+        )
+        .await
+        .expect("bulk reassign");
 
         assert_eq!(moved, vec![in_scope]);
         assert_eq!(owner_of(&pool, in_scope).await, *steward);
@@ -788,9 +880,15 @@ mod tests {
         let steward = mk_profile(&pool, "steward").await;
         let team = mk_team(&pool, "acme").await;
         add_member(&pool, team, steward, "member").await;
-        let err = reassign_team_resources(&pool, stranger, team, *leaver, *steward)
-            .await
-            .unwrap_err();
+        let err = reassign_team_resources(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *stranger).await,
+            team,
+            *leaver,
+            *steward,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
     }
 
@@ -801,9 +899,15 @@ mod tests {
         let outsider = mk_profile(&pool, "outsider").await;
         let team = mk_team(&pool, "acme").await;
         add_member(&pool, team, admin, "owner").await;
-        let err = reassign_team_resources(&pool, admin, team, *leaver, *outsider)
-            .await
-            .unwrap_err();
+        let err = reassign_team_resources(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
+            team,
+            *leaver,
+            *outsider,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
     }
 
@@ -815,9 +919,15 @@ mod tests {
         let team = mk_team(&pool, "acme").await;
         add_member(&pool, team, admin, "owner").await;
         add_member(&pool, team, steward, "member").await;
-        let moved = reassign_team_resources(&pool, admin, team, *leaver, *steward)
-            .await
-            .expect("empty is ok");
+        let moved = reassign_team_resources(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
+            team,
+            *leaver,
+            *steward,
+        )
+        .await
+        .expect("empty is ok");
         assert!(moved.is_empty());
     }
 }

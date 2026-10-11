@@ -4020,7 +4020,7 @@ class ResourcesApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ReassignAck",
             '400': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '410': "ErrorBody",
         }
@@ -4098,7 +4098,7 @@ class ResourcesApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ReassignAck",
             '400': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '410': "ErrorBody",
         }
@@ -4176,7 +4176,7 @@ class ResourcesApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ReassignAck",
             '400': "ErrorBody",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '410': "ErrorBody",
         }

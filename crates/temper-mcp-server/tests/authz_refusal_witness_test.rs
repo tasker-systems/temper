@@ -29,7 +29,7 @@ fn api_wire_refusal(e: temper_services::auth::AuthzError) -> Option<ClientError>
             ApiError::Unauthorized(cause) => Some(unauthorized(cause)),
             _ => None,
         },
-        AuthzError::AccessCheck(_) => None,
+        AuthzError::AccessCheck(_) | AuthzError::Classification(_) => None,
         AuthzError::SystemAccessDenied { refusal, .. } => Some(ClientError::SystemAccessRequired(
             Box::new(temper_core::error::CliAccessDetails {
                 email: Some("someone@example.com".to_string()),
@@ -98,6 +98,10 @@ fn every_authz_refusal_has_an_mcp_face() {
         ),
         (
             AuthzError::AccessCheck(ApiError::Internal("db".to_string())),
+            None,
+        ),
+        (
+            AuthzError::Classification(ApiError::Internal("db".to_string())),
             None,
         ),
         (

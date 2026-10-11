@@ -2,10 +2,10 @@
 //!
 //! The third two-sided gate, and the one that does **not** share
 //! [`super::TwoSidedAuthority`]'s resolver. It looks similar and is not: the object side here is
-//! not "do you administer this thing?" but the whole of `MachineAuthority`, and there is no
-//! gating-team exclusion (a reach grant flips no regime and transfers no ownership — spec §6.1).
-//! Folding it into the shared resolver would mean parameterizing away everything that is actually
-//! shared.
+//! not "do you administer this thing?" but the whole of `MachineRegistrationAuthority`, and there
+//! is no gating-team exclusion (a reach grant flips no regime and transfers no ownership — spec
+//! §6.1). Folding it into the shared resolver would mean parameterizing away everything that is
+//! actually shared.
 //!
 //! **Two refusal dialects, and this is not an oracle.** `ConnectionAuthority` answers `404` to a
 //! caller who does not control the connection — byte-identical to a missing connection, like every
@@ -28,7 +28,7 @@ use uuid::Uuid;
 use super::{Principal, ScopedAuthority};
 use crate::error::{ApiError, ApiResult};
 use crate::services::connection_service::{self, CONNECTION_REFUSAL};
-use crate::services::machine_authz::{self, MachineAuthority};
+use crate::services::machine_authz::{self, MachineRegistrationAuthority};
 
 /// The connection whose reach is being conferred, and the team receiving it.
 ///
@@ -62,9 +62,9 @@ impl ConnectionScope {
 /// must still succeed (spec §2.5).
 ///
 /// `ConnectionAuthority` **composes** this rather than re-asking, so there is exactly one place that
-/// knows the owning team is read from the row and handed to `MachineAuthority`. It is also the gate
-/// for every other act on an existing connection: get, revoke, the credential, the webhook events
-/// and the tool manifest.
+/// knows the owning team is read from the row and handed to `MachineRegistrationAuthority`. It is
+/// also the gate for every other act on an existing connection: get, revoke, the credential, the
+/// webhook events and the tool manifest.
 ///
 /// **Its refusal is `NotFound`, byte-identical to the missing-row refusal.** A `Forbidden` here told
 /// a caller probing ids that the connection exists — an existence oracle any approved bearer could
@@ -90,16 +90,20 @@ impl ScopedAuthority for ConnectionControlAuthority {
         let connection = connection_service::get(pool, connection_id).await?;
 
         Ok(
-            match <MachineAuthority as ScopedAuthority>::resolve(
+            match <MachineRegistrationAuthority as ScopedAuthority>::resolve(
                 pool,
                 caller,
                 connection.owner_team_id,
             )
             .await?
             {
-                MachineAuthority::SystemAdmin => ConnectionControlAuthority::SystemAdmin,
-                MachineAuthority::TeamOwner => ConnectionControlAuthority::OwnerOfOwningTeam,
-                MachineAuthority::None => {
+                MachineRegistrationAuthority::SystemAdmin => {
+                    ConnectionControlAuthority::SystemAdmin
+                }
+                MachineRegistrationAuthority::TeamOwner => {
+                    ConnectionControlAuthority::OwnerOfOwningTeam
+                }
+                MachineRegistrationAuthority::None => {
                     super::log_concealed_refusal(caller, "connection");
                     ConnectionControlAuthority::None
                 }
@@ -128,9 +132,9 @@ pub(crate) enum ConnectionAuthority {
     /// Owner of the connection's owning team, who also manages the receiving team.
     ///
     /// **The two bars are deliberately different, and this is the place that would be "simplified"
-    /// first.** The owning-team side is `TeamRole::Owner` only (through `MachineAuthority`); the
-    /// target-team side is `Owner | Maintainer` (through `require_manage_on_team`). It is not an
-    /// oversight and it is not symmetry waiting to happen:
+    /// first.** The owning-team side is `TeamRole::Owner` only (through
+    /// `MachineRegistrationAuthority`); the target-team side is `Owner | Maintainer` (through
+    /// `require_manage_on_team`). It is not an oversight and it is not symmetry waiting to happen:
     ///
     /// - `machine_authz`'s `MAX_MACHINE_TEAM_ROLE` argues that `can_manage` **is governance** and
     ///   caps machine principals below it for exactly that reason. A connection is a machine
@@ -160,9 +164,9 @@ impl ScopedAuthority for ConnectionAuthority {
     /// Two teams are in play and they are two different questions, asked in this order — the order
     /// `grant_reach` has always asked them in.
     ///
-    /// 1. **May you act on this connection?** — `MachineAuthority` over the connection's OWNING
-    ///    team, the same policy every other connection mutator uses. A teamless connection fails
-    ///    closed there (spec D2), so it needs no special case here.
+    /// 1. **May you act on this connection?** — `MachineRegistrationAuthority` over the
+    ///    connection's OWNING team, the same policy every other connection mutator uses. A teamless
+    ///    connection fails closed there (spec D2), so it needs no special case here.
     /// 2. **May you hand read-reach to THAT team?** — `machine_authz::contain_target_team` on the
     ///    receiving team. Without it, the owner of one team could bind their connection's reach to
     ///    any team UUID in the instance.
@@ -176,7 +180,7 @@ impl ScopedAuthority for ConnectionAuthority {
     ) -> ApiResult<Self> {
         // Question 1, asked through `ConnectionControlAuthority` rather than restated — that type
         // exists precisely because revocation asks this one alone, and two copies of "resolve the
-        // owning team, then MachineAuthority" is exactly the drift this layer removes.
+        // owning team, then MachineRegistrationAuthority" is exactly the drift this layer removes.
         let control = <ConnectionControlAuthority as ScopedAuthority>::resolve(
             pool,
             caller,
@@ -187,12 +191,15 @@ impl ScopedAuthority for ConnectionAuthority {
             return Ok(ConnectionAuthority::Invisible);
         }
 
-        // `contain_target_team` still takes a `MachineAuthority`, so map back for the one call. The
-        // mapping is total and lossless — the two enums are the same three cases under two names,
-        // which is the cost of `contain_target_team` being shared with the machine path.
+        // `contain_target_team` still takes a `MachineRegistrationAuthority`, so map back for the
+        // one call. The mapping is total and lossless — the two enums are the same three cases
+        // under two names, which is the cost of `contain_target_team` being shared with the machine
+        // path.
         let machine = match control {
-            ConnectionControlAuthority::SystemAdmin => MachineAuthority::SystemAdmin,
-            ConnectionControlAuthority::OwnerOfOwningTeam => MachineAuthority::TeamOwner,
+            ConnectionControlAuthority::SystemAdmin => MachineRegistrationAuthority::SystemAdmin,
+            ConnectionControlAuthority::OwnerOfOwningTeam => {
+                MachineRegistrationAuthority::TeamOwner
+            }
             // Unreachable — the denial arm returned above. Enumerated rather than `_ =>` so a
             // future arm cannot land here and be silently authorized.
             ConnectionControlAuthority::None => return Ok(ConnectionAuthority::Invisible),

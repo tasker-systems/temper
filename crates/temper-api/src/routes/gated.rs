@@ -223,9 +223,9 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::machine_clients::rotate_secret))
         // Connection provisioning (external systems as subscribed emitters, S1). Same shape as
         // machine-clients above and for the same reasons: gated inside the service
-        // (`MachineAuthority`'s policy, verbatim — a connection is a machine principal wearing an
-        // integration's clothes; per row through `ConnectionControlAuthority`, which refuses as a
-        // missing id).
+        // (`MachineRegistrationAuthority`'s policy, verbatim — a connection is a machine principal
+        // wearing an integration's clothes; per row through `ConnectionControlAuthority`, which
+        // refuses as a missing id).
         .routes(routes!(
             handlers::connections::list,
             handlers::connections::provision
