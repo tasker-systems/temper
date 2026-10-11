@@ -61,12 +61,15 @@ determination. In one server-side transaction it:
   identifiers. Attribution to them anywhere else breaks because their profile stops
   resolving to a person (the pseudonym break) — their past contributions to team contexts
   are never edited to hide them.
-- **Retires the estate's contexts** in the same transaction. This is what makes
-  line 2 enforceable rather than promised: every share and grant that reached the estate
-  *through the context* dies with the retirement — nobody can read into a retired context
-  afterward, guests included. Writing is deliberately not blocked the same way: a fresh
-  commit into a retired home mints live, lawful content, and any later erasure of the same
-  estate strikes it again.
+- **Erases the estate's contexts themselves** in the same transaction: each is retired, and its
+  name and address are replaced by placeholders, in the projections and in every earlier event
+  that recorded them (a rename, a retirement, a restoration). Retirement is what makes line 2
+  enforceable rather than promised: every share and grant that reached the estate *through the
+  context* dies with it — nobody can read into it afterward, guests included. An erased context
+  is never restored, by anyone: not by a member who administers the personal team, not by an
+  instance administrator. Writing is deliberately not blocked the same way: a fresh commit into a
+  retired home mints live, lawful content, and any later erasure of the same estate strikes it
+  again.
 - Leaves other teams' contexts untouched: the content stays, whoever authored it. The one
   change it makes there is to end a relationship that points into the estate.
 
@@ -90,7 +93,10 @@ keeps it afterward:
   with their content hashes: attribution for the audit trail, never a deletion claim.
   Contributing into a shared space never carried a sole claim on the content; attribution
   is what the system provides and what survives. The prose itself stays; only the
-  attribution breaks (the pseudonym break).
+  attribution breaks (the pseudonym break). The other text the subject wrote there — titles,
+  property values, relationship labels, citation-audit reasons and the names they gave contexts
+  outside the estate — is counted in the record,
+  one count per kind, and never quoted.
 
 - **Files the subject contributed to other teams' or map homes are reported, not struck.** Each
   one is named in the record with its content hash as held by the team or map that homes
@@ -105,7 +111,7 @@ keeps it afterward:
   were the last copy. Structured-data artifacts on those resources are emptied with the
   resource, whichever principal's kind owns them.
 - **The record lists each resource erasure it ran,** and the response says how many live
-  resources and files were still homed in the estate after the act committed: ones created
+  resources, files and contexts were still in the estate after the act committed: ones created
   there while the act ran. A non-zero count means the operator runs the act again, which
   erases them. When the count cannot be read, the response leaves it out rather than report
   zero.

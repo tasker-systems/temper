@@ -32,6 +32,25 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 (`schemas/versions/<M.m>/`); the pin gate checks the record names a `spec-correction` row.
 
 ## Since v0.6.0 — unreleased
+- **Erasing a person now erases their contexts' names, and an erased context can no longer be restored**
+  The principal erasure act retired its estate contexts with an un-evented update and left their
+  names and slugs, in `kb_contexts` and in every earlier `context_renamed`, `context_retired` and
+  `context_restored` payload. It now appends one `context_erased` event per estate context (a new
+  domain event carrying only the placeholder name `erased` and slug `erased-<context id>`), which
+  retires it under those placeholders, and rewrites the earlier events' names and slugs to the same
+  placeholders under a third ledger authority, the act's own `principal_erased`, whose payload gains
+  the required key `redacted_fields`. `POST /api/contexts/{id}/restore` answers 410 for an erased
+  context, whoever asks; before, any owner or maintainer of the owning team could restore it,
+  a co-admin of the erased person's personal team included. A binary without this change renders
+  that refusal as a 500. Rename, retire and restore now wait on a context the act is erasing. The
+  act's record also counts, per kind, the titles, property values, edge labels and citation-audit
+  reasons the subject wrote outside the estate. Who observes: system admins running a person
+  erasure, and anyone restoring a context of an erased person. Release relevance: behavioral, plus
+  a documented 410 response on the restore door.
+pr: self
+classes: additive, behavioral
+surfaces: http, clients, schema
+status: signal-only
 - **Erasing a person now erases every resource in their @me and personal-team contexts, ledger included**
   The principal erasure act emptied its estate's prose by content hash and left titles, origins,
   properties, edge labels and every ledger copy; its estate was the subject's `@me` contexts only.

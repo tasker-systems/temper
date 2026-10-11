@@ -1564,6 +1564,12 @@ pub struct PrincipalErased {
     pub resource_erasures: Vec<EstateResourceErasureRef>,
     /// The estate's charters, emptied and held until map-grain erasure (D3).
     pub charters_held: Vec<Uuid>,
+    /// The estate contexts' ledger copies of their names and slugs this act rewrote to the
+    /// sentinels (20261022100000, R7): `context_renamed`, `context_retired` and
+    /// `context_restored` paths, in the shape `resource_erased` uses. Paths only, never values.
+    /// Required, and written even when empty: no `principal_erased` predates it (the migration
+    /// guards).
+    pub redacted_fields: Vec<RedactedEventFields>,
 }
 
 /// One resource erasure a person act ran: its subject and its `resource_erased` event. Keyed
@@ -2242,6 +2248,10 @@ mod tests {
                 kind: EstateResourceErasureKind::Erasure,
             }],
             charters_held: vec![],
+            redacted_fields: vec![RedactedEventFields {
+                event: EventId::from(Uuid::now_v7()),
+                paths: vec!["from_name".into(), "from_slug".into()],
+            }],
         };
         let v = serde_json::to_value(&erased).unwrap();
         assert!(

@@ -31,6 +31,13 @@
         "format": "uuid"
       }
     },
+    "redacted_fields": {
+      "description": "The estate contexts' ledger copies of their names and slugs this act rewrote to the\nsentinels (20261022100000, R7): `context_renamed`, `context_retired` and\n`context_restored` paths, in the shape `resource_erased` uses. Paths only, never values.\nRequired, and written even when empty: no `principal_erased` predates it (the migration\nguards).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RedactedEventFields"
+      }
+    },
     "redacted_hashes": {
       "description": "The redacted set (D2): bare sha256 hex, exactly as `content_hash` carries it — the key\nevery reader already shares and no trail join-key shape can match.",
       "type": "array",
@@ -66,7 +73,8 @@
     "subject_id",
     "estate_contexts",
     "resource_erasures",
-    "charters_held"
+    "charters_held",
+    "redacted_fields"
   ],
   "$defs": {
     "AnchorTable": {
@@ -134,10 +142,35 @@
         "kind"
       ]
     },
+    "EventId": {
+      "description": "A `kb_events.id` value. Always UUIDv7 (time-sortable).",
+      "type": "string",
+      "format": "uuid"
+    },
     "ProfileId": {
       "description": "A `kb_profiles.id` value.",
       "type": "string",
       "format": "uuid"
+    },
+    "RedactedEventFields": {
+      "description": "The ledger paths of one event: redacted (`redacted_fields`) or named-and-unreached\n(`ledger_remainder`). ONE shape for both, so the cut-2 completion pass derives what it redacts\nfrom what cut 1 recorded without translating (resource erasure spec D12). The event is keyed\n`event`, never `event_id` — no trail join-key shape rides an admin payload (D1). Paths only,\nnever values: the record of a redaction must not carry what was redacted.",
+      "type": "object",
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/EventId"
+        },
+        "paths": {
+          "description": "JSON paths within that event's `payload` (or `metadata`), e.g. `title`, `origin_uri`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "event",
+        "paths"
+      ]
     }
   }
 }

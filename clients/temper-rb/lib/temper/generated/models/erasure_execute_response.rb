@@ -20,7 +20,7 @@ module Temper::Generated
 
     attr_accessor :blob_strikes
 
-    # Live resources and blobs still homed in the estate after the act committed: created there while the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which erases them. Absent when the count could not be read: unknown, never zero.
+    # Live resources and blobs still homed in the estate after the act committed, and contexts of the estate not yet erased: created there while the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which erases them. Absent when the count could not be read: unknown, never zero.
     attr_accessor :estate_stragglers
 
     attr_accessor :event_id

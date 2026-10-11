@@ -306,6 +306,9 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // content, so no sidecar — same posture as `ContextRenamed`.
             | EventKind::ContextRetired
             | EventKind::ContextRestored
+            // An erasure retires the context and writes sentinels into its name and slug. No
+            // content, so no sidecar.
+            | EventKind::ContextErased
             | EventKind::DelegatedLaunch
             | EventKind::InvocationClosed
             // Admin-ledger events (NULL-anchored, spec 2026-07-16): no content, no sidecar.
@@ -899,6 +902,13 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .fetch_one(&mut *tx)
                     .await?;
             }
+            // The person act's custody closure (20261022100000, R7): the pure projector half, at
+            // the event's position. The act is the only writer, and replay never re-adjudicates.
+            EventKind::ContextErased => {
+                sqlx::query_scalar!("SELECT _project_context_erased($1,$2)", id, payload)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            }
             EventKind::DelegatedLaunch => {
                 sqlx::query("SELECT _project_delegated_launch($1,$2)")
                     .bind(id)
@@ -958,6 +968,16 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                             .context("redacted_hashes must carry hash strings")
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                // The act's leave to rewrite its estate contexts' ledger copies (20261022100000):
+                // the redaction rows, projected first as the act projects them, by the same
+                // function. The rewritten payloads themselves are already in the ledger.
+                sqlx::query!(
+                    "SELECT _project_principal_erased_redactions($1,$2)",
+                    id,
+                    payload
+                )
+                .fetch_one(&mut *tx)
+                .await?;
                 // Macro form, like the ContextRetired/Restored/ResourceReblocked arms: a fixed
                 // function call with bound parameters — the audit's `dynamic-table` reason does
                 // not cover it, so it converts and gains a `.sqlx` entry.

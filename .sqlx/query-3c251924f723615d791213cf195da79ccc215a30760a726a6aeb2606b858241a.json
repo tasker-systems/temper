@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (SELECT count(*)\n                     FROM _erasure_estate_contexts($2) g\n                    WHERE NOT EXISTS (SELECT 1 FROM kb_events e\n                                        JOIN kb_event_types t ON t.id = e.event_type_id\n                                       WHERE t.name = 'context_erased'\n                                         AND e.producing_anchor_table = 'kb_contexts'\n                                         AND e.producing_anchor_id = g))\n                + (SELECT count(*)\n                     FROM kb_resource_homes h\n                     JOIN kb_resources r ON r.id = h.resource_id\n                    WHERE h.anchor_table = 'kb_contexts'\n                      AND h.anchor_id = ANY($1)\n                      AND r.erased_at IS NULL\n                      AND NOT EXISTS (SELECT 1 FROM kb_cogmaps m WHERE m.telos_resource_id = r.id))\n                + (SELECT count(*)\n                     FROM kb_blobs b\n                    WHERE b.home_table = 'kb_contexts'\n                      AND b.home_id = ANY($1)\n                      AND b.content_type IS NOT NULL) AS \"n!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3c251924f723615d791213cf195da79ccc215a30760a726a6aeb2606b858241a"
+}
