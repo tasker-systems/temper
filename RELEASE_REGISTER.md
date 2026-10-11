@@ -32,6 +32,21 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 (`schemas/versions/<M.m>/`); the pin gate checks the record names a `spec-correction` row.
 
 ## Since v0.6.0 — unreleased
+- **The steward and mention agents move to eve 0.73; temper-telemetry-ts gains an eve-owned export path**
+  `@tasker-systems/temper-telemetry-ts` adds `otlpSpanProcessors()` and `httpInstrumentations()`,
+  the exporter and instrumentation halves of `initTelemetry()` without its provider registration,
+  because eve now owns the tracer provider; `initTelemetry()` keeps its shape and behavior, and the
+  MCP negotiation reset now also fires on `onEnd`. The agents' telemetry moves to
+  `agent/instrumentation/` with the same never-record-model-IO policy. Behind unchanged surfaces:
+  steward worker sessions park instead of completing (eve dropped task mode); mention queues a second
+  mention rather than folding it into the running turn; mention's Slack status renderer keeps
+  0.18's public surface; Slack principal identity now keys on the installation team. Who
+  observes: temper-telemetry-ts consumers (new exports), Slack users of the mention agent, operators
+  of the steward. Release relevance: additive client exports, behavioral agent runtime.
+pr: self
+classes: additive, behavioral
+surfaces: clients, internal
+status: signal-only
 - **Erasing a person now erases every resource in their @me and personal-team contexts, ledger included**
   The principal erasure act emptied its estate's prose by content hash and left titles, origins,
   properties, edge labels and every ledger copy; its estate was the subject's `@me` contexts only.

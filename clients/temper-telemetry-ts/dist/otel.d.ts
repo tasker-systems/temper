@@ -22,7 +22,7 @@
  * true value, and guessing at others would let a typo silently disable observability.
  */
 import { type Tracer } from '@opentelemetry/api';
-import type { Sampler } from '@opentelemetry/sdk-trace-base';
+import type { Sampler, SpanProcessor } from '@opentelemetry/sdk-trace-base';
 export interface InitTelemetryOptions {
     /**
      * `service.name` for exported spans, and the instrumentation-scope name for
@@ -82,6 +82,29 @@ export declare function shouldExportSpans(env?: NodeJS.ProcessEnv): boolean;
  * remote parent; the sampling decision does not follow it.
  */
 export declare function telemetrySampler(): Sampler;
+/**
+ * The exporting span processors for a pipeline someone ELSE owns — the eve agents, where eve
+ * (≥0.62) registers the one tracer provider and takes destinations as
+ * `otelIntegration({ spanProcessors })`. eve refuses to start if anything else has registered a
+ * global provider first, so {@link initTelemetry} is not an option there; this is its export half,
+ * without the registration.
+ *
+ * The same rules as `initTelemetry`, from the same resolution: no endpoint, the kill switch, or a
+ * refused endpoint ⇒ `[]` (logged once, never thrown), so a destination built from it exports
+ * nothing. Otherwise the {@link McpNegotiationStatusProcessor} when `mcpEndpoint` parses, AHEAD of
+ * the batching OTLP exporter (handed the vetted URL; headers from `OTEL_EXPORTER_OTLP_HEADERS`) —
+ * ahead, because under eve only its `onEnd` runs (see `mcp-negotiation.ts`).
+ *
+ * Service name, sampler and HTTP instrumentation are the owner's to set (eve: `otel({ sampler,
+ * instrumentations })`, with `OTEL_SERVICE_NAME` honored by eve's own registration).
+ */
+export declare function otlpSpanProcessors({ mcpEndpoint }?: Pick<InitTelemetryOptions, 'mcpEndpoint'>): SpanProcessor[];
+/**
+ * The HTTP client auto-instrumentation {@link initTelemetry} registers under `instrumentHttp`, as
+ * instances for a provider owner to register (eve: `otel({ instrumentations })`). Dynamic import
+ * for the same reason as there: consumers that never ask do not load the packages.
+ */
+export declare function httpInstrumentations(): Promise<unknown[]>;
 /**
  * Build and register the tracer provider — **once**. Idempotent, so a repeated
  * side-effecting call (dev HMR, multiple entrypoints) does not double-register.

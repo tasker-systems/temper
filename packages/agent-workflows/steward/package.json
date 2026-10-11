@@ -18,13 +18,13 @@
     "typecheck": "tsc"
   },
   "dependencies": {
-    "@vercel/connect": "0.2.2",
-    "ai": "^7.0.0",
-    "eve": "^0.18.1",
+    "@vercel/connect": "2.4.1",
+    "ai": "^7.0.128",
+    "eve": "^0.73.0",
     "openapi-fetch": "^0.17.0",
     "@tasker-systems/temper-telemetry-ts": "file:../../../clients/temper-telemetry-ts",
     "@tasker-systems/temper-ts": "file:../../../clients/temper-ts",
-    "zod": "4.4.3"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@types/node": "24.x",
@@ -32,7 +32,7 @@
     "vitest": "^4.1.11"
   },
   "overrides": {
-    "ai": "^7.0.0"
+    "ai": "^7.0.128"
   },
   "engines": {
     "node": "24.x"

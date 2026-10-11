@@ -28,7 +28,13 @@
  * **`onEnding` is marked `@experimental` in the SDK** and may change in a minor version. That
  * is pinned by `tests/mcp-negotiation.test.ts`, which asserts the exported status rather than
  * the hook — if the seam ever stops firing, the suite goes red rather than the dashboard
- * quietly re-inverting.
+ * quietly re-inverting. *
+ * **`onEnd` repeats the reset, for pipelines that never call `onEnding`.** eve (≥0.62) owns the
+ * tracer provider and wraps every authored processor in its own, which forwards only `onStart`
+ * and `onEnd` (`eve/dist/src/tracing/otel-registration.js`, `PrivateSpanFilteringProcessor`). There
+ * the reset has to happen in `onEnd`, and it is order-DEPENDENT: it reaches only the processors
+ * listed after this one, which is why `otlpSpanProcessors` puts it ahead of the exporter. The span
+ * is the same `SpanImpl` there, ended but not frozen, so the assignment is the same one.
  */
 import { SpanStatusCode } from '@opentelemetry/api';
 import { ATTR_HTTP_REQUEST_METHOD, ATTR_HTTP_RESPONSE_STATUS_CODE, ATTR_URL_FULL } from '@opentelemetry/semantic-conventions';
@@ -86,7 +92,11 @@ export class McpNegotiationStatusProcessor {
             return;
         writableStatus(span).status = { code: SpanStatusCode.UNSET };
     }
-    onEnd() { }
+    onEnd(span) {
+        if (!this.isMandatedNegotiation(span))
+            return;
+        writableStatus(span).status = { code: SpanStatusCode.UNSET };
+    }
     forceFlush() {
         return Promise.resolve();
     }

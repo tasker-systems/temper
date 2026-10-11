@@ -51,7 +51,7 @@ export default defineMcpClientConnection({
     ? { getToken: mintAuditorM2mToken }
     : { getToken: async () => ({ token: requireEnv(AUDITOR_CREDENTIALS.staticToken) }) },
   // Trace propagation, under the auditor's own credential. When OTLP export is configured,
-  // undici auto-instrumentation (agent/instrumentation.ts, process-wide) injects a per-request
+  // undici auto-instrumentation (agent/instrumentation/otel.ts, process-wide) injects a per-request
   // `traceparent` naming a real exported span, so we omit the static one to avoid a second,
   // ambiguous header (see `otlpExportConfigured`). Without export, keep the session-derived
   // header as the log-correlation handle — the path the 2026-08-01 incident ran on.

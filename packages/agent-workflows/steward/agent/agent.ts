@@ -13,7 +13,7 @@ export default defineAgent({
   description:
     "Team self-cognition steward: distills a team's own temper resources into cogmap-homed nodes and tends the team's cognitive map via the authored-4 (create/assert/facet/fold), audited by the invocation envelope.",
   build: {
-    // `agent/instrumentation.ts` imports `temper-telemetry-ts` (the OTLP export bootstrap), whose
+    // `agent/instrumentation/` imports `temper-telemetry-ts` (the OTLP export pieces), whose
     // committed dist pulls the native @opentelemetry SDK. Two facts are load-bearing:
     //   1. `.vercelignore` strips `dist/` before the build runs, so the committed
     //      `temper-telemetry-ts` dist is GONE at eve-build time. `build:dep` must `npm run build`

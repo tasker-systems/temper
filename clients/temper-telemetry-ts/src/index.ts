@@ -12,9 +12,11 @@
 export {
 	forceFlush,
 	getTracer,
+	httpInstrumentations,
 	initTelemetry,
 	isSdkDisabled,
 	isTelemetryEnabled,
+	otlpSpanProcessors,
 	shouldExportSpans,
 	telemetrySampler,
 	type InitTelemetryOptions

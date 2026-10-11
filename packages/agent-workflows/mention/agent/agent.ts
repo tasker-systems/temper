@@ -5,7 +5,7 @@ export default defineAgent({
   description:
     "The @temper Slack agent: answers app mentions in a team's workspace. T1 proves the inbound pipe — it resolves the mentioning Slack user to an opaque eve principal and prompts to connect a temper account. Temper reach arrives in a later task.",
   build: {
-    // `agent/instrumentation.ts` imports `temper-telemetry-ts` (the OTLP export bootstrap), whose
+    // `agent/instrumentation/` imports `temper-telemetry-ts` (the OTLP export pieces), whose
     // committed dist pulls the native @opentelemetry SDK. Two facts are load-bearing:
     //   1. `.vercelignore` strips `dist/` before the build runs, so the committed
     //      `temper-telemetry-ts` dist is GONE at eve-build time. `build:dep` must `npm run build`

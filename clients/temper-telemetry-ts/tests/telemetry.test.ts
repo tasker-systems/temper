@@ -1,13 +1,15 @@
 import { context, propagation, TraceFlags, trace } from '@opentelemetry/api';
 import { AsyncHooksContextManager } from '@opentelemetry/context-async-hooks';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
-import { SamplingDecision } from '@opentelemetry/sdk-trace-base';
+import { BatchSpanProcessor, SamplingDecision } from '@opentelemetry/sdk-trace-base';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { activeTraceparent, extractContext } from '../src/context.js';
+import { McpNegotiationStatusProcessor } from '../src/mcp-negotiation.js';
 import {
 	initTelemetry,
 	isSdkDisabled,
 	isTelemetryEnabled,
+	otlpSpanProcessors,
 	shouldExportSpans,
 	telemetrySampler
 } from '../src/otel.js';
@@ -136,6 +138,64 @@ describe('initTelemetry refuses a plaintext collector', () => {
 		const message = String(error.mock.calls[0]?.[0]);
 		expect(message).toContain(name);
 		expect(message).not.toContain('tok3n');
+	});
+});
+
+describe('otlpSpanProcessors', () => {
+	const VARIABLES = [
+		'OTEL_SDK_DISABLED',
+		'OTEL_EXPORTER_OTLP_ENDPOINT',
+		'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT'
+	] as const;
+	let saved: Record<string, string | undefined>;
+
+	beforeEach(() => {
+		saved = {};
+		for (const name of VARIABLES) saved[name] = process.env[name];
+		for (const name of VARIABLES) delete process.env[name];
+		vi.spyOn(console, 'info').mockImplementation(() => {});
+	});
+
+	afterEach(() => {
+		for (const name of VARIABLES) restore(saved[name], name);
+		vi.restoreAllMocks();
+	});
+
+	// FAILS IF: the eve-side factory exports where `initTelemetry` would not — the same three
+	// "off" resolutions must yield no processor at all.
+	it('is empty when no endpoint is configured', () => {
+		expect(otlpSpanProcessors({ mcpEndpoint: 'https://temperkb.io/mcp' })).toEqual([]);
+	});
+
+	it('is empty under the kill switch, even with an endpoint', () => {
+		process.env.OTEL_SDK_DISABLED = 'true';
+		process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://localhost:4318';
+		expect(otlpSpanProcessors()).toEqual([]);
+	});
+
+	it('is empty for a refused plaintext endpoint', () => {
+		process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://collector.example.com:4318';
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		expect(otlpSpanProcessors()).toEqual([]);
+	});
+
+	// FAILS IF: the negotiation reset is placed AFTER the exporter — under eve only `onEnd` runs,
+	// in list order, so it must come first — or if the factory registers a provider of its own,
+	// which would make eve refuse to start.
+	it('puts the MCP negotiation reset ahead of the batching exporter, and registers nothing', () => {
+		process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://localhost:4318';
+		const processors = otlpSpanProcessors({ mcpEndpoint: 'https://temperkb.io/mcp' });
+		expect(processors).toHaveLength(2);
+		expect(processors[0]).toBeInstanceOf(McpNegotiationStatusProcessor);
+		expect(processors[1]).toBeInstanceOf(BatchSpanProcessor);
+		expect(isTelemetryEnabled()).toBe(false);
+	});
+
+	it('is just the exporter without an MCP endpoint', () => {
+		process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://localhost:4318';
+		const processors = otlpSpanProcessors();
+		expect(processors).toHaveLength(1);
+		expect(processors[0]).toBeInstanceOf(BatchSpanProcessor);
 	});
 });
 

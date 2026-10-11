@@ -1,4 +1,5 @@
-import type { SlackChannelEvents } from "eve/channels/slack";
+import { defineSlackRenderer } from "eve/channels/slack";
+import type { SlackRendererEvents } from "eve/channels/slack";
 
 import { deliverEphemeral, resolveEphemeralRecipient } from "./ephemeral.js";
 
@@ -50,29 +51,36 @@ import { deliverEphemeral, resolveEphemeralRecipient } from "./ephemeral.js";
  * this classification against eve's real `defaultEvents` so a future eve
  * release adding a sink FAILS rather than silently opening one.
  *
- * ## A supplied handler REPLACES the default — there is no supplement
+ * ## A handler that never calls `next` REPLACES the default
  *
- * Verified at three layers:
+ * Since eve 0.7x these handlers are one link of a renderer chain
+ * (`slackChannel({ renderers })`), not an `events` map merged over the
+ * defaults. Each handler receives a `next` that runs the rest of the chain,
+ * ending with eve's default — and none of the handlers below ever calls it:
  *
- *   m={...defaultEvents,...e.events, ...}                    (user last)
- *   "input.requested":e.events?.[`input.requested`]??defaultInputRequestedHandler()
- *   -- eve/dist/src/public/channels/slack/slackChannel.js
+ *   runChain(a, e, (e,i,a)=>e(i,userChannel(r,t),n,a), e=>i?.(e,t,n))
+ *   -- eve/dist/src/public/channels/slack/renderers.js, composeEvents
  *
- *   for(let e of d){let t=f?.[e]; t&&(u=!0,l[e]=(r,i)=>{...})} (one fn per name)
- *   -- eve/dist/src/public/definitions/defineChannel.js, buildAdapter
+ * The default (`i`) is reached only through `next`, so each handler below is
+ * the ONLY thing that runs for its event. Anything the default did that still
+ * matters must be reproduced here. `input.requested`'s default
+ * (`defaultInputRequestedHandler`) is installed as the chain's innermost link
+ * the same way, so the same rule covers it.
  *
- *   let r=e[t.type]; if(r===void 0)return t; try{await r(...)}  (one read, one call)
- *   -- eve/dist/src/channel/adapter.js, callAdapterEventHandler
- *
- * So each handler below is the ONLY thing that runs for its event. Anything
- * the default did that still matters must be reproduced here.
+ * Two framework wrappers sit OUTSIDE the chain and are not ours to replace:
+ * `withFinalReplyDelivery` posts a content-free "couldn't deliver my answer
+ * (error id …)" line if `message.completed` THROWS, and `withTaskCards` posts
+ * whatever card `taskCard` returns — which is why `ephemeralRenderer` below
+ * returns none.
  *
  * ## Failure mode to keep in mind
  *
  * `callAdapterEventHandler` swallows a thrown handler
  * (`log.error("adapter event handler threw — event swallowed")`). A bug here
- * therefore fails as SILENCE, not as a leak — safe, but invisible. That is
- * exactly why these paths are unit-tested rather than eyeballed.
+ * therefore fails as SILENCE, not as a leak — safe, but invisible (except for
+ * `message.completed`, where `withFinalReplyDelivery` adds its content-free
+ * notice). That is exactly why these paths are unit-tested rather than
+ * eyeballed.
  *
  * ## Residual gap: `authorization.required` is NOT overridden
  *
@@ -80,19 +88,20 @@ import { deliverEphemeral, resolveEphemeralRecipient } from "./ephemeral.js";
  * narrowed to private delivery only — no public `post`, no `slack.request` —
  * and eve's default additionally posts a framework-owned public status line
  * that it edits on `authorization.completed`
- * (`state.pendingAuthMessageTs`). That public post is NOT reachable from an
- * override, so overriding cannot remove it and would only cost us the
- * framework's own edit-in-place behaviour. The public line is link-free by
+ * (`state.pendingAuthMessageTs`). The public line is link-free by
  * construction (the challenge URL goes to the private surface), so the
  * residual disclosure is "this agent asked someone to connect an account" —
- * documented here rather than papered over.
+ * documented here rather than papered over. (Under the renderer chain a
+ * handler that skips `next` WOULD now suppress that public line, at the cost
+ * of delivering the challenge itself and losing the edit-in-place. Not taken
+ * here: `getToken` never raises `authorization.required` — see CLAUDE.md.)
  */
 
 /**
  * The one status string this agent ever shows publicly.
  *
- * Constant by construction: it is the same string eve's own `turn.started`
- * default uses, and it is derived from NOTHING on the event. Every handler
+ * Constant by construction: it is derived from NOTHING on the event. (eve's
+ * own `turn.started` default now shows the equally constant `Thinking...`.) Every handler
  * that wants to signal "still working" uses this rather than anything the
  * model produced.
  */
@@ -114,7 +123,7 @@ export const WORKING_STATUS = "Working...";
  * leak this file exists to close. `actionsRequested` below now overrides that
  * reader with a constant, and nothing writes the field.
  */
-export const messageCompleted: NonNullable<SlackChannelEvents["message.completed"]> = async (
+export const messageCompleted: NonNullable<SlackRendererEvents["message.completed"]> = async (
   event,
   ctx,
   callbackCtx,
@@ -141,7 +150,7 @@ export const messageCompleted: NonNullable<SlackChannelEvents["message.completed
  * the asker gets that work continues, and `WORKING_STATUS` reads nothing off
  * the event.
  */
-export const reasoningAppended: NonNullable<SlackChannelEvents["reasoning.appended"]> = async (
+export const reasoningAppended: NonNullable<SlackRendererEvents["reasoning.appended"]> = async (
   _event,
   ctx,
 ) => {
@@ -157,15 +166,38 @@ export const reasoningAppended: NonNullable<SlackChannelEvents["reasoning.append
  * they are not model prose — but which tool the model reached for, and when,
  * is still a read of the caller's private turn, and a constant costs nothing.
  */
-export const actionsRequested: NonNullable<SlackChannelEvents["actions.requested"]> = async (
+export const actionsRequested: NonNullable<SlackRendererEvents["actions.requested"]> = async (
   _event,
   ctx,
 ) => {
   await ctx.thread.startTyping(WORKING_STATUS);
 };
 
+/**
+ * The finished reasoning block. eve's default (new since 0.18) pushes its last
+ * heading or sentence into the public status — the same sink as
+ * `reasoning.appended`, so the same constant.
+ */
+export const reasoningCompleted: NonNullable<SlackRendererEvents["reasoning.completed"]> = async (
+  _event,
+  ctx,
+) => {
+  await ctx.thread.startTyping(WORKING_STATUS);
+};
+
+/**
+ * A tool's progress or result. eve's defaults (new since 0.18) push the call's
+ * presentation label into the public status, and a label is built from the
+ * call's validated INPUT (`label.start(input)`, `docs/tools/overview.mdx`) — a
+ * read of the caller's private turn, like the tool names `actionsRequested`
+ * already withholds. Rendered as nothing, which is what 0.18 did: the
+ * `WORKING_STATUS` set by `actionsRequested` stays up.
+ */
+export const actionPartial: NonNullable<SlackRendererEvents["action.partial"]> = async () => {};
+export const actionResult: NonNullable<SlackRendererEvents["action.result"]> = async () => {};
+
 /** A failed turn. eve's default posts the failure into the channel; ours does not. */
-export const turnFailed: NonNullable<SlackChannelEvents["turn.failed"]> = async (
+export const turnFailed: NonNullable<SlackRendererEvents["turn.failed"]> = async (
   _event,
   ctx,
   callbackCtx,
@@ -190,7 +222,7 @@ export const turnFailed: NonNullable<SlackChannelEvents["turn.failed"]> = async 
  * (`e===\`session.failed\`?t(r,a):t(r,a,buildCallbackContext())` in
  * `buildAdapter`), so the recipient can only come from session state.
  */
-export const sessionFailed: NonNullable<SlackChannelEvents["session.failed"]> = async (
+export const sessionFailed: NonNullable<SlackRendererEvents["session.failed"]> = async (
   _event,
   ctx,
 ) => {
@@ -220,7 +252,7 @@ export const sessionFailed: NonNullable<SlackChannelEvents["session.failed"]> = 
  * turn's context, so it cannot stay public in the meantime. Answering
  * interactively is not wired — nothing in this agent requests input yet.
  */
-export const inputRequested: NonNullable<SlackChannelEvents["input.requested"]> = async (
+export const inputRequested: NonNullable<SlackRendererEvents["input.requested"]> = async (
   event,
   ctx,
   callbackCtx,
@@ -231,20 +263,46 @@ export const inputRequested: NonNullable<SlackChannelEvents["input.requested"]> 
 };
 
 /**
- * The handlers, ready to spread into `slackChannel({ events })`.
+ * The handlers, keyed by event, for `ephemeralRenderer` below.
  *
  * Every eve default that reads model-derived text is here. `tests/events.test.ts`
  * asserts that against eve's actual `defaultEvents` at runtime, so this map
  * cannot silently fall behind an eve upgrade.
  */
-export const ephemeralEvents: SlackChannelEvents = {
+export const ephemeralEvents: SlackRendererEvents = {
   "message.completed": messageCompleted,
   "reasoning.appended": reasoningAppended,
+  "reasoning.completed": reasoningCompleted,
   "actions.requested": actionsRequested,
+  "action.partial": actionPartial,
+  "action.result": actionResult,
   "turn.failed": turnFailed,
   "session.failed": sessionFailed,
   "input.requested": inputRequested,
 };
+
+/**
+ * The renderer `slackChannel({ renderers })` runs, outermost and only.
+ *
+ * Besides `ephemeralEvents` it replaces two non-event links of the chain, both
+ * to keep what 0.18 rendered:
+ *
+ * - `received` — eve's default sets a `Thinking...` status the moment a mention
+ *   arrives, while `onAppMention` is still deciding, and clears it on a drop.
+ *   Content-free, but new: under 0.18 a supplied `onAppMention` replaced the
+ *   default's typing indicator outright, and ours sets none, so a dropped
+ *   mention (bot, unlinked, refused) showed nothing public at all. A no-op
+ *   keeps it that way; a dispatched turn still gets `turn.started`'s status.
+ * - `taskCard` — eve posts a PUBLIC card (`chat.postMessage`) for any turn that
+ *   starts tasks, and a renderer may draw it from the turn's tool calls and
+ *   their input. No card existed in 0.18; returning `null` writes none
+ *   (`withTaskCards` skips a `null` card).
+ */
+export const ephemeralRenderer = defineSlackRenderer({
+  received: async () => {},
+  events: ephemeralEvents,
+  taskCard: () => null,
+});
 
 /**
  * Shared body of every override: resolve the recipient, then deliver privately.

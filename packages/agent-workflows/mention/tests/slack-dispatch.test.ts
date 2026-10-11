@@ -11,16 +11,17 @@ import type { MintOutcome } from "../agent/lib/mint.js";
  * building a real one would mean constructing eve's whole inbound webhook surface, and
  * `identity.test.ts` already covers the auth-context forks.
  */
-const { slackChannel, defaultSlackAuth, requestLinkState, requestMintedToken } = vi.hoisted(
-  () => ({
+const { slackChannel, defineSlackRenderer, defaultSlackAuth, requestLinkState, requestMintedToken } =
+  vi.hoisted(() => ({
     slackChannel: vi.fn((config: unknown) => config),
+    // The identity function in eve too; `lib/events.ts` builds its renderer with it at import.
+    defineSlackRenderer: vi.fn((renderer: unknown) => renderer),
     defaultSlackAuth: vi.fn(),
     requestLinkState: vi.fn<(p: string) => Promise<LinkState>>(),
     requestMintedToken: vi.fn<(p: string) => Promise<MintOutcome>>(),
-  }),
-);
+  }));
 
-vi.mock("eve/channels/slack", () => ({ slackChannel, defaultSlackAuth }));
+vi.mock("eve/channels/slack", () => ({ slackChannel, defineSlackRenderer, defaultSlackAuth }));
 vi.mock("../agent/lib/link.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent/lib/link.js")>()),
   requestLinkState,
@@ -262,9 +263,9 @@ describe("onDirectMessage — the gate that must exist", () => {
   }
 
   // FAILS IF: `onDirectMessage` is removed from the channel config. eve resolves
-  // `onDirectMessage ?? defaultOnDirectMessage`, so an ABSENT key is not "DMs are ignored" —
-  // it is eve's `defaultOnDirectMessage`, which does
-  // `startTyping("Thinking...")` then `{auth: defaultSlackAuth(...)}`: an UNCONDITIONAL
+  // `onDirectMessage ?? onMessage`, falling back to `defaultOnMessage`, so an ABSENT key is not
+  // "DMs are ignored" — it is eve's default, which returns
+  // `{auth: defaultSlackAuth(...)}`: an UNCONDITIONAL
   // dispatch with no `decideIdentity`, no `principalType === "user"` gate, no link-state and
   // no mint pre-flight. Asserting the key is defined is the only way to tell the two apart,
   // because both look like "nothing happens" from outside until `message.im` is subscribed.
@@ -289,6 +290,20 @@ describe("onDirectMessage — the gate that must exist", () => {
     expect(post).not.toHaveBeenCalled();
     expect(requestLinkState).not.toHaveBeenCalled();
     expect(requestMintedToken).not.toHaveBeenCalled();
+  });
+});
+
+describe("channel config — rendering and overlap", () => {
+  // FAILS IF: the renderer is dropped (every eve default — the answer itself included — would
+  // render publicly), or the channel goes back to eve's default `turnPolicy: "steer"`, which folds
+  // a second mention in the thread into the RUNNING turn — one that reaches temper as whoever
+  // started it.
+  it("renders through ephemeralRenderer and queues overlapping turns", async () => {
+    const channel = (await import("../agent/channels/slack.js")).default as AnyArgs;
+    const { ephemeralRenderer } = await import("../agent/lib/events.js");
+
+    expect(channel.renderers).toEqual([ephemeralRenderer]);
+    expect(channel.turnPolicy).toBe("queue");
   });
 });
 
