@@ -71,7 +71,7 @@ use temper_workflow::operations::{AuditorDispatchTick, Backend, CompleteAuditorJ
 /// guard: a 400 at the surface for the caller's benefit, a bound underneath for everyone else's.
 /// A cap ABOVE the ceiling is deliberately NOT a 400: "as much as you can" is a coherent request and
 /// the clamp answers it honestly.
-fn validate_cap(cap: Option<i64>) -> ApiResult<()> {
+pub(super) fn validate_cap(cap: Option<i64>) -> ApiResult<()> {
     match cap {
         Some(c) if c < 1 => Err(ApiError::BadRequest(format!(
             "cap must be at least 1 (got {c})"

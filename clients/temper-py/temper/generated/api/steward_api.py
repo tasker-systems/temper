@@ -960,6 +960,7 @@ class StewardApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "DispatchTickResponse",
+            '400': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1030,6 +1031,7 @@ class StewardApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "DispatchTickResponse",
+            '400': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1100,6 +1102,7 @@ class StewardApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "DispatchTickResponse",
+            '400': None,
         }
         response_data = self.api_client.call_api(
             *_param,

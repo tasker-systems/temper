@@ -32,6 +32,18 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 (`schemas/versions/<M.m>/`); the pin gate checks the record names a `spec-correction` row.
 
 ## Since v0.6.0 — unreleased
+- **The steward dispatch tick refuses a non-positive `cap` with `400` and clamps a large one**
+  `POST /api/steward/dispatch` (and `temper steward dispatch --cap`) now answers `cap` below 1 with
+  `400` "cap must be at least 1". A `cap` of 0 used to answer `200` having claimed nothing, and a
+  negative one a `500`. A `cap` above 100 now claims at most 100 jobs (`MAX_STEWARD_DISPATCH_CAP`).
+  Before, a value past `i32` wrapped negative and answered `500`, and any large in-range value
+  claimed every pending job at once. This is the same two-layer shape as the auditor tick. The
+  request and response shapes are unchanged; the OpenAPI operation gains its `400` entry. Who
+  observes: a caller passing an explicit `cap`. The steward cron sends none and keeps the default
+  of 10. Release relevance: behavioral, plus an additive documented `400`.
+pr: self
+classes: additive, behavioral
+surfaces: http, cli-stdout
 - **Bun-workspace minor/patch dependency refresh (temper-cloud, temper-ui)**
   Minor and patch bumps across the root bun workspace — among them svelte 5.57, tailwindcss 4.3,
   marked 18.1, zod 4.6, jose, pino, docx, xml-crypto, @vercel/functions, @huggingface/hub — with
