@@ -288,3 +288,120 @@ async fn owner_grants_resource_to_team_via_cli_and_revokes(pool: sqlx::PgPool) {
         "decorated team ref (slug-<uuid>) resolves via parse_ref"
     );
 }
+
+/// POST or DELETE `/api/resources/{resource}/grants` as `token` for `principal`: status and body.
+async fn grant_door(
+    app: &common::E2eTestApp,
+    token: &str,
+    method: reqwest::Method,
+    resource: Uuid,
+    principal: Uuid,
+) -> (reqwest::StatusCode, Value) {
+    let body = if method == reqwest::Method::DELETE {
+        serde_json::json!({ "principal_table": "kb_profiles", "principal_id": principal })
+    } else {
+        serde_json::json!({
+            "principal_table": "kb_profiles",
+            "principal_id": principal,
+            "can_read": true,
+            "can_write": false,
+            "can_delete": false,
+            "can_grant": false,
+        })
+    };
+    let resp = app
+        .reqwest_client
+        .request(
+            method,
+            app.url(&format!("/api/resources/{resource}/grants")),
+        )
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&body)
+        .send()
+        .await
+        .expect("grant door request");
+    let status = resp.status();
+    (status, resp.json().await.unwrap_or(Value::Null))
+}
+
+/// The grant door's gate and outcomes, for people: an approved person who neither owns the
+/// resource nor holds `can_grant` on it is refused both verbs (`403`, the plain `FORBIDDEN`), and
+/// the owner grants (`granted: true` on a fresh grant) and revokes (`revoked: true`; a second
+/// revoke of the now-absent grant is the no-op `revoked: false`).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_grant_door_admits_the_owner_and_refuses_a_stranger(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    provision(&app, &app.token).await;
+    let stranger_token = common::generate_second_user_jwt();
+    let stranger_id = provision(&app, &stranger_token).await;
+
+    let context = app
+        .client
+        .contexts()
+        .create("grant-door-ctx", None)
+        .await
+        .expect("ctx");
+    let resource_id =
+        ingest_into_context(&app, &app.token, *context.id, "door doc", "door-doc").await;
+
+    for method in [reqwest::Method::POST, reqwest::Method::DELETE] {
+        let (status, body) = grant_door(
+            &app,
+            &stranger_token,
+            method.clone(),
+            resource_id,
+            stranger_id,
+        )
+        .await;
+        assert_eq!(
+            status,
+            reqwest::StatusCode::FORBIDDEN,
+            "{method}: a non-owner without can_grant is refused; body: {body}"
+        );
+        assert_eq!(body["error"]["code"], "FORBIDDEN", "{method}: {body}");
+    }
+
+    let (status, body) = grant_door(
+        &app,
+        &app.token,
+        reqwest::Method::POST,
+        resource_id,
+        stranger_id,
+    )
+    .await;
+    assert_eq!(
+        status,
+        reqwest::StatusCode::OK,
+        "the owner grants; body: {body}"
+    );
+    assert_eq!(body["granted"], true, "{body}");
+
+    let (status, body) = grant_door(
+        &app,
+        &app.token,
+        reqwest::Method::DELETE,
+        resource_id,
+        stranger_id,
+    )
+    .await;
+    assert_eq!(
+        status,
+        reqwest::StatusCode::OK,
+        "the owner revokes; body: {body}"
+    );
+    assert_eq!(body["revoked"], true, "{body}");
+
+    let (status, body) = grant_door(
+        &app,
+        &app.token,
+        reqwest::Method::DELETE,
+        resource_id,
+        stranger_id,
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+    assert_eq!(
+        body["revoked"], false,
+        "revoke of an absent grant is a no-op; {body}"
+    );
+}

@@ -70,7 +70,7 @@ fn resolve_axis(q: &AdminLedgerQuery) -> ApiResult<Axis> {
         (status = 200, description = "A page of ledger entries, with the ledger epoch", body = AdminLedgerResponse),
         (status = 400, description = "Neither or both of `subject` and `actor` were given, or `subject` is malformed. A query value that does not parse (e.g. a non-UUID `actor`) is a plain-text rejection, not an ErrorBody", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "The caller may read nothing on this axis: no readable act family for the subject, or another profile's acts without being a system admin", body = ErrorBody),
     )
 )]

@@ -52,7 +52,7 @@ use temper_services::state::AppState;
         (status = 200, description = "A directory page, or — when `email` is given — the one matching profile's state card", body = AdminProfilesListAnswer),
         (status = 400, description = "Invalid filter, or both `email` and `email_contains` given", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "`email` matched no profile, or more than one", body = ErrorBody),
     )
 )]
@@ -94,7 +94,7 @@ pub async fn list_profiles(
     responses(
         (status = 200, description = "The principal state card", body = AdminProfileCard),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such profile", body = ErrorBody),
     )
 )]

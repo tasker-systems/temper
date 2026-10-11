@@ -6,7 +6,6 @@ use axum::Json;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
-use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::{
     BulkReassignAck, BulkReassignRequest, ReassignAck, ReassignResourceRequest,
 };
@@ -25,7 +24,7 @@ use temper_services::state::AppState;
     responses(
         (status = 200, description = "Owner reassigned", body = ReassignAck),
         (status = 400, description = "The caller owns the resource, but it is homed in a cognitive map (map interiors are not reassignable)", body = ErrorBody),
-        (status = 403, description = "Forbidden: not the owner and no admin reach over the resource and target. An unknown id answers the same 403"),
+        (status = 403, description = "Forbidden: not the owner and no admin reach over the resource and target. An unknown id answers the same 403; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "Not answered: an unknown id answers 403, as a resource the caller has no authority over"),
         (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered to a caller with authority who also holds the erased resource (its owner, or an admin with reach who holds a read grant on it); everyone else gets 403", body = ErrorBody),
     )
@@ -36,13 +35,8 @@ pub async fn reassign_resource(
     Path(resource_id): Path<Uuid>,
     Json(body): Json<ReassignResourceRequest>,
 ) -> ApiResult<Json<ReassignAck>> {
-    reassign_service::reassign_resource(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        resource_id,
-        body.to_profile_id,
-    )
-    .await?;
+    reassign_service::reassign_resource(&state.pool, &auth.0, resource_id, body.to_profile_id)
+        .await?;
     Ok(Json(ReassignAck {
         resource_id,
         to_profile_id: body.to_profile_id,
@@ -59,7 +53,7 @@ pub async fn reassign_resource(
     request_body = BulkReassignRequest,
     responses(
         (status = 200, description = "Team resources reassigned", body = BulkReassignAck),
-        (status = 403, description = "Forbidden (caller does not manage the team, or target not a member)"),
+        (status = 403, description = "Forbidden (caller does not manage the team, or target not a member); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
     )
 )]
 pub async fn reassign_team(
@@ -70,7 +64,7 @@ pub async fn reassign_team(
 ) -> ApiResult<Json<BulkReassignAck>> {
     let ids = reassign_service::reassign_team_resources(
         &state.pool,
-        ProfileId::from(auth.0.profile().id),
+        &auth.0,
         team_id,
         body.from_profile_id,
         body.to_profile_id,

@@ -165,12 +165,11 @@ async fn is_machine_principal(pool: &PgPool, caller: ProfileId) -> ApiResult<boo
 /// `Forbidden`, not `NotFound`: there is no subject whose existence a refusal could confirm, and a
 /// 404 on a fixed route would just be a lie. The dialect argument that makes the other two gates
 /// `NotFound` (`ScopedAuthority::denial`, `mod.rs:86-95`) does not apply where nothing is named.
-/// Takes the crate-internal [`Principal`] rather than a bare id: the gate consumes the typed
-/// principal wherever the caller path carries one. The db_backend seam's `principal()` routes
-/// here arm-for-arm — `Proof` from HTTP/MCP call paths that hold the middleware-resolved proof,
-/// `Bare` from the CLI/operator path (no middleware above it, so the DB probe stays there).
-/// The Level-1 ruling that moved the proof INTO signatures did not delete this probe; it named
-/// the one place the Bare arm still re-derives provenance.
+/// Takes the crate-internal [`Principal`] rather than a bare id: the db_backend seam's
+/// `principal()` routes here arm-for-arm. The probe stays even though the classification already
+/// knows a machine from a person, because it asks a narrower question: an **unrevoked** client row
+/// (`is_registered_principal`'s definition) — a revoked machine is still a machine, but may not
+/// run the tick.
 pub(crate) async fn require_machine_principal(
     pool: &PgPool,
     caller: Principal<'_>,

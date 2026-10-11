@@ -2,7 +2,7 @@ use axum::extract::{Path, State};
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use crate::middleware::surface::RequestSurface;
 use temper_core::types::data_artifact::KindOwnerInput;
 use temper_core::types::data_artifact_shape::{EnforcementMode, ShapeDeclareRequest, ShapeView};
@@ -33,7 +33,7 @@ use temper_substrate::payloads::{AnchorRef, KindOwner};
 )]
 pub async fn list_shapes(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(context_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<ShapeView>>> {
     let shapes = temper_services::backend::substrate_read::list_shapes(
@@ -66,7 +66,7 @@ pub async fn list_shapes(
 )]
 pub async fn get_shape(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(shape_id): Path<Uuid>,
 ) -> ApiResult<Json<ShapeView>> {
     let shape = temper_services::backend::substrate_read::get_shape(
@@ -103,7 +103,7 @@ pub async fn get_shape(
 )]
 pub async fn declare_shape(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(context_id): Path<Uuid>,
     Json(req): Json<ShapeDeclareRequest>,
@@ -174,7 +174,7 @@ pub async fn declare_shape(
 )]
 pub async fn list_cogmap_shapes(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(cogmap_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<ShapeView>>> {
     let shapes = temper_services::backend::substrate_read::list_shapes(
@@ -213,7 +213,7 @@ pub async fn list_cogmap_shapes(
 )]
 pub async fn declare_cogmap_shape(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(cogmap_id): Path<Uuid>,
     Json(req): Json<ShapeDeclareRequest>,

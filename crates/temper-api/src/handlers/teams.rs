@@ -1,5 +1,5 @@
-//! Team lifecycle handlers — thin: extract `AuthUser`, dispatch one
-//! `team_service` call, return the typed row. Service-direct (no Backend-trait
+//! Team lifecycle handlers — thin: extract `AuthUser` (`AnyPrincipal` for the two reads a machine
+//! may take), dispatch one `team_service` call, return the typed row. Service-direct (no Backend-trait
 //! command, no event emission) per org-provisioning spec §2.6.
 
 use axum::extract::{Path, State};
@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::{AnyPrincipal, AuthUser};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::RemoveMemberOutcome;
 use temper_core::types::team::{
@@ -29,7 +29,10 @@ use temper_services::state::AppState;
         (status = 200, description = "Teams the caller is a member of", body = Vec<TeamRow>),
     )
 )]
-pub async fn list(State(state): State<AppState>, auth: AuthUser) -> ApiResult<Json<Vec<TeamRow>>> {
+pub async fn list(
+    State(state): State<AppState>,
+    auth: AnyPrincipal,
+) -> ApiResult<Json<Vec<TeamRow>>> {
     team_service::list_teams(&state.pool, ProfileId::from(auth.0.profile().id))
         .await
         .map(Json)
@@ -46,7 +49,7 @@ pub async fn list(State(state): State<AppState>, auth: AuthUser) -> ApiResult<Js
     responses(
         (status = 201, description = "Team created", body = TeamRow),
         (status = 400, description = "The `personal-` slug prefix is reserved for personal teams, or the caller is a machine principal (a team's creator becomes its owner, and a machine never governs)"),
-        (status = 403, description = "Forbidden (child requires owner/maintainer; auto_join_role requires admin)"),
+        (status = 403, description = "Forbidden (child requires owner/maintainer; auto_join_role requires admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 409, description = "Team slug already exists"),
     )
 )]
@@ -69,7 +72,7 @@ pub async fn create(
     request_body = AddMemberRequest,
     responses(
         (status = 201, description = "Member added", body = TeamMemberRow),
-        (status = 403, description = "Forbidden (caller is not owner/maintainer)"),
+        (status = 403, description = "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 400, description = "Cannot grant owner via add_member (use ownership transfer), or the target is a machine principal and the role is above `member`"),
         (status = 409, description = "Already a member of this team; change the role with PATCH /api/teams/{id}/members/{profile_id}"),
     )
@@ -80,13 +83,7 @@ pub async fn add_member(
     Path(team_id): Path<Uuid>,
     Json(body): Json<AddMemberRequest>,
 ) -> ApiResult<(StatusCode, Json<TeamMemberRow>)> {
-    let row = team_service::add_member(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        team_id,
-        &body,
-    )
-    .await?;
+    let row = team_service::add_member(&state.pool, &auth.0, team_id, &body).await?;
     Ok((StatusCode::CREATED, Json(row)))
 }
 
@@ -104,7 +101,7 @@ pub async fn add_member(
 )]
 pub async fn detail(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(team_id): Path<Uuid>,
 ) -> ApiResult<Json<TeamDetail>> {
     team_service::team_detail(&state.pool, &auth.0, team_id)
@@ -123,7 +120,7 @@ pub async fn detail(
     request_body = TeamUpdateRequest,
     responses(
         (status = 200, description = "Team metadata updated", body = TeamRow),
-        (status = 403, description = "Forbidden (caller is not owner/maintainer)"),
+        (status = 403, description = "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Team not found or soft-deleted"),
     )
 )]
@@ -133,14 +130,9 @@ pub async fn update(
     Path(team_id): Path<Uuid>,
     Json(body): Json<TeamUpdateRequest>,
 ) -> ApiResult<Json<TeamRow>> {
-    team_service::update_team(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        team_id,
-        &body,
-    )
-    .await
-    .map(Json)
+    team_service::update_team(&state.pool, &auth.0, team_id, &body)
+        .await
+        .map(Json)
 }
 
 /// Delete a team
@@ -153,7 +145,7 @@ pub async fn update(
     security(("bearer_auth" = [])),
     responses(
         (status = 204, description = "Team soft-deleted"),
-        (status = 403, description = "Forbidden (caller is not the owner)"),
+        (status = 403, description = "Forbidden (caller is not the owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Team not found or already soft-deleted"),
         (status = 409, description = "Cannot delete the temper-system root team"),
     )
@@ -163,7 +155,7 @@ pub async fn delete(
     auth: AuthUser,
     Path(team_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    team_service::delete_team(&state.pool, ProfileId::from(auth.0.profile().id), team_id).await?;
+    team_service::delete_team(&state.pool, &auth.0, team_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -179,7 +171,7 @@ pub async fn delete(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Member removed; residual owned-resource reach reported", body = RemoveMemberOutcome),
-        (status = 403, description = "Forbidden (not owner/maintainer and not self)"),
+        (status = 403, description = "Forbidden (not owner/maintainer and not self); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Member not found"),
         (status = 409, description = "Cannot remove the last owner, a SAML-provisioned row, or a profile from its own personal team"),
     )
@@ -189,13 +181,7 @@ pub async fn remove_member(
     auth: AuthUser,
     Path((team_id, profile_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<RemoveMemberOutcome>> {
-    let outcome = team_service::remove_member(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        team_id,
-        profile_id,
-    )
-    .await?;
+    let outcome = team_service::remove_member(&state.pool, &auth.0, team_id, profile_id).await?;
     Ok(Json(outcome))
 }
 
@@ -213,7 +199,7 @@ pub async fn remove_member(
     responses(
         (status = 200, description = "Role changed", body = TeamMemberRow),
         (status = 400, description = "Cannot grant owner via role change, or the target is a machine principal and the role is above `member`"),
-        (status = 403, description = "Forbidden (not owner/maintainer)"),
+        (status = 403, description = "Forbidden (not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Member not found"),
         (status = 409, description = "Cannot demote last owner or SAML-provisioned row"),
     )
@@ -224,13 +210,7 @@ pub async fn change_role(
     Path((team_id, profile_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<ChangeRoleRequest>,
 ) -> ApiResult<Json<TeamMemberRow>> {
-    team_service::change_role(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        team_id,
-        profile_id,
-        body.role,
-    )
-    .await
-    .map(Json)
+    team_service::change_role(&state.pool, &auth.0, team_id, profile_id, body.role)
+        .await
+        .map(Json)
 }

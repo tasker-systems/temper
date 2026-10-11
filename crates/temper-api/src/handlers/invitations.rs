@@ -18,7 +18,6 @@ use axum::Json;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
-use temper_core::types::ids::ProfileId;
 use temper_core::types::invitation::{
     AcceptInvitationResponse, CreateInvitationRequest, InvitationTokenRequest, InviteeInvitation,
     PendingInvitationCounts, TeamInvitation,
@@ -40,7 +39,7 @@ use temper_services::state::AppState;
     responses(
         (status = 201, description = "Invitation created", body = TeamInvitation),
         (status = 400, description = "Owner role cannot be invited"),
-        (status = 403, description = "Forbidden (caller is not owner/maintainer)"),
+        (status = 403, description = "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 409, description = "A pending invitation already exists for this email"),
     )
 )]
@@ -54,13 +53,7 @@ pub async fn create(
         invited_email: body.invited_email,
         role: body.role,
     };
-    let inv = invitation_service::create_invitation(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        team_id,
-        params,
-    )
-    .await?;
+    let inv = invitation_service::create_invitation(&state.pool, &auth.0, team_id, params).await?;
     Ok((StatusCode::CREATED, Json(inv)))
 }
 
@@ -78,7 +71,7 @@ pub async fn create(
     responses(
         (status = 204, description = "Invitation revoked"),
         (status = 400, description = "Only a pending invitation can be revoked"),
-        (status = 403, description = "Forbidden (caller is not owner/maintainer)"),
+        (status = 403, description = "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Invitation not found for this team"),
     )
 )]
@@ -87,14 +80,9 @@ pub async fn revoke(
     auth: AuthUser,
     Path((team_id, invitation_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<StatusCode> {
-    invitation_service::revoke_invitation(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        team_id,
-        invitation_id,
-    )
-    .await
-    .map(|()| StatusCode::NO_CONTENT)
+    invitation_service::revoke_invitation(&state.pool, &auth.0, team_id, invitation_id)
+        .await
+        .map(|()| StatusCode::NO_CONTENT)
 }
 
 /// List a team's open invitations
@@ -107,7 +95,7 @@ pub async fn revoke(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Pending invitations for the team", body = Vec<TeamInvitation>),
-        (status = 403, description = "Forbidden (caller is not owner/maintainer)"),
+        (status = 403, description = "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
     )
 )]
 pub async fn list(
@@ -115,7 +103,7 @@ pub async fn list(
     auth: AuthUser,
     Path(team_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<TeamInvitation>>> {
-    invitation_service::list_invitations(&state.pool, ProfileId::from(auth.0.profile().id), team_id)
+    invitation_service::list_invitations(&state.pool, &auth.0, team_id)
         .await
         .map(Json)
 }
@@ -127,6 +115,7 @@ pub async fn list(
     tag = "Invitations",
     security(("bearer_auth" = [])),
     responses(
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 200, description = "The caller's own pending invitations", body = Vec<InviteeInvitation>),
     )
 )]
@@ -134,7 +123,7 @@ pub async fn list_mine(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<Json<Vec<InviteeInvitation>>> {
-    invitation_service::list_for_profile(&state.pool, ProfileId::from(auth.0.profile().id))
+    invitation_service::list_for_profile(&state.pool, &auth.0)
         .await
         .map(Json)
 }
@@ -155,6 +144,7 @@ pub async fn list_mine(
     params(CountMineQuery),
     security(("bearer_auth" = [])),
     responses(
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 200, description = "How many invitations are waiting on the caller", body = PendingInvitationCounts),
     )
 )]
@@ -163,13 +153,9 @@ pub async fn count_mine(
     auth: AuthUser,
     Query(q): Query<CountMineQuery>,
 ) -> ApiResult<Json<PendingInvitationCounts>> {
-    invitation_service::count_for_profile(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        q.team_slug.as_deref(),
-    )
-    .await
-    .map(Json)
+    invitation_service::count_for_profile(&state.pool, &auth.0, q.team_slug.as_deref())
+        .await
+        .map(Json)
 }
 
 /// Accept a team invitation
@@ -182,7 +168,7 @@ pub async fn count_mine(
     responses(
         (status = 200, description = "Invitation redeemed; caller joined the team", body = AcceptInvitationResponse),
         (status = 400, description = "Invitation expired or already declined"),
-        (status = 403, description = "The invitation is addressed to someone else: only the account whose verified email it names may redeem it"),
+        (status = 403, description = "The invitation is addressed to someone else: only the account whose verified email it names may redeem it; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Unknown token"),
         (status = 409, description = "Invitation already redeemed by another profile"),
     )
@@ -192,13 +178,9 @@ pub async fn accept(
     auth: AuthUser,
     Json(body): Json<InvitationTokenRequest>,
 ) -> ApiResult<Json<AcceptInvitationResponse>> {
-    invitation_service::accept_invitation(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        &body.token,
-    )
-    .await
-    .map(Json)
+    invitation_service::accept_invitation(&state.pool, &auth.0, &body.token)
+        .await
+        .map(Json)
 }
 
 /// Decline a team invitation
@@ -211,7 +193,7 @@ pub async fn accept(
     responses(
         (status = 204, description = "Invitation declined"),
         (status = 400, description = "Invitation was already accepted"),
-        (status = 403, description = "The invitation is addressed to someone else: only the account whose verified email it names may decline it"),
+        (status = 403, description = "The invitation is addressed to someone else: only the account whose verified email it names may decline it; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Unknown token"),
     )
 )]
@@ -220,11 +202,7 @@ pub async fn decline(
     auth: AuthUser,
     Json(body): Json<InvitationTokenRequest>,
 ) -> ApiResult<StatusCode> {
-    invitation_service::decline_invitation(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        &body.token,
-    )
-    .await
-    .map(|()| StatusCode::NO_CONTENT)
+    invitation_service::decline_invitation(&state.pool, &auth.0, &body.token)
+        .await
+        .map(|()| StatusCode::NO_CONTENT)
 }

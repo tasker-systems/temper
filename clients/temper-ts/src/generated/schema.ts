@@ -11114,7 +11114,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11157,7 +11157,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11208,7 +11208,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11268,7 +11268,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11328,7 +11328,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11392,7 +11392,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11477,7 +11477,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11530,7 +11530,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11593,7 +11593,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11634,7 +11634,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11675,7 +11675,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11732,7 +11732,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11782,7 +11782,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11823,7 +11823,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11869,7 +11869,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11919,7 +11919,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11973,7 +11973,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12020,6 +12020,15 @@ export interface operations {
             };
             /** @description Unauthorized */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12077,6 +12086,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     withdraw_request: {
@@ -12100,6 +12118,15 @@ export interface operations {
             };
             /** @description Unauthorized */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12159,6 +12186,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     get_settings: {
@@ -12184,6 +12220,15 @@ export interface operations {
             };
             /** @description Unauthorized */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12227,7 +12272,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12288,7 +12333,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12366,7 +12411,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12429,7 +12474,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12499,7 +12544,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12569,7 +12614,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12630,7 +12675,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12700,7 +12745,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12761,7 +12806,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12831,7 +12876,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12901,7 +12946,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -13042,6 +13087,15 @@ export interface operations {
             };
             /** @description Authentication required, or Slack account linking is not configured on this instance */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14003,12 +14057,14 @@ export interface operations {
                     "application/json": components["schemas"]["GrantOutcome"];
                 };
             };
-            /** @description Caller may not administer grants on this map */
+            /** @description Caller may not administer grants on this map; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };
@@ -14040,12 +14096,14 @@ export interface operations {
                     "application/json": components["schemas"]["RevokeOutcome"];
                 };
             };
-            /** @description Caller may not administer grants on this map */
+            /** @description Caller may not administer grants on this map; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };
@@ -14325,12 +14383,14 @@ export interface operations {
                     "application/json": components["schemas"]["BindTeamOutcome"];
                 };
             };
-            /** @description Caller is not a system admin and does not both administer the map and manage the team */
+            /** @description Caller is not a system admin and does not both administer the map and manage the team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };
@@ -14360,12 +14420,14 @@ export interface operations {
                     "application/json": components["schemas"]["UnbindTeamOutcome"];
                 };
             };
-            /** @description Caller is not a system admin and does not both administer the map and manage the team */
+            /** @description Caller is not a system admin and does not both administer the map and manage the team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };
@@ -14402,7 +14464,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -14456,7 +14518,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -14509,7 +14571,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -14562,7 +14624,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -14628,7 +14690,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -14703,7 +14765,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The caller controls the connection but does not own or maintain the receiving team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description The caller controls the connection but does not own or maintain the receiving team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -14769,7 +14831,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -14826,7 +14888,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -14892,7 +14954,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -15270,12 +15332,14 @@ export interface operations {
                     "application/json": components["schemas"]["ReassignContextOutcome"];
                 };
             };
-            /** @description Caller may not transfer this context to this team */
+            /** @description Caller may not transfer this context to this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Context or team not found */
             404: {
@@ -15601,12 +15665,14 @@ export interface operations {
                     "application/json": components["schemas"]["ShareContextOutcome"];
                 };
             };
-            /** @description Caller may not share this context into this team */
+            /** @description Caller may not share this context into this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };
@@ -15636,12 +15702,14 @@ export interface operations {
                     "application/json": components["schemas"]["UnshareContextOutcome"];
                 };
             };
-            /** @description Caller may not unshare this context from this team */
+            /** @description Caller may not unshare this context from this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };
@@ -15732,7 +15800,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16398,12 +16466,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The invitation is addressed to someone else: only the account whose verified email it names may redeem it */
+            /** @description The invitation is addressed to someone else: only the account whose verified email it names may redeem it; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Unknown token */
             404: {
@@ -16451,12 +16521,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The invitation is addressed to someone else: only the account whose verified email it names may decline it */
+            /** @description The invitation is addressed to someone else: only the account whose verified email it names may decline it; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Unknown token */
             404: {
@@ -16488,6 +16560,15 @@ export interface operations {
                     "application/json": components["schemas"]["InviteeInvitation"][];
                 };
             };
+            /** @description The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     count_mine: {
@@ -16512,6 +16593,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PendingInvitationCounts"];
+                };
+            };
+            /** @description The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
         };
@@ -16686,7 +16776,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16740,7 +16830,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16803,7 +16893,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16847,7 +16937,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16900,7 +16990,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16966,7 +17056,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -17041,7 +17131,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -17127,6 +17217,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     list_auth_links: {
@@ -17152,6 +17251,15 @@ export interface operations {
             };
             /** @description Unauthorized */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -19023,7 +19131,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller may not administer grants on this resource */
+            /** @description Caller may not administer grants on this resource; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -19080,7 +19188,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller may not administer grants on this resource */
+            /** @description Caller may not administer grants on this resource; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -19422,12 +19530,14 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Forbidden: not the owner and no admin reach over the resource and target. An unknown id answers the same 403 */
+            /** @description Forbidden: not the owner and no admin reach over the resource and target. An unknown id answers the same 403; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Not answered: an unknown id answers 403, as a resource the caller has no authority over */
             404: {
@@ -19835,7 +19945,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -19889,7 +19999,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor an owner or maintainer of the authoring team, the authoring team has no read-reach on the connection, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is neither a system admin nor an owner or maintainer of the authoring team, the authoring team has no read-reach on the connection, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -19949,7 +20059,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -20002,7 +20112,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -20077,12 +20187,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden (child requires owner/maintainer; auto_join_role requires admin) */
+            /** @description Forbidden (child requires owner/maintainer; auto_join_role requires admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Team slug already exists */
             409: {
@@ -20148,12 +20260,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden (caller is not the owner) */
+            /** @description Forbidden (caller is not the owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Team not found or already soft-deleted */
             404: {
@@ -20199,12 +20313,14 @@ export interface operations {
                     "application/json": components["schemas"]["TeamRow"];
                 };
             };
-            /** @description Forbidden (caller is not owner/maintainer) */
+            /** @description Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Team not found or soft-deleted */
             404: {
@@ -20239,12 +20355,14 @@ export interface operations {
                     "application/json": components["schemas"]["TeamInvitation"][];
                 };
             };
-            /** @description Forbidden (caller is not owner/maintainer) */
+            /** @description Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };
@@ -20279,12 +20397,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden (caller is not owner/maintainer) */
+            /** @description Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Invitation not found for this team */
             404: {
@@ -20330,12 +20450,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden (caller is not owner/maintainer) */
+            /** @description Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description A pending invitation already exists for this email */
             409: {
@@ -20381,12 +20503,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden (caller is not owner/maintainer) */
+            /** @description Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Already a member of this team; change the role with PATCH /api/teams/{id}/members/{profile_id} */
             409: {
@@ -20423,12 +20547,14 @@ export interface operations {
                     "application/json": components["schemas"]["RemoveMemberOutcome"];
                 };
             };
-            /** @description Forbidden (not owner/maintainer and not self) */
+            /** @description Forbidden (not owner/maintainer and not self); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Member not found */
             404: {
@@ -20483,12 +20609,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden (not owner/maintainer) */
+            /** @description Forbidden (not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Member not found */
             404: {
@@ -20534,12 +20662,14 @@ export interface operations {
                     "application/json": components["schemas"]["BulkReassignAck"];
                 };
             };
-            /** @description Forbidden (caller does not manage the team, or target not a member) */
+            /** @description Forbidden (caller does not manage the team, or target not a member); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };

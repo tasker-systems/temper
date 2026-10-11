@@ -10,9 +10,10 @@
 #
 #   GROUP                        TIER                          POSTURE
 #   ---------------------------  ----------------------------  --------------------------------------------------------------
-#   auth_only_routes             AuthOnly                      require_auth                          (JWT — authenticated)
+#   auth_only_routes             HumanAuthOnly                 require_auth + refuse_machine         (JWT — an authenticated person)
+#   auth_only_status_routes      AuthOnly                      require_auth                          (JWT — person or machine: profile GET only)
 #   gated_routes                 Gated                         require_auth + require_system_access  (JWT + system access)
-#   admin_routes                 Gated                         same stack as gated_routes            (+ &SystemAdmin proof in every service)
+#   admin_routes                 HumanGated                    gated stack + refuse_machine          (+ &SystemAdmin proof in every service)
 #   public_routes                Public                        (none)                                by-design public: /health
 #   blob_commit_routes           Gated (+ inner body limit)    same stack as gated_routes
 #   blob_segment_routes          Gated (+ inner body limit)    same stack as gated_routes
@@ -52,7 +53,8 @@
 # token" — mint_access_token authorizes nothing itself — so a lost layer here is not a downgrade
 # to authenticated-but-broad, it is act-as-any-user.
 #
-# A route added to auth_only/gated is authenticated by construction — safe, no review needed.
+# A route added to auth_only/gated is authenticated by construction — safe, no review needed. WHO it
+# admits is a separate question, pinned by (d), (e) and (f): a person, or (opted in) a machine.
 # A route added to any of the OTHER groups is unauthenticated-at-the-middleware (public, a
 # self-checked secret, or a signature the handler trusts) and MUST be reviewed: does it really
 # self-gate / carry its own compensating control? This script freezes the set of routes in those
@@ -100,7 +102,7 @@ APP_BUILDERS='create_app create_internal_app'
 # and to nothing else. That indirection is exactly what makes a bare AUTH_COVERED entry too weak
 # here: the entry asserts a posture, and the posture is a property of where the merge lands. The
 # merge-landing assertion below is what closes that, and it is why this name may sit here at all.
-AUTH_COVERED='auth_only_routes|gated_routes|admin_routes|query_routes|blob_segment_routes|blob_commit_routes'
+AUTH_COVERED='auth_only_routes|auth_only_status_routes|gated_routes|admin_routes|query_routes|blob_segment_routes|blob_commit_routes'
 # Groups whose routes are NOT behind require_auth — every entry is a reviewed compensating control.
 REVIEW_GROUPS='public_routes|embed_internal_routes|internal_routes|slack_link_internal_routes|slack_mint_internal_routes|slack_link_public_routes|webhook_intake_routes'
 
@@ -140,10 +142,15 @@ auth_only_routes	handlers::invitations::accept
 auth_only_routes	handlers::invitations::count_mine
 auth_only_routes	handlers::invitations::decline
 auth_only_routes	handlers::invitations::list_mine
-auth_only_routes	handlers::profiles::get
 auth_only_routes	handlers::profiles::list_auth_links
 auth_only_routes	handlers::profiles::update
 auth_only_routes	handlers::slack_disconnect::disconnect_me
+EOF
+
+# The one machine-admitting self-service group. Its tier is plain AuthOnly, so a handler added here
+# is reachable by a machine with no system-access gate — the narrowest door, pinned to one handler.
+read -r -d '' AUTH_ONLY_STATUS_BASELINE <<'EOF' || true
+auth_only_status_routes	handlers::profiles::get
 EOF
 
 # Every (sub-router group, handler) pair declared in the routes module, keyed on the handler ident
@@ -216,9 +223,10 @@ require_row() {
 }
 
 require_row 'public_routes'              'Group { key: "public_routes", tier: Tier::Public, build: Documented(public_routes), body_limit: None, serves: Serves::AppOnly },'
-require_row 'auth_only_routes'           'Group { key: "auth_only_routes", tier: Tier::AuthOnly, build: Documented(auth_only_routes), body_limit: None, serves: Serves::AppOnly },'
+require_row 'auth_only_routes'           'Group { key: "auth_only_routes", tier: Tier::HumanAuthOnly, build: Documented(auth_only_routes), body_limit: None, serves: Serves::AppOnly },'
+require_row 'auth_only_status_routes'    'Group { key: "auth_only_status_routes", tier: Tier::AuthOnly, build: Documented(auth_only_status_routes), body_limit: None, serves: Serves::AppOnly },'
 require_row 'gated_routes'               'Group { key: "gated_routes", tier: Tier::Gated, build: Documented(gated_routes), body_limit: None, serves: Serves::AppOnly },'
-require_row 'admin_routes'               'Group { key: "admin_routes", tier: Tier::Gated, build: Documented(admin_routes), body_limit: None, serves: Serves::AppOnly },'
+require_row 'admin_routes'               'Group { key: "admin_routes", tier: Tier::HumanGated, build: Documented(admin_routes), body_limit: None, serves: Serves::AppOnly },'
 require_row 'blob_commit_routes'         'Group { key: "blob_commit_routes", tier: Tier::Gated, build: Documented(blob_commit_routes), body_limit: Some(BodyLimit::CommitDoor), serves: Serves::AppOnly },'
 require_row 'blob_segment_routes'        'Group { key: "blob_segment_routes", tier: Tier::Gated, build: Documented(blob_segment_routes), body_limit: Some(BodyLimit::Fixed(blob_doors::BLOB_SEGMENT_MAX_BODY_BYTES)), serves: Serves::AppOnly },'
 require_row 'internal_routes'            'Group { key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile), build: Undocumented(internal_routes), body_limit: None, serves: Serves::BothBuilders },'
@@ -244,6 +252,7 @@ assert_in_body() {
   }
 }
 assert_in_body 'auth::require_auth'
+assert_in_body 'auth::refuse_machine'
 assert_in_body 'require_system_access'
 assert_in_body 'require_relay_trust'
 assert_in_body 'require_route_rate_limit'
@@ -258,22 +267,41 @@ assert_in_body 'DefaultBodyLimit::max(GATED_MAX_BODY_BYTES)'
 # (last-added is outermost and runs first, per the module doc), so the byte offsets must be
 # strictly increasing along each arm's addition order. A swapped pair changes which refusal an
 # unauthenticated caller meets first — a behavior change presence-greps stay green through.
+#
+# Each pin is ANCHORED on its arm's label and BOUNDED by the next arm's label (END = the end of the
+# function): the search runs only inside that slice. An anchor alone fixes where a search starts,
+# not where it stops — a name missing from its own arm would be found in a later one, and the pin
+# would pass over an arm that lost its gate. Several arms share names (`auth::require_auth` is in
+# four), which is exactly when an unbounded search lies.
 require_order() {
-  local fn_name="$1"; shift
-  fn_body "$fn_name" | awk -v fn="$fn_name" -v names="$*" '
+  local fn_name="$1" start="$2" end="$3"; shift 3
+  fn_body "$fn_name" | awk -v fn="$fn_name" -v start="$start" -v stop="$end" -v names="$*" '
     BEGIN { n = split(names, arr, " ") }
     { body = body $0 "\n" }
     END {
       # No `next`/`continue` here: gawk fatally rejects `next` in an END action, and the
       # macOS awk that accepted it is not the awk CI runs.
-      cursor = 1; bad = 0
+      bad = 0
+      s = index(body, start)
+      if (s == 0) {
+        print "audit-route-auth: FAIL — order pin: arm label \x27" start "\x27 not found in " fn "\x27s body" > "/dev/stderr"
+        exit 1
+      }
+      arm = substr(body, s + length(start))
+      if (stop != "END") {
+        e = index(arm, stop)
+        if (e == 0) {
+          print "audit-route-auth: FAIL — order pin: end label \x27" stop "\x27 does not follow \x27" start "\x27 in " fn "\x27s body" > "/dev/stderr"
+          exit 1
+        }
+        arm = substr(arm, 1, e - 1)
+      }
+      cursor = 1
       for (i = 1; i <= n; i++) {
-        # Sequential search: each name must first occur AFTER the previous one, so a name
-        # reused across match arms (auth::require_auth is in AuthOnly AND Gated) resolves to
-        # THIS arm occurrence, not the first one in the file.
-        idx = index(substr(body, cursor), arr[i])
+        # Sequential search within the arm: each name must first occur AFTER the previous one.
+        idx = index(substr(arm, cursor), arr[i])
         if (idx == 0) {
-          print "audit-route-auth: FAIL — order pin: \x27" arr[i] "\x27 not found in " fn "'"'"'s body (after offset " cursor-1 ")" > "/dev/stderr"
+          print "audit-route-auth: FAIL — order pin: \x27" arr[i] "\x27 not found in " fn "\x27s \x27" start "\x27 arm (after offset " cursor-1 ")" > "/dev/stderr"
           bad = 1
         } else {
           cursor = cursor + idx - 1 + length(arr[i])
@@ -282,8 +310,11 @@ require_order() {
       exit bad
     }' || fail=1
 }
-require_order apply_tier 'system_access::require_system_access' 'auth::require_auth' 'require_relay_trust' 'DefaultBodyLimit::max(GATED_MAX_BODY_BYTES)'
-require_order apply_tier 'rate_limit::require_route_rate_limit' 'internal_auth::require_internal_signature'
+require_order apply_tier 'Tier::AuthOnly =>' 'Tier::HumanAuthOnly =>' 'auth::require_auth'
+require_order apply_tier 'Tier::HumanAuthOnly =>' 'Tier::Gated =>' 'auth::refuse_machine' 'auth::require_auth'
+require_order apply_tier 'Tier::Gated =>' 'Tier::HumanGated =>' 'system_access::require_system_access' 'auth::require_auth' 'require_relay_trust' 'DefaultBodyLimit::max(GATED_MAX_BODY_BYTES)'
+require_order apply_tier 'Tier::HumanGated =>' 'Tier::InternalHmac' 'system_access::require_system_access' 'auth::refuse_machine' 'auth::require_auth' 'require_relay_trust' 'DefaultBodyLimit::max(GATED_MAX_BODY_BYTES)'
+require_order apply_tier 'Tier::InternalHmac' 'END' 'rate_limit::require_route_rate_limit' 'internal_auth::require_internal_signature'
 
 # Both builders must mount FROM the table. A builder that stops consuming it (e.g. re-derives its
 # own router) is a second, drift-prone wiring path — the exact thing the table exists to prevent.
@@ -361,6 +392,376 @@ if ! diff <(printf '%s\n' "$NORM_AUTH_ONLY") <(printf '%s\n' "$AUTH_ONLY_CURRENT
   echo "JWT auth — a privilege widening. diff (baseline -> current):" >&2
   cat /tmp/route-auth-authonly.diff >&2
   echo "If reviewed and correct: extend AUTH_ONLY_BASELINE in this script." >&2
+  fail=1
+fi
+
+# (d2) The machine-admitting self-service group is pinned to its one handler. Its tier is plain
+# AuthOnly — no system-access gate and no machine refusal — so a handler added here is a door an
+# unapproved machine walks through.
+AUTH_ONLY_STATUS_CURRENT="$(printf '%s\n' "$ALL" | grep -E '^auth_only_status_routes'$'\t' || true)"
+NORM_AUTH_ONLY_STATUS="$(printf '%s\n' "$AUTH_ONLY_STATUS_BASELINE" | sort -u)"
+if [[ "$NORM_AUTH_ONLY_STATUS" != "$AUTH_ONLY_STATUS_CURRENT" ]]; then
+  echo "audit-route-auth: FAIL — the auth_only_status group's handler set changed." >&2
+  echo "  It is the one self-service group a machine reaches with no system-access gate; it carries" >&2
+  echo "  the profile read and nothing else. baseline -> current:" >&2
+  diff <(printf '%s\n' "$NORM_AUTH_ONLY_STATUS") <(printf '%s\n' "$AUTH_ONLY_STATUS_CURRENT") >&2 || true
+  echo "  If reviewed and correct: extend AUTH_ONLY_STATUS_BASELINE in this script." >&2
+  fail=1
+fi
+
+# The signature of handler `handlers::<mod>::<fn>`: from `pub async fn <fn>(` through the line that
+# opens its body. Empty when the handler is not found.
+handler_signature() {
+  local h="$1" mod fname
+  mod="$(printf '%s' "$h" | cut -d: -f3)"
+  fname="$(printf '%s' "$h" | cut -d: -f5)"
+  awk -v f="pub async fn ${fname}(" 'index($0,f){p=1} p{print} p&&/\{[[:space:]]*$/{exit}' \
+    "${HANDLERS_DIR}/${mod}.rs" 2>/dev/null || true
+}
+
+# How many identity extractors a signature names: `: AuthUser` (a person) or `: AnyPrincipal` (an
+# explicit opt-in that admits a machine).
+extractor_count() {
+  printf '%s\n' "$1" | grep -Eo ':[[:space:]]*(AuthUser|AnyPrincipal)([^A-Za-z0-9_]|$)' | grep -c . || true
+}
+
+AUTH_COVERED_HANDLERS="$(printf '%s\n' "$ALL" | grep -E "^($AUTH_COVERED)"$'\t' | cut -f2 | sort -u)"
+
+# (e) Every auth-covered handler names exactly one identity extractor. The extractor is where WHO
+# is decided: `AuthUser` refuses a machine, `AnyPrincipal` admits one. A handler naming neither
+# reads no identity and so refuses nobody — on a machine-admitting tier, a refused act served to a
+# machine. A handler naming both has two answers to one question. The no-extractor baseline is
+# empty: every authenticated handler today names one.
+read -r -d '' NO_EXTRACTOR_BASELINE <<'EOF' || true
+EOF
+NO_EXTRACTOR_CURRENT=""
+for h in $AUTH_COVERED_HANDLERS; do
+  sig="$(handler_signature "$h")"
+  if [[ -z "$sig" ]]; then
+    echo "audit-route-auth: FAIL — auth-covered handler $h: signature not found under ${HANDLERS_DIR}" >&2
+    fail=1
+    continue
+  fi
+  n="$(extractor_count "$sig")"
+  if [[ "$n" == "0" ]]; then
+    NO_EXTRACTOR_CURRENT="${NO_EXTRACTOR_CURRENT}${h}"$'\n'
+  elif [[ "$n" != "1" ]]; then
+    echo "audit-route-auth: FAIL — auth-covered handler $h names $n identity extractors; exactly one" >&2
+    echo "  (AuthUser for a person's act, AnyPrincipal for content and workflow) decides who it admits." >&2
+    fail=1
+  fi
+done
+NORM_NO_EXTRACTOR="$(printf '%s\n' "$NO_EXTRACTOR_BASELINE" | grep . | sort -u || true)"
+NO_EXTRACTOR_CURRENT="$(printf '%s' "$NO_EXTRACTOR_CURRENT" | grep . | sort -u || true)"
+if [[ "$NORM_NO_EXTRACTOR" != "$NO_EXTRACTOR_CURRENT" ]]; then
+  echo "audit-route-auth: FAIL — an auth-covered handler names no identity extractor:" >&2
+  diff <(printf '%s\n' "$NORM_NO_EXTRACTOR") <(printf '%s\n' "$NO_EXTRACTOR_CURRENT") >&2 || true
+  echo "  Take AuthUser (a person's act; refuses a machine) or AnyPrincipal (content and workflow;" >&2
+  echo "  admits a machine) — a handler that reads no identity refuses no one." >&2
+  fail=1
+fi
+
+# (f) The machine-admitting handlers are pinned. `AnyPrincipal` is the opt-in that lets a machine
+# reach a handler, so the set of handlers taking it is the machine surface. A new one fails until
+# this baseline is edited, and that edit is the explicit statement that the act is content or
+# workflow.
+read -r -d '' ANY_PRINCIPAL_BASELINE <<'EOF' || true
+handlers::auditor::complete
+handlers::auditor::dispatch
+handlers::auditor::sweep
+handlers::blobs::append_segment
+handlers::blobs::begin_upload
+handlers::blobs::commit
+handlers::blobs::delete
+handlers::blobs::finalize_upload
+handlers::blobs::get
+handlers::blobs::list
+handlers::blobs::relate
+handlers::blobs::relations
+handlers::blobs::upload_progress
+handlers::citation_audits::list
+handlers::citation_audits::record
+handlers::citation_audits::record_for_block
+handlers::cognitive_maps::analytics
+handlers::cognitive_maps::genesis
+handlers::cognitive_maps::list
+handlers::cognitive_maps::materialize
+handlers::cognitive_maps::materialize_delta
+handlers::cognitive_maps::reconcile
+handlers::cognitive_maps::region_metrics
+handlers::cognitive_maps::shape
+handlers::cognitive_maps::show
+handlers::contexts::analytics
+handlers::contexts::create
+handlers::contexts::delete
+handlers::contexts::get
+handlers::contexts::list
+handlers::contexts::materialize
+handlers::contexts::materialize_delta
+handlers::contexts::region_metrics
+handlers::contexts::rename
+handlers::contexts::resolve
+handlers::contexts::restore
+handlers::contexts::shape
+handlers::data_artifact_shapes::declare_cogmap_shape
+handlers::data_artifact_shapes::declare_shape
+handlers::data_artifact_shapes::get_shape
+handlers::data_artifact_shapes::list_cogmap_shapes
+handlers::data_artifact_shapes::list_shapes
+handlers::data_artifacts::commit
+handlers::data_artifacts::get
+handlers::data_artifacts::get_by_id
+handlers::data_artifacts::list
+handlers::edges::assert
+handlers::edges::fold
+handlers::edges::lineage
+handlers::edges::list
+handlers::edges::list_connections
+handlers::edges::retype
+handlers::edges::reweight
+handlers::events::cursor
+handlers::events::element_trail
+handlers::evidence::evidence
+handlers::facets::list_edge_facets
+handlers::facets::list_resource_facets
+handlers::facets::retract_edge_facet
+handlers::facets::set_edge_facet
+handlers::facets::set_facet
+handlers::graph::atlas_home
+handlers::graph::cogmap_neighborhood_slice
+handlers::graph::cogmap_panorama
+handlers::graph::context_composition
+handlers::graph::context_panorama
+handlers::graph::entry
+handlers::graph::region_composition
+handlers::graph::traverse
+handlers::ingest::create
+handlers::ingest::update
+handlers::invocations::close
+handlers::invocations::list
+handlers::invocations::open
+handlers::invocations::show
+handlers::meta::get_meta
+handlers::meta::update_meta
+handlers::profiles::get
+handlers::query::query
+handlers::reblock::reblock
+handlers::resources::annotate
+handlers::resources::create
+handlers::resources::delete
+handlers::resources::get
+handlers::resources::get_content
+handlers::resources::list
+handlers::resources::provenance
+handlers::resources::read_block
+handlers::resources::update
+handlers::schema::describe_doc_type
+handlers::schema::describe_open_meta
+handlers::schema::list_doc_types
+handlers::search::search
+handlers::segments::append_block_handler
+handlers::segments::finalize_handler
+handlers::segments::list_blocks_handler
+handlers::steward::advance
+handlers::steward::candidates
+handlers::steward::delta
+handlers::steward::dispatch
+handlers::steward::sweep
+handlers::teams::detail
+handlers::teams::list
+EOF
+ANY_PRINCIPAL_CURRENT=""
+for h in $AUTH_COVERED_HANDLERS; do
+  sig="$(handler_signature "$h")"
+  if printf '%s\n' "$sig" | grep -Eq ':[[:space:]]*AnyPrincipal([^A-Za-z0-9_]|$)'; then
+    ANY_PRINCIPAL_CURRENT="${ANY_PRINCIPAL_CURRENT}${h}"$'\n'
+  fi
+done
+ANY_PRINCIPAL_CURRENT="$(printf '%s' "$ANY_PRINCIPAL_CURRENT" | grep . | sort -u || true)"
+NORM_ANY_PRINCIPAL="$(printf '%s\n' "$ANY_PRINCIPAL_BASELINE" | grep . | sort -u || true)"
+if [[ "${1:-}" == "--list-any-principal" ]]; then
+  printf '%s\n' "$ANY_PRINCIPAL_CURRENT"
+  exit 0
+fi
+if [[ "$NORM_ANY_PRINCIPAL" != "$ANY_PRINCIPAL_CURRENT" ]]; then
+  echo "audit-route-auth: FAIL — the set of machine-admitting (AnyPrincipal) handlers changed." >&2
+  echo "  A machine reaches only content and workflow. baseline -> current:" >&2
+  diff <(printf '%s\n' "$NORM_ANY_PRINCIPAL") <(printf '%s\n' "$ANY_PRINCIPAL_CURRENT") >&2 || true
+  echo "  If the act is content or workflow: extend ANY_PRINCIPAL_BASELINE in this script" >&2
+  echo "  (.github/scripts/audit-route-auth.sh --list-any-principal prints the current set)." >&2
+  fail=1
+fi
+
+# (g) No raw proof outside the middleware. The compiler is the gate — the planted extension is a
+# type private to `middleware/`, which nothing else can name — and this is its backstop: reading
+# the classified caller, an unclassified profile, or the planted newtype out of request extensions
+# anywhere else would bypass the extractors (e) and (f) pin. Each file is flattened to one line
+# first, so a call split across lines (`.extensions()` / `.get::<…>()`) is still one match, and a
+# path-qualified type (`super::Planted`, `temper_services::auth::Caller`) is matched too.
+API_SRC_DIR="${API_SRC_DIR:-crates/temper-api/src}"
+RAW_PROOF_TYPES='([A-Za-z_][A-Za-z0-9_]*::)*(Caller|AuthenticatedProfile|Planted)([^A-Za-z0-9_]|$)'
+RAW_PROOF_RE="extensions[[:space:]]*(\(\))?[[:space:]]*\.[[:space:]]*(get|get_mut|remove|insert)[[:space:]]*::[[:space:]]*<[[:space:]]*${RAW_PROOF_TYPES}|Extension[[:space:]]*<[[:space:]]*${RAW_PROOF_TYPES}"
+if [[ ! -d "$API_SRC_DIR/middleware" ]]; then
+  echo "audit-route-auth: FAIL — raw-proof check: ${API_SRC_DIR}/middleware not found (moved?)" >&2
+  fail=1
+fi
+RAW_PROOF_HITS=""
+while IFS= read -r f; do
+  if tr '\n' ' ' < "$f" | grep -Eq "$RAW_PROOF_RE"; then
+    RAW_PROOF_HITS="${RAW_PROOF_HITS}${f}"$'\n'
+  fi
+done < <(find "$API_SRC_DIR" -name '*.rs' -not -path "$API_SRC_DIR/middleware/*" | sort)
+if [[ -n "$RAW_PROOF_HITS" ]]; then
+  echo "audit-route-auth: FAIL — a raw caller proof read from request extensions outside middleware/:" >&2
+  printf '  %s\n' $RAW_PROOF_HITS >&2
+  echo "  Take the identity through AuthUser or AnyPrincipal; they are the only reads of the caller." >&2
+  fail=1
+fi
+
+# (h) Every route in an auth-covered group is mounted by its handler's path. Checks (d) through (f)
+# find a group's handlers by the text `handlers::<mod>::<fn>`, and the refusal table finds its
+# operations through the OpenAPI document; a route mounted any other way — an aliased import
+# (`use crate::handlers::teams as t`), a closure, a function local to the routes file, a raw
+# `.route(` with no OpenAPI entry — is invisible to all of them. So in each file that defines an
+# auth-covered group (outside its test module): every `.routes(` argument is a `routes!(` whose
+# arguments are each `handlers::<mod>::<fn>`, `handlers` and the `routes!` macro are imported only
+# plainly, nothing mounts through `.route(`/`.nest(`/`.fallback(`, and a `.merge(` takes only another
+# auth-covered group.
+GROUP_FILES=""
+# The route scan reads routes/*.rs only; a module nested beneath it would be read by nothing.
+if [ -d "$ROUTES" ]; then
+  NESTED="$(find "$ROUTES" -mindepth 2 -name '*.rs' | sort)"
+  if [[ -n "$NESTED" ]]; then
+    echo "audit-route-auth: FAIL — a Rust file nested under the routes module, which no check reads:" >&2
+    printf '  %s\n' $NESTED >&2
+    fail=1
+  fi
+fi
+for f in $ROUTES_FILES; do
+  if grep -Eq "fn (${AUTH_COVERED})\(" "$f"; then GROUP_FILES="${GROUP_FILES} ${f}"; fi
+done
+UNNAMED_MOUNTS=""
+for f in $GROUP_FILES; do
+  # The file's source with comments and test modules removed, flattened so a multi-line `routes!(`
+  # or `use` is one match. Comments go first — `//` and `/* */`, but never inside a string literal,
+  # so a URL in a string cannot cut off the code after it. Then each test module is skipped and the
+  # scan resumes after it: a `#[cfg(test)]` line whose next item is `mod x;` drops that one line,
+  # and `mod x {` drops through its matching close brace (braces counted outside strings). A
+  # test-only `use` or item ends nothing, and no test module, wherever it sits, hides what follows.
+  body="$(awk '
+    # Lexer state persists across lines: a block comment, an ordinary string (which may span
+    # lines) or a raw string `r#"…"#` (closed by a quote and the same number of hashes, held in
+    # `rawend`). Char literals are passed whole, so a quote or slash char cannot flip that state.
+    function strip(line,    out, i, n, c, d, h) {
+      out = ""; n = length(line)
+      for (i = 1; i <= n; i++) {
+        c = substr(line, i, 1); d = substr(line, i + 1, 1)
+        if (inblk) { if (c == "*" && d == "/") { inblk = 0; i++ } ; continue }
+        if (rawend != "") {
+          if (substr(line, i, length(rawend)) == rawend) { out = out rawend; i += length(rawend) - 1; rawend = "" }
+          else out = out c
+          continue
+        }
+        if (inq) { out = out c; if (c == "\\") { out = out d; i++ } else if (c == "\"") inq = 0; continue }
+        if (c == "r" && (d == "\"" || d == "#") && (i == 1 || substr(line, i - 1, 1) !~ /[A-Za-z0-9_]/)) {
+          h = ""; while (substr(line, i + 1 + length(h), 1) == "#") h = h "#"
+          if (substr(line, i + 1 + length(h), 1) == "\"") {
+            out = out "r" h "\""; i += 1 + length(h); rawend = "\"" h
+            continue
+          }
+        }
+        if (c == "'"'"'" && substr(line, i + 2, 1) == "'"'"'") { out = out substr(line, i, 3); i += 2; continue }
+        if (c == "'"'"'" && d == "\\" && substr(line, i + 3, 1) == "'"'"'") { out = out substr(line, i, 4); i += 3; continue }
+        if (c == "\"") { inq = 1; out = out c; continue }
+        if (c == "/" && d == "/") break
+        if (c == "/" && d == "*") { inblk = 1; i++; continue }
+        out = out c
+      }
+      return out
+    }
+    # Net braces on a line, ignoring those inside string and char literals.
+    function braces(line,    t, o, cl) {
+      t = line; gsub(/"([^"\\]|\\.)*"/, "", t); gsub(/'"'"'(\\.|[^'"'"'\\])'"'"'/, "", t)
+      o = gsub(/\{/, "{", t); cl = gsub(/\}/, "}", t)
+      return o - cl
+    }
+    { line = strip($0) }
+    skipping {
+      depth += braces(line)
+      if (depth <= 0) skipping = 0
+      next
+    }
+    pending && line ~ /^[[:space:]]*$/ { next }
+    pending && line ~ /^[[:space:]]*(pub(\([a-z]+\))?[[:space:]]+)?mod[[:space:]]/ {
+      pending = 0
+      if (line ~ /;[[:space:]]*$/) next
+      depth = braces(line); skipping = (depth > 0)
+      next
+    }
+    pending { pending = 0; print held }
+    line ~ /^[[:space:]]*#\[cfg\(test\)\][[:space:]]*$/ { pending = 1; held = line; next }
+    { print line }
+    END { if (inblk || inq || rawend != "") print "@@UNTERMINATED@@" }
+  ' "$f" | tr '\n' ' ')"
+  # A comment or string still open at the end of the file means the lexer lost its place, and
+  # everything after that point was read as one comment or string: fail closed.
+  if printf '%s' "$body" | grep -qF '@@UNTERMINATED@@'; then
+    UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: a comment or string the scan could not close (it read nothing after it)"$'\n'
+  fi
+  # The scan must still hold every group the file defines; a body that lost one read nothing of it.
+  for g in $(grep -Eo "fn (${AUTH_COVERED})\(" "$f" | sed -E 's/^fn //; s/\($//' | sort -u); do
+    if ! printf '%s' "$body" | grep -Eq "fn ${g}\("; then
+      UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: ${g} is not in the scanned source (a test-module skip swallowed it)"$'\n'
+    fi
+  done
+  while IFS= read -r arg; do
+    [[ -z "$arg" ]] && continue
+    if ! [[ "$arg" =~ ^handlers::[a-z_0-9]+::[a-z_0-9]+$ ]]; then
+      UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: routes!(${arg})"$'\n'
+    fi
+  done < <(printf '%s' "$body" | grep -Eo 'routes!\([^)]*\)' | sed -E 's/^routes!\(//; s/\)$//' | tr ',' '\n' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+  while IFS= read -r r; do
+    [[ -z "$r" ]] && continue
+    UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: ${r} (a .routes( argument that is not routes!(...))"$'\n'
+  done < <(printf '%s' "$body" | grep -Eo '\.routes[[:space:]]*\([[:space:]]*[^[:space:]]{1,40}' | grep -Ev '\.routes[[:space:]]*\([[:space:]]*routes!\(' || true)
+  for hit in $(printf '%s' "$body" | { grep -Eo '(\.|::)(route|route_service|nest|nest_service|fallback|fallback_service|merge|routes)[[:space:]]*\(|Router::(route|route_service|nest|nest_service|fallback|fallback_service|merge|routes)([^A-Za-z0-9_!(]|$)' || true; } | grep -Ev '^\.(merge|routes)' | tr -d ' (' || true); do
+    UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: ${hit}("$'\n'
+  done
+  while IFS= read -r m; do
+    [[ -z "$m" ]] && continue
+    if ! [[ "$m" =~ ^\.merge\([[:space:]]*(super::[a-z_]+::)?([a-z_]+_routes)\(\)[[:space:]]*\)$ ]] \
+       || ! [[ "${BASH_REMATCH[2]}" =~ ^(${AUTH_COVERED})$ ]]; then
+      UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: ${m}"$'\n'
+    fi
+  done < <(printf '%s' "$body" | grep -Eo '\.merge[[:space:]]*\([^)]*\)[[:space:]]*\)?' || true)
+  while IFS= read -r u; do
+    [[ -z "$u" ]] && continue
+    if [[ "$u" != "use crate::handlers;" ]]; then
+      UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: ${u}"$'\n'
+    fi
+  done < <(printf '%s' "$body" | grep -Eo '(^|[^A-Za-z0-9_])use [^;]*;' | sed -E 's/^[^u]*use /use /; s/[[:space:]]+/ /g' | grep -Ew 'handlers' || true)
+  while IFS= read -r u; do
+    [[ -z "$u" ]] && continue
+    if [[ "$u" != "use utoipa_axum::routes;" ]]; then
+      UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: ${u}"$'\n'
+    fi
+  done < <(printf '%s' "$body" | grep -Eo '(^|[^A-Za-z0-9_])use [^;]*;' | sed -E 's/^[^u]*use /use /; s/[[:space:]]+/ /g' | grep -Ew 'routes' || true)
+done
+if [[ -n "$UNNAMED_MOUNTS" ]]; then
+  echo "audit-route-auth: FAIL — an auth-covered group mounts a route not named handlers::<mod>::<fn>:" >&2
+  printf '%s' "$UNNAMED_MOUNTS" | sed 's/^/  /' >&2
+  echo "  Mount it as routes!(handlers::<mod>::<fn>) under \`use crate::handlers;\`, so the extractor" >&2
+  echo "  checks and the refusal table can see who it admits." >&2
+  fail=1
+fi
+
+# (e2) An identity extractor is named by its own name. A renaming import (`AnyPrincipal as AuthUser`)
+# or a type alias (`type AuthUser = AnyPrincipal;`) outside middleware/ would make (e) and (f) read
+# one extractor as the other.
+ALIASED="$(grep -REn '(AuthUser|AnyPrincipal)[[:space:]]+as[[:space:]]|as[[:space:]]+(AuthUser|AnyPrincipal)([^A-Za-z0-9_]|$)|type[[:space:]]+(AuthUser|AnyPrincipal)([^A-Za-z0-9_]|$)' "$API_SRC_DIR" --include='*.rs' | grep -v '^[^:]*/middleware/' || true)"
+if [[ -n "$ALIASED" ]]; then
+  echo "audit-route-auth: FAIL — an identity extractor imported under another name:" >&2
+  printf '%s\n' "$ALIASED" | sed 's/^/  /' >&2
   fail=1
 fi
 

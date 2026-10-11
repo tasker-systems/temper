@@ -2709,7 +2709,7 @@ class ContextsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ReassignContextOutcome",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -2786,7 +2786,7 @@ class ContextsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ReassignContextOutcome",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -2863,7 +2863,7 @@ class ContextsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ReassignContextOutcome",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -3907,7 +3907,7 @@ class ContextsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ShareContextOutcome",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -3982,7 +3982,7 @@ class ContextsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ShareContextOutcome",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -4057,7 +4057,7 @@ class ContextsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ShareContextOutcome",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -4211,7 +4211,7 @@ class ContextsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "UnshareContextOutcome",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -4286,7 +4286,7 @@ class ContextsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "UnshareContextOutcome",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -4361,7 +4361,7 @@ class ContextsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "UnshareContextOutcome",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,

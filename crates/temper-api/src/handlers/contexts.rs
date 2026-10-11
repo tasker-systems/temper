@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::{AnyPrincipal, AuthUser};
 use crate::middleware::surface::RequestSurface;
 use temper_core::context_ref::parse_context_ref;
 use temper_core::types::cognitive_maps::{AnchorShape, CogmapRegionMetricsRow, CogmapStaleness};
@@ -39,7 +39,7 @@ use temper_workflow::operations::{Backend, MaterializeOnThreshold};
 )]
 pub async fn list(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Query(q): Query<ListContextsQuery>,
 ) -> ApiResult<Json<Vec<ContextRowWithCounts>>> {
     let profile_id = ProfileId::from(auth.0.profile().id);
@@ -69,7 +69,7 @@ pub async fn list(
 )]
 pub async fn create(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Json(body): Json<ContextCreateRequest>,
 ) -> ApiResult<(StatusCode, Json<ContextRow>)> {
     let caller = ProfileId::from(auth.0.profile().id);
@@ -103,7 +103,7 @@ pub async fn create(
 )]
 pub async fn resolve(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Query(q): Query<ResolveContextQuery>,
 ) -> ApiResult<Json<ContextResolution>> {
     let cref =
@@ -128,7 +128,7 @@ pub async fn resolve(
 )]
 pub async fn get(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(context_id): Path<Uuid>,
 ) -> ApiResult<Json<ContextRow>> {
     let profile_id = ProfileId::from(auth.0.profile().id);
@@ -163,7 +163,7 @@ pub async fn get(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(context_id): Path<Uuid>,
 ) -> ApiResult<Json<RetireContextOutcome>> {
     let outcome = context_service::retire(&state.pool, &auth.0, context_id).await?;
@@ -188,7 +188,7 @@ pub async fn delete(
 )]
 pub async fn restore(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(context_id): Path<Uuid>,
 ) -> ApiResult<Json<RestoreContextOutcome>> {
     context_service::restore(&state.pool, &auth.0, context_id)
@@ -206,7 +206,7 @@ pub async fn restore(
     request_body = ShareContextRequest,
     responses(
         (status = 200, description = "Context shared (or idempotent no-op)", body = ShareContextOutcome),
-        (status = 403, description = "Caller may not share this context into this team"),
+        (status = 403, description = "Caller may not share this context into this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
     )
 )]
 pub async fn share_team(
@@ -231,7 +231,7 @@ pub async fn share_team(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Context unshared (or no-op)", body = UnshareContextOutcome),
-        (status = 403, description = "Caller may not unshare this context from this team"),
+        (status = 403, description = "Caller may not unshare this context from this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
     )
 )]
 pub async fn unshare_team(
@@ -253,7 +253,7 @@ pub async fn unshare_team(
     request_body = ReassignContextRequest,
     responses(
         (status = 200, description = "Context ownership transferred (or idempotent no-op)", body = ReassignContextOutcome),
-        (status = 403, description = "Caller may not transfer this context to this team"),
+        (status = 403, description = "Caller may not transfer this context to this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "Context or team not found"),
         (status = 409, description = "Target team already owns a context with this slug"),
     )
@@ -287,7 +287,7 @@ pub async fn reassign(
 )]
 pub async fn rename(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(context_id): Path<Uuid>,
     Json(body): Json<RenameContextRequest>,
 ) -> ApiResult<Json<RenameContextOutcome>> {
@@ -327,7 +327,7 @@ pub async fn rename(
 )]
 pub async fn shape(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(context_id): Path<Uuid>,
     Query(q): Query<ContextShapeQuery>,
 ) -> ApiResult<Json<AnchorShape>> {
@@ -359,7 +359,7 @@ pub async fn shape(
 )]
 pub async fn region_metrics(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(context_id): Path<Uuid>,
     Query(q): Query<ContextShapeQuery>,
 ) -> ApiResult<Json<Vec<CogmapRegionMetricsRow>>> {
@@ -397,7 +397,7 @@ pub async fn region_metrics(
 )]
 pub async fn materialize_delta(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(context_id): Path<Uuid>,
     Query(q): Query<ContextMaterializeDeltaQuery>,
 ) -> ApiResult<Json<MaterializeDelta>> {
@@ -428,7 +428,7 @@ pub async fn materialize_delta(
 )]
 pub async fn materialize(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(context_id): Path<Uuid>,
     Json(req): Json<MaterializeRequest>,
@@ -478,7 +478,7 @@ pub async fn materialize(
 )]
 pub async fn analytics(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(context_id): Path<Uuid>,
 ) -> ApiResult<Json<CogmapStaleness>> {
     temper_services::backend::substrate_read::context_analytics_select(

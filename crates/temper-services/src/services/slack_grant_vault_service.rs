@@ -99,7 +99,8 @@ impl std::fmt::Debug for MintOutcome {
 /// refresh and access tokens, so a derived `Debug` + a stray `?grant` would dump the durable
 /// grant to a log.
 pub struct NewGrant<'a> {
-    pub profile_id: Uuid,
+    /// The person the grant is vaulted for: a machine never holds a Slack grant.
+    pub owner: &'a crate::auth::HumanPrincipal,
     /// The WHOLE opaque principal (`slack:<team>:<user>`), never split.
     pub slack_principal_id: &'a str,
     /// The refresh token — the durable grant.
@@ -113,7 +114,7 @@ pub struct NewGrant<'a> {
 impl std::fmt::Debug for NewGrant<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NewGrant")
-            .field("profile_id", &self.profile_id)
+            .field("profile_id", &self.owner.profile().id)
             .field("slack_principal_id", &self.slack_principal_id)
             .field("refresh_token", &"redacted")
             .field("access_token", &"redacted")
@@ -192,7 +193,7 @@ pub async fn store_grant(
                 updated_at        = now()
         "#,
         Uuid::now_v7(),
-        grant.profile_id,
+        grant.owner.profile().id,
         grant.slack_principal_id,
         &rt_nonce[..],
         rt_ciphertext,
@@ -524,12 +525,13 @@ mod tests {
         ttl: Option<u64>,
     ) {
         link(pool, profile, principal).await;
+        let owner = crate::test_support::human_principal_for(pool, profile).await;
         let mut conn = pool.acquire().await.expect("acquire");
         store_grant(
             &mut conn,
             &key(),
             NewGrant {
-                profile_id: profile,
+                owner: &owner,
                 slack_principal_id: principal,
                 refresh_token: rt,
                 access_token: at,
@@ -695,12 +697,13 @@ mod tests {
     async fn store_grant_is_rolled_back_with_its_caller_transaction(pool: PgPool) {
         let profile = insert_profile(&pool).await;
 
+        let owner = crate::test_support::human_principal_for(&pool, profile).await;
         let mut tx = pool.begin().await.expect("begin");
         store_grant(
             &mut tx,
             &key(),
             NewGrant {
-                profile_id: profile,
+                owner: &owner,
                 slack_principal_id: PRINCIPAL,
                 refresh_token: "rt",
                 access_token: "at",

@@ -404,15 +404,13 @@ async fn an_erased_context_cannot_be_restored_by_anyone(pool: PgPool) {
 
     erase(&pool, p.profile).await;
 
-    let co_admin_proof =
-        temper_services::test_support::authenticated_profile_for(&pool, co_admin.profile).await;
+    let co_admin_proof = temper_services::test_support::caller_for(&pool, co_admin.profile).await;
     match context_service::restore(&pool, &co_admin_proof, p.personal_team.uuid()).await {
         Err(ApiError::Gone(_)) => {}
         other => panic!("the co-admin's restore is refused with 410, got {other:?}"),
     }
     let (op, _) = operator(&pool).await;
-    let op_proof =
-        temper_services::test_support::authenticated_profile_for(&pool, op.profile).await;
+    let op_proof = temper_services::test_support::caller_for(&pool, op.profile).await;
     for c in [p.me, p.personal_team] {
         match context_service::restore(&pool, &op_proof, c.uuid()).await {
             Err(ApiError::Gone(_)) => {}

@@ -95,6 +95,13 @@ fn map_api_error(context: &str, rule: ForbiddenRule, err: ClientError) -> rmcp::
             format!("{context} requires that {}", rule.requirement()),
             None,
         ),
+        // A refusal that names why — a machine refused share, unshare or transfer, which take a
+        // person — carries the server's own sentence, never an internal fault.
+        ClientError::ForbiddenDetail { message } => rmcp::ErrorData::new(
+            rmcp::model::ErrorCode::INVALID_REQUEST,
+            format!("{context}: {message}"),
+            None,
+        ),
         ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
         ClientError::Conflict { message } => {
             rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
@@ -567,6 +574,26 @@ mod tests {
         assert_ne!(
             forbidden.message, not_found.message,
             "403 and 404 must stay distinguishable at this surface"
+        );
+    }
+
+    #[test]
+    fn map_api_error_carries_a_detailed_refusal_as_the_callers_not_a_fault() {
+        let refused = map_api_error(
+            "share_context",
+            ForbiddenRule::ContextAndTargetTeam,
+            ClientError::ForbiddenDetail {
+                message: "this action is not available to a machine principal".to_string(),
+            },
+        );
+        assert_eq!(
+            refused.code,
+            rmcp::model::ErrorCode::INVALID_REQUEST,
+            "{refused:?}"
+        );
+        assert_eq!(
+            refused.message,
+            "share_context: this action is not available to a machine principal"
         );
     }
 

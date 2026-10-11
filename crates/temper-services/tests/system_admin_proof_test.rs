@@ -5,12 +5,12 @@
 use sqlx::PgPool;
 use temper_core::types::ids::ProfileId;
 use temper_services::auth::require_system_admin;
-use temper_services::auth::AuthenticatedProfile;
+use temper_services::auth::HumanPrincipal;
 use temper_services::error::ApiError;
 use temper_services::test_support;
 
-/// Seed a profile and build an `AuthenticatedProfile` for it — the auth path's Level-1 output.
-async fn authed(pool: &PgPool, handle: &str) -> AuthenticatedProfile {
+/// Seed a profile and mint the `HumanPrincipal` the auth path classifies it as.
+async fn authed(pool: &PgPool, handle: &str) -> HumanPrincipal {
     let id: uuid::Uuid = sqlx::query_scalar(
         "INSERT INTO kb_profiles (handle, display_name) VALUES ($1,$1) RETURNING id",
     )
@@ -18,7 +18,7 @@ async fn authed(pool: &PgPool, handle: &str) -> AuthenticatedProfile {
     .fetch_one(pool)
     .await
     .unwrap();
-    test_support::authenticated_profile_for(pool, id).await
+    test_support::human_principal_for(pool, id).await
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
