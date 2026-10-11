@@ -38,7 +38,7 @@
     "@opentelemetry/semantic-conventions": "^1.43.0"
   },
   "devDependencies": {
-    "@types/node": "24.x",
+    "@types/node": "26.x",
     "typescript": "^5.8",
     "vitest": "^4.1.11"
   },
