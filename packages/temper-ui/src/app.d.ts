@@ -1,4 +1,4 @@
-import type { Profile, Entitlements } from '$lib/types';
+import type { Entitlements, Profile } from '$lib/types';
 
 declare global {
 	namespace App {
