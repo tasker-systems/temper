@@ -29,10 +29,13 @@
 -- in the second call would leave the profile admitted but not an admin.
 BEGIN;
 
+-- The slug before the team: setting it takes the gating-team lock (20261025100000) before the team's
+-- slug exists, so a concurrent sign-up whose `personal-<handle>` is this slug waits and then skips it,
+-- rather than deadlocking on the uncommitted team.
+UPDATE kb_system_settings SET gating_team_slug = :'gating' WHERE id = 1;
+
 INSERT INTO kb_teams (slug, name) VALUES (:'gating', :'gating')
   ON CONFLICT (slug) DO NOTHING;
-
-UPDATE kb_system_settings SET gating_team_slug = :'gating' WHERE id = 1;
 
 -- The functions, not raw INSERTs: each records the transition and emits its event.
 SELECT principal_standing_apply(:'admin'::uuid, 'approve', 'approved', NULL, 'root bootstrap');

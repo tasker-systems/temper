@@ -580,8 +580,8 @@ pub async fn admin_get_settings(pool: &PgPool, _admin: &SystemAdmin) -> ApiResul
 /// retired as a control (spec §14 / D18); the column survives read-only until
 /// Phase 2 drops it, so this function never touches it.
 ///
-/// One guard survives, decoupled from the retired mode: if a `gating_team_slug`
-/// is being set, the team must exist. The gating team is the conventional
+/// Two guards on a `gating_team_slug` being set: the team must exist, and must not be
+/// someone's personal team. The gating team is the conventional
 /// home for the side-effect `owner` row `promote_admin` writes, so pointing the
 /// slug at a nonexistent team would orphan that row. This is *not* the old
 /// lockout guard — under Task 7's repoint `has_system_access` reads standing, so
@@ -591,19 +591,30 @@ pub async fn update_system_settings(
     _admin: &SystemAdmin,
     req: &UpdateSettingsRequest,
 ) -> ApiResult<SystemSettings> {
-    // If a gating team is being set, it must name a real team.
+    // If a gating team is being set, it must name a real team, and never a personal one: person
+    // erasure erases everything in the subject's personal team, so a personal gating team would let
+    // one erasure take the org's content with it. The database refuses it too
+    // (20261025100000); this check is what renders the reason.
     if let Some(ref slug) = req.gating_team_slug {
-        let exists: bool = sqlx::query_scalar!(
-            "SELECT EXISTS(SELECT 1 FROM kb_teams WHERE slug = $1)",
+        let personal: Option<bool> = sqlx::query_scalar!(
+            r#"SELECT personal_of IS NOT NULL AS "personal!" FROM kb_teams WHERE slug = $1"#,
             slug
         )
-        .fetch_one(pool)
-        .await?
-        .unwrap_or(false);
-        if !exists {
-            return Err(ApiError::BadRequest(format!(
-                "gating_team_slug '{slug}' does not exist — create the team first"
-            )));
+        .fetch_optional(pool)
+        .await?;
+        match personal {
+            None => {
+                return Err(ApiError::BadRequest(format!(
+                    "gating_team_slug '{slug}' does not exist — create the team first"
+                )));
+            }
+            Some(true) => {
+                return Err(ApiError::BadRequest(format!(
+                    "gating_team_slug '{slug}' is a personal team — the gating team holds \
+                     org-wide content, and erasing the person would erase it; choose a shared team"
+                )));
+            }
+            Some(false) => {}
         }
     }
 
