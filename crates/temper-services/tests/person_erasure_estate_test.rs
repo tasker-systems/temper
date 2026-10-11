@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use temper_core::types::erasure::{EstateDisposition, EstateErasureKind};
 use temper_core::types::ids::ProfileId;
+use temper_services::error::ApiError;
 use temper_services::services::erasure_service::{execute_erasure, survey_erasure};
 use temper_services::services::resource_erasure_service::{
     execute_resource_erasure, ResourceErasureOutcome, ResourceErasureRequest,
@@ -506,6 +507,136 @@ async fn already_erased_resources_are_skipped_or_completed(pool: PgPool) {
         ledger_quoting(&pool, TITLE).await,
         0,
         "the completion pass rewrote the title"
+    );
+}
+
+/// Task 01a127f2-29b9-71f7-ab35-92af00bf7d70. One husk in the estate that the
+/// completion pass refuses fails the whole person act, and the survey with it: the survey's
+/// disposition reads `resource_erasure_completion_fields`, which raises on the same derivation the
+/// act runs. The husk here is the substrate witness's permuted husk
+/// (`a_husk_whose_provenance_permutes_its_sentinels_is_refused_not_completed`): two remote-source
+/// citations of one block with their seqs swapped after a cut-1 erasure.
+///
+/// This pins TODAY's behavior, so that whatever the design chooses has a witness to flip: the act
+/// refuses outright, and nothing about the person, or the live resource beside the husk, is
+/// erased.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_husk_the_completion_pass_refuses_fails_the_whole_person_act(pool: PgPool) {
+    let p = person(&pool).await;
+    let live = resource(&pool, &p, p.me, "live beside the husk", "body one", None).await;
+    let husk = resource(&pool, &p, p.me, TITLE, "body two", None).await;
+    let block: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id = $1 AND NOT is_folded \
+          ORDER BY seq LIMIT 1",
+    )
+    .bind(husk.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    writes::annotate_block_sources(
+        &pool,
+        writes::AnnotateParams {
+            resource: husk,
+            sources: vec![
+                Incorporation {
+                    source: ProvenanceSource::Remote(URL.to_owned()),
+                    seq: 1,
+                },
+                Incorporation {
+                    source: ProvenanceSource::Remote(format!("{URL}/second")),
+                    seq: 2,
+                },
+            ],
+            content_block: Some(block),
+            emitter: EntityId::from(p.emitter),
+        },
+    )
+    .await
+    .expect("annotate two remote sources");
+    simulate_cut1_husk(&pool, &p, husk.uuid()).await;
+    // Swaps the seqs of the block's two remote citations; run twice, it restores them.
+    let swap = || async {
+        let swapped = sqlx::query(
+            "WITH two AS (SELECT block_id, source_id, contributed_by_event_id, accretion_seq \
+                            FROM kb_block_provenance \
+                           WHERE block_id = $1 AND source_kind = 'remote' AND accretion_seq IN (1, 2)), \
+                  seqs AS (SELECT array_agg(accretion_seq ORDER BY accretion_seq) AS q FROM two) \
+             UPDATE kb_block_provenance bp \
+                SET accretion_seq = CASE WHEN two.accretion_seq = seqs.q[1] THEN seqs.q[2] ELSE seqs.q[1] END \
+               FROM seqs, two \
+              WHERE bp.block_id = two.block_id AND bp.source_id = two.source_id \
+                AND bp.contributed_by_event_id = two.contributed_by_event_id",
+        )
+        .bind(block)
+        .execute(&pool)
+        .await
+        .expect("swap the husk's two sentinel citations");
+        assert_eq!(swapped.rows_affected(), 2, "two rows swapped");
+    };
+    swap().await;
+    let refusal = sqlx::query("SELECT resource_erasure_completion_fields($1)")
+        .bind(husk.uuid())
+        .execute(&pool)
+        .await
+        .expect_err("setup: the completion pass refuses this husk");
+    assert!(
+        refusal
+            .to_string()
+            .contains("does not match the sentinels its provenance cites"),
+        "setup: {refusal}"
+    );
+    let ledger_before: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // The door answers an opaque internal error: neither the refusal nor the husk is named.
+    // Restoring the permutation below shows the husk is the only cause.
+    let admin = operator(&pool).await;
+    let survey = survey_erasure(&pool, &admin, ProfileId::from(p.profile), None).await;
+    assert!(
+        matches!(survey, Err(ApiError::Internal(_))),
+        "the survey cannot derive the husk's disposition: {survey:?}"
+    );
+    let act = execute_erasure(
+        &pool,
+        &admin,
+        ProfileId::from(p.profile),
+        Uuid::now_v7(),
+        Surface::ApiHttp,
+        &Default::default(),
+    )
+    .await;
+    assert!(
+        matches!(act, Err(ApiError::Internal(_))),
+        "the person act refuses outright: {act:?}"
+    );
+
+    let ledger_after: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(ledger_before, ledger_after, "nothing reached the ledger");
+    let tombstoned: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT tombstoned_at FROM kb_profiles WHERE id = $1")
+            .bind(p.profile)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(tombstoned.is_none(), "the person is not erased");
+    assert!(
+        erased_at(&pool, live).await.is_none(),
+        "the live resource beside the husk is not erased"
+    );
+
+    swap().await;
+    survey_erasure(&pool, &admin, ProfileId::from(p.profile), None)
+        .await
+        .expect("restored, the survey derives");
+    erase(&pool, p.profile).await;
+    assert!(
+        erased_at(&pool, live).await.is_some(),
+        "restored, the same act erases the estate"
     );
 }
 
