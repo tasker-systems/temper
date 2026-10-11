@@ -28,9 +28,15 @@
  * **`onEnding` is marked `@experimental` in the SDK** and may change in a minor version. That
  * is pinned by `tests/mcp-negotiation.test.ts`, which asserts the exported status rather than
  * the hook — if the seam ever stops firing, the suite goes red rather than the dashboard
- * quietly re-inverting.
+ * quietly re-inverting. *
+ * **`onEnd` repeats the reset, for pipelines that never call `onEnding`.** eve (≥0.62) owns the
+ * tracer provider and wraps every authored processor in its own, which forwards only `onStart`
+ * and `onEnd` (`eve/dist/src/tracing/otel-registration.js`, `PrivateSpanFilteringProcessor`). There
+ * the reset has to happen in `onEnd`, and it is order-DEPENDENT: it reaches only the processors
+ * listed after this one, which is why `otlpSpanProcessors` puts it ahead of the exporter. The span
+ * is the same `SpanImpl` there, ended but not frozen, so the assignment is the same one.
  */
-import type { Span, SpanProcessor } from '@opentelemetry/sdk-trace-base';
+import type { ReadableSpan, Span, SpanProcessor } from '@opentelemetry/sdk-trace-base';
 /**
  * Reduce a URL to the `origin + pathname` form the predicate compares on, dropping query,
  * fragment and any trailing slash. Returns `null` for anything unparseable — a caller that
@@ -53,7 +59,7 @@ export declare class McpNegotiationStatusProcessor implements SpanProcessor {
     constructor(endpointKey: string);
     onStart(): void;
     onEnding(span: Span): void;
-    onEnd(): void;
+    onEnd(span: ReadableSpan): void;
     forceFlush(): Promise<void>;
     shutdown(): Promise<void>;
     /**

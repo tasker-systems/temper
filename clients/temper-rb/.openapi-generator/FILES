@@ -394,6 +394,10 @@ lib/temper/generated/models/resource_sort_field.rb
 lib/temper/generated/models/resource_update_request.rb
 lib/temper/generated/models/resource_view.rb
 lib/temper/generated/models/restore_context_outcome.rb
+lib/temper/generated/models/retention_category.rb
+lib/temper/generated/models/retention_policies.rb
+lib/temper/generated/models/retention_policy.rb
+lib/temper/generated/models/retention_policy_set.rb
 lib/temper/generated/models/retire_context_outcome.rb
 lib/temper/generated/models/return_spec.rb
 lib/temper/generated/models/retype_relationship_request.rb
@@ -427,6 +431,7 @@ lib/temper/generated/models/share_context_request.rb
 lib/temper/generated/models/slack_disconnect_request.rb
 lib/temper/generated/models/slack_disconnect_response.rb
 lib/temper/generated/models/slack_disconnected_principal.rb
+lib/temper/generated/models/slack_revocation_tally.rb
 lib/temper/generated/models/slice_request.rb
 lib/temper/generated/models/sort_order.rb
 lib/temper/generated/models/stage_disposition.rb

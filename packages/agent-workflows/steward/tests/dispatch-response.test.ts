@@ -6,7 +6,7 @@ const { temperFetchMock, auditorFetchMock } = vi.hoisted(() => ({
 }));
 
 // The schedules are code `run` handlers: eve's `defineSchedule` returns the definition unchanged,
-// and the channels the fan-out targets are opaque first arguments to the mocked `receive`.
+// and the channels the fan-out targets are opaque first arguments to the mocked `to`.
 vi.mock("eve/schedules", () => ({
   defineSchedule: <T>(definition: T) => definition,
 }));
@@ -31,16 +31,19 @@ vi.mock("../agent/lib/temper-auth.js", () => ({
 import auditorDispatch from "../agent/schedules/auditor.js";
 import stewardDispatch from "../agent/schedules/steward.js";
 
-type ReceiveMock = ReturnType<
-  typeof vi.fn<(channel: unknown, input: { message: string }) => Promise<unknown>>
->;
+/** A `to(channel, target)` mock whose returned handle records each `send(message, options)`. */
+function fanOut() {
+  const send = vi.fn(async (_message: string, _options: { auth: unknown }) => ({}));
+  const to = vi.fn((_channel: unknown, _target: unknown) => ({ send }));
+  return { to, send };
+}
 
 /** Handler args whose `waitUntil` parks the tick's work until `awaited()` is called. */
-function tickArgs(receive: ReceiveMock) {
+function tickArgs(to: ReturnType<typeof fanOut>["to"]) {
   const pending: Promise<unknown>[] = [];
   return {
     args: {
-      receive,
+      to,
       waitUntil: (task: Promise<unknown>) => {
         pending.push(task);
       },
@@ -56,8 +59,8 @@ afterEach(() => {
 
 describe("steward dispatch response boundary", () => {
   it("fans out one session per claimed job on a well-formed response", async () => {
-    const receive = vi.fn(async (_channel: unknown, input: { message: string }) => ({}));
-    const { args, awaited } = tickArgs(receive);
+    const { to, send } = fanOut();
+    const { args, awaited } = tickArgs(to);
     temperFetchMock.mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -71,20 +74,20 @@ describe("steward dispatch response boundary", () => {
     await stewardDispatch.run(args);
     await awaited();
 
-    expect(receive).toHaveBeenCalledTimes(1);
-    expect(receive.mock.calls[0][1].message).toContain("map-1");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toContain("map-1");
   });
 
   it("refuses a body without a claimed list at the boundary instead of fanning out", async () => {
-    const receive = vi.fn(async (_channel: unknown, input: { message: string }) => ({}));
-    const { args, awaited } = tickArgs(receive);
+    const { to } = fanOut();
+    const { args, awaited } = tickArgs(to);
     temperFetchMock.mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
 
     await stewardDispatch.run(args);
     await expect(awaited()).rejects.toThrow(
       "steward dispatch returned an unrecognized response",
     );
-    expect(receive).not.toHaveBeenCalled();
+    expect(to).not.toHaveBeenCalled();
   });
 });
 
@@ -97,8 +100,8 @@ describe("auditor dispatch response boundary", () => {
   };
 
   it("fans out one audit session per claimed job on a well-formed response", async () => {
-    const receive = vi.fn(async (_channel: unknown, input: { message: string }) => ({}));
-    const { args, awaited } = tickArgs(receive);
+    const { to, send } = fanOut();
+    const { args, awaited } = tickArgs(to);
     auditorFetchMock.mockResolvedValue(
       new Response(JSON.stringify({ claimed: [CLAIMED_JOB] }), { status: 200 }),
     );
@@ -106,25 +109,25 @@ describe("auditor dispatch response boundary", () => {
     await auditorDispatch.run(args);
     await awaited();
 
-    expect(receive).toHaveBeenCalledTimes(1);
-    expect(receive.mock.calls[0][1].message).toContain("finding-1");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toContain("finding-1");
   });
 
   it("refuses a body without a claimed list at the boundary instead of fanning out", async () => {
-    const receive = vi.fn(async (_channel: unknown, input: { message: string }) => ({}));
-    const { args, awaited } = tickArgs(receive);
+    const { to } = fanOut();
+    const { args, awaited } = tickArgs(to);
     auditorFetchMock.mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
 
     await auditorDispatch.run(args);
     await expect(awaited()).rejects.toThrow(
       "auditor dispatch returned an unrecognized response",
     );
-    expect(receive).not.toHaveBeenCalled();
+    expect(to).not.toHaveBeenCalled();
   });
 
   it("refuses a claimed job whose citations are not citation-shaped", async () => {
-    const receive = vi.fn(async (_channel: unknown, input: { message: string }) => ({}));
-    const { args, awaited } = tickArgs(receive);
+    const { to } = fanOut();
+    const { args, awaited } = tickArgs(to);
     auditorFetchMock.mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -138,6 +141,6 @@ describe("auditor dispatch response boundary", () => {
     await expect(awaited()).rejects.toThrow(
       "auditor dispatch returned an unrecognized response",
     );
-    expect(receive).not.toHaveBeenCalled();
+    expect(to).not.toHaveBeenCalled();
   });
 });

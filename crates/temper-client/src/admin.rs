@@ -21,6 +21,7 @@ use temper_core::types::erasure::{
     FieldScrubExecuteResponse, FieldScrubFamilies, FieldScrubFamiliesRequest,
     FieldScrubRequestBody, FieldScrubSurvey, ResourceErasureExecuteRequest,
     ResourceErasureExecuteResponse, ResourceErasureSurvey, ResourceErasureSurveyRequest,
+    RetentionCategory, RetentionPolicies, RetentionPolicySet,
 };
 use temper_core::types::reblock::{ReblockReceipt, ReblockRequest};
 use temper_core::types::team::TeamMemberRow;
@@ -421,6 +422,47 @@ impl<'a> AdminClient<'a> {
         body: &FieldScrubRequestBody,
     ) -> Result<FieldScrubExecuteResponse> {
         self.erasure_door(&ops::ADMIN_SCRUB_RESOURCE_FIELD, body)
+            .await
+    }
+
+    /// The deployment's retention policy for person erasure (system admin only): the categories
+    /// the act keeps. Empty means it keeps nothing.
+    pub async fn list_erasure_retention(&self) -> Result<RetentionPolicies> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::ADMIN_LIST_ERASURE_RETENTION;
+        let path = op.path(&[])?;
+        let req = self.http.request(op, &path);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// Set the policy for one category, replacing any it had (system admin only). Answers the
+    /// policy after the change.
+    pub async fn set_erasure_retention(
+        &self,
+        body: &RetentionPolicySet,
+    ) -> Result<RetentionPolicies> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::ADMIN_SET_ERASURE_RETENTION;
+        let path = op.path(&[])?;
+        let req = self.http.request(op, &path).json(body);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
+            .await
+    }
+
+    /// Stop keeping a category (system admin only). A category with no policy is a no-op.
+    pub async fn remove_erasure_retention(
+        &self,
+        category: RetentionCategory,
+    ) -> Result<RetentionPolicies> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::ADMIN_REMOVE_ERASURE_RETENTION;
+        let path = op.path(&[&category.as_str()])?;
+        let req = self.http.request(op, &path);
+        self.http
+            .send_json(&op.method(), &path, req, Some(&token))
             .await
     }
 

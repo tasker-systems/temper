@@ -52,6 +52,13 @@
         "$ref": "#/$defs/EstateResourceErasureRef"
       }
     },
+    "retained": {
+      "description": "The categories the deployment's retention policy kept (20261023100000, R4), as the policy\nstood when the act ran. The redaction reads them back from here, as it reads the estate, so\nreplay keeps what live kept. Required, and written even when empty: no `principal_erased`\npredates it (the migration guards).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RetainedCategory"
+      }
+    },
     "subject_id": {
       "description": "The pseudonym — `kb_profiles.id`. It survives; its identifying power does not (D5).",
       "type": "string",
@@ -74,7 +81,8 @@
     "estate_contexts",
     "resource_erasures",
     "charters_held",
-    "redacted_fields"
+    "redacted_fields",
+    "retained"
   ],
   "$defs": {
     "AnchorTable": {
@@ -170,6 +178,68 @@
       "required": [
         "event",
         "paths"
+      ]
+    },
+    "RetainedCategory": {
+      "description": "One category a person erasure kept under the deployment's retention policy, as the act's record\ncarries it: the policy as it stood when the act ran, so the record stays true after the policy\nchanges and replay keeps exactly what the live act kept.",
+      "type": "object",
+      "properties": {
+        "basis": {
+          "description": "The stated basis, e.g. `GDPR 17(3)(e) / CCPA 105(d)(1)`.",
+          "type": "string"
+        },
+        "category": {
+          "$ref": "#/$defs/RetentionCategory"
+        },
+        "period": {
+          "description": "The stated period, as Postgres renders the interval (`1 year`).",
+          "type": "string"
+        },
+        "policy": {
+          "description": "The policy's name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "category",
+        "policy",
+        "basis",
+        "period"
+      ]
+    },
+    "RetentionCategory": {
+      "description": "What a deployment's retention policy may keep through a person erasure (R4 of the 2026-10-10\nerasure inventory). The act removes every identifier of the subject and every free-text field\nabout them by default; a category here is kept only when an organisation names it in a policy\nwith a stated basis and period, and the record then names it `retained under policy <name>`.\n\nFree text and replay evidence only. Identifiers and live credentials are not retainable: a\ndeployment cannot keep a usable credential or a direct identifier of an erased person, so no\nvalue here names one. The SQL CHECK on `kb_erasure_retention_policies.category` is the same\nclosed set.",
+      "oneOf": [
+        {
+          "description": "`kb_principal_standing_events.reason` and its ledger copy `principal_standing_changed.reason`.",
+          "type": "string",
+          "const": "standing-reasons"
+        },
+        {
+          "description": "The ledger's `principal_governance_changed.reason`.",
+          "type": "string",
+          "const": "governance-reasons"
+        },
+        {
+          "description": "`kb_join_requests.message` and `.decision_note` of the subject's requests.",
+          "type": "string",
+          "const": "join-request-notes"
+        },
+        {
+          "description": "`kb_principal_review_requests.message` and `.decision_note` of the subject's requests.",
+          "type": "string",
+          "const": "review-request-notes"
+        },
+        {
+          "description": "`kb_oauth_refresh_replays`: the evidence that one of the subject's refresh tokens was\ncopied. Kept with its tokens, which stay revoked with their claims and hash erased.",
+          "type": "string",
+          "const": "credential-replay-evidence"
+        },
+        {
+          "description": "The ledger's `principal_erasure_refused.detail`: the operator's stated reason an earlier\nerasure of the subject was refused (the obligation held, the part that could not be\nhonoured).",
+          "type": "string",
+          "const": "erasure-refusal-details"
+        }
       ]
     }
   }
