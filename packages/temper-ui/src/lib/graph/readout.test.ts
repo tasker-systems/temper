@@ -287,21 +287,18 @@ describe('derived structure is confined to the two modules that declare it — t
 		}
 	});
 
-	test.each([
-		'RegionHit',
-		'RegionDisclosure',
-		'disclosed_regions',
-		'region_score',
-		'region_id',
-	])('only the two declaring modules name %s', (symbol) => {
-		for (const file of modules) {
-			if (DECLARE_DERIVED.includes(file)) continue;
-			const source = readFileSync(join(dir, file), 'utf8');
-			// Comments may discuss the constraint; code may not reach for the thing.
-			const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-			expect(code, `${file} reaches for ${symbol}`).not.toContain(symbol);
-		}
-	});
+	test.each(['RegionHit', 'RegionDisclosure', 'disclosed_regions', 'region_score', 'region_id'])(
+		'only the two declaring modules name %s',
+		(symbol) => {
+			for (const file of modules) {
+				if (DECLARE_DERIVED.includes(file)) continue;
+				const source = readFileSync(join(dir, file), 'utf8');
+				// Comments may discuss the constraint; code may not reach for the thing.
+				const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+				expect(code, `${file} reaches for ${symbol}`).not.toContain(symbol);
+			}
+		},
+	);
 
 	test('nothing the CANVAS draws can reach either of them', () => {
 		// This is the assertion the one-module rule was really buying, made directly. A second
@@ -417,24 +414,22 @@ describe('no internal vocabulary is load-bearing — the per-grouping strings', 
 	// The surface's OWN words only. An authored label is the reader's material and may say
 	// anything; these fixtures deliberately carry none of the forbidden words so the sweep
 	// tests the sentence the surface builds rather than the name the reader gave.
-	test.each([
-		'region',
-		'salience',
-		'wayfind',
-		'survey',
-	])('no grouping sentence contains %s', (word) => {
-		const said = [
-			{
-				id: 'a',
-				name: { state: 'named' as const, label: 'Bounds and disclosure', memberCount: 4 },
-			},
-			{ id: 'b', name: { state: 'named' as const, label: null, memberCount: 1 } },
-			{ id: 'c', name: { state: 're-derived' as const } },
-			{ id: 'd', name: { state: 'unchecked' as const } },
-		].map(describeGrouping);
+	test.each(['region', 'salience', 'wayfind', 'survey'])(
+		'no grouping sentence contains %s',
+		(word) => {
+			const said = [
+				{
+					id: 'a',
+					name: { state: 'named' as const, label: 'Bounds and disclosure', memberCount: 4 },
+				},
+				{ id: 'b', name: { state: 'named' as const, label: null, memberCount: 1 } },
+				{ id: 'c', name: { state: 're-derived' as const } },
+				{ id: 'd', name: { state: 'unchecked' as const } },
+			].map(describeGrouping);
 
-		for (const s of said) expect(s.toLowerCase()).not.toContain(word);
-	});
+			for (const s of said) expect(s.toLowerCase()).not.toContain(word);
+		},
+	);
 });
 
 describe('the listing is bounded, and says how much it is not listing', () => {
