@@ -16,6 +16,9 @@ require 'time'
 module Temper::Generated
   # What a person erasure did about the subject's Slack grants at Slack, before it destroyed temper's copies (ruled 2026-10-10). Counts, never principals: the answer goes to an operator about an erased person.
   class SlackRevocationTally < ApiModelBase
+    # Grants whose revoke was attempted and failed where no retry can succeed: in AS mode, no AS row matched the token. Destroyed in temper; not queued.
+    attr_accessor :failed
+
     # Grants that could not be revoked at all: the row could not be opened, or Slack linking is not configured on this instance. Destroyed in temper; they may stay live at Slack until they expire.
     attr_accessor :not_attempted
 
@@ -28,6 +31,7 @@ module Temper::Generated
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'failed' => :'failed',
         :'not_attempted' => :'not_attempted',
         :'queued' => :'queued',
         :'revoked' => :'revoked'
@@ -47,6 +51,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'failed' => :'Integer',
         :'not_attempted' => :'Integer',
         :'queued' => :'Integer',
         :'revoked' => :'Integer'
@@ -75,6 +80,10 @@ module Temper::Generated
         h[k.to_sym] = v
       }
 
+      if attributes.key?(:'failed')
+        self.failed = attributes[:'failed']
+      end
+
       if attributes.key?(:'not_attempted')
         self.not_attempted = attributes[:'not_attempted']
       else
@@ -99,6 +108,10 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
+      if !@failed.nil? && @failed < 0
+        invalid_properties.push('invalid value for "failed", must be greater than or equal to 0.')
+      end
+
       if @not_attempted.nil?
         invalid_properties.push('invalid value for "not_attempted", not_attempted cannot be nil.')
       end
@@ -130,6 +143,7 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
+      return false if !@failed.nil? && @failed < 0
       return false if @not_attempted.nil?
       return false if @not_attempted < 0
       return false if @queued.nil?
@@ -137,6 +151,20 @@ module Temper::Generated
       return false if @revoked.nil?
       return false if @revoked < 0
       true
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] failed Value to be assigned
+    def failed=(failed)
+      if failed.nil?
+        fail ArgumentError, 'failed cannot be nil'
+      end
+
+      if failed < 0
+        fail ArgumentError, 'invalid value for "failed", must be greater than or equal to 0.'
+      end
+
+      @failed = failed
     end
 
     # Custom attribute writer method with validation
@@ -186,6 +214,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          failed == o.failed &&
           not_attempted == o.not_attempted &&
           queued == o.queued &&
           revoked == o.revoked
@@ -200,7 +229,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [not_attempted, queued, revoked].hash
+      [failed, not_attempted, queued, revoked].hash
     end
 
     # Builds the object from hash

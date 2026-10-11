@@ -10273,6 +10273,12 @@ export interface components {
         SlackRevocationTally: {
             /**
              * Format: int32
+             * @description Grants whose revoke was attempted and failed where no retry can succeed: in AS mode, no AS
+             *     row matched the token. Destroyed in temper; not queued.
+             */
+            failed?: number;
+            /**
+             * Format: int32
              * @description Grants that could not be revoked at all: the row could not be opened, or Slack linking is
              *     not configured on this instance. Destroyed in temper; they may stay live at Slack until they
              *     expire.

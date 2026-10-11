@@ -121,7 +121,7 @@ kb_cogmaps.telos_centroid                 | derived       | recompute | an immut
 kb_contexts.telos_centroid                | derived       | recompute | an immutable copy also rides kb_events.payload
 
 # ── external identifiers ─────────────────────────────────────────────────────────────────────
-kb_team_invitations.invited_email         | identifier    | full      | an email for someone who may have NO profile at all; REACHED at erase time (20261023100000): invitations sent by or to the subject sentineled to 'erased-' || id, token replaced, pending ones revoked
+kb_team_invitations.invited_email         | identifier    | full      | an email for someone who may have NO profile at all; REACHED at erase time (20261023100000): invitations sent by the subject or to an email they verifiably hold sentineled to 'erased-' || id, token replaced by a random sentinel, pending ones revoked
 kb_slack_link_intents.slack_principal_id  | identifier    | full      | no profile FK; an unconsumed intent is reachable only by this value; REACHED at erase time (20261023100000): deleted, matched through a Slack auth link or a vault row of the subject
 kb_slack_grant_vault.slack_principal_id   | identifier    | full      | REACHED at erase time (20261023100000): deleted, matched through a Slack auth link or the vault row's own profile_id; the grant is revoked at Slack first, best-effort
 kb_slack_grant_vault.rt_ciphertext        | identifier    | full      | AEAD-sealed Slack refresh token — the durable grant (found by the `bytes` derivation; invisible to every type-keyed source before it); REACHED at erase time (20261023100000): revoked at Slack best-effort, then deleted; a failed revoke re-seals the token into kb_erasure_slack_revocations
@@ -146,8 +146,8 @@ kb_blob_upload_segments.bytes             | content       | full      | raw stag
 kb_data_artifact_shapes.schema            | none          | n-a       | a JSON schema
 kb_data_artifact_verdicts.detail          | incidental    | full      |
 kb_subscriptions.selector                 | none          | n-a       |
-kb_oauth_flow.claims                      | identifier    | full      | IdP claims carry email and name; REACHED at erase time (20261023100000): flows bound to the subject or naming their provider id or email deleted
-kb_oauth_refresh_tokens.claims            | identifier    | full      | IdP claims carry email and name; REACHED at erase time (20261023100000): tokens deleted with their replay rows; under a credential-replay-evidence policy kept revoked with claims emptied and hash replaced
+kb_oauth_flow.claims                      | identifier    | full      | IdP claims carry email and name; REACHED at erase time (20261023100000): flows bound to the subject deleted; an unbound flow is minutes from expiry and reaped by the AS sweep
+kb_oauth_refresh_tokens.claims            | identifier    | full      | IdP claims carry email and name; REACHED at erase time (20261023100000): tokens bound to the subject, or unbound and theirs by (login provider, sub), deleted with their replay rows; under a credential-replay-evidence policy kept revoked with claims emptied and hash replaced
 
 # ── pseudonymous references; each ceases to identify when the profile is tombstoned ──────────
 kb_access_grants.granted_by_profile_id    | reference     | pseudonym |

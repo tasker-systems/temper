@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_erasure_slack_revocations r\n              SET next_attempt_at = now() + make_interval(secs => $2)\n             FROM (SELECT id FROM kb_erasure_slack_revocations\n                    WHERE resolved_at IS NULL AND next_attempt_at <= now()\n                    ORDER BY next_attempt_at\n                    LIMIT $1\n                      FOR UPDATE SKIP LOCKED) d\n            WHERE r.id = d.id\n        RETURNING r.id, r.attempts, r.rt_nonce AS \"rt_nonce!\", r.rt_ciphertext AS \"rt_ciphertext!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "attempts",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "rt_nonce!",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 3,
+        "name": "rt_ciphertext!",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "c859416156ec41cb9fb9c3fb689b6f063a92f8ef1337a14145f048c79556ee4e"
+}

@@ -18,7 +18,7 @@ import re  # noqa: F401
 import json
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Any, ClassVar, Dict, List
+from typing import Any, ClassVar, Dict, List, Optional
 from typing_extensions import Annotated
 from typing import Optional, Set
 from typing_extensions import Self
@@ -28,10 +28,11 @@ class SlackRevocationTally(BaseModel):
     """
     What a person erasure did about the subject's Slack grants at Slack, before it destroyed temper's copies (ruled 2026-10-10). Counts, never principals: the answer goes to an operator about an erased person.
     """ # noqa: E501
+    failed: Optional[Annotated[int, Field(strict=True, ge=0)]] = Field(default=None, description="Grants whose revoke was attempted and failed where no retry can succeed: in AS mode, no AS row matched the token. Destroyed in temper; not queued.")
     not_attempted: Annotated[int, Field(strict=True, ge=0)] = Field(description="Grants that could not be revoked at all: the row could not be opened, or Slack linking is not configured on this instance. Destroyed in temper; they may stay live at Slack until they expire.")
     queued: Annotated[int, Field(strict=True, ge=0)] = Field(description="Grants whose revoke failed and is pending: the token is held, sealed, for the erasure drain to retry until it succeeds or the retry window closes.")
     revoked: Annotated[int, Field(strict=True, ge=0)] = Field(description="Grants Slack (or the AS) confirmed revoked.")
-    __properties: ClassVar[List[str]] = ["not_attempted", "queued", "revoked"]
+    __properties: ClassVar[List[str]] = ["failed", "not_attempted", "queued", "revoked"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -84,6 +85,7 @@ class SlackRevocationTally(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
+            "failed": obj.get("failed"),
             "not_attempted": obj.get("not_attempted"),
             "queued": obj.get("queued"),
             "revoked": obj.get("revoked")

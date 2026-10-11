@@ -26188,6 +26188,12 @@
           "not_attempted"
         ],
         "properties": {
+          "failed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Grants whose revoke was attempted and failed where no retry can succeed: in AS mode, no AS\nrow matched the token. Destroyed in temper; not queued.",
+            "minimum": 0
+          },
           "not_attempted": {
             "type": "integer",
             "format": "int32",

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT set_config('temper.erasure_auth_provider', $1, true)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "set_config",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "62f69e842c011675bcb20498567be42c1550922b08ecb22ff527d583a0b1a155"
+}
