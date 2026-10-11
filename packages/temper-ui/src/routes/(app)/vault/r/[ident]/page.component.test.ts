@@ -253,22 +253,21 @@ describe('C2: an arriving region declares itself in words', () => {
 		['document', documentRegion, 'Loading document…'],
 		['history', historyRegion, 'Loading history…'],
 		['connections', connectionsRegion, 'Loading connections…'],
-	] as [
-		string,
-		Scope,
-		string,
-	][])('the arriving %s region carries a sentence, not a bare shimmer', (_name, scope, sentence) => {
-		const { container } = render(Page, {
-			data: data({ content: pending(), trail: pending(), connections: pending() }),
-			form: null,
-		});
+	] as [string, Scope, string][])(
+		'the arriving %s region carries a sentence, not a bare shimmer',
+		(_name, scope, sentence) => {
+			const { container } = render(Page, {
+				data: data({ content: pending(), trail: pending(), connections: pending() }),
+				form: null,
+			});
 
-		// The words that reach the accessibility tree, with the decorative marker removed. An
-		// animation with no text is silent to everything except an eye on the pixels.
-		expect(sentenceOf(scope(container)?.querySelector('[data-testid="region-arriving"]'))).toBe(
-			sentence,
-		);
-	});
+			// The words that reach the accessibility tree, with the decorative marker removed. An
+			// animation with no text is silent to everything except an eye on the pixels.
+			expect(sentenceOf(scope(container)?.querySelector('[data-testid="region-arriving"]'))).toBe(
+				sentence,
+			);
+		},
+	);
 });
 
 describe('C3: a failure is a third state, not a stuck second one', () => {
@@ -281,17 +280,18 @@ describe('C3: a failure is a third state, not a stuck second one', () => {
 		expect(words.toLowerCase()).not.toContain('something went wrong');
 	});
 
-	it.each(
-		REGIONS,
-	)('a failed %s read drops the arriving marker — the perpetual skeleton', async (_name, scope, key) => {
-		const { container } = render(Page, { data: data({ [key]: broken() }), form: null });
-		await vi.waitFor(() => {
-			expect(scope(container)?.querySelector('[data-testid="region-failed"]')).not.toBeNull();
-		});
+	it.each(REGIONS)(
+		'a failed %s read drops the arriving marker — the perpetual skeleton',
+		async (_name, scope, key) => {
+			const { container } = render(Page, { data: data({ [key]: broken() }), form: null });
+			await vi.waitFor(() => {
+				expect(scope(container)?.querySelector('[data-testid="region-failed"]')).not.toBeNull();
+			});
 
-		// A read that will not resolve must stop presenting as one that has not resolved YET.
-		expect(scope(container)?.querySelector('[data-testid="region-arriving"]')).toBeNull();
-	});
+			// A read that will not resolve must stop presenting as one that has not resolved YET.
+			expect(scope(container)?.querySelector('[data-testid="region-arriving"]')).toBeNull();
+		},
+	);
 
 	it('a failed history read leaves the document and the connections arriving on their own', async () => {
 		const { container } = render(Page, {
@@ -324,22 +324,23 @@ describe('C3: a failure is a third state, not a stuck second one', () => {
  * failing, and it is what the load's `null` / `[]` degradations used to do.
  */
 describe('C4: an empty region does not present like a failed one', () => {
-	it.each(
-		REGIONS,
-	)('%s: what came back empty says something different from what did not come back', async (_name, scope, key) => {
-		const emptyValue: Fill = {
-			content: Promise.resolve(''),
-			trail: Promise.resolve(trailOf(0)),
-			connections: Promise.resolve(connectionsOf([])),
-		};
+	it.each(REGIONS)(
+		'%s: what came back empty says something different from what did not come back',
+		async (_name, scope, key) => {
+			const emptyValue: Fill = {
+				content: Promise.resolve(''),
+				trail: Promise.resolve(trailOf(0)),
+				connections: Promise.resolve(connectionsOf([])),
+			};
 
-		const empty = await wordsOf({ [key]: emptyValue[key] }, scope, 'region-empty');
-		const failed = await wordsOf({ [key]: broken() }, scope, 'region-failed');
+			const empty = await wordsOf({ [key]: emptyValue[key] }, scope, 'region-empty');
+			const failed = await wordsOf({ [key]: broken() }, scope, 'region-failed');
 
-		expect(empty).not.toBe('');
-		expect(failed).not.toBe('');
-		expect(empty).not.toBe(failed);
-	});
+			expect(empty).not.toBe('');
+			expect(failed).not.toBe('');
+			expect(empty).not.toBe(failed);
+		},
+	);
 });
 
 /**
@@ -769,27 +770,28 @@ describe('a rail region keeps its heading in every state', () => {
 	it.each([
 		['history', historyRegion, 'trail', 'History'],
 		['connections', connectionsRegion, 'connections', 'Connections'],
-	] as [
-		string,
-		Scope,
-		'trail' | 'connections',
-		string,
-	][])('the %s heading is present while arriving, present, empty and failed', async (_name, scope, key, heading) => {
-		for (const [state, fill, settledOn] of stateOf(key)) {
-			const { container, unmount } = render(Page, { data: data(fill), form: null });
-			await vi.waitFor(() => {
-				expect(scope(container)?.querySelector(settledOn), `${state} never settled`).not.toBeNull();
-			});
+	] as [string, Scope, 'trail' | 'connections', string][])(
+		'the %s heading is present while arriving, present, empty and failed',
+		async (_name, scope, key, heading) => {
+			for (const [state, fill, settledOn] of stateOf(key)) {
+				const { container, unmount } = render(Page, { data: data(fill), form: null });
+				await vi.waitFor(() => {
+					expect(
+						scope(container)?.querySelector(settledOn),
+						`${state} never settled`,
+					).not.toBeNull();
+				});
 
-			// `?? '(no heading at all)'` so the red reads as the defect rather than as a type
-			// complaint about `undefined` — the absence IS what this test is about.
-			expect(
-				scope(container)?.querySelector('.label')?.textContent ?? '(no heading at all)',
-				`the ${state} region must still name itself`,
-			).toContain(heading);
-			unmount();
-		}
-	});
+				// `?? '(no heading at all)'` so the red reads as the defect rather than as a type
+				// complaint about `undefined` — the absence IS what this test is about.
+				expect(
+					scope(container)?.querySelector('.label')?.textContent ?? '(no heading at all)',
+					`the ${state} region must still name itself`,
+				).toContain(heading);
+				unmount();
+			}
+		},
+	);
 });
 
 /**
@@ -921,7 +923,8 @@ describe('a state the system defines is changed where it is read', () => {
 			form: null,
 		});
 		const cell = stageCell(container);
-		expect((cell?.querySelector('button') as HTMLButtonElement).disabled).toBe(true);
+		const button = cell?.querySelector('button') as HTMLButtonElement;
+		expect(button.disabled).toBe(true);
 	});
 
 	it('offers a state the work carries that this resource has not got', async () => {
@@ -1021,7 +1024,8 @@ describe('a reader attaches and revises their own descriptions where they read t
 		// A DIFFERENT action from the state arm. They share a storage layer and nothing else.
 		expect(form.getAttribute('action')).toBe('?/changeDescription');
 		expect(form.getAttribute('method')?.toLowerCase()).toBe('post');
-		expect((cell?.querySelector('button') as HTMLButtonElement).disabled).toBe(true);
+		const button = cell?.querySelector('button') as HTMLButtonElement;
+		expect(button.disabled).toBe(true);
 	});
 
 	it('offers attaching a description the system has no field for', () => {
