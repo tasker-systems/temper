@@ -205,7 +205,7 @@ pub async fn restore(
     request_body = ShareContextRequest,
     responses(
         (status = 200, description = "Context shared (or idempotent no-op)", body = ShareContextOutcome),
-        (status = 403, description = "Caller may not share this context into this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
+        (status = 403, description = "Caller may not share this context into this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
     )
 )]
 pub async fn share_team(
@@ -230,7 +230,7 @@ pub async fn share_team(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Context unshared (or no-op)", body = UnshareContextOutcome),
-        (status = 403, description = "Caller may not unshare this context from this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
+        (status = 403, description = "Caller may not unshare this context from this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
     )
 )]
 pub async fn unshare_team(
@@ -252,7 +252,7 @@ pub async fn unshare_team(
     request_body = ReassignContextRequest,
     responses(
         (status = 200, description = "Context ownership transferred (or idempotent no-op)", body = ReassignContextOutcome),
-        (status = 403, description = "Caller may not transfer this context to this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
+        (status = 403, description = "Caller may not transfer this context to this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "Context or team not found"),
         (status = 409, description = "Target team already owns a context with this slug"),
     )

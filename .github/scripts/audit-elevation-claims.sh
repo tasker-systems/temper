@@ -227,6 +227,10 @@ current_gates() {
 # claims bound to these gates (access, admin_directory, admin_ledger, cognitive_maps, embed,
 # erasure, field_scrub, machine_clients, openapi, resource_erasure): each states what a system
 # admin may do, which still holds for a person. No over-claim.
+# REVIEWED 2026-10-10 (machines reach only content and workflow, review fixes) — `context_admin`,
+# `grant`, `machine`, `read_gates`, `subscription`, `two_sided` re-fingerprinted by a rename only:
+# each `resolve` names its parameter `principal` and drops `let principal = caller;`. No decision
+# moved; the claims bound to them are unchanged in truth.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin

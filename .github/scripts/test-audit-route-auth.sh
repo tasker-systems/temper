@@ -481,6 +481,56 @@ run_test "a raw Caller taken as Extension<…> outside middleware: fails" "$REAL
     "a raw caller proof read from request extensions outside middleware/"
 unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
 
+# --- (u) the evasions the first cut of (h) missed ---
+# A test-only item or a comment naming `#[cfg(test)]` must not end the scan; a `.routes(` of a
+# helper, a braced or renaming import, and a `.merge(` of a non-group router all fail.
+for spelling in cfg_test_use cfg_test_comment helper_call braced_use renamed_macro foreign_group_merge; do
+  FIX="${FIXTURE_DIR}/evasion_${spelling}"
+  copy_module "$FIX"
+  python3 - "$FIX/gated.rs" "$spelling" <<'PYEOF2'
+import sys
+p, spelling = sys.argv[1], sys.argv[2]
+s = open(p).read()
+a = "use crate::handlers;\n"
+assert a in s
+b = "        .routes(routes!(handlers::resources::get_content))"
+assert b in s
+if spelling == "cfg_test_use":
+    s = s.replace(a, a + "#[cfg(test)]\nuse std::fmt;\nuse crate::handlers::teams as t;\n", 1)
+    s = s.replace(b, b + "\n        .routes(routes!(t::create))", 1)
+elif spelling == "cfg_test_comment":
+    s = s.replace(a, a + "// see #[cfg(test)] below\nuse crate::handlers::teams as t;\n", 1)
+    s = s.replace(b, b + "\n        .routes(routes!(t::create))", 1)
+elif spelling == "helper_call":
+    s = s.replace(b, b + "\n        .routes(probe())", 1)
+elif spelling == "braced_use":
+    s = s.replace(a, a + "use crate::{handlers::teams as t};\n", 1)
+    s = s.replace(b, b + "\n        .routes(routes!(t::create))", 1)
+elif spelling == "renamed_macro":
+    s = s.replace("use utoipa_axum::routes;\n", "use utoipa_axum::routes;\nuse utoipa_axum::routes as r;\n", 1)
+else:
+    s = s.replace(b, b + "\n        .merge(extra_routes())", 1)
+open(p, "w").write(s)
+PYEOF2
+  run_test "an auth-covered group mounting by ${spelling}: fails" "$FIX" 1 \
+      "an auth-covered group mounts a route not named handlers::<mod>::<fn>"
+done
+
+# --- (v) an identity extractor redefined by a type alias fails (e2) ---
+FIX_SRC="${FIXTURE_DIR}/src_type_alias_extractor"
+cp -R "$REAL_API_SRC" "$FIX_SRC"
+python3 - "$FIX_SRC/handlers/access.rs" <<'PYEOF2'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = "type AuthUser = crate::middleware::auth::AnyPrincipal;\n" + s
+open(p, "w").write(s)
+PYEOF2
+FIX_HANDLERS_DIR="$FIX_SRC/handlers" FIX_API_SRC_DIR="$FIX_SRC"
+run_test "an identity extractor redefined by a type alias: fails" "$REAL_ROUTES" 1 \
+    "an identity extractor imported under another name"
+unset FIX_HANDLERS_DIR FIX_API_SRC_DIR
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
 [ "$FAIL" -eq 0 ]

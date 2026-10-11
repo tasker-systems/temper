@@ -111,7 +111,7 @@ class TeamsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '201': "TeamMemberRow",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '409': None,
         }
         response_data = self.api_client.call_api(
@@ -188,7 +188,7 @@ class TeamsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '201': "TeamMemberRow",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '409': None,
         }
         response_data = self.api_client.call_api(
@@ -265,7 +265,7 @@ class TeamsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '201': "TeamMemberRow",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '409': None,
         }
         response_data = self.api_client.call_api(
@@ -425,7 +425,7 @@ class TeamsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "TeamMemberRow",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -507,7 +507,7 @@ class TeamsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "TeamMemberRow",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -589,7 +589,7 @@ class TeamsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "TeamMemberRow",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -745,7 +745,7 @@ class TeamsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '201': "TeamRow",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '409': None,
         }
         response_data = self.api_client.call_api(
@@ -818,7 +818,7 @@ class TeamsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '201': "TeamRow",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '409': None,
         }
         response_data = self.api_client.call_api(
@@ -891,7 +891,7 @@ class TeamsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '201': "TeamRow",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '409': None,
         }
         response_data = self.api_client.call_api(
@@ -1039,7 +1039,7 @@ class TeamsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -1112,7 +1112,7 @@ class TeamsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -1185,7 +1185,7 @@ class TeamsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -1231,6 +1231,13 @@ class TeamsApi:
         # process the body parameter
 
 
+        # set the HTTP header `Accept`
+        if 'Accept' not in _header_params:
+            _header_params['Accept'] = self.api_client.select_header_accept(
+                [
+                    'application/json'
+                ]
+            )
 
 
         # authentication setting
@@ -1852,7 +1859,7 @@ class TeamsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "BulkReassignAck",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1927,7 +1934,7 @@ class TeamsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "BulkReassignAck",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -2002,7 +2009,7 @@ class TeamsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "BulkReassignAck",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -2156,7 +2163,7 @@ class TeamsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "RemoveMemberOutcome",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -2233,7 +2240,7 @@ class TeamsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "RemoveMemberOutcome",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -2310,7 +2317,7 @@ class TeamsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "RemoveMemberOutcome",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -2453,7 +2460,7 @@ class TeamsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "TeamRow",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -2529,7 +2536,7 @@ class TeamsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "TeamRow",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -2605,7 +2612,7 @@ class TeamsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "TeamRow",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
         }
         response_data = self.api_client.call_api(

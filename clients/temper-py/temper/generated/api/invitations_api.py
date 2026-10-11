@@ -103,7 +103,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AcceptInvitationResponse",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -177,7 +177,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AcceptInvitationResponse",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -251,7 +251,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AcceptInvitationResponse",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -401,7 +401,7 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "PendingInvitationCounts",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -473,7 +473,7 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "PendingInvitationCounts",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -545,7 +545,7 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "PendingInvitationCounts",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -686,7 +686,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '201': "TeamInvitation",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '409': None,
         }
         response_data = self.api_client.call_api(
@@ -763,7 +763,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '201': "TeamInvitation",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '409': None,
         }
         response_data = self.api_client.call_api(
@@ -840,7 +840,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '201': "TeamInvitation",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '409': None,
         }
         response_data = self.api_client.call_api(
@@ -992,7 +992,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -1065,7 +1065,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -1138,7 +1138,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -1183,6 +1183,13 @@ class InvitationsApi:
             _body_params = invitation_token_request
 
 
+        # set the HTTP header `Accept`
+        if 'Accept' not in _header_params:
+            _header_params['Accept'] = self.api_client.select_header_accept(
+                [
+                    'application/json'
+                ]
+            )
 
         # set the HTTP header `Content-Type`
         if _content_type:
@@ -1275,7 +1282,7 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "List[InviteeInvitation]",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1342,7 +1349,7 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "List[InviteeInvitation]",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1409,7 +1416,7 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "List[InviteeInvitation]",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1540,7 +1547,7 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "List[TeamInvitation]",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1611,7 +1618,7 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "List[TeamInvitation]",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1682,7 +1689,7 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "List[TeamInvitation]",
-            '403': None,
+            '403': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1821,7 +1828,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -1898,7 +1905,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -1975,7 +1982,7 @@ class InvitationsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -2023,6 +2030,13 @@ class InvitationsApi:
         # process the body parameter
 
 
+        # set the HTTP header `Accept`
+        if 'Accept' not in _header_params:
+            _header_params['Accept'] = self.api_client.select_header_accept(
+                [
+                    'application/json'
+                ]
+            )
 
 
         # authentication setting

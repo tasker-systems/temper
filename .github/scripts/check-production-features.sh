@@ -12,7 +12,8 @@
 # production with every other gate green.
 #
 # So for each shipped package this resolves its NORMAL (and build) dependency graph with
-# `cargo tree -e normal,build`, which is the feature set a release build compiles, and fails if any
+# `cargo tree -e normal,build --target all` (every platform the release matrix builds, not just the
+# host), which is the feature set a release build compiles, and fails if any
 # workspace crate in it carries a feature whose name contains `test` — every test-gating feature in
 # this workspace does (`test-db`, `test-harness`, `test-embed`, `test-support`,
 # `integration-tests`, `artifact-tests`). It also fails if `temper-services` stops appearing under
@@ -31,7 +32,7 @@ cargo_tree() {
   if [[ -n "${CARGO_TREE_CMD:-}" ]]; then
     "$CARGO_TREE_CMD" "$1"
   else
-    cargo tree --locked -p "$1" -e normal,build --prefix none -f '{p} [{f}]'
+    cargo tree --locked -p "$1" -e normal,build --target all --prefix none -f '{p} [{f}]'
   fi
 }
 

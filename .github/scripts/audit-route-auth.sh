@@ -623,29 +623,43 @@ fi
 # operations through the OpenAPI document; a route mounted any other way — an aliased import
 # (`use crate::handlers::teams as t`), a closure, a function local to the routes file, a raw
 # `.route(` with no OpenAPI entry — is invisible to all of them. So in each file that defines an
-# auth-covered group (outside its test module): every `routes!(` argument is `handlers::<mod>::<fn>`,
-# `handlers` is imported only whole, nothing mounts through `.route(`/`.nest(`/`.fallback(`, and a
-# `.merge(` takes only another group function.
+# auth-covered group (outside its test module): every `.routes(` argument is a `routes!(` whose
+# arguments are each `handlers::<mod>::<fn>`, `handlers` and the `routes!` macro are imported only
+# plainly, nothing mounts through `.route(`/`.nest(`/`.fallback(`, and a `.merge(` takes only another
+# auth-covered group.
 GROUP_FILES=""
 for f in $ROUTES_FILES; do
   if grep -Eq "fn (${AUTH_COVERED})\(" "$f"; then GROUP_FILES="${GROUP_FILES} ${f}"; fi
 done
 UNNAMED_MOUNTS=""
 for f in $GROUP_FILES; do
-  # The source before the file's test module, flattened so a multi-line `routes!(` is one match.
-  body="$(awk '/#\[cfg\(test\)\]/{exit} {print}' "$f" | tr '\n' ' ')"
+  # The source before the file's test module (a `#[cfg(test)]` on its own line followed by a `mod`;
+  # a test-only `use` or item does not end the scan), comments stripped so prose cannot match or
+  # mask a mount, flattened so a multi-line `routes!(` or `use` is one match.
+  body="$(awk '
+    pending && /^[[:space:]]*$/ { held = held $0 "\n"; next }
+    pending && /^[[:space:]]*(pub(\([a-z]+\))?[[:space:]]+)?mod[[:space:]]/ { exit }
+    pending { printf "%s", held; pending = 0; held = "" }
+    /^[[:space:]]*#\[cfg\(test\)\][[:space:]]*$/ { pending = 1; held = $0 "\n"; next }
+    { print }
+  ' "$f" | sed -E 's://.*$::' | tr '\n' ' ')"
   while IFS= read -r arg; do
     [[ -z "$arg" ]] && continue
     if ! [[ "$arg" =~ ^handlers::[a-z_0-9]+::[a-z_0-9]+$ ]]; then
       UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: routes!(${arg})"$'\n'
     fi
   done < <(printf '%s' "$body" | grep -Eo 'routes!\([^)]*\)' | sed -E 's/^routes!\(//; s/\)$//' | tr ',' '\n' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+  while IFS= read -r r; do
+    [[ -z "$r" ]] && continue
+    UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: ${r} (a .routes( argument that is not routes!(...))"$'\n'
+  done < <(printf '%s' "$body" | grep -Eo '\.routes[[:space:]]*\([[:space:]]*[^[:space:]]{1,40}' | grep -Ev '\.routes[[:space:]]*\([[:space:]]*routes!\(' || true)
   for hit in $(printf '%s' "$body" | grep -Eo '\.(route|route_service|nest|nest_service|fallback|fallback_service)[[:space:]]*\(' | tr -d ' (' || true); do
     UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: ${hit}("$'\n'
   done
   while IFS= read -r m; do
     [[ -z "$m" ]] && continue
-    if ! [[ "$m" =~ ^\.merge\([[:space:]]*(super::[a-z_]+::)?[a-z_]+_routes\(\)[[:space:]]*\)$ ]]; then
+    if ! [[ "$m" =~ ^\.merge\([[:space:]]*(super::[a-z_]+::)?([a-z_]+_routes)\(\)[[:space:]]*\)$ ]] \
+       || ! [[ "${BASH_REMATCH[2]}" =~ ^(${AUTH_COVERED})$ ]]; then
       UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: ${m}"$'\n'
     fi
   done < <(printf '%s' "$body" | grep -Eo '\.merge[[:space:]]*\([^)]*\)[[:space:]]*\)?' || true)
@@ -654,7 +668,13 @@ for f in $GROUP_FILES; do
     if [[ "$u" != "use crate::handlers;" ]]; then
       UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: ${u}"$'\n'
     fi
-  done < <(printf '%s' "$body" | grep -Eo 'use (crate|super)::handlers[^;]*;' || true)
+  done < <(printf '%s' "$body" | grep -Eo '(^|[^A-Za-z0-9_])use [^;]*;' | sed -E 's/^[^u]*use /use /; s/[[:space:]]+/ /g' | grep -Ew 'handlers' || true)
+  while IFS= read -r u; do
+    [[ -z "$u" ]] && continue
+    if [[ "$u" != "use utoipa_axum::routes;" ]]; then
+      UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: ${u}"$'\n'
+    fi
+  done < <(printf '%s' "$body" | grep -Eo '(^|[^A-Za-z0-9_])use [^;]*;' | sed -E 's/^[^u]*use /use /; s/[[:space:]]+/ /g' | grep -Ew 'routes' || true)
 done
 if [[ -n "$UNNAMED_MOUNTS" ]]; then
   echo "audit-route-auth: FAIL — an auth-covered group mounts a route not named handlers::<mod>::<fn>:" >&2
@@ -665,8 +685,9 @@ if [[ -n "$UNNAMED_MOUNTS" ]]; then
 fi
 
 # (e2) An identity extractor is named by its own name. A renaming import (`AnyPrincipal as AuthUser`)
-# would make (e) and (f) read one extractor as the other.
-ALIASED="$(grep -REn '(AuthUser|AnyPrincipal)[[:space:]]+as[[:space:]]|as[[:space:]]+(AuthUser|AnyPrincipal)([^A-Za-z0-9_]|$)' "$API_SRC_DIR" --include='*.rs' || true)"
+# or a type alias (`type AuthUser = AnyPrincipal;`) outside middleware/ would make (e) and (f) read
+# one extractor as the other.
+ALIASED="$(grep -REn '(AuthUser|AnyPrincipal)[[:space:]]+as[[:space:]]|as[[:space:]]+(AuthUser|AnyPrincipal)([^A-Za-z0-9_]|$)|type[[:space:]]+(AuthUser|AnyPrincipal)([^A-Za-z0-9_]|$)' "$API_SRC_DIR" --include='*.rs' | grep -v '^[^:]*/middleware/' || true)"
 if [[ -n "$ALIASED" ]]; then
   echo "audit-route-auth: FAIL — an identity extractor imported under another name:" >&2
   printf '%s\n' "$ALIASED" | sed 's/^/  /' >&2

@@ -39,7 +39,7 @@ use temper_services::state::AppState;
     responses(
         (status = 201, description = "Invitation created", body = TeamInvitation),
         (status = 400, description = "Owner role cannot be invited"),
-        (status = 403, description = "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
+        (status = 403, description = "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 409, description = "A pending invitation already exists for this email"),
     )
 )]
@@ -71,7 +71,7 @@ pub async fn create(
     responses(
         (status = 204, description = "Invitation revoked"),
         (status = 400, description = "Only a pending invitation can be revoked"),
-        (status = 403, description = "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
+        (status = 403, description = "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Invitation not found for this team"),
     )
 )]
@@ -95,7 +95,7 @@ pub async fn revoke(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Pending invitations for the team", body = Vec<TeamInvitation>),
-        (status = 403, description = "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
+        (status = 403, description = "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
     )
 )]
 pub async fn list(
@@ -115,7 +115,7 @@ pub async fn list(
     tag = "Invitations",
     security(("bearer_auth" = [])),
     responses(
-        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 200, description = "The caller's own pending invitations", body = Vec<InviteeInvitation>),
     )
 )]
@@ -144,7 +144,7 @@ pub async fn list_mine(
     params(CountMineQuery),
     security(("bearer_auth" = [])),
     responses(
-        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 200, description = "How many invitations are waiting on the caller", body = PendingInvitationCounts),
     )
 )]
@@ -168,7 +168,7 @@ pub async fn count_mine(
     responses(
         (status = 200, description = "Invitation redeemed; caller joined the team", body = AcceptInvitationResponse),
         (status = 400, description = "Invitation expired or already declined"),
-        (status = 403, description = "The invitation is addressed to someone else: only the account whose verified email it names may redeem it; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
+        (status = 403, description = "The invitation is addressed to someone else: only the account whose verified email it names may redeem it; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Unknown token"),
         (status = 409, description = "Invitation already redeemed by another profile"),
     )
@@ -193,7 +193,7 @@ pub async fn accept(
     responses(
         (status = 204, description = "Invitation declined"),
         (status = 400, description = "Invitation was already accepted"),
-        (status = 403, description = "The invitation is addressed to someone else: only the account whose verified email it names may decline it; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)"),
+        (status = 403, description = "The invitation is addressed to someone else: only the account whose verified email it names may decline it; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Unknown token"),
     )
 )]
