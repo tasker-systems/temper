@@ -12,13 +12,19 @@
 #
 #   A. every migration version is declared by SOME migration file,
 #   B. every declared version corresponds to a migration file that exists,
-#   C. every class token is one of the two, and every reason is non-empty.
+#   C. every class token is one of the two, and every reason is non-empty,
+#   D. no two migration files share a version,
+#   E. no version is declared twice (a reclassification does not count).
 #
 # A+B together already catch the copy-paste this was worried about: paste
-# `declare_migration(<some other version>, …)` into a new migration and that version is now
-# declared twice (B is satisfied, but the DB's primary key rejects it on apply) while the new
-# migration's own version is declared nowhere — so A fails. No separate filename-match rule needed,
-# and no legacy exemption to carve out, because the backfill covers the pre-declaration 148.
+# `declare_migration(<some other version>, …)` into a new migration and the new migration's own
+# version is declared nowhere — so A fails. No separate filename-match rule needed, and no legacy
+# exemption to carve out, because the backfill covers the pre-declaration 148. The pasted version
+# is now declared twice, which E also reports. Nothing else would: `kb_migration_ledger` is keyed by
+# its own uuid, so the database records both declarations without complaint.
+#
+# D+E are the merge collision: two branches each take the next timestamp, each is green alone, and
+# main ends up with two files of one version. A–C pass that tree (#1109 and #1111, 2026-10-11).
 #
 # Two discriminations carry history rather than theory:
 #
@@ -306,7 +312,69 @@ if [ "$rc" -ne 0 ] \
   ok "an empty class token is rejected, naming the empty token and not the reason"
 else bad "an empty class token is rejected, naming the empty token and not the reason" "exit=$rc" "$out"; fi
 
-# ── 15. The real repo passes — the check is live, not just fixture-true ─────────────────────────
+# ── 15. Two files sharing a version fail, and the message names both ────────────────────────────
+# The merge collision. Each file declares its own version, so A, B and C are all satisfied; only D
+# and E see it. The assertion is on the file names because the point of the message is to say
+# which two branches collided.
+D="${WORK}/collision"; new_fixture "$D"
+cat > "$D/20260801000001_other_branch.sql" <<'SQL'
+CREATE TABLE kb_other (id uuid PRIMARY KEY);
+
+SELECT declare_migration(
+    20260801000001,
+    'additive',
+    'The other branch took the same timestamp.'
+);
+SQL
+out="$(run_audit "$D")"; rc=$?
+if [ "$rc" -ne 0 ] \
+   && printf '%s' "$out" | grep -q 'more than one migration file has this version' \
+   && printf '%s' "$out" | grep -q '20260801000001_add_thing.sql' \
+   && printf '%s' "$out" | grep -q '20260801000001_other_branch.sql'; then
+  ok "two files sharing a version fail, naming both files"
+else bad "two files sharing a version fail, naming both files" "exit=$rc" "$out"; fi
+
+# ── 16. A version declared twice fails, even when every file is otherwise sound ─────────────────
+# The backfill shape lets one file declare another's version, so D alone cannot see this: the
+# second declaration comes from a file with a version of its own, which it also declares.
+D="${WORK}/doubledeclared"; new_fixture "$D"
+cat > "$D/20260801000017_redeclares.sql" <<'SQL'
+SELECT declare_migration(
+    20260801000017,
+    'additive',
+    'Declares itself.'
+);
+SELECT declare_migration(
+    20260801000001,
+    'shape-breaking',
+    'And quietly re-declares a migration that already declared itself.'
+);
+SQL
+out="$(run_audit "$D")"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q '20260801000001: declared more than once'; then
+  ok "a version declared twice fails, naming the version"
+else bad "a version declared twice fails, naming the version" "exit=$rc" "$out"; fi
+
+# ── 17. A reclassification of a declared version is NOT a second declaration ────────────────────
+# The legitimate way to revise a class. E must not count it, or every correction would fail.
+D="${WORK}/reclassified"; new_fixture "$D"
+cat > "$D/20260801000018_corrects.sql" <<'SQL'
+SELECT declare_migration(
+    20260801000018,
+    'additive',
+    'Declares itself.'
+);
+SELECT reclassify_migration(
+    20260801000001,
+    'shape-breaking',
+    'The earlier verdict was wrong: the deployed binary selects the dropped column.'
+);
+SQL
+out="$(run_audit "$D")"; rc=$?
+if [ "$rc" -eq 0 ]; then ok "reclassifying a declared version passes"
+else bad "reclassifying a declared version passes" "exit=$rc" "$out"; fi
+
+# ── 18. The real repo passes — the check is live, not just fixture-true ─────────────────────────
 out="$(bash "$AUDIT_SCRIPT" 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ]; then ok "the repo's own migrations/ passes"
 else bad "the repo's own migrations/ passes" "exit=$rc" "$out"; fi

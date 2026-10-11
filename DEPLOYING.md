@@ -82,7 +82,7 @@ SELECT declare_migration(
 );
 ```
 
-Three things about that call are load-bearing:
+Four things about that call are load-bearing:
 
 - **The version argument must equal the filename's timestamp.** CI checks it, so a
   copy-pasted declaration naming the wrong migration is caught mechanically.
@@ -92,6 +92,10 @@ Three things about that call are load-bearing:
 - **Saying nothing is not saying additive.** A migration with no declaration fails
   CI. Silence is not a classification, and an absent statement is as loud as a wrong
   one.
+- **A version belongs to one migration and is declared once.** Two branches cut from the
+  same main can each take the next timestamp and each be green alone; once both land,
+  CI fails the tree that has two files of one version. Renumber the later one past the
+  latest version on main, in its file name and its `declare_migration` call.
 
 It lives in the database (`kb_migration_ledger`, read through the `migration_current`
 view) rather than only in a file header, because the declaration has to be readable by
