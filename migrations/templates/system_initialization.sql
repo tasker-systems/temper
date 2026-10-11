@@ -1,28 +1,45 @@
 -- migrations/templates/system_initialization.sql
--- Template for self-hosted operators to enable invite-only mode.
--- Copy this file, fill in your values, and run against your database.
--- Also used verbatim by integration tests.
+--
+-- The irreducible SQL root step for a self-hosted instance: configure the gating team, then admit
+-- and promote the first system admin. Nothing can authenticate an admin-gated command until the
+-- first admin exists, so this one step runs directly against the database. Everything after it is
+-- a surfaced `temper` command (see docs/playbooks/bootstrap-an-org.md).
+--
+-- Run it with psql, filling in the two variables. The first admin must have signed in once, so its
+-- kb_profiles row exists:
+--
+--   psql "$DATABASE_URL" -X --set=ON_ERROR_STOP=1 \
+--     --set=gating=temper-system --set=admin=<first-admin-profile-uuid> \
+--     -f migrations/templates/system_initialization.sql
+--
+-- `scripts/bootstrap/system-bootstrap.sh --run-root` runs this file as-is, and
+-- `crates/temper-services/tests/system_initialization_template_test.rs` runs it against the
+-- migrated schema, so a schema change that breaks it fails CI rather than a self-hoster. The e2e
+-- suites' bootstrap helpers are separate copies that this test does not cover.
+--
+-- Admission and governance are separate, and each reads exactly one table:
+--   has_system_access  -> kb_principal_standing   (may this principal use the instance?)
+--   is_system_admin    -> kb_principal_governance (may this principal change the rules?)
+-- Neither reads team membership. Owning the gating team does not make anyone an admin.
+--
+-- Further admins are promoted by an existing admin, never by hand-written SQL:
+--   temper admin promote <profile-uuid>
 
--- Step 1: Add yourself as owner of the gating team.
--- Replace the profile_id with your own (from kb_profiles).
-INSERT INTO kb_team_members (id, team_id, profile_id, role, joined_at)
-VALUES (
-    gen_random_uuid(),
-    '00000000-0000-0000-0000-000000000002',  -- temper-system team
-    '00000000-0000-0000-0004-000000000001',  -- REPLACE with your profile ID
-    'owner',
-    now()
-);
+-- One transaction: admission and governance land together or not at all. Without it, a failure
+-- in the second call would leave the profile admitted but not an admin.
+BEGIN;
 
--- Step 2: Enable invite-only mode.
-UPDATE kb_system_settings
-   SET access_mode = 'invite_only',
-       gating_team_slug = 'temper-system',
-       instance_name = 'temper',              -- REPLACE with your instance name
-       updated = now();
+INSERT INTO kb_teams (slug, name) VALUES (:'gating', :'gating')
+  ON CONFLICT (slug) DO NOTHING;
 
--- Optional: Set terms version and URI.
--- UPDATE kb_system_settings
---    SET terms_version = '1.0',
---        terms_resource_uri = 'kb://+temper-system/general/concept/terms',
---        updated = now();
+UPDATE kb_system_settings SET gating_team_slug = :'gating' WHERE id = 1;
+
+-- The functions, not raw INSERTs: each records the transition and emits its event.
+SELECT principal_standing_apply(:'admin'::uuid, 'approve', 'approved', NULL, 'root bootstrap');
+SELECT principal_governance_set(:'admin'::uuid, true, NULL, 'root bootstrap');
+
+COMMIT;
+
+-- Both must read true. They are independent, and one without the other is a silent half-state.
+SELECT has_system_access(:'admin'::uuid) AS admitted,
+       is_system_admin(:'admin'::uuid)   AS governs;

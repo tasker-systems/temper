@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM kb_machine_clients WHERE profile_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e9ef992e1e1ca0d890a1cfad4311004670a0a6f334cd36c9abcfc725e7accc17"
+}

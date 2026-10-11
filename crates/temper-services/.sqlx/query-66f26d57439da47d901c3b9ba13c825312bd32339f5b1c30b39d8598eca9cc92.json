@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_profiles (handle, display_name) VALUES ('enum-person', 'Person') RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "66f26d57439da47d901c3b9ba13c825312bd32339f5b1c30b39d8598eca9cc92"
+}

@@ -81,31 +81,31 @@ LANDMARKS_MANIFEST="$(prof '.org_identity.landmarks_manifest')"
 # rows and each predicate reads exactly one table: has_system_access -> kb_principal_standing
 # ('approved'), is_system_admin -> kb_principal_governance. Neither reads team membership, and the
 # kb_profiles.system_access / kb_system_settings.access_mode columns were dropped in Phase 2.
-# Mirrors `root_bootstrap_first_admin` in tests/e2e/tests/context_transfer_e2e.rs.
+# The SQL itself is migrations/templates/system_initialization.sql, run as-is: the operator
+# template, this script and that template's test (system_initialization_template_test.rs) share it.
 if [ "$RUN_ROOT" -eq 1 ]; then
   info "Phase 0 — SQL root step (gating + first admin)"
   command -v psql >/dev/null 2>&1 || die "psql not found — required for --run-root"
   [ -n "${DATABASE_URL:-}" ] || die "DATABASE_URL not set — required for --run-root"
   [ -n "$GATING_TEAM" ]  || die "profile missing .root.gating_team_slug (needed for --run-root)"
+  ROOT_SQL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/migrations/templates/system_initialization.sql"
+  [ -f "$ROOT_SQL" ] || die "root step SQL not found at $ROOT_SQL"
   [ -n "$FIRST_ADMIN" ] && [ "$FIRST_ADMIN" != "REPLACE-WITH-FIRST-ADMIN-PROFILE-UUID" ] \
     || die "set .root.first_admin_profile_id in the profile before --run-root"
   if [ "$DRY_RUN" -eq 1 ]; then
-    printf '   (dry-run) psql <DATABASE_URL> -f - <<root.sql (gating=%s admin=%s)\n' \
-      "$GATING_TEAM" "$FIRST_ADMIN"
+    printf '   (dry-run) psql <DATABASE_URL> -f %s (gating=%s admin=%s)\n' \
+      "$ROOT_SQL" "$GATING_TEAM" "$FIRST_ADMIN"
   else
-    psql "$DATABASE_URL" --set=ON_ERROR_STOP=1 \
-      --set=gating="$GATING_TEAM" --set=admin="$FIRST_ADMIN" <<'SQL'
-INSERT INTO kb_teams (slug, name) VALUES (:'gating', :'gating')
-  ON CONFLICT (slug) DO NOTHING;
-UPDATE kb_system_settings SET gating_team_slug = :'gating' WHERE id = 1;
-SELECT principal_standing_apply(:'admin'::uuid, 'approve', 'approved', NULL, 'root bootstrap');
-SELECT principal_governance_set(:'admin'::uuid, true, NULL, 'root bootstrap');
-SQL
+    psql "$DATABASE_URL" -X --set=ON_ERROR_STOP=1 \
+      --set=gating="$GATING_TEAM" --set=admin="$FIRST_ADMIN" -f "$ROOT_SQL"
     # Verify BOTH predicates. They are independent; one without the other is a silent half-state.
     # Deliberately a separate psql call: psql does NOT interpolate :'var' inside a dollar-quoted
-    # DO block, so an in-band assertion would never see the uuid.
-    root_check="$(psql "$DATABASE_URL" -tAX --set=admin="$FIRST_ADMIN" \
-      -c "SELECT has_system_access(:'admin'::uuid)::text || ',' || is_system_admin(:'admin'::uuid)::text")"
+    # DO block, so an in-band assertion would never see the uuid. It reads the query from stdin
+    # (`-f -`), not `-c`: psql does not interpolate variables in a `-c` string either, so the `-c`
+    # form sent the literal `:'admin'` and this check always failed.
+    root_check="$(printf '%s\n' \
+      "SELECT has_system_access(:'admin'::uuid)::text || ',' || is_system_admin(:'admin'::uuid)::text;" \
+      | psql "$DATABASE_URL" -tAX --set=admin="$FIRST_ADMIN" -f -)"
     [ "$root_check" = "true,true" ] \
       || die "root bootstrap verify failed (has_system_access,is_system_admin = $root_check)"
   fi
