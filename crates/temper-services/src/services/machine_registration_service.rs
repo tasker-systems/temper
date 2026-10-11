@@ -1375,6 +1375,295 @@ mod tests {
         assert!(is_check_violation(&err), "{err}");
     }
 
+    // ── The floor holds against accidental SQL (20261023100000) ──────────────────────────────
+
+    async fn still_a_machine(pool: &PgPool, profile: Uuid) -> bool {
+        sqlx::query_scalar!(r#"SELECT is_machine_profile($1) AS "m!""#, profile)
+            .fetch_one(pool)
+            .await
+            .expect("is_machine_profile")
+    }
+
+    /// Deleting the client row would make the profile a person again everywhere. Revocation is
+    /// the way a machine's credential ends, and it must keep working.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_machine_client_row_is_never_deleted(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let machine = approved_machine(&pool, admin, "kept-agent").await;
+
+        let err = sqlx::query!(
+            "DELETE FROM kb_machine_clients WHERE profile_id = $1",
+            machine
+        )
+        .execute(&pool)
+        .await
+        .expect_err("a client row cannot be deleted");
+        assert!(is_check_violation(&err), "{err}");
+        assert!(still_a_machine(&pool, machine).await);
+
+        sqlx::query!(
+            "UPDATE kb_machine_clients SET revoked_at = now() WHERE profile_id = $1",
+            machine,
+        )
+        .execute(&pool)
+        .await
+        .expect("revocation stays the way a credential ends");
+        assert!(
+            still_a_machine(&pool, machine).await,
+            "a revoked machine is still a machine"
+        );
+    }
+
+    /// Moving the client row to another profile would make its old profile a person again.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_machine_client_row_never_moves_to_another_profile(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let machine = approved_machine(&pool, admin, "moved-agent").await;
+        let other: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ('move-target', 'Target') \
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("profile");
+
+        let err = sqlx::query!(
+            "UPDATE kb_machine_clients SET profile_id = $2 WHERE profile_id = $1",
+            machine,
+            other,
+        )
+        .execute(&pool)
+        .await
+        .expect_err("a client row cannot move");
+        assert!(is_check_violation(&err), "{err}");
+        assert!(still_a_machine(&pool, machine).await);
+    }
+
+    /// A role added to `team_role` lands last in the enum, below `watcher`. Enum order would rank
+    /// it "not above member" and admit it for a machine; the allowlist refuses it until someone
+    /// decides where it ranks. Both the ceiling and the cap must refuse, not admit or rewrite.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_role_added_to_the_enum_is_refused_for_a_machine(pool: PgPool) {
+        sqlx::query("ALTER TYPE team_role ADD VALUE 'probe_role'")
+            .execute(&pool)
+            .await
+            .expect("add an enum value");
+        let admin = seed_admin(&pool).await;
+        let machine = approved_machine(&pool, admin, "enum-agent").await;
+        let team = plain_team(&pool, "enum-team").await;
+
+        let err = sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) \
+             VALUES ($1, $2, 'probe_role')",
+        )
+        .bind(team)
+        .bind(machine)
+        .execute(&pool)
+        .await
+        .expect_err("the ceiling refuses a role it does not know");
+        assert!(is_check_violation(&err), "{err}");
+
+        // The cap side: a person holding the unknown role cannot become a machine.
+        let person: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ('enum-person', 'Person') \
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("profile");
+        sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) \
+             VALUES ($1, $2, 'probe_role')",
+        )
+        .bind(team)
+        .bind(person)
+        .execute(&pool)
+        .await
+        .expect("a person may hold it");
+        let err = sqlx::query!(
+            "INSERT INTO kb_machine_clients \
+               (client_id, issuer, label, profile_id, team_id, registered_by_profile_id) \
+             VALUES ('enum-person', 'auth0-m2m', 'enum', $1, NULL, $2)",
+            person,
+            *admin,
+        )
+        .execute(&pool)
+        .await
+        .expect_err("the cap refuses a role it does not know how to lower");
+        assert!(is_check_violation(&err), "{err}");
+    }
+
+    /// Waits until a transaction in this test's database is blocked on an advisory lock, which is
+    /// the per-profile lock the machine triggers take. Polling `pg_locks` rather than sleeping
+    /// makes the proof independent of load: without the lock the second writer never waits, so it
+    /// finishes, and this fails, however slowly the machine runs.
+    async fn wait_until_blocked_on_the_profile_lock<T>(
+        pool: &PgPool,
+        writer: &tokio::task::JoinHandle<T>,
+    ) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            assert!(
+                !writer.is_finished(),
+                "the second writer finished without waiting on the profile's lock"
+            );
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM pg_locks \
+                                 WHERE locktype = 'advisory' AND NOT granted \
+                                   AND database = (SELECT oid FROM pg_database \
+                                                    WHERE datname = current_database()))",
+            )
+            .fetch_one(pool)
+            .await
+            .expect("pg_locks");
+            if waiting {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the second writer never reached the profile's lock"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    /// Two transactions writing a governance grant and a client row for the same person must not
+    /// both commit. Without the per-profile lock, neither trigger sees the other's uncommitted
+    /// row and both pass. With it, the second writer waits for the first, then reads its commit.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_concurrent_governance_grant_and_client_row_cannot_both_commit(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let person: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ('race-person', 'Race') \
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("profile");
+
+        let mut governs = pool.begin().await.expect("tx 1");
+        sqlx::query_scalar!(
+            "SELECT principal_governance_set($1, true, $2, NULL)",
+            person,
+            *admin,
+        )
+        .fetch_one(&mut *governs)
+        .await
+        .expect("tx 1 grants governance while the profile is a person");
+
+        let becomes = {
+            let pool = pool.clone();
+            let admin = *admin;
+            tokio::spawn(async move {
+                let mut tx = pool.begin().await.expect("tx 2");
+                sqlx::query!(
+                    "INSERT INTO kb_machine_clients \
+                       (client_id, issuer, label, profile_id, team_id, registered_by_profile_id) \
+                     VALUES ('race-person', 'auth0-m2m', 'race', $1, NULL, $2)",
+                    person,
+                    admin,
+                )
+                .execute(&mut *tx)
+                .await?;
+                tx.commit().await
+            })
+        };
+
+        wait_until_blocked_on_the_profile_lock(&pool, &becomes).await;
+        governs.commit().await.expect("tx 1 commits");
+
+        let err = becomes
+            .await
+            .expect("join tx 2")
+            .expect_err("tx 2 reads tx 1's governance grant once the lock is released");
+        assert!(is_check_violation(&err), "{err}");
+        assert!(!still_a_machine(&pool, person).await);
+    }
+
+    /// The ceiling's half of the race: a client row and an `owner` row for the same person, in
+    /// two transactions. Without the ceiling's lock, the cap runs before the `owner` row exists
+    /// and the ceiling cannot see the uncommitted client row, so both commit and a machine owns
+    /// a team. With it, the `owner` insert waits, then reads the committed client row.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_concurrent_client_row_and_owner_row_cannot_both_commit(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let person: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ('race-owner', 'Race') \
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("profile");
+        let team = plain_team(&pool, "race-team").await;
+
+        let mut becomes = pool.begin().await.expect("tx 1");
+        sqlx::query!(
+            "INSERT INTO kb_machine_clients \
+               (client_id, issuer, label, profile_id, team_id, registered_by_profile_id) \
+             VALUES ('race-owner', 'auth0-m2m', 'race', $1, NULL, $2)",
+            person,
+            *admin,
+        )
+        .execute(&mut *becomes)
+        .await
+        .expect("tx 1 makes the person a machine");
+
+        let owns = {
+            let pool = pool.clone();
+            tokio::spawn(async move {
+                let mut tx = pool.begin().await.expect("tx 2");
+                sqlx::query!(
+                    "INSERT INTO kb_team_members (team_id, profile_id, role) \
+                     VALUES ($1, $2, 'owner')",
+                    team,
+                    person,
+                )
+                .execute(&mut *tx)
+                .await?;
+                tx.commit().await
+            })
+        };
+
+        wait_until_blocked_on_the_profile_lock(&pool, &owns).await;
+        becomes.commit().await.expect("tx 1 commits");
+
+        let err = owns
+            .await
+            .expect("join tx 2")
+            .expect_err("tx 2 reads tx 1's client row once the lock is released");
+        assert!(is_check_violation(&err), "{err}");
+    }
+
+    /// A table created earlier in a caller's `search_path` must not stand in for the real ones.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn the_machine_floor_functions_pin_their_search_path(pool: PgPool) {
+        let names = [
+            "is_machine_profile",
+            "_machine_principal_lock",
+            "machine_team_role_ceiling",
+            "machine_never_governs",
+            "machine_client_caps_profile",
+            "machine_client_row_is_permanent",
+        ]
+        .map(String::from);
+        let rows = sqlx::query!(
+            r#"SELECT p.proname::text AS "name!",
+                      EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, '{}')) c
+                               WHERE c LIKE 'search_path=%') AS "pinned!"
+                 FROM pg_proc p
+                WHERE p.proname = ANY($1)
+                ORDER BY 1"#,
+            &names[..],
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("pg_proc");
+        // Every name must be found, or an absent function would read as "nothing unpinned".
+        assert_eq!(rows.len(), names.len(), "found: {rows:?}");
+        let unpinned: Vec<_> = rows.iter().filter(|r| !r.pinned).map(|r| &r.name).collect();
+        assert!(unpinned.is_empty(), "unpinned: {unpinned:?}");
+    }
+
     /// Each service refusal is asserted by its own message, so with the service guard removed the
     /// trigger's error (a different variant) fails the test: each witness bites on its own guard.
     fn is_machine_refusal(err: &crate::error::ApiError) -> bool {

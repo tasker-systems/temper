@@ -88,27 +88,26 @@ each reads exactly one table:
 Neither reads team membership. Owning the gating team does not make anyone an
 admin, and being an admin does not admit you.
 
-```sql
--- Create the gating team if it does not exist (temper-system is the conventional slug).
-INSERT INTO kb_teams (slug, name) VALUES ('temper-system', 'Temper System')
-  ON CONFLICT (slug) DO NOTHING;
+The root step is `migrations/templates/system_initialization.sql`. Run it with
+psql, filling in the gating slug (`temper-system` is the conventional one) and
+the profile id:
 
-UPDATE kb_system_settings SET gating_team_slug = 'temper-system' WHERE id = 1;
-
--- Admit the profile. Prefer the function over a raw INSERT: it records the
--- transition in kb_principal_standing_events and emits the corresponding event.
-SELECT principal_standing_apply(
-    '<first-admin-profile-uuid>'::uuid, 'approve', 'approved', NULL, 'root bootstrap');
-
--- Promote it to system admin.
-SELECT principal_governance_set(
-    '<first-admin-profile-uuid>'::uuid, true, NULL, 'root bootstrap');
-
--- Confirm BOTH took — they are independent, and one without the other is a
--- silent half-state:
-SELECT has_system_access('<first-admin-profile-uuid>'::uuid);  -- expect: true
-SELECT is_system_admin('<first-admin-profile-uuid>'::uuid);    -- expect: true
+```bash
+psql "$DATABASE_URL" -X --set=ON_ERROR_STOP=1 \
+  --set=gating=temper-system --set=admin=<first-admin-profile-uuid> \
+  -f migrations/templates/system_initialization.sql
 ```
+
+It creates the gating team if it does not exist and records it in
+`kb_system_settings`. Then, in one transaction, it admits the profile
+(`principal_standing_apply`) and promotes it (`principal_governance_set`). It
+uses the functions, not raw INSERTs, so each transition is recorded and emits
+its event. Its last statement reads both predicates back: `admitted` and
+`governs` must both be `true`, because they are independent and one without
+the other is a silent half-state.
+
+`scripts/bootstrap/system-bootstrap.sh --run-root` runs the same file, and CI
+runs it against the current schema, so it stays correct as the schema moves.
 
 > **Snapshot prod before a hand-run data change.** On Neon, create a
 > copy-on-write backup branch first.

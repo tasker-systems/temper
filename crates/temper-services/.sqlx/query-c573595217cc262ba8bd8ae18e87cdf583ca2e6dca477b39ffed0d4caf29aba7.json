@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_machine_clients (client_id, issuer, label, profile_id, team_id, registered_by_profile_id) VALUES ('race-owner', 'auth0-m2m', 'race', $1, NULL, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c573595217cc262ba8bd8ae18e87cdf583ca2e6dca477b39ffed0d4caf29aba7"
+}

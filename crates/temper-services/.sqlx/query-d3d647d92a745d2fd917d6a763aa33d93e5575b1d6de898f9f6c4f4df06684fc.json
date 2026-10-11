@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_machine_clients SET profile_id = $2 WHERE profile_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d3d647d92a745d2fd917d6a763aa33d93e5575b1d6de898f9f6c4f4df06684fc"
+}
