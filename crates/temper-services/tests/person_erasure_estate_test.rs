@@ -190,7 +190,7 @@ async fn erase(
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
-        None,
+        &Default::default(),
     )
     .await
     .expect("the person act completes")
@@ -472,7 +472,7 @@ async fn already_erased_resources_are_skipped_or_completed(pool: PgPool) {
         "setup: the cut-1 husk's ledger keeps its title"
     );
 
-    let survey = survey_erasure(&pool, &admin, ProfileId::from(p.profile))
+    let survey = survey_erasure(&pool, &admin, ProfileId::from(p.profile), None)
         .await
         .expect("survey");
     let disposition = |r: ResourceId| {
@@ -608,7 +608,7 @@ async fn a_resource_erased_while_the_act_waits_is_skipped_not_fatal(pool: PgPool
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
-            None,
+            &Default::default(),
         )
         .await
     });

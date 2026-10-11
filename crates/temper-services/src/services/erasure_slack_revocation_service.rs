@@ -21,9 +21,9 @@ use temper_core::types::erasure::SlackRevocationTally;
 use temper_core::types::slack::IdpRevocation;
 
 use super::grant_crypto::VaultKey;
-use crate::auth_config::AuthMode;
 use super::slack_disconnect_service::{revoke_at_idp, IdpRevokeTarget};
 use super::slack_grant_vault_service;
+use crate::auth_config::AuthMode;
 use crate::error::ApiResult;
 
 /// How long a failed revoke is retried before it is abandoned: seven days. A Slack outage lasts

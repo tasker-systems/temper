@@ -138,6 +138,31 @@ struct SurveyOutcomeWire {
     resources: Vec<EstateResourcePlan>,
 }
 
+/// What the act needs from the instance beyond the database: how to revoke Slack grants, and which
+/// login provider this instance's tokens resolve through (`AUTH_PROVIDER_NAME`). `Default` is
+/// neither: Slack grants are destroyed unrevoked and refresh tokens never bound to a profile are
+/// not attributed, and the record says both.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ErasureEnv<'a> {
+    pub slack: Option<SlackRevokeConfig<'a>>,
+    pub auth_provider: Option<&'a str>,
+}
+
+/// Tell the act, for this transaction only, which login provider the subject's unbound refresh
+/// tokens resolve through (`_erasure_auth_provider`).
+async fn set_auth_provider(
+    conn: &mut sqlx::PgConnection,
+    provider: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "SELECT set_config('temper.erasure_auth_provider', $1, true)",
+        provider.unwrap_or("")
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 /// Execute the erasure act for `subject`, as the operator `admin` names.
 ///
 /// The [`SystemAdmin`] proof is the authority: the gate ran where the proof was minted, before
@@ -153,7 +178,7 @@ pub async fn execute_erasure(
     subject: ProfileId,
     request_reference: Uuid,
     surface: Surface,
-    slack: Option<&SlackRevokeConfig<'_>>,
+    env: &ErasureEnv<'_>,
 ) -> ApiResult<ErasureCompletion> {
     let operator = admin.actor();
     // The emitter resolves on the pool, before the transaction opens (a read, not part of the
@@ -185,9 +210,12 @@ pub async fn execute_erasure(
     // can be opened, and the tally says how many were destroyed unrevoked. A grant linked between
     // this read and the act is destroyed unrevoked and uncounted: a narrow race, named here so the
     // tally is not read as complete.
-    let (slack_revocation, pending) =
-        erasure_slack_revocation_service::revoke_before_erasure(pool, subject.uuid(), slack)
-            .await?;
+    let (slack_revocation, pending) = erasure_slack_revocation_service::revoke_before_erasure(
+        pool,
+        subject.uuid(),
+        env.slack.as_ref(),
+    )
+    .await?;
 
     // The act runs resource erasure once per estate resource (20261021100000), so it fails
     // retryably where that act does: a deadlock, a raced edge fold, a remote source that gained or
@@ -198,6 +226,7 @@ pub async fn execute_erasure(
     let raw = loop {
         let result = async {
             let mut tx = pool.begin().await?;
+            set_auth_provider(&mut tx, env.auth_provider).await?;
             erasure_slack_revocation_service::queue_pending(&mut tx, &pending).await?;
             let raw = sqlx::query_scalar!(
                 r#"SELECT principal_erasure_execute($1, $2, $3, $4) AS "outcome: serde_json::Value""#,
@@ -391,6 +420,7 @@ pub async fn survey_erasure(
     pool: &PgPool,
     _admin: &SystemAdmin,
     subject: ProfileId,
+    auth_provider: Option<&str>,
 ) -> ApiResult<ErasureSurvey> {
     // Operator-only from here: existence may be disclosed (and as an error, not a ledger row).
     let exists: Option<Uuid> = sqlx::query_scalar!(
@@ -403,11 +433,13 @@ pub async fn survey_erasure(
         return Err(ApiError::NotFound("profile not found".to_string()));
     }
 
+    let mut tx = pool.begin().await?;
+    set_auth_provider(&mut tx, auth_provider).await?;
     let raw = sqlx::query_scalar!(
         r#"SELECT principal_erasure_survey($1) AS "survey: serde_json::Value""#,
         subject.uuid(),
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?
     .ok_or_else(|| ApiError::Internal("principal_erasure_survey returned no row".to_string()))?;
     let wire: SurveyOutcomeWire = serde_json::from_value(raw)
@@ -761,7 +793,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::CliCloud,
-            None,
+            &Default::default(),
         )
         .await
         .expect("the operator's act completes");
@@ -805,7 +837,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
-            None,
+            &Default::default(),
         )
         .await
         .expect("the operator's act completes");
@@ -893,7 +925,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
-            None,
+            &Default::default(),
         )
         .await
         .expect("completes");
@@ -1072,7 +1104,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
-            None,
+            &Default::default(),
         )
         .await
         .expect("completes");
@@ -1199,7 +1231,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
-            None,
+            &Default::default(),
         )
         .await
         .expect("completes");
@@ -1350,7 +1382,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
-            None,
+            &Default::default(),
         )
         .await
         .expect("completes");
@@ -1430,7 +1462,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
-            None,
+            &Default::default(),
         )
         .await
         .expect("completes");
@@ -1480,7 +1512,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
-            None,
+            &Default::default(),
         )
         .await
         .expect("completes");
@@ -1585,7 +1617,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
-            None,
+            &Default::default(),
         )
         .await
         .expect("first act completes");
@@ -1596,7 +1628,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
-            None,
+            &Default::default(),
         )
         .await
         .expect("re-erase completes");
@@ -1681,7 +1713,7 @@ mod tests {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
-            None,
+            &Default::default(),
         )
         .await
         .expect("completes");

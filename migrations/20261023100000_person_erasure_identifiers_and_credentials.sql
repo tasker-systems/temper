@@ -354,10 +354,10 @@ AS $$
         OR lower(i.invited_email COLLATE "C") IN (SELECT _erasure_subject_emails(p_subject));
 $$;
 
--- Login-provider rows bound to the subject's profile. Bound rows only: a claim's `sub` carries no
--- provider (two SAML tenants can issue the same NameID) and its email may be unverified, so a match
--- on claims would reach other people's logins (security review, 2026-10-11). A flow not yet bound
--- to a profile is minutes from expiry and the AS sweep reaps it (as_reap_service).
+-- Login flows bound to the subject's profile. A claims match would reach other people's logins:
+-- a claim's `sub` carries no provider and its email may be unverified (security review,
+-- 2026-10-11). A flow not yet bound to a profile is minutes from expiry and the AS sweep reaps it
+-- (as_reap_service).
 CREATE FUNCTION _erasure_subject_oauth_flows(p_subject uuid)
 RETURNS SETOF uuid
 LANGUAGE sql STABLE
@@ -366,12 +366,41 @@ AS $$
     SELECT f.id FROM kb_oauth_flow f WHERE f.profile_id = p_subject;
 $$;
 
+-- The login provider the doors tell the act, transaction-local (`temper.erasure_auth_provider`,
+-- set by erasure_service from temper-api's AUTH_PROVIDER_NAME). NULL when unset: replay, and a
+-- direct SQL caller.
+CREATE FUNCTION _erasure_auth_provider()
+RETURNS text
+LANGUAGE sql STABLE AS $$
+    SELECT nullif(current_setting('temper.erasure_auth_provider', true), '');
+$$;
+
+-- Refresh tokens issued to the subject but never bound to their profile: the AS leaves profile_id
+-- NULL when it could not resolve the owner at issue time and binds it on the next rotation
+-- (20260825000010), which after the act can never succeed, so such a token would live out its
+-- chain. It is matched by the AS's own resolution key, (provider, sub) — the provider the act was
+-- told, never a bare `sub`, which two IdPs can share.
+CREATE FUNCTION _erasure_subject_unbound_refresh_tokens(p_subject uuid, p_provider text)
+RETURNS SETOF uuid
+LANGUAGE sql STABLE
+SET search_path = public, pg_temp
+AS $$
+    SELECT t.id FROM kb_oauth_refresh_tokens t
+     WHERE t.profile_id IS NULL
+       AND p_provider IS NOT NULL
+       AND (t.claims ->> 'sub') IN (SELECT l.auth_provider_user_id FROM kb_profile_auth_links l
+                                     WHERE l.profile_id = p_subject AND l.auth_provider = p_provider);
+$$;
+
+-- The subject's refresh tokens: bound to their profile, or unbound and theirs by (provider, sub).
 CREATE FUNCTION _erasure_subject_refresh_tokens(p_subject uuid)
 RETURNS SETOF uuid
 LANGUAGE sql STABLE
 SET search_path = public, pg_temp
 AS $$
-    SELECT t.id FROM kb_oauth_refresh_tokens t WHERE t.profile_id = p_subject;
+    SELECT t.id FROM kb_oauth_refresh_tokens t WHERE t.profile_id = p_subject
+    UNION
+    SELECT _erasure_subject_unbound_refresh_tokens(p_subject, _erasure_auth_provider());
 $$;
 
 -- Connections that are the subject's (ruled 2026-10-10): homed in the estate, or whose own machine
@@ -682,6 +711,30 @@ BEGIN
             jsonb_build_object('target','kb_team_invitations.invited_email',
                 'outcome', v_n || ' invitation(s) sent by or to the subject; sentinel-scrubbed, '
                            || 'token replaced, pending ones revoked'));
+    END IF;
+    -- Invitations to an address the subject holds only unverified: perhaps theirs, perhaps not, so
+    -- never touched, and named by count.
+    SELECT count(*) INTO v_n FROM kb_team_invitations i
+     WHERE i.invited_email IS DISTINCT FROM 'erased-' || i.id::text
+       AND i.id NOT IN (SELECT _erasure_subject_invitations(p_subject))
+       AND lower(i.invited_email COLLATE "C") IN (
+           SELECT lower(l.email COLLATE "C") FROM kb_profile_auth_links l
+            WHERE l.profile_id = p_subject AND l.email IS NOT NULL AND NOT l.email_verified);
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_team_invitations.invited_email (unverified address)',
+                'outcome', 'independent_obligation: ' || v_n || ' invitation(s) to an address the '
+                           || 'subject never verified; may be another person''s; not reached'));
+    END IF;
+    -- Unbound refresh tokens are reached by the login provider the doors pass. Without it they
+    -- cannot be attributed, so say so rather than imply none exist.
+    IF _erasure_auth_provider() IS NULL
+       AND EXISTS (SELECT 1 FROM kb_oauth_refresh_tokens t
+                    WHERE t.profile_id IS NULL AND t.revoked_at IS NULL) THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_oauth_refresh_tokens (unbound)',
+                'outcome', 'not checked: the act was not told the login provider, so tokens never '
+                           || 'bound to a profile cannot be attributed'));
     END IF;
     SELECT count(*) INTO v_n FROM kb_oauth_flow f
      WHERE f.id IN (SELECT _erasure_subject_oauth_flows(p_subject));
@@ -1890,5 +1943,5 @@ COMMENT ON FUNCTION _erasure_apply_redaction(uuid, text[], uuid) IS
 SELECT declare_migration(
     20261023100000,
     'additive',
-    'Two new tables (kb_erasure_retention_policies, empty; kb_erasure_slack_revocations, empty); new SQL functions for the person act''s reach (_erasure_retention_snapshot, _erasure_retained_by, _principal_erasure_path_category, _erasure_subject_emails, _erasure_subject_invitations, _erasure_subject_oauth_flows, _erasure_subject_refresh_tokens, _erasure_subject_connections, _erasure_subject_uploads, _erasure_subject_slack_principals); _principal_erasure_redacted_fields dropped and re-created with a third argument, its only callers being the two functions this migration replaces; the principal_erased payload_schema re-registered with one new required key (Section 0 refuses a ledger holding any earlier principal_erased payload); and CREATE OR REPLACE, every signature unchanged, of kb_principal_standing_events_append_only, _principal_erasure_redact_paths, _principal_erasure_context_events, _erasure_sentinel_exact, _erasure_sentinel_admits, principal_erasure_survey_plan, principal_erasure_execute and _erasure_apply_redaction. A binary without this migration keeps working: it calls the same functions with the same arguments. What changes is what the act removes, and that the standing log admits one update, the act''s reason null for a tombstoned subject.'
+    'Two new tables (kb_erasure_retention_policies, empty; kb_erasure_slack_revocations, empty); new SQL functions for the person act''s reach (_erasure_retention_snapshot, _erasure_retained_by, _principal_erasure_path_category, _erasure_subject_emails, _erasure_subject_invitations, _erasure_subject_oauth_flows, _erasure_auth_provider, _erasure_subject_unbound_refresh_tokens, _erasure_subject_refresh_tokens, _erasure_subject_connections, _erasure_subject_uploads, _erasure_subject_slack_principals); _principal_erasure_redacted_fields dropped and re-created with a third argument, its only callers being the two functions this migration replaces; the principal_erased payload_schema re-registered with one new required key (Section 0 refuses a ledger holding any earlier principal_erased payload); and CREATE OR REPLACE, every signature unchanged, of kb_principal_standing_events_append_only, _principal_erasure_redact_paths, _principal_erasure_context_events, _erasure_sentinel_exact, _erasure_sentinel_admits, principal_erasure_survey_plan, principal_erasure_execute and _erasure_apply_redaction. A binary without this migration keeps working: it calls the same functions with the same arguments. What changes is what the act removes, and that the standing log admits one update, the act''s reason null for a tombstoned subject.'
 );

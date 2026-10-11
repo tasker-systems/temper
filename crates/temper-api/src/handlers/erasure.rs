@@ -114,7 +114,10 @@ pub async fn execute(
         ProfileId::from(body.subject),
         body.request_reference,
         surface,
-        slack_revoke_config(&state, provider.as_ref()).as_ref(),
+        &erasure_service::ErasureEnv {
+            slack: slack_revoke_config(&state, provider.as_ref()),
+            auth_provider: Some(&state.config.auth_provider_name),
+        },
     )
     .await?;
 
@@ -220,8 +223,13 @@ pub async fn survey(
     Json(body): Json<ErasureSurveyRequest>,
 ) -> ApiResult<Json<ErasureSurveyResponse>> {
     let admin = require_erasure_operator(&state, &auth, "erasure.survey").await?;
-    let prediction =
-        erasure_service::survey_erasure(&state.pool, &admin, ProfileId::from(body.subject)).await?;
+    let prediction = erasure_service::survey_erasure(
+        &state.pool,
+        &admin,
+        ProfileId::from(body.subject),
+        Some(&state.config.auth_provider_name),
+    )
+    .await?;
 
     Ok(Json(ErasureSurveyResponse {
         subject: prediction.subject.uuid(),

@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use temper_core::types::ids::ProfileId;
 use temper_services::auth_config::AuthMode;
-use temper_services::services::erasure_service::{execute_erasure, ErasureCompletion};
+use temper_services::services::erasure_service::{execute_erasure, ErasureCompletion, ErasureEnv};
 use temper_services::services::grant_crypto::VaultKey;
 use temper_services::services::slack_disconnect_service::{
     disconnect_slack_principal, DisconnectRequest,
@@ -99,7 +99,7 @@ async fn erase(pool: &PgPool, subject: Uuid) -> ErasureCompletion {
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
-        None,
+        &Default::default(),
     )
     .await
     .expect("the person act completes")
@@ -332,7 +332,11 @@ async fn no_live_credential_of_the_subject_survives(pool: PgPool) {
         }
     };
     flow(Some(p.profile), serde_json::json!({"sub": "jdoe"})).await;
-    flow(Some(other.profile), serde_json::json!({"sub": "jdoe", "email": p.email})).await;
+    flow(
+        Some(other.profile),
+        serde_json::json!({"sub": "jdoe", "email": p.email}),
+    )
+    .await;
 
     let token = |profile: Option<Uuid>, claims: serde_json::Value| {
         let pool = pool.clone();
@@ -452,7 +456,12 @@ async fn no_live_credential_of_the_subject_survives(pool: PgPool) {
         "another person's token stays, though its claims carry the subject's NameID and email"
     );
     assert_eq!(
-        count(&pool, "SELECT count(*) FROM kb_oauth_flow WHERE profile_id = $1", other.profile).await,
+        count(
+            &pool,
+            "SELECT count(*) FROM kb_oauth_flow WHERE profile_id = $1",
+            other.profile
+        )
+        .await,
         1,
         "and so does their login flow"
     );
@@ -868,7 +877,10 @@ async fn erase_with_slack(pool: &PgPool, subject: Uuid, revoke_url: &str) -> Era
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
-        Some(&cfg),
+        &ErasureEnv {
+            slack: Some(cfg),
+            auth_provider: None,
+        },
     )
     .await
     .expect("the person act completes")
@@ -1147,14 +1159,24 @@ async fn replay_reproduces_the_admin_event_rewrite_and_the_kept_category(pool: P
     assert_eq!(
         rows,
         vec![
-            ("principal_governance_changed".to_string(), "reason".to_string()),
-            ("slack_principal_disconnected".to_string(), "slack_principal_id".to_string()),
+            (
+                "principal_governance_changed".to_string(),
+                "reason".to_string()
+            ),
+            (
+                "slack_principal_disconnected".to_string(),
+                "slack_principal_id".to_string()
+            ),
         ],
         "the walk projects the act's rows; the kept standing reason has none"
     );
     assert_eq!(ledger_quoting(&pool, "UJANEROE").await, 0);
     assert_eq!(ledger_quoting(&pool, "governance: Jane Roe").await, 0);
-    assert_eq!(ledger_quoting(&pool, ABOUT).await, 1, "the kept reason stays");
+    assert_eq!(
+        ledger_quoting(&pool, ABOUT).await,
+        1,
+        "the kept reason stays"
+    );
     // The replay namespace holds no retention policy: only the recorded snapshot keeps the reason.
     assert_eq!(
         count(
@@ -1166,4 +1188,121 @@ async fn replay_reproduces_the_admin_event_rewrite_and_the_kept_category(pool: P
         1,
         "the walk keeps what the act kept, by the category the event recorded"
     );
+}
+
+/// FAILS IF a refresh token issued to the subject but never bound to their profile (a fail-open
+/// login, 20260825000010) survives an act that was told the login provider, or if another person's
+/// unbound token is reached. Without the provider such a token cannot be attributed, and the record
+/// says so rather than implying there is none.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_unbound_refresh_token_is_reached_through_the_login_provider(pool: PgPool) {
+    async fn world(pool: &PgPool) -> (Person, Uuid, Uuid) {
+        let p = person(pool).await;
+        let other = person(pool).await;
+        let mut unbound = Vec::new();
+        for (who, sub) in [
+            (p.profile, format!("auth0|{}", p.profile)),
+            (other.profile, format!("auth0|{}", other.profile)),
+        ] {
+            sqlx::query(
+                "INSERT INTO kb_profile_auth_links (id, profile_id, auth_provider, auth_provider_user_id) \
+                      VALUES (gen_random_uuid(), $1, 'auth0', $2)",
+            )
+            .bind(who)
+            .bind(&sub)
+            .execute(pool)
+            .await
+            .unwrap();
+            unbound.push(
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO kb_oauth_refresh_tokens (token_hash, client_id, claims, expires_at, profile_id) \
+                          VALUES (gen_random_uuid()::text, 'c', jsonb_build_object('sub', $1::text), \
+                                  now() + interval '1 day', NULL) RETURNING id",
+                )
+                .bind(&sub)
+                .fetch_one(pool)
+                .await
+                .unwrap(),
+            );
+        }
+        (p, unbound[0], unbound[1])
+    }
+    async fn erase_told(pool: &PgPool, subject: Uuid, provider: Option<&str>) -> ErasureCompletion {
+        let op = person(pool).await;
+        temper_services::test_support::approved_admin(pool, op.profile).await;
+        let admin = temper_services::test_support::system_admin_proof_for(pool, op.profile).await;
+        execute_erasure(
+            pool,
+            &admin,
+            ProfileId::from(subject),
+            Uuid::now_v7(),
+            Surface::ApiHttp,
+            &ErasureEnv {
+                slack: None,
+                auth_provider: provider,
+            },
+        )
+        .await
+        .expect("the person act completes")
+    }
+    let exists = |pool: PgPool, id: Uuid| async move {
+        count(
+            &pool,
+            "SELECT count(*) FROM kb_oauth_refresh_tokens WHERE id = $1",
+            id,
+        )
+        .await
+    };
+
+    let (p, theirs, others) = world(&pool).await;
+    let c = erase_told(&pool, p.profile, Some("auth0")).await;
+    assert_eq!(
+        exists(pool.clone(), theirs).await,
+        0,
+        "the subject's unbound token is gone"
+    );
+    assert_eq!(
+        exists(pool.clone(), others).await,
+        1,
+        "another person's stays"
+    );
+    assert!(outcome_of(&c, "kb_oauth_refresh_tokens (unbound)").is_empty());
+
+    let (q, theirs, _) = world(&pool).await;
+    let c = erase_told(&pool, q.profile, None).await;
+    assert_eq!(
+        exists(pool.clone(), theirs).await,
+        1,
+        "unattributable without the provider"
+    );
+    assert_eq!(
+        outcome_of(&c, "kb_oauth_refresh_tokens (unbound)").len(),
+        1,
+        "and the record says it was not checked"
+    );
+}
+
+/// FAILS IF an invitation to an address the subject holds only unverified goes unnamed in the
+/// record (it is left: it may be another person's).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_invitation_to_an_unverified_address_is_named_not_reached(pool: PgPool) {
+    let p = person(&pool).await;
+    let other = person(&pool).await;
+    let (team_id, _) = team(&pool).await;
+    link_email(&pool, p.profile, "maybe@elsewhere.test", false).await;
+    sqlx::query(
+        "INSERT INTO kb_team_invitations (id, team_id, invited_email, invited_by_profile_id, role, token) \
+              VALUES (gen_random_uuid(), $1, 'Maybe@Elsewhere.test', $2, 'member', gen_random_uuid()::text)",
+    )
+    .bind(team_id)
+    .bind(other.profile)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let c = erase(&pool, p.profile).await;
+
+    let outcomes = outcome_of(&c, "kb_team_invitations.invited_email (unverified address)");
+    assert_eq!(outcomes.len(), 1, "{:?}", c.targets);
+    assert!(outcomes[0].contains("1 invitation(s)"), "{}", outcomes[0]);
 }

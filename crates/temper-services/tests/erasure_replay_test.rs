@@ -586,7 +586,7 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
-        None,
+        &Default::default(),
     )
     .await
     .expect("the operator's act completes");
@@ -658,7 +658,7 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
-        None,
+        &Default::default(),
     )
     .await
     .expect("the re-erase on the replayed namespace completes");
@@ -766,7 +766,7 @@ async fn post_erasure_recommits_survive_replay(pool: sqlx::PgPool) {
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
-        None,
+        &Default::default(),
     )
     .await
     .expect("completes");
@@ -988,7 +988,7 @@ async fn a_guest_committed_blob_in_a_governed_home_is_struck_with_the_estate(poo
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
-        None,
+        &Default::default(),
     )
     .await
     .expect("the operator's act completes");
@@ -1192,7 +1192,7 @@ async fn the_subjects_team_context_text_is_named_in_the_record(pool: sqlx::PgPoo
     .expect("the team resource carries block content");
 
     // The survey predicts the remainder; the act records it — one computation, two doors.
-    let survey = survey_erasure(&pool, &admin, ProfileId::from(subject))
+    let survey = survey_erasure(&pool, &admin, ProfileId::from(subject), None)
         .await
         .expect("the operator's survey");
     let predicted: Vec<_> = survey
@@ -1216,7 +1216,7 @@ async fn the_subjects_team_context_text_is_named_in_the_record(pool: sqlx::PgPoo
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
-        None,
+        &Default::default(),
     )
     .await
     .expect("the operator's act completes");
@@ -1376,7 +1376,7 @@ async fn the_act_nulls_a_governed_chunks_heading_trail_and_leaves_a_same_hash_tw
         "the governed chunk carries its heading trail before the act"
     );
 
-    let survey = survey_erasure(&pool, &admin, ProfileId::from(subject))
+    let survey = survey_erasure(&pool, &admin, ProfileId::from(subject), None)
         .await
         .expect("the operator's survey");
     // Since 20261021100000 a non-charter estate resource's trail is nulled by its resource
@@ -1394,7 +1394,7 @@ async fn the_act_nulls_a_governed_chunks_heading_trail_and_leaves_a_same_hash_tw
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
-        None,
+        &Default::default(),
     )
     .await
     .expect("the operator's act completes");
@@ -1450,7 +1450,7 @@ async fn the_act_nulls_a_governed_chunks_heading_trail_and_leaves_a_same_hash_tw
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
-        None,
+        &Default::default(),
     )
     .await
     .expect("the re-erase completes");

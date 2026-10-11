@@ -452,7 +452,7 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
         seed_blob(&pool, guest, "kb_contexts", world.context, "ee").await;
 
     // ── The survey, then the act: the prediction is the record. ───────────────────────────
-    let survey = survey_erasure(&pool, &admin, ProfileId::from(subject))
+    let survey = survey_erasure(&pool, &admin, ProfileId::from(subject), None)
         .await
         .expect("the operator surveys");
     let outcome = execute_erasure(
@@ -461,7 +461,7 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
-        None,
+        &Default::default(),
     )
     .await
     .expect("the act completes");
@@ -624,7 +624,7 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
 
     // ── The second round: survey the erased subject, execute again — the survey predicts
     // the no-op completion's already-erased shape the same way. ────────────────────────────
-    let survey2 = survey_erasure(&pool, &admin, ProfileId::from(subject))
+    let survey2 = survey_erasure(&pool, &admin, ProfileId::from(subject), None)
         .await
         .expect("the second survey");
     let outcome2 = execute_erasure(
@@ -633,7 +633,7 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
-        None,
+        &Default::default(),
     )
     .await
     .expect("the re-erase completes");
@@ -719,7 +719,7 @@ async fn the_survey_pass_leaves_no_trace(pool: PgPool) {
     .await
     .unwrap();
 
-    survey_erasure(&pool, &admin, ProfileId::from(subject))
+    survey_erasure(&pool, &admin, ProfileId::from(subject), None)
         .await
         .expect("the survey answers");
 

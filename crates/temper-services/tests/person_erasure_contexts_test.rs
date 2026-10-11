@@ -150,7 +150,7 @@ async fn erase(pool: &PgPool, subject: Uuid) {
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
-        None,
+        &Default::default(),
     )
     .await
     .expect("the person act completes");
@@ -950,7 +950,7 @@ async fn a_rename_committing_while_the_act_waits_is_rewritten(pool: PgPool) {
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
-            None,
+            &Default::default(),
         )
         .await
     });
