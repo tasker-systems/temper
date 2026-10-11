@@ -15,10 +15,16 @@ Consumed as a `file:` dependency (compiled `dist/`), mirroring `clients/temper-t
   is internal to a framework (the eve agents' MCP client); consumers that inject at
   known call sites (temper-ui) leave it off. `mcpEndpoint` (optional, `TEMPER_MCP_URL`)
   installs `McpNegotiationStatusProcessor` — pass it from any hop running an MCP client.
+- `otlpSpanProcessors({ mcpEndpoint })`, `httpInstrumentations()` — the same export and
+  HTTP instrumentation, **without registering a provider**, for a consumer whose framework
+  owns the provider: the eve agents (eve ≥0.62 refuses to start if another provider is
+  registered), which hand them to `otelIntegration({ spanProcessors })` and
+  `otel({ instrumentations })`. `[]` under exactly the conditions `initTelemetry` no-ops.
 - `isTelemetryEnabled()`, `getTracer()`, `forceFlush()`.
 - `McpNegotiationStatusProcessor`, `negotiationKey(url)` — exported for testing and for
-  a consumer assembling its own provider. `initTelemetry` installs the processor for
-  you when given `mcpEndpoint`; there is no reason to construct it by hand otherwise.
+  a consumer assembling its own provider. `initTelemetry` and `otlpSpanProcessors` install
+  the processor for you when given `mcpEndpoint`; there is no reason to construct it by
+  hand otherwise.
 - `extractContext(headers)`, `activeTraceparent()` — inbound parent extraction and the
   active span's `traceparent` for hand-injection at a known call site.
 
