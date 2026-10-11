@@ -186,7 +186,7 @@ type ClaimedAuditJob = components["schemas"]["ClaimedAuditJob"];
 
 export default defineSchedule({
   cron: "30 3 * * *", // daily at 03:30 UTC — trailing a steward tick; see "Cadence" above
-  async run({ receive, waitUntil, appAuth }) {
+  async run({ to, waitUntil, appAuth }) {
     // An operator may hold auditor credentials and still want agent maintenance off — the credential
     // axis cannot express that, because unsetting the credential also removes the ability to run the
     // auditor on demand. This is checked FIRST because it is the only axis that carries an EXPLICIT
@@ -314,11 +314,7 @@ export default defineSchedule({
 
           await Promise.all(
             workable.map((job) =>
-              receive(auditorWorker, {
-                target: {},
-                auth: appAuth,
-                message: auditSessionPrompt(job),
-              }),
+              to(auditorWorker, {}).send(auditSessionPrompt(job), { auth: appAuth }),
             ),
           );
         } catch (err) {
@@ -332,7 +328,7 @@ export default defineSchedule({
           // minted spends the very quota being probed.
           //
           // **This `catch` cannot be taught to handle the AI Gateway's 402, and adding a branch for
-          // it would be dead code.** `receive()` above resolves when a session's workflow run is
+          // it would be dead code.** `send()` above resolves when a session's workflow run is
           // STARTED, not when it completes — eve's `Session` is an inert, non-thenable result value
           // — so the 402, and every other in-session failure, is raised past this frame in a
           // separate durable run. The same is true of the auditor subagent's own mint. Only not

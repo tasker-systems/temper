@@ -37,7 +37,7 @@ export function makeTraceparent(sessionId: string): string {
 /**
  * Whether OTLP span export is configured for this process (an endpoint is set).
  *
- * When it is, `agent/instrumentation.ts` enables undici HTTP auto-instrumentation, which
+ * When it is, `agent/instrumentation/otel.ts` enables undici HTTP auto-instrumentation, which
  * injects a per-request `traceparent` naming a real exported CLIENT span (a child of the
  * active `ai.toolCall` span). A connection that *also* stamps a static {@link makeTraceparent}
  * header would put a SECOND `traceparent` on the wire — undici appends via `request.addHeader`,
@@ -45,7 +45,7 @@ export function makeTraceparent(sessionId: string): string {
  * does not exist. So connections omit the static header when this is true, and keep it only when
  * export is off — where it remains the cross-service log-correlation handle (PR #611).
  *
- * The gate mirrors `temper-telemetry-ts`'s `initTelemetry` (both key on
+ * The gate mirrors `temper-telemetry-ts`'s `otlpSpanProcessors` (both key on
  * `OTEL_EXPORTER_OTLP_ENDPOINT`), so the "do we export?" decision is the same on both sides.
  */
 export function otlpExportConfigured(): boolean {

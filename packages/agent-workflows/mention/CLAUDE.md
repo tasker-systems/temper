@@ -94,15 +94,21 @@ call, and cannot tell a deliberate exception from a regression.)
 **Public sinks are not only `thread.post` — `thread.startTyping` is one too.** eve's
 `reasoning.appended` default pushes `firstNonEmptyLine(event.reasoningSoFar)` into the typing
 status, and its `actions.requested` default pushes `state.pendingToolCallMessage` (the model's own
-mid-turn narration) or the tool names. Both are overridden in `agent/channels/events.ts` with the
+mid-turn narration) or the tool names. Both are overridden in `agent/lib/events.ts` with the
 constant `WORKING_STATUS`, and nothing writes `pendingToolCallMessage` any more — populating it
-was feeding an un-overridden public sink. `turn.started` and `authorization.completed` are left as
+was feeding an un-overridden public sink. eve 0.7x added three more such defaults —
+`reasoning.completed` (the finished reasoning) and `action.partial` / `action.result` (a tool
+call's input-derived label) — overridden the same way. Since eve 0.7x the overrides are a Slack
+**renderer** (`ephemeralRenderer`, passed as `slackChannel({ renderers })`), not an `events` map:
+each handler replaces the default by never calling `next`. The renderer also no-ops `received`
+(no `Thinking...` status while `onAppMention` decides) and returns no `taskCard` (eve would post a
+public task card), both to keep what 0.18 rendered. `turn.started` and `authorization.completed` are left as
 eve's defaults, verified content-free. `tests/events.test.ts` derives all of this from eve's real
 `defaultEvents` **at runtime**, so an eve upgrade that ADDS a default handler fails the test
 instead of silently installing a new sink.
 
 **DMs are explicitly refused.** `agent/channels/slack.ts` supplies `onDirectMessage: async () =>
-null`. This is load-bearing: eve resolves `onDirectMessage ?? defaultOnDirectMessage`, and the
+null`. This is load-bearing: eve resolves `onDirectMessage ?? onMessage ?? defaultOnMessage`, and the
 default **dispatches unconditionally** — no `decideIdentity`, no `principalType === "user"` gate,
 no link-state, no mint pre-flight. Leaving the key absent inherits that. `message.im` is currently
 commented out in `slack-app-manifest.yml`'s phase-2 block, but `im:history` is already a live
@@ -183,7 +189,7 @@ pre-flight and the tool call — it must still fail closed rather than call the 
 credential. The thrown `reason` carries the refusal (`standing:denied`, not a flat `revoked`), so
 the distinction survives into the log even though the user-facing remedy is grouped.
 
-## eve inbound identity contract (verified against eve@0.18.1)
+## eve inbound identity contract (verified against eve@0.18.1; re-verified against eve@0.73.0)
 
 Verified by reading the installed package, not the docs:
 `node_modules/eve/dist/src/public/channels/slack/auth.js` (`buildSlackAuthContext`),
@@ -224,6 +230,11 @@ which is why parsing is never necessary.
 ### Other verified facts
 
 - **`issuer`** = `slack:<team>` when teamId is present, else the bare string `slack`.
+- **Since eve 0.7x `<team>` is the INSTALLATION team when eve knows it** (`installationTeamId ||
+  teamId` in `buildSlackAuthContext`), in both `principalId` and `issuer`; `attributes.team_id` is
+  still the message's team. For a single-workspace install the two are the same id. Where they can
+  differ (Enterprise Grid, Slack Connect channels) a principal minted before the upgrade and one
+  minted after would not match.
 - **`subject` is NEVER set** by this channel. Do not read it.
 - **THERE IS NO EMAIL.** Attributes the Slack channel sets are exactly: `author_type`,
   `channel_id`, `thread_ts`, `user_id`, plus optional `user_name`, `full_name`, `team_id`.
@@ -240,8 +251,9 @@ which is why parsing is never necessary.
   hydrated `SlackEventContext` handed to `events[...]` handlers). `ctx.thread` owns `post`,
   `postEphemeral`, `startTyping`, `refresh`, `recentMessages`, `mentionUser`; `ctx.slack` owns
   `channelId`, `threadTs`, `teamId`, `request`, `uploadFiles`.
-- Supplying `onAppMention` **replaces** eve's default mention pipeline — both the auth derivation
-  *and* the default `"Thinking..."` typing indicator.
+- Supplying `onAppMention` **replaces** eve's default auth derivation. The `"Thinking..."` status
+  is no longer part of it: since eve 0.7x it is the renderer chain's `received`, which
+  `ephemeralRenderer` replaces with a no-op.
 
 ## Known constraints for later tasks
 

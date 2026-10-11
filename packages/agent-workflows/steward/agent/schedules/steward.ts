@@ -42,13 +42,13 @@ import { requireEndpointEnv, temperFetch } from "../lib/temper-auth.js";
  */
 export default defineSchedule({
   cron: "0 * * * *", // hourly, UTC; the server's threshold + single-flight gate what actually runs
-  async run({ receive, waitUntil, appAuth }) {
+  async run({ to, waitUntil, appAuth }) {
     waitUntil(
       (async () => {
         // One id per tick, threaded cron → /dispatch → the agent session so the whole chain shares a
         // single join key across the two Vercel apps. `crypto.randomUUID` (v4) is sufficient — a
         // correlation key needs uniqueness, not v7 sortability; log timestamps order the trace. Logged
-        // BEFORE the outbound fetch so a hop that dies (cold-start 500, fetch-never-lands, a receive()
+        // BEFORE the outbound fetch so a hop that dies (cold-start 500, fetch-never-lands, a send()
         // that throws) is still pinned to this id via the catch below.
         const correlationId = crypto.randomUUID();
         console.log(`[steward-dispatch] tick ${correlationId} starting (temper-ts ${TEMPER_TS_VERSION})`);
@@ -111,11 +111,8 @@ export default defineSchedule({
           // SINGLE cogmap id. Each session ends by advancing the watermark, completing its job.
           await Promise.all(
             claimed.map((job) =>
-              receive(worker, {
-                target: {},
-                auth: appAuth,
-                message:
-                  `Run one steward tick over cognitive map ${job.cogmap_id} (dispatch job ${job.id} — ` +
+              to(worker, {}).send(
+                `Run one steward tick over cognitive map ${job.cogmap_id} (dispatch job ${job.id} — ` +
                   `an internal queue id, NOT a cogmap: never pass it to a temper tool, and in ` +
                   `particular never as \`parent_cogmap\`, which you must omit entirely). ` +
                   `This map was already selected by the deterministic drift sweep, so its ingest delta ` +
@@ -124,7 +121,8 @@ export default defineSchedule({
                   `then: open the invocation envelope, read the telos, distill the new/changed sources ` +
                   `with the authored-4 (create / assert / facet / fold), then advance the watermark to ` +
                   `the latest observed event (this completes the dispatch job) and close the envelope.`,
-              }),
+                { auth: appAuth },
+              ),
             ),
           );
         } catch (err) {
