@@ -489,8 +489,8 @@ pub async fn grants_for_erasure(
             )
             .ok();
             if refresh_token.is_none() {
+                // No principal in the line: the erasure is removing it.
                 tracing::warn!(
-                    principal = %r.slack_principal_id,
                     "erasure: a Slack grant could not be opened (key rotated, or the row was \
                      tampered with). It is destroyed with the subject's other stores and cannot \
                      be revoked at Slack."

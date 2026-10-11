@@ -324,24 +324,26 @@ AS $$
 $$;
 
 -- ── The subject's operational rows (R3). One definition each, read by the plan for its targets and
---    by the redaction for its arms, so the two cannot disagree about reach. Every one matches
---    through identifiers the tombstone and arm (9) destroy, so the redaction runs them first. ──────
+--    by the redaction for its arms, so the two cannot disagree about reach. The invitation and
+--    Slack selectors match through the auth links' emails and provider ids, which arm (9) destroys,
+--    so the redaction runs them first. Each reaches only rows the subject provably holds. ──────────
 
--- The subject's direct identifiers as an IdP or an inviter would spell them: the profile email and
--- every auth link's email, lower-cased (the auth links' own index is case-blind, 20261016100000),
--- and every auth link's provider subject id.
+-- The addresses the subject PROVABLY holds: their auth links' verified emails, folded under the C
+-- collation. Never the profile email or an unverified link email: both are written from whatever an
+-- IdP claimed, so matching them would let anyone who registered another person's address erase that
+-- person's invitations by asking to be erased (security review, 2026-10-11). The C fold is
+-- profile_service::reconcile_by_email's: a database-collation lower() can fold look-alikes (KELVIN
+-- SIGN to `k`) into one address.
 CREATE FUNCTION _erasure_subject_emails(p_subject uuid)
 RETURNS SETOF text
 LANGUAGE sql STABLE
 SET search_path = public, pg_temp
 AS $$
-    SELECT lower(p.email) FROM kb_profiles p WHERE p.id = p_subject AND p.email IS NOT NULL
-    UNION
-    SELECT lower(l.email) FROM kb_profile_auth_links l
-     WHERE l.profile_id = p_subject AND l.email IS NOT NULL;
+    SELECT DISTINCT lower(l.email COLLATE "C") FROM kb_profile_auth_links l
+     WHERE l.profile_id = p_subject AND l.email IS NOT NULL AND l.email_verified;
 $$;
 
--- Invitations sent by the subject, or addressed to one of their emails.
+-- Invitations sent by the subject, or addressed to an email they verifiably hold.
 CREATE FUNCTION _erasure_subject_invitations(p_subject uuid)
 RETURNS SETOF uuid
 LANGUAGE sql STABLE
@@ -349,29 +351,19 @@ SET search_path = public, pg_temp
 AS $$
     SELECT i.id FROM kb_team_invitations i
      WHERE i.invited_by_profile_id = p_subject
-        OR lower(i.invited_email) IN (SELECT _erasure_subject_emails(p_subject));
+        OR lower(i.invited_email COLLATE "C") IN (SELECT _erasure_subject_emails(p_subject));
 $$;
 
--- Login-provider rows that carry the subject: bound to the profile, or carrying one of their
--- provider subject ids or emails in the claims (a flow is bound to a profile only once it resolves).
-CREATE FUNCTION _erasure_claims_name_subject(p_subject uuid, p_claims jsonb)
-RETURNS boolean
-LANGUAGE sql STABLE
-SET search_path = public, pg_temp
-AS $$
-    SELECT p_claims IS NOT NULL
-       AND (   (p_claims ->> 'sub') IN (SELECT l.auth_provider_user_id FROM kb_profile_auth_links l
-                                         WHERE l.profile_id = p_subject)
-            OR lower(p_claims ->> 'email') IN (SELECT _erasure_subject_emails(p_subject)));
-$$;
-
+-- Login-provider rows bound to the subject's profile. Bound rows only: a claim's `sub` carries no
+-- provider (two SAML tenants can issue the same NameID) and its email may be unverified, so a match
+-- on claims would reach other people's logins (security review, 2026-10-11). A flow not yet bound
+-- to a profile is minutes from expiry and the AS sweep reaps it (as_reap_service).
 CREATE FUNCTION _erasure_subject_oauth_flows(p_subject uuid)
 RETURNS SETOF uuid
 LANGUAGE sql STABLE
 SET search_path = public, pg_temp
 AS $$
-    SELECT f.id FROM kb_oauth_flow f
-     WHERE f.profile_id = p_subject OR _erasure_claims_name_subject(p_subject, f.claims);
+    SELECT f.id FROM kb_oauth_flow f WHERE f.profile_id = p_subject;
 $$;
 
 CREATE FUNCTION _erasure_subject_refresh_tokens(p_subject uuid)
@@ -379,8 +371,7 @@ RETURNS SETOF uuid
 LANGUAGE sql STABLE
 SET search_path = public, pg_temp
 AS $$
-    SELECT t.id FROM kb_oauth_refresh_tokens t
-     WHERE t.profile_id = p_subject OR _erasure_claims_name_subject(p_subject, t.claims);
+    SELECT t.id FROM kb_oauth_refresh_tokens t WHERE t.profile_id = p_subject;
 $$;
 
 -- Connections that are the subject's (ruled 2026-10-10): homed in the estate, or whose own machine
@@ -1442,8 +1433,8 @@ BEGIN
     ON CONFLICT (content_hash) DO NOTHING;
 
     -- (6a) The operational identity arms (R3, 20261023100000). Each reaches its rows through the
-    --      _erasure_subject_* selectors the plan reads, and each matches through the subject's
-    --      emails or provider ids, which (7) and (9) destroy, so they run here, first. In a replay
+    --      _erasure_subject_* selectors the plan reads. The invitation selector matches through the
+    --      auth links' verified emails, which (9) destroys, so they run here, first. In a replay
     --      namespace these tables are empty, so the arms are no-ops there.
     --
     --      Invitations sent by the subject or addressed to them: the email and the token become
@@ -1451,7 +1442,9 @@ BEGIN
     --      pending one is revoked at the act's moment. The row stays: the team keeps its history.
     UPDATE kb_team_invitations i
        SET invited_email = 'erased-' || i.id::text,
-           token         = 'erased-' || i.id::text,
+           -- Random, not derived from the id: a token is the invitation's bearer secret, and one
+           -- anyone could compute from the id would answer the preview door. Nothing replays it.
+           token         = 'erased-' || gen_random_uuid()::text,
            revoked_at    = CASE WHEN i.status = 'pending' AND i.revoked_at IS NULL
                                 THEN v_occurred ELSE i.revoked_at END
      WHERE i.id IN (SELECT _erasure_subject_invitations(p_subject))
@@ -1897,5 +1890,5 @@ COMMENT ON FUNCTION _erasure_apply_redaction(uuid, text[], uuid) IS
 SELECT declare_migration(
     20261023100000,
     'additive',
-    'Two new tables (kb_erasure_retention_policies, empty; kb_erasure_slack_revocations, empty); new SQL functions for the person act''s reach (_erasure_retention_snapshot, _erasure_retained_by, _principal_erasure_path_category, _erasure_subject_emails, _erasure_subject_invitations, _erasure_claims_name_subject, _erasure_subject_oauth_flows, _erasure_subject_refresh_tokens, _erasure_subject_connections, _erasure_subject_uploads, _erasure_subject_slack_principals); _principal_erasure_redacted_fields dropped and re-created with a third argument, its only callers being the two functions this migration replaces; the principal_erased payload_schema re-registered with one new required key (Section 0 refuses a ledger holding any earlier principal_erased payload); and CREATE OR REPLACE, every signature unchanged, of kb_principal_standing_events_append_only, _principal_erasure_redact_paths, _principal_erasure_context_events, _erasure_sentinel_exact, _erasure_sentinel_admits, principal_erasure_survey_plan, principal_erasure_execute and _erasure_apply_redaction. A binary without this migration keeps working: it calls the same functions with the same arguments. What changes is what the act removes, and that the standing log admits one update, the act''s reason null for a tombstoned subject.'
+    'Two new tables (kb_erasure_retention_policies, empty; kb_erasure_slack_revocations, empty); new SQL functions for the person act''s reach (_erasure_retention_snapshot, _erasure_retained_by, _principal_erasure_path_category, _erasure_subject_emails, _erasure_subject_invitations, _erasure_subject_oauth_flows, _erasure_subject_refresh_tokens, _erasure_subject_connections, _erasure_subject_uploads, _erasure_subject_slack_principals); _principal_erasure_redacted_fields dropped and re-created with a third argument, its only callers being the two functions this migration replaces; the principal_erased payload_schema re-registered with one new required key (Section 0 refuses a ledger holding any earlier principal_erased payload); and CREATE OR REPLACE, every signature unchanged, of kb_principal_standing_events_append_only, _principal_erasure_redact_paths, _principal_erasure_context_events, _erasure_sentinel_exact, _erasure_sentinel_admits, principal_erasure_survey_plan, principal_erasure_execute and _erasure_apply_redaction. A binary without this migration keeps working: it calls the same functions with the same arguments. What changes is what the act removes, and that the standing log admits one update, the act''s reason null for a tombstoned subject.'
 );

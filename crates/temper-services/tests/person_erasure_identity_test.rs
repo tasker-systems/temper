@@ -157,6 +157,20 @@ async fn set_policy(pool: &PgPool, name: &str, category: &str, by: Uuid) {
     .expect("seed a retention policy");
 }
 
+/// An auth link carrying `email`, verified or not, under a provider id no other row holds.
+async fn link_email(pool: &PgPool, profile: Uuid, email: &str, verified: bool) {
+    sqlx::query(
+        "INSERT INTO kb_profile_auth_links (id, profile_id, auth_provider, auth_provider_user_id, email, email_verified) \
+              VALUES (gen_random_uuid(), $1, 'auth0', gen_random_uuid()::text, $2, $3)",
+    )
+    .bind(profile)
+    .bind(email)
+    .bind(verified)
+    .execute(pool)
+    .await
+    .expect("seed auth link");
+}
+
 /// A Slack auth link through the real link helper.
 async fn link_slack(pool: &PgPool, subject: Uuid, principal: &str) {
     let mut conn = pool.acquire().await.unwrap();
@@ -198,8 +212,11 @@ async fn intent(pool: &PgPool, principal: &str) {
     .expect("seed intent");
 }
 
-/// FAILS IF an invitation sent by the subject, or addressed to any spelling of their email, keeps
-/// an email, a usable token or a pending state. An invitation between two other people is left.
+/// FAILS IF an invitation sent by the subject, or addressed to any case of an email they verifiably
+/// hold, keeps an email, a usable token or a pending state. An invitation between two other people
+/// is left, and so is one to an address the subject only CLAIMED: an unverified link email is
+/// whatever an IdP said, so matching it would let anyone erase someone else's invitations by asking
+/// to be erased (security review, 2026-10-11).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn invitations_sent_by_or_to_the_subject_keep_no_identifier(pool: PgPool) {
     let p = person(&pool).await;
@@ -220,10 +237,14 @@ async fn invitations_sent_by_or_to_the_subject_keep_no_identifier(pool: PgPool) 
             .expect("seed invitation")
         }
     };
+    // A verified link email the subject holds, and an unverified one naming someone else's address.
+    link_email(&pool, p.profile, &p.email, true).await;
+    link_email(&pool, p.profile, "victim@elsewhere.test", false).await;
     let sent = invite(p.profile, "friend@elsewhere.test".into()).await;
     // Addressed to the subject, in another case: the match is case-blind.
     let received = invite(other.profile, p.email.to_uppercase()).await;
     let unrelated = invite(other.profile, "someone@elsewhere.test".into()).await;
+    let claimed_only = invite(other.profile, "victim@elsewhere.test".into()).await;
 
     let c = erase(&pool, p.profile).await;
 
@@ -240,10 +261,9 @@ async fn invitations_sent_by_or_to_the_subject_keep_no_identifier(pool: PgPool) 
             format!("erased-{id}"),
             "the email is the row's sentinel"
         );
-        assert_eq!(
-            token,
-            format!("erased-{id}"),
-            "the token can no longer be presented"
+        assert!(
+            token.starts_with("erased-") && token != format!("erased-{id}"),
+            "the token can no longer be presented, nor computed from the id: {token}"
         );
         assert!(revoked, "a pending invitation is revoked");
     }
@@ -257,26 +277,39 @@ async fn invitations_sent_by_or_to_the_subject_keep_no_identifier(pool: PgPool) 
         kept, "someone@elsewhere.test",
         "other people's invitations stay"
     );
+    let (kept, revoked): (String, bool) = sqlx::query_as(
+        "SELECT invited_email, revoked_at IS NOT NULL FROM kb_team_invitations WHERE id = $1",
+    )
+    .bind(claimed_only)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (kept.as_str(), revoked),
+        ("victim@elsewhere.test", false),
+        "an address the subject never verified is not theirs to erase"
+    );
     assert_eq!(outcome_of(&c, "kb_team_invitations.invited_email").len(), 1);
 }
 
 /// FAILS IF any credential of the subject's survives the act: a login flow or refresh token bound
-/// to them or naming them in its claims, a replay record, a live or credentialed connection of
-/// theirs, or a Slack grant, link intent or vault row, whether reached through a link or only
-/// through the vault's own profile. A team-homed connection the subject merely registered stays,
-/// and so does every credential of another person.
+/// to them, a replay record, a live or credentialed connection of theirs, or a Slack grant, link
+/// intent or vault row, whether reached through a link or only through the vault's own profile. A
+/// team-homed connection the subject merely registered stays, and so does every credential of
+/// another person, including one whose claims carry the subject's email or the subject's IdP
+/// subject id under another provider (two SAML tenants can issue one NameID; security review,
+/// 2026-10-11).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn no_live_credential_of_the_subject_survives(pool: PgPool) {
     let p = person(&pool).await;
     let other = person(&pool).await;
     let (team_id, team_ctx) = team(&pool).await;
-    // An IdP-subject auth link: the claims of an unbound row name this id.
+    // The subject's SAML link, NameID "jdoe"; another tenant's user holds the same NameID.
     sqlx::query(
-        "INSERT INTO kb_profile_auth_links (id, profile_id, auth_provider, auth_provider_user_id, email) \
-              VALUES (gen_random_uuid(), $1, 'auth0', $2, $3)",
+        "INSERT INTO kb_profile_auth_links (id, profile_id, auth_provider, auth_provider_user_id, email, email_verified) \
+              VALUES (gen_random_uuid(), $1, 'saml:acme', 'jdoe', $2, true)",
     )
     .bind(p.profile)
-    .bind(format!("auth0|{}", p.profile))
     .bind(&p.email)
     .execute(&pool)
     .await
@@ -298,9 +331,8 @@ async fn no_live_credential_of_the_subject_survives(pool: PgPool) {
             .expect("seed flow");
         }
     };
-    flow(Some(p.profile), serde_json::json!({"sub": "x"})).await;
-    flow(None, serde_json::json!({"email": p.email.to_uppercase()})).await;
-    flow(Some(other.profile), serde_json::json!({"sub": "y"})).await;
+    flow(Some(p.profile), serde_json::json!({"sub": "jdoe"})).await;
+    flow(Some(other.profile), serde_json::json!({"sub": "jdoe", "email": p.email})).await;
 
     let token = |profile: Option<Uuid>, claims: serde_json::Value| {
         let pool = pool.clone();
@@ -316,13 +348,13 @@ async fn no_live_credential_of_the_subject_survives(pool: PgPool) {
             .expect("seed refresh token")
         }
     };
-    let bound = token(Some(p.profile), serde_json::json!({"sub": "x"})).await;
-    token(
-        None,
-        serde_json::json!({"sub": format!("auth0|{}", p.profile)}),
+    let bound = token(Some(p.profile), serde_json::json!({"sub": "jdoe"})).await;
+    // Another tenant's "jdoe", whose claims also carry the subject's email.
+    let others = token(
+        Some(other.profile),
+        serde_json::json!({"sub": "jdoe", "email": p.email}),
     )
     .await;
-    let others = token(Some(other.profile), serde_json::json!({"sub": "y"})).await;
     sqlx::query(
         "INSERT INTO kb_oauth_refresh_replays (token_id, chain_id, profile_id, client_id, rotated_at, first_age_seconds) \
               SELECT id, chain_id, profile_id, client_id, now(), 1 FROM kb_oauth_refresh_tokens WHERE id = $1",
@@ -369,16 +401,14 @@ async fn no_live_credential_of_the_subject_survives(pool: PgPool) {
     erase(&pool, p.profile).await;
 
     let left: i64 = sqlx::query_scalar(
-        "SELECT (SELECT count(*) FROM kb_oauth_flow WHERE profile_id = $1 OR claims::text ILIKE '%' || $2 || '%') \
-              + (SELECT count(*) FROM kb_oauth_refresh_tokens \
-                  WHERE profile_id = $1 OR claims::text ILIKE '%' || $1::text || '%') \
+        "SELECT (SELECT count(*) FROM kb_oauth_flow WHERE profile_id = $1) \
+              + (SELECT count(*) FROM kb_oauth_refresh_tokens WHERE profile_id = $1) \
               + (SELECT count(*) FROM kb_oauth_refresh_replays WHERE profile_id = $1) \
               + (SELECT count(*) FROM kb_slack_grant_vault WHERE profile_id = $1) \
               + (SELECT count(*) FROM kb_slack_link_intents WHERE slack_principal_id LIKE 'slack:T1:U%' \
                                                                AND slack_principal_id <> 'slack:T1:UOTHER')",
     )
     .bind(p.profile)
-    .bind(&p.email)
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -419,7 +449,12 @@ async fn no_live_credential_of_the_subject_survives(pool: PgPool) {
         )
         .await,
         1,
-        "another person's token stays"
+        "another person's token stays, though its claims carry the subject's NameID and email"
+    );
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM kb_oauth_flow WHERE profile_id = $1", other.profile).await,
+        1,
+        "and so does their login flow"
     );
     assert_eq!(
         count(
@@ -1015,5 +1050,120 @@ async fn a_queued_token_never_outlives_its_window(pool: PgPool) {
             rows[0].3.as_deref()
         ),
         (true, true, Some("abandoned")),
+    );
+}
+
+// ── Replay (code review M-3, 2026-10-11) ────────────────────────────────────────────────────────
+
+/// Reset the schema to a clean, un-seeded baseline (the person-erasure suites' helper).
+async fn reset_namespace(pool: &PgPool) {
+    use sqlx::Executor;
+    pool.execute("DROP SCHEMA IF EXISTS sensitivity CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        .await
+        .expect("drop sensitivity, recreate public schema");
+    temper_substrate::MIGRATOR
+        .run(pool)
+        .await
+        .expect("re-apply the migration chain");
+    pool.execute(
+        "DO $$ DECLARE r record; BEGIN \
+           FOR r IN SELECT tablename FROM pg_tables \
+                     WHERE schemaname = 'public' AND tablename LIKE 'kb\\_%' \
+           LOOP EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' RESTART IDENTITY CASCADE'; \
+           END LOOP; END $$;",
+    )
+    .await
+    .expect("truncate kb_ data tables to a seed-free baseline");
+}
+
+/// FAILS IF replay diverges from the live act over the subject's admin events: the standing and
+/// governance reasons rewritten (one of them kept under a policy), and the disconnected Slack id.
+/// The walk projects the act's redaction rows at its position, reading the retained categories from
+/// the event, so every projection comes back byte-identical, and the ledger holds no rewritten text.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn replay_reproduces_the_admin_event_rewrite_and_the_kept_category(pool: PgPool) {
+    let p = person(&pool).await;
+    let admin = person(&pool).await;
+    set_policy(&pool, "security-audit", "standing-reasons", admin.profile).await;
+    sqlx::query("SELECT principal_standing_apply($1, 'revoke', 'revoked', $2, $3)")
+        .bind(p.profile)
+        .bind(admin.profile)
+        .bind(ABOUT)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("SELECT principal_governance_set($1, true, $2, NULL)")
+        .bind(p.profile)
+        .bind(admin.profile)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("SELECT principal_governance_set($1, false, $2, 'governance: Jane Roe')")
+        .bind(p.profile)
+        .bind(admin.profile)
+        .execute(&pool)
+        .await
+        .unwrap();
+    link_slack(&pool, p.profile, "slack:T1:UJANEROE").await;
+    disconnect_slack_principal(
+        &pool,
+        ProfileId::from(p.profile),
+        DisconnectRequest {
+            slack_principal_id: "slack:T1:UJANEROE",
+            key: &vault_key(),
+            mode: AuthMode::ExternalIdp,
+            revoke_url: "http://127.0.0.1:1/unused".to_string(),
+            client_id: "c",
+        },
+    )
+    .await
+    .unwrap();
+
+    erase(&pool, p.profile).await;
+
+    let before = temper_substrate::replay::dump_projections(&pool)
+        .await
+        .unwrap();
+    let snap = temper_substrate::replay::snapshot(&pool).await.unwrap();
+    reset_namespace(&pool).await;
+    temper_substrate::replay::replay(&pool, &snap)
+        .await
+        .expect("the walk replays the act");
+    let after = temper_substrate::replay::dump_projections(&pool)
+        .await
+        .unwrap();
+    for ((table_a, x), (table_b, y)) in before.iter().zip(after.iter()) {
+        assert_eq!(table_a, table_b);
+        assert_eq!(x, y, "projection table {table_a} diverged under replay");
+    }
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT t.name, r.path FROM kb_event_field_redactions r \
+           JOIN kb_events e ON e.id = r.event_id JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE r.authority = 'principal' ORDER BY 1, 2",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            ("principal_governance_changed".to_string(), "reason".to_string()),
+            ("slack_principal_disconnected".to_string(), "slack_principal_id".to_string()),
+        ],
+        "the walk projects the act's rows; the kept standing reason has none"
+    );
+    assert_eq!(ledger_quoting(&pool, "UJANEROE").await, 0);
+    assert_eq!(ledger_quoting(&pool, "governance: Jane Roe").await, 0);
+    assert_eq!(ledger_quoting(&pool, ABOUT).await, 1, "the kept reason stays");
+    // The replay namespace holds no retention policy: only the recorded snapshot keeps the reason.
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM kb_principal_standing_events WHERE profile_id = $1 AND reason IS NOT NULL",
+            p.profile
+        )
+        .await,
+        1,
+        "the walk keeps what the act kept, by the category the event recorded"
     );
 }

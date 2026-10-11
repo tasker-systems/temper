@@ -182,7 +182,9 @@ pub async fn execute_erasure(
     // Once, outside the retry loop below, so a retried act never re-asks Slack. A grant whose
     // revoke failed is queued for the drain in each attempt's own transaction, beside the act, so
     // a failed attempt queues nothing. `slack` is `None` where linking is not configured: no grant
-    // can be opened, and the tally says how many were destroyed unrevoked.
+    // can be opened, and the tally says how many were destroyed unrevoked. A grant linked between
+    // this read and the act is destroyed unrevoked and uncounted: a narrow race, named here so the
+    // tally is not read as complete.
     let (slack_revocation, pending) =
         erasure_slack_revocation_service::revoke_before_erasure(pool, subject.uuid(), slack)
             .await?;
@@ -217,10 +219,19 @@ pub async fn execute_erasure(
             // collision is a unique violation, which the generic mapping would render as a 409
             // "already exists" that misdescribes it.
             Err(err) => {
+                // The grants revoked above stay revoked: Slack cannot un-revoke them. The vault rows
+                // and links stand until the act is re-run, which destroys them.
+                if slack_revocation.revoked > 0 {
+                    tracing::warn!(
+                        revoked = slack_revocation.revoked,
+                        "principal erasure failed after revoking the subject's Slack grants at \
+                         Slack; re-run the erasure to destroy temper's copies"
+                    );
+                }
                 return Err(ApiError::internal_scrubbed(
                     "principal erasure act failed",
                     err,
-                ))
+                ));
             }
         }
     }

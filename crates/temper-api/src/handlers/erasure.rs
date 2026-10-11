@@ -137,6 +137,35 @@ pub async fn execute(
     }))
 }
 
+/// The Slack revocations erasures queued: a sibling pass on the drain tick, after the fence. It
+/// runs with or without Slack configured — without it, only the rows past their window are
+/// emptied, so a deployment that lost its configuration still never keeps a token past it.
+async fn slack_revocation_pass(state: &AppState) -> ApiResult<SlackRevocationDrain> {
+    let provider = slack_link_provider(state);
+    let pass = erasure_slack_revocation_service::drain(
+        &state.pool,
+        slack_revoke_config(state, provider.as_ref()).as_ref(),
+    )
+    .await?;
+    tracing::info!(
+        attempted = pass.attempted,
+        revoked = pass.revoked,
+        retrying = pass.retrying,
+        abandoned = pass.abandoned,
+        "erasure Slack revocation pass complete"
+    );
+    Ok(pass)
+}
+
+/// A fence failure still runs the Slack pass, so a queued token's window is never extended by an
+/// unrelated error; the tick then answers the fence's error.
+async fn slack_pass_then(state: &AppState, fence_error: ApiError) -> ApiError {
+    if let Err(e) = slack_revocation_pass(state).await {
+        tracing::warn!(error = %e, "erasure Slack revocation pass failed after a fence error");
+    }
+    fence_error
+}
+
 /// The instance's Slack revoke endpoint and its client, or `None` where Slack linking is not
 /// configured. The provider owns the strings [`slack_revoke_config`] borrows.
 fn slack_link_provider(state: &AppState) -> Option<LinkProvider> {
@@ -240,7 +269,11 @@ pub async fn drain(
 
     let (drain, store_configured) = match state.blob_store.as_deref() {
         Some(store) => {
-            let summary = erasure_fence_service::drain(&state.pool, store).await?;
+            let summary = erasure_fence_service::drain(&state.pool, store).await;
+            let summary = match summary {
+                Ok(summary) => summary,
+                Err(e) => return Err(slack_pass_then(&state, e).await),
+            };
             tracing::info!(
                 seeded = summary.seeded,
                 unparseable_verdicts = summary.unparseable_verdicts,
@@ -253,7 +286,10 @@ pub async fn drain(
             (summary, true)
         }
         None => {
-            let summary = erasure_fence_service::drain_without_store(&state.pool).await?;
+            let summary = match erasure_fence_service::drain_without_store(&state.pool).await {
+                Ok(summary) => summary,
+                Err(e) => return Err(slack_pass_then(&state, e).await),
+            };
             tracing::info!(
                 seeded = summary.seeded,
                 unparseable_verdicts = summary.unparseable_verdicts,
@@ -264,22 +300,7 @@ pub async fn drain(
         }
     };
 
-    // The Slack revocations erasures queued: a sibling pass on the same tick, after the fence. It
-    // runs with or without Slack configured — without it, only the rows past their window are
-    // emptied, so a deployment that lost its configuration still never keeps a token past it.
-    let provider = slack_link_provider(&state);
-    let slack_revocations = erasure_slack_revocation_service::drain(
-        &state.pool,
-        slack_revoke_config(&state, provider.as_ref()).as_ref(),
-    )
-    .await?;
-    tracing::info!(
-        attempted = slack_revocations.attempted,
-        revoked = slack_revocations.revoked,
-        retrying = slack_revocations.retrying,
-        abandoned = slack_revocations.abandoned,
-        "erasure Slack revocation pass complete"
-    );
+    let slack_revocations = slack_revocation_pass(&state).await?;
 
     Ok(Json(FenceDrainResponse {
         drain,

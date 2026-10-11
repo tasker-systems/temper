@@ -147,6 +147,10 @@ pub struct SlackRevocationTally {
     /// not configured on this instance. Destroyed in temper; they may stay live at Slack until they
     /// expire.
     pub not_attempted: u32,
+    /// Grants whose revoke was attempted and failed where no retry can succeed: in AS mode, no AS
+    /// row matched the token. Destroyed in temper; not queued.
+    #[serde(default)]
+    pub failed: u32,
 }
 
 // The erasure and block history scrub doors answer in this enum. The ledger records refusals in

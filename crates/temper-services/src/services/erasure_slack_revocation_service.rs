@@ -21,6 +21,7 @@ use temper_core::types::erasure::SlackRevocationTally;
 use temper_core::types::slack::IdpRevocation;
 
 use super::grant_crypto::VaultKey;
+use crate::auth_config::AuthMode;
 use super::slack_disconnect_service::{revoke_at_idp, IdpRevokeTarget};
 use super::slack_grant_vault_service;
 use crate::error::ApiResult;
@@ -32,8 +33,12 @@ pub const GIVE_UP_AFTER_SECONDS: f64 = 604_800.0;
 /// The longest wait between two attempts: six hours. The wait doubles from one minute.
 const MAX_BACKOFF_SECONDS: f64 = 21_600.0;
 
-/// Rows one drain tick attempts. Each is an HTTP call made while its row is locked.
+/// Rows one drain tick attempts, each an HTTP call of at most five seconds.
 const BATCH_ROWS: i64 = 25;
+
+/// How long a tick's claim on its rows lasts: longer than a full batch of calls, so a concurrent
+/// tick never attempts a row this one is still revoking.
+const LEASE_SECONDS: f64 = 600.0;
 
 /// The key version a queued token is sealed under. The vault seals at version 1 (`store_grant`);
 /// a key rotation would move both together.
@@ -86,13 +91,21 @@ pub async fn revoke_before_erasure(
     let mut conn = pool.acquire().await?;
     let grants = slack_grant_vault_service::grants_for_erasure(&mut conn, cfg.key, subject).await?;
     let mut tokens = Vec::new();
-    for grant in grants {
+    for (n, grant) in grants.into_iter().enumerate() {
         let Some(rt) = grant.refresh_token else {
             tally.not_attempted += 1;
             continue;
         };
-        match revoke_at_idp(&mut conn, &rt, &cfg.target, &grant.slack_principal_id).await? {
+        // Labelled by position, never by Slack id: the act is removing that id, and a trace line
+        // would carry it out of the database it is being erased from.
+        let label = format!("erasure grant {}", n + 1);
+        match revoke_at_idp(&mut conn, &rt, &cfg.target, &label).await? {
             IdpRevocation::Revoked => tally.revoked += 1,
+            // In AS mode a failure means no AS row matched the token, which no retry can change:
+            // keeping the secret for the window would gain nothing. Destroyed with the vault row.
+            IdpRevocation::Failed if matches!(cfg.target.mode, AuthMode::TemperAs) => {
+                tally.failed += 1;
+            }
             // `revoke_at_idp` never answers NotAttempted; count it as a failure if it ever does.
             IdpRevocation::Failed | IdpRevocation::NotAttempted => {
                 tally.queued += 1;
@@ -182,18 +195,26 @@ pub async fn drain(
         return Ok(out);
     };
 
-    let mut tx = pool.begin().await?;
+    // Claim the due rows under a short lease and commit: no transaction stays open across a call
+    // to Slack, so a slow IdP never holds a connection idle in a transaction, a killed tick loses
+    // nothing Slack already confirmed (each row resolves in its own statement), and a concurrent
+    // tick skips the claimed rows until the lease ends.
     let due = sqlx::query!(
-        r#"SELECT id, attempts, rt_nonce AS "rt_nonce!", rt_ciphertext AS "rt_ciphertext!"
-             FROM kb_erasure_slack_revocations
-            WHERE resolved_at IS NULL AND next_attempt_at <= now()
-            ORDER BY next_attempt_at
-            LIMIT $1
-              FOR UPDATE SKIP LOCKED"#,
-        BATCH_ROWS
+        r#"UPDATE kb_erasure_slack_revocations r
+              SET next_attempt_at = now() + make_interval(secs => $2)
+             FROM (SELECT id FROM kb_erasure_slack_revocations
+                    WHERE resolved_at IS NULL AND next_attempt_at <= now()
+                    ORDER BY next_attempt_at
+                    LIMIT $1
+                      FOR UPDATE SKIP LOCKED) d
+            WHERE r.id = d.id
+        RETURNING r.id, r.attempts, r.rt_nonce AS "rt_nonce!", r.rt_ciphertext AS "rt_ciphertext!""#,
+        BATCH_ROWS,
+        LEASE_SECONDS,
     )
-    .fetch_all(&mut *tx)
+    .fetch_all(pool)
     .await?;
+    let mut conn = pool.acquire().await?;
     for row in due {
         let label = row.id.to_string();
         let verdict = match slack_grant_vault_service::open_for_revocation(
@@ -204,7 +225,7 @@ pub async fn drain(
         ) {
             Ok(rt) => {
                 out.attempted += 1;
-                Some(revoke_at_idp(&mut tx, &rt, &cfg.target, &label).await?)
+                Some(revoke_at_idp(&mut conn, &rt, &cfg.target, &label).await?)
             }
             Err(_) => {
                 tracing::warn!(
@@ -216,7 +237,7 @@ pub async fn drain(
         };
         match verdict {
             Some(IdpRevocation::Revoked) => {
-                resolve(&mut tx, row.id, "revoked").await?;
+                resolve(&mut conn, row.id, "revoked").await?;
                 out.revoked += 1;
             }
             Some(IdpRevocation::Failed | IdpRevocation::NotAttempted) => {
@@ -226,21 +247,20 @@ pub async fn drain(
                     r#"UPDATE kb_erasure_slack_revocations
                           SET attempts = attempts + 1,
                               next_attempt_at = now() + make_interval(secs => $2)
-                        WHERE id = $1"#,
+                        WHERE id = $1 AND resolved_at IS NULL"#,
                     row.id,
                     wait
                 )
-                .execute(&mut *tx)
+                .execute(&mut *conn)
                 .await?;
                 out.retrying += 1;
             }
             None => {
-                resolve(&mut tx, row.id, "abandoned").await?;
+                resolve(&mut conn, row.id, "abandoned").await?;
                 out.abandoned += 1;
             }
         }
     }
-    tx.commit().await?;
     Ok(out)
 }
 
@@ -250,7 +270,7 @@ async fn resolve(conn: &mut sqlx::PgConnection, id: Uuid, outcome: &str) -> ApiR
         r#"UPDATE kb_erasure_slack_revocations
               SET key_version = NULL, rt_nonce = NULL, rt_ciphertext = NULL,
                   resolved_at = now(), outcome = $2
-            WHERE id = $1"#,
+            WHERE id = $1 AND resolved_at IS NULL"#,
         id,
         outcome
     )
