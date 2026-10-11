@@ -1036,6 +1036,149 @@ async fn a_successful_link_vaults_an_encrypted_grant_that_mints_a_token(pool: Pg
     );
 }
 
+/// **A grant the IdP refuses is a typed refusal, not an error.** When the cached AT is stale and
+/// the IdP answers the refresh with `invalid_grant` — the RT aged out, was rotated out, or was
+/// revoked — the mint must report `Refused(NotVaulted)` (whose agent reply says "reconnect") and KEEP
+/// the row: `invalid_grant` can also mean a transient AS failure or a misconfigured client, and a
+/// deleted row is unrecoverable and unrevocable. It used to surface as `Err(Unauthorized)`: a 401 the mention agent can only render
+/// as "try again in a moment", forever, which is what a long-idle production user hit.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_grant_the_idp_rejects_mints_a_not_vaulted_refusal_and_is_kept(pool: PgPool) {
+    use temper_core::types::slack::LinkRefusal;
+    use temper_services::services::slack_grant_vault_service::{mint_access_token, MintOutcome};
+
+    let app = setup_slack_app(&pool).await;
+    let sub = "idp-sub-expired-grant";
+    let email = "expired-grant-7c41de@example.invalid";
+    provision_profile(&app, sub, email).await;
+    stub_token_endpoint(&app, sign_idp_access_token(&app.issuer(), sub, email)).await;
+
+    let body = app
+        .http
+        .get(app.callback_url(&mint_state_nonce(&app).await))
+        .send()
+        .await
+        .expect("callback")
+        .text()
+        .await
+        .expect("callback body");
+    assert!(body.contains("Linked as"), "the link must succeed: {body}");
+    approve_standing(&pool, profile_id_for_sub(&pool, sub).await).await;
+
+    // From here on the IdP refuses the grant, exactly as Auth0 does for a dead RT.
+    app.idp.reset().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "error": "invalid_grant",
+            "error_description": "Unknown or invalid refresh token."
+        })))
+        .expect(2)
+        .mount(&app.idp)
+        .await;
+
+    // Expire the cached AT so the mint must spend the RT.
+    sqlx::query("UPDATE kb_slack_grant_vault SET access_expires_at = now() - interval '1 hour' WHERE slack_principal_id = $1")
+        .bind(SLACK_PRINCIPAL)
+        .execute(&pool)
+        .await
+        .expect("expire the cached access token");
+
+    let token_url = format!("{}/oauth/token", app.issuer());
+    let outcome = mint_access_token(&pool, &vault_key(), &token_url, CLIENT_ID, SLACK_PRINCIPAL)
+        .await
+        .expect("a dead grant is a refusal, not an error");
+    assert_eq!(outcome, MintOutcome::Refused(LinkRefusal::NotVaulted));
+
+    // Nothing was destroyed: the vault row (and its ciphertext) and the link both survive, so a
+    // transient refusal heals and disconnect can still revoke.
+    let vaulted: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM kb_slack_grant_vault WHERE slack_principal_id = $1)",
+    )
+    .bind(SLACK_PRINCIPAL)
+    .fetch_one(&pool)
+    .await
+    .expect("read the vault");
+    assert!(vaulted, "a refused grant must not be deleted");
+    let linked: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM kb_profile_auth_links WHERE auth_provider = 'slack' AND auth_provider_user_id = $1)",
+    )
+    .bind(SLACK_PRINCIPAL)
+    .fetch_one(&pool)
+    .await
+    .expect("read the link");
+    assert!(linked, "a refused grant must not unlink the user");
+
+    // A second mint asks the IdP again (the mock's `.expect(2)` is verified on drop) and gets the
+    // same typed refusal — and once the IdP answers 200 again, the same row mints.
+    let again = mint_access_token(&pool, &vault_key(), &token_url, CLIENT_ID, SLACK_PRINCIPAL)
+        .await
+        .expect("second mint");
+    assert_eq!(again, MintOutcome::Refused(LinkRefusal::NotVaulted));
+}
+
+/// The other half of the classifier, against the real mint: an IdP refusal that is NOT
+/// `invalid_grant` (here `invalid_client`, a deployment fault) stays an error and leaves the grant
+/// exactly as it was.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_non_invalid_grant_idp_refusal_stays_an_error_and_keeps_the_grant(pool: PgPool) {
+    use temper_services::services::slack_grant_vault_service::mint_access_token;
+
+    let app = setup_slack_app(&pool).await;
+    let sub = "idp-sub-invalid-client";
+    let email = "invalid-client-2e90ab@example.invalid";
+    provision_profile(&app, sub, email).await;
+    stub_token_endpoint(&app, sign_idp_access_token(&app.issuer(), sub, email)).await;
+
+    let body = app
+        .http
+        .get(app.callback_url(&mint_state_nonce(&app).await))
+        .send()
+        .await
+        .expect("callback")
+        .text()
+        .await
+        .expect("callback body");
+    assert!(body.contains("Linked as"), "the link must succeed: {body}");
+    approve_standing(&pool, profile_id_for_sub(&pool, sub).await).await;
+
+    app.idp.reset().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(
+            ResponseTemplate::new(401)
+                .set_body_json(serde_json::json!({"error": "invalid_client"})),
+        )
+        .mount(&app.idp)
+        .await;
+    sqlx::query("UPDATE kb_slack_grant_vault SET access_expires_at = now() - interval '1 hour' WHERE slack_principal_id = $1")
+        .bind(SLACK_PRINCIPAL)
+        .execute(&pool)
+        .await
+        .expect("expire the cached access token");
+    let before: Vec<u8> = sqlx::query_scalar(
+        "SELECT rt_ciphertext FROM kb_slack_grant_vault WHERE slack_principal_id = $1",
+    )
+    .bind(SLACK_PRINCIPAL)
+    .fetch_one(&pool)
+    .await
+    .expect("read the grant");
+
+    let token_url = format!("{}/oauth/token", app.issuer());
+    mint_access_token(&pool, &vault_key(), &token_url, CLIENT_ID, SLACK_PRINCIPAL)
+        .await
+        .expect_err("invalid_client is a deployment fault, not a verdict on the grant");
+
+    let after: Vec<u8> = sqlx::query_scalar(
+        "SELECT rt_ciphertext FROM kb_slack_grant_vault WHERE slack_principal_id = $1",
+    )
+    .bind(SLACK_PRINCIPAL)
+    .fetch_one(&pool)
+    .await
+    .expect("the grant must survive");
+    assert_eq!(before, after, "the stored grant must be untouched");
+}
+
 // ---------------------------------------------------------------------------
 // Disconnect — driven through the REAL `temper` CLI binary, not the service fn
 // directly. This is the only tier that exercises the full stack for this

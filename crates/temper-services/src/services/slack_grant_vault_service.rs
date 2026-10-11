@@ -73,7 +73,8 @@ pub enum MintOutcome {
         expires_at: DateTime<Utc>,
     },
     /// No token was minted, and the typed reason why — carried verbatim from
-    /// [`super::slack_link_state::resolve`]. This replaces the former `Revoked` / `NotVaulted`
+    /// [`super::slack_link_state::resolve`], or [`LinkRefusal::NotVaulted`] when the IdP refused
+    /// the vaulted grant as `invalid_grant` (see [`mint_access_token`]). This replaces the former `Revoked` / `NotVaulted`
     /// pair, which collapsed seven distinct facts (six standing reasons plus a dead soft-revoke
     /// flag) into two arms and shipped a re-link remedy that could not work for a standing refusal.
     /// (A live token handed out earlier still survives to its own `exp` — honest revocation
@@ -221,10 +222,13 @@ pub async fn store_grant(
 /// rotation is an IdP side effect that is not part of this transaction, so if the process dies or
 /// the COMMIT fails AFTER Auth0 returns a rotated RT but BEFORE the `UPDATE` commits, the row keeps
 /// the now-dead RT and the next mint trips reuse-detection, bricking the grant until the user
-/// re-links. No row lock can make an external HTTP effect atomic with a local commit. Two
-/// mitigations belong at the deployment layer, not here: enable Auth0 refresh-token rotation
-/// **leeway** (a grace window that tolerates a brief RT reuse), and treat a bricked grant as a
-/// re-link prompt. See the T3 spec's "grant vault" section.
+/// re-links. No row lock can make an external HTTP effect atomic with a local commit. The
+/// mitigation belongs at the deployment layer: enable Auth0 refresh-token rotation **leeway** (a
+/// grace window that tolerates a brief RT reuse). The recovery is re-link, and that part IS here: a
+/// grant the IdP refuses as `invalid_grant` — bricked this way, or simply aged past the IdP's
+/// refresh-token lifetime — reports [`LinkRefusal::NotVaulted`], whose reply tells the user to
+/// reconnect, rather than an error the agent can only call transient. The row is kept, not
+/// deleted; see that arm for why. See the T3 spec's "grant vault" section.
 ///
 /// A principal whose standing does not admit them mints nothing — the decision is delegated to
 /// [`super::slack_link_state::resolve`] (which calls `temper_principal::admit`), so a `deactivated`
@@ -332,7 +336,32 @@ pub async fn mint_access_token(
         rt_ciphertext,
         &aad(slack_principal_id, FIELD_RT),
     )?;
-    let tokens = oauth_client::refresh_grant(token_url, client_id, &refresh_token).await?;
+    let tokens = match oauth_client::refresh_grant(token_url, client_id, &refresh_token).await? {
+        oauth_client::RefreshOutcome::Refreshed(tokens) => tokens,
+        oauth_client::RefreshOutcome::GrantRejected => {
+            // The IdP says the grant is dead: the RT aged out (the common case — a user who has
+            // not mentioned @temper for longer than the IdP's refresh-token lifetime), was rotated
+            // out by the dual-write window above, or was revoked. Retrying cannot produce a token
+            // and the remedy is a fresh consent — exactly what `NotVaulted` means to the agent
+            // ("retrying won't fix it; reconnect"). Not an `Err`: that is a 401 to the agent,
+            // which can only say "try again", forever.
+            //
+            // The row is deliberately LEFT IN PLACE (rolled back with this transaction), not
+            // deleted. `invalid_grant` is the IdP's word, and it is not always about the grant:
+            //   - the temper AS answers `invalid_grant` for ANY failure inside its rotation,
+            //     including a transient database error (`packages/temper-cloud/src/oauth/
+            //     endpoints.ts`, the refresh branch's catch) — so the grant may be perfectly live;
+            //   - Auth0 answers `invalid_grant` when the RT is presented to the wrong client or
+            //     tenant, so a misconfigured `client_id` / issuer would refuse EVERY grant.
+            // Deleting would turn either into permanent loss — and, worse, destroy the only
+            // plaintext source of a possibly-live RT, so disconnect and erasure could never
+            // revoke it. Kept, a transient refusal heals on the next mention, a config fix heals
+            // every user at once, and disconnect still revokes before it deletes. The cost is that
+            // a truly dead RT is re-presented to the IdP on each mention, which is harmless.
+            // A re-link overwrites the row (`store_grant` upserts).
+            return Ok(MintOutcome::Refused(LinkRefusal::NotVaulted));
+        }
+    };
 
     // Auth0 rotates, so the response's RT supersedes the spent one. A provider that does not
     // rotate omits it (RFC 6749 §6: keep the existing RT); keep the one we hold in that case

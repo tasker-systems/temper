@@ -140,7 +140,11 @@ const RECONNECT_REMEDY =
  * The reply for a linked user whose stored credential is missing.
  *
  * Distinct from {@link standingRefusedPrompt} on purpose. This user did nothing wrong and
- * nothing was withheld: their link predates the credential store, or the link never completed.
+ * nothing was withheld: their link predates the credential store, the link never completed, or —
+ * the common case — the stored credential EXPIRED. When the identity provider refuses the stored
+ * grant as `invalid_grant` (aged past the refresh-token lifetime after a long gap between mentions,
+ * rotated out, or revoked), temper answers `not_vaulted` rather than an error this agent could only
+ * call transient (`mint_access_token`, `slack_grant_vault_service.rs`).
  * Their access is fine — the credential is what is missing, which is why this is the one
  * refusal whose remedy the user can carry out alone.
  * The load-bearing sentence is that RETRYING WILL NOT FIX IT — without it the user mentions
@@ -148,7 +152,7 @@ const RECONNECT_REMEDY =
  */
 export function notVaultedPrompt(handle: string): string {
   return [
-    `You're connected as @${handle}, but I don't have a stored credential I can use to look things up as you.`,
+    `You're connected as @${handle}, but I don't have a working stored credential to look things up as you — it may have expired since you last used me.`,
     "",
     "Mentioning me again won't fix this — the connection needs to be made afresh.",
     "",

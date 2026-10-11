@@ -1,0 +1,18 @@
+title    = "A Slack grant the identity provider refuses as `invalid_grant` mints a `not_vaulted` refusal instead of a 401"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "internal"]
+status   = "signal-only"
+body = '''
+`POST /internal/slack/mint` used to answer 401 when refreshing a linked user's vaulted grant was
+refused by the identity provider, whatever the reason, and the mention agent rendered that as a
+transient "try again in a moment" that could never succeed. A refusal whose OAuth `error` is
+`invalid_grant` (an expired, rotated-out or revoked refresh token) now answers 200
+`{"status":"refused","reason":"not_vaulted"}`, so the agent tells the user that retrying will not
+help and to reconnect. The stored grant is left in place, so a re-link replaces it and disconnect
+can still revoke it. Every other refusal (`invalid_client`, a 5xx, and so on) is still a 401. The
+mention agent's `not_vaulted` reply now says the credential may have expired. Who observes: Slack
+users of the mention agent whose grant has lapsed, and operators reading the mint's logs.
+Release relevance: behavioral, on an internal HMAC-gated endpoint whose only caller is the mention
+agent, which already handles this response shape.
+'''

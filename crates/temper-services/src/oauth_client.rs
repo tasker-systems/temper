@@ -52,17 +52,72 @@ pub async fn exchange_code(
         .map_err(|e| ApiError::Internal(format!("token response was not the expected shape: {e}")))
 }
 
+/// What spending a refresh token produced.
+///
+/// Two arms rather than `ApiResult<TokenResponse>` alone, because one failure is not like the
+/// others: an IdP answering `invalid_grant` is telling us the grant family is DEAD — the RT expired
+/// (Auth0's inactivity/absolute lifetime, the AS's `AS_REFRESH_TTL_SECONDS`), was rotated out, was
+/// revoked, or tripped reuse-detection. No retry of this call can ever succeed, and the only remedy
+/// is a fresh consent. Folding that into the same `Err` as a 5xx or a transport failure is what made
+/// a Slack user whose grant had simply aged out read "try again in a moment" forever.
+///
+/// Every OTHER non-2xx stays an `Err`: `invalid_client`, a 5xx, a rate limit are deployment or
+/// transient facts, not facts about this user's grant, and must not be treated as license to
+/// discard it.
+#[derive(Debug)]
+pub enum RefreshOutcome {
+    /// The IdP issued tokens. Auth0 rotates, so `refresh_token` (when present) supersedes the RT
+    /// that was spent.
+    Refreshed(TokenResponse),
+    /// The IdP refused the grant itself (`invalid_grant`, RFC 6749 §5.2). Permanent.
+    GrantRejected,
+}
+
+/// The only part of an RFC 6749 §5.2 error body this module reads. `error_description` is
+/// deliberately not modelled: it is free text the IdP may echo request material into, and nothing
+/// here branches on it.
+#[derive(serde::Deserialize)]
+struct OAuthErrorBody {
+    error: String,
+}
+
+/// The IdP's `error` code, if it is one RFC 6749 §5.2 (or the RFC 8628/OIDC codes Auth0 uses on
+/// this endpoint) defines; anything else is `"other"`. The field is IdP-controlled free text in
+/// practice, so it is never logged verbatim — a non-compliant IdP could echo request material there.
+fn loggable_error_code(code: Option<&str>) -> &'static str {
+    match code {
+        Some("invalid_request") => "invalid_request",
+        Some("invalid_client") => "invalid_client",
+        Some("invalid_grant") => "invalid_grant",
+        Some("unauthorized_client") => "unauthorized_client",
+        Some("unsupported_grant_type") => "unsupported_grant_type",
+        Some("invalid_scope") => "invalid_scope",
+        Some("access_denied") => "access_denied",
+        Some("mfa_required") => "mfa_required",
+        Some("temporarily_unavailable") => "temporarily_unavailable",
+        Some("server_error") => "server_error",
+        Some(_) => "other",
+        None => "none",
+    }
+}
+
 /// Spend a refresh token for a fresh access token (RFC 6749 §6), same public PKCE client, no
 /// secret. Auth0 rotates the RT on every such call, so the response's `refresh_token` (when
 /// present) SUPERSEDES the one spent — the caller must persist it and never replay the old one,
 /// or reuse-detection kills the whole grant family.
 ///
-/// Never logs the token, the response, or the client's reply body.
+/// An `invalid_grant` refusal is [`RefreshOutcome::GrantRejected`], not an error — see that type.
+/// It is recognised by the body's `error` code and a 4xx status together, never by status alone:
+/// Auth0 answers `invalid_grant` with 403 and the AS with 400, while a 401/403 can equally mean
+/// `invalid_client`, which is a broken deployment rather than a dead grant.
+///
+/// Never logs the token, the response, or the client's reply body beyond its `error` code, and that
+/// only when it is a known RFC 6749 code (see `loggable_error_code`).
 pub async fn refresh_grant(
     token_url: &str,
     client_id: &str,
     refresh_token: &str,
-) -> ApiResult<TokenResponse> {
+) -> ApiResult<RefreshOutcome> {
     let resp = HTTP
         .post(token_url)
         .form(&[
@@ -78,17 +133,36 @@ pub async fn refresh_grant(
         .await
         .map_err(|e| ApiError::Internal(format!("token refresh transport failure: {e}")))?;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        // A non-2xx here usually means the grant family is dead (rotated-out RT, revoked at the
-        // IdP, or the user un-consented). Log the status only; the body can echo the token.
-        tracing::warn!(%status, "slack grant vault: refresh rejected by the IdP");
+    let status = resp.status();
+    if !status.is_success() {
+        // Read only the `error` code; an unparseable body is simply "not invalid_grant".
+        let error_code = if status.is_client_error() {
+            resp.json::<OAuthErrorBody>().await.ok().map(|b| b.error)
+        } else {
+            None
+        };
+        if error_code.as_deref() == Some("invalid_grant") {
+            tracing::warn!(
+                %status,
+                "slack grant vault: the IdP rejected the refresh grant as invalid_grant; the grant \
+                 family is dead and only a re-link can replace it"
+            );
+            return Ok(RefreshOutcome::GrantRejected);
+        }
+        tracing::warn!(
+            %status,
+            error = loggable_error_code(error_code.as_deref()),
+            "slack grant vault: refresh rejected by the IdP"
+        );
         return Err(ApiError::Unauthorized("refresh grant failed".to_string()));
     }
 
-    resp.json::<TokenResponse>().await.map_err(|e| {
-        ApiError::Internal(format!("refresh response was not the expected shape: {e}"))
-    })
+    resp.json::<TokenResponse>()
+        .await
+        .map(RefreshOutcome::Refreshed)
+        .map_err(|e| {
+            ApiError::Internal(format!("refresh response was not the expected shape: {e}"))
+        })
 }
 
 /// Best-effort revocation of a refresh-token grant at an external IdP.
@@ -160,6 +234,65 @@ mod tests {
         let err = revoke_grant(&url, "test-client", "rt-value")
             .await
             .expect_err("a 400 must be an error");
+        assert!(matches!(err, ApiError::Unauthorized(_)), "got {err:?}");
+    }
+
+    async fn refresh_against(status: u16, body: serde_json::Value) -> ApiResult<RefreshOutcome> {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .and(body_string_contains("grant_type=refresh_token"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .mount(&server)
+            .await;
+        let url = format!("{}/oauth/token", server.uri());
+        refresh_grant(&url, "test-client", "rt-value").await
+    }
+
+    /// Auth0's shape for an expired / rotated-out / revoked RT: 403 + `invalid_grant`. This is the
+    /// production failure that read as "try again" forever before the refusal was typed.
+    #[tokio::test]
+    async fn an_auth0_invalid_grant_is_a_rejected_grant_not_an_error() {
+        let outcome = refresh_against(
+            403,
+            serde_json::json!({"error": "invalid_grant", "error_description": "Unknown or invalid refresh token."}),
+        )
+        .await
+        .expect("invalid_grant is an outcome, not an error");
+        assert!(
+            matches!(outcome, RefreshOutcome::GrantRejected),
+            "got {outcome:?}"
+        );
+    }
+
+    /// The temper AS answers the same refusal with 400 (`packages/temper-cloud/src/oauth/endpoints.ts`).
+    #[tokio::test]
+    async fn an_as_invalid_grant_is_a_rejected_grant_not_an_error() {
+        let outcome = refresh_against(400, serde_json::json!({"error": "invalid_grant"}))
+            .await
+            .expect("invalid_grant is an outcome, not an error");
+        assert!(
+            matches!(outcome, RefreshOutcome::GrantRejected),
+            "got {outcome:?}"
+        );
+    }
+
+    /// A 401/403 is NOT enough on its own: `invalid_client` is a broken deployment, and treating it
+    /// as a dead grant would have the caller discard every user's working grant.
+    #[tokio::test]
+    async fn invalid_client_stays_an_error() {
+        let err = refresh_against(401, serde_json::json!({"error": "invalid_client"}))
+            .await
+            .expect_err("invalid_client must not read as a dead grant");
+        assert!(matches!(err, ApiError::Unauthorized(_)), "got {err:?}");
+    }
+
+    /// A server error carrying the same code is still not a grant verdict — only a 4xx is.
+    #[tokio::test]
+    async fn a_5xx_stays_an_error_whatever_its_body_says() {
+        let err = refresh_against(500, serde_json::json!({"error": "invalid_grant"}))
+            .await
+            .expect_err("a 5xx is transient, never a dead grant");
         assert!(matches!(err, ApiError::Unauthorized(_)), "got {err:?}");
     }
 }
