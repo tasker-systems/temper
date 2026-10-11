@@ -17,7 +17,7 @@ Commands:
   requests      Review pending join requests
   reviews       Read and close reconsideration requests from revoked principals
   profiles      The operator directory: who exists in this deployment, and their state. Lists denied principals (the default `needs-access` view) and resolves an email to a state card — the bridge into the strict-UUID admin acts
-  erasure       Erase a resource or a principal, or scrub a resource's block history or one of its fields. Surveys by default; --execute acts
+  erasure       Erase a resource or a principal, or scrub a resource's block history or one of its fields. Surveys by default; --execute acts. `retention` sets what a principal erasure keeps
   ledger        Read the admin ledger: who granted what, to whom, and when
   saml          SAML provisioning: generate keys + emit the consistent env bundle and SQL (operator tooling)
   machine       Register and rotate machine (client_credentials) principals
@@ -396,16 +396,92 @@ Options:
 ### `temper admin erasure`
 
 ```text
-Erase a resource or a principal, or scrub a resource's block history or one of its fields. Surveys by default; --execute acts
+Erase a resource or a principal, or scrub a resource's block history or one of its fields. Surveys by default; --execute acts. `retention` sets what a principal erasure keeps
 
 Usage: temper admin erasure [OPTIONS] <COMMAND>
 
 Commands:
+  retention      The deployment's retention policy: what a person erasure keeps, by category, each with a stated basis and period. Empty by default, and the act then keeps nothing. Only free text and replay evidence can be kept; identifiers and credentials cannot
   resource       Erase a resource. The survey counts the blocks, revisions, chunks, artifacts and edges the act would reach, and names what it would leave as remainder
   principal      Erase a principal, named by its pseudonym UUID
   block-history  Scrub the revision history of named blocks of a resource
   field          Scrub the history of one field of a resource (its title, its origin URI, or a property family) while the resource survives. With no --field, list the fields and property families to choose from: handles, counts, dates, profile ids and the sensitivity sweep's flags, never a key or a value. Today's value is kept unless --clear says it is part of the leak
   help           Print this message or the help of the given subcommand(s)
+
+Options:
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+#### `temper admin erasure retention`
+
+```text
+The deployment's retention policy: what a person erasure keeps, by category, each with a stated basis and period. Empty by default, and the act then keeps nothing. Only free text and replay evidence can be kept; identifiers and credentials cannot
+
+Usage: temper admin erasure retention [OPTIONS] <COMMAND>
+
+Commands:
+  list    List the categories a person erasure keeps
+  set     Keep a category, replacing the category's existing policy. The erasure record names it `retained under policy <name>`. Nothing deletes kept data when the period ends
+  remove  Stop keeping a category
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+##### `temper admin erasure retention list`
+
+```text
+List the categories a person erasure keeps
+
+Usage: temper admin erasure retention list [OPTIONS]
+
+Options:
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+##### `temper admin erasure retention set`
+
+```text
+Keep a category, replacing the category's existing policy. The erasure record names it `retained under policy <name>`. Nothing deletes kept data when the period ends
+
+Usage: temper admin erasure retention set [OPTIONS] --name <NAME> --basis <BASIS> --period <PERIOD> <CATEGORY>
+
+Arguments:
+  <CATEGORY>  The category to keep [possible values: standing-reasons, governance-reasons, join-request-notes, review-request-notes, credential-replay-evidence]
+
+Options:
+      --name <NAME>        The policy's name: a slug (lower-case letters, digits, hyphens)
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --basis <BASIS>      The stated basis, e.g. "GDPR 17(3)(e) / CCPA 105(d)(1)"
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --period <PERIOD>    The period, as an interval, e.g. "1 year" or "90 days"
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+##### `temper admin erasure retention remove`
+
+```text
+Stop keeping a category
+
+Usage: temper admin erasure retention remove [OPTIONS] <CATEGORY>
+
+Arguments:
+  <CATEGORY>  The category to stop keeping [possible values: standing-reasons, governance-reasons, join-request-notes, review-request-notes, credential-replay-evidence]
 
 Options:
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)

@@ -1674,7 +1674,7 @@ pub enum AdminAction {
         action: AdminProfilesAction,
     },
     /// Erase a resource or a principal, or scrub a resource's block history or one of its fields.
-    /// Surveys by default; --execute acts
+    /// Surveys by default; --execute acts. `retention` sets what a principal erasure keeps
     Erasure {
         #[command(subcommand)]
         action: AdminErasureAction,
