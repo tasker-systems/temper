@@ -60,7 +60,7 @@ fn request(body: &FieldScrubRequestBody, surface: Surface) -> FieldScrubRequest 
         (status = 200, description = "The act completed, or was refused and the refusal recorded (`status` says which)", body = FieldScrubExecuteResponse),
         (status = 400, description = "A handle with a field that takes none, `property` without a handle, `properties` with `clear`, a handle that is not a property family of the resource (checked before any refusal), in keep mode nothing prior to scrub, or with `clear` a field already cleared (the placeholder title or origin URI, the placeholder type, or a family with no live row); nothing was scrubbed or recorded", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist", body = ErrorBody),
         (status = 422, description = "The body is JSON but not the expected shape, e.g. a missing or unknown field or an unknown field kind: a caller-supplied `request_reference` is refused, not ignored (a plain-text rejection, not an ErrorBody)"),
     )
@@ -110,7 +110,7 @@ pub async fn execute(
         (status = 200, description = "What the act would do (`plan`), or the refusal it would record (`refusal`); nothing is recorded or changed", body = FieldScrubSurvey),
         (status = 400, description = "A handle with a field that takes none, `property` without a handle, `properties` with `clear`, or a handle that is not a property family of the resource, whatever the resource's state (checked before any refusal is reported); or, with `clear`, a field already cleared, as the act answers it", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist", body = ErrorBody),
         (status = 422, description = "The body is JSON but not the expected shape, e.g. a missing or unknown field or an unknown field kind (a plain-text rejection, not an ErrorBody)"),
     )
@@ -142,7 +142,7 @@ pub async fn survey(
     responses(
         (status = 200, description = "The resource's scrubbable fields; nothing is recorded or changed", body = FieldScrubFamilies),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist", body = ErrorBody),
         (status = 422, description = "The body is JSON but not the expected shape, e.g. a missing or unknown field (a plain-text rejection, not an ErrorBody)"),
     )

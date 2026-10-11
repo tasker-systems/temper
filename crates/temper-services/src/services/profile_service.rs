@@ -6,6 +6,7 @@ use temper_core::types::ids::ProfileId;
 use temper_core::types::{AuthClaims, PrincipalKind, Profile, ProfileAuthLink};
 use temper_workflow::operations::Surface;
 
+use crate::auth::HumanPrincipal;
 use crate::error::{ApiError, ApiResult};
 
 /// Maximum serialized size for the preferences JSON field (64KB).
@@ -660,16 +661,17 @@ pub async fn get_by_id(pool: &PgPool, id: ProfileId) -> ApiResult<Profile> {
     Ok(profile)
 }
 
-/// Update mutable profile fields. Only provided (`Some`) values are written.
+/// Update the caller's own mutable profile fields. Only provided (`Some`) values are written.
 ///
 /// `vault_config` is intentionally not a parameter: it is substrate-dropped
 /// (synthesized on read), so there is nothing to persist.
 pub async fn update(
     pool: &PgPool,
-    id: ProfileId,
+    who: &HumanPrincipal,
     display_name: Option<&str>,
     preferences: Option<&Value>,
 ) -> ApiResult<Profile> {
+    let id = who.profile_id();
     let current = get_by_id(pool, id).await?;
 
     let new_display_name = display_name.unwrap_or(&current.display_name);
@@ -692,11 +694,12 @@ pub async fn update(
     get_by_id(pool, id).await
 }
 
-/// List all auth links attached to a profile.
+/// List all auth links attached to the caller's own profile.
 pub async fn list_auth_links(
     pool: &PgPool,
-    profile_id: ProfileId,
+    who: &HumanPrincipal,
 ) -> ApiResult<Vec<ProfileAuthLink>> {
+    let profile_id = who.profile_id();
     let links = sqlx::query_as!(
         ProfileAuthLink,
         r#"

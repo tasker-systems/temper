@@ -55,8 +55,8 @@ async fn a_revoked_principal(pool: &PgPool, admin: &SystemAdmin, handle: &str) -
 async fn file_a_review(pool: &PgPool, subject: ProfileId, message: &str) -> Result<(), ApiError> {
     access_service::create_review_request(
         pool,
+        &test_support::human_principal_for(pool, *subject).await,
         access_service::CreateReviewRequestParams {
-            profile_id: subject,
             message: Some(message.to_string()),
         },
     )

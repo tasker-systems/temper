@@ -40,7 +40,7 @@ use temper_workflow::types::managed_meta::ManagedMeta;
 async fn create_team(pool: &PgPool, owner: Uuid, slug: &str) -> Uuid {
     team_service::create_team(
         pool,
-        &temper_services::test_support::authenticated_profile_for(pool, owner).await,
+        &temper_services::test_support::human_principal_for(pool, owner).await,
         &TeamCreateRequest {
             slug: slug.to_owned(),
             name: None,
@@ -57,7 +57,7 @@ async fn create_team(pool: &PgPool, owner: Uuid, slug: &str) -> Uuid {
 async fn add_member(pool: &PgPool, actor: Uuid, team_id: Uuid, profile: Uuid, role: TeamRole) {
     team_service::add_member(
         pool,
-        ProfileId::from(actor),
+        &temper_services::test_support::human_principal_for(pool, actor).await,
         team_id,
         &AddMemberRequest {
             profile_id: profile,

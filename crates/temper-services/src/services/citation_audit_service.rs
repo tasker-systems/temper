@@ -61,7 +61,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::auth::AuthenticatedProfile;
+use crate::auth::Caller;
 use crate::authz::{finding_of_block, FINDING_REFUSAL};
 use crate::backend::DbBackend;
 use crate::error::{ApiError, ApiResult};
@@ -75,17 +75,15 @@ use temper_workflow::operations::{Backend, RecordCitationAudit};
 /// the command through `DbBackend` — which re-derives the same finding and independently
 /// authorizes over it (see module doc: two lookups, one gate).
 ///
-/// Takes the caller's resolved [`AuthenticatedProfile`] rather than a bare id: the handler holds a
-/// middleware-minted proof, and the backend command constructed below dispatches its
-/// `AuditAuthority` gate through the `Principal::Proof` arm that proof routes to — the caller
-/// passes the proof it already holds instead of having the seam re-derive a bare id from it. The
-/// proof is handed in by reference and cloned once behind the surface check; the CLI/operator
-/// path constructs its backend through `DbBackend::new` and stays on the `Bare` arm.
+/// Takes the classified [`Caller`] rather than a bare id: the handler holds the caller its
+/// middleware minted, and the backend command constructed below dispatches its `AuditAuthority`
+/// gate through the arm that caller routes to — a person's or a machine's. The caller is handed in
+/// by reference and cloned once behind the surface check.
 ///
 /// Returns the new `kb_citation_audits.id`.
 pub async fn record_citation_audit(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    caller: &Caller,
     path_finding: ResourceId,
     cmd: RecordCitationAudit,
 ) -> ApiResult<Uuid> {
@@ -100,7 +98,7 @@ pub async fn record_citation_audit(
         return Err(ApiError::NotFound(FINDING_REFUSAL.to_string()));
     }
 
-    let backend = DbBackend::with_proof(pool.clone(), authed);
+    let backend = DbBackend::with_proof(pool.clone(), caller);
     let out = backend
         .record_citation_audit(cmd)
         .await

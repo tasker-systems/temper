@@ -26,7 +26,7 @@ mod webhook_intake;
 pub use query::QUERY_MAX_BODY_BYTES;
 
 use axum::extract::DefaultBodyLimit;
-use axum::middleware::from_fn_with_state;
+use axum::middleware::{from_fn, from_fn_with_state};
 use axum::Router;
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
@@ -35,7 +35,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::middleware::{auth, internal_auth, relay_trust, system_access};
 use crate::openapi::ApiDoc;
 use admin::admin_routes;
-use auth_only::auth_only_routes;
+use auth_only::{auth_only_routes, auth_only_status_routes};
 use blob_doors::{blob_commit_body_limit, blob_commit_routes, blob_segment_routes};
 use embed_internal::embed_internal_routes;
 use gated::gated_routes;
@@ -52,11 +52,17 @@ use webhook_intake::webhook_intake_routes;
 enum Tier {
     /// No middleware: by-design public (`/health`).
     Public,
-    /// `require_auth` — authenticated, not system-access-gated.
+    /// `require_auth` — authenticated, not system-access-gated. Admits a machine.
     AuthOnly,
+    /// [`Tier::AuthOnly`] that refuses a machine: `require_auth`, then `refuse_machine`.
+    HumanAuthOnly,
     /// The gated chain: system access, auth, the relay-trust carrier, and the inherited
-    /// body ceiling. See [`GATED_MAX_BODY_BYTES`] and the row comments for the order.
+    /// body ceiling. See [`GATED_MAX_BODY_BYTES`] and the row comments for the order. Admits a
+    /// machine; the refused acts in it refuse one at the handler and the service.
     Gated,
+    /// [`Tier::Gated`] that refuses a machine: `refuse_machine` runs after `require_auth` and
+    /// before `require_system_access`, so an unapproved machine meets the machine refusal.
+    HumanGated,
     /// Rate limit inside a shared-secret HMAC signature gate; the kind names WHICH
     /// signature — three groups, three secrets, one scheme.
     InternalHmac(SignatureKind),
@@ -124,8 +130,13 @@ fn route_table() -> Vec<Group> {
         // By-design public: a health check discloses nothing and authenticates nobody.
         Group { key: "public_routes", tier: Tier::Public, build: Documented(public_routes), body_limit: None, serves: Serves::AppOnly },
         // Self-service: authenticated, but no system-access gate — a caller managing
-        // their own instance is a library caller, not an operator.
-        Group { key: "auth_only_routes", tier: Tier::AuthOnly, build: Documented(auth_only_routes), body_limit: None, serves: Serves::AppOnly },
+        // their own instance is a library caller, not an operator. A person's acts only: the
+        // tier refuses a machine before any handler runs.
+        Group { key: "auth_only_routes", tier: Tier::HumanAuthOnly, build: Documented(auth_only_routes), body_limit: None, serves: Serves::AppOnly },
+        // The one self-service read a machine keeps: its own profile and entitlements (how an
+        // agent learns whether it is approved). Its own group so the machine-admitting AuthOnly
+        // tier carries exactly this handler; `/api/profile`'s PATCH sits in `auth_only_routes`.
+        Group { key: "auth_only_status_routes", tier: Tier::AuthOnly, build: Documented(auth_only_status_routes), body_limit: None, serves: Serves::AppOnly },
         // Default-deny for all data routes. Addition order (INNER → OUTER, so execution
         // runs outermost-first): require_system_access, require_auth, relay_trust,
         // DefaultBodyLimit. Relay-trust runs BEFORE the auth layers — it rejects nothing
@@ -137,11 +148,12 @@ fn route_table() -> Vec<Group> {
         // own limits (the blob rows below, `/api/query` inside the group) stay inner
         // and win on their routes — the network door's ruling 3, design §D4.
         Group { key: "gated_routes", tier: Tier::Gated, build: Documented(gated_routes), body_limit: None, serves: Serves::AppOnly },
-        // The system-admin surface: the gated tier unchanged, its own row so the operator
-        // surface is one auditable set. The tier admits any approved principal; the gate that
-        // makes these routes admin-only is the `&SystemAdmin` proof each service requires,
-        // minted in the handler before dispatch (see `admin.rs` for the membership rule).
-        Group { key: "admin_routes", tier: Tier::Gated, build: Documented(admin_routes), body_limit: None, serves: Serves::AppOnly },
+        // The system-admin surface: the gated stack with the machine refusal, its own row so
+        // the operator surface is one auditable set. The tier admits any approved person; the
+        // gate that makes these routes admin-only is the `&SystemAdmin` proof each service
+        // requires, minted in the handler before dispatch (see `admin.rs` for the membership
+        // rule). A machine is refused at the tier, before any lookup.
+        Group { key: "admin_routes", tier: Tier::HumanGated, build: Documented(admin_routes), body_limit: None, serves: Serves::AppOnly },
         // The two blob doors, at the gated tier with their own body limits INNER to the
         // tier stack so the decisions they chose win on their routes. The commit door's
         // bound is the config's D7 threshold plus multipart overhead — the transport
@@ -205,6 +217,9 @@ fn apply_tier(router: Router<AppState>, tier: Tier, state: &AppState) -> Router<
     match tier {
         Tier::Public | Tier::SelfGated => router,
         Tier::AuthOnly => router.layer(from_fn_with_state(state.clone(), auth::require_auth)),
+        Tier::HumanAuthOnly => router
+            .layer(from_fn(auth::refuse_machine))
+            .layer(from_fn_with_state(state.clone(), auth::require_auth)),
         Tier::Gated => router
             .layer(from_fn_with_state(
                 state.clone(),
@@ -222,6 +237,21 @@ fn apply_tier(router: Router<AppState>, tier: Tier, state: &AppState) -> Router<
             ))
             // Ruling 3: the inherited default stops being an invisible second gate —
             // the doors that chose their own limits stay inner and win.
+            .layer(DefaultBodyLimit::max(GATED_MAX_BODY_BYTES)),
+        // Spelled out in full rather than composed from the Gated arm: composing would add
+        // `refuse_machine` innermost, AFTER `require_system_access`, and an unapproved machine
+        // would be told it lacks system access instead of that it is a machine.
+        Tier::HumanGated => router
+            .layer(from_fn_with_state(
+                state.clone(),
+                system_access::require_system_access,
+            ))
+            .layer(from_fn(auth::refuse_machine))
+            .layer(from_fn_with_state(state.clone(), auth::require_auth))
+            .layer(from_fn_with_state(
+                state.clone(),
+                relay_trust::require_relay_trust,
+            ))
             .layer(DefaultBodyLimit::max(GATED_MAX_BODY_BYTES)),
         Tier::InternalHmac(kind) => {
             // The rate-limit layer rides ONLY the reconcile pair's router — the base wiring

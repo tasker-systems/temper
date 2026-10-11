@@ -133,6 +133,13 @@ the sentence true.
   requests access in the first place.
 - **gated tier** — everything else. Adds the `require_system_access` layer.
 
+Who each tier admits is a third axis. The route table (`routes/mod.rs`) gives each tier a
+human-only twin that refuses a machine with a 403 before anything inner runs: the self-service
+group is `HumanAuthOnly` except the profile read (`auth_only_status_routes`, plain `AuthOnly`), and
+the admin group is `HumanGated`. The gated group admits machines and refuses a person's acts per
+handler — `AuthUser` takes a person, `AnyPrincipal` opts a content or workflow handler in for a
+machine.
+
 `temper-mcp` has **no** auth-only tier: every tool requires Level 2.
 
 A single `authorize_request()` that always ran all gates would **break** the request-access

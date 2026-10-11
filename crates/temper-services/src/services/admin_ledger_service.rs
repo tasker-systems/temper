@@ -30,7 +30,7 @@ use temper_core::types::ids::ProfileId;
 use temper_substrate::payloads::{EventRef, RefTarget};
 use uuid::Uuid;
 
-use crate::auth::AuthenticatedProfile;
+use crate::auth::HumanPrincipal;
 use crate::authz::{Principal, ACTOR_HISTORY_REFUSAL};
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service;
@@ -106,12 +106,15 @@ const ADMIN_EVENT_TYPES: &[&str] = &[
 /// second 50 readable rows, it is whatever survived of the second 50 raw rows.
 async fn readable_event_types(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     subject: RefTarget,
 ) -> ApiResult<Vec<&'static str>> {
-    let caller = ProfileId::from(authed.profile().id);
     // Admin reads everything; one query, and the common admin path stops here.
-    if access_service::is_system_admin(pool, caller).await? {
+    if crate::authz::Principal::Human(authed)
+        .system_admin(pool)
+        .await?
+        .is_some()
+    {
         return Ok(ADMIN_EVENT_TYPES.to_vec());
     }
 
@@ -122,7 +125,7 @@ async fn readable_event_types(
     // can_grant arm doing the work.)
     // `subject` is already a typed `RefTarget`; it used to be flattened to `(&str, Uuid)` here
     // purely because the gate took strings. It no longer does.
-    if access_service::can_administer_grant(pool, Principal::Proof(authed), subject).await? {
+    if access_service::can_administer_grant(pool, Principal::Human(authed), subject).await? {
         readable.push("grant_created");
         readable.push("grant_revoked");
     }
@@ -187,7 +190,7 @@ async fn readable_event_types(
 /// "Who was granted what on this subject, and when?"
 pub async fn list_by_subject(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     subject: RefTarget,
     limit: i64,
     offset: i64,
@@ -225,7 +228,7 @@ pub async fn list_by_subject(
 /// reachable by ordinary usage, not just by demotion.
 pub async fn list_by_actor(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     actor: ProfileId,
     limit: i64,
     offset: i64,
@@ -250,7 +253,7 @@ pub async fn list_by_actor(
     // an authority question about the actor axis. Keeping them separate is the point.
     crate::authz::authorize::<crate::authz::ActorHistoryAuthority>(
         pool,
-        Principal::Proof(authed),
+        Principal::Human(authed),
         actor,
     )
     .await?;

@@ -2,7 +2,7 @@ use axum::extract::{Path, State};
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use crate::middleware::surface::RequestSurface;
 use temper_core::types::ids::EdgeId;
 use temper_core::types::lineage::ResourceLineage;
@@ -38,7 +38,7 @@ use temper_workflow::types::graph::{GraphEdgeRow, ResourceConnections};
 )]
 pub async fn list(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<GraphEdgeRow>>> {
     edge_service::list_resource_edges(&state.pool, auth.0.profile().id, resource_id)
@@ -62,7 +62,7 @@ pub async fn list(
 )]
 pub async fn lineage(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(resource_id): Path<Uuid>,
     axum::extract::Query(q): axum::extract::Query<LineageQuery>,
 ) -> ApiResult<Json<ResourceLineage>> {
@@ -91,7 +91,7 @@ pub async fn lineage(
 )]
 pub async fn list_connections(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(resource_id): Path<Uuid>,
     axum::extract::Query(q): axum::extract::Query<ConnectionsQuery>,
 ) -> ApiResult<Json<ResourceConnections>> {
@@ -121,7 +121,7 @@ pub async fn list_connections(
 )]
 pub async fn assert(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Json(req): Json<AssertRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
@@ -166,7 +166,7 @@ pub async fn assert(
 )]
 pub async fn retype(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(edge_handle): Path<Uuid>,
     Json(req): Json<RetypeRelationshipRequest>,
@@ -208,7 +208,7 @@ pub async fn retype(
 )]
 pub async fn reweight(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(edge_handle): Path<Uuid>,
     Json(req): Json<ReweightRelationshipRequest>,
@@ -249,7 +249,7 @@ pub async fn reweight(
 )]
 pub async fn fold(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(edge_handle): Path<Uuid>,
     Json(req): Json<FoldRelationshipRequest>,

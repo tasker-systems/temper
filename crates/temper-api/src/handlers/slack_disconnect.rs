@@ -16,8 +16,7 @@ use temper_core::types::slack::{
 use temper_services::error::{ApiError, ApiResult};
 use temper_services::link_provider;
 use temper_services::services::slack_disconnect_service::{
-    admin_disconnect_slack_principal, disconnect_slack_principal, DisconnectOutcome,
-    DisconnectRequest,
+    admin_disconnect_slack_principal, disconnect_own, DisconnectOutcome, DisconnectRequest,
 };
 use temper_services::services::slack_link_service;
 use temper_services::state::AppState;
@@ -58,6 +57,7 @@ fn entry_for(principal: String, outcome: DisconnectOutcome) -> SlackDisconnected
     tag = "Slack Link",
     security(("bearer_auth" = [])),
     responses(
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 200, description = "Disconnect completed (idempotent); `disconnected` lists every principal unbound", body = SlackDisconnectResponse),
         (status = 401, description = "Authentication required, or Slack account linking is not configured on this instance", body = temper_services::error::ErrorBody),
     )
@@ -89,11 +89,11 @@ pub async fn disconnect_me(
 
     let mut disconnected = Vec::with_capacity(principals.len());
     for principal in principals {
-        let outcome = disconnect_slack_principal(
+        let outcome = disconnect_own(
             &state.pool,
             // Self-serve: the actor IS the subject. The principals were derived
             // from this profile's own link rows.
-            profile_id,
+            &auth.0,
             DisconnectRequest {
                 slack_principal_id: &principal,
                 key: &cfg.vault_key,
@@ -125,7 +125,7 @@ pub async fn disconnect_me(
         (status = 200, description = "Disconnect completed (idempotent); `disconnected` is empty when the principal was not linked", body = SlackDisconnectResponse),
         (status = 400, description = "Malformed Slack principal", body = temper_services::error::ErrorBody),
         (status = 401, description = "Authentication required, or Slack account linking is not configured on this instance", body = temper_services::error::ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
     )
 )]
 pub async fn admin_disconnect(

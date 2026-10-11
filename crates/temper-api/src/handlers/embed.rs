@@ -247,7 +247,7 @@ pub async fn warm(
         (status = 200, description = "What is stale in scope, and the resources enqueued (none on `dry_run`)", body = ReembedSummary),
         (status = 400, description = "Not exactly one of `resource_id`, `context_id`, `all`", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
     )
 )]
 pub async fn reembed(

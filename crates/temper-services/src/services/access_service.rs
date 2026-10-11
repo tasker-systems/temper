@@ -13,7 +13,7 @@ use temper_substrate::ids::EntityId;
 use temper_substrate::payloads::{AnchorTable, RefTarget};
 use uuid::Uuid;
 
-use crate::auth::{AuthenticatedProfile, SystemAdmin};
+use crate::auth::{HumanPrincipal, SystemAdmin};
 use crate::backend::substrate_read::husk_held_by;
 use crate::backend::write_floor;
 // In scope so `GrantAuthority::resolve` — the grant-administration gate, which lives as this
@@ -417,7 +417,7 @@ async fn grant_subject_floor_in_tx(
 /// the row already existed and was updated in place.
 pub async fn grant_capability(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     req: &GrantCapabilityRequest,
 ) -> ApiResult<GrantOutcome> {
     let caller = ProfileId::from(authed.profile().id);
@@ -428,7 +428,7 @@ pub async fn grant_capability(
     let subject = crate::authz::wire_subject(&req.subject_table, req.subject_id)
         .ok_or(ApiError::Forbidden)?;
     let proof =
-        match authorize_capability_grant(pool, Principal::Proof(authed), subject, req.into()).await
+        match authorize_capability_grant(pool, Principal::Human(authed), subject, req.into()).await
         {
             Ok(proof) => proof,
             Err(refusal) => return Err(erased_or_refused(pool, caller, subject, refusal).await),
@@ -470,7 +470,7 @@ pub async fn grant_capability(
 /// (idempotent, mirrors `bind_team`/`unbind_team`).
 pub async fn revoke_capability(
     pool: &PgPool,
-    authed: &AuthenticatedProfile,
+    authed: &HumanPrincipal,
     req: &RevokeCapabilityRequest,
 ) -> ApiResult<RevokeOutcome> {
     let caller = ProfileId::from(authed.profile().id);
@@ -481,7 +481,7 @@ pub async fn revoke_capability(
     // its warrant. Deliberately NOT `authorize_capability_grant`: that adds attenuation, and
     // attenuating a revocation is what would make a grant unwithdrawable.
     let proof =
-        match crate::authz::authorize::<GrantAuthority>(pool, Principal::Proof(authed), subject)
+        match crate::authz::authorize::<GrantAuthority>(pool, Principal::Human(authed), subject)
             .await
         {
             Ok(proof) => proof,
@@ -1024,7 +1024,6 @@ pub const MAX_DECIDED_JOIN_REQUESTS: i64 = 25;
 
 /// Parameters for creating a join request.
 pub struct CreateJoinRequestParams {
-    pub profile_id: ProfileId,
     pub message: Option<String>,
     pub source: String,
     pub accepted_terms_version: Option<String>,
@@ -1051,19 +1050,21 @@ pub struct CreateJoinRequestParams {
 /// principal at the decided-history cap is refused before any write.
 pub async fn create_join_request(
     pool: &PgPool,
+    requester: &HumanPrincipal,
     params: CreateJoinRequestParams,
     request_rate: Option<crate::rate_limit::WindowLimit>,
 ) -> ApiResult<JoinRequest> {
+    let profile_id = requester.profile_id();
     // Pressure before standing: the guard reads a windowed COUNT over this table's own
     // rows — no new table, no second bookkeeping (spec A2's "count the canonical
     // artifact"). Refused here, the caller never triggers the standing transition below,
     // which is a write.
-    crate::rate_limit::guard_join_request(pool, *params.profile_id, request_rate).await?;
+    crate::rate_limit::guard_join_request(pool, *profile_id, request_rate).await?;
 
     // Admission before standing, same position, same reason — one indexed count, refused
     // before any read or write. This one is never off (see MAX_DECIDED_JOIN_REQUESTS):
     // it is the growth bound the pressure guard above cannot be.
-    guard_join_request_history(pool, params.profile_id).await?;
+    guard_join_request_history(pool, profile_id).await?;
 
     // Resolve the request's target FIRST. These are READS, so doing them before any standing write
     // keeps auth-before-writes honest: an unconfigured gating team must fail BEFORE standing moves,
@@ -1096,9 +1097,9 @@ pub async fn create_join_request(
     standing_service::apply(
         pool,
         ApplyStandingParams {
-            subject: params.profile_id,
+            subject: profile_id,
             act: Act::Request,
-            actor: Some(params.profile_id),
+            actor: Some(profile_id),
             authority: ActorAuthority::SelfPrincipal,
         },
     )
@@ -1125,7 +1126,7 @@ pub async fn create_join_request(
         "#,
         request_id,
         team_id,
-        *params.profile_id,
+        *profile_id,
         params.message,
         params.source,
         params.accepted_terms_version,
@@ -1217,7 +1218,8 @@ pub async fn get_own_request(
 /// (is a gating team configured?) that the public settings endpoint withholds.
 const NOTHING_TO_WITHDRAW: &str = "no pending join request to withdraw";
 
-pub async fn withdraw_request(pool: &PgPool, profile_id: ProfileId) -> ApiResult<()> {
+pub async fn withdraw_request(pool: &PgPool, requester: &HumanPrincipal) -> ApiResult<()> {
+    let profile_id = requester.profile_id();
     // Standing first (auth before writes): Withdraw is legal only from `Requested` (§6), so a
     // principal with nothing pending is refused here rather than reaching the row UPDATE.
     standing_service::apply(
@@ -1276,7 +1278,6 @@ pub const REVIEW_CLOSED_BY_READMISSION: &str = "closed by readmission — the pr
 
 /// Parameters for a review request (spec D15 — a revoked principal asking for reconsideration).
 pub struct CreateReviewRequestParams {
-    pub profile_id: ProfileId,
     pub message: Option<String>,
 }
 
@@ -1287,17 +1288,19 @@ pub struct CreateReviewRequestParams {
 /// (`idx_principal_review_one_open`) guards against duplicate open reviews (D15 obligation 2).
 pub async fn create_review_request(
     pool: &PgPool,
+    requester: &HumanPrincipal,
     params: CreateReviewRequestParams,
 ) -> ApiResult<()> {
+    let profile_id = requester.profile_id();
     // Standing gate first (auth before writes): RequestReview is legal only from `Revoked` (§6).
     // It moves nothing — the marker's whole point is that reconsideration cannot launder a
     // revocation (D15). An illegal call refuses before any review row exists.
     standing_service::apply(
         pool,
         ApplyStandingParams {
-            subject: params.profile_id,
+            subject: profile_id,
             act: Act::RequestReview,
-            actor: Some(params.profile_id),
+            actor: Some(profile_id),
             authority: ActorAuthority::SelfPrincipal,
         },
     )
@@ -1305,7 +1308,7 @@ pub async fn create_review_request(
 
     sqlx::query!(
         "INSERT INTO kb_principal_review_requests (profile_id, message) VALUES ($1, $2)",
-        *params.profile_id,
+        *profile_id,
         params.message,
     )
     .execute(pool)

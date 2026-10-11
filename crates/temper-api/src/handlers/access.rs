@@ -37,6 +37,7 @@ use temper_services::state::AppState;
     request_body = CreateRequestBody,
     security(("bearer_auth" = [])),
     responses(
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 201, description = "Join request created", body = JoinRequest),
         (status = 400, description = "The request is not legal from the caller's standing", body = ErrorBody),
         (status = 409, description = "A request is already pending, or access is already granted", body = ErrorBody),
@@ -50,7 +51,6 @@ pub async fn create_request(
     Json(body): Json<CreateRequestBody>,
 ) -> ApiResult<(StatusCode, Json<JoinRequest>)> {
     let params = access_service::CreateJoinRequestParams {
-        profile_id: ProfileId::from(auth.0.profile().id),
         message: body.message,
         source: body.source,
         accepted_terms_version: body.accepted_terms_version,
@@ -58,6 +58,7 @@ pub async fn create_request(
 
     let request = access_service::create_join_request(
         &state.pool,
+        &auth.0,
         params,
         state.config.rate_limit.and_then(|r| r.create_request),
     )
@@ -72,6 +73,7 @@ pub async fn create_request(
     tag = "Access",
     security(("bearer_auth" = [])),
     responses(
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 200, description = "Own join request, or null if none exists", body = Option<JoinRequest>),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
@@ -92,6 +94,7 @@ pub async fn get_own_request(
     tag = "Access",
     security(("bearer_auth" = [])),
     responses(
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 204, description = "Pending join request withdrawn"),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "No pending join request to withdraw", body = ErrorBody),
@@ -101,7 +104,7 @@ pub async fn withdraw_request(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<StatusCode> {
-    access_service::withdraw_request(&state.pool, ProfileId::from(auth.0.profile().id)).await?;
+    access_service::withdraw_request(&state.pool, &auth.0).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -120,6 +123,7 @@ pub async fn withdraw_request(
     request_body = CreateReviewBody,
     security(("bearer_auth" = [])),
     responses(
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 201, description = "Review request recorded"),
         (status = 400, description = "Only a revoked principal may request review", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
@@ -132,8 +136,8 @@ pub async fn create_review_request(
 ) -> ApiResult<StatusCode> {
     access_service::create_review_request(
         &state.pool,
+        &auth.0,
         access_service::CreateReviewRequestParams {
-            profile_id: ProfileId::from(auth.0.profile().id),
             message: body.message,
         },
     )
@@ -148,11 +152,15 @@ pub async fn create_review_request(
     tag = "Access",
     security(("bearer_auth" = [])),
     responses(
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 200, description = "Public system settings", body = PublicSystemSettings),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
 )]
-pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<PublicSystemSettings>> {
+pub async fn get_settings(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+) -> ApiResult<Json<PublicSystemSettings>> {
     access_service::get_public_settings(&state.pool)
         .await
         .map(Json)
@@ -185,7 +193,7 @@ pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<Publi
     responses(
         (status = 200, description = "Pending join requests, with the requesting profile's identity", body = Vec<JoinRequestWithProfile>),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
 )
 )]
 pub async fn list_pending(
@@ -214,7 +222,7 @@ pub async fn list_pending(
     responses(
         (status = 200, description = "How many join requests are pending", body = QueueCount),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
 )
 )]
 pub async fn count_pending(
@@ -242,7 +250,7 @@ pub async fn count_pending(
         (status = 200, description = "The reviewed join request", body = JoinRequest),
         (status = 400, description = "The decision is not a legal review outcome", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such join request", body = ErrorBody),
 )
 )]
@@ -280,7 +288,7 @@ pub async fn review_request(
     responses(
         (status = 200, description = "Open reconsideration requests, with the asking principal's identity", body = Vec<ReviewRequestWithProfile>),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
 )
 )]
 pub async fn list_reviews(
@@ -307,7 +315,7 @@ pub async fn list_reviews(
     responses(
         (status = 200, description = "How many reconsideration requests are open", body = QueueCount),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
 )
 )]
 pub async fn count_reviews(
@@ -338,7 +346,7 @@ pub async fn count_reviews(
     responses(
         (status = 204, description = "Reconsideration recorded as handled; no standing moved"),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such open reconsideration request", body = ErrorBody),
 )
 )]
@@ -373,7 +381,7 @@ pub async fn close_review(
     responses(
         (status = 200, description = "Full system settings, including the gating team slug", body = SystemSettings),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
 )
 )]
 pub async fn get_admin_settings(
@@ -400,7 +408,7 @@ pub async fn get_admin_settings(
         (status = 200, description = "Settings after the partial update", body = SystemSettings),
         (status = 400, description = "Invalid settings value", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
 )
 )]
 pub async fn update_settings(
@@ -432,7 +440,7 @@ pub async fn update_settings(
         (status = 200, description = "Profile promoted; the side-effect team membership row", body = TeamMemberRow),
         (status = 400, description = "The profile or team cannot be promoted into, or the profile is a machine principal (a machine never governs)", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
 )
 )]
 pub async fn promote_admin(
@@ -465,7 +473,7 @@ pub async fn promote_admin(
     responses(
         (status = 200, description = "System-admin governance grant revoked (idempotent)"),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
 )
 )]
 pub async fn demote_admin(
@@ -504,7 +512,7 @@ pub async fn demote_admin(
         (status = 200, description = "Principal approved"),
         (status = 400, description = "Approval is not a legal transition from the principal's standing", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 409, description = "The principal is already approved", body = ErrorBody),
 )
 )]
@@ -533,7 +541,7 @@ pub async fn approve_principal(
     responses(
         (status = 200, description = "The roster pairs added (empty when already converged) and the SAML-mapped teams touched", body = ReconcileAutoJoinOutcome),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
 )
 )]
 pub async fn reconcile_auto_join(
@@ -560,7 +568,7 @@ pub async fn reconcile_auto_join(
         (status = 200, description = "Principal's admission revoked"),
         (status = 400, description = "Revocation is not a legal transition from the principal's standing", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 409, description = "The transition conflicts with the principal's current standing", body = ErrorBody),
 )
 )]
@@ -595,7 +603,7 @@ pub async fn revoke_principal(
         (status = 200, description = "Principal deactivated"),
         (status = 400, description = "Deactivation is not a legal transition from the principal's standing", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 409, description = "The transition conflicts with the principal's current standing", body = ErrorBody),
 )
 )]
@@ -623,7 +631,7 @@ pub async fn deactivate_principal(
         (status = 200, description = "Principal reactivated"),
         (status = 400, description = "Reactivation is not a legal transition from the principal's standing", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 409, description = "The transition conflicts with the principal's current standing", body = ErrorBody),
 )
 )]

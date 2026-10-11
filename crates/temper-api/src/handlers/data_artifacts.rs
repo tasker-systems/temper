@@ -2,7 +2,7 @@ use axum::extract::{Path, Query, State};
 use axum::Json;
 use uuid::Uuid;
 
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::AnyPrincipal;
 use crate::middleware::surface::RequestSurface;
 use temper_core::types::data_artifact::{
     ArtifactCommitRequest, ArtifactCommitResponse, ArtifactListParams, ArtifactView,
@@ -35,7 +35,7 @@ use temper_workflow::operations::{Backend, CommitDataArtifact};
 )]
 pub async fn list(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(resource_id): Path<Uuid>,
     Query(params): Query<ArtifactListParams>,
 ) -> ApiResult<Json<serde_json::Value>> {
@@ -89,7 +89,7 @@ pub async fn list(
 )]
 pub async fn get(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path((_resource_id, artifact_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<ArtifactView>> {
     let artifact = temper_services::backend::substrate_read::get_artifact(
@@ -131,7 +131,7 @@ pub async fn get(
 #[allow(rustdoc::redundant_explicit_links)]
 pub async fn get_by_id(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     Path(artifact_id): Path<Uuid>,
 ) -> ApiResult<Json<ArtifactView>> {
     let artifact = temper_services::backend::substrate_read::get_artifact(
@@ -169,7 +169,7 @@ pub async fn get_by_id(
 )]
 pub async fn commit(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AnyPrincipal,
     RequestSurface(surface): RequestSurface,
     Path(resource_id): Path<Uuid>,
     Json(req): Json<ArtifactCommitRequest>,
