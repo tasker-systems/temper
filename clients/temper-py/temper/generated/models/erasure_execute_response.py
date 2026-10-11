@@ -34,7 +34,7 @@ class ErasureExecuteResponse(BaseModel):
     """ # noqa: E501
     already_erased: StrictBool
     blob_strikes: List[BlobStrikeView]
-    estate_stragglers: Optional[Annotated[int, Field(strict=True, ge=0)]] = Field(default=None, description="Live resources and blobs still homed in the estate after the act committed: created there while the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which erases them. Absent when the count could not be read: unknown, never zero.")
+    estate_stragglers: Optional[Annotated[int, Field(strict=True, ge=0)]] = Field(default=None, description="Live resources and blobs still homed in the estate after the act committed, and contexts of the estate not yet erased: created there while the act ran (ruled Q3, 2026-10-10). Non-zero means run the act again, which erases them. Absent when the count could not be read: unknown, never zero.")
     event_id: UUID
     redacted_hashes: List[StrictStr] = Field(description="The redacted set (D2): content hashes only.")
     resource_erasures: Optional[List[EstateResourceErasure]] = Field(default=None, description="The resource erasures the act ran over the estate, in the order it ran them.")
