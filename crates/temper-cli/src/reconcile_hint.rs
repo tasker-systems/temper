@@ -104,6 +104,9 @@ pub fn lost_ack_prone(command: &Commands) -> Option<LostAckProne> {
             AdminErasureAction::Field { execute, .. } => {
                 execute.then_some(LostAckProne::FieldScrubAct)
             }
+            // Setting or removing a policy is idempotent: re-running it after a lost answer is
+            // harmless, so there is nothing to warn about.
+            AdminErasureAction::Retention { .. } => None,
         },
         _ => None,
     }

@@ -274,6 +274,9 @@ principal_erased:/targets/*/target                        | structural          
 principal_erased:/targets/*/outcome                       | structural               | the principal act's record
 principal_erased:/redacted_hashes/*                       | structural               | hashes
 principal_erased:/redacted_fields/*/paths/*               | structural               | ledger paths the person act rewrote; paths only, never values
+principal_erased:/retained/*/policy                       | structural               | the deployment's retention policy name, an operator-chosen slug (R4)
+principal_erased:/retained/*/basis                        | structural               | the policy's stated legal basis, operator-typed; names no person
+principal_erased:/retained/*/period                       | structural               | the policy's period as an interval
 principal_erasure_refused:/detail                         | structural               | fixed text
 
 # ── out of scope: not the resource's text ───────────────────────────────────────────────────

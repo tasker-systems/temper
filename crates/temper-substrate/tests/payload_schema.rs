@@ -173,6 +173,10 @@ fn the_migration_literal_matches_the_committed_fixture() {
         ),
         (
             "20261022100000_person_erasure_evented_retirement.sql",
+            &[SUPERSEDED], // principal_erased: 20261023100000
+        ),
+        (
+            "20261023100000_person_erasure_identifiers_and_credentials.sql",
             &["principal_erased.v1.schema.json"],
         ),
     ] {

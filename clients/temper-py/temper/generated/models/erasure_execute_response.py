@@ -24,6 +24,7 @@ from uuid import UUID
 from temper.generated.models.blob_strike_view import BlobStrikeView
 from temper.generated.models.erasure_target_outcome import ErasureTargetOutcome
 from temper.generated.models.estate_resource_erasure import EstateResourceErasure
+from temper.generated.models.slack_revocation_tally import SlackRevocationTally
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -38,9 +39,10 @@ class ErasureExecuteResponse(BaseModel):
     event_id: UUID
     redacted_hashes: List[StrictStr] = Field(description="The redacted set (D2): content hashes only.")
     resource_erasures: Optional[List[EstateResourceErasure]] = Field(default=None, description="The resource erasures the act ran over the estate, in the order it ran them.")
+    slack_revocation: Optional[SlackRevocationTally] = Field(default=None, description="What happened to the subject's Slack grants at Slack before the act destroyed them: revoked, queued for retry, or never attempted. Counts only.")
     status: StrictStr
     targets: List[ErasureTargetOutcome] = Field(description="Per-target outcomes and the named remainder (D6's accepted-in-part arm): the operator sees the `independent_obligation` remainder AT THE DOOR, not only in the ledger — the completion's own payload is the audit, but the door's caller is the actor and deserves the same facts.")
-    __properties: ClassVar[List[str]] = ["already_erased", "blob_strikes", "estate_stragglers", "event_id", "redacted_hashes", "resource_erasures", "status", "targets"]
+    __properties: ClassVar[List[str]] = ["already_erased", "blob_strikes", "estate_stragglers", "event_id", "redacted_hashes", "resource_erasures", "slack_revocation", "status", "targets"]
 
     @field_validator('status')
     def status_validate_enum(cls, value):
@@ -102,6 +104,9 @@ class ErasureExecuteResponse(BaseModel):
                 if _item_resource_erasures:
                     _items.append(_item_resource_erasures.to_dict())
             _dict['resource_erasures'] = _items
+        # override the default output from pydantic by calling `to_dict()` of slack_revocation
+        if self.slack_revocation:
+            _dict['slack_revocation'] = self.slack_revocation.to_dict()
         # override the default output from pydantic by calling `to_dict()` of each item in targets (list)
         _items = []
         if self.targets:
@@ -132,6 +137,7 @@ class ErasureExecuteResponse(BaseModel):
             "event_id": obj.get("event_id"),
             "redacted_hashes": obj.get("redacted_hashes"),
             "resource_erasures": [EstateResourceErasure.from_dict(_item) for _item in obj["resource_erasures"]] if obj.get("resource_erasures") is not None else None,
+            "slack_revocation": SlackRevocationTally.from_dict(obj["slack_revocation"]) if obj.get("slack_revocation") is not None else None,
             "status": obj.get("status"),
             "targets": [ErasureTargetOutcome.from_dict(_item) for _item in obj["targets"]] if obj.get("targets") is not None else None
         })

@@ -1180,6 +1180,14 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 temper_cli::actions::runtime::with_client(|client| {
                     Box::pin(async move {
                         match action {
+                            AdminErasureAction::Retention { action } => {
+                                temper_cli::commands::admin_erasure::retention_remote(
+                                    client,
+                                    action,
+                                    output_format,
+                                )
+                                .await
+                            }
                             AdminErasureAction::Resource {
                                 resource,
                                 also_strike_blobs,

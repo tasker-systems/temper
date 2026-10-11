@@ -374,6 +374,10 @@ from temper.generated.models.resource_sort_field import ResourceSortField
 from temper.generated.models.resource_update_request import ResourceUpdateRequest
 from temper.generated.models.resource_view import ResourceView
 from temper.generated.models.restore_context_outcome import RestoreContextOutcome
+from temper.generated.models.retention_category import RetentionCategory
+from temper.generated.models.retention_policies import RetentionPolicies
+from temper.generated.models.retention_policy import RetentionPolicy
+from temper.generated.models.retention_policy_set import RetentionPolicySet
 from temper.generated.models.retire_context_outcome import RetireContextOutcome
 from temper.generated.models.return_spec import ReturnSpec
 from temper.generated.models.retype_relationship_request import RetypeRelationshipRequest
@@ -407,6 +411,7 @@ from temper.generated.models.share_context_request import ShareContextRequest
 from temper.generated.models.slack_disconnect_request import SlackDisconnectRequest
 from temper.generated.models.slack_disconnect_response import SlackDisconnectResponse
 from temper.generated.models.slack_disconnected_principal import SlackDisconnectedPrincipal
+from temper.generated.models.slack_revocation_tally import SlackRevocationTally
 from temper.generated.models.slice_request import SliceRequest
 from temper.generated.models.sort_order import SortOrder
 from temper.generated.models.stage_disposition import StageDisposition

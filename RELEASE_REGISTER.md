@@ -32,6 +32,34 @@ with its corrected shape and this row's title, in `corrections.json` beside the 
 (`schemas/versions/<M.m>/`); the pin gate checks the record names a `spec-correction` row.
 
 ## Since v0.6.0 — unreleased
+- **Erasing a person now removes their identifiers everywhere and revokes their live credentials**
+  The principal erasure act removed the profile's and the auth links' identifiers and left the
+  like kinds. It now also sentinels invitations sent by the subject or to an email they verified
+  (revoking pending ones; an invitation to an address they never verified is left and named by
+  count); deletes the login flows and refresh tokens bound to their profile, and refresh tokens
+  never bound but theirs by the instance's login provider and `sub`, with their replay records;
+  ends every refresh chain of theirs, so a rotation racing the act mints no successor (the AS's
+  refresh gate also refuses an erased principal, and a successor that arrives behind the act is
+  not stored, the AS's existing no-refresh-token answer); revokes in temper and empties the credential of every connection homed in their estate or whose machine principal
+  they are (provider-side tokens are not revoked there); empties their entities' metadata; deletes
+  their staged uploads; reaches Slack stores through the vault's own profile, not only a current
+  link; nulls standing, join and review free text about them; and rewrites the ledger's standing
+  and governance reasons, an earlier erasure refusal's detail, and disconnected Slack ids about
+  them. Before destroying a Slack grant the
+  service revokes it at Slack; a failed revoke is queued, sealed and naming no one, and the
+  existing erasure drain cron retries it for up to seven days. A deployment can keep a category of
+  free text or replay evidence through a new admin door, `GET`/`PUT /api/admin/erasure/retention`
+  and `DELETE /api/admin/erasure/retention/{category}` (CLI: `temper admin erasure retention`);
+  the act records each kept category as `retained under policy <name>`, and the `principal_erased`
+  payload gains the required key `retained`. `POST /api/admin/erasure`'s completion gains
+  `slack_revocation` (counts: revoked, queued, not attempted, failed; with a default); every existing field keeps its shape. Who observes:
+  system admins running or surveying a person erasure or setting a retention policy, and anyone
+  whose invitation, login or connection belonged to an erased person. Release relevance:
+  behavioral, plus an additive response field and three new admin routes.
+pr: self
+classes: additive, behavioral
+surfaces: http, clients, cli-stdout, schema
+status: signal-only
 - **The steward and mention agents move to eve 0.73; temper-telemetry-ts gains an eve-owned export path**
   `@tasker-systems/temper-telemetry-ts` adds `otlpSpanProcessors()` and `httpInstrumentations()`,
   the exporter and instrumentation halves of `initTelemetry()` without its provider registration,

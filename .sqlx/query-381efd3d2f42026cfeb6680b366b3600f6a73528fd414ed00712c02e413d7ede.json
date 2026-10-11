@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_erasure_slack_revocations\n                   (id, key_version, rt_nonce, rt_ciphertext, give_up_at)\n               VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int2",
+        "Bytea",
+        "Bytea",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "381efd3d2f42026cfeb6680b366b3600f6a73528fd414ed00712c02e413d7ede"
+}

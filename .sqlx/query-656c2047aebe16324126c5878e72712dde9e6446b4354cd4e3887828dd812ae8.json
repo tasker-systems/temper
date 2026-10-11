@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_erasure_slack_revocations\n              SET key_version = NULL, rt_nonce = NULL, rt_ciphertext = NULL,\n                  resolved_at = now(), outcome = $2\n            WHERE id = $1 AND resolved_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "656c2047aebe16324126c5878e72712dde9e6446b4354cd4e3887828dd812ae8"
+}
