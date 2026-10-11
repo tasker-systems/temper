@@ -62,6 +62,11 @@ updates:
     groups:
       bun-workspace:
         update-types: ["minor", "patch"]
+    ignore:
+      # @huggingface/transformers pins onnxruntime-node to an exact version, and the root and
+      # temper-cloud manifests pin and override onnxruntime to match it. They move together with
+      # a transformers upgrade, never on their own.
+      - dependency-name: "onnxruntime-*"
     commit-message:
       prefix: "chore(deps)"
 
