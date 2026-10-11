@@ -649,12 +649,29 @@ for f in $GROUP_FILES; do
   # and `mod x {` drops through its matching close brace (braces counted outside strings). A
   # test-only `use` or item ends nothing, and no test module, wherever it sits, hides what follows.
   body="$(awk '
-    function strip(line,    out, i, n, c, d, inq) {
-      out = ""; inq = 0; n = length(line)
+    # Lexer state persists across lines: a block comment, an ordinary string (which may span
+    # lines) or a raw string `r#"…"#` (closed by a quote and the same number of hashes, held in
+    # `rawend`). Char literals are passed whole, so a quote or slash char cannot flip that state.
+    function strip(line,    out, i, n, c, d, h) {
+      out = ""; n = length(line)
       for (i = 1; i <= n; i++) {
         c = substr(line, i, 1); d = substr(line, i + 1, 1)
         if (inblk) { if (c == "*" && d == "/") { inblk = 0; i++ } ; continue }
+        if (rawend != "") {
+          if (substr(line, i, length(rawend)) == rawend) { out = out rawend; i += length(rawend) - 1; rawend = "" }
+          else out = out c
+          continue
+        }
         if (inq) { out = out c; if (c == "\\") { out = out d; i++ } else if (c == "\"") inq = 0; continue }
+        if (c == "r" && (d == "\"" || d == "#") && (i == 1 || substr(line, i - 1, 1) !~ /[A-Za-z0-9_]/)) {
+          h = ""; while (substr(line, i + 1 + length(h), 1) == "#") h = h "#"
+          if (substr(line, i + 1 + length(h), 1) == "\"") {
+            out = out "r" h "\""; i += 1 + length(h); rawend = "\"" h
+            continue
+          }
+        }
+        if (c == "'"'"'" && substr(line, i + 2, 1) == "'"'"'") { out = out substr(line, i, 3); i += 2; continue }
+        if (c == "'"'"'" && d == "\\" && substr(line, i + 3, 1) == "'"'"'") { out = out substr(line, i, 4); i += 3; continue }
         if (c == "\"") { inq = 1; out = out c; continue }
         if (c == "/" && d == "/") break
         if (c == "/" && d == "*") { inblk = 1; i++; continue }
@@ -662,13 +679,18 @@ for f in $GROUP_FILES; do
       }
       return out
     }
+    # Net braces on a line, ignoring those inside string and char literals.
     function braces(line,    t, o, cl) {
-      t = line; gsub(/"([^"\\]|\\.)*"/, "", t)
+      t = line; gsub(/"([^"\\]|\\.)*"/, "", t); gsub(/'"'"'(\\.|[^'"'"'\\])'"'"'/, "", t)
       o = gsub(/\{/, "{", t); cl = gsub(/\}/, "}", t)
       return o - cl
     }
     { line = strip($0) }
-    skipping { depth += braces(line); if (depth <= 0) skipping = 0; next }
+    skipping {
+      depth += braces(line)
+      if (depth <= 0) skipping = 0
+      next
+    }
     pending && line ~ /^[[:space:]]*$/ { next }
     pending && line ~ /^[[:space:]]*(pub(\([a-z]+\))?[[:space:]]+)?mod[[:space:]]/ {
       pending = 0
@@ -679,7 +701,13 @@ for f in $GROUP_FILES; do
     pending { pending = 0; print held }
     line ~ /^[[:space:]]*#\[cfg\(test\)\][[:space:]]*$/ { pending = 1; held = line; next }
     { print line }
+    END { if (inblk || inq || rawend != "") print "@@UNTERMINATED@@" }
   ' "$f" | tr '\n' ' ')"
+  # A comment or string still open at the end of the file means the lexer lost its place, and
+  # everything after that point was read as one comment or string: fail closed.
+  if printf '%s' "$body" | grep -qF '@@UNTERMINATED@@'; then
+    UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: a comment or string the scan could not close (it read nothing after it)"$'\n'
+  fi
   # The scan must still hold every group the file defines; a body that lost one read nothing of it.
   for g in $(grep -Eo "fn (${AUTH_COVERED})\(" "$f" | sed -E 's/^fn //; s/\($//' | sort -u); do
     if ! printf '%s' "$body" | grep -Eq "fn ${g}\("; then
@@ -696,7 +724,7 @@ for f in $GROUP_FILES; do
     [[ -z "$r" ]] && continue
     UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: ${r} (a .routes( argument that is not routes!(...))"$'\n'
   done < <(printf '%s' "$body" | grep -Eo '\.routes[[:space:]]*\([[:space:]]*[^[:space:]]{1,40}' | grep -Ev '\.routes[[:space:]]*\([[:space:]]*routes!\(' || true)
-  for hit in $(printf '%s' "$body" | grep -Eo '(\.|::)(route|route_service|nest|nest_service|fallback|fallback_service|merge|routes)[[:space:]]*\(' | grep -Ev '^\.(merge|routes)' | tr -d ' (' || true); do
+  for hit in $(printf '%s' "$body" | { grep -Eo '(\.|::)(route|route_service|nest|nest_service|fallback|fallback_service|merge|routes)[[:space:]]*\(|Router::(route|route_service|nest|nest_service|fallback|fallback_service|merge|routes)([^A-Za-z0-9_!(]|$)' || true; } | grep -Ev '^\.(merge|routes)' | tr -d ' (' || true); do
     UNNAMED_MOUNTS="${UNNAMED_MOUNTS}${f}: ${hit}("$'\n'
   done
   while IFS= read -r m; do

@@ -571,6 +571,33 @@ printf 'pub(super) fn admin_routes() {}\n' > "$FIX/gated/inner.rs"
 run_test "a Rust file nested under routes/: fails" "$FIX" 1 \
     "a Rust file nested under the routes module"
 
+# --- (y) the lexer fails closed: a raw or multi-line string cannot open a comment that hides a
+#     mount, a char-literal brace cannot misplace a test module's end, and a router method passed
+#     as a path is a mount ---
+for spelling in raw_string_slash_star multiline_string_slash_star char_brace_in_test_mod method_path; do
+  FIX="${FIXTURE_DIR}/lexer_${spelling}"
+  copy_module "$FIX"
+  python3 - "$FIX/gated.rs" "$spelling" <<'PYEOF2'
+import sys
+p, spelling = sys.argv[1], sys.argv[2]
+s = open(p).read()
+b = "        .routes(routes!(handlers::resources::get_content))"
+assert b in s
+evil = '\n        .route("/evil", axum::routing::get(handlers::teams::create))'
+if spelling == "raw_string_slash_star":
+    s = s.replace(b, b + '\n        .layer(make_layer(r#"say "hi /* glob"#))' + evil, 1)
+elif spelling == "multiline_string_slash_star":
+    s = s.replace(b, b + '\n        .layer(make_layer("first line\nsrc/* glob"))' + evil, 1)
+elif spelling == "char_brace_in_test_mod":
+    s += "\n#[cfg(test)]\nmod probe {\n    const OPEN: char = '{';\n}\n\nfn extra() { OpenApiRouter::new()" + evil + "; }\n"
+else:
+    s = s.replace(b, b + "\n        ;\n    let _ = [OpenApiRouter::new()].into_iter().fold(OpenApiRouter::new(), OpenApiRouter::merge)", 1)
+open(p, "w").write(s)
+PYEOF2
+  run_test "a mount hidden by ${spelling}: fails" "$FIX" 1 \
+      "an auth-covered group mounts a route not named handlers::<mod>::<fn>"
+done
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
 [ "$FAIL" -eq 0 ]
