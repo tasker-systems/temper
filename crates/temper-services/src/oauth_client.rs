@@ -81,6 +81,26 @@ struct OAuthErrorBody {
     error: String,
 }
 
+/// The IdP's `error` code, if it is one RFC 6749 §5.2 (or the RFC 8628/OIDC codes Auth0 uses on
+/// this endpoint) defines; anything else is `"other"`. The field is IdP-controlled free text in
+/// practice, so it is never logged verbatim — a non-compliant IdP could echo request material there.
+fn loggable_error_code(code: Option<&str>) -> &'static str {
+    match code {
+        Some("invalid_request") => "invalid_request",
+        Some("invalid_client") => "invalid_client",
+        Some("invalid_grant") => "invalid_grant",
+        Some("unauthorized_client") => "unauthorized_client",
+        Some("unsupported_grant_type") => "unsupported_grant_type",
+        Some("invalid_scope") => "invalid_scope",
+        Some("access_denied") => "access_denied",
+        Some("mfa_required") => "mfa_required",
+        Some("temporarily_unavailable") => "temporarily_unavailable",
+        Some("server_error") => "server_error",
+        Some(_) => "other",
+        None => "none",
+    }
+}
+
 /// Spend a refresh token for a fresh access token (RFC 6749 §6), same public PKCE client, no
 /// secret. Auth0 rotates the RT on every such call, so the response's `refresh_token` (when
 /// present) SUPERSEDES the one spent — the caller must persist it and never replay the old one,
@@ -91,8 +111,8 @@ struct OAuthErrorBody {
 /// Auth0 answers `invalid_grant` with 403 and the AS with 400, while a 401/403 can equally mean
 /// `invalid_client`, which is a broken deployment rather than a dead grant.
 ///
-/// Never logs the token, the response, or the client's reply body beyond its `error` code (a fixed
-/// RFC 6749 vocabulary, not request material).
+/// Never logs the token, the response, or the client's reply body beyond its `error` code, and that
+/// only when it is a known RFC 6749 code (see `loggable_error_code`).
 pub async fn refresh_grant(
     token_url: &str,
     client_id: &str,
@@ -131,7 +151,7 @@ pub async fn refresh_grant(
         }
         tracing::warn!(
             %status,
-            error = error_code.as_deref().unwrap_or("unknown"),
+            error = loggable_error_code(error_code.as_deref()),
             "slack grant vault: refresh rejected by the IdP"
         );
         return Err(ApiError::Unauthorized("refresh grant failed".to_string()));

@@ -141,10 +141,10 @@ const RECONNECT_REMEDY =
  *
  * Distinct from {@link standingRefusedPrompt} on purpose. This user did nothing wrong and
  * nothing was withheld: their link predates the credential store, the link never completed, or —
- * the common case — the stored credential EXPIRED. temper drops a grant the identity provider
- * refuses as `invalid_grant` (aged past the refresh-token lifetime after a long gap between
- * mentions, rotated out, or revoked) and answers `not_vaulted`, rather than an error this agent
- * could only call transient (`mint_access_token`, `slack_grant_vault_service.rs`).
+ * the common case — the stored credential EXPIRED. When the identity provider refuses the stored
+ * grant as `invalid_grant` (aged past the refresh-token lifetime after a long gap between mentions,
+ * rotated out, or revoked), temper answers `not_vaulted` rather than an error this agent could only
+ * call transient (`mint_access_token`, `slack_grant_vault_service.rs`).
  * Their access is fine — the credential is what is missing, which is why this is the one
  * refusal whose remedy the user can carry out alone.
  * The load-bearing sentence is that RETRYING WILL NOT FIX IT — without it the user mentions

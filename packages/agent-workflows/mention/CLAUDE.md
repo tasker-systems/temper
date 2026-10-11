@@ -41,14 +41,16 @@ only, `POST /internal/slack/mint` asks for that person's access token. The four 
 **An expired grant is `not_vaulted`, not an error.** The vaulted refresh token has a lifetime at
 the IdP (Auth0's inactivity/absolute expiry; the AS's `AS_REFRESH_TTL_SECONDS`), so a user who goes
 long enough between mentions comes back to a dead grant. The server recognises the IdP's
-`invalid_grant` refusal (`oauth_client::refresh_grant` → `RefreshOutcome::GrantRejected`), deletes
-the dead vault row under the mint's row lock, and answers `refused` / `not_vaulted` — whose reply is
-the true one: retrying won't fix it, reconnect. Before that it surfaced as a **401 from the mint**,
-which `requestMintedToken` throws on, which lands in the channel's catch-all "try again in a moment"
-— a retry that could never succeed. Any *other* IdP refusal (`invalid_client`, a 5xx) is still a
-401: those are deployment or transient faults and must not discard a user's grant. So a mint 401 in
-this agent's log now means a signature/secret mismatch or an IdP-side outage — check temper-api's
-log for which.
+`invalid_grant` refusal (`oauth_client::refresh_grant` → `RefreshOutcome::GrantRejected`) and
+answers `refused` / `not_vaulted` — whose reply is the true one: retrying won't fix it, reconnect.
+Before that it surfaced as a **401 from the mint**, which `requestMintedToken` throws on, which lands
+in the channel's catch-all "try again in a moment" — a retry that could never succeed. The vault row
+is **kept**, not deleted: the temper AS answers `invalid_grant` for transient failures too, and Auth0
+answers it for a misconfigured client, so deleting would make a blip or a config slip permanent and
+leave a possibly-live grant unrevocable. Any *other* IdP refusal (`invalid_client`,
+`unauthorized_client`, a 5xx) is still a 401, as are a signature/secret mismatch and `slack link
+disabled` — temper-api's log names which (the refusal's `error` code is logged when it is a known
+RFC 6749 code).
 
 **The mint is PRE-FLIGHTED in `onAppMention`, deliberately.** The connection's `getToken` mints
 too, so a successful turn mints twice — that is cheap on purpose: the server hands back the

@@ -73,7 +73,8 @@ pub enum MintOutcome {
         expires_at: DateTime<Utc>,
     },
     /// No token was minted, and the typed reason why — carried verbatim from
-    /// [`super::slack_link_state::resolve`]. This replaces the former `Revoked` / `NotVaulted`
+    /// [`super::slack_link_state::resolve`], or [`LinkRefusal::NotVaulted`] when the IdP refused
+    /// the vaulted grant as `invalid_grant` (see [`mint_access_token`]). This replaces the former `Revoked` / `NotVaulted`
     /// pair, which collapsed seven distinct facts (six standing reasons plus a dead soft-revoke
     /// flag) into two arms and shipped a re-link remedy that could not work for a standing refusal.
     /// (A live token handed out earlier still survives to its own `exp` — honest revocation
@@ -225,9 +226,9 @@ pub async fn store_grant(
 /// mitigation belongs at the deployment layer: enable Auth0 refresh-token rotation **leeway** (a
 /// grace window that tolerates a brief RT reuse). The recovery is re-link, and that part IS here: a
 /// grant the IdP refuses as `invalid_grant` — bricked this way, or simply aged past the IdP's
-/// refresh-token lifetime — has its dead row dropped and reports [`LinkRefusal::NotVaulted`], whose
-/// reply tells the user to reconnect, rather than an error the agent can only call transient. See
-/// the T3 spec's "grant vault" section.
+/// refresh-token lifetime — reports [`LinkRefusal::NotVaulted`], whose reply tells the user to
+/// reconnect, rather than an error the agent can only call transient. The row is kept, not
+/// deleted; see that arm for why. See the T3 spec's "grant vault" section.
 ///
 /// A principal whose standing does not admit them mints nothing — the decision is delegated to
 /// [`super::slack_link_state::resolve`] (which calls `temper_principal::admit`), so a `deactivated`
@@ -338,28 +339,26 @@ pub async fn mint_access_token(
     let tokens = match oauth_client::refresh_grant(token_url, client_id, &refresh_token).await? {
         oauth_client::RefreshOutcome::Refreshed(tokens) => tokens,
         oauth_client::RefreshOutcome::GrantRejected => {
-            // The IdP says the grant family is dead: the RT aged out (the common case — a user who
-            // has not mentioned @temper for longer than the IdP's refresh-token lifetime), was
-            // rotated out by the dual-write window above, or was revoked. Nothing retries into a
-            // token, and the only remedy is a fresh consent — which is exactly what `NotVaulted`
-            // already means to the agent ("retrying won't fix it; reconnect").
+            // The IdP says the grant is dead: the RT aged out (the common case — a user who has
+            // not mentioned @temper for longer than the IdP's refresh-token lifetime), was rotated
+            // out by the dual-write window above, or was revoked. Retrying cannot produce a token
+            // and the remedy is a fresh consent — exactly what `NotVaulted` means to the agent
+            // ("retrying won't fix it; reconnect"). Not an `Err`: that is a 401 to the agent,
+            // which can only say "try again", forever.
             //
-            // The row is DELETED rather than left in place, under the lock this transaction
-            // already holds, so the vault keeps meaning "holds a grant that can mint":
-            //   - leaving it would re-present the dead RT to the IdP on every mention (each one a
-            //     fresh reuse-detection signal) and keep `vaulted` true while every mint refuses;
-            //   - there is nothing to revoke — the IdP has just told us the grant is not live —
-            //     so the revoke-before-delete ordering disconnect needs does not apply;
-            //   - the link row is untouched, so the user is linked-not-vaulted, a state this
-            //     ladder already names and the agent already has a true reply for.
-            // Not an error: an `Err` here is a 401 to the agent, which can only say "try again".
-            sqlx::query!(
-                "DELETE FROM kb_slack_grant_vault WHERE slack_principal_id = $1",
-                slack_principal_id,
-            )
-            .execute(&mut *tx)
-            .await?;
-            tx.commit().await?;
+            // The row is deliberately LEFT IN PLACE (rolled back with this transaction), not
+            // deleted. `invalid_grant` is the IdP's word, and it is not always about the grant:
+            //   - the temper AS answers `invalid_grant` for ANY failure inside its rotation,
+            //     including a transient database error (`packages/temper-cloud/src/oauth/
+            //     endpoints.ts`, the refresh branch's catch) — so the grant may be perfectly live;
+            //   - Auth0 answers `invalid_grant` when the RT is presented to the wrong client or
+            //     tenant, so a misconfigured `client_id` / issuer would refuse EVERY grant.
+            // Deleting would turn either into permanent loss — and, worse, destroy the only
+            // plaintext source of a possibly-live RT, so disconnect and erasure could never
+            // revoke it. Kept, a transient refusal heals on the next mention, a config fix heals
+            // every user at once, and disconnect still revokes before it deletes. The cost is that
+            // a truly dead RT is re-presented to the IdP on each mention, which is harmless.
+            // A re-link overwrites the row (`store_grant` upserts).
             return Ok(MintOutcome::Refused(LinkRefusal::NotVaulted));
         }
     };
