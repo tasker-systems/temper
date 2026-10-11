@@ -131,7 +131,7 @@ CREATE TRIGGER trg_machine_client_row_is_permanent
     FOR EACH ROW EXECUTE FUNCTION machine_client_row_is_permanent();
 
 SELECT declare_migration(
-    20261023100000,
+    20261024100000,
     'additive',
     'Guards the machine-principal floor against accidental SQL. A new trigger on kb_machine_clients '
     'refuses DELETE and any UPDATE that moves profile_id. A new helper, _machine_principal_lock(uuid), '

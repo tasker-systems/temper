@@ -1375,7 +1375,7 @@ mod tests {
         assert!(is_check_violation(&err), "{err}");
     }
 
-    // ── The floor holds against accidental SQL (20261023100000) ──────────────────────────────
+    // ── The floor holds against accidental SQL (20261024100000) ──────────────────────────────
 
     async fn still_a_machine(pool: &PgPool, profile: Uuid) -> bool {
         sqlx::query_scalar!(r#"SELECT is_machine_profile($1) AS "m!""#, profile)
