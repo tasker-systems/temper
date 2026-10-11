@@ -26,7 +26,7 @@
   "devDependencies": {
     "@types/node": "24.x",
     "typescript": "7.0.1-rc",
-    "vitest": "^3"
+    "vitest": "^4.1.11"
   },
   "overrides": {
     "ai": "^7.0.0"

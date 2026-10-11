@@ -38,10 +38,10 @@
     "openapi-fetch": "^0.17.0"
   },
   "devDependencies": {
-    "@types/node": "24.x",
+    "@types/node": "26.x",
     "openapi-typescript": "7.13.0",
     "typescript": "^5.8",
-    "vitest": "^3"
+    "vitest": "^5"
   },
   "engines": {
     "node": ">=22"
