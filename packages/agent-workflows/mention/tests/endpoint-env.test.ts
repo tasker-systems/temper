@@ -200,7 +200,7 @@ describe("no read of TEMPER_API_URL / TEMPER_MCP_URL bypasses the gate", () => {
    * credential use added to either file is still caught.
    */
   const NO_CREDENTIAL = new Set([
-    "instrumentation.ts: mcpEndpoint: process.env.TEMPER_MCP_URL,",
+    "instrumentation/otlp.ts: spanProcessors: otlpSpanProcessors({ mcpEndpoint: process.env.TEMPER_MCP_URL }),",
     "instructions/citations.ts: markdown: citationLinkInstruction(process.env.TEMPER_API_URL),",
   ]);
   const GATED_FILES = ["connections/temper.ts", "lib/link.ts", "lib/mint.ts"];
