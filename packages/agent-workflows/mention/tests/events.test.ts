@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  actionPartial,
+  actionResult,
   actionsRequested,
   ephemeralEvents,
+  ephemeralRenderer,
   inputRequested,
   messageCompleted,
   reasoningAppended,
+  reasoningCompleted,
   sessionFailed,
   turnFailed,
   WORKING_STATUS,
@@ -71,6 +75,15 @@ function operations(request: ReturnType<typeof fakeCtx>["request"]): string[] {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyArgs = any;
 
+/**
+ * The renderer chain's `next`, which reaches eve's default. Every handler here
+ * REPLACES its default by never calling it, so a call is a failure: it throws,
+ * and the awaiting test rejects.
+ */
+const neverNext = (async () => {
+  throw new Error("handler called next() — eve's default would have run");
+}) as AnyArgs;
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -88,6 +101,7 @@ describe("messageCompleted", () => {
       { finishReason: "stop", message: "the answer" } as AnyArgs,
       ctx as AnyArgs,
       fakeCallbackCtx("U_AUTH") as AnyArgs,
+      neverNext,
     );
 
     expect(operations(request)).toEqual(["chat.postEphemeral"]);
@@ -115,6 +129,7 @@ describe("messageCompleted", () => {
       { finishReason: "tool-calls", message: "\n\n  Looking that up  \nmore" } as AnyArgs,
       ctx as AnyArgs,
       fakeCallbackCtx("U_AUTH") as AnyArgs,
+      neverNext,
     );
 
     expect(request).not.toHaveBeenCalled();
@@ -131,6 +146,7 @@ describe("messageCompleted", () => {
       { finishReason: "stop", message: null } as AnyArgs,
       ctx as AnyArgs,
       fakeCallbackCtx("U_AUTH") as AnyArgs,
+      neverNext,
     );
 
     expect(request).not.toHaveBeenCalled();
@@ -149,6 +165,7 @@ describe("messageCompleted", () => {
       { finishReason: "stop", message: "the answer" } as AnyArgs,
       ctx as AnyArgs,
       undefined as AnyArgs,
+      neverNext,
     );
 
     expect(request).not.toHaveBeenCalled();
@@ -170,6 +187,7 @@ describe("reasoningAppended", () => {
       { reasoningSoFar: "The user's private salary doc says 250000" } as AnyArgs,
       ctx as AnyArgs,
       fakeCallbackCtx("U_AUTH") as AnyArgs,
+      neverNext,
     );
 
     expect(startTyping.mock.calls).toEqual([[WORKING_STATUS]]);
@@ -192,11 +210,114 @@ describe("actionsRequested", () => {
       { actions: [{ kind: "tool-call", toolName: "get_resource" }] } as AnyArgs,
       ctx as AnyArgs,
       fakeCallbackCtx("U_AUTH") as AnyArgs,
+      neverNext,
     );
 
     expect(startTyping.mock.calls).toEqual([[WORKING_STATUS]]);
     expect(request).not.toHaveBeenCalled();
     expect(post).not.toHaveBeenCalled();
+  });
+});
+
+describe("reasoningCompleted", () => {
+  it("shows a constant status and never the finished reasoning", async () => {
+    // FAILS IF: the override is removed. eve's default (new since 0.18) puts the
+    // finished block's last heading or sentence into the channel-visible status —
+    // the `reasoning.appended` leak again, one event later.
+    const { ctx, request, post, startTyping } = fakeCtx();
+
+    await reasoningCompleted(
+      { reasoning: "The user's private salary doc says 250000." } as AnyArgs,
+      ctx as AnyArgs,
+      fakeCallbackCtx("U_AUTH") as AnyArgs,
+      neverNext,
+    );
+
+    expect(startTyping.mock.calls).toEqual([[WORKING_STATUS]]);
+    expect(request).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+  });
+});
+
+describe("actionPartial / actionResult", () => {
+  it.each([
+    ["action.partial", actionPartial],
+    ["action.result", actionResult],
+  ])("renders nothing from the call's label: %s", async (_name, handler) => {
+    // FAILS IF: the override is removed. eve's defaults (new since 0.18) put the
+    // call's presentation label — built from the call's INPUT — into the
+    // channel-visible status.
+    const { ctx, request, post, startTyping } = fakeCtx();
+
+    await handler(
+      {
+        result: { callId: "c1" },
+        presentation: { c1: { label: "Read her performance review" } },
+      } as AnyArgs,
+      ctx as AnyArgs,
+      fakeCallbackCtx("U_AUTH") as AnyArgs,
+      neverNext,
+    );
+
+    expect(startTyping).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+  });
+});
+
+describe("ephemeralRenderer", () => {
+  it("runs exactly ephemeralEvents, sets no status on arrival, and posts no task card", async () => {
+    // FAILS IF: the renderer stops carrying the overrides (each would fall
+    // through to eve's default), its `received` reaches eve's `Thinking...`
+    // default, or it returns a task card — eve posts that card with
+    // `chat.postMessage`, i.e. publicly.
+    expect(ephemeralRenderer.events).toBe(ephemeralEvents);
+
+    const { ctx, startTyping } = fakeCtx();
+    await ephemeralRenderer.received?.({} as AnyArgs, ctx as AnyArgs, neverNext);
+    expect(startTyping).not.toHaveBeenCalled();
+
+    expect(ephemeralRenderer.taskCard?.({} as AnyArgs, neverNext)).toBeNull();
+  });
+});
+
+describe("ephemeralRenderer composed by eve's real renderer chain", () => {
+  /**
+   * eve's REAL chain composition, imported at runtime the same way `defaultEvents` is above.
+   * Composing `ephemeralRenderer` over SPY defaults pins the claim this whole file rests on —
+   * that a handler which never calls `next` replaces eve's default — against eve's own
+   * `composeSlackRenderers`, not against our reading of it.
+   */
+  it("never reaches eve's default for any overridden event, nor for received or taskCard", async () => {
+    // FAILS IF: any override calls `next`, or an eve upgrade changes the chain so a renderer's
+    // handler no longer stands in front of the default.
+    const { composeSlackRenderers } = await import(
+      "../node_modules/eve/dist/src/public/channels/slack/renderers.js"
+    );
+    const names = Object.keys(ephemeralEvents);
+    const defaults = Object.fromEntries(names.map((name) => [name, vi.fn(async () => undefined)]));
+    const received = vi.fn(async () => undefined);
+    const taskCard = vi.fn(() => ({ blocks: [], text: "card" }));
+    const chain = composeSlackRenderers([ephemeralRenderer], {
+      events: defaults as AnyArgs,
+      received,
+      taskCard,
+    });
+
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (const name of names) {
+      const { ctx } = fakeCtx();
+      const handler = (chain.events as Record<string, (...args: unknown[]) => Promise<void>>)[name];
+      const event = name === "input.requested" ? { requests: [] } : { finishReason: "stop", message: null };
+      if (name === "session.failed") await handler?.(event, ctx);
+      else await handler?.(event, ctx, fakeCallbackCtx("U_AUTH"));
+    }
+    for (const name of names) expect(defaults[name], name).not.toHaveBeenCalled();
+
+    await chain.received({} as AnyArgs, fakeCtx().ctx as AnyArgs);
+    expect(received).not.toHaveBeenCalled();
+    expect(chain.taskCard({} as AnyArgs)).toBeNull();
+    expect(taskCard).not.toHaveBeenCalled();
   });
 });
 
@@ -211,6 +332,7 @@ describe("turnFailed", () => {
       { code: "boom", message: "TOOL RETURNED SECRET ROW", turnId: "t1", sequence: 1 } as AnyArgs,
       ctx as AnyArgs,
       fakeCallbackCtx("U_AUTH") as AnyArgs,
+      neverNext,
     );
 
     expect(operations(request)).toEqual(["chat.postEphemeral"]);
@@ -229,7 +351,11 @@ describe("sessionFailed", () => {
     // never as an error. This test is the only thing that catches it.
     const { ctx, request, post } = fakeCtx("U_STATE");
 
-    await sessionFailed({ code: "boom", message: "x", sessionId: "s1" } as AnyArgs, ctx as AnyArgs);
+    await sessionFailed(
+      { code: "boom", message: "x", sessionId: "s1" } as AnyArgs,
+      ctx as AnyArgs,
+      neverNext,
+    );
 
     expect(operations(request)).toEqual(["chat.postEphemeral"]);
     expect((request.mock.calls[0]?.[1] as { user: string }).user).toBe("U_STATE");
@@ -249,6 +375,7 @@ describe("inputRequested", () => {
       { requests: [{ prompt: "Approve A?" }, { prompt: "Approve B?" }] } as AnyArgs,
       ctx as AnyArgs,
       fakeCallbackCtx("U_AUTH") as AnyArgs,
+      neverNext,
     );
 
     expect(operations(request)).toEqual(["chat.postEphemeral", "chat.postEphemeral"]);
@@ -274,28 +401,61 @@ describe("inputRequested", () => {
  * an unclassified key fails the test outright.
  */
 const DEFAULT_EVENT_CLASSIFICATION: Readonly<Record<string, "content-bearing" | "content-free">> = {
-  // `startTyping("Working...")` plus three state resets. Reads nothing off the
-  // event. Verified in `.../slack/defaults.js`.
+  // `showStatus("Thinking...")` plus three state resets. Reads nothing off the
+  // event. Verified in `.../slack/defaults.js` (eve@0.73.0).
   "turn.started": "content-free",
-  // `firstNonEmptyLine(event.reasoningSoFar)` -> `startTyping(...)`. The raw
-  // reasoning trace, which quotes tool results verbatim.
+  // `reasoningStatus(stream.reasoning)` -> `showStatus(...)`: the latest heading or
+  // sentence of the raw reasoning trace, which quotes tool results verbatim.
   "reasoning.appended": "content-bearing",
-  // `state.pendingToolCallMessage` -> `startTyping(...)`, else the tool names.
+  // Same sink as `reasoning.appended`, on the finished block. New since 0.18.
+  "reasoning.completed": "content-bearing",
+  // `state.pendingToolCallMessage` -> `showStatus(...)`, else `actionLabel(...)`.
   // The buffered field holds the model's own mid-turn narration.
   "actions.requested": "content-bearing",
-  // `thread.post(event.message)` — the answer itself.
+  // `showStatus(presentation[callId].label)`. A label is built from the call's
+  // INPUT (`label.start(input)`), so it is a read of the private turn. New since 0.18.
+  "action.partial": "content-bearing",
+  // Same as `action.partial`, on the result. New since 0.18.
+  "action.result": "content-bearing",
+  // `deliverCompletedSlackReply` -> `thread.post(event.message)` — the answer itself.
   "message.completed": "content-bearing",
-  // `thread.post` of `formatErrorHint(event)`, which can quote model or tool output.
+  // `thread.post` of `formatErrorHint(event)` / the semantic error summary, which
+  // can quote model or tool output.
   "turn.failed": "content-bearing",
   // Same shape as turn.failed.
   "session.failed": "content-bearing",
   // Content-free, but NOT overridden — see the dedicated test below.
   "authorization.required": "content-free",
-  // `chat.update` of a ts it only holds if `authorization.required` posted one,
-  // with `buildAuthCompletedText({displayName, outcome, reason})`
+  // `showStatus("Connected to <displayName>. Resuming...")`, then `chat.update` of a
+  // ts it only holds if `authorization.required` posted one, with
+  // `buildAuthCompletedText({displayName, outcome, reason})`
   // (`.../slack/connections.js`): a connection display name and an outcome code.
   // No model or tool output reaches it.
   "authorization.completed": "content-free",
+  // `showStatus("Writing a reply...")` once the streamed reply passes 280 chars.
+  // A constant; the delta's text is only measured. New since 0.18.
+  "message.appended": "content-free",
+  // `hideStatus`, or `waitingOnTasks(names)` for a turn waiting on TASKS — task
+  // tool/agent names from eve's own card state, never model prose. This agent
+  // starts no tasks (`ephemeralRenderer.taskCard` is null either way). New since 0.18.
+  "turn.waiting": "content-free",
+  // State bookkeeping only (`state.pendingTaskResults`); renders nothing. New since 0.18.
+  "task.settled": "content-free",
+  // `showStatus(reviewingResults(names) ?? state.threadStatus.text ?? "Thinking...")`:
+  // task names, or re-showing a status eve's own default set — every
+  // content-bearing writer of which is overridden here. New since 0.18.
+  "step.started": "content-free",
+  // `clearStatus`. New since 0.18.
+  "turn.completed": "content-free",
+  // `postEphemeral` to the responder of a rejected/failed approval — private, and
+  // unreachable: approvals need the cards `input.requested`'s default posts, which
+  // is overridden. New since 0.18.
+  "approval.candidate": "content-free",
+  // `settleApprovalCard` — edits an approval card ("Approved/Cancelled by <@user>")
+  // that only exists if eve's `input.requested` default posted it. New since 0.18.
+  "approval.settled": "content-free",
+  // Same edit, for each resolved `tool-approval`. New since 0.18.
+  "input.resolved": "content-free",
 };
 
 describe("ephemeralEvents", () => {
@@ -332,10 +492,11 @@ describe("ephemeralEvents", () => {
 
   it("overrides input.requested, which has no defaultEvents entry", () => {
     // FAILS IF: the override is dropped. `input.requested` is NOT a key of
-    // `defaultEvents` — eve installs `defaultInputRequestedHandler()` for it
-    // separately in `slackChannel.js`
-    // (`e.events?.["input.requested"] ?? defaultInputRequestedHandler()`), and
-    // that default loops `await t.thread.post(n)`. So the derived check above
+    // `defaultEvents` — eve installs `defaultInputRequestedHandler(approvalChannel)`
+    // for it separately in `slackChannel.js`
+    // (`{...defaultEvents, "input.requested": defaultInputRequestedHandler(...)}`,
+    // the innermost link of the renderer chain), and that default posts the
+    // prompts into the thread. So the derived check above
     // structurally cannot cover it, and this test is what does.
     expect(defaultEvents).not.toHaveProperty("input.requested");
     expect(ephemeralEvents).toHaveProperty("input.requested");
@@ -365,8 +526,8 @@ describe("the session-state recipient fallback is confined to session.failed", (
    * behaviour is to DROP.
    */
   it.each([
-    ["message.completed", () => messageCompleted({ message: "the answer" } as never, undefined as never, undefined as never)],
-    ["turn.failed", () => turnFailed({} as never, undefined as never, undefined as never)],
+    ["message.completed", () => messageCompleted({ message: "the answer" } as never, undefined as never, undefined as never, neverNext)],
+    ["turn.failed", () => turnFailed({} as never, undefined as never, undefined as never, neverNext)],
   ])("drops rather than using stale state: %s", async (_name, invoke) => {
     const { ctx, request, post } = fakeCtx("U_STATE");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -389,7 +550,7 @@ describe("the session-state recipient fallback is confined to session.failed", (
   it("still delivers session.failed from state alone", async () => {
     const { ctx, request } = fakeCtx("U_STATE");
 
-    await sessionFailed({} as never, ctx as never);
+    await sessionFailed({} as never, ctx as never, neverNext);
 
     expect(request).toHaveBeenCalledWith(
       "chat.postEphemeral",

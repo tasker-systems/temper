@@ -298,14 +298,14 @@ describe("auditor credentials", () => {
     process.env.TEMPER_TOKEN = "steward-dev-token";
 
     const schedule = (await import("../agent/schedules/auditor.js")).default;
-    const receive = vi.fn();
+    const to = vi.fn();
     const waitUntil = vi.fn();
 
-    await schedule.run?.({ receive, waitUntil, appAuth: {} as never });
+    await schedule.run?.({ to, waitUntil, appAuth: {} as never });
 
     // No background work parked, no session started, and NOT a thrown error.
     expect(waitUntil).not.toHaveBeenCalled();
-    expect(receive).not.toHaveBeenCalled();
+    expect(to).not.toHaveBeenCalled();
   });
 
   it("the tick PROCEEDS when an auditor credential is configured", async () => {
@@ -313,10 +313,10 @@ describe("auditor credentials", () => {
     process.env.TEMPER_AUDITOR_TOKEN = "auditor-dev-token";
 
     const schedule = (await import("../agent/schedules/auditor.js")).default;
-    const receive = vi.fn();
+    const to = vi.fn();
     const waitUntil = vi.fn();
 
-    await schedule.run?.({ receive, waitUntil, appAuth: {} as never });
+    await schedule.run?.({ to, waitUntil, appAuth: {} as never });
 
     // The guard must not block a deployment that DID configure an auditor. Parking the work is the
     // whole assertion — the parked promise then fails against an unreachable host, which is neither
@@ -442,14 +442,14 @@ describe("the enable toggle — absence means ENABLED", () => {
     process.env.TEMPER_AUDITOR_ENABLED = "false";
 
     const schedule = (await import("../agent/schedules/auditor.js")).default;
-    const receive = vi.fn();
+    const to = vi.fn();
     const waitUntil = vi.fn();
 
-    await schedule.run?.({ receive, waitUntil, appAuth: {} as never });
+    await schedule.run?.({ to, waitUntil, appAuth: {} as never });
 
     // A skip, never a fallback: nothing parked, nothing dispatched, and not a thrown error.
     expect(waitUntil).not.toHaveBeenCalled();
-    expect(receive).not.toHaveBeenCalled();
+    expect(to).not.toHaveBeenCalled();
   });
 });
 
@@ -513,19 +513,19 @@ describe("capacity — correct credentials are not sufficient credentials", () =
     process.env.TEMPER_AUDITOR_M2M_TOKEN_URL = refusing.url;
 
     const schedule = (await import("../agent/schedules/auditor.js")).default;
-    const receive = vi.fn();
+    const to = vi.fn();
     const waitUntil = vi.fn();
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    await schedule.run?.({ receive, waitUntil, appAuth: {} as never });
+    await schedule.run?.({ to, waitUntil, appAuth: {} as never });
 
     // The tick still PARKS — the credential is configured, so the guard above must not stop it — and
     // the parked promise must then SETTLE rather than reject. Resolving is the whole assertion: it
     // is what "degrade quietly" means at this seam.
     expect(waitUntil).toHaveBeenCalledTimes(1);
     await expect(waitUntil.mock.calls[0]?.[0]).resolves.toBeUndefined();
-    expect(receive).not.toHaveBeenCalled();
+    expect(to).not.toHaveBeenCalled();
     expect(error).not.toHaveBeenCalled();
     // Quiet is not invisible. A degraded auditor that logged at the same level as a deployment which
     // never had one would be indistinguishable from the resting state in a log stream.
@@ -549,11 +549,11 @@ describe("capacity — correct credentials are not sufficient credentials", () =
     process.env.TEMPER_AUDITOR_M2M_TOKEN_URL = issuer.url;
 
     const schedule = (await import("../agent/schedules/auditor.js")).default;
-    const receive = vi.fn();
+    const to = vi.fn();
     const waitUntil = vi.fn();
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await schedule.run?.({ receive, waitUntil, appAuth: {} as never });
+    await schedule.run?.({ to, waitUntil, appAuth: {} as never });
 
     expect(waitUntil).toHaveBeenCalledTimes(1);
     await expect(waitUntil.mock.calls[0]?.[0]).rejects.toThrow(/401/);

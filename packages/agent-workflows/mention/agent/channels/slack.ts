@@ -11,7 +11,7 @@ import {
 } from "../lib/identity.js";
 import { requestLinkState } from "../lib/link.js";
 import { requestMintedToken } from "../lib/mint.js";
-import { ephemeralEvents } from "../lib/events.js";
+import { ephemeralRenderer } from "../lib/events.js";
 
 /**
  * Slack channel for the @temper mention agent.
@@ -40,17 +40,29 @@ export default slackChannel({
    * never the undelivered reply. Silence was the one outcome worth refusing.
    * Any OTHER `thread.post` is a bug.
    */
-  events: ephemeralEvents,
+  renderers: [ephemeralRenderer],
+
+  /**
+   * Every active turn finishes before the next mention in the thread starts its own.
+   *
+   * eve (≥0.33) STEERS by default: a message accepted while a turn is active is folded into that
+   * running turn as a correction. In a shared thread that is a cross-user hazard here, because the
+   * running turn's tools reach temper as whoever started it — so B's mention would be answered
+   * under A's reach. `"queue"` is the pre-0.33 behaviour this agent was built on, and under it
+   * messages from different users (different auth contexts) never share a turn
+   * (`docs/channels/slack.mdx`, "Control overlapping turns").
+   */
+  turnPolicy: "queue",
 
   /**
    * DMs are deliberately NOT served.
    *
    * This is a real gate, not an omission. eve resolves
-   * `onDirectMessage ?? defaultOnDirectMessage`, and the default
-   * (`.../slack/defaults.js`) is:
+   * `onDirectMessage ?? onMessage`, falling back to `defaultOnMessage`
+   * (`.../slack/slackChannel.js`; re-verified against eve@0.73.0), and the
+   * default (`.../slack/defaults.js`) is:
    *
-   *   async function defaultOnDirectMessage(e,t){
-   *     return await e.thread.startTyping(`Thinking...`),{auth:defaultSlackAuth(t,e)} }
+   *   function defaultOnMessage(e,t){return{auth:defaultSlackAuth(t,e)}}
    *
    * — it DISPATCHES UNCONDITIONALLY: no `decideIdentity`, no
    * `principalType === "user"` gate, no link-state, no mint pre-flight. An
