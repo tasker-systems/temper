@@ -1734,9 +1734,10 @@ mod tests {
     /// so restoring the right key heals the grant.
     ///
     /// **Why this bites:** mapping [`Unopenable::UnknownKey`] to `NotVaulted` (the reverted
-    /// behaviour) fails the first assertion. Writing to the row on the failure path (a stamp, a
-    /// reseal) fails the byte comparison. And if the failure path overwrote the ciphertext, the
-    /// right key could no longer mint.
+    /// behaviour) fails the first assertion. COMMITTING a write on the failure path (a stamp, a
+    /// reseal) fails the byte comparison; an uncommitted one rolls back with the transaction, which
+    /// is correct and does not fail it. And if the failure path overwrote the ciphertext, the right
+    /// key could no longer mint.
     #[sqlx::test(migrations = "../../migrations")]
     async fn a_wrong_key_is_a_500_that_leaves_the_row_for_the_right_key(pool: PgPool) {
         let profile = insert_profile(&pool).await;
