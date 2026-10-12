@@ -12,8 +12,8 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer};
 
-use super::GrammarError;
 use super::columns::ColumnKey;
+use super::GrammarError;
 
 /// The spec's D2 step numbering, which `handled:`, `repointed:` and `resource-erasure:` cite.
 const D2_STEPS: &[&str] = &["1", "2", "3", "4", "5", "6", "7", "7a", "8", "9", "9f"];

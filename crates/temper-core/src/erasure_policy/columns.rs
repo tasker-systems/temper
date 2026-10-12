@@ -10,8 +10,8 @@ use std::str::FromStr;
 
 use serde::Deserialize;
 
-use super::GrammarError;
 use super::resource_erasure::d2_step;
+use super::GrammarError;
 
 /// A `table.column` key, both halves non-empty. Ordered by its text.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

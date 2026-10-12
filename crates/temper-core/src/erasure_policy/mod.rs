@@ -16,8 +16,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use serde::Deserialize;
 
 /// `Deserialize` for a type with a `FromStr` grammar: read a string, parse it, and report a grammar
 /// failure as a deserialize error, so the TOML error carries the offending value's position.
@@ -343,7 +343,10 @@ refine = [
             .collect();
         assert_eq!(
             identifiers,
-            ["kb_profiles.email", "kb_slack_link_intents.slack_principal_id"]
+            [
+                "kb_profiles.email",
+                "kb_slack_link_intents.slack_principal_id"
+            ]
         );
 
         assert_eq!(policy.sensitivity.count_at, "20261023100000");
@@ -505,7 +508,12 @@ refine = [
             },
             ManifestFile::SensitivityScan,
         );
-        for bad in ["handled:D2.10", "repointed:D2.9", "repointed:D2.9:source_id", "erased"] {
+        for bad in [
+            "handled:D2.10",
+            "repointed:D2.9",
+            "repointed:D2.9:source_id",
+            "erased",
+        ] {
             let resource = RESOURCE.replace("handled:D2.3", bad);
             fails_in(
                 ManifestFiles {
@@ -540,7 +548,10 @@ refine = [
             },
             ManifestFile::Estate,
         );
-        let personal = PERSONAL.replace(r#"achieved = "erased:7""#, r#"achieved = "erased:7", arm = "7""#);
+        let personal = PERSONAL.replace(
+            r#"achieved = "erased:7""#,
+            r#"achieved = "erased:7", arm = "7""#,
+        );
         fails_in(
             ManifestFiles {
                 personal_data: &personal,
@@ -589,10 +600,8 @@ refine = [
             "scrubbed:7",
             "erased:7 + ",
         ] {
-            let personal = PERSONAL.replace(
-                r#"achieved = "erased:7""#,
-                &format!("achieved = \"{bad}\""),
-            );
+            let personal =
+                PERSONAL.replace(r#"achieved = "erased:7""#, &format!("achieved = \"{bad}\""));
             fails_in(
                 ManifestFiles {
                     personal_data: &personal,
@@ -620,7 +629,10 @@ refine = [
 
     #[test]
     fn an_empty_or_repeated_qualifier_fails() {
-        let empty = RESOURCE.replace(r#"where = { key = "facet" }, disposition = "structural""#, r#"where = {}, disposition = "structural""#);
+        let empty = RESOURCE.replace(
+            r#"where = { key = "facet" }, disposition = "structural""#,
+            r#"where = {}, disposition = "structural""#,
+        );
         fails_in(
             ManifestFiles {
                 resource_erasure: &empty,
