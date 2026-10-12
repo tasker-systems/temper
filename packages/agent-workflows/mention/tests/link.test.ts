@@ -86,7 +86,7 @@ describe("doors", () => {
 });
 
 describe("signRequestV2", () => {
-  // The v2 known-answer vector, asserted identically in crates/temper-core/src/internal_sig.rs
+  // The v2 known-answer vector, asserted identically in crates/temper-core/tests/internal_sig_v2.rs
   // (`sign_v2_matches_known_answer_vector`) and packages/temper-cloud/tests/oauth/wire-contract.test.ts.
   it("matches the shared v2 known-answer signature", () => {
     const body =

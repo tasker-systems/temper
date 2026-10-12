@@ -200,7 +200,7 @@ describe("internal reconcile signature (mirrors Rust temper_core::internal_sig)"
     expect(RESOLVE_DOOR).toBe("/internal/principal/resolve");
   });
 
-  // The v2 vector, asserted identically in crates/temper-core/src/internal_sig.rs
+  // The v2 vector, asserted identically in crates/temper-core/tests/internal_sig_v2.rs
   // (`sign_v2_matches_known_answer_vector`) and packages/agent-workflows/mention/tests/link.test.ts.
   it("produces the shared v2 known-answer signature", () => {
     expect(
