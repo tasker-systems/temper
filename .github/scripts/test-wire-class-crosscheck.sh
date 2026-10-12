@@ -66,13 +66,13 @@ reset_fixtures() {
 toml_list() { printf '%s' "$1" | awk -F', *' '{ for (i = 1; i <= NF; i++) printf "%s\"%s\"", (i > 1 ? ", " : ""), $i }'; }
 toml_pr() { case "$1" in *[!0-9]*) printf '"%s"' "$1" ;; *) printf '%s' "$1" ;; esac; }
 
-add_own_row() { # $1 = pr value, $2 = classes value ("a, b"); one entry file the diff adds
+add_own_row() { # $1 = pr value, $2 = classes value ("a, b"), $3 = surfaces (default "http"); one entry file the diff adds
   OWN=$((OWN + 1))
   cat > "${ADDED}/this-pr-${OWN}.toml" <<TOML
 title    = "Citation N — this PR's entry"
 pr       = $(toml_pr "$1")
 classes  = [$(toml_list "$2")]
-surfaces = ["http"]
+surfaces = [$(toml_list "${3:-http}")]
 status   = "signal-only"
 body = """
 Prose.
@@ -620,6 +620,36 @@ if [ "$rc" -ne 0 ] \
     && printf '%s' "$out" | grep -q 'release-register/unreleased/<id>.toml'; then
   ok "W9: RELEASE_REGISTER.md existing fails, naming the new location — even beside a valid entry"
 else bad "W9: RELEASE_REGISTER.md existing fails, naming the new location" "exit=$rc" "$out"; fi
+
+# ── 18a. ERASURE POLICY — policy/erasure/ is declared on its own surface, and is not wire ───────
+# Check 4. The policy is not wire shape: no wire path is touched, no class is demanded, and the
+# only thing owed is an added entry that lists `erasure-policy` in surfaces.
+reset_fixtures
+printf '%s\n' "policy/erasure/estate.toml" > "$WIRE"
+add_own_row self additive "internal"   # an own row, but it does not list erasure-policy
+out="$(run_check unchanged)"; rc=$?
+if [ "$rc" -ne 0 ] \
+    && printf '%s' "$out" | grep -q 'lists' \
+    && printf '%s' "$out" | grep -q '"erasure-policy" in surfaces' \
+    && printf '%s' "$out" | grep -q 'policy/erasure/estate.toml'; then
+  ok "erasure policy: a policy edit without the erasure-policy surface fails, naming the files"
+else bad "erasure policy: a policy edit without the erasure-policy surface fails, naming the files" "exit=$rc" "$out"; fi
+
+reset_fixtures
+printf '%s\n' "policy/erasure/estate.toml" > "$WIRE"
+out="$(run_check unchanged)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q '"erasure-policy" in surfaces'; then
+  ok "erasure policy: a policy edit with no added entry at all fails"
+else bad "erasure policy: a policy edit with no added entry at all fails" "exit=$rc" "$out"; fi
+
+reset_fixtures
+printf '%s\n' "policy/erasure/estate.toml" "policy/erasure/manifest.toml" > "$WIRE"
+add_own_row self additive "erasure-policy, internal"
+out="$(run_check unchanged)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'wire-class-crosscheck: PASS' \
+    && ! printf '%s' "$out" | grep -q 'wire paths ──'; then
+  ok "erasure policy: an added entry listing erasure-policy passes, and the policy is not a wire path"
+else bad "erasure policy: an added entry listing erasure-policy passes, and the policy is not a wire path" "exit=$rc" "$out"; fi
 
 # ── 19. W2 — in git mode, only an ADDED entry is a declaration ──────────────────────────────────
 # The fixture seams above bypass git; this arm runs the gate's own derivation. A sandbox repo

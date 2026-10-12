@@ -317,24 +317,18 @@ RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/agent-w
 #     path-traversal security rule; editing it alone skipped the entire pipeline.
 #   scripts/migration-declaration-corpus.txt — `include_str!`d by temper-migrate
 #     and read by code-quality's awk-side parity check.
-#   scripts/personal-data-surface.txt — `include_str!`d by
-#     personal_data_surface_test.rs, which joins it against the personal-data
-#     candidate set DERIVED from the live catalog. The file is half a gate: the
-#     test supplies the columns, this file supplies the classification, and a
-#     lone edit skipping the pipeline would mean reclassifying personal data —
-#     or deleting a declaration outright — with the test that checks it never
-#     running. Verified before the entry was added: DOCS_ONLY=true,
-#     SKIP_ALL=true.
-#   scripts/sensitivity-scan-surface.txt — `include_str!`d by
-#     sensitivity_scan_surface_test.rs, which asserts it and the manifest above
-#     PARTITION every text/varchar column of the live catalog. The same shape and
-#     the same hole: a lone edit re-dispositioning a column (or deleting its line)
-#     would skip the test that checks it.
-#   scripts/resource-erasure-surface.txt — `include_str!`d by
-#     resource_erasure_surface_test.rs, which joins it with the scan manifest
-#     above against the tables a resource reaches in the live catalog. The same
-#     hole again: a lone edit declaring a column out of scope (or deleting its
-#     line) would skip the fence that checks it.
+#   policy/erasure/** — the erasure-policy manifest, five TOML files read through
+#     `temper_core::erasure_policy` and `include_str!`d into that parser. It is half
+#     of three gates: the personal-data, sensitivity-scan and resource-erasure
+#     fences each join it against what the LIVE catalog derives (the columns, the
+#     text/varchar partition, the tables a resource reaches). The test supplies the
+#     columns, the manifest supplies the classification, so a lone edit
+#     reclassifying personal data, re-dispositioning a column or deleting an entry
+#     would skip the very fence that checks it. `.toml` is not a doc extension, so
+#     the extension rule already forces a full run; the entry is here so the
+#     coupling is stated and survives a change to that rule. Verified before the
+#     entry was added: a lone edit to policy/erasure/estate.toml produced
+#     DOCS_ONLY=false, SKIP_ALL=false, RUN_TEST_RUST=true.
 #   docs/reference/** — the committed projection of the BUILT CLI's `--help` tree
 #     (and, next to it, of TemperConfig). All `.md` under `docs/`, so it scoped as
 #     docs-only and turned rust-quality OFF — leaving a hand-edit to a GENERATED
@@ -362,7 +356,7 @@ RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/agent-w
 # `assert_every_compiled_in_doc_is_vetoed` in test-detect-ci-scope.sh guards —
 # it derives the set from the source rather than trusting this list to stay
 # complete.
-RUST_COUPLED='^packages/temper-ui/src/lib/types/generated/|^packages/agent-workflows/mention/agent/generated/|^skills/|^openapi\.json$|^tests/contracts/|^crates/temper-cli/skill-content/|^scripts/install/containment-corpus\.txt$|^scripts/migration-declaration-corpus\.txt$|^scripts/personal-data-surface\.txt$|^scripts/sensitivity-scan-surface\.txt$|^scripts/resource-erasure-surface\.txt$|^docs/reference/'
+RUST_COUPLED='^packages/temper-ui/src/lib/types/generated/|^packages/agent-workflows/mention/agent/generated/|^skills/|^openapi\.json$|^tests/contracts/|^crates/temper-cli/skill-content/|^scripts/install/containment-corpus\.txt$|^scripts/migration-declaration-corpus\.txt$|^policy/erasure/|^docs/reference/'
 
 HAS_RUST_COUPLED=false
 if changes_match "$RUST_COUPLED"; then

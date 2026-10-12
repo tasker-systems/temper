@@ -1,11 +1,11 @@
 # The sensitivity scan surface: the declared COMPLEMENT of the personal-data surface.
 #
 # Under goal "Sensitivity sweep" (spec: temper-artifacts specs/2026-09-28-sensitivity-sweep-design.md,
-# D3 and Q9). Sibling of scripts/personal-data-surface.txt.
+# D3 and Q9). Sibling of personal-data.toml.
 #
 # WHY THIS FILE EXISTS.
 #
-# personal-data-surface.txt is built from STRUCTURE: foreign keys, polymorphic pairs, principal
+# personal-data.toml is built from STRUCTURE: foreign keys, polymorphic pairs, principal
 # tables, vector/jsonb/bytea types, and a name heuristic. Every `text` / `character varying` column
 # those derivations do not nominate used to be a stated silence in that file's header. The silence
 # included the whole authored corpus (kb_block_content.content, kb_chunk_content.content), because
@@ -14,16 +14,16 @@
 # This file turns that silence into a checked invariant. Every text/varchar column of a public base
 # table appears in EXACTLY ONE of the two manifests:
 #
-#   * nominated by a personal-data derivation  -> declared in personal-data-surface.txt
+#   * nominated by a personal-data derivation  -> declared in personal-data.toml
 #   * nominated by nothing                     -> declared here
 #
 # sensitivity_scan_surface_test.rs asserts the partition: the union is total, the intersection is
-# empty, and a line here naming a column that is not a live text/varchar column fails.
+# empty, and an entry here naming a column that is not a live text/varchar column fails.
 #
 # METHOD. The column set is every column of information_schema.columns with data_type in
 # ('text','character varying') whose table is a BASE TABLE in schema `public`, as migrated by
 # temper_services::MIGRATOR (so `_sqlx_migrations` is included). The complement is that set minus
-# every `table.column` declared in personal-data-surface.txt.
+# every `table.column` declared in personal-data.toml.
 #
 # COUNT at `count_at`: 172 text/varchar columns; 18 declared in the sibling; `declared_count` declared here.
 count_at = "20261023100000"

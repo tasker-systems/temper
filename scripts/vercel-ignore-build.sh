@@ -142,8 +142,10 @@ case "${PROJECT}" in
   temper-cloud)
     # The Rust API and its deployable surface. `api/` holds the entrypoints, `crates/` the
     # workspace they compile from, `.sqlx/` the offline query cache the build reads under
-    # SQLX_OFFLINE=true, and `migrations/` the schema this project's build APPLIES.
-    TRIGGERS='^crates/|^packages/temper-cloud/|^api/|^migrations/|^\.sqlx/|^Cargo\.(toml|lock)$|^rust-toolchain(\.toml)?$|^(bun\.lock|package\.json)$|^vercel\.json$|^scripts/vercel-[a-z0-9-]*\.sh$'
+    # SQLX_OFFLINE=true, and `migrations/` the schema this project's build APPLIES. `policy/`
+    # holds the erasure-policy manifest the compiled binaries embed via `include_str!`, so a
+    # policy-only commit changes the deployed artifact and must not skip the deploy.
+    TRIGGERS='^crates/|^packages/temper-cloud/|^api/|^migrations/|^policy/|^\.sqlx/|^Cargo\.(toml|lock)$|^rust-toolchain(\.toml)?$|^(bun\.lock|package\.json)$|^vercel\.json$|^scripts/vercel-[a-z0-9-]*\.sh$'
     ;;
   temper-ui)
     TRIGGERS='^packages/temper-ui/|^clients/temper-telemetry-ts/|^(bun\.lock|package\.json)$|^scripts/vercel-[a-z0-9-]*\.sh$'

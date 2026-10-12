@@ -1,0 +1,20 @@
+title    = "The erasure policy is one versioned TOML manifest in `policy/erasure/`, replacing the three text manifests that were under `scripts/`"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["erasure-policy", "internal"]
+status   = "signal-only"
+body = '''
+What erasure and the sensitivity scan cover (which personal-data columns exist and how they are
+classed, which text columns the scan reads, which paths a resource's erasure reaches or leaves out)
+was declared in three line-oriented text files under `scripts/`. It is now declared in five TOML
+files in `policy/erasure/`, read through one parser, `temper_core::erasure_policy`, which the
+personal-data, sensitivity-scan and resource-erasure fences and the migration-time checks all use.
+The three `.txt` manifests are removed. Every entry, classification and disposition carries over
+unchanged, and the fences still join the manifest against the live catalog. There is no behaviour
+change at any door: no route, request or answer shape, CLI output or ledger event moves. Who
+observes: contributors who edit the policy, and CI. User-visible: no. Release relevance: additive.
+
+The policy is versioned from here on. Any later PR that changes `policy/erasure/` must add a
+register entry listing the `erasure-policy` surface; the declared-class gate fails the PR
+otherwise.
+'''

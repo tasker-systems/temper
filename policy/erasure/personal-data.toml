@@ -12,7 +12,7 @@
 #     miss a column, because it asks Postgres rather than a person.
 #   * This file DECLARES the judgement for each candidate: what class of personal data it holds and
 #     how far erasure can reach it.
-#   * The test fails on any derived candidate with no line here, and on any line here naming a
+#   * The test fails on any derived candidate with no entry here, and on any entry here naming a
 #     column that no longer exists. Neither half can drift silently.
 #
 # The derivations are seven, and each exists because the one before it is blind to something:
@@ -35,7 +35,7 @@
 #
 # WHAT IS NOT COVERED, STATED SO NOBODY INFERS COVERAGE FROM SILENCE.
 # The `text`/`varchar` columns no derivation above nominates are NOT classified here. They are
-# declared in the sibling manifest, scripts/sensitivity-scan-surface.txt, which states their count
+# declared in the sibling manifest, policy/erasure/sensitivity-scan.toml, which states their count
 # and adjudicates each as scan / structural / credential / out-of-scope. The two files PARTITION
 # every text/varchar column of a public base table (sensitivity_scan_surface_test.rs), so a column
 # is never in neither. That is a declaration, not a detection: a column called `note` that happens
@@ -80,7 +80,7 @@
 #   resource-erasure:D2.<step>
 #                        principal_erasure_execute runs resource_erasure_execute over the estate,
 #                        which runs _resource_erasure_apply_redaction, and
-#                        scripts/resource-erasure-surface.txt declares the column handled:D2.<step>
+#                        policy/erasure/resource-erasure.toml declares the column handled:D2.<step>
 #   remainder: <reason>  the act does not reach it; the reason is required
 #
 # <arm> is the number in the act body's comments: (1) to (12), with 4a, 6a, 7a and 9a. It is a

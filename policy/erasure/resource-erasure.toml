@@ -1,8 +1,8 @@
 # The resource-erasure surface: what the act does with every carrier a resource reaches.
 #
 # Under goal "A single resource can be erased out of a live estate" (spec: temper-artifacts
-# specs/2026-09-28-resource-erasure-design.md, D9). Sibling of scripts/personal-data-surface.txt and
-# scripts/sensitivity-scan-surface.txt.
+# specs/2026-09-28-resource-erasure-design.md, D9). Sibling of personal-data.toml and
+# sensitivity-scan.toml.
 #
 # WHY THIS FILE EXISTS.
 #
@@ -15,8 +15,8 @@
 # THE INVARIANT. Every CARRIER in a table a resource reaches has a line here: handled by a numbered
 # D2 step, or out-of-scope with its reason. A carrier is (ruled 2026-10-02):
 #
-#   * a column sensitivity-scan-surface.txt classes `scan` (authored text), or
-#   * a column personal-data-surface.txt classes `content`, `incidental` or `derived` (jsonb, bytea,
+#   * a column sensitivity-scan.toml classes `scan` (authored text), or
+#   * a column personal-data.toml classes `content`, `incidental` or `derived` (jsonb, bytea,
 #     vector and search-index columns that hold or are computed from what someone wrote).
 #
 # NOTHING HERE DECIDES WHAT A COLUMN HOLDS. Those two manifests are the definitions; this file only
@@ -77,7 +77,7 @@
 #     data R held, stay as the record of what was found. The act itself never names the schema.
 #
 # FORMAT (TOML; `#` comments and blank lines ignored)
-#   [tables]                                  this section; [payload], D9's payload half, is below
+#   [tables]                                  this table; [payload], D9's payload half, is below
 #   "<table>.<column>" = { disposition = "<disposition>", note = "<note>" }
 #
 #   One inline table per column, so a column declared twice fails the TOML parse itself. `note`
@@ -159,16 +159,16 @@
 # WHAT IS NOMINATED. resource_erasure_surface_test walks, for every registered event type, both its
 # committed schema snapshot (temper-substrate tests/fixtures/payloads) and its registered
 # payload_schema (kb_event_types), and nominates each path that holds a string or an open value;
-# the `metadata:` lines are walked the same way from AgentAuthorship's snapshot
+# the `metadata` tables are walked the same way from AgentAuthorship's snapshot
 # (tests/fixtures/metadata). Arrays read as
 # `*`, a map's keys as `?`. Three kinds of string are classed by the walk itself and never appear
 # here: a `format: uuid` or `format: date-time` string (an id or a time), and a string confined by
 # `enum` or `const` (vocabulary). A number or boolean is never nominated.
 #
 # PERMISSIVE TYPES. A type registered with no payload_schema cannot be walked. Each has a
-# `<type>:* | permissive | <note>` line, and its string paths are declared by hand below it (ids
+# `"*" = { disposition = "permissive", ... }` entry under its `[payload."<type>"]` table, and its string paths are declared by hand beside it (ids
 # and vocabulary left out, as the walk would leave them). The test checks that every schema-less
-# type has that line and that no walked type does; it cannot check a hand list is complete, so the
+# type has that entry and that no walked type does; it cannot check a hand list is complete, so the
 # note says where the list came from.
 #
 # FORMAT
@@ -463,7 +463,7 @@ refine = [
 
 [payload."delegated_launch"]
 "*"             = { disposition = "permissive", note = "fields from payloads.rs DelegatedLaunch" }
-"/trigger_kind" = { disposition = "out-of-scope", note = "free text by type, a label vocabulary by use (sensitivity-scan-surface.txt); anchored on a cogmap, in no resource's trail" }
+"/trigger_kind" = { disposition = "out-of-scope", note = "free text by type, a label vocabulary by use (sensitivity-scan.toml); anchored on a cogmap, in no resource's trail" }
 
 [payload."invocation_closed"]
 "*"            = { disposition = "permissive", note = "fields from payloads.rs InvocationClosed; production shapes checked 2026-10-08" }
