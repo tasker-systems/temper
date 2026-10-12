@@ -18,11 +18,10 @@ use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use temper_core::erasure_policy::{Class, ColumnKey, ScanDisposition};
 use temper_core::types::workflow_job::{DispatchType, Persona, SensitivityJobPayload};
+use temper_services::erasure_policy::in_force;
 use temper_services::services::workflow_job_service::enqueue_system;
-
-const SCAN_MANIFEST: &str = include_str!("../../../scripts/sensitivity-scan-surface.txt");
-const PERSONAL_DATA_MANIFEST: &str = include_str!("../../../scripts/personal-data-surface.txt");
 
 const A_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -299,22 +298,15 @@ async fn a_path_holds_no_value(pool: PgPool) {
 
 // ── Q19 and Q26: the surface registry covers both manifests ───────────────────────────────────
 
-/// The `table.column` of every line in `manifest` whose second field is `class`.
-fn manifest_lines(manifest: &str, class: &str) -> BTreeSet<String> {
-    manifest
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .filter_map(|l| {
-            let cols: Vec<&str> = l.split('|').map(str::trim).collect();
-            (cols.get(1) == Some(&class)).then(|| cols[0].to_string())
-        })
-        .collect()
+/// The `table.column` keys, as text, of the columns a manifest declares.
+fn manifest_keys<'k>(keys: impl Iterator<Item = &'k ColumnKey>) -> BTreeSet<String> {
+    keys.map(ColumnKey::to_string).collect()
 }
 
-/// Every `scan` line is a `text` surface and every `incidental` line of the personal-data manifest
-/// a `jsonb` one (Q26). A registry row neither manifest names any longer must be disabled: findings
-/// and cursors pin a surface's row, so retiring a line cannot delete it (Q19, amended).
+/// Every `scan` entry of `policy/erasure/sensitivity-scan.toml` is a `text` surface and every
+/// `incidental` entry of `policy/erasure/personal-data.toml` a `jsonb` one (Q26). A registry row
+/// neither manifest names any longer must be disabled: findings and cursors pin a surface's row, so
+/// retiring an entry cannot delete it (Q19, amended).
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn the_surface_registry_covers_both_manifests(pool: PgPool) {
     let rows: Vec<(String, String, bool)> =
@@ -322,10 +314,14 @@ async fn the_surface_registry_covers_both_manifests(pool: PgPool) {
             .fetch_all(&pool)
             .await
             .unwrap();
+    let policy = in_force();
     let declared = [
-        (manifest_lines(SCAN_MANIFEST, "scan"), "text"),
         (
-            manifest_lines(PERSONAL_DATA_MANIFEST, "incidental"),
+            manifest_keys(policy.sensitivity_scan.keys(ScanDisposition::Scan)),
+            "text",
+        ),
+        (
+            manifest_keys(policy.personal_data_keys(Class::Incidental)),
             "jsonb",
         ),
     ];

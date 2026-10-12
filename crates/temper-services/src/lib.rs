@@ -20,6 +20,9 @@ pub mod backend;
 pub mod broker;
 pub mod config;
 pub mod cors;
+/// The erasure policy in force: the `policy/erasure/` manifest, embedded and parsed once
+/// ([`erasure_policy::in_force`]).
+pub mod erasure_policy;
 pub mod error;
 pub mod link_provider;
 pub mod oauth_client;

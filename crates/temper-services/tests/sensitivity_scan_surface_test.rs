@@ -7,30 +7,25 @@
 //! used to be a stated silence, and that silence held the whole authored corpus. This test closes
 //! it. Every text/varchar column of a public base table is declared in **exactly one** of:
 //!
-//! - `scripts/personal-data-surface.txt`: nominated by a personal-data derivation;
-//! - `scripts/sensitivity-scan-surface.txt`: nominated by nothing, and adjudicated there as
+//! - `policy/erasure/personal-data.toml`: nominated by a personal-data derivation;
+//! - `policy/erasure/sensitivity-scan.toml`: nominated by nothing, and adjudicated there as
 //!   `scan`, `structural`, `credential` or `out-of-scope`.
 //!
 //! **The three failure directions.** A column in neither file is free text nobody classified: the
 //! dangerous one, because the sweep enumerates its targets from the scan manifest. A column in both
-//! is two contradicting judgements about one value. A scan line naming a column that is not a live
+//! is two contradicting judgements about one value. A scan entry naming a column that is not a live
 //! text/varchar column is stale. All three fail, for the sibling's reason: a manifest that
 //! accumulates dead lines stops being read.
 //!
-//! The sibling manifest is read for its KEYS only. Its non-text lines (uuids, vectors, jsonb) are
+//! The sibling manifest is read for its KEYS only. Its non-text entries (uuids, vectors, jsonb) are
 //! its own business and are checked by its own test; here they simply cannot collide, because the
 //! scan manifest may only name text/varchar columns.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use sqlx::PgPool;
-
-/// The declaration half of this test. Read from the shipped file so the manifest and the gate
-/// cannot drift.
-const SCAN_MANIFEST: &str = include_str!("../../../scripts/sensitivity-scan-surface.txt");
-
-/// The other side of the partition.
-const PERSONAL_MANIFEST: &str = include_str!("../../../scripts/personal-data-surface.txt");
+use temper_core::erasure_policy::{ColumnKey, ScanColumn, ScanDisposition};
+use temper_services::erasure_policy::in_force;
 
 /// Every text/varchar column of a public base table: the set the two manifests partition.
 ///
@@ -45,47 +40,21 @@ SELECT c.table_name || '.' || c.column_name
  ORDER BY 1
 "#;
 
-const DISPOSITIONS: &[&str] = &["scan", "structural", "credential", "out-of-scope"];
-
-/// `table.column` → (disposition, note) from the scan manifest. Panics with the offending line:
-/// a malformed line would otherwise drop a declaration and read as an undeclared column.
-fn scan_declarations() -> BTreeMap<String, (String, String)> {
-    let mut out = BTreeMap::new();
-    for (lineno, raw) in SCAN_MANIFEST.lines().enumerate() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let cols: Vec<&str> = line.split('|').map(str::trim).collect();
-        assert!(
-            cols.len() == 3,
-            "sensitivity-scan-surface.txt:{}: expected `table.column | disposition | note`, got {raw:?}",
-            lineno + 1
-        );
-        let (key, disposition, note) = (cols[0].to_string(), cols[1], cols[2]);
-        assert!(
-            DISPOSITIONS.contains(&disposition),
-            "sensitivity-scan-surface.txt:{}: unknown disposition {disposition:?} (known: {DISPOSITIONS:?}). \
-             There is deliberately no `unadjudicated` class.",
-            lineno + 1
-        );
-        assert!(
-            out.insert(key.clone(), (disposition.to_string(), note.to_string()))
-                .is_none(),
-            "sensitivity-scan-surface.txt:{}: {key} declared twice",
-            lineno + 1
-        );
-    }
-    out
+/// `table.column` → its disposition and note, the declaration half of this test, from the policy in
+/// force. The parser (`temper_core::erasure_policy::parse`) refuses an unknown disposition (there
+/// is deliberately no `unadjudicated` one) and a column declared twice, so a malformed entry fails
+/// the parse rather than dropping a declaration and reading as an undeclared column.
+fn scan_declarations() -> &'static BTreeMap<ColumnKey, ScanColumn> {
+    &in_force().sensitivity_scan.columns
 }
 
-/// The sibling's declared keys. Its own test owns the line format; this reads column 0 only.
+/// The other side of the partition: the sibling's declared keys. Its own test owns the rest of
+/// its entries; this reads the keys only.
 fn personal_declarations() -> BTreeSet<String> {
-    PERSONAL_MANIFEST
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|l| l.split('|').next().unwrap_or_default().trim().to_string())
+    in_force()
+        .personal_data
+        .keys()
+        .map(ColumnKey::to_string)
         .collect()
 }
 
@@ -95,7 +64,7 @@ struct Partition {
     undeclared: Vec<String>,
     /// Columns declared in both manifests.
     doubly_declared: Vec<String>,
-    /// Scan-manifest lines that name no live text/varchar column.
+    /// Scan-manifest entries that name no live text/varchar column.
     stale: Vec<String>,
 }
 
@@ -106,7 +75,10 @@ async fn partition(pool: &PgPool) -> Partition {
         .expect("derive the text/varchar column set")
         .into_iter()
         .collect();
-    let scan: BTreeSet<String> = scan_declarations().into_keys().collect();
+    let scan: BTreeSet<String> = scan_declarations()
+        .keys()
+        .map(ColumnKey::to_string)
+        .collect();
     let personal = personal_declarations();
 
     Partition {
@@ -129,9 +101,10 @@ async fn every_text_column_is_declared_in_one_manifest(pool: PgPool) {
     let undeclared = partition(&pool).await.undeclared;
     assert!(
         undeclared.is_empty(),
-        "these text/varchar columns are declared in neither scripts/personal-data-surface.txt nor \
-         scripts/sensitivity-scan-surface.txt.\n\
-         Add a line to sensitivity-scan-surface.txt — `table.column | disposition | note` — with \
+        "these text/varchar columns are declared in neither policy/erasure/personal-data.toml nor \
+         policy/erasure/sensitivity-scan.toml.\n\
+         Add an entry under `[columns]` in sensitivity-scan.toml — \
+         `\"table.column\" = {{ disposition, note }}` — with \
          `scan` for authored or user-supplied text, `structural` for hashes, enums and vocabularies, \
          `credential` for secrets, or `out-of-scope` with the reason. (If the column is nominated \
          by a personal-data derivation, its own test will already be asking for it there instead.)\n\
@@ -147,14 +120,15 @@ async fn every_text_column_is_declared_in_one_manifest(pool: PgPool) {
 fn no_column_is_declared_in_both_manifests() {
     let personal = personal_declarations();
     let both: Vec<String> = scan_declarations()
-        .into_keys()
+        .keys()
+        .map(ColumnKey::to_string)
         .filter(|k| personal.contains(k))
         .collect();
     assert!(
         both.is_empty(),
         "these columns are declared in BOTH manifests. A column nominated by a personal-data \
-         derivation belongs in personal-data-surface.txt only; delete its line from \
-         sensitivity-scan-surface.txt.\n\
+         derivation belongs in personal-data.toml only; delete its entry from \
+         sensitivity-scan.toml.\n\
          Doubly declared: {both:#?}"
     );
 }
@@ -166,8 +140,8 @@ async fn every_scan_declaration_names_a_live_text_column(pool: PgPool) {
     let stale = partition(&pool).await.stale;
     assert!(
         stale.is_empty(),
-        "scripts/sensitivity-scan-surface.txt declares columns that are not live text/varchar \
-         columns of a public base table. Delete the line if the column was dropped; move it if it \
+        "policy/erasure/sensitivity-scan.toml declares columns that are not live text/varchar \
+         columns of a public base table. Delete the entry if the column was dropped; move it if it \
          was renamed; if it was retyped, the sibling manifest's derivations may now own it.\n\
          Stale: {stale:#?}"
     );
@@ -200,40 +174,35 @@ async fn an_added_text_column_fails_the_partition_until_declared(pool: PgPool) {
     assert!(after.doubly_declared.is_empty() && after.stale.is_empty());
 }
 
-/// FAILS IF: an `out-of-scope` line gives no reason. The class means "everything else", and
+/// FAILS IF: an `out-of-scope` entry gives no reason. The class means "everything else", and
 /// without its reason a reader cannot tell a judgement from a shrug.
 #[test]
 fn every_out_of_scope_line_states_its_reason() {
     let silent: Vec<String> = scan_declarations()
-        .into_iter()
-        .filter(|(_, (disposition, note))| disposition == "out-of-scope" && note.is_empty())
-        .map(|(k, _)| k)
+        .iter()
+        .filter(|(_, c)| c.disposition == ScanDisposition::OutOfScope && c.note.is_empty())
+        .map(|(k, _)| k.to_string())
         .collect();
     assert!(
         silent.is_empty(),
-        "`out-of-scope` requires the reason in the note column.\nSilent: {silent:#?}"
+        "`out-of-scope` requires the reason in the note.\nSilent: {silent:#?}"
     );
 }
 
-/// FAILS IF: the manifest header's stated count disagrees with its declarations.
+/// FAILS IF: the manifest's stated count (`declared_count`) disagrees with its declarations.
 ///
-/// The header states the count so the next drift is readable without running anything. A count
+/// The manifest states the count so the next drift is readable without running anything. A count
 /// that is never checked drifts, which is how the sibling's header came to say 150 while the
 /// catalog said 147.
 #[test]
 fn the_header_count_matches_the_declarations() {
-    let declared = scan_declarations().len();
-    let stated: usize = SCAN_MANIFEST
-        .lines()
-        .find_map(|l| {
-            let rest = l.strip_prefix("# COUNT at ")?;
-            let tail = rest.split("declared here").next()?;
-            tail.rsplit(';').next()?.trim().parse().ok()
-        })
-        .expect("sensitivity-scan-surface.txt: a `# COUNT at <sha>: ...; <n> declared here.` line");
+    let sensitivity = &in_force().sensitivity_scan;
+    let declared = sensitivity.columns.len();
+    let stated = sensitivity.declared_count;
     assert_eq!(
         stated, declared,
-        "sensitivity-scan-surface.txt's header says {stated} columns are declared here, but it \
-         declares {declared}. Update the COUNT line (and the commit it names)."
+        "policy/erasure/sensitivity-scan.toml's `declared_count` says {stated} columns are declared \
+         there, but it declares {declared}. Update `declared_count` (and `count_at`, the migration it \
+         was taken at)."
     );
 }

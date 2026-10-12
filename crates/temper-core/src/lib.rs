@@ -6,6 +6,7 @@
 
 pub mod charter;
 pub mod context_ref;
+pub mod erasure_policy;
 pub mod error;
 pub mod hash;
 pub mod ids;

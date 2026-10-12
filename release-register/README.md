@@ -53,7 +53,11 @@ file explains what the tokens mean; it never restates the lists.
   - `spec-correction`: see below.
   - `retirement-train`: see the routing rule below.
 - **`surfaces`:** the surfaces this entry speaks for. The release calculator intersects them with
-  the surfaces a release ships.
+  the surfaces a release ships. `erasure-policy` is the one surface that is not a door: it names
+  the versioned erasure-policy manifest in `policy/erasure/`, which classifies what erasure covers.
+  A PR whose diff touches that directory must add an entry listing it, and the declared-class gate
+  fails the PR otherwise. It asks for the declaration only, never a class, because the policy is
+  not wire shape.
 - **`status`:** where the entry stands for the next release.
   - `open` gates the release until carried.
   - `signal-only` records without gating.

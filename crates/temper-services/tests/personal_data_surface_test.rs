@@ -1,6 +1,6 @@
 #![cfg(feature = "test-db")]
 //! The personal-data surface is DERIVED from the catalog and DECLARED in
-//! `scripts/personal-data-surface.txt`; this test is the join between the two.
+//! `policy/erasure/personal-data.toml`; this test is the join between the two.
 //!
 //! Under goal *"A person can be erased without the ledger losing what happened"*. An erasure path
 //! that enumerates its targets from a hand-written list is an erasure path that misses the column
@@ -26,19 +26,20 @@
 //! person uploads it, so every bytea column nominates.
 //!
 //! This test does NOT claim the surface is complete. The `text` columns nominated by nothing here
-//! are declared in `scripts/sensitivity-scan-surface.txt`, and `sensitivity_scan_surface_test.rs`
+//! are declared in `policy/erasure/sensitivity-scan.toml`, and `sensitivity_scan_surface_test.rs`
 //! asserts the two manifests partition every text/varchar column. That makes the remainder
 //! declared, not detected. Coverage is never inferred from absence.
 
 mod erasure_binding;
+mod person_act_binding;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use erasure_binding::{assignments, deletes_from, is_erasure_value, tokens};
+use erasure_binding::{deletes_from, tokens};
+use person_act_binding::assigns_erasure;
 use sqlx::PgPool;
-
-/// The declaration half. Read from the shipped file so the manifest and this test cannot drift.
-const MANIFEST: &str = include_str!("../../../scripts/personal-data-surface.txt");
+use temper_core::erasure_policy::{Achieved, Ceiling, Claim, Class, ColumnKey, PersonalColumn};
+use temper_services::erasure_policy::in_force;
 
 /// The derivation half — seven sources, unioned and de-duplicated.
 ///
@@ -93,151 +94,11 @@ SELECT DISTINCT tbl||'.'||col FROM (
 ) u ORDER BY 1
 "#;
 
-const CLASSES: &[&str] = &[
-    "identifier",
-    "reference",
-    "content",
-    "derived",
-    "incidental",
-    "discriminator",
-    "none",
-];
-const CEILINGS: &[&str] = &["full", "recompute", "pseudonym", "none", "n-a"];
-
-/// The person act's arms, as its body's comments number them (20261023100000). A label for the
-/// reader: comments are dropped before binding, so the test checks only that a line names one.
-const ARMS: &[&str] = &[
-    "1", "2", "3", "4", "4a", "5", "6", "6a", "7", "7a", "8", "9", "9a", "10", "11", "12",
-];
-
-/// The D2 steps a `resource-erasure:` claim may cite: `resource-erasure-surface.txt`'s numbering.
-const D2_STEPS: &[&str] = &["1", "2", "3", "4", "5", "6", "7", "7a", "8", "9", "9f"];
-
-/// One way the person act reaches a column. Each is bound to a statement in the live act.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Claim {
-    /// `_erasure_apply_redaction` assigns the column an erasure value.
-    Erased { arm: String },
-    /// `_erasure_apply_redaction` deletes from the column's table.
-    Deleted { arm: String },
-    /// `_erasure_apply_redaction` deletes from `parent`, which cascades to the column's table.
-    Cascaded { arm: String, parent: String },
-    /// The resource erasures the act runs over the estate, whose manifest handles the column.
-    ResourceErasure { step: String },
-}
-
-/// What a line says the person act achieves.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Achieved {
-    /// `-`: the line's ceiling is not `full`, so there is nothing to achieve.
-    Unstated,
-    Claims(Vec<Claim>),
-    /// `remainder: <reason>`: the act does not reach it.
-    Remainder(String),
-}
-
-#[derive(Debug, Clone)]
-struct Declaration {
-    class: String,
-    ceiling: String,
-    achieved: Achieved,
-}
-
-fn parse_arm(arm: &str, lineno: usize) -> String {
-    assert!(
-        ARMS.contains(&arm),
-        "personal-data-surface.txt:{lineno}: no arm {arm:?} in the person act (known: {ARMS:?})"
-    );
-    arm.to_string()
-}
-
-fn parse_claim(raw: &str, lineno: usize) -> Claim {
-    if let Some(arm) = raw.strip_prefix("erased:") {
-        return Claim::Erased {
-            arm: parse_arm(arm, lineno),
-        };
-    }
-    if let Some(arm) = raw.strip_prefix("deleted:") {
-        return Claim::Deleted {
-            arm: parse_arm(arm, lineno),
-        };
-    }
-    if let Some(rest) = raw.strip_prefix("cascaded:") {
-        let (arm, parent) = rest.split_once(':').unwrap_or_else(|| {
-            panic!("personal-data-surface.txt:{lineno}: expected `cascaded:<arm>:<parent table>`")
-        });
-        return Claim::Cascaded {
-            arm: parse_arm(arm, lineno),
-            parent: parent.to_string(),
-        };
-    }
-    let step = raw.strip_prefix("resource-erasure:D2.").unwrap_or_else(|| {
-        panic!(
-            "personal-data-surface.txt:{lineno}: unknown achieved claim {raw:?} (known: \
-             `erased:<arm>`, `deleted:<arm>`, `cascaded:<arm>:<table>`, \
-             `resource-erasure:D2.<step>`, `remainder: <reason>`, `-`)"
-        )
-    });
-    assert!(
-        D2_STEPS.contains(&step),
-        "personal-data-surface.txt:{lineno}: no D2 step {step:?} (known: {D2_STEPS:?})"
-    );
-    Claim::ResourceErasure {
-        step: step.to_string(),
-    }
-}
-
-fn parse_achieved(raw: &str, lineno: usize) -> Achieved {
-    if raw == "-" {
-        return Achieved::Unstated;
-    }
-    if let Some(reason) = raw.strip_prefix("remainder:") {
-        return Achieved::Remainder(reason.trim().to_string());
-    }
-    Achieved::Claims(
-        raw.split(" + ")
-            .map(|c| parse_claim(c.trim(), lineno))
-            .collect(),
-    )
-}
-
-/// `table.column` → its declaration. Panics with the offending line, since a malformed manifest
-/// line would otherwise silently drop a declaration and read as an undeclared candidate.
-fn declarations() -> BTreeMap<String, Declaration> {
-    let mut out = BTreeMap::new();
-    for (lineno, raw) in MANIFEST.lines().enumerate() {
-        let lineno = lineno + 1;
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        // Four splits: a note may itself hold `||`.
-        let cols: Vec<&str> = line.splitn(5, '|').map(str::trim).collect();
-        assert!(
-            cols.len() >= 4,
-            "personal-data-surface.txt:{lineno}: expected \
-             `table.column | class | ceiling | achieved | note`, got {raw:?}"
-        );
-        let (key, class, ceiling) = (cols[0].to_string(), cols[1], cols[2]);
-        assert!(
-            CLASSES.contains(&class),
-            "personal-data-surface.txt:{lineno}: unknown class {class:?} (known: {CLASSES:?})"
-        );
-        assert!(
-            CEILINGS.contains(&ceiling),
-            "personal-data-surface.txt:{lineno}: unknown ceiling {ceiling:?} (known: {CEILINGS:?})"
-        );
-        let declaration = Declaration {
-            class: class.to_string(),
-            ceiling: ceiling.to_string(),
-            achieved: parse_achieved(cols[3], lineno),
-        };
-        assert!(
-            out.insert(key.clone(), declaration).is_none(),
-            "personal-data-surface.txt:{lineno}: {key} declared twice"
-        );
-    }
-    out
+/// `table.column` → its declaration, from the policy in force. The parser
+/// (`temper_core::erasure_policy::parse`) refuses an unknown class, ceiling, arm or claim, and a
+/// column declared twice, so a malformed entry fails the parse rather than dropping a declaration.
+fn declarations() -> &'static BTreeMap<ColumnKey, PersonalColumn> {
+    &in_force().personal_data
 }
 
 async fn derived(pool: &PgPool) -> BTreeSet<String> {
@@ -254,17 +115,18 @@ async fn derived(pool: &PgPool) -> BTreeSet<String> {
 /// owner lands here the day it is added, not the day an erasure request arrives.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn every_derived_candidate_is_declared(pool: PgPool) {
-    let declared: BTreeSet<String> = declarations().into_keys().collect();
+    let declared: BTreeSet<String> = declarations().keys().map(ColumnKey::to_string).collect();
     let candidates = derived(&pool).await;
     let undeclared: Vec<&String> = candidates.difference(&declared).collect();
 
     assert!(
         undeclared.is_empty(),
         "these columns can hold or reference personal data and are not declared in \
-         scripts/personal-data-surface.txt.\n\
-         Add a line per column — `table.column | class | ceiling | note` — deciding what it holds \
-         and how far erasure reaches it. Declaring one `none | n-a` is a fine answer; leaving it \
-         out is not, because the erasure path enumerates from that file.\n\
+         policy/erasure/personal-data.toml.\n\
+         Add an entry per column under `[columns]` — `\"table.column\" = {{ class, ceiling, \
+         achieved, note }}` — deciding what it holds and how far erasure reaches it. Declaring one \
+         `class = \"none\", ceiling = \"n-a\"` is a fine answer; leaving it out is not, because \
+         the erasure path enumerates from that file.\n\
          Undeclared: {undeclared:#?}"
     );
 }
@@ -276,14 +138,15 @@ async fn every_derived_candidate_is_declared(pool: PgPool) {
 async fn every_declaration_still_names_a_live_candidate(pool: PgPool) {
     let live = derived(&pool).await;
     let stale: Vec<String> = declarations()
-        .into_keys()
+        .keys()
+        .map(ColumnKey::to_string)
         .filter(|k| !live.contains(k))
         .collect();
 
     assert!(
         stale.is_empty(),
-        "scripts/personal-data-surface.txt declares columns the catalog no longer nominates. \
-         Either the column was dropped (delete the line) or a derivation stopped finding it \
+        "policy/erasure/personal-data.toml declares columns the catalog no longer nominates. \
+         Either the column was dropped (delete the entry) or a derivation stopped finding it \
          (which is the more serious reading — check that first).\n\
          Stale: {stale:#?}"
     );
@@ -338,10 +201,10 @@ async fn every_polymorphic_discriminator_has_a_resolvable_id_sibling(pool: PgPoo
 /// that leaves personal data in place while the manifest reads as covered.
 #[test]
 fn a_pseudonym_ceiling_is_only_claimed_for_references() {
-    let bad: Vec<(String, String)> = declarations()
-        .into_iter()
-        .filter(|(_, d)| d.ceiling == "pseudonym" && d.class != "reference")
-        .map(|(k, d)| (k, d.class))
+    let bad: Vec<(String, Class)> = declarations()
+        .iter()
+        .filter(|(_, d)| d.ceiling == Ceiling::Pseudonym && d.class != Class::Reference)
+        .map(|(k, d)| (k.to_string(), d.class))
         .collect();
 
     assert!(
@@ -369,26 +232,6 @@ const REDACTION_FN: &str = "_erasure_apply_redaction";
 /// What a `resource-erasure:` claim runs through, to the body the resource fence binds.
 const RESOURCE_EXECUTE_FN: &str = "resource_erasure_execute";
 const RESOURCE_REDACTION_FN: &str = "_resource_erasure_apply_redaction";
-
-/// Which columns resource erasure handles, and at which D2 step. Its own test owns its format and
-/// binds each `handled` line to `_resource_erasure_apply_redaction`; this test reuses that binding
-/// rather than repeating it.
-const RESOURCE_MANIFEST: &str = include_str!("../../../scripts/resource-erasure-surface.txt");
-
-/// The person act's subject sentinel, as its body declares it. `v_sentinel` is an erasure value
-/// only while this declaration stands: the fence reads a variable's value from nowhere else.
-const SENTINEL_DECLARATION: &[&str] = &[
-    "v_sentinel",
-    "text",
-    ":",
-    "=",
-    "'erased-'",
-    "||",
-    "p_subject",
-    "::",
-    "text",
-    ";",
-];
 
 /// The live act, tokenized, and the catalog's cascading foreign keys as (child, parent).
 struct Act {
@@ -423,17 +266,14 @@ async fn act(pool: &PgPool) -> Act {
     }
 }
 
-/// `table.column` → step, for every `handled:D2.<step>` line of the resource manifest.
-fn resource_handled() -> BTreeMap<String, String> {
-    RESOURCE_MANIFEST
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .filter_map(|l| {
-            let cols: Vec<&str> = l.split('|').map(str::trim).collect();
-            let step = cols.get(1)?.strip_prefix("handled:D2.")?;
-            Some((cols[0].to_string(), step.to_string()))
-        })
+/// Every `table.column` declared `handled` in `policy/erasure/resource-erasure.toml` `[tables]`:
+/// which columns resource erasure handles. Its own test binds each `handled` entry to
+/// `_resource_erasure_apply_redaction`; this test reuses that binding rather than repeating it.
+fn resource_handled() -> BTreeSet<&'static str> {
+    in_force()
+        .resource_erasure
+        .handled()
+        .map(ColumnKey::as_str)
         .collect()
 }
 
@@ -441,50 +281,22 @@ fn calls(t: &[String], function: &str) -> bool {
     t.windows(2).any(|w| w[0] == function && w[1] == "(")
 }
 
-fn table_of(key: &str) -> &str {
-    key.split_once('.').map_or(key, |(t, _)| t)
-}
-
-/// Whether a SET value erases in the person act: one of the resource binder's shapes, or a `||`
-/// chain of string literals and the declared `v_sentinel` that holds the sentinel at least once
-/// (`'personal-' || v_sentinel`). Nothing read from a row may join the chain.
-fn erases(expr: &[String], sentinel_declared: bool) -> bool {
-    if is_erasure_value(expr) {
-        return true;
-    }
-    let operand = |tok: &String| tok == "v_sentinel" || tok.starts_with('\'');
-    sentinel_declared
-        && expr.len() % 2 == 1
-        && expr.iter().step_by(2).all(operand)
-        && expr.iter().skip(1).step_by(2).all(|op| op == "||")
-        && expr.iter().any(|tok| tok == "v_sentinel")
-}
-
-/// Whether `t` assigns `key` at least once, and every assignment erases.
-fn assigns_erasure(t: &[String], key: &str) -> bool {
-    let sentinel = t
-        .windows(SENTINEL_DECLARATION.len())
-        .any(|w| w.iter().zip(SENTINEL_DECLARATION).all(|(a, b)| a == b));
-    let values = assignments(t, key);
-    !values.is_empty() && values.into_iter().all(|v| erases(v, sentinel))
-}
-
 /// Whether the live act does what `claim` says for `key`.
-fn binds(act: &Act, handled: &BTreeMap<String, String>, key: &str, claim: &Claim) -> bool {
-    let table = table_of(key);
+fn binds(act: &Act, handled: &BTreeSet<&str>, key: &ColumnKey, claim: &Claim) -> bool {
+    let table = key.table();
     let redaction_runs = calls(&act.execute, REDACTION_FN);
     match claim {
-        Claim::Erased { .. } => redaction_runs && assigns_erasure(&act.redaction, key),
+        Claim::Erased { .. } => redaction_runs && assigns_erasure(&act.redaction, key.as_str()),
         Claim::Deleted { .. } => redaction_runs && deletes_from(&act.redaction, table),
         Claim::Cascaded { parent, .. } => {
             redaction_runs
                 && deletes_from(&act.redaction, parent)
                 && act.cascades.contains(&(table.to_string(), parent.clone()))
         }
-        Claim::ResourceErasure { step } => {
+        Claim::ResourceErasure => {
             calls(&act.execute, RESOURCE_EXECUTE_FN)
                 && calls(&act.resource_execute, RESOURCE_REDACTION_FN)
-                && handled.get(key) == Some(step)
+                && handled.contains(key.as_str())
         }
     }
 }
@@ -493,12 +305,12 @@ fn binds(act: &Act, handled: &BTreeMap<String, String>, key: &str, claim: &Claim
 fn unbound(act: &Act) -> Vec<String> {
     let handled = resource_handled();
     declarations()
-        .into_iter()
+        .iter()
         .filter(|(key, d)| match &d.achieved {
             Achieved::Claims(claims) => !claims.iter().all(|c| binds(act, &handled, key, c)),
             Achieved::Unstated | Achieved::Remainder(_) => false,
         })
-        .map(|(key, _)| key)
+        .map(|(key, _)| key.to_string())
         .collect()
 }
 
@@ -509,7 +321,8 @@ fn unbound(act: &Act) -> Vec<String> {
 fn every_full_line_states_its_achieved_reach() {
     let (mut silent, mut unreasoned, mut misplaced) = (Vec::new(), Vec::new(), Vec::new());
     for (key, d) in declarations() {
-        match (&d.achieved, d.ceiling == "full") {
+        let key = key.to_string();
+        match (&d.achieved, d.ceiling == Ceiling::Full) {
             (Achieved::Unstated, true) => silent.push(key),
             (Achieved::Remainder(reason), true) if reason.is_empty() => unreasoned.push(key),
             (Achieved::Unstated, false) | (_, true) => {}
@@ -520,7 +333,7 @@ fn every_full_line_states_its_achieved_reach() {
         silent.is_empty(),
         "these `full` lines say how far erasure could reach and nothing about what the person act \
          does. Name what reaches each (`erased:<arm>`, `deleted:<arm>`, `cascaded:<arm>:<table>`, \
-         `resource-erasure:D2.<step>`) or declare `remainder: <reason>`.\nSilent: {silent:#?}"
+         `resource-erasure`) or declare `remainder: <reason>`.\nSilent: {silent:#?}"
     );
     assert!(
         unreasoned.is_empty(),
@@ -536,15 +349,15 @@ fn every_full_line_states_its_achieved_reach() {
 /// FAILS IF: a line claims a reach the live person act does not have: an `erased` column no UPDATE
 /// assigns an erasure value, a `deleted` or `cascaded` table no DELETE reaches, or a
 /// `resource-erasure` column the act no longer runs resource erasure for, or whose resource
-/// manifest line no longer handles it at that step.
+/// manifest line no longer declares it `handled`.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn every_achieved_claim_is_carried_out_by_the_act(pool: PgPool) {
     let broken = unbound(&act(&pool).await);
     assert!(
         broken.is_empty(),
-        "scripts/personal-data-surface.txt says the person act reaches these columns, and the live \
-         act does not do what the line claims. Restore the arm, or change the line to say what the \
-         act now does, a `remainder: <reason>` included.\nUnbound: {broken:#?}"
+        "policy/erasure/personal-data.toml says the person act reaches these columns, and the live \
+         act does not do what the entry's `achieved` claims. Restore the arm, or change the entry to \
+         say what the act now does, a `remainder: <reason>` included.\nUnbound: {broken:#?}"
     );
 }
 
@@ -689,14 +502,12 @@ async fn an_act_that_skips_a_body_unbinds_what_it_reaches(pool: PgPool) {
     )
     .await;
     let claimed_by_redaction: Vec<String> = declarations()
-        .into_iter()
+        .iter()
         .filter(|(_, d)| match &d.achieved {
-            Achieved::Claims(c) => c
-                .iter()
-                .any(|c| !matches!(c, Claim::ResourceErasure { .. })),
+            Achieved::Claims(c) => c.iter().any(|c| !matches!(c, Claim::ResourceErasure)),
             _ => false,
         })
-        .map(|(k, _)| k)
+        .map(|(k, _)| k.to_string())
         .collect();
     assert!(!claimed_by_redaction.is_empty(), "precondition");
     assert_eq!(unbound(&act(&pool).await), claimed_by_redaction);

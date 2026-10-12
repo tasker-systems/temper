@@ -70,6 +70,14 @@
 #            under-declaration);
 #        neither `additive` nor `shape-breaking` while openapi.json changed: FAIL —
 #            `behavioral` does not answer the shape question, and the P floor is owed.
+#   4. ERASURE POLICY — the diff touches policy/erasure/ (the erasure-policy manifest, five TOML
+#      files read through temper_core::erasure_policy) and adds no register entry for this PR
+#      that lists `erasure-policy` in `surfaces`: FAIL, naming the policy files. The entry is
+#      found the way check 1 finds it (a file the diff ADDS, `pr` "self" or this PR's number),
+#      and the surface is read from the entry, never from this script. It is its own check
+#      beside PRESENCE: the policy is not wire shape, so policy/ is deliberately NOT in
+#      WIRE_PREFIXES, no class is demanded, and check 3 never sees it. A PR that touches both
+#      is judged by each check on its own terms.
 #
 # DEPENDENCY-ONLY CHANGES ARE NOT WIRE MOVEMENT
 # ---------------------------------------------
@@ -128,7 +136,7 @@
 #   --pr N                   this PR's number (else GITHUB_PR_NUMBER; else `self` only)
 #   --base REF               diff base (else the incumbents' candidate list)
 #
-# Exit 0 = presence, parse, and shape honesty hold. Exit 1 = they do not (every face reported).
+# Exit 0 = presence, parse, shape honesty and the erasure-policy declaration hold. Exit 1 = they do not (every face reported).
 
 set -uo pipefail
 
@@ -327,7 +335,10 @@ fi
 # ── Not wire-touched: nothing to cross-check ────────────────────────────────────────────────────
 WIRE_COUNT="$(grep -c . "$WIRE_FILES" || true)"
 WIRE_COUNT="${WIRE_COUNT:-0}"
-if [ "$WIRE_COUNT" -eq 0 ]; then
+POLICY_FILES="$(grep '^policy/erasure/' "$CHANGED_FILE" || true)"
+POLICY_COUNT="$(printf '%s' "$POLICY_FILES" | grep -c . || true)"
+POLICY_COUNT="${POLICY_COUNT:-0}"
+if [ "$WIRE_COUNT" -eq 0 ] && [ "$POLICY_COUNT" -eq 0 ]; then
     if [ "$DEP_COUNT" -gt 0 ]; then
         echo "wire-class-crosscheck: PASS — every wire-tree change is dependency-only; no register entry is owed."
     elif [ "$REGISTER_IN_DIFF" -eq 1 ] || [ "$REGISTER_EXPLICIT" -eq 1 ]; then
@@ -342,7 +353,6 @@ if [ "$WIRE_COUNT" -eq 0 ]; then
     exit 0
 fi
 
-echo "── wire paths ──"
 WIRE_LIST=""
 grep -qx "openapi.json" "$WIRE_FILES" && WIRE_LIST="  openapi.json"$'\n'
 for pre in $WIRE_PREFIXES; do
@@ -352,7 +362,14 @@ for pre in $WIRE_PREFIXES; do
         WIRE_LIST="${WIRE_LIST}  ${pre} (${c} file(s))"$'\n'
     fi
 done
-printf '%s' "$WIRE_LIST"
+if [ "$WIRE_COUNT" -gt 0 ]; then
+    echo "── wire paths ──"
+    printf '%s' "$WIRE_LIST"
+fi
+if [ "$POLICY_COUNT" -gt 0 ]; then
+    echo "── erasure-policy paths ──"
+    printf '%s\n' "$POLICY_FILES" | sed 's/^/  /'
+fi
 
 # ── This PR's own entries: the entry files this diff ADDS ───────────────────────────────────────
 # An entry counts only when the diff adds its file — `-M` makes a rename an `R`, never an `A`,
@@ -388,15 +405,17 @@ if [ "${#ADDED_FILES[@]}" -gt 0 ]; then
 fi
 
 SELF_CLASSES=""
+SELF_SURFACES=""
 HAS_OWN_ROW=0
 if [ "${ADDED_DERIV_FAILED:-0}" -eq 1 ]; then
     SELF_CLASSES="<deriv-failed>"
 else
-    while IFS=$'\t' read -r r_pr r_cls _ _ _ r_id; do
+    while IFS=$'\t' read -r r_pr r_cls r_surf _ _ r_id; do
         [ -z "${r_pr:-}" ] && continue
         if [ "$r_pr" = "self" ] || { [ -n "$PR_NUMBER" ] && [ "$r_pr" = "$PR_NUMBER" ]; }; then
             HAS_OWN_ROW=1
             SELF_CLASSES="${SELF_CLASSES} ${r_cls}"
+            SELF_SURFACES="${SELF_SURFACES} ${r_surf}"
         fi
     done < "$ADDED_ROWS"
 fi
@@ -423,13 +442,26 @@ fi
 PROBLEMS=""
 
 # ── Check 1: presence ───────────────────────────────────────────────────────────────────────────
-if [ "$HAS_OWN_ROW" -eq 0 ]; then
+if [ "$WIRE_COUNT" -gt 0 ] && [ "$HAS_OWN_ROW" -eq 0 ]; then
     PROBLEMS="  This diff adds no register entry for this PR, while wire-touched paths changed:"$'\n'
     PROBLEMS="${PROBLEMS}${WIRE_LIST}"
     PROBLEMS="${PROBLEMS}  Every wire-touching PR adds its own entry, release-register/unreleased/<id>.toml"$'\n'
     PROBLEMS="${PROBLEMS}  (python3 tools/manifest/manifest.py register new <id>), with pr = \"self\" (legal — the"$'\n'
     PROBLEMS="${PROBLEMS}  number is unknowable before push), classes, surfaces, status, title and body. The entry"$'\n'
     PROBLEMS="${PROBLEMS}  is the durable declaration; the PR template field is only the authoring act (spec §4)."$'\n'
+    PROBLEMS="${PROBLEMS}  A new entry must be committed or staged (git add) for the diff to see it."$'\n'
+fi
+
+# ── Check 4: erasure policy ─────────────────────────────────────────────────────────────────────
+# Its own check, deliberately not a wire prefix: the policy is not wire shape. Derivation
+# failure ("<deriv-failed>") leaves SELF_SURFACES empty, so it fails closed here too.
+if [ "$POLICY_COUNT" -gt 0 ] && ! classes_contain "$SELF_SURFACES" "erasure-policy"; then
+    PROBLEMS="${PROBLEMS}  This diff changes the erasure policy, and no register entry it adds for this PR lists"$'\n'
+    PROBLEMS="${PROBLEMS}  \"erasure-policy\" in surfaces (declared:${SELF_SURFACES:- <none>}). Changed policy files:"$'\n'
+    PROBLEMS="${PROBLEMS}$(printf '%s\n' "$POLICY_FILES" | sed 's/^/    /')"$'\n'
+    PROBLEMS="${PROBLEMS}  Add release-register/unreleased/<id>.toml with pr = \"self\" and"$'\n'
+    PROBLEMS="${PROBLEMS}  surfaces including \"erasure-policy\" (python3 tools/manifest/manifest.py register new <id>)."$'\n'
+    PROBLEMS="${PROBLEMS}  The policy is versioned; a change to what erasure covers is declared, not silent."$'\n'
     PROBLEMS="${PROBLEMS}  A new entry must be committed or staged (git add) for the diff to see it."$'\n'
 fi
 
@@ -607,7 +639,7 @@ if [ -n "$PROBLEMS" ]; then
     exit 1
 fi
 
-echo "wire-class-crosscheck: PASS — presence, parse, and shape honesty hold (register entry and wire diff agree)."
+echo "wire-class-crosscheck: PASS — presence, parse, shape honesty and the erasure-policy declaration hold (register entry and diff agree)."
 [ -n "$SHAPE_NOTE" ] && { printf '%s\n' "$SHAPE_NOTE"; echo; }
 echo "Verified: the mechanical half only. CI is structurally barred from certifying the behavioral"
 echo "class — behavior is not in the diff; that half is owned by review and the merge decision (spec §4)."
