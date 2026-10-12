@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH pruned AS (\n               DELETE FROM kb_internal_signature_nonces WHERE expires_at < now()\n           )\n           INSERT INTO kb_internal_signature_nonces (nonce, door, expires_at)\n           VALUES ($1, $2, to_timestamp($3))\n           ON CONFLICT (nonce) DO NOTHING\n           RETURNING nonce",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "nonce",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "52751c09baa1533146d5867f9ee265ae065476d4384d5e17b8d5e0b7f8503195"
+}

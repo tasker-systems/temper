@@ -169,6 +169,26 @@ pub fn verify_v2(
         .is_ok()
 }
 
+/// The three v2 headers for `body` sent by `method` to `door` at `timestamp` under `nonce`, as
+/// `(name, value)` pairs. The signers outside Rust build the same three.
+pub fn v2_headers(
+    secret: &[u8],
+    method: &str,
+    door: &str,
+    timestamp: i64,
+    nonce: &str,
+    body: &[u8],
+) -> [(&'static str, String); 3] {
+    [
+        (TIMESTAMP_HEADER, timestamp.to_string()),
+        (NONCE_HEADER, nonce.to_owned()),
+        (
+            SIGNATURE_V2_HEADER,
+            sign_v2(secret, method, door, timestamp, nonce, body),
+        ),
+    ]
+}
+
 /// Whether `nonce` has the v2 shape: exactly [`NONCE_LEN`] lowercase hex characters.
 pub fn nonce_is_well_formed(nonce: &str) -> bool {
     nonce.len() == NONCE_LEN

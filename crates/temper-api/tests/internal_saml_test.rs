@@ -12,7 +12,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, Utc};
 use reqwest::RequestBuilder;
 use sqlx::PgPool;
-use temper_core::internal_sig::{sign, SIGNATURE_HEADER, TIMESTAMP_HEADER};
+use temper_core::internal_sig::{
+    sign, v2_headers, DOORS, DOOR_PRINCIPAL_RESOLVE, DOOR_SAML_RECONCILE, SIGNATURE_HEADER,
+    TIMESTAMP_HEADER,
+};
 use temper_core::types::ReconcileRequest;
 use uuid::Uuid;
 
@@ -23,20 +26,52 @@ fn now_secs() -> i64 {
         .as_secs() as i64
 }
 
-/// Build a POST carrying a body string signed at `timestamp` with `secret`. The signed bytes
-/// are exactly the bytes sent, matching the raw-body discipline the AS uses.
+/// A fresh v2 nonce, as the AS's `randomBytes(16)` would make one.
+fn fresh_nonce() -> String {
+    Uuid::new_v4().simple().to_string()
+}
+
+/// Add v2 headers signing `body` for `door` at `timestamp` under `nonce`.
+fn with_v2(
+    mut builder: RequestBuilder,
+    secret: &str,
+    door: &str,
+    timestamp: i64,
+    nonce: &str,
+    body: &str,
+) -> RequestBuilder {
+    for (name, value) in v2_headers(
+        secret.as_bytes(),
+        "POST",
+        door,
+        timestamp,
+        nonce,
+        body.as_bytes(),
+    ) {
+        builder = builder.header(name, value);
+    }
+    builder
+}
+
+/// Build a POST to the reconcile door carrying a body string signed at `timestamp` with `secret`,
+/// under a fresh nonce. The signed bytes are exactly the bytes sent, matching the raw-body
+/// discipline the AS uses.
 fn signed_post(
     builder: RequestBuilder,
     secret: &str,
     timestamp: i64,
     body: &str,
 ) -> RequestBuilder {
-    let signature = sign(secret.as_bytes(), timestamp, body.as_bytes());
-    builder
-        .header("content-type", "application/json")
-        .header(TIMESTAMP_HEADER, timestamp.to_string())
-        .header(SIGNATURE_HEADER, signature)
-        .body(body.to_string())
+    with_v2(
+        builder,
+        secret,
+        DOOR_SAML_RECONCILE,
+        timestamp,
+        &fresh_nonce(),
+        body,
+    )
+    .header("content-type", "application/json")
+    .body(body.to_string())
 }
 
 /// Seed an active IdP 'acme', a team, and a mapping engineering -> team (member). Returns team_id.
@@ -191,19 +226,21 @@ async fn reconcile_endpoint_rejects_tampered_body(pool: PgPool) {
     // Sign the honest body, then send a different body under that signature.
     let signed_body = serde_json::to_string(&reconcile_body()).unwrap();
     let timestamp = now_secs();
-    let signature = sign("s3cr3t".as_bytes(), timestamp, signed_body.as_bytes());
     let tampered = serde_json::to_string(&ReconcileRequest {
         groups: Some(vec!["temper-admins".to_string()]),
         ..reconcile_body()
     })
     .unwrap();
-    let builder = app
-        .client
-        .post(app.url("/internal/saml/reconcile"))
-        .header("content-type", "application/json")
-        .header(TIMESTAMP_HEADER, timestamp.to_string())
-        .header(SIGNATURE_HEADER, signature)
-        .body(tampered);
+    let builder = with_v2(
+        app.client.post(app.url("/internal/saml/reconcile")),
+        "s3cr3t",
+        DOOR_SAML_RECONCILE,
+        timestamp,
+        &fresh_nonce(),
+        &signed_body,
+    )
+    .header("content-type", "application/json")
+    .body(tampered);
     assert_rejected_and_no_provisioning(&pool, builder).await;
 }
 
@@ -284,4 +321,114 @@ async fn reconcile_endpoint_records_a_null_group_signal_as_a_skip(pool: PgPool) 
         idp_memberships, 0,
         "and no idp-derived reach was conferred from no signal"
     );
+}
+
+/// The configuration every single-use and door test below runs under.
+async fn reconcile_app(pool: &PgPool) -> common::TestApp {
+    common::setup_test_app_with_config(pool.clone(), |c| {
+        c.auth_provider_name = "saml:acme".to_string();
+        c.internal_reconcile_secret = Some("s3cr3t".to_string());
+    })
+    .await
+}
+
+/// A signed request is good once. The same request sent again inside its freshness window is
+/// refused: before v2, it verified again.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reconcile_endpoint_refuses_a_replay(pool: PgPool) {
+    seed(&pool).await;
+    let app = reconcile_app(&pool).await;
+    let body = serde_json::to_string(&reconcile_body()).unwrap();
+    let (timestamp, nonce) = (now_secs(), fresh_nonce());
+    let send = || {
+        with_v2(
+            app.client.post(app.url("/internal/saml/reconcile")),
+            "s3cr3t",
+            DOOR_SAML_RECONCILE,
+            timestamp,
+            &nonce,
+            &body,
+        )
+        .header("content-type", "application/json")
+        .body(body.clone())
+        .send()
+    };
+
+    let first = send().await.expect("first send");
+    assert!(
+        first.status().is_success(),
+        "the first send is accepted: {}",
+        first.status()
+    );
+    let replay = send().await.expect("replay");
+    assert_eq!(
+        replay.status(),
+        401,
+        "the same request again must be refused"
+    );
+}
+
+/// A signature is good for the door it names. A body signed for reconcile and sent to resolve —
+/// the sibling door on the same key — is refused.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn resolve_refuses_a_body_signed_for_reconcile(pool: PgPool) {
+    let app = reconcile_app(&pool).await;
+    let body = r#"{"provider":"saml:acme","external_user_id":"nid-1"}"#;
+    let resp = with_v2(
+        app.client.post(app.url(DOOR_PRINCIPAL_RESOLVE)),
+        "s3cr3t",
+        DOOR_SAML_RECONCILE,
+        now_secs(),
+        &fresh_nonce(),
+        body,
+    )
+    .header("content-type", "application/json")
+    .body(body)
+    .send()
+    .await
+    .expect("send");
+    assert_eq!(
+        resp.status(),
+        401,
+        "a signature for another door must be refused"
+    );
+}
+
+/// The original construction alone is no longer accepted, however fresh: accepting it would leave
+/// its replay and cross-door gaps open to anyone who strips the v2 headers from a capture.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reconcile_endpoint_refuses_the_original_construction(pool: PgPool) {
+    seed(&pool).await;
+    let app = reconcile_app(&pool).await;
+    let body = serde_json::to_string(&reconcile_body()).unwrap();
+    let timestamp = now_secs();
+    let builder = app
+        .client
+        .post(app.url("/internal/saml/reconcile"))
+        .header("content-type", "application/json")
+        .header(TIMESTAMP_HEADER, timestamp.to_string())
+        .header(
+            SIGNATURE_HEADER,
+            sign("s3cr3t".as_bytes(), timestamp, body.as_bytes()),
+        )
+        .body(body);
+    assert_rejected_and_no_provisioning(&pool, builder).await;
+}
+
+/// Every door the signers name is a route the API serves, so a signer and the route cannot drift
+/// apart unnoticed: an unsigned POST to each is refused by its gate (401), never unrouted (404).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn every_signed_door_is_a_gated_route(pool: PgPool) {
+    let app = reconcile_app(&pool).await;
+    for door in DOORS {
+        let resp = app
+            .client
+            .post(app.url(door))
+            .header("content-type", "application/json")
+            .body("{}")
+            .send()
+            .await
+            .expect("send");
+        assert_eq!(resp.status(), 401, "{door} must be a gated route");
+    }
 }

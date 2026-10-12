@@ -5,10 +5,15 @@
 //! asking what to say (link state, `SLACK_LINK_SECRET`), and the same agent asking for an
 //! act-as-the-human token (mint, `SLACK_MINT_SECRET`). The last two share a *caller* but not a
 //! *key*, because they differ enormously in what their key is worth: one answers a question, the
-//! other confers a human's full reach. Each signs its request with
-//! `HMAC(secret, "{timestamp}.{raw_body}")`. The secret never crosses the wire, and a
-//! captured request is replay-proof (a stale timestamp is rejected). The signing scheme +
-//! the shared known-answer vector live in `temper_core::internal_sig`.
+//! other confers a human's full reach. Each signs its request with the v2 construction,
+//! `HMAC(secret, "v2\n{METHOD}\n{door}\n{timestamp}\n{nonce}\n{raw_body}")`. The secret never
+//! crosses the wire; the signature is good only for the route it names; and a request is accepted
+//! once, because its nonce is recorded (`internal_sig_service`). The construction + the shared
+//! known-answer vector live in `temper_core::internal_sig`.
+//!
+//! The original `X-Temper-Signature` header is ignored. Signers still send it, for verifiers that
+//! predate v2, but a verifier that accepted it would reopen the replay and cross-door gaps to anyone
+//! who stripped the v2 headers from a capture.
 //!
 //! Fail-closed: if a given gate's secret is unset, that endpoint is disabled and every
 //! request to it is rejected.
@@ -16,14 +21,15 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::{Body, Bytes};
-use axum::extract::State;
+use axum::extract::{MatchedPath, State};
 use axum::http::request::Parts;
 use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 
-use temper_core::internal_sig::{timestamp_is_fresh, verify, SIGNATURE_HEADER, TIMESTAMP_HEADER};
+use temper_core::internal_sig::{DOORS, NONCE_HEADER, SIGNATURE_V2_HEADER, TIMESTAMP_HEADER};
 use temper_services::error::ApiError;
+use temper_services::services::internal_sig_service::{self, SignedRequest};
 use temper_services::state::AppState;
 
 /// Cap on the buffered body, for BOTH gates. The payloads are small — a membership list for
@@ -39,44 +45,96 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-/// Pull the signature headers and buffer the body — the transport plumbing every signature gate
-/// shares. Returns the parts (to rebuild the request), the timestamp, the signature, and the
-/// buffered bytes. It does **not** verify: freshness and HMAC are the caller's, so each gate
-/// verifies how it must. `require_signature_with` checks them inline for the two report gates; the
-/// mint gate hands the result to `verify_mint_request`, which verifies AND seals a proof inside
-/// temper-services — the split that makes that proof un-forgeable in this crate (spec §5.1).
-async fn buffer_signed_request(
-    request: Request<Body>,
-    label: &str,
-) -> Result<(Parts, i64, String, Bytes), ApiError> {
-    let (parts, body) = request.into_parts();
-    let timestamp = parts
-        .headers
-        .get(TIMESTAMP_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<i64>().ok());
-    let signature = parts
-        .headers
-        .get(SIGNATURE_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
+/// A request's signature headers and buffered body, before any verdict.
+struct Buffered {
+    parts: Parts,
+    method: String,
+    door: String,
+    timestamp: i64,
+    nonce: String,
+    signature: String,
+    body: Bytes,
+}
 
-    let (Some(timestamp), Some(signature)) = (timestamp, signature) else {
-        tracing::warn!("{label}: rejected (missing or malformed signature headers)");
+impl Buffered {
+    fn signed(&self) -> SignedRequest<'_> {
+        SignedRequest {
+            method: &self.method,
+            door: &self.door,
+            timestamp: self.timestamp,
+            nonce: &self.nonce,
+            signature: &self.signature,
+            body: &self.body,
+        }
+    }
+
+    /// Rebuild the request with the buffered body for the handler's extractor.
+    fn into_request(self) -> Request<Body> {
+        Request::from_parts(self.parts, Body::from(self.body))
+    }
+}
+
+/// Pull the v2 signature headers, name the door, and buffer the body — the transport plumbing every
+/// signature gate shares. It does **not** verify: each gate verifies how it must.
+/// `require_signature_with` accepts the request through `internal_sig_service::accept_once` for the
+/// report gates; the mint gate hands it to `verify_mint_request`, which verifies AND seals a proof
+/// inside temper-services — the split that makes that proof un-forgeable in this crate (spec §5.1).
+///
+/// The door is the route the request matched, never the URI it arrived on: a deployment may reach
+/// the API through a prefix or a rewrite, and the route is the one name the signer also holds.
+/// A matched route that is not one of `internal_sig::DOORS` is refused rather than verified: a route
+/// mounted under a signature tier without a door of its own must fail closed, not accept a
+/// signature over whatever path it happens to have.
+async fn buffer_signed_request(request: Request<Body>, label: &str) -> Result<Buffered, ApiError> {
+    let (parts, body) = request.into_parts();
+    let header = |name: &str| {
+        parts
+            .headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    };
+    let timestamp = header(TIMESTAMP_HEADER).and_then(|s| s.parse::<i64>().ok());
+    let nonce = header(NONCE_HEADER);
+    let signature = header(SIGNATURE_V2_HEADER);
+    let door = parts
+        .extensions
+        .get::<MatchedPath>()
+        .map(|p| p.as_str().to_owned());
+
+    let (Some(timestamp), Some(nonce), Some(signature), Some(door)) =
+        (timestamp, nonce, signature, door)
+    else {
+        tracing::warn!(reason = "missing_headers", "{label}: rejected");
         return Err(ApiError::Unauthorized(
             "invalid internal signature".to_string(),
         ));
     };
 
-    let bytes = axum::body::to_bytes(body, MAX_BODY_BYTES)
+    if !DOORS.contains(&door.as_str()) {
+        tracing::error!(door, reason = "unknown_door", "{label}: rejected");
+        return Err(ApiError::Unauthorized(
+            "invalid internal signature".to_string(),
+        ));
+    }
+
+    let body = axum::body::to_bytes(body, MAX_BODY_BYTES)
         .await
         .map_err(|_| ApiError::Unauthorized(format!("{label} body too large")))?;
 
-    Ok((parts, timestamp, signature, bytes))
+    Ok(Buffered {
+        method: parts.method.as_str().to_owned(),
+        parts,
+        door,
+        timestamp,
+        nonce,
+        signature,
+        body,
+    })
 }
 
-/// The shared gate for the two signature surfaces that guard a *report*: fresh timestamp + valid
-/// HMAC over the exact bytes received.
+/// The shared gate for the signature surfaces that guard a *report*: a v2 signature over the exact
+/// bytes received, for this route, accepted once.
 ///
 /// `secret` is passed in rather than read from state because these gates use one scheme with
 /// different keys — the co-deployed AS (`INTERNAL_RECONCILE_SECRET`) and the mention agent's
@@ -85,36 +143,29 @@ async fn buffer_signed_request(
 /// `verify_mint_request` instead (see `require_slack_mint_signature`), which is why no proof can be
 /// minted behind this path.
 async fn require_signature_with(
+    state: &AppState,
     secret: &str,
     label: &'static str,
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, ApiError> {
-    let (parts, timestamp, signature, bytes) = buffer_signed_request(request, label).await?;
-
-    if !timestamp_is_fresh(timestamp, now_secs()) {
-        tracing::warn!(timestamp, "{label}: rejected (stale timestamp)");
-        return Err(ApiError::Unauthorized(
-            "stale internal signature".to_string(),
-        ));
-    }
-
-    if !verify(secret.as_bytes(), timestamp, &bytes, &signature) {
-        tracing::warn!("{label}: rejected (signature mismatch)");
-        return Err(ApiError::Unauthorized(
-            "invalid internal signature".to_string(),
-        ));
-    }
+    let buffered = buffer_signed_request(request, label).await?;
+    internal_sig_service::accept_once(
+        &state.pool,
+        secret.as_bytes(),
+        &buffered.signed(),
+        now_secs(),
+        label,
+    )
+    .await?;
 
     // The signature verified against a secret only our own services hold, which is the strongest
     // form of "one of ours" temper has — so join the caller's trace by link (decision `019f95ff`
     // rule 2). These are the hops the whole goal exists to make navigable: the mention agent asking
     // what to say, then asking for a token, are two of the three spans in that story.
-    temper_telemetry::link_trusted_caller(&tracing::Span::current(), &parts.headers);
+    temper_telemetry::link_trusted_caller(&tracing::Span::current(), &buffered.parts.headers);
 
-    // Rebuild the request with the buffered body for the handler's extractor.
-    let request = Request::from_parts(parts, Body::from(bytes));
-    Ok(next.run(request).await)
+    Ok(next.run(buffered.into_request()).await)
 }
 
 /// Rejects the request unless it carries a fresh, valid HMAC signature over its body.
@@ -133,7 +184,7 @@ pub async fn require_internal_signature(
             ));
         }
     };
-    require_signature_with(&secret, "internal reconcile", request, next).await
+    require_signature_with(&state, &secret, "internal reconcile", request, next).await
 }
 
 /// Rejects the request unless it carries a fresh, valid HMAC signature over its body, keyed
@@ -163,7 +214,7 @@ pub async fn require_slack_link_signature(
             return Err(ApiError::Unauthorized("slack link disabled".to_string()));
         }
     };
-    require_signature_with(&secret, "slack link", request, next).await
+    require_signature_with(&state, &secret, "slack link", request, next).await
 }
 
 /// Rejects the request unless it carries a fresh, valid HMAC signature over its body, keyed on
@@ -202,8 +253,7 @@ pub async fn require_slack_mint_signature(
         }
     };
 
-    let (mut parts, timestamp, signature, bytes) =
-        buffer_signed_request(request, "slack mint").await?;
+    let buffered = buffer_signed_request(request, "slack mint").await?;
 
     // Verify AND seal in temper-services — the ONLY place a `VerifiedSlackPrincipal` is constructed,
     // so this gate is the only one that can produce one, and it can only produce one for a request
@@ -211,18 +261,17 @@ pub async fn require_slack_mint_signature(
     // the proof un-forgeable by temper-api (spec §5.1). A malformed principal surfaces as a 400, a
     // bad signature or stale timestamp as a 401 — both before the handler runs.
     let verified = temper_services::services::slack_mint_service::verify_mint_request(
+        &state.pool,
         &secret,
-        timestamp,
+        &buffered.signed(),
         now_secs(),
-        &bytes,
-        &signature,
-    )?;
+    )
+    .await?;
     // Verified against the mint secret — one of ours, so link its trace (decision `019f95ff`
     // rule 2). Spelled out here rather than inherited from `require_signature_with` because this
     // gate deliberately does not use that helper; see the doc comment above.
-    temper_telemetry::link_trusted_caller(&tracing::Span::current(), &parts.headers);
-    parts.extensions.insert(verified);
-
-    let request = Request::from_parts(parts, Body::from(bytes));
+    temper_telemetry::link_trusted_caller(&tracing::Span::current(), &buffered.parts.headers);
+    let mut request = buffered.into_request();
+    request.extensions_mut().insert(verified);
     Ok(next.run(request).await)
 }
