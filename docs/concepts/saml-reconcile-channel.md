@@ -13,13 +13,19 @@ endpoint, not a JWT path.
 
 ## Trust model: an HMAC signature over the body
 
-The AS signs each request with `HMAC-SHA256(secret, "{timestamp}.{raw_body}")` and sends two
-headers; the API recomputes the MAC over the bytes it received and rejects a stale timestamp.
+The AS signs each request with
+`HMAC-SHA256(secret, "v2\n{METHOD}\n{route}\n{timestamp}\n{nonce}\n{raw_body}")`, where `route`
+is the API route it calls and `nonce` is fresh randomness, and sends the timestamp, the nonce and
+the signature as headers. The API recomputes the MAC over the bytes it received, for the route the
+request matched.
 
 - **The secret never crosses the wire.** Only a signature derived from it travels, so a
   captured request never leaks the secret.
-- **Captured requests are replay-proof.** The signed timestamp must be within ±30s of the
-  verifier's clock; a replayed request is stale.
+- **A signature is good once.** The signed timestamp must be within ±30s of the API's clock, and
+  the API records each nonce it accepts until that window has passed, so a captured request sent
+  again is refused even while it is still fresh.
+- **A signature is good for one route.** The reconcile and principal-resolve routes share a key;
+  a request signed for one is refused at the other.
 - **Fail-closed.** If the shared secret is unset, the endpoint is disabled and every request is
   rejected. An unconfigured instance simply does no group provisioning — authentication still
   works.

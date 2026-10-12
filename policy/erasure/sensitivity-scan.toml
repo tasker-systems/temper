@@ -23,9 +23,9 @@
 # temper_services::MIGRATOR (so `_sqlx_migrations` is included). The complement is that set minus
 # every `table.column` declared in personal-data.toml.
 #
-# COUNT at `count_at`: 173 text/varchar columns; 18 declared in the sibling; `declared_count` declared here.
-count_at = "20261027100000"
-declared_count = 155
+# COUNT at `count_at`: 175 text/varchar columns; 18 declared in the sibling; `declared_count` declared here.
+count_at = "20261028100000"
+declared_count = 157
 #
 # THERE IS NO `unadjudicated` CLASS. A class that means "we will decide later" is how a manifest
 # starts accumulating lines nobody reads. A new column is declared by the PR that adds it.
@@ -101,6 +101,8 @@ declared_count = 155
 "kb_erasure_blob_deletes.pathname"                = { disposition = "structural", note = "copy of a content-addressed blob pathname" }
 "kb_ingestion_records.source_hash"                = { disposition = "structural", note = "sha256 of the source" }
 "kb_inbound_attestations_seen.replay_key"         = { disposition = "structural", note = "SHA-256 of a webhook attestation, the replay key" }
+"kb_internal_signature_nonces.nonce"              = { disposition = "structural", note = "random hex a signer made, the replay key" }
+"kb_internal_signature_nonces.door"               = { disposition = "structural", note = "a route path from internal_sig::DOORS" }
 "kb_chunks.embedded_with"                         = { disposition = "structural", note = "sha256 of the embedding model" }
 "kb_cogmap_components.fingerprint"                = { disposition = "structural", note = "digest of a component's membership" }
 "kb_cogmaps.steward_boundary_fingerprint"         = { disposition = "structural", note = "digest of the steward's boundary" }

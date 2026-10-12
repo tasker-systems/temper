@@ -1,0 +1,18 @@
+title    = "An internal signature is good for one door, once"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["internal", "schema"]
+status   = "signal-only"
+body = '''
+The four internal HMAC doors — `/internal/saml/reconcile`, `/internal/principal/resolve`,
+`/internal/slack/link-state` and `/internal/slack/mint` — now require the v2 signature
+(`X-Temper-Nonce`, `X-Temper-Signature-V2`) and ignore the original `X-Temper-Signature`. A v2
+signature names the route it was signed for, so a body signed for one door is refused at another;
+and each accepted nonce is recorded in the new `kb_internal_signature_nonces` table until it can no
+longer be fresh, so the same request sent again inside the 30-second window is refused. At the mint
+door a replay used to return a fresh act-as-the-human token. The wire answer to every refusal is
+the 401 it always was; the log names the reason. Who observes: the SAML Authorization Server and the
+Slack mention agent, which already send v2. Release relevance: additive (the table), behavioral (the
+original construction alone is now refused). The signers must already be deployed, or those doors refuse
+until they are.
+'''
