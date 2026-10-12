@@ -20,7 +20,10 @@ link URLs). In AS mode the callback now revokes the superseded token locally, in
 transaction, before overwriting it. In ExternalIdp mode it is deliberately not revoked, because with
 Auth0's "Refresh Token Revocation Deletes Grant" enabled a revoke would also kill the fresh
 replacement grant; the overwrite destroys temper's only copy, and the supersede is logged at info.
-Link-state URL issuance moved into
+A stored grant the mint cannot decrypt (a rotated `SLACK_VAULT_ENC_KEY`, or a tampered row) now
+also answers `not_vaulted`, where it used to be a 500 the agent rendered as "try again" on every
+mention; an unopenable cached access token falls through to a refresh. Link-state URL issuance
+moved into
 `slack_link_service::issue_authorize_url` unchanged, and both endpoints share it.
 
 Who observes it: Slack users of the mention agent whose stored grant is gone or expired. Their
