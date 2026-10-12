@@ -71,10 +71,13 @@ pub enum Grain {
         /// reached by the scope rules rather than by a home.
         home: Option<Home>,
     },
-    /// Reached through its parent: erased by the parent's unit.
+    /// Reached through its parent: erased by the parent's unit, unless `unit` names another.
     Covered {
         /// The path from a row to the parent that covers it.
         parent: ParentPath,
+        /// What erases these rows when the parent's unit does not: absent when the parent's unit
+        /// covers them.
+        unit: Option<Mechanism>,
     },
     /// Erased at declaration, with the subject's identity.
     Identity {
@@ -108,11 +111,12 @@ pub struct Home {
 pub struct ParentPath {
     /// The table the path reaches.
     pub table: String,
-    /// The columns that make the link. They are on the row's own table, unless `via` says
-    /// otherwise.
+    /// The columns that make the link: on the row's own table, or, for a path with `via`, on
+    /// `table`, the table whose rows cite this one.
     pub link: Link,
-    /// For a path that is not a plain key from the row's table (`kb_remote_sources` is cited by
-    /// `kb_block_provenance`'s `(source_kind, source_id)`, with no foreign key): how it is read.
+    /// For a path read in reverse, from a citing table with no foreign key (`kb_remote_sources`
+    /// is cited by `kb_block_provenance`'s `(source_kind, source_id)`): how the citation is read.
+    /// Its presence moves `link`'s columns onto `table`.
     pub via: Option<String>,
 }
 

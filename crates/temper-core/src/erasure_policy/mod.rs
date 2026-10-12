@@ -453,6 +453,7 @@ refine = [
                     },
                     via: Some("source_kind = 'remote_source'; no foreign key".into()),
                 },
+                unit: None,
             }
         );
         assert_eq!(
@@ -683,6 +684,48 @@ refine = [
         let estate = ESTATE.replace(
             r#"unit = { gap = "2a: context unit" }"#,
             r#"unit = { gap = "2a: context unit", bound = "context_erasure_execute" }"#,
+        );
+        fails_in(
+            ManifestFiles {
+                estate: &estate,
+                ..files()
+            },
+            ManifestFile::Estate,
+        );
+    }
+
+    #[test]
+    fn a_covered_grain_may_name_its_own_unit() {
+        let estate = format!(
+            "{ESTATE}\n[tables.kb_invocations]\n\
+             grain = {{ kind = \"covered\", parent = {{ table = \"kb_cogmaps\", link = {{ fk = \"originating_cogmap_id\" }} }}, unit = {{ gap = \"task 01a12c03-2663-7562-b6bb-2d0a67c61972: invocation outcome\" }} }}\n"
+        );
+        let policy = parse(&ManifestFiles {
+            estate: &estate,
+            ..files()
+        })
+        .expect("a covered grain with a unit parses");
+        assert_eq!(
+            policy.estate.tables["kb_invocations"].grain,
+            Grain::Covered {
+                parent: ParentPath {
+                    table: "kb_cogmaps".into(),
+                    link: Link::Fk("originating_cogmap_id".into()),
+                    via: None,
+                },
+                unit: Some(Mechanism::Gap(
+                    "task 01a12c03-2663-7562-b6bb-2d0a67c61972: invocation outcome".into()
+                )),
+            }
+        );
+        let Grain::Covered { unit, .. } = &policy.estate.tables["kb_properties"].grain else {
+            panic!("kb_properties is covered in the fixture");
+        };
+        assert_eq!(*unit, None, "an absent unit is None");
+
+        let estate = estate.replace(
+            r#"unit = { gap = "task 01a12c03"#,
+            r#"unit = { gone = "task 01a12c03"#,
         );
         fails_in(
             ManifestFiles {
