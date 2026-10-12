@@ -168,7 +168,8 @@ async fn require_signature_with(
     Ok(next.run(buffered.into_request()).await)
 }
 
-/// Rejects the request unless it carries a fresh, valid HMAC signature over its body.
+/// Rejects the request unless it carries a fresh v2 signature over its body, for this route, not
+/// accepted before.
 pub async fn require_internal_signature(
     State(state): State<AppState>,
     request: Request<Body>,
@@ -187,7 +188,8 @@ pub async fn require_internal_signature(
     require_signature_with(&state, &secret, "internal reconcile", request, next).await
 }
 
-/// Rejects the request unless it carries a fresh, valid HMAC signature over its body, keyed
+/// Rejects the request unless it carries a fresh v2 signature over its body, for this route, not
+/// accepted before, keyed
 /// on `SLACK_LINK_SECRET`.
 ///
 /// This gate is what makes Slack-side hijack expensive. Slack user ids are visible in a
@@ -217,7 +219,8 @@ pub async fn require_slack_link_signature(
     require_signature_with(&state, &secret, "slack link", request, next).await
 }
 
-/// Rejects the request unless it carries a fresh, valid HMAC signature over its body, keyed on
+/// Rejects the request unless it carries a fresh v2 signature over its body, for this route, not
+/// accepted before, keyed on
 /// `SLACK_MINT_SECRET`.
 ///
 /// **This is the highest-privilege gate in the file, and the reason it has its own key.** The
@@ -259,7 +262,7 @@ pub async fn require_slack_mint_signature(
     // so this gate is the only one that can produce one, and it can only produce one for a request
     // that verifies against the mint secret. The verify lives THERE, not here, which is what makes
     // the proof un-forgeable by temper-api (spec §5.1). A malformed principal surfaces as a 400, a
-    // bad signature or stale timestamp as a 401 — both before the handler runs.
+    // bad signature, stale timestamp or replay as a 401 — all before the handler runs.
     let verified = temper_services::services::slack_mint_service::verify_mint_request(
         &state.pool,
         &secret,

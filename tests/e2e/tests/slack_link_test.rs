@@ -1946,20 +1946,9 @@ async fn mint_refuses_the_link_state_key(pool: PgPool) {
     );
 
     // And the converse, so the separation is proven in both directions rather than assumed: the
-    // mint key must not open link-state either.
-    let body = format!(r#"{{"slack_principal_id":"{SLACK_PRINCIPAL}"}}"#);
-    let ts = now_unix();
-    let sig = temper_core::internal_sig::sign(MINT_SECRET.as_bytes(), ts, body.as_bytes());
-    let res = app
-        .http
-        .post(format!("http://{}/internal/slack/link-state", app.addr))
-        .header("Content-Type", "application/json")
-        .header(temper_core::internal_sig::TIMESTAMP_HEADER, ts.to_string())
-        .header(temper_core::internal_sig::SIGNATURE_HEADER, sig)
-        .body(body)
-        .send()
-        .await
-        .expect("post link state with the mint key");
+    // mint key must not open link-state either. A well-formed v2 request for the link-state door,
+    // so the refusal can only come from the key.
+    let res = post_link_state(&app, SLACK_PRINCIPAL, Some(MINT_SECRET.as_bytes())).await;
     assert_eq!(
         res.status(),
         401,

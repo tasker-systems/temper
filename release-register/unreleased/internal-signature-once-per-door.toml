@@ -1,6 +1,6 @@
 title    = "An internal signature is good for one door, once"
 pr       = "self"
-classes  = ["behavioral"]
+classes  = ["additive", "behavioral"]
 surfaces = ["internal", "schema"]
 status   = "signal-only"
 body = '''
@@ -12,7 +12,7 @@ and each accepted nonce is recorded in the new `kb_internal_signature_nonces` ta
 longer be fresh, so the same request sent again inside the 30-second window is refused. At the mint
 door a replay used to return a fresh act-as-the-human token. The wire answer to every refusal is
 the 401 it always was; the log names the reason. Who observes: the SAML Authorization Server and the
-Slack mention agent, which already send v2. Release relevance: behavioral (the original
-construction alone is now refused). The signers must already be deployed, or those doors refuse
+Slack mention agent, which already send v2. Release relevance: additive (the table), behavioral (the
+original construction alone is now refused). The signers must already be deployed, or those doors refuse
 until they are.
 '''

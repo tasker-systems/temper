@@ -103,24 +103,36 @@ pub fn check(secret: &[u8], req: &SignedRequest<'_>, now: i64) -> Result<(), Ref
     }
 }
 
-/// Record `nonce` as spent, unless it already is. Returns `false` for a nonce already recorded.
+/// Record `nonce` as spent at `door`, unless it already is. Returns `false` for a nonce already
+/// recorded there.
 ///
 /// The row is kept until the signature can no longer be fresh: its timestamp plus twice the skew
-/// window, which also covers clock disagreement between API instances. Expired rows are deleted in
-/// the same statement, so the table holds about a minute of traffic.
-async fn claim_nonce(pool: &PgPool, door: &str, nonce: &str, timestamp: i64) -> ApiResult<bool> {
+/// window. Expiry and the prune are both judged on the API's clock (`now`), the clock freshness is
+/// judged on, never the database's: a database clock running ahead would otherwise prune a row
+/// while its signature was still fresh to the API, and the replay would be claimed again. Twice the
+/// window covers API instances whose clocks disagree by up to `MAX_SKEW_SECS`. Expired rows are
+/// deleted in the same statement, so the table holds about a minute of traffic.
+async fn claim_nonce(
+    pool: &PgPool,
+    door: &str,
+    nonce: &str,
+    timestamp: i64,
+    now: i64,
+) -> ApiResult<bool> {
     let retain_secs = (timestamp + 2 * MAX_SKEW_SECS) as f64;
+    let now_secs = now as f64;
     let claimed = sqlx::query_scalar!(
         r#"WITH pruned AS (
-               DELETE FROM kb_internal_signature_nonces WHERE expires_at < now()
+               DELETE FROM kb_internal_signature_nonces WHERE expires_at < to_timestamp($4)
            )
            INSERT INTO kb_internal_signature_nonces (nonce, door, expires_at)
            VALUES ($1, $2, to_timestamp($3))
-           ON CONFLICT (nonce) DO NOTHING
+           ON CONFLICT (door, nonce) DO NOTHING
            RETURNING nonce"#,
         nonce,
         door,
         retain_secs,
+        now_secs,
     )
     .fetch_optional(pool)
     .await?;
@@ -153,8 +165,8 @@ pub fn verify(secret: &[u8], req: &SignedRequest<'_>, now: i64, label: &str) -> 
 
 /// Spend a verified request's nonce, refusing one already spent. Call only after [`verify`]: the
 /// claim is what makes a row, and only a request signed with the door's key may make one.
-pub async fn spend(pool: &PgPool, req: &SignedRequest<'_>, label: &str) -> ApiResult<()> {
-    if claim_nonce(pool, req.door, req.nonce, req.timestamp).await? {
+pub async fn spend(pool: &PgPool, req: &SignedRequest<'_>, now: i64, label: &str) -> ApiResult<()> {
+    if claim_nonce(pool, req.door, req.nonce, req.timestamp, now).await? {
         Ok(())
     } else {
         Err(refuse(req, label, Refusal::Replayed))
@@ -170,7 +182,7 @@ pub async fn accept_once(
     label: &str,
 ) -> ApiResult<()> {
     verify(secret, req, now, label)?;
-    spend(pool, req, label).await
+    spend(pool, req, now, label).await
 }
 
 #[cfg(test)]

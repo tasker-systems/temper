@@ -10,16 +10,22 @@
 -- deployment that runs more than one: a nonce claimed by one instance is refused by the next.
 --
 -- A row is kept until its signature can no longer be fresh. Its signed timestamp is accepted up to
--- MAX_SKEW_SECS after it was signed, so expires_at is the timestamp plus twice that, which also
--- covers clock disagreement between instances. Nothing reads a row after expires_at; the verifier
+-- MAX_SKEW_SECS after it was signed, by the API's clock, and expires_at and the prune are both
+-- judged on the API's clock too, never the database's: expires_at is the timestamp plus twice
+-- MAX_SKEW_SECS, which covers API instances whose clocks disagree by up to MAX_SKEW_SECS. Nothing reads a row after expires_at; the verifier
 -- deletes expired rows as it claims new ones, so the table holds about one minute of traffic.
 --
 -- A row is written only after the signature verifies, so nobody without the door's key can add one.
+--
+-- The key is (door, nonce), not the nonce alone. The doors have different keys, and a holder of a
+-- cheaper one (link-state, reconcile) who saw an in-flight mint nonce could otherwise spend it
+-- first at their own door and have the real mint refused as a replay.
 
 CREATE TABLE kb_internal_signature_nonces (
-    nonce      TEXT PRIMARY KEY,
     door       TEXT NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL
+    nonce      TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (door, nonce)
 );
 
 CREATE INDEX kb_internal_signature_nonces_expires_at

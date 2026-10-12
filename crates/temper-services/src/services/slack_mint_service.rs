@@ -126,7 +126,7 @@ pub async fn verify_mint_request(
     let parsed: MintRequestBody = serde_json::from_slice(request.body)
         .map_err(|_| ApiError::BadRequest("malformed mint request body".to_string()))?;
     validate_slack_principal(&parsed.slack_principal_id)?;
-    internal_sig_service::spend(pool, request, "slack mint").await?;
+    internal_sig_service::spend(pool, request, now, "slack mint").await?;
     Ok(VerifiedSlackPrincipal {
         id: parsed.slack_principal_id,
     })
@@ -222,7 +222,8 @@ mod tests {
 
     /// A pool that never connects. Every refusal below happens before the nonce is spent, so none
     /// of these tests reach the database; the accepted path and the replay are witnessed against a
-    /// real one in `tests/internal_signature_once_test.rs`.
+    /// real one in `tests/e2e/tests/slack_link_test.rs` (`mint_returns_a_token_for_a_vaulted_principal`,
+    /// `mint_refuses_a_replayed_request`).
     fn unreachable_pool() -> PgPool {
         sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://unreachable.invalid/none")
