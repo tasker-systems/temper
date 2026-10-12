@@ -93,7 +93,7 @@
 scope = [
   { rule = "the subject's own (@me) contexts", mechanism = { bound = "_erasure_estate_contexts" } },
   { rule = "the subject's personal team's contexts (kb_teams.personal_of)", mechanism = { bound = "_erasure_estate_contexts" } },
-  { rule = "cogmaps whose only kb_team_cogmaps row is the personal team ", mechanism = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "cogmaps whose only kb_team_cogmaps row is the personal team" } } },
+  { rule = "cogmaps whose only kb_team_cogmaps row is the personal team", mechanism = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "cogmaps whose only kb_team_cogmaps row is the personal team" } } },
 ]
 
 [tables]

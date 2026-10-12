@@ -28,7 +28,7 @@ pub struct Gap {
     #[serde(deserialize_with = "task_id")]
     pub task: Uuid,
     /// What is uncovered, in plain words. Never blank.
-    #[serde(deserialize_with = "what")]
+    #[serde(deserialize_with = "non_blank")]
     pub what: String,
 }
 
@@ -43,14 +43,24 @@ fn task_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Uuid, D::Error>
     }
 }
 
-/// A gap's `what`: trimmed, and refused when blank.
-fn what<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+/// A value that states something (a gap's `what`, a rule, a reason, a retention category):
+/// trimmed, and refused when blank.
+fn non_blank<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     let raw = String::deserialize(deserializer)?;
-    let what = raw.trim();
-    if what.is_empty() {
-        return Err(serde::de::Error::custom("a gap's `what` is blank"));
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(serde::de::Error::custom(
+            "a blank value where the manifest requires a statement",
+        ));
     }
-    Ok(what.to_owned())
+    Ok(value.to_owned())
+}
+
+/// [`non_blank`], for a value that may be absent.
+fn non_blank_if_present<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    non_blank(deserializer).map(Some)
 }
 
 /// `estate.toml`.
@@ -67,7 +77,8 @@ pub struct Estate {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScopeRule {
-    /// The set, in words (for example "the personal team's contexts").
+    /// The set, in words (for example "the personal team's contexts"). Never blank.
+    #[serde(deserialize_with = "non_blank")]
     pub rule: String,
     /// What selects the set.
     pub mechanism: Mechanism,
@@ -118,14 +129,17 @@ pub enum Grain {
         /// What erases it.
         mechanism: Mechanism,
         /// The retention category under which a deployment keeps what the mechanism would
-        /// otherwise erase, when one applies.
+        /// otherwise erase, when one applies. Never blank when present.
+        #[serde(default, deserialize_with = "non_blank_if_present")]
         retention: Option<String>,
     },
     /// Deliberately not erased.
     DeclaredOut {
-        /// Why.
+        /// Why. Never blank.
+        #[serde(deserialize_with = "non_blank")]
         reason: String,
-        /// The retention category that keeps it, when one applies.
+        /// The retention category that keeps it, when one applies. Never blank when present.
+        #[serde(default, deserialize_with = "non_blank_if_present")]
         retention: Option<String>,
     },
 }

@@ -796,6 +796,60 @@ refine = [
         }
     }
 
+    /// FAILS IF: a value that states something parses blank: a scope rule, a declared-out reason,
+    /// or a retention category on an identity or declared-out grain.
+    #[test]
+    fn a_rule_reason_or_retention_is_never_blank() {
+        for (from, to) in [
+            (
+                r#"rule = "the subject's @me contexts""#,
+                r#"rule = "  ""#,
+            ),
+            (
+                r#"reason = "the ledger is append-only""#,
+                r#"reason = " ""#,
+            ),
+            (
+                r#"retention = "credential-replay-evidence""#,
+                r#"retention = "  ""#,
+            ),
+            (
+                r#"retention = "moderation-record""#,
+                r#"retention = """#,
+            ),
+        ] {
+            let estate = estate_with(from, to);
+            let text = fails_in(
+                ManifestFiles {
+                    estate: &estate,
+                    ..files()
+                },
+                ManifestFile::Estate,
+            );
+            assert!(text.contains("blank"), "{to}: {text}");
+        }
+    }
+
+    #[test]
+    fn a_rule_reason_or_retention_is_trimmed() {
+        let estate = estate_with(
+            r#"reason = "the ledger is append-only""#,
+            r#"reason = " the ledger is append-only ""#,
+        );
+        let policy = parse(&ManifestFiles {
+            estate: &estate,
+            ..files()
+        })
+        .expect("a padded reason parses");
+        assert_eq!(
+            policy.estate.tables["kb_events"].grain,
+            Grain::DeclaredOut {
+                reason: "the ledger is append-only".into(),
+                retention: None,
+            }
+        );
+    }
+
     #[test]
     fn a_gap_what_is_trimmed() {
         let estate = estate_with(
