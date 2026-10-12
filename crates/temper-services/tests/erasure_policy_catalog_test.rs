@@ -15,7 +15,7 @@
 //! declared twice fails the parse. A table reached by a second path records it as `also_reached`.
 //!
 //! **What the catalog check does not see.** It checks names: tables, link columns, home columns,
-//! flag columns, functions. It does not check that a bound function does what the entry says, and
+//! flag columns, an `also_reached` entry's `column`, functions. It does not check that a bound function does what the entry says, and
 //! it does not check a `via`'s discriminator value (`source_kind = 'remote'` for
 //! `kb_remote_sources`), which is prose. A `via` path's link columns ARE checked, on the citing
 //! table the path names. Gaps are only checked to name their slice.
@@ -230,6 +230,11 @@ fn catalog_problems(policy: &ErasurePolicy, catalog: &Catalog) -> Vec<String> {
                 &reach.path,
                 catalog,
             ));
+            if let Some(column) = &reach.column {
+                if !catalog.has_column(table, column) {
+                    problems.push(format!("{table} also_reached: no column {table}.{column}"));
+                }
+            }
         }
     }
     for site in mechanisms(policy) {
@@ -315,8 +320,8 @@ fn an_added_carrier_table_without_a_grain_is_reported() {
     assert_eq!(ungrained(&policy), ["kb_probe_t"]);
 }
 
-/// FAILS IF: a grain names a table, a link column, a home column or a flag column the schema does
-/// not have, or a bound function that does not exist. A `via` path's link columns are checked on
+/// FAILS IF: a grain names a table, a link column, a home column, a flag column or a reached column
+/// the schema does not have, or a bound function that does not exist. A `via` path's link columns are checked on
 /// the citing table; its discriminator value is not checked (see the module comment).
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn every_grain_names_live_tables_and_columns(pool: PgPool) {

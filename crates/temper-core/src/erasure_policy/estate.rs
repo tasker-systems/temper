@@ -125,7 +125,8 @@ pub struct ParentPath {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase", deny_unknown_fields)]
 pub enum Link {
-    /// A foreign-key column.
+    /// A column holding the other row's id: a foreign key, or a uuid reference with no
+    /// constraint (`kb_teams.personal_of`).
     Fk(String),
     /// A CHECKed discriminator pair.
     Pair {
@@ -144,4 +145,8 @@ pub struct Reach {
     pub path: ParentPath,
     /// What follows the path to the rows.
     pub mechanism: Mechanism,
+    /// The one column of the row the mechanism is for, when it is not the whole row (the personal
+    /// team's `description`, which the identity grain's mechanism does not reach). Absent: the
+    /// whole row.
+    pub column: Option<String>,
 }

@@ -440,6 +440,7 @@ refine = [
                     via: None,
                 },
                 mechanism: Mechanism::Bound("resource_erasure_execute".into()),
+                column: None,
             }]
         );
         assert_eq!(
@@ -733,6 +734,40 @@ refine = [
                 ..files()
             },
             ManifestFile::Estate,
+        );
+    }
+
+    #[test]
+    fn a_reach_may_name_the_one_column_it_is_for() {
+        let estate = format!(
+            "{ESTATE}\n[tables.kb_teams]\n\
+             grain = {{ kind = \"identity\", mechanism = {{ bound = \"_erasure_apply_redaction\" }} }}\n\
+             [[tables.kb_teams.also_reached]]\n\
+             path = {{ table = \"kb_profiles\", link = {{ fk = \"personal_of\" }} }}\n\
+             mechanism = {{ gap = \"2a: team description erased at declaration\" }}\n\
+             column = \"description\"\n"
+        );
+        let policy = parse(&ManifestFiles {
+            estate: &estate,
+            ..files()
+        })
+        .expect("a reach with a column parses");
+        assert_eq!(
+            policy.estate.tables["kb_teams"].also_reached,
+            [Reach {
+                path: ParentPath {
+                    table: "kb_profiles".into(),
+                    link: Link::Fk("personal_of".into()),
+                    via: None,
+                },
+                mechanism: Mechanism::Gap("2a: team description erased at declaration".into()),
+                column: Some("description".into()),
+            }]
+        );
+        assert_eq!(
+            policy.estate.tables["kb_edges"].also_reached[0].column,
+            None,
+            "an absent column is None"
         );
     }
 

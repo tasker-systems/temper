@@ -45,14 +45,14 @@
 # WHAT THIS FILE DOES NOT SEE, STATED SO NOBODY INFERS COVERAGE FROM SILENCE.
 #   * A gap is work not yet built. The rows behind it are in reach of no erasure until its slice
 #     lands; the gap says so, and the catalog test only checks that it names its slice.
-#   * The catalog test checks names: every table, link column and flag column exists, and every
-#     bound function exists. It does not check that a bound function does what the entry says, or
+#   * The catalog test checks names: every table, link column, flag column and reached column
+#     exists, and every bound function exists. It does not check that a bound function does what the entry says, or
 #     that a discriminator value in a `via` (kb_remote_sources) matches the live vocabulary.
 #   * A covered parent need not be grained itself. kb_block_revisions and kb_blob_uploads carry no
 #     content of their own; the note on the child names the rest of the path.
 #   * The value set of a polymorphic pair's CHECK is not compared with the paths declared here.
-#     Two values admitted by the catalog have no path yet, named in their notes: kb_properties
-#     owned by kb_cogmaps, and kb_edges with a kb_cogmaps endpoint.
+#     Every value admitted today has an entry (a parent or an `also_reached`), but a value a later
+#     migration adds to a CHECK is not caught by this file's test.
 #
 # FORMAT (TOML; `#` comments and blank lines ignored)
 #   scope = [ { rule = "<the set, in words>", mechanism = { bound = "…" } | { gap = "…" } }, … ]
@@ -69,6 +69,8 @@
 #   [[tables.<table>.also_reached]]                                             (optional, repeated)
 #   path = <path>
 #   mechanism = <mechanism>
+#   column = "<column>"        (optional: the one column of the row the mechanism is for; absent,
+#                               the whole row)
 #
 #   <path>       { table = "<table reached>", link = { fk = "<column>" }
 #                                                  | { pair = { table_column, id_column } },
@@ -126,7 +128,7 @@ unit = { bound = "blob_delete" }
 home = { table = "kb_blobs", table_column = "home_table", id_column = "home_id" }
 
 [tables.kb_edges]
-note = "homed in the estate: folded at declaration, the label redacted by the unit. Also reached by each endpoint: resource erasure nulls the label on every edge with the resource at either end (step 9c) and replaces its edge-owned properties (step 9d); an edge with an estate blob at either end is P4 (ruled 2026-10-11). kb_edges_source_table_check and kb_edges_target_table_check also admit kb_cogmaps; no path for an edge with a kb_cogmaps endpoint is declared yet"
+note = "homed in the estate: folded at declaration, the label redacted by the unit. Also reached by each endpoint: resource erasure nulls the label on every edge with the resource at either end (step 9c) and replaces its edge-owned properties (step 9d); an edge with an estate blob at either end is P4 (ruled 2026-10-11). kb_edges_source_table_check and kb_edges_target_table_check also admit kb_cogmaps: an edge with an estate cogmap at either end waits on charter erasure (the kb_cogmaps also_reached entries)"
 
 [tables.kb_edges.grain]
 kind = "per-item"
@@ -150,6 +152,14 @@ mechanism = { gap = "3: P4 blob-edge labels" }
 [[tables.kb_edges.also_reached]]
 path = { table = "kb_blobs", link = { pair = { table_column = "target_table", id_column = "target_id" } } }
 mechanism = { gap = "3: P4 blob-edge labels" }
+
+[[tables.kb_edges.also_reached]]
+path = { table = "kb_cogmaps", link = { pair = { table_column = "source_table", id_column = "source_id" } } }
+mechanism = { gap = "prereq 2a: charter erasure 01a0e960-0ca2-7f42-b33e-1ed19b024e6b" }
+
+[[tables.kb_edges.also_reached]]
+path = { table = "kb_cogmaps", link = { pair = { table_column = "target_table", id_column = "target_id" } } }
+mechanism = { gap = "prereq 2a: charter erasure 01a0e960-0ca2-7f42-b33e-1ed19b024e6b" }
 
 # ── covered: content beneath a resource ──────────────────────────────────────────────────────────
 
@@ -189,7 +199,7 @@ kind = "covered"
 parent = { table = "kb_resources", link = { fk = "resource_id" } }
 
 [tables.kb_properties]
-note = "owned through kb_properties_owner_table_check's pair. Resource erasure D2.9 replaces the keys and values of R's properties (9b), of every edge touching R (9d) and of every block of R (9d′). The CHECK also admits kb_cogmaps; no path for cogmap-owned properties is declared yet"
+note = "owned through kb_properties_owner_table_check's pair. Resource erasure D2.9 replaces the keys and values of R's properties (9b), of every edge touching R (9d) and of every block of R (9d′). The CHECK also admits kb_cogmaps: cogmap-owned properties wait on charter erasure (the kb_cogmaps also_reached entry)"
 
 [tables.kb_properties.grain]
 kind = "covered"
@@ -202,6 +212,10 @@ mechanism = { gap = "2a: edge unit, edge-owned properties" }
 [[tables.kb_properties.also_reached]]
 path = { table = "kb_content_blocks", link = { pair = { table_column = "owner_table", id_column = "owner_id" } } }
 mechanism = { bound = "resource_erasure_execute" }
+
+[[tables.kb_properties.also_reached]]
+path = { table = "kb_cogmaps", link = { pair = { table_column = "owner_table", id_column = "owner_id" } } }
+mechanism = { gap = "prereq 2a: charter erasure 01a0e960-0ca2-7f42-b33e-1ed19b024e6b" }
 
 [tables.kb_data_artifacts]
 note = "resource erasure D2.9f (the artifact family)"
@@ -329,11 +343,16 @@ kind = "identity"
 mechanism = { bound = "_erasure_apply_redaction" }
 
 [tables.kb_teams]
-note = "the personal team only (kb_teams.personal_of). Arm 1 scrubs slug and name. description is erased at declaration (D4 step 5), which no arm does yet: gap 2a"
+note = "the personal team only, found by kb_teams.personal_of (a uuid of kb_profiles, unique, with no foreign key). Arm 1 scrubs slug and name. description is erased at declaration (D4 step 5), which no arm does yet (the description also_reached entry)"
 
 [tables.kb_teams.grain]
 kind = "identity"
 mechanism = { bound = "_erasure_apply_redaction" }
+
+[[tables.kb_teams.also_reached]]
+path = { table = "kb_profiles", link = { fk = "personal_of" } }
+mechanism = { gap = "2a: team description erased at declaration" }
+column = "description"
 
 [tables.kb_team_invitations]
 note = "arm 6a: invitations sent by the subject or addressed to them"
