@@ -141,9 +141,12 @@ describe("unlinkedPrompt", () => {
   });
 });
 
+/** The re-link URL temper issues on the mint's `not_vaulted` refusal. */
+const RELINK_URL = "https://temperkb.io/authorize/relink-456";
+
 /** Every reply reachable from link-state's `linked` arm — i.e. every mint refusal. */
 const refusalPrompts = (handle: string) => [
-  notVaultedPrompt(handle),
+  notVaultedPrompt(handle, RELINK_URL),
   standingRefusedPrompt(handle),
   pendingApprovalPrompt(handle),
   unknownStandingPrompt(handle),
@@ -175,13 +178,16 @@ describe("the refusal prompts", () => {
   //
   // FAILS IF: the re-link remedy leaks back into any standing reply.
   it("offers re-link ONLY where re-linking is the actual remedy", () => {
-    // The one state re-linking fixes: a link with no vaulted credential.
-    expect(notVaultedPrompt("someone")).toContain("temper slack disconnect");
+    // The one state re-linking fixes: a link with no usable credential. The remedy is the URL
+    // itself, usable from Slack — not a CLI detour through `temper slack disconnect`.
+    expect(notVaultedPrompt("someone", RELINK_URL)).toContain(RELINK_URL);
+    expect(notVaultedPrompt("someone", RELINK_URL)).not.toContain("temper slack disconnect");
 
-    // The states only an admin can fix. `disconnect` must appear in NEITHER, and the denial
-    // copy must say so out loud rather than merely omitting it.
+    // The states only an admin can fix. Neither a link nor `disconnect` may appear in them, and
+    // the denial copy must say so out loud rather than merely omitting it.
     for (const message of [standingRefusedPrompt("someone"), pendingApprovalPrompt("someone")]) {
       expect(message).not.toContain("temper slack disconnect");
+      expect(message).not.toContain("http");
     }
     expect(standingRefusedPrompt("someone").toLowerCase()).toContain("reconnecting won't change");
     expect(standingRefusedPrompt("someone").toLowerCase()).toContain("admin");
@@ -191,7 +197,7 @@ describe("the refusal prompts", () => {
     // FAILS IF: the not_vaulted copy loses its finality. Without it the user mentions again,
     // gets the identical message, and concludes the agent is simply broken — which is the
     // exact experience the pre-flight fork exists to prevent.
-    expect(notVaultedPrompt("someone").toLowerCase()).toMatch(/won't fix/);
+    expect(notVaultedPrompt("someone", RELINK_URL).toLowerCase()).toMatch(/won't fix/);
 
     // ...and the converse, which is not symmetry for its own sake: `not_linked` is the ONE
     // refusal where mentioning again genuinely works, because the next link-state read takes
@@ -199,15 +205,34 @@ describe("the refusal prompts", () => {
     expect(linkVanishedPrompt("someone").toLowerCase()).toContain("mention me again");
   });
 
-  it("carry no URL, no task numbers and no dates", () => {
-    // FAILS IF: someone "helpfully" pastes an authorize URL here. There is none to offer —
-    // every one of these is reached from link-state's `linked` arm, which carries no
-    // `authorize_url` — so any URL in this copy is invented. Also guards the copy rules: no
-    // task numbers, no dates, no internal plans in user-facing text.
+  it("carry no task numbers and no dates, and a URL only on not_vaulted", () => {
+    // FAILS IF: someone "helpfully" pastes an authorize URL into a reply that has none to offer.
+    // The mint attaches a URL to `not_vaulted` and to nothing else, so a URL anywhere else is
+    // invented — and on a standing refusal it is the false remedy. Also guards the copy rules:
+    // no task numbers, no dates, no internal plans in user-facing text.
     for (const message of refusalPrompts("someone")) {
-      expect(message).not.toContain("http");
       expect(message).not.toMatch(/\bT\d\b/);
       expect(message).not.toMatch(/\b20\d\d\b/);
+    }
+    const [notVaulted, ...rest] = refusalPrompts("someone");
+    expect(notVaulted.match(/https?:\/\/\S+/g)).toEqual([RELINK_URL]);
+    for (const message of rest) {
+      expect(message).not.toContain("http");
+    }
+  });
+
+  it("keeps the re-link reply DISTINCT from the first-link one", () => {
+    // FAILS IF: not_vaulted is "simplified" into `unlinkedPrompt(url)`. Both carry a URL, but the
+    // first tells someone they were never connected, and the second tells a connected user their
+    // credential stopped working and that mentioning again will not help.
+    expect(notVaultedPrompt("someone", RELINK_URL)).not.toBe(unlinkedPrompt(RELINK_URL));
+    expect(unlinkedPrompt(RELINK_URL).toLowerCase()).not.toMatch(/won't fix/);
+  });
+
+  it("marks the re-link URL as single-use and private, like the first-link one", () => {
+    // FAILS IF: the re-link copy drops the don't-forward warning. Both URLs are credentials.
+    for (const message of [notVaultedPrompt("someone", RELINK_URL), unlinkedPrompt(RELINK_URL)]) {
+      expect(message).toContain("single-use and just for you");
     }
   });
 });

@@ -6238,7 +6238,6 @@ dependencies = [
  "temper-migrate",
  "temper-services",
  "temper-substrate",
- "temperkb-auth",
  "temperkb-client",
  "temperkb-core",
  "temperkb-principal",

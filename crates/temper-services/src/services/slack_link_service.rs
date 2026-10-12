@@ -126,6 +126,59 @@ pub async fn create_intent(
     Ok(state_nonce)
 }
 
+/// How long a link URL stays usable. Long enough for a human to notice the ephemeral
+/// message and finish a browser login; short enough to bound a stolen one.
+const INTENT_TTL: Duration = Duration::from_secs(15 * 60);
+
+/// The scopes the link grant requests. `offline_access` is what makes the exchange return a
+/// refresh token — T2 obtains the grant; T3 vaults it.
+///
+/// `email` and `profile` are here because the email ladder is a HARD failure and runs before
+/// resolution: with `openid` alone, Auth0's `/userinfo` returns no email, so the ladder's last
+/// rung cannot succeed and every link attempt dies there. They match the Auth0-mode CLI
+/// (`temper-cli/src/commands/init.rs`), and the temper AS advertises all four in
+/// `scopes_supported` (`packages/temper-cloud/src/oauth/metadata.ts`), so this is safe in
+/// both modes.
+const LINK_SCOPES: [&str; 4] = ["openid", "profile", "email", "offline_access"];
+
+/// Mint an intent for `slack_principal_id` and return the IdP authorize URL that carries it.
+///
+/// The one place a link URL is made. Two callers, and both deliver the URL ephemerally to the
+/// mentioning Slack user:
+/// - link-state's `unlinked` arm, the first link;
+/// - the mint's `not_vaulted` refusal, a re-link for a principal that is already bound but whose
+///   grant is missing or was refused by the IdP.
+///
+/// The second caller issues a URL for a principal that is already LINKED. That is safe because
+/// [`link_slack_principal`] never rebinds: completing the URL under the same profile re-stamps the
+/// link and `store_grant` replaces the dead grant, and completing it under any other login is
+/// refused before anything is vaulted. A stolen re-link URL therefore cannot move the principal.
+///
+/// The URL is a credential. It is single-use and expires after `INTENT_TTL`, and the intent row's
+/// state nonce is the only thing that ties it to this principal.
+pub async fn issue_authorize_url(
+    pool: &PgPool,
+    auth: &crate::auth_config::AuthConfig,
+    cfg: &crate::config::SlackLinkConfig,
+    slack_principal_id: &str,
+) -> ApiResult<String> {
+    let provider = crate::link_provider::derive(auth, cfg);
+
+    let (verifier, challenge) = temper_auth::generate_pkce_pair();
+    let state_nonce = create_intent(pool, slack_principal_id, &verifier, INTENT_TTL).await?;
+
+    temper_auth::build_authorize_url(&temper_auth::AuthorizeParams {
+        authorize_url: provider.authorize_url,
+        client_id: provider.client_id,
+        audience: Some(auth.audience.clone()),
+        redirect_uri: provider.redirect_uri,
+        scopes: LINK_SCOPES.iter().map(|s| (*s).to_string()).collect(),
+        state: state_nonce,
+        code_challenge: challenge,
+    })
+    .map_err(|e| ApiError::Internal(e.to_string()))
+}
+
 /// Burn an intent and return its payload — atomically, exactly once.
 ///
 /// The conditional UPDATE is the whole single-use mechanism: two concurrent callbacks race
@@ -254,8 +307,10 @@ pub enum SlackLinkOutcome {
 /// is: steal the victim's ephemeral link URL, complete the login as yourself, and bind their
 /// principal to your profile so their future `@temper` writes land in your KB. That attack
 /// *requires* rebind when the victim is already linked. Refusing it here closes that case
-/// outright, and D9 means an already-linked victim is never issued a URL to steal in the first
-/// place. Only "victim not yet linked, attacker steals their first-link message" remains.
+/// outright. It is also what makes it safe to issue an already-linked victim a URL at all: the
+/// mint hands one out when their grant is missing or dead ([`issue_authorize_url`]), and a thief
+/// who completes it as themselves lands here and is refused. Only "victim not yet linked,
+/// attacker steals their first-link message" remains.
 ///
 /// The guard is the `WHERE` on the `DO UPDATE`, which makes it **atomic** — no read-then-write
 /// TOCTOU. On a different-profile conflict the update matches no row, so the statement returns

@@ -149,6 +149,10 @@ const FIELD_AT: &[u8] = b"at";
 /// disconnected and reconnected is not left mysteriously revoked. The principal binds to one
 /// profile (T2's guarantee), so `profile_id` is re-stamped defensively but does not move.
 ///
+/// The overwritten refresh token's plaintext is gone after this write, so nothing can revoke it
+/// later. The link callback calls `slack_disconnect_service::revoke_superseded_grant` first, which
+/// revokes it in AS mode and deliberately leaves it in ExternalIdp mode (see that function).
+///
 /// **Takes `&mut PgConnection`, not a pool, so the callback can run this in the SAME transaction
 /// as [`slack_link_service::link_slack_principal`].** These two writes used to be independent
 /// autocommits, and the gap between them was not benign: process death after the directory row
@@ -158,7 +162,7 @@ const FIELD_AT: &[u8] = b"at";
 /// benign because "the user is shown a retry page", which holds for an observable `Err` return and
 /// does NOT hold for a kill between two commits, where no page renders at all. The executor type
 /// is what makes that shape unrepresentable. Mirrors
-/// [`take_refresh_token_for_disconnect`], which takes `&mut PgConnection` for the same reason.
+/// [`take_refresh_token_locked`], which takes `&mut PgConnection` for the same reason.
 ///
 /// [`slack_link_service::link_slack_principal`]: super::slack_link_service::link_slack_principal
 pub async fn store_grant(
@@ -358,7 +362,9 @@ pub async fn mint_access_token(
             // revoke it. Kept, a transient refusal heals on the next mention, a config fix heals
             // every user at once, and disconnect still revokes before it deletes. The cost is that
             // a truly dead RT is re-presented to the IdP on each mention, which is harmless.
-            // A re-link overwrites the row (`store_grant` upserts).
+            // A re-link overwrites the row (`store_grant` upserts). In AS mode, where this refusal
+            // can be transient, the callback revokes the overwritten RT first
+            // (`slack_disconnect_service::revoke_superseded_grant`).
             return Ok(MintOutcome::Refused(LinkRefusal::NotVaulted));
         }
     };
@@ -401,7 +407,9 @@ pub async fn mint_access_token(
     })
 }
 
-/// Read and decrypt the stored refresh token, for the disconnect path only.
+/// Read and decrypt the stored refresh token under a row lock, for a caller about to destroy or
+/// overwrite it: disconnect (which deletes the row) and a re-link
+/// (`slack_disconnect_service::revoke_superseded_grant`, before `store_grant` overwrites it).
 ///
 /// Takes a `&mut PgConnection` so the caller can run this inside the same
 /// transaction as the deletes. Locks the row (`FOR UPDATE`) so a concurrent
@@ -416,8 +424,8 @@ pub async fn mint_access_token(
 ///
 /// **A decrypt failure also yields `Ok(None)`, and that is deliberate.** Every
 /// other reader of the vault treats an unopenable ciphertext as an error,
-/// because it is about to *use* the token. Disconnect is the one caller that is
-/// about to DESTROY it, and an unopenable ciphertext has no value to revoke —
+/// because it is about to *use* the token. These callers are about to DESTROY or
+/// overwrite it, and an unopenable ciphertext has no value to revoke —
 /// so failing here would abort the transaction and delete nothing. That is
 /// exactly backwards for the scenario that produces the failure: rotating
 /// `SLACK_VAULT_ENC_KEY` is a documented flag-day that makes every pre-rotation
@@ -426,7 +434,7 @@ pub async fn mint_access_token(
 /// leave an unremovable stale identity row (re-link cannot rebind to another
 /// profile). A genuine sqlx error still propagates — only the AEAD open is
 /// downgraded.
-pub async fn take_refresh_token_for_disconnect(
+pub async fn take_refresh_token_locked(
     tx: &mut sqlx::PgConnection,
     key: &VaultKey,
     slack_principal_id: &str,
@@ -461,9 +469,9 @@ pub async fn take_refresh_token_for_disconnect(
             // material.
             tracing::warn!(
                 principal = %slack_principal_id,
-                "slack disconnect: the stored grant could not be opened (key rotated, or the row \
-                 was tampered with). Destroying it anyway — an unopenable ciphertext has no value \
-                 to revoke. Revoke at the IdP out-of-band if that matters."
+                "slack grant: the stored grant could not be opened (key rotated, or the row was \
+                 tampered with), so it cannot be revoked. The caller (a disconnect or a re-link) \
+                 destroys or overwrites it anyway. Revoke at the IdP out-of-band if that matters."
             );
             Ok(None)
         }
@@ -1163,7 +1171,7 @@ mod tests {
         .await;
 
         let mut conn = pool.acquire().await.expect("acquire");
-        let got = take_refresh_token_for_disconnect(&mut conn, &key, "slack:T1:U1")
+        let got = take_refresh_token_locked(&mut conn, &key, "slack:T1:U1")
             .await
             .expect("take");
         assert_eq!(got.as_deref(), Some("rt-plaintext"));
@@ -1173,7 +1181,7 @@ mod tests {
     async fn take_refresh_token_returns_none_for_an_unknown_principal(pool: PgPool) {
         let key = key();
         let mut conn = pool.acquire().await.expect("acquire");
-        let got = take_refresh_token_for_disconnect(&mut conn, &key, "slack:T9:U9")
+        let got = take_refresh_token_locked(&mut conn, &key, "slack:T9:U9")
             .await
             .expect("take");
         assert!(

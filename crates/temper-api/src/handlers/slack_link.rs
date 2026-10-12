@@ -3,35 +3,19 @@
 //! `slack_link_state` is server-to-server (the mention agent, HMAC-gated). `callback` is
 //! browser-facing and renders HTML, never JSON — a human is looking at it.
 
-use std::time::Duration;
-
 use axum::extract::{Query, State};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 use jsonwebtoken::{decode, TokenData};
 
-use temper_auth::{build_authorize_url, generate_pkce_pair, AuthorizeParams};
 use temper_core::types::ids::ProfileId;
 use temper_services::auth::{AuthzError, Caller, HumanPrincipal, RawJwtClaims};
 use temper_services::error::ApiError;
-use temper_services::services::{slack_grant_vault_service, slack_link_service, standing_service};
+use temper_services::services::{
+    slack_disconnect_service, slack_grant_vault_service, slack_link_service, standing_service,
+};
 use temper_services::state::{AppState, KeyLookupError};
 use temper_services::{link_provider, oauth_client};
-
-/// How long a link URL stays usable. Long enough for a human to notice the ephemeral
-/// message and finish a browser login; short enough to bound a stolen one.
-const INTENT_TTL: Duration = Duration::from_secs(15 * 60);
-
-/// The scopes the link grant requests. `offline_access` is what makes the exchange return a
-/// refresh token — T2 obtains the grant; T3 vaults it.
-///
-/// `email` and `profile` are here because the email ladder is a HARD failure and runs before
-/// resolution: with `openid` alone, Auth0's `/userinfo` returns no email, so the ladder's last
-/// rung cannot succeed and every link attempt dies there. They match the Auth0-mode CLI
-/// (`temper-cli/src/commands/init.rs`), and the temper AS advertises all four in
-/// `scopes_supported` (`packages/temper-cloud/src/oauth/metadata.ts`), so this is safe in
-/// both modes.
-const LINK_SCOPES: [&str; 4] = ["openid", "profile", "email", "offline_access"];
 
 #[derive(Debug, serde::Deserialize)]
 pub struct SlackLinkStateRequest {
@@ -89,27 +73,13 @@ pub async fn slack_link_state(
         return Ok(Json(SlackLinkStateResponse::Linked { handle }));
     }
 
-    let provider = link_provider::derive(&state.config.auth, cfg);
-
-    let (verifier, challenge) = generate_pkce_pair();
-    let state_nonce = slack_link_service::create_intent(
+    let authorize_url = slack_link_service::issue_authorize_url(
         &state.pool,
+        &state.config.auth,
+        cfg,
         &req.slack_principal_id,
-        &verifier,
-        INTENT_TTL,
     )
     .await?;
-
-    let authorize_url = build_authorize_url(&AuthorizeParams {
-        authorize_url: provider.authorize_url,
-        client_id: provider.client_id,
-        audience: Some(state.config.auth.audience.clone()),
-        redirect_uri: provider.redirect_uri,
-        scopes: LINK_SCOPES.iter().map(|s| (*s).to_string()).collect(),
-        state: state_nonce,
-        code_challenge: challenge,
-    })
-    .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     Ok(Json(SlackLinkStateResponse::Unlinked { authorize_url }))
 }
@@ -278,11 +248,10 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<CallbackOutc
         // `tx` is DROPPED without commit, so the directory row is rolled back too. That is the
         // deliberate call: half-linked is the worst of the three states. Linked-with-no-grant
         // reads as "connected" to `lookup_linked_handle` (which reads the auth-link table, not
-        // the vault), so link-state would keep telling the agent this user is fine while every
-        // mint answers `not_vaulted` — and re-linking cannot repair it, because
-        // `link_slack_principal` refuses to rebind. Rolling back leaves the user cleanly
-        // UNLINKED, which is the one state the flow can recover from on its own: they mention
-        // @temper, get a fresh intent, and try again once the operator fixes the client.
+        // the vault), so the user's next mention costs a mint that answers `not_vaulted` before
+        // it can hand them a re-link URL. Rolling back leaves the user cleanly UNLINKED, where
+        // their next mention gets a fresh intent straight from link-state, and they try again
+        // once the operator fixes the client.
         tracing::warn!(
             profile_id = %profile.profile().id,
             "slack link: NO refresh token returned -- link rolled back rather than left inert; \
@@ -296,6 +265,25 @@ async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<CallbackOutc
                 .into(),
         );
     };
+
+    // A re-link (the mint's `not_vaulted` URL) overwrites a stored grant, and the vault holds the
+    // only copy of its plaintext. In AS mode that grant may still be live, so it is revoked here,
+    // in this transaction, before the overwrite. See `revoke_superseded_grant` for why ExternalIdp
+    // mode must not do the same.
+    slack_disconnect_service::revoke_superseded_grant(
+        &mut tx,
+        &cfg.vault_key,
+        state.config.auth.mode,
+        &intent.slack_principal_id,
+        refresh_token,
+    )
+    .await
+    .map_err(|e| {
+        // Logged here because the page string below is shared with `store_grant` and the commit,
+        // so without this line a failed revoke is indistinguishable from either of them.
+        tracing::error!(error = %e, "slack link: revoking the superseded grant failed");
+        "Something went wrong saving your connection. Mention @temper again.".to_string()
+    })?;
 
     slack_grant_vault_service::store_grant(
         &mut tx,

@@ -181,7 +181,8 @@ export default slackChannel({
         case "refused":
           // The refusal's REASON picks the reply, because the reasons carry different
           // remedies and a remedy is the only part of this the user can act on. Re-link
-          // fixes `not_vaulted` and nothing else; every `standing` refusal needs an admin.
+          // fixes `not_vaulted` and nothing else, so only that arm carries a URL; every
+          // `standing` refusal needs an admin.
           // Saying "re-link" to a denied human — which the former flat `revoked` arm did —
           // sends them round a loop that cannot terminate.
           switch (mint.reason) {
@@ -190,7 +191,13 @@ export default slackChannel({
               return null;
 
             case "not_vaulted":
-              await deliverEphemeral(ctx, userId, notVaultedPrompt(link.handle));
+              // Carries a fresh re-link URL, which is a CREDENTIAL exactly like the unlinked
+              // arm's: ephemeral to this user only, never `thread.post`.
+              await deliverEphemeral(
+                ctx,
+                userId,
+                notVaultedPrompt(link.handle, mint.authorize_url),
+              );
               // DROP: dispatching would fail in `getToken` and overwrite this specific,
               // actionable message with the generic turn-failure line.
               return null;

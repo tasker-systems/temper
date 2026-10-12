@@ -71,11 +71,34 @@ describe("getTemperToken", () => {
   // asserted because a retryable failure invites eve to re-prompt for an interactive flow
   // that does not exist here.
   it("fails closed and terminally on not_vaulted", async () => {
-    requestMintedToken.mockResolvedValue({ status: "refused", reason: "not_vaulted" });
+    requestMintedToken.mockResolvedValue({
+      status: "refused",
+      reason: "not_vaulted",
+      authorize_url: "https://idp.test/authorize?state=secret-nonce",
+    });
 
     await expect(
       getTemperToken({ principal: { type: "user", id: PRINCIPAL } }),
     ).rejects.toMatchObject({ reason: "not_vaulted", retryable: false });
+  });
+
+  // FAILS IF: the re-link URL leaks into the thrown error. That error lands in eve's error surface
+  // and this repo's logs, and the URL is a credential: whoever completes it re-links this Slack
+  // identity. Only the mentioning user, via an ephemeral, may ever see it.
+  it("never carries the not_vaulted re-link URL on the thrown error", async () => {
+    requestMintedToken.mockResolvedValue({
+      status: "refused",
+      reason: "not_vaulted",
+      authorize_url: "https://idp.test/authorize?state=secret-nonce",
+    });
+
+    const err = await getTemperToken({ principal: { type: "user", id: PRINCIPAL } }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(Error);
+    expect(JSON.stringify(err)).not.toContain("secret-nonce");
+    expect((err as Error).message).not.toContain("secret-nonce");
   });
 
   // FAILS IF: a standing refusal fails open, or is collapsed onto the not_vaulted reason.

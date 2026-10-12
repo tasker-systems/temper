@@ -9,7 +9,7 @@ use axum::extract::State;
 use axum::{Extension, Json};
 use serde::Serialize;
 
-use temper_core::types::slack::LinkRefusal;
+use temper_core::types::slack::SlackMintRefusal;
 use temper_services::error::ApiResult;
 use temper_services::services::slack_grant_vault_service::MintOutcome;
 use temper_services::services::slack_mint_service::{self, VerifiedSlackPrincipal};
@@ -18,18 +18,20 @@ use temper_services::state::AppState;
 /// What the agent should do next, as a tagged union rather than a nullable token.
 ///
 /// Two arms, mirroring [`MintOutcome`]: a `Token`, or a `Refused` carrying the typed
-/// [`LinkRefusal`]. None is an error, so none is an HTTP failure — a 200 carrying a refusal is the
-/// honest encoding of *"the request was fine; there is nothing to mint, and here is exactly why."*
-/// The refusal reason is what lets the agent say something true and specific — "ask an admin" for a
-/// standing refusal, "reconnect" for a missing grant — instead of one vague sentence for all of them.
+/// [`SlackMintRefusal`]. None is an error, so none is an HTTP failure — a 200 carrying a refusal is
+/// the honest encoding of *"the request was fine; there is nothing to mint, and here is exactly
+/// why."* The refusal reason is what lets the agent say something true and specific — "ask an
+/// admin" for a standing refusal, "reconnect here" for a missing or dead grant — instead of one
+/// vague sentence for all of them.
 ///
-/// The outer tag is `status`; `LinkRefusal`'s own tag is `reason`; `Refusal`'s is `kind`. Three
+/// The outer tag is `status`; `SlackMintRefusal`'s own tag is `reason`; `Refusal`'s is `kind`. Three
 /// distinct discriminators nest without collision: `{"status":"refused","reason":"standing",
 /// "refusal":{"kind":"denied"}}`.
 ///
 /// `Debug` is hand-written to REDACT the token: this is the exact value the mention path handles,
 /// and a stray `?response` in a log would write an act-as-the-human credential to disk. The same
-/// reasoning as `MintOutcome`'s own `Debug`, applied at the wire boundary.
+/// reasoning as `MintOutcome`'s own `Debug`, applied at the wire boundary. The `not_vaulted`
+/// refusal's authorize URL is a credential too, and `SlackMintRefusal`'s own `Debug` redacts it.
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum SlackMintResponse {
@@ -43,8 +45,9 @@ pub enum SlackMintResponse {
     },
     /// No token, and the typed reason. `not_linked` / `not_vaulted` / `standing` each carry a
     /// different remedy — critically, a standing refusal is fixed by an admin approval, never by
-    /// re-linking, which is the false remedy the former flat `revoked` arm shipped.
-    Refused(LinkRefusal),
+    /// re-linking, which is the false remedy the former flat `revoked` arm shipped. `not_vaulted`
+    /// is the one arm that carries the remedy itself: a fresh re-link URL.
+    Refused(SlackMintRefusal),
 }
 
 impl std::fmt::Debug for SlackMintResponse {
@@ -53,23 +56,18 @@ impl std::fmt::Debug for SlackMintResponse {
             Self::Token { expires_at_ms, .. } => {
                 write!(f, "Token(redacted, expires_at_ms={expires_at_ms})")
             }
-            // `LinkRefusal` carries no secret, so its derived `Debug` is safe to surface.
+            // `SlackMintRefusal`'s hand-written `Debug` redacts the re-link URL.
             Self::Refused(reason) => write!(f, "Refused({reason:?})"),
         }
     }
 }
 
-impl From<MintOutcome> for SlackMintResponse {
-    fn from(outcome: MintOutcome) -> Self {
-        match outcome {
-            MintOutcome::Token {
-                access_token,
-                expires_at,
-            } => Self::Token {
-                access_token,
-                expires_at_ms: expires_at.timestamp_millis(),
-            },
-            MintOutcome::Refused(refusal) => Self::Refused(refusal),
+impl SlackMintResponse {
+    /// The `Token` arm, with the expiry converted to the epoch milliseconds the agent expects.
+    fn token(access_token: String, expires_at: chrono::DateTime<chrono::Utc>) -> Self {
+        Self::Token {
+            access_token,
+            expires_at_ms: expires_at.timestamp_millis(),
         }
     }
 }
@@ -84,7 +82,8 @@ impl From<MintOutcome> for SlackMintResponse {
 /// this handler must remember. See `slack_mint_service::verify_mint_request` for the seal.
 ///
 /// Thin by intent (`temper-api` is transport): read the verified principal, dispatch to the
-/// service, map the outcome. No SQL, no cipher, no provider derivation, no validation here.
+/// service, map the outcome. No SQL, no cipher, no provider derivation, no validation here. A
+/// refusal goes back to the service once more, which attaches the re-link URL on `not_vaulted`.
 pub async fn slack_mint(
     State(state): State<AppState>,
     Extension(principal): Extension<VerifiedSlackPrincipal>,
@@ -97,7 +96,23 @@ pub async fn slack_mint(
     // where act-attribution belongs.
     tracing::debug!(outcome = ?outcome, "slack mint");
 
-    Ok(Json(outcome.into()))
+    let response = match outcome {
+        MintOutcome::Token {
+            access_token,
+            expires_at,
+        } => SlackMintResponse::token(access_token, expires_at),
+        MintOutcome::Refused(refusal) => SlackMintResponse::Refused(
+            slack_mint_service::refusal_for_mention(
+                &state.pool,
+                &state.config,
+                principal.id(),
+                refusal,
+            )
+            .await?,
+        ),
+    };
+
+    Ok(Json(response))
 }
 
 #[cfg(test)]
@@ -111,9 +126,11 @@ mod tests {
 
     #[test]
     fn each_arm_serializes_to_a_distinct_status_and_reason() {
-        let not_linked = json(&SlackMintResponse::Refused(LinkRefusal::NotLinked));
-        let not_vaulted = json(&SlackMintResponse::Refused(LinkRefusal::NotVaulted));
-        let standing = json(&SlackMintResponse::Refused(LinkRefusal::Standing {
+        let not_linked = json(&SlackMintResponse::Refused(SlackMintRefusal::NotLinked));
+        let not_vaulted = json(&SlackMintResponse::Refused(SlackMintRefusal::NotVaulted {
+            authorize_url: "https://idp.example/authorize?state=n".to_string(),
+        }));
+        let standing = json(&SlackMintResponse::Refused(SlackMintRefusal::Standing {
             refusal: Refusal::Denied,
         }));
 
@@ -128,6 +145,14 @@ mod tests {
         );
         assert!(standing.contains(r#""reason":"standing""#), "{standing}");
 
+        // The re-link URL rides ONLY the not_vaulted arm, flat beside its reason.
+        assert!(
+            not_vaulted.contains(r#""authorize_url":"https://idp.example/authorize?state=n""#),
+            "{not_vaulted}"
+        );
+        assert!(!not_linked.contains("authorize_url"), "{not_linked}");
+        assert!(!standing.contains("authorize_url"), "{standing}");
+
         // Three genuinely different wire values — the whole point of the typed refusal.
         assert_ne!(not_linked, not_vaulted);
         assert_ne!(not_linked, standing);
@@ -138,7 +163,7 @@ mod tests {
     fn the_standing_refusal_nests_without_a_colliding_tag() {
         // status / reason / kind are three distinct discriminators; they must not flatten onto
         // one another. A regression to a colliding tag would drop the inner refusal here.
-        let standing = json(&SlackMintResponse::Refused(LinkRefusal::Standing {
+        let standing = json(&SlackMintResponse::Refused(SlackMintRefusal::Standing {
             refusal: Refusal::Revoked,
         }));
         assert!(
@@ -148,13 +173,9 @@ mod tests {
     }
 
     #[test]
-    fn from_mint_outcome_preserves_the_token_and_converts_to_millis() {
+    fn token_preserves_the_token_and_converts_to_millis() {
         let expires_at = chrono::DateTime::<chrono::Utc>::from_timestamp(1_700_000_000, 0).unwrap();
-        let resp: SlackMintResponse = MintOutcome::Token {
-            access_token: "tok".to_string(),
-            expires_at,
-        }
-        .into();
+        let resp = SlackMintResponse::token("tok".to_string(), expires_at);
         match resp {
             SlackMintResponse::Token {
                 access_token,
@@ -179,6 +200,20 @@ mod tests {
         assert!(
             !dbg.contains("super-secret"),
             "token must be redacted: {dbg}"
+        );
+    }
+
+    #[test]
+    fn debug_redacts_the_relink_url() {
+        let dbg = format!(
+            "{:?}",
+            SlackMintResponse::Refused(SlackMintRefusal::NotVaulted {
+                authorize_url: "https://idp.example/authorize?state=secret-nonce".to_string(),
+            })
+        );
+        assert!(
+            !dbg.contains("secret-nonce"),
+            "re-link URL must be redacted: {dbg}"
         );
     }
 }

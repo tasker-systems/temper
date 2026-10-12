@@ -23,10 +23,10 @@ import {
  */
 
 /**
- * `LinkRefusal` and `Refusal` are GENERATED from the Rust by ts-rs — not mirrored by hand.
+ * `SlackMintRefusal` and `Refusal` are GENERATED from the Rust by ts-rs — not mirrored by hand.
  *
  * `cargo make generate-ts-types` writes `agent/generated/` from
- * `crates/temper-core/src/types/slack.rs` (`LinkRefusal`) and its transitive closure
+ * `crates/temper-core/src/types/slack.rs` (`SlackMintRefusal`) and its transitive closure
  * (`Refusal`/`Standing`/`ActorAuthority` from temper-principal). The package gets its own copy
  * rather than importing temper-ui's because it is workspace-isolated by design (CLAUDE.md), and
  * `.github/scripts/check-ts-rs-drift.sh` fails the build if the committed files stop matching
@@ -38,14 +38,17 @@ import {
  * it.
  *
  * **The remedy splits on `reason`, and that split is the point of the type.** `not_vaulted` is
- * fixed by re-linking. Every `standing` refusal is fixed by an ADMIN, and re-linking does nothing
- * for it — telling a denied human to reconnect sends them round a loop that cannot terminate. The
- * former flat `revoked` arm said exactly that to everyone.
+ * fixed by re-linking, and it is the one arm that carries the fix: `authorize_url`, a fresh
+ * single-use link that temper issued because it had just decided the grant was missing or dead.
+ * Every `standing` refusal is fixed by an ADMIN, and re-linking does nothing for it — telling a
+ * denied human to reconnect sends them round a loop that cannot terminate. The former flat
+ * `revoked` arm said exactly that to everyone. The type has no URL on that arm, so the agent has
+ * none to offer there.
  */
-export type { LinkRefusal } from "../generated/slack_link.js";
+export type { SlackMintRefusal } from "../generated/slack_link.js";
 export type { Refusal } from "../generated/admission.js";
 
-import type { LinkRefusal } from "../generated/slack_link.js";
+import type { SlackMintRefusal } from "../generated/slack_link.js";
 
 /**
  * What temper says when asked to mint for this Slack principal — mirrors the Rust
@@ -77,14 +80,15 @@ export type MintOutcome =
        */
       readonly expires_at_ms: number;
     }
-  | ({ readonly status: "refused" } & LinkRefusal);
+  | ({ readonly status: "refused" } & SlackMintRefusal);
 
 /**
  * Runtime check that a parsed mint body really is one of the two arms the Rust
  * `SlackMintResponse` can serialize (`#[serde(tag = "status", rename_all = "snake_case")]`,
  * `crates/temper-api/src/handlers/slack_mint.rs:33-47`): a `token` arm carrying the credential and
- * its millisecond expiry, or a `refused` arm carrying one of the three `LinkRefusal` reasons. The
- * same fetch-layer check `requestLinkState` applies to its response. Extra fields are tolerated,
+ * its millisecond expiry, or a `refused` arm carrying one of the three `SlackMintRefusal` reasons,
+ * `not_vaulted` with its re-link URL. The same fetch-layer check `requestLinkState` applies to its
+ * response. Extra fields are tolerated,
  * matching serde's own default — the union arms, not the full key set, are the contract. The
  * `standing` payload is checked only for object-ness: `Refusal`'s kinds are the server's
  * vocabulary to extend, and `unrecognized_standing` is itself a kind a newer server may send.
@@ -97,12 +101,19 @@ function isMintOutcome(value: unknown): value is MintOutcome {
     expires_at_ms?: unknown;
     reason?: unknown;
     refusal?: unknown;
+    authorize_url?: unknown;
   };
   if (arm.status === "token") {
     return typeof arm.access_token === "string" && typeof arm.expires_at_ms === "number";
   }
   if (arm.status === "refused") {
-    if (arm.reason === "not_linked" || arm.reason === "not_vaulted") return true;
+    if (arm.reason === "not_linked") return true;
+    // A `not_vaulted` without its URL is a server older than this agent. Refusing it lands the user
+    // on the generic retry line, which is wrong but recoverable once temper-api is deployed; inventing
+    // a URL-less arm would mean a reply with no remedy in it.
+    if (arm.reason === "not_vaulted") {
+      return typeof arm.authorize_url === "string" && arm.authorize_url.length > 0;
+    }
     return arm.reason === "standing" && typeof arm.refusal === "object" && arm.refusal !== null;
   }
   return false;
@@ -148,11 +159,19 @@ export async function requestMintedToken(principalId: string): Promise<MintOutco
     // The same failure class as the non-2xx throw above — the response is not an answer this
     // path can act on — so it propagates the same way: the channel's catch turns it into the
     // generic retry ephemeral instead of a turn that mints or refuses on an invented shape.
-    const status = (outcome as { status?: unknown } | null)?.status;
+    // Names the discriminants and whether a URL was present — never the body, which may carry
+    // the token or the re-link URL. `not_vaulted` with no URL is the expected shape of an
+    // agent deployed ahead of temper-api, so it is called out by name.
+    const o = outcome as { status?: unknown; reason?: unknown; authorize_url?: unknown } | null;
+    const str = (v: unknown) => (typeof v === "string" ? v : "none");
+    const skew =
+      o?.status === "refused" && o?.reason === "not_vaulted"
+        ? " — not_vaulted without authorize_url: is temper-api older than this agent?"
+        : "";
     throw new Error(
-      `mint returned an unrecognized response (status: ${
-        typeof status === "string" ? status : "none"
-      })`,
+      `mint returned an unrecognized response (status: ${str(o?.status)}, reason: ${str(
+        o?.reason,
+      )}, authorize_url: ${typeof o?.authorize_url})${skew}`,
     );
   }
   return outcome;
