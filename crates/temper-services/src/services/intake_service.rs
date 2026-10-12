@@ -157,6 +157,61 @@ pub async fn receive_webhook(
     event: ProviderEvent<'_>,
     payload: &serde_json::Value,
 ) -> ApiResult<Uuid> {
+    match receive(pool, connection_id, event, payload, None).await? {
+        Receipt::Recorded(event_id) => Ok(event_id),
+        Receipt::RefusedAsReplay => unreachable!("no attestation, nothing to replay"),
+    }
+}
+
+/// The inbound attestation a receipt arrived under, to be accepted once. See
+/// [`receive_attested_webhook`].
+pub struct AttestationSeen<'a> {
+    /// [`crate::broker::replay_key`] of the bearer.
+    pub replay_key: &'a str,
+    /// Until when a repeat must be recognised (Unix seconds), from the broker.
+    pub expires_at: i64,
+    /// The caller's clock, which judged the attestation's freshness; expired rows are pruned on it.
+    pub now: i64,
+    /// Whether a repeat is refused, or only reported and recorded.
+    pub enforced: bool,
+}
+
+/// What became of an attested receipt.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Receipt {
+    /// The event was appended.
+    Recorded(Uuid),
+    /// The attestation was already accepted, and the binding is enforced: nothing was appended.
+    RefusedAsReplay,
+}
+
+/// [`receive_webhook`] for a receipt that arrived under an inbound attestation, which is accepted
+/// once.
+///
+/// The attestation is recorded in `kb_inbound_attestations_seen` **in the same transaction** as the
+/// event: it is spent exactly when a receipt lands, and a receipt that fails — or is cut off — never
+/// spends it, so its redelivery is not a replay. A concurrent presentation of the same attestation
+/// waits on the first's row and then sees it, so of two simultaneous copies exactly one lands.
+///
+/// A repeat is refused when [`AttestationSeen::enforced`]; otherwise it is logged as a would-be
+/// refusal and recorded as usual.
+pub async fn receive_attested_webhook(
+    pool: &PgPool,
+    connection_id: Uuid,
+    event: ProviderEvent<'_>,
+    payload: &serde_json::Value,
+    attestation: AttestationSeen<'_>,
+) -> ApiResult<Receipt> {
+    receive(pool, connection_id, event, payload, Some(attestation)).await
+}
+
+async fn receive(
+    pool: &PgPool,
+    connection_id: Uuid,
+    event: ProviderEvent<'_>,
+    payload: &serde_json::Value,
+    attestation: Option<AttestationSeen<'_>>,
+) -> ApiResult<Receipt> {
     let provider_event_type = event.event_type;
     // Load the connection: emitter_entity_id + home_context_id. The emitter is the
     // connection's own entity (`<handle>@webhook`); the producing anchor is the
@@ -184,6 +239,20 @@ pub async fn receive_webhook(
     let stored = serde_json::json!({ "body": payload });
 
     let mut tx = pool.begin().await?;
+
+    if let Some(seen) = &attestation {
+        if !claim_attestation(&mut tx, seen).await? {
+            if seen.enforced {
+                tracing::warn!(reason = "replayed", "inbound webhook attestation refused");
+                return Ok(Receipt::RefusedAsReplay);
+            }
+            tracing::warn!(
+                reason = "replayed",
+                would_refuse = true,
+                "inbound attestation: would refuse once binding is enforced"
+            );
+        }
+    }
 
     // One INSERT via the chokepoint writer. `_event_append` looks up the event type's
     // category from the registry, generates the event id, and inserts. The producing
@@ -224,7 +293,7 @@ pub async fn receive_webhook(
 
     tx.commit().await?;
 
-    Ok(event_id)
+    Ok(Receipt::Recorded(event_id))
 }
 
 /// One live subscription row for matching, with the deserialized selector. The subscriber's
@@ -925,4 +994,31 @@ mod tests {
             "provider event type rides metadata, not payload"
         );
     }
+}
+
+/// Record an inbound attestation as seen, unless it already is. Returns `false` for a repeat.
+///
+/// Runs inside the receipt's transaction ([`receive_attested_webhook`]). The row is kept until
+/// [`AttestationSeen::expires_at`]; expired rows are deleted in the same statement, judged on
+/// [`AttestationSeen::now`] — the clock that judged the attestation's freshness — so the table holds
+/// about one attestation lifetime of traffic.
+async fn claim_attestation(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    seen: &AttestationSeen<'_>,
+) -> ApiResult<bool> {
+    let claimed = sqlx::query_scalar!(
+        r#"WITH pruned AS (
+               DELETE FROM kb_inbound_attestations_seen WHERE expires_at < to_timestamp($3)
+           )
+           INSERT INTO kb_inbound_attestations_seen (replay_key, expires_at)
+           VALUES ($1, to_timestamp($2))
+           ON CONFLICT (replay_key) DO NOTHING
+           RETURNING replay_key"#,
+        seen.replay_key,
+        seen.expires_at as f64,
+        seen.now as f64,
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(claimed.is_some())
 }

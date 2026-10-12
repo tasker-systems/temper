@@ -427,7 +427,11 @@ impl JwksKeyStore {
     /// two agree, the library default and our choice are indistinguishable, and a library release
     /// that moved its default would silently move ours with it. The pin keeps the tolerance at the
     /// value this codebase chose.
-    const CLOCK_SKEW_LEEWAY_SECONDS: u64 = 60;
+    ///
+    /// Public because whatever remembers a verified token must remember it for as long as this
+    /// store would still accept it: until `exp` **plus** this leeway (`broker::vercel_connect`'s
+    /// replay key).
+    pub const CLOCK_SKEW_LEEWAY_SECONDS: u64 = 60;
 
     /// Build a `Validation` for the given issuer and audience, with an allow-list scoped to exactly
     /// `algorithm` (the loaded key's family).
@@ -1228,6 +1232,28 @@ mod tests {
             e: "test".to_string(),
         });
         assert!(is_supported_key(&params));
+    }
+
+    /// ECDSA keys are not offered for verification, and the inbound webhook's single use depends on
+    /// it. That replay key is a hash of the token as presented, which is sound only while a token
+    /// has exactly one valid signature: RS256 (PKCS#1 v1.5) and Ed25519 are deterministic, but an
+    /// ECDSA signature `(r, s)` has a twin `(r, n - s)` that also verifies — a second token string,
+    /// a second replay key, the same attestation accepted twice. Adding ES256 here must first move
+    /// that key off the token's bytes (`broker::vercel_connect`).
+    #[test]
+    fn is_supported_key_refuses_ecdsa_because_replay_keys_assume_one_signature_per_token() {
+        use jsonwebtoken::jwk::{
+            AlgorithmParameters, EllipticCurve, EllipticCurveKeyParameters, EllipticCurveKeyType,
+        };
+        for curve in [EllipticCurve::P256, EllipticCurve::P384] {
+            let params = AlgorithmParameters::EllipticCurve(EllipticCurveKeyParameters {
+                key_type: EllipticCurveKeyType::EC,
+                curve,
+                x: "test".to_string(),
+                y: "test".to_string(),
+            });
+            assert!(!is_supported_key(&params));
+        }
     }
 
     #[test]

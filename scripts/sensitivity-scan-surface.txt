@@ -25,7 +25,7 @@
 # temper_services::MIGRATOR (so `_sqlx_migrations` is included). The complement is that set minus
 # every `table.column` declared in personal-data-surface.txt.
 #
-# COUNT at migration 20261023100000: 172 text/varchar columns; 18 declared in the sibling; 154 declared here.
+# COUNT at migration 20261027100000: 173 text/varchar columns; 18 declared in the sibling; 155 declared here.
 # (The spec measured 147 at 7c6d0f2. The schema did not change between the two commits; the
 # difference is `_sqlx_migrations.description`, which exists in every migrated test database.)
 #
@@ -184,6 +184,7 @@ kb_saml_group_mappings.idp_key               | structural   | FK to kb_saml_idp
 kb_saml_seen_groups.idp_key                  | structural   | FK to kb_saml_idp
 kb_saml_principal_reconcile.idp_key          | structural   | FK to kb_saml_idp
 kb_saml_replay.assertion_id                  | structural   | IdP-minted assertion id, the replay key
+kb_inbound_attestations_seen.replay_key      | structural   | SHA-256 of a webhook attestation, the replay key
 
 # ── secrets ─────────────────────────────────────────────────────────────────────────────────
 kb_machine_clients.secret_hash               | credential   | SHA-256 of the client secret
