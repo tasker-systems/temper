@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { logger } from "../../src/logger.js";
 import {
+  NONCE_HEADER,
+  RECONCILE_DOOR,
   reconcileMemberships,
   SIGNATURE_HEADER,
+  SIGNATURE_V2_HEADER,
   signReconcile,
+  signRequestV2,
   TIMESTAMP_HEADER,
 } from "../../src/oauth/reconcile.js";
 
@@ -46,6 +50,29 @@ describe("reconcileMemberships", () => {
     expect(Number.isInteger(timestamp)).toBe(true);
     expect(headerRecord[SIGNATURE_HEADER]).toBe(signReconcile("s3cr3t", timestamp, body as string));
     expect(JSON.parse(body as string)).toMatchObject({ idp_key: "acme" });
+
+    // The v2 signature names this door and a fresh nonce, so the verifier can hold it to one
+    // door, once.
+    const nonce = headerRecord[NONCE_HEADER];
+    expect(nonce).toMatch(/^[0-9a-f]{32}$/);
+    expect(headerRecord[SIGNATURE_V2_HEADER]).toBe(
+      signRequestV2("s3cr3t", "POST", RECONCILE_DOOR, timestamp, nonce, body as string),
+    );
+  });
+
+  it("signs each request under a fresh nonce", async () => {
+    vi.stubEnv("INTERNAL_RECONCILE_URL", "https://api.internal/internal/saml/reconcile");
+    vi.stubEnv("INTERNAL_RECONCILE_SECRET", "s3cr3t");
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await reconcileMemberships(payload);
+    await reconcileMemberships(payload);
+
+    const nonces = fetchMock.mock.calls.map(
+      ([, init]) => ((init as RequestInit).headers as Record<string, string>)[NONCE_HEADER],
+    );
+    expect(nonces[0]).not.toBe(nonces[1]);
   });
 
   it("throws on a non-2xx response", async () => {

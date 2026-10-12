@@ -1,0 +1,16 @@
+title    = "Internal signers also send a door-bound, single-use v2 signature"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+The SAML Authorization Server (reconcile, resolve) and the Slack mention agent (link-state, mint)
+now send `X-Temper-Nonce` and `X-Temper-Signature-V2` beside the existing `X-Temper-Timestamp` and
+`X-Temper-Signature`. The v2 signature (`temper_core::internal_sig::sign_v2`) covers
+`"v2\n{METHOD}\n{door}\n{timestamp}\n{nonce}\n{body}"`, where `door` is the route temper-api
+registers, so a verifier can hold it to one door, once. temper-api does not read the new headers
+yet and still verifies the original construction, so nothing observable changes. Who observes:
+nobody yet; the new headers are ignored. Release relevance: this must deploy (temper-cloud and the
+mention agent) before the temper-api change that requires v2, or those four doors refuse until it
+does.
+'''

@@ -1,6 +1,6 @@
 import { logger } from "../logger.js";
 import { requireEnv } from "./env.js";
-import { SIGNATURE_HEADER, signReconcile, TIMESTAMP_HEADER } from "./reconcile.js";
+import { RESOLVE_DOOR, signedHeaders } from "./reconcile.js";
 
 /** Ceiling on an internal server-to-server call, so a slow dependency fails open rather than hanging. */
 const INTERNAL_CALL_TIMEOUT_MS = 5000;
@@ -52,13 +52,11 @@ export async function resolvePrincipal(
   // Sign the exact body string we send — raw-body discipline, no re-serialization.
   const body = JSON.stringify(payload);
   const timestamp = Math.floor(Date.now() / 1000);
-  const signature = signReconcile(secret, timestamp, body);
   const res = await fetch(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      [TIMESTAMP_HEADER]: String(timestamp),
-      [SIGNATURE_HEADER]: signature,
+      ...signedHeaders(secret, RESOLVE_DOOR, timestamp, body),
     },
     body,
     // Fail-open is only a mercy if it fails FAST. Both callers catch and carry on, but an
