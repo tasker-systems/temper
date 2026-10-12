@@ -40,7 +40,7 @@ opentelemetry_sdk = "0.32"
 # which exists so a vendor round trip cannot block a Tokio worker or lengthen a response without bound.
 tokio = { version = "1", features = ["rt", "time"] }
 tracing = "0.1"
-tracing-opentelemetry = { version = "0.33", default-features = false }
+tracing-opentelemetry = { version = "0.34", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Parses the OTLP endpoint so `export::vet_endpoint` can refuse plaintext off loopback before the
 # exporter puts `OTEL_EXPORTER_OTLP_HEADERS` on it. Already in the graph through reqwest.
