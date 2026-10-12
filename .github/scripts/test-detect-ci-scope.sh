@@ -754,6 +754,13 @@ run_test "migration-declaration corpus .txt: held by both parsers" \
     "RUN_CODE_QUALITY=true" \
     "RUN_TEST_RUST=true"
 
+run_test "erasure-policy manifest .toml: joined against the live catalog by three fences" \
+    "policy/erasure/estate.toml" \
+    "DOCS_ONLY=false" \
+    "SKIP_ALL=false" \
+    "RUN_CODE_QUALITY=true" \
+    "RUN_TEST_RUST=true"
+
 # A RUST_COUPLED doc cannot be laundered by pairing it with a non-product file.
 run_test "coupled doc + non-product: veto survives the wider predicate" \
     "scripts/install/containment-corpus.txt

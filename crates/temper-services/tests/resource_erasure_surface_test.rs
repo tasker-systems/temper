@@ -6,8 +6,8 @@
 //! Witness 13). Four sources meet here, and only one of them is written for this test:
 //!
 //! - **What a column holds** comes from the two sibling manifests. A carrier is a column
-//!   `scripts/sensitivity-scan-surface.txt` classes `scan`, or one
-//!   `scripts/personal-data-surface.txt` classes `content`, `incidental` or `derived` (ruled
+//!   `policy/erasure/sensitivity-scan.toml` classes `scan`, or one
+//!   `policy/erasure/personal-data.toml` classes `content`, `incidental` or `derived` (ruled
 //!   2026-10-02). Nothing here re-classifies a column.
 //! - **Which tables a resource reaches** comes from the live catalog. A foreign key, or a
 //!   single-column CHECK on a `*_table` discriminator that enumerates tables, makes its table a
@@ -15,7 +15,7 @@
 //!   five roots, the ledger included (ruled 2026-10-02, amended 2026-10-03). Nothing enumerates
 //!   tables by hand, so a new table is reached by construction rather than by someone remembering
 //!   it.
-//! - **What the act does about each carrier** is declared in `scripts/resource-erasure-surface.txt`.
+//! - **What the act does about each carrier** is declared in `policy/erasure/resource-erasure.toml`.
 //! - **Whether the act really does it** is read from the live body of
 //!   `_resource_erasure_apply_redaction`, the D2 function: a `handled` line must find an UPDATE of
 //!   its table assigning its column an erasure value.
@@ -38,26 +38,17 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use erasure_binding::{assignments, deletes_from, is_erasure_value, is_identity, tokens};
 use sqlx::PgPool;
-
-/// The declaration half. Read from the shipped file so the manifest and this test cannot drift.
-const MANIFEST: &str = include_str!("../../../scripts/resource-erasure-surface.txt");
-
-/// Which text is prose: read for its `scan` lines. Its own test owns its format.
-const SCAN_MANIFEST: &str = include_str!("../../../scripts/sensitivity-scan-surface.txt");
-
-/// Which non-text columns hold content: read for its `content`/`incidental`/`derived` lines. Its
-/// own test owns its format.
-const PERSONAL_MANIFEST: &str = include_str!("../../../scripts/personal-data-surface.txt");
+use temper_core::erasure_policy::{
+    Class, ColumnKey, Disposition, PayloadDisposition, Qualifier, ScanDisposition, TableLine,
+};
+use temper_services::erasure_policy::in_force;
 
 /// The personal-data classes that make a column a carrier. `identifier` and `reference` are about
 /// a person, not about what a resource says; `discriminator` and `none` hold nothing.
-const CARRIER_CLASSES: &[&str] = &["content", "incidental", "derived"];
+const CARRIER_CLASSES: &[Class] = &[Class::Content, Class::Incidental, Class::Derived];
 
 /// The D2 function: the one home of the content shape (spec D2).
 const REDACTION_FN: &str = "_resource_erasure_apply_redaction";
-
-/// The numbered D2 steps a line may cite (spec D2, steps 1–9, 7a and 9f).
-const D2_STEPS: &[&str] = &["1", "2", "3", "4", "5", "6", "7", "7a", "8", "9", "9f"];
 
 /// The parent→child edges of the walk: every foreign key, and every single-column CHECK on a
 /// `*_table` discriminator, read as an edge to each public table it names.
@@ -116,137 +107,29 @@ fn reachable_tables_sql() -> String {
     )
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Disposition {
-    /// Emptied or sentineled by this D2 step.
-    Handled { step: String },
-    /// Its citers are re-pointed through `via` (`table.column`) and the orphaned original deleted.
-    Repointed { step: String, via: String },
-    /// Deliberately left; the note carries the reason.
-    OutOfScope,
+/// `table.column` → its disposition and note: the declaration half, the `[tables]` of
+/// `policy/erasure/resource-erasure.toml` in force. The parser (`temper_core::erasure_policy::parse`)
+/// refuses an unknown disposition, a malformed `repointed` column and a column declared
+/// twice, so a malformed entry fails the parse rather than dropping a declaration and reading as
+/// uncovered.
+fn declarations() -> &'static BTreeMap<ColumnKey, TableLine> {
+    &in_force().resource_erasure.tables
 }
 
-fn parse_step(step: &str, lineno: usize) -> String {
-    assert!(
-        D2_STEPS.contains(&step),
-        "resource-erasure-surface.txt:{lineno}: no D2 step {step:?} (known: {D2_STEPS:?})"
-    );
-    step.to_string()
-}
-
-fn parse_disposition(raw: &str, lineno: usize) -> Disposition {
-    if let Some(step) = raw.strip_prefix("handled:D2.") {
-        return Disposition::Handled {
-            step: parse_step(step, lineno),
-        };
-    }
-    if let Some(rest) = raw.strip_prefix("repointed:D2.") {
-        let (step, via) = rest.split_once(':').unwrap_or_else(|| {
-            panic!(
-                "resource-erasure-surface.txt:{lineno}: expected `repointed:D2.<step>:<table>.<column>`"
-            )
-        });
-        assert!(
-            via.split_once('.').is_some(),
-            "resource-erasure-surface.txt:{lineno}: {via:?} is not `table.column`"
-        );
-        return Disposition::Repointed {
-            step: parse_step(step, lineno),
-            via: via.to_string(),
-        };
-    }
-    assert!(
-        raw == "out-of-scope",
-        "resource-erasure-surface.txt:{lineno}: unknown disposition {raw:?} (known: \
-         `handled:D2.<step>`, `repointed:D2.<step>:<table>.<column>`, `out-of-scope`)"
-    );
-    Disposition::OutOfScope
-}
-
-/// The manifest's declaration lines, each with its section and 1-based line number. Panics on an
-/// unknown section or a line outside one: a malformed line would otherwise drop a declaration and
-/// read as uncovered.
-fn section_lines() -> Vec<(&'static str, usize, &'static str)> {
-    let mut out = Vec::new();
-    let mut section: Option<&'static str> = None;
-    for (i, raw) in MANIFEST.lines().enumerate() {
-        let lineno = i + 1;
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-            assert!(
-                matches!(name, "tables" | "payload"),
-                "resource-erasure-surface.txt:{lineno}: unknown section [{name}] (known: [tables], \
-                 [payload])"
-            );
-            section = Some(if name == "tables" {
-                "tables"
-            } else {
-                "payload"
-            });
-            continue;
-        }
-        let section = section.unwrap_or_else(|| {
-            panic!(
-                "resource-erasure-surface.txt:{lineno}: a declaration outside any section: {raw:?}"
-            )
-        });
-        out.push((section, lineno, line));
-    }
-    out
-}
-
-/// `table.column` → (disposition, note), from the manifest's `[tables]` section.
-fn declarations() -> BTreeMap<String, (Disposition, String)> {
-    let mut out = BTreeMap::new();
-    for (section, lineno, line) in section_lines() {
-        if section != "tables" {
-            continue;
-        }
-        let raw = line;
-        let cols: Vec<&str> = line.split('|').map(str::trim).collect();
-        assert!(
-            cols.len() == 3,
-            "resource-erasure-surface.txt:{lineno}: expected `table.column | disposition | note`, got {raw:?}"
-        );
-        let key = cols[0].to_string();
-        assert!(
-            key.split_once('.')
-                .is_some_and(|(t, c)| !t.is_empty() && !c.is_empty()),
-            "resource-erasure-surface.txt:{lineno}: {key:?} is not `table.column`"
-        );
-        let disposition = parse_disposition(cols[1], lineno);
-        assert!(
-            out.insert(key.clone(), (disposition, cols[2].to_string()))
-                .is_none(),
-            "resource-erasure-surface.txt:{lineno}: {key} declared twice"
-        );
-    }
-    out
-}
-
-/// `table.column` keys of `manifest` whose second field is in `classes`.
-fn keys_classed(manifest: &str, classes: &[&str]) -> BTreeSet<String> {
-    manifest
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .filter_map(|l| {
-            let cols: Vec<&str> = l.split('|').map(str::trim).collect();
-            cols.get(1)
-                .is_some_and(|c| classes.contains(c))
-                .then(|| cols[0].to_string())
-        })
-        .collect()
-}
-
-/// Every carrier column, by the two sibling manifests.
+/// Every carrier column, by the two sibling manifests: `scan` in sensitivity-scan.toml, and
+/// `content`/`incidental`/`derived` in personal-data.toml.
 fn carriers() -> BTreeSet<String> {
-    let mut out = keys_classed(SCAN_MANIFEST, &["scan"]);
-    out.extend(keys_classed(PERSONAL_MANIFEST, CARRIER_CLASSES));
-    out
+    let policy = in_force();
+    policy
+        .sensitivity_scan
+        .keys(ScanDisposition::Scan)
+        .chain(
+            CARRIER_CLASSES
+                .iter()
+                .flat_map(|class| policy.personal_data_keys(*class)),
+        )
+        .map(ColumnKey::to_string)
+        .collect()
 }
 
 fn table_of(key: &str) -> &str {
@@ -287,15 +170,14 @@ fn reads_column(expr: &[String], column: &str) -> bool {
 fn binds(body: &str, key: &str, disposition: &Disposition) -> bool {
     let t = tokens(body);
     match disposition {
-        Disposition::Handled { .. } => {
+        Disposition::Handled => {
             let values = assignments(&t, key);
             !values.is_empty() && values.into_iter().all(is_erasure_value)
         }
-        Disposition::Repointed { via, .. } => {
-            let via_column = via.split_once('.').map_or(via.as_str(), |(_, c)| c);
-            assignments(&t, via).into_iter().any(|expr| {
+        Disposition::Repointed { via } => {
+            assignments(&t, via.as_str()).into_iter().any(|expr| {
                 !expr.is_empty()
-                    && !reads_column(expr, via_column)
+                    && !reads_column(expr, via.column())
                     && !matches!(expr, [only] if is_identity(only))
             }) && deletes_from(&t, table_of(key))
         }
@@ -303,23 +185,23 @@ fn binds(body: &str, key: &str, disposition: &Disposition) -> bool {
     }
 }
 
-/// Carriers in reachable tables with no line in the manifest. `carriers` is a parameter, not read
+/// Carriers in reachable tables with no entry in the manifest. `carriers` is a parameter, not read
 /// inside, so the Witness 13 probes can stand in for the sibling-manifest PR that would class them.
 fn uncovered(reach: &BTreeSet<String>, carriers: &BTreeSet<String>) -> Vec<String> {
-    let declared = declarations();
+    let declared: BTreeSet<&str> = declarations().keys().map(ColumnKey::as_str).collect();
     carriers
         .iter()
-        .filter(|k| reach.contains(table_of(k)) && !declared.contains_key(*k))
+        .filter(|k| reach.contains(table_of(k)) && !declared.contains(k.as_str()))
         .cloned()
         .collect()
 }
 
-/// Lines whose disposition the D2 function does not carry out.
+/// Entries whose disposition the D2 function does not carry out.
 fn unbound(body: &str) -> Vec<String> {
     declarations()
-        .into_iter()
-        .filter(|(k, (d, _))| !binds(body, k, d))
-        .map(|(k, _)| k)
+        .iter()
+        .filter(|(k, line)| !binds(body, k.as_str(), &line.disposition))
+        .map(|(k, _)| k.to_string())
         .collect()
 }
 
@@ -338,10 +220,10 @@ async fn every_reachable_carrier_is_handled_or_declared(pool: PgPool) {
     let missing = uncovered(&reachable_tables(&pool).await, &carriers());
     assert!(
         missing.is_empty(),
-        "these columns are carriers (`scan` in scripts/sensitivity-scan-surface.txt, or \
-         content/incidental/derived in scripts/personal-data-surface.txt), sit in a table a \
-         resource reaches, and have no line in scripts/resource-erasure-surface.txt.\n\
-         Either make `{REDACTION_FN}` erase the column and declare it `handled:D2.<step>`, or \
+        "these columns are carriers (`scan` in policy/erasure/sensitivity-scan.toml, or \
+         content/incidental/derived in policy/erasure/personal-data.toml), sit in a table a \
+         resource reaches, and have no entry in policy/erasure/resource-erasure.toml [tables].\n\
+         Either make `{REDACTION_FN}` erase the column and declare it `handled`, or \
          declare it `out-of-scope` with the reason the act leaves it.\n\
          Uncovered: {missing:#?}"
     );
@@ -354,11 +236,11 @@ async fn every_handled_declaration_is_carried_out_by_the_redaction(pool: PgPool)
     let broken = unbound(&redaction_body(&pool).await);
     assert!(
         broken.is_empty(),
-        "scripts/resource-erasure-surface.txt declares these columns handled, but the live \
-         `{REDACTION_FN}` does not do what the line says: a `handled` column needs an UPDATE of its \
+        "policy/erasure/resource-erasure.toml [tables] declares these columns handled, but the live \
+         `{REDACTION_FN}` does not do what the entry says: a `handled` column needs an UPDATE of its \
          table assigning NULL, '', '{{}}', '\"erased\"' or an 'erased…' sentinel; a `repointed` \
          one needs the re-point UPDATE and the DELETE.\n\
-         Restore the step, or change the line to say what the act now does.\n\
+         Restore the statement, or change the entry to say what the act now does.\n\
          Unbound: {broken:#?}"
     );
 }
@@ -372,16 +254,18 @@ async fn every_declaration_is_live(pool: PgPool) {
     let carriers = carriers();
     let reach = reachable_tables(&pool).await;
     let stale: Vec<String> = declarations()
-        .into_iter()
-        .filter(|(k, (d, _))| {
-            !carriers.contains(k) || (*d == Disposition::OutOfScope && !reach.contains(table_of(k)))
+        .iter()
+        .filter(|(k, line)| {
+            !carriers.contains(k.as_str())
+                || (line.disposition == Disposition::OutOfScope && !reach.contains(k.table()))
         })
-        .map(|(k, _)| k)
+        .map(|(k, _)| k.to_string())
         .collect();
     assert!(
         stale.is_empty(),
-        "scripts/resource-erasure-surface.txt declares columns that are not carriers in either \
-         sibling manifest, or are out of scope in a table no resource reaches. Delete the line, or \
+        "policy/erasure/resource-erasure.toml [tables] declares columns that are not carriers in \
+         either sibling manifest, or are out of scope in a table no resource reaches. Delete the \
+         entry, or \
          (if a sibling reclassified the column) check that manifest's reason first.\n\
          Stale: {stale:#?}"
     );
@@ -407,13 +291,13 @@ async fn every_polymorphic_discriminator_enumerates_its_targets(pool: PgPool) {
 #[test]
 fn every_out_of_scope_line_states_its_reason() {
     let silent: Vec<String> = declarations()
-        .into_iter()
-        .filter(|(_, (d, note))| *d == Disposition::OutOfScope && note.is_empty())
-        .map(|(k, _)| k)
+        .iter()
+        .filter(|(_, line)| line.disposition == Disposition::OutOfScope && line.note.is_empty())
+        .map(|(k, _)| k.to_string())
         .collect();
     assert!(
         silent.is_empty(),
-        "`out-of-scope` requires the reason in the note column.\nSilent: {silent:#?}"
+        "`out-of-scope` requires the reason in the note.\nSilent: {silent:#?}"
     );
 }
 
@@ -657,7 +541,7 @@ fn the_binding_reads_erasing_assignments_not_mentions() {
         UPDATE kb_block_provenance bp SET source_id = (v ->> bp.id::text)::uuid;
         DELETE FROM kb_remote_sources r WHERE r.id = v;
     ";
-    let handled = Disposition::Handled { step: "9".into() };
+    let handled = Disposition::Handled;
     for key in [
         "kb_chunks.embedding",
         "kb_chunks.embedded_with",
@@ -700,8 +584,7 @@ fn the_binding_reads_erasing_assignments_not_mentions() {
     }
 
     let repointed = Disposition::Repointed {
-        step: "9".into(),
-        via: "kb_block_provenance.source_id".into(),
+        via: "kb_block_provenance.source_id".parse().unwrap(),
     };
     assert!(binds(sql, "kb_remote_sources.uri", &repointed));
     for (body, why) in [
@@ -726,7 +609,7 @@ fn the_binding_reads_erasing_assignments_not_mentions() {
 /// The binding's remaining rules, each case excluded by exactly the one named beside it.
 #[test]
 fn the_binding_is_not_fooled_by_spacing_restoring_or_parking() {
-    let handled = Disposition::Handled { step: "9".into() };
+    let handled = Disposition::Handled;
     let bound = |sql: &str, key: &str| binds(sql, key, &handled);
 
     assert!(
@@ -795,8 +678,7 @@ fn the_binding_is_not_fooled_by_spacing_restoring_or_parking() {
     }
 
     let repointed = Disposition::Repointed {
-        step: "9".into(),
-        via: "kb_block_provenance.source_id".into(),
+        via: "kb_block_provenance.source_id".parse().unwrap(),
     };
     assert!(
         !binds(
@@ -819,116 +701,53 @@ fn the_binding_is_not_fooled_by_spacing_restoring_or_parking() {
 // one is declared `permissive` and its paths are listed by hand, which this test cannot check for
 // completeness (the manifest's header says so).
 
-/// The redaction classes of D4, one per sentinel shape.
-const REDACT_CLASSES: &[&str] = &[
-    "title",
-    "origin-uri",
-    "remote-source-url",
-    "property-key",
-    "property-value",
-    "facet-value",
-    "doc-type",
-    "artifact-family",
-    "edge-label",
-    "reason",
-    "scar",
-    "authorship",
-];
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PayloadDisposition {
-    Redact(String),
-    Structural,
-    OutOfScope,
-    Permissive,
+/// One declared ledger-path disposition: an entry of `[payload."<event_type>"]` under its path key,
+/// or one of that entry's refinements, whose `where` is `qualifier`. `event_type` is `metadata` for
+/// an authorship key.
+#[derive(Debug, Clone, Copy)]
+struct PayloadEntry {
+    event_type: &'static str,
+    path: &'static str,
+    qualifier: Option<&'static Qualifier>,
+    disposition: &'static PayloadDisposition,
+    note: &'static str,
 }
 
-/// One `[payload]` line: `<event_type>:<path>[<qualifier>]`, its disposition and its note.
-/// `event_type` is `metadata` for an authorship key.
-#[derive(Debug, Clone)]
-struct PayloadLine {
-    lineno: usize,
-    event_type: String,
-    path: String,
-    qualifier: Option<String>,
-    disposition: PayloadDisposition,
-    note: String,
-}
-
-fn payload_lines() -> Vec<PayloadLine> {
-    let mut out = Vec::new();
-    let mut seen = BTreeSet::new();
-    for (section, lineno, line) in section_lines() {
-        if section != "payload" {
-            continue;
+impl PayloadEntry {
+    /// Where the entry sits in `policy/erasure/resource-erasure.toml`, for a failure message.
+    fn at(&self) -> String {
+        let (ty, path) = (self.event_type, self.path);
+        match self.qualifier {
+            None => format!("[payload.{ty:?}] {path:?}"),
+            Some(q) => format!("[payload.{ty:?}] {path:?} refine {q:?}"),
         }
-        let cols: Vec<&str> = line.split('|').map(str::trim).collect();
-        assert!(
-            cols.len() == 3,
-            "resource-erasure-surface.txt:{lineno}: expected `<type>:<path> | disposition | note`, got {line:?}"
-        );
-        let (event_type, rest) = cols[0].split_once(':').unwrap_or_else(|| {
-            panic!(
-                "resource-erasure-surface.txt:{lineno}: {:?} is not `<type>:<path>`",
-                cols[0]
-            )
-        });
-        let (path, qualifier) = match rest.split_once('[') {
-            Some((p, q)) => (
-                p,
-                Some(
-                    q.strip_suffix(']')
-                        .unwrap_or_else(|| {
-                            panic!("resource-erasure-surface.txt:{lineno}: unclosed qualifier")
-                        })
-                        .to_string(),
-                ),
-            ),
-            None => (rest, None),
-        };
-        assert!(
-            path == "*" || path.starts_with('/'),
-            "resource-erasure-surface.txt:{lineno}: a path is a JSON pointer or `*`, got {path:?}"
-        );
-        let disposition = match cols[1] {
-            "structural" => PayloadDisposition::Structural,
-            "out-of-scope" => PayloadDisposition::OutOfScope,
-            "permissive" => PayloadDisposition::Permissive,
-            d => {
-                let class = d.strip_prefix("redact:").unwrap_or_else(|| {
-                    panic!(
-                        "resource-erasure-surface.txt:{lineno}: unknown disposition {d:?} (known: \
-                         `redact:<class>`, `structural`, `out-of-scope`, `permissive`)"
-                    )
-                });
-                assert!(
-                    REDACT_CLASSES.contains(&class),
-                    "resource-erasure-surface.txt:{lineno}: no D4 class {class:?} (known: {REDACT_CLASSES:?})"
-                );
-                PayloadDisposition::Redact(class.to_string())
-            }
-        };
-        assert!(
-            (path == "*") == (disposition == PayloadDisposition::Permissive),
-            "resource-erasure-surface.txt:{lineno}: `<type>:*` and `permissive` go together"
-        );
-        assert!(
-            seen.insert(cols[0].to_string()),
-            "resource-erasure-surface.txt:{lineno}: {} declared twice",
-            cols[0]
-        );
-        out.push(PayloadLine {
-            lineno,
-            event_type: event_type.to_string(),
-            path: path.to_string(),
-            qualifier,
-            disposition,
-            note: cols[2].to_string(),
-        });
+    }
+}
+
+/// Every `[payload]` entry and refinement of the policy in force, flattened.
+fn payload_entries() -> Vec<PayloadEntry> {
+    let mut out = Vec::new();
+    for (event_type, paths) in &in_force().resource_erasure.payload {
+        for (path, line) in paths {
+            out.push(PayloadEntry {
+                event_type,
+                path,
+                qualifier: None,
+                disposition: &line.disposition,
+                note: &line.note,
+            });
+            out.extend(line.refine.iter().map(|r| PayloadEntry {
+                event_type,
+                path,
+                qualifier: Some(&r.r#where),
+                disposition: &r.disposition,
+                note: &r.note,
+            }));
+        }
     }
     assert!(
         !out.is_empty(),
-        "the manifest parse found no [payload] lines"
+        "the manifest parse found no [payload] entries"
     );
     out
 }
@@ -1119,22 +938,22 @@ fn metadata_walked() -> BTreeSet<(String, String)> {
         .collect()
 }
 
-/// The `[payload]` problems against `registry`: undeclared walked paths, lines naming a walked
-/// type's path the schema does not have, permissive declarations that disagree with the registry,
-/// and qualified lines with no unqualified line to refine.
+/// The `[payload]` problems against `registry`: undeclared walked paths, entries naming a walked
+/// type's path the schema does not have, and permissive declarations that disagree with the
+/// registry.
 fn payload_problems(registry: &BTreeMap<String, Vec<serde_json::Value>>) -> Vec<String> {
-    let lines = payload_lines();
+    let lines = payload_entries();
     let mut walked = walked(registry);
     walked.extend(metadata_walked());
     let declared: BTreeSet<(String, String)> = lines
         .iter()
         .filter(|l| l.qualifier.is_none() && l.path != "*")
-        .map(|l| (l.event_type.clone(), l.path.clone()))
+        .map(|l| (l.event_type.to_string(), l.path.to_string()))
         .collect();
     let permissive: BTreeSet<&str> = lines
         .iter()
-        .filter(|l| l.disposition == PayloadDisposition::Permissive)
-        .map(|l| l.event_type.as_str())
+        .filter(|l| *l.disposition == PayloadDisposition::Permissive)
+        .map(|l| l.event_type)
         .collect();
     let mut problems = Vec::new();
     for (ty, path) in walked.difference(&declared) {
@@ -1143,56 +962,49 @@ fn payload_problems(registry: &BTreeMap<String, Vec<serde_json::Value>>) -> Vec<
         ));
     }
     for l in &lines {
+        let at = l.at();
+        let walked_here = walked.contains(&(l.event_type.to_string(), l.path.to_string()));
         if l.event_type == "metadata" {
-            if !walked.contains(&(l.event_type.clone(), l.path.clone())) {
+            if !walked_here {
                 problems.push(format!(
-                    "line {}: stale: metadata:{} is not a string path of AgentAuthorship",
-                    l.lineno, l.path
+                    "{at}: stale: metadata:{} is not a string path of AgentAuthorship",
+                    l.path
                 ));
             }
             continue;
         }
-        match registry.get(&l.event_type).map(Vec::is_empty) {
+        match registry.get(l.event_type).map(Vec::is_empty) {
             None => problems.push(format!(
-                "line {}: {} is not a registered event type",
-                l.lineno, l.event_type
+                "{at}: {} is not a registered event type",
+                l.event_type
             )),
             Some(false) if l.path == "*" => problems.push(format!(
-                "line {}: {} has a payload schema, so the walk reads it; drop `permissive`",
-                l.lineno, l.event_type
+                "{at}: {} has a payload schema, so the walk reads it; drop `permissive`",
+                l.event_type
             )),
-            Some(false)
-                if l.qualifier.is_none()
-                    && !walked.contains(&(l.event_type.clone(), l.path.clone())) =>
-            {
-                problems.push(format!(
-                    "line {}: stale: {}:{} is not a string path of its schema",
-                    l.lineno, l.event_type, l.path
-                ))
-            }
-            Some(true) if !permissive.contains(l.event_type.as_str()) => problems.push(format!(
-                "line {}: {} has no payload schema; declare `{}:* | permissive | <where its fields came from>`",
-                l.lineno, l.event_type, l.event_type
+            Some(false) if l.qualifier.is_none() && !walked_here => problems.push(format!(
+                "{at}: stale: {}:{} is not a string path of its schema",
+                l.event_type, l.path
+            )),
+            Some(true) if !permissive.contains(l.event_type) => problems.push(format!(
+                "{at}: {ty} has no payload schema; declare `[payload.\"{ty}\"] \"*\" = \
+                 {{ disposition = \"permissive\", note = \"<where its fields came from>\" }}`",
+                ty = l.event_type
             )),
             _ => {}
         }
-        if l.qualifier.is_some() && !declared.contains(&(l.event_type.clone(), l.path.clone())) {
-            problems.push(format!(
-                "line {}: {}:{}[…] refines no unqualified line",
-                l.lineno, l.event_type, l.path
-            ));
-        }
-        if l.disposition == PayloadDisposition::OutOfScope && l.note.is_empty() {
-            problems.push(format!(
-                "line {}: `out-of-scope` needs its reason",
-                l.lineno
-            ));
+        // A refinement with no unqualified entry to refine cannot be written: it nests under its
+        // entry (`temper_core::erasure_policy::PayloadLine::refine`), so the parser enforces it.
+        if *l.disposition == PayloadDisposition::OutOfScope && l.note.is_empty() {
+            problems.push(format!("{at}: `out-of-scope` needs its reason"));
         }
     }
     for (name, schemas) in registry {
         if schemas.is_empty() && !permissive.contains(name.as_str()) {
             problems.push(format!(
-                "undeclared: {name} is registered with no payload schema; declare `{name}:* | permissive | …` and its string paths"
+                "undeclared: {name} is registered with no payload schema; declare \
+                 `[payload.\"{name}\"] \"*\" = {{ disposition = \"permissive\", note = \"…\" }}` \
+                 and its string paths"
             ));
         }
     }
@@ -1207,9 +1019,9 @@ async fn every_payload_string_path_is_declared(pool: PgPool) {
     let problems = payload_problems(&registry(&pool).await);
     assert!(
         problems.is_empty(),
-        "scripts/resource-erasure-surface.txt [payload] disagrees with the registered payload \
+        "policy/erasure/resource-erasure.toml [payload] disagrees with the registered payload \
          schemas (kb_event_types). Declare each new string path `redact:<class>`, `structural` or \
-         `out-of-scope` with its reason, and delete a line whose path is gone.\n\
+         `out-of-scope` with its reason, and delete an entry whose path is gone.\n\
          Problems: {problems:#?}"
     );
 }
@@ -1245,10 +1057,10 @@ type AllowlistRow = (
 );
 
 /// FAILS IF: the ledger exception's allowlist (`_erasure_redact_paths`, migration
-/// 20261009100000) and the manifest's `redact` lines disagree. Every `redact:<class>` line is a row
-/// of that class, qualified or not, and every qualified `structural` line is a `keep` row (it
-/// refines a redact line back to structural); nothing else is. D9: the verifier's allowlist is
-/// generated from the redact lines, and this is what holds it to them.
+/// 20261009100000) and the manifest's `redact` entries disagree. Every `redact:<class>` entry is a
+/// row of that class, refinement or not, and every `structural` refinement is a `keep` row (it
+/// refines a redact entry back to structural); nothing else is. D9: the verifier's allowlist is
+/// generated from the redact entries, and this is what holds it to them.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn the_allowlist_is_the_manifests_redact_lines(pool: PgPool) {
     let live: BTreeSet<AllowlistRow> = sqlx::query_as(
@@ -1259,31 +1071,18 @@ async fn the_allowlist_is_the_manifests_redact_lines(pool: PgPool) {
     .expect("read the allowlist")
     .into_iter()
     .collect();
-    let manifest: BTreeSet<AllowlistRow> = payload_lines()
+    let manifest: BTreeSet<AllowlistRow> = payload_entries()
         .into_iter()
         .filter_map(|l| {
-            let class = match (&l.disposition, &l.qualifier) {
+            let class = match (l.disposition, l.qualifier) {
                 (PayloadDisposition::Redact(class), _) => class.clone(),
                 (PayloadDisposition::Structural, Some(_)) => "keep".to_string(),
                 _ => return None,
             };
-            let mut key = None;
-            let mut owner = None;
-            for part in l.qualifier.iter().flat_map(|q| q.split(',')) {
-                match part.split_once('=') {
-                    Some(("key", v)) => key = Some(v.to_string()),
-                    Some(("owner", v)) => owner = Some(v.to_string()),
-                    _ => panic!("line {}: unknown qualifier {part}", l.lineno),
-                }
-            }
-            let event_type = (l.event_type != "metadata").then(|| l.event_type.clone());
-            Some((
-                event_type,
-                dotted(&l.event_type, &l.path),
-                key,
-                owner,
-                class,
-            ))
+            let key = l.qualifier.and_then(|q| q.key.clone());
+            let owner = l.qualifier.and_then(|q| q.owner.clone());
+            let event_type = (l.event_type != "metadata").then(|| l.event_type.to_string());
+            Some((event_type, dotted(l.event_type, l.path), key, owner, class))
         })
         .collect();
     assert_eq!(

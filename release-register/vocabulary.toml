@@ -16,7 +16,7 @@ classes = ["additive", "shape-breaking", "behavioral", "retirement-train", "spec
 
 # Which surfaces the entry speaks for. The calculator's Gate 3 intersects these with the
 # surfaces a release ships.
-surfaces = ["http", "mcp", "cli-stdout", "clients", "schema", "internal"]
+surfaces = ["http", "mcp", "cli-stdout", "clients", "schema", "internal", "erasure-policy"]
 
 # Where the entry stands for the next release. `open` gates the release until carried.
 status = ["open", "signal-only", "satisfied"]
