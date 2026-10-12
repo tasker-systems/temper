@@ -31,10 +31,12 @@
 //! declared, not detected. Coverage is never inferred from absence.
 
 mod erasure_binding;
+mod person_act_binding;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use erasure_binding::{assignments, deletes_from, is_erasure_value, tokens};
+use erasure_binding::{deletes_from, tokens};
+use person_act_binding::assigns_erasure;
 use sqlx::PgPool;
 use temper_core::erasure_policy::{Achieved, Ceiling, Claim, Class, ColumnKey, PersonalColumn};
 use temper_services::erasure_policy::in_force;
@@ -231,21 +233,6 @@ const REDACTION_FN: &str = "_erasure_apply_redaction";
 const RESOURCE_EXECUTE_FN: &str = "resource_erasure_execute";
 const RESOURCE_REDACTION_FN: &str = "_resource_erasure_apply_redaction";
 
-/// The person act's subject sentinel, as its body declares it. `v_sentinel` is an erasure value
-/// only while this declaration stands: the fence reads a variable's value from nowhere else.
-const SENTINEL_DECLARATION: &[&str] = &[
-    "v_sentinel",
-    "text",
-    ":",
-    "=",
-    "'erased-'",
-    "||",
-    "p_subject",
-    "::",
-    "text",
-    ";",
-];
-
 /// The live act, tokenized, and the catalog's cascading foreign keys as (child, parent).
 struct Act {
     execute: Vec<String>,
@@ -292,30 +279,6 @@ fn resource_handled() -> BTreeSet<&'static str> {
 
 fn calls(t: &[String], function: &str) -> bool {
     t.windows(2).any(|w| w[0] == function && w[1] == "(")
-}
-
-/// Whether a SET value erases in the person act: one of the resource binder's shapes, or a `||`
-/// chain of string literals and the declared `v_sentinel` that holds the sentinel at least once
-/// (`'personal-' || v_sentinel`). Nothing read from a row may join the chain.
-fn erases(expr: &[String], sentinel_declared: bool) -> bool {
-    if is_erasure_value(expr) {
-        return true;
-    }
-    let operand = |tok: &String| tok == "v_sentinel" || tok.starts_with('\'');
-    sentinel_declared
-        && expr.len() % 2 == 1
-        && expr.iter().step_by(2).all(operand)
-        && expr.iter().skip(1).step_by(2).all(|op| op == "||")
-        && expr.iter().any(|tok| tok == "v_sentinel")
-}
-
-/// Whether `t` assigns `key` at least once, and every assignment erases.
-fn assigns_erasure(t: &[String], key: &str) -> bool {
-    let sentinel = t
-        .windows(SENTINEL_DECLARATION.len())
-        .any(|w| w.iter().zip(SENTINEL_DECLARATION).all(|(a, b)| a == b));
-    let values = assignments(t, key);
-    !values.is_empty() && values.into_iter().all(|v| erases(v, sentinel))
 }
 
 /// Whether the live act does what `claim` says for `key`.

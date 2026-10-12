@@ -48,8 +48,6 @@
 #   * The catalog test checks names: every table, link column, flag column and reached column
 #     exists, and every bound function exists. It does not check that a bound function does what the entry says, or
 #     that a discriminator value in a `via` (kb_remote_sources) matches the live vocabulary.
-#   * A covered parent need not be grained itself. kb_block_revisions and kb_blob_uploads carry no
-#     content of their own; the note on the child names the rest of the path.
 #   * The value set of a polymorphic pair's CHECK is not compared with the paths declared here.
 #     Every value admitted today has an entry (a parent or an `also_reached`), but a value a later
 #     migration adds to a CHECK is not caught by this file's test.
@@ -169,6 +167,13 @@ note = "D2: content beneath a resource is covered by its resource"
 [tables.kb_content_blocks.grain]
 kind = "covered"
 parent = { table = "kb_resources", link = { fk = "resource_id" } }
+
+[tables.kb_block_revisions]
+note = "every revision of a block"
+
+[tables.kb_block_revisions.grain]
+kind = "covered"
+parent = { table = "kb_content_blocks", link = { fk = "block_id" } }
 
 [tables.kb_block_content]
 note = "kb_block_revisions → kb_content_blocks (block_id) → kb_resources (resource_id); resource erasure D2.2"
@@ -368,12 +373,20 @@ note = "arm 6a: the subject's login flows, deleted"
 kind = "identity"
 mechanism = { bound = "_erasure_apply_redaction" }
 
+[tables.kb_blob_uploads]
+note = "arm 6a: upload sessions owned by the subject or homed in the estate (home_table/home_id), deleted; their segments cascade"
+
+[tables.kb_blob_uploads.grain]
+kind = "identity"
+mechanism = { bound = "_erasure_apply_redaction" }
+
 [tables.kb_oauth_refresh_tokens]
 note = "arm 7a: deleted; kept revoked with claims emptied when the deployment keeps credential-replay-evidence"
 
 [tables.kb_oauth_refresh_tokens.grain]
 kind = "identity"
 mechanism = { bound = "_erasure_apply_redaction" }
+retention = "credential-replay-evidence"
 
 [tables.kb_slack_link_intents]
 note = "arm 8: deleted"
@@ -396,12 +409,18 @@ note = "arm 6a: connections homed in the estate or whose profile is the subject,
 kind = "identity"
 mechanism = { bound = "_erasure_apply_redaction" }
 
+[[tables.kb_connections.also_reached]]
+path = { table = "kb_profiles", link = { fk = "profile_id" } }
+mechanism = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "the reach_affirmation of a connection the person act revokes" } }
+column = "reach_affirmation"
+
 [tables.kb_join_requests]
 note = "arm 9a: message and decision_note nulled unless the deployment keeps join-request-notes"
 
 [tables.kb_join_requests.grain]
 kind = "identity"
 mechanism = { bound = "_erasure_apply_redaction" }
+retention = "join-request-notes"
 
 [tables.kb_principal_review_requests]
 note = "arm 9a: message and decision_note nulled unless the deployment keeps review-request-notes"
@@ -409,6 +428,7 @@ note = "arm 9a: message and decision_note nulled unless the deployment keeps rev
 [tables.kb_principal_review_requests.grain]
 kind = "identity"
 mechanism = { bound = "_erasure_apply_redaction" }
+retention = "review-request-notes"
 
 [tables.kb_principal_standing_events]
 note = "arm 9a: reason nulled unless the deployment keeps standing-reasons"
@@ -416,6 +436,7 @@ note = "arm 9a: reason nulled unless the deployment keeps standing-reasons"
 [tables.kb_principal_standing_events.grain]
 kind = "identity"
 mechanism = { bound = "_erasure_apply_redaction" }
+retention = "standing-reasons"
 
 # ── declared-out ─────────────────────────────────────────────────────────────────────────────────
 
