@@ -10,7 +10,7 @@
 # (sqlx stores each applied version and checksum, and refuses a source missing an applied version).
 # So the check belongs before the merge.
 #
-# WHAT IT COMPARES. The migrations this change ADDS are the versions in the index (`git ls-files`:
+# WHAT IT COMPARES. The migrations this change ADDS are the files in the index (`git ls-files`:
 # the staged tree in a pre-commit hook, HEAD in CI) that are not in the base's tree. Each must sort
 # strictly above the base's highest version. Two files sharing one version fail too. Files the base
 # has and this change lacks are ignored: that is a branch behind its base, which a merge fixes.
@@ -79,12 +79,14 @@ if [ -n "$base_list" ]; then
     base_max_line="$(tail -n1 <<<"$base_list")"
     base_max="$(cut -f1 <<<"$base_max_line")"
     base_max_file="$(cut -f2 <<<"$base_max_line")"
-    base_versions="$(cut -f1 <<<"$base_list")"
+    # Added is judged by PATH, not version: a branch behind its base can carry a file whose version
+    # the base already holds under another name, and that collision is exactly what must fail.
+    base_paths="$(cut -f2 <<<"$base_list")"
 
     added=0
     while IFS=$'\t' read -r version path; do
         [ -z "$version" ] && continue
-        grep -qxF "$version" <<<"$base_versions" && continue
+        grep -qxF "$path" <<<"$base_paths" && continue
         added=$((added + 1))
         # Versions are 14-digit timestamps; compare as strings of equal length, then numerically,
         # so a short or long version cannot slip past a lexical comparison.

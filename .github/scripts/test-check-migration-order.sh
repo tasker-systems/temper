@@ -86,9 +86,16 @@ make_repo none 20261025100000 20261027100000
 run_case "no added migration passes" 0 "OK: 0 added"
 
 make_repo behind 20261025100000 20261026100000 20261027100000
-(cd "$TREE" && git rm -q --cached migrations/20261027100000_m20261027100000.sql) >/dev/null 2>&1
+(cd "$TREE" && git rm -q migrations/20261027100000_m20261027100000.sql) >/dev/null 2>&1
 add_migration 20261028100000
 run_case "a branch behind its base (missing a base migration) is judged on what it adds" 0 "OK: 1 added"
+
+# A branch behind its base, adding a file at a version the base gained meanwhile under another name.
+# Without the base's file in the index there is no duplicate to catch; only the order check sees it.
+make_repo reused 20261025100000 20261028100000
+(cd "$TREE" && git rm -q migrations/20261028100000_m20261028100000.sql) >/dev/null 2>&1
+add_migration 20261028100000 slack_vault
+run_case "a file reusing a version the base holds under another name fails" 1 "migrations/20261028100000_slack_vault.sql"
 
 make_repo short 20261025100000
 add_migration 9999999999999 short

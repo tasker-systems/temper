@@ -4,7 +4,7 @@ classes  = ["additive", "behavioral"]
 surfaces = ["internal", "schema"]
 status   = "signal-only"
 body = '''
-`kb_slack_grant_vault` gains a nullable `key_fingerprint` column (migration 20261028100000): the
+`kb_slack_grant_vault` gains a nullable `key_fingerprint` column (migration 20261029100000): the
 first 8 bytes of HMAC-SHA256 under the sealing key, which is not secret. `store_grant` and the
 mint's reseal stamp it. A row written earlier gets it on its first successful open. temper-api logs
 the configured key's fingerprint at boot (`slack vault key fingerprint: …`). A new optional,
