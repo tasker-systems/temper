@@ -2,7 +2,7 @@
 //! The estate manifest covers the catalog: every content or identity table has exactly one grain
 //! in `policy/erasure/estate.toml`, every grain names live tables and columns, every link is the
 //! kind it says, every bound mechanism exists, every covered chain ends in a unit, and every scan
-//! column of an identity table is reached by the person act or recorded as a gap.
+//! column of an identity table is reached by the person act or recorded as a gap, never both.
 //!
 //! **Which tables must have a grain is derived, not listed.** A content or identity table is one
 //! with at least one column classed `content`, `incidental`, `derived` or `identifier` in
@@ -258,8 +258,7 @@ fn path_problems(at: &str, row_table: &str, path: &ParentPath, catalog: &Catalog
     match &path.link {
         Link::Fk(column) if !catalog.has_foreign_key(link_table, column, other_table) => {
             problems.push(format!(
-                "{at}: no foreign key {link_table}.{column} -> {other_table}; a uuid with no \
-                 constraint is a `ref`"
+                "{at}: no foreign key {link_table}.{column} -> {other_table}"
             ));
         }
         Link::Ref(column) if catalog.has_any_foreign_key(link_table, column) => {
@@ -390,19 +389,20 @@ fn unended_chains(policy: &ErasurePolicy) -> Vec<String> {
     problems
 }
 
-/// Every `scan` column of an identity-grained table that the person act's redaction neither
-/// erases (an UPDATE assigning it an erasure value) nor deletes the row of, and that no
-/// `also_reached` gap scoped to that column records. `redaction` is the act's body, tokenized.
-fn unreached_identity_scan_columns(policy: &ErasurePolicy, redaction: &[String]) -> Vec<String> {
+/// Each `scan` column of an identity-grained table, with whether the person act's redaction
+/// reaches it (an UPDATE assigning it an erasure value, or a DELETE of its table) and whether an
+/// `also_reached` gap scoped to that column records it. `redaction` is the act's body, tokenized.
+fn identity_scan_columns(
+    policy: &ErasurePolicy,
+    redaction: &[String],
+) -> Vec<(String, bool, bool)> {
     policy
         .sensitivity_scan
         .keys(ScanDisposition::Scan)
-        .filter(|key| {
-            let Some(entry) = policy.estate.tables.get(key.table()) else {
-                return false;
-            };
+        .filter_map(|key| {
+            let entry = policy.estate.tables.get(key.table())?;
             if !matches!(entry.grain, Grain::Identity { .. }) {
-                return false;
+                return None;
             }
             let reached =
                 assigns_erasure(redaction, key.as_str()) || deletes_from(redaction, key.table());
@@ -410,9 +410,27 @@ fn unreached_identity_scan_columns(policy: &ErasurePolicy, redaction: &[String])
                 reach.column.as_deref() == Some(key.column())
                     && matches!(reach.mechanism, Mechanism::Gap(_))
             });
-            !reached && !gapped
+            Some((key.to_string(), reached, gapped))
         })
-        .map(|key| key.to_string())
+        .collect()
+}
+
+/// The identity `scan` columns the act does not reach and no column-scoped gap records.
+fn unreached_identity_scan_columns(policy: &ErasurePolicy, redaction: &[String]) -> Vec<String> {
+    identity_scan_columns(policy, redaction)
+        .into_iter()
+        .filter(|(_, reached, gapped)| !reached && !gapped)
+        .map(|(key, ..)| key)
+        .collect()
+}
+
+/// The identity `scan` columns a column-scoped gap records although the act already reaches them:
+/// a gap left standing after its work was done.
+fn stale_identity_scan_gaps(policy: &ErasurePolicy, redaction: &[String]) -> Vec<String> {
+    identity_scan_columns(policy, redaction)
+        .into_iter()
+        .filter(|(_, reached, gapped)| *reached && *gapped)
+        .map(|(key, ..)| key)
         .collect()
 }
 
@@ -505,8 +523,9 @@ async fn a_bound_function_that_does_not_exist_is_reported(pool: PgPool) {
     );
 }
 
-/// The link-kind check's bite, both ways: a constrained column declared `ref`, and an
-/// unconstrained one declared `fk`, are each reported, and nothing else is.
+/// The link-kind check's bite, three ways: a constrained column declared `ref`, an unconstrained
+/// one declared `fk`, and an `fk` whose constraint references a table other than the one named,
+/// are each reported, and nothing else is.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_link_of_the_wrong_kind_is_reported(pool: PgPool) {
     let mut policy = in_force().clone();
@@ -531,15 +550,25 @@ async fn a_link_of_the_wrong_kind_is_reported(pool: PgPool) {
         "precondition"
     );
     reach.path.link = Link::Fk("personal_of".into());
+    let chunks = tables.get_mut("kb_chunks").expect("kb_chunks is grained");
+    let Grain::Covered { parent, .. } = &mut chunks.grain else {
+        panic!("kb_chunks is covered; the probe expects its parent");
+    };
+    assert_eq!(
+        (parent.table.as_str(), &parent.link),
+        ("kb_resources", &Link::Fk("resource_id".into())),
+        "precondition"
+    );
+    parent.table = "kb_content_blocks".into();
 
     let problems = catalog_problems(&policy, &catalog(&pool).await);
     assert_eq!(
         problems,
         [
+            "kb_chunks parent: no foreign key kb_chunks.resource_id -> kb_content_blocks",
             "kb_content_blocks parent: kb_content_blocks.resource_id has a foreign key; the link \
              is an `fk`",
-            "kb_teams also_reached: no foreign key kb_teams.personal_of -> kb_profiles; a uuid \
-             with no constraint is a `ref`",
+            "kb_teams also_reached: no foreign key kb_teams.personal_of -> kb_profiles",
         ]
     );
 }
@@ -601,6 +630,50 @@ fn a_covered_chain_through_an_ungrained_parent_is_reported() {
     );
 }
 
+/// The chain check's bite at a declared-out parent: with kb_block_revisions declared out,
+/// kb_block_content's chain stops there, and nothing else is reported.
+#[test]
+fn a_covered_chain_through_a_declared_out_parent_is_reported() {
+    let mut policy = in_force().clone();
+    let revisions = policy
+        .estate
+        .tables
+        .get_mut("kb_block_revisions")
+        .expect("precondition: kb_block_revisions is grained");
+    revisions.grain = Grain::DeclaredOut {
+        reason: "a probe".into(),
+        retention: None,
+    };
+    assert_eq!(
+        unended_chains(&policy),
+        ["kb_block_content: its covered chain reaches kb_block_revisions, which is declared out"]
+    );
+}
+
+/// The chain check's bite on a cycle: with kb_block_revisions' parent pointed back at
+/// kb_block_content, each of the two reports the cycle, and nothing else is reported. No other
+/// covered entry has either table as its parent, so the cycle is the whole of the change.
+#[test]
+fn a_covered_chain_that_cycles_is_reported() {
+    let mut policy = in_force().clone();
+    let revisions = policy
+        .estate
+        .tables
+        .get_mut("kb_block_revisions")
+        .expect("precondition: kb_block_revisions is grained");
+    let Grain::Covered { parent, .. } = &mut revisions.grain else {
+        panic!("kb_block_revisions is covered; the probe expects its parent");
+    };
+    parent.table = "kb_block_content".into();
+    assert_eq!(
+        unended_chains(&policy),
+        [
+            "kb_block_content: its covered chain cycles at kb_block_content",
+            "kb_block_revisions: its covered chain cycles at kb_block_revisions",
+        ]
+    );
+}
+
 /// FAILS IF: an identity table has a `scan` column the person act neither erases nor deletes, and
 /// no column-scoped gap records it. The grain would then read as erasing the whole row.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -639,5 +712,43 @@ async fn an_identity_scan_column_without_its_gap_is_reported(pool: PgPool) {
     assert_eq!(
         unreached_identity_scan_columns(&policy, &redaction(&pool).await),
         ["kb_connections.reach_affirmation"]
+    );
+}
+
+/// FAILS IF: a column-scoped gap on an identity table's `scan` column stands although the person
+/// act now reaches the column. The gap would keep reading as uncovered work that is done.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn no_identity_scan_gap_is_stale(pool: PgPool) {
+    let stale = stale_identity_scan_gaps(in_force(), &redaction(&pool).await);
+    assert!(
+        stale.is_empty(),
+        "`{REDACTION_FN}` now erases these columns, but policy/erasure/estate.toml still records \
+         them as column-scoped gaps. Remove the `also_reached` entry and close its task.\n\
+         Stale: {stale:#?}"
+    );
+}
+
+/// The staleness check's bite: a column-scoped gap added on kb_join_requests.message, which the
+/// act erases, is reported, and nothing else is.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_gap_on_a_column_the_act_reaches_is_reported(pool: PgPool) {
+    let mut policy = in_force().clone();
+    let tables = &mut policy.estate.tables;
+    let mut reach = tables["kb_connections"]
+        .also_reached
+        .iter()
+        .find(|reach| reach.column.as_deref() == Some("reach_affirmation"))
+        .expect("precondition: kb_connections records reach_affirmation as a gap")
+        .clone();
+    reach.column = Some("message".into());
+    tables
+        .get_mut("kb_join_requests")
+        .expect("kb_join_requests is grained")
+        .also_reached
+        .push(reach);
+
+    assert_eq!(
+        stale_identity_scan_gaps(&policy, &redaction(&pool).await),
+        ["kb_join_requests.message"]
     );
 }
