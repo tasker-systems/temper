@@ -28,6 +28,7 @@ pub mod grant_crypto;
 pub mod graph_service;
 pub mod intake_service;
 pub mod internal_call_health_service;
+pub mod internal_sig_service;
 pub mod invitation_service;
 pub mod lineage_service;
 pub(crate) mod machine_authz;

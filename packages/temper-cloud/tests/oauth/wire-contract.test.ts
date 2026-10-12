@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs";
 import { importSPKI, jwtVerify } from "jose";
 import { beforeAll, describe, expect, it } from "vitest";
-import { type ReconcileRequest, signReconcile } from "../../src/oauth/reconcile.js";
+import {
+  RECONCILE_DOOR,
+  RESOLVE_DOOR,
+  type ReconcileRequest,
+  signReconcile,
+  signRequestV2,
+} from "../../src/oauth/reconcile.js";
 import { RECONCILE_CHANNEL } from "../../src/oauth/reconcile-health.js";
 import type { ResolvePrincipalRequest, ResolvePrincipalResponse } from "../../src/oauth/resolve.js";
 
@@ -185,6 +191,28 @@ describe("internal reconcile signature (mirrors Rust temper_core::internal_sig)"
 
   it("produces the shared known-answer signature", () => {
     expect(signReconcile(KAT_SECRET, KAT_TIMESTAMP, KAT_BODY)).toBe(KAT_SIG);
+  });
+
+  // FAILS IF: a door drifts from the route temper-api registers (`internal_sig::DOORS`). Resolve
+  // is not covered by the vector below, and the signer tests compare against these constants.
+  it("names the routes temper-api registers", () => {
+    expect(RECONCILE_DOOR).toBe("/internal/saml/reconcile");
+    expect(RESOLVE_DOOR).toBe("/internal/principal/resolve");
+  });
+
+  // The v2 vector, asserted identically in crates/temper-core/tests/internal_sig_v2.rs
+  // (`sign_v2_matches_known_answer_vector`) and packages/agent-workflows/mention/tests/link.test.ts.
+  it("produces the shared v2 known-answer signature", () => {
+    expect(
+      signRequestV2(
+        KAT_SECRET,
+        "POST",
+        RECONCILE_DOOR,
+        KAT_TIMESTAMP,
+        "0123456789abcdef0123456789abcdef",
+        KAT_BODY,
+      ),
+    ).toBe("47385733b968d6043c77d0f515723b670636b69b40e3678e8fe82dfef890c65a");
   });
 });
 

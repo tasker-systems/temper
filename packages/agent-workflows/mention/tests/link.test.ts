@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertSlackSecretsDistinct,
   requestLinkState,
+  LINK_STATE_DOOR,
+  MINT_DOOR,
   signIntentRequest,
+  signRequestV2,
 } from "../agent/lib/link.js";
 
 describe("assertSlackSecretsDistinct", () => {
@@ -68,6 +71,36 @@ describe("signIntentRequest", () => {
       .digest("hex");
     expect(signature).toBe(expected);
     expect(signature).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+// FAILS IF: a door drifts from the route temper-api registers (`temper_core::internal_sig::DOORS`).
+// The v2 signature names the door, so a drifted string is a 401 on every mention once temper-api
+// requires v2 — and the header assertions below compare against these same constants, so only a
+// literal can catch it.
+describe("doors", () => {
+  it("name the routes temper-api registers", () => {
+    expect(LINK_STATE_DOOR).toBe("/internal/slack/link-state");
+    expect(MINT_DOOR).toBe("/internal/slack/mint");
+  });
+});
+
+describe("signRequestV2", () => {
+  // The v2 known-answer vector, asserted identically in crates/temper-core/tests/internal_sig_v2.rs
+  // (`sign_v2_matches_known_answer_vector`) and packages/temper-cloud/tests/oauth/wire-contract.test.ts.
+  it("matches the shared v2 known-answer signature", () => {
+    const body =
+      '{"provider":"saml:acme","external_user_id":"nid-1","email":"a@corp.io","email_verified":true,"idp_key":"acme","groups":["engineering"]}';
+    expect(
+      signRequestV2(
+        "topsecret-abcdefghijklmnopqrstuvwxyz012345",
+        "POST",
+        "/internal/saml/reconcile",
+        "1750000000",
+        "0123456789abcdef0123456789abcdef",
+        body,
+      ),
+    ).toBe("47385733b968d6043c77d0f515723b670636b69b40e3678e8fe82dfef890c65a");
   });
 });
 
@@ -140,6 +173,21 @@ describe("requestLinkState", () => {
     const headers = init.headers as Record<string, string>;
     expect(headers["X-Temper-Signature"]).toMatch(/^[0-9a-f]{64}$/);
     expect(headers["X-Temper-Timestamp"]).toMatch(/^\d+$/);
+
+    // FAILS IF: the v2 signature names a door other than link-state, or no fresh nonce. temper
+    // holds a v2 signature to the door it names, so a wrong door here is a 401 on every mention.
+    const nonce = headers["X-Temper-Nonce"];
+    expect(nonce).toMatch(/^[0-9a-f]{32}$/);
+    expect(headers["X-Temper-Signature-V2"]).toBe(
+      signRequestV2(
+        "s3cret",
+        "POST",
+        LINK_STATE_DOOR,
+        headers["X-Temper-Timestamp"],
+        nonce,
+        init.body as string,
+      ),
+    );
   });
 
   it("throws on a non-2xx so the channel can say something honest", async () => {

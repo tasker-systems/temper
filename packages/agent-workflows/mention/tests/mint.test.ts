@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { LINK_STATE_DOOR, MINT_DOOR, signRequestV2 } from "../agent/lib/link.js";
 import { requestMintedToken } from "../agent/lib/mint.js";
 
 describe("requestMintedToken", () => {
@@ -68,6 +69,15 @@ describe("requestMintedToken", () => {
 
     expect(headers["X-Temper-Signature"]).toBe(withMint);
     expect(headers["X-Temper-Signature"]).not.toBe(withLink);
+
+    // The v2 signature: the mint key, the mint door, this request's nonce.
+    const nonce = headers["X-Temper-Nonce"];
+    expect(nonce).toMatch(/^[0-9a-f]{32}$/);
+    const v2 = (secret: string, door: string) =>
+      signRequestV2(secret, "POST", door, timestamp, nonce, init.body as string);
+    expect(headers["X-Temper-Signature-V2"]).toBe(v2(MINT_SECRET, MINT_DOOR));
+    expect(headers["X-Temper-Signature-V2"]).not.toBe(v2(LINK_SECRET, MINT_DOOR));
+    expect(headers["X-Temper-Signature-V2"]).not.toBe(v2(MINT_SECRET, LINK_STATE_DOOR));
   });
 
   // FAILS IF: SLACK_MINT_SECRET stops being required — e.g. someone "helpfully" falls back to

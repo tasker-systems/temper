@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { logger } from "../logger.js";
 import { requireEnv } from "./env.js";
 import { InternalCallError } from "./reconcile-health.js";
@@ -20,6 +20,56 @@ export const SIGNATURE_HEADER = "X-Temper-Signature";
  */
 export function signReconcile(secret: string, timestamp: number, body: string): string {
   return createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex");
+}
+
+/** Header carrying the v2 construction's per-request nonce. */
+export const NONCE_HEADER = "X-Temper-Nonce";
+/** Header carrying the v2 construction's lowercase-hex signature. */
+export const SIGNATURE_V2_HEADER = "X-Temper-Signature-V2";
+/** The reconcile route as temper-api registers it (`internal_sig::DOOR_SAML_RECONCILE`). */
+export const RECONCILE_DOOR = "/internal/saml/reconcile";
+/** The resolve route as temper-api registers it (`internal_sig::DOOR_PRINCIPAL_RESOLVE`). */
+export const RESOLVE_DOOR = "/internal/principal/resolve";
+
+/**
+ * The v2 construction: `"v2\n{METHOD}\n{door}\n{timestamp}\n{nonce}\n{body}"`, lowercase hex.
+ * Mirrors `temper_core::internal_sig::sign_v2`; pinned by the v2 known-answer vector in
+ * tests/oauth/wire-contract.test.ts. `door` is the route temper-api registers, never the URL we
+ * post to, so a prefix or rewrite in front of the API does not break it. Binding the door and a
+ * nonce is what lets the verifier accept a signature at one door, once.
+ */
+export function signRequestV2(
+  secret: string,
+  method: string,
+  door: string,
+  timestamp: number,
+  nonce: string,
+  body: string,
+): string {
+  return createHmac("sha256", secret)
+    .update(`v2\n${method}\n${door}\n${timestamp}\n${nonce}\n${body}`)
+    .digest("hex");
+}
+
+/**
+ * Both constructions' headers for one signed POST. Signers send both until every verifier
+ * requires v2: a verifier that still reads only the original construction keeps working, and one
+ * that requires v2 never has to accept the original, so the cutover never reopens the gaps v2
+ * closes. Drop the original pair once no verifier reads it.
+ */
+export function signedHeaders(
+  secret: string,
+  door: string,
+  timestamp: number,
+  body: string,
+): Record<string, string> {
+  const nonce = randomBytes(16).toString("hex");
+  return {
+    [TIMESTAMP_HEADER]: String(timestamp),
+    [SIGNATURE_HEADER]: signReconcile(secret, timestamp, body),
+    [NONCE_HEADER]: nonce,
+    [SIGNATURE_V2_HEADER]: signRequestV2(secret, "POST", door, timestamp, nonce, body),
+  };
 }
 
 /**
@@ -78,8 +128,8 @@ function transportDetail(err: unknown): string {
 
 /**
  * Calls the internal temper-api reconcile endpoint (server-to-server), signing the request with
- * `HMAC(secret, "{timestamp}.{body}")` so the secret never crosses the wire and a captured request
- * is replay-proof. Throws on transport error or non-2xx — the ACS handler catches and proceeds
+ * `signedHeaders` so the secret never crosses the wire and the API accepts the request at this door,
+ * once. Throws on transport error or non-2xx — the ACS handler catches and proceeds
  * (fail-open), so a provisioning hiccup never blocks login. The verifier is temper-api's
  * `require_internal_signature` middleware.
  */
@@ -89,15 +139,13 @@ export async function reconcileMemberships(payload: ReconcileRequest): Promise<v
   // Sign the exact body string we send — raw-body discipline, no re-serialization.
   const body = JSON.stringify(payload);
   const timestamp = Math.floor(Date.now() / 1000);
-  const signature = signReconcile(secret, timestamp, body);
   let res: Response;
   try {
     res = await fetch(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        [TIMESTAMP_HEADER]: String(timestamp),
-        [SIGNATURE_HEADER]: signature,
+        ...signedHeaders(secret, RECONCILE_DOOR, timestamp, body),
       },
       body,
       // Fail-open is only a mercy if it fails FAST. Both callers catch and carry on, but an

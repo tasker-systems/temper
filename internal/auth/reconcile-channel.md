@@ -11,19 +11,37 @@ Source: `crates/temper-api/src/middleware/internal_auth.rs` (the HMAC gate),
 
 ## Trust model: an HMAC signature over the body
 
-The AS signs each request with `HMAC-SHA256(secret, "{timestamp}.{raw_body}")` and sends two
-headers; the API (`require_internal_signature`) recomputes the MAC over the bytes it received
-and rejects a stale timestamp. Two wins over sending the secret in a header:
+The AS signs each request with the v2 construction,
+`HMAC-SHA256(secret, "v2\n{METHOD}\n{door}\n{timestamp}\n{nonce}\n{raw_body}")`, and the API
+(`require_internal_signature` → `internal_sig_service::accept_once`) recomputes the MAC over the
+bytes it received, for the route the request matched. `door` is the route as the API registers it
+(`temper_core::internal_sig::DOORS`), never the URL the AS posts to, so a prefix or rewrite in
+front of the API changes nothing. Three properties:
 
 - **The secret never crosses the wire.** Only a signature derived from it travels, so a
   captured request never leaks the secret.
-- **Captured requests are replay-proof.** The signed timestamp must be within ±30s of the
-  verifier's clock (`temper_core::internal_sig::MAX_SKEW_SECS`); a replayed request is stale.
+- **A signature is good once.** The timestamp must be within ±30s of the verifier's clock
+  (`MAX_SKEW_SECS`), and the API records each accepted nonce in `kb_internal_signature_nonces`
+  until it can no longer be fresh, so a replay inside the window is refused. The table is shared
+  by every API instance, so "once" holds across instances. A row is written only after the MAC
+  verifies, so nobody without the key can add one.
+- **A signature is good for one door.** Reconcile and resolve share a key; a body signed for one
+  is refused at the other, and the log says `cross_door` rather than `signature_mismatch`.
 
 | Header | Value |
 |--------|-------|
 | `X-Temper-Timestamp` | Unix seconds the signature was computed at |
-| `X-Temper-Signature` | lowercase-hex `HMAC-SHA256(secret, "{timestamp}.{body}")` |
+| `X-Temper-Nonce` | 32 lowercase hex characters of fresh randomness |
+| `X-Temper-Signature-V2` | lowercase-hex v2 signature (above) |
+
+The AS also still sends `X-Temper-Signature`, the original `"{timestamp}.{body}"` construction,
+which bound neither door nor occasion. The API ignores it: it is there only for a verifier that
+predates v2, and a verifier that accepted it would reopen both gaps to anyone who stripped the v2
+headers from a capture. Removing it from the signers is the last step of the cutover.
+
+Every refusal answers the same 401 on the wire; the log line carries a bounded `reason`
+(`stale`, `malformed_nonce`, `signature_mismatch`, `cross_door`, `replayed`, `missing_headers`,
+`unknown_door`).
 
 Still **fail-closed**: if `INTERNAL_RECONCILE_SECRET` is unset the endpoint is disabled and
 every request is rejected, so an unconfigured instance simply does no group provisioning
@@ -39,8 +57,8 @@ canonicalization to drift on — the same discipline every major webhook signatu
 skew window); the TS signer (`packages/temper-cloud/src/oauth/reconcile.ts`) and the Rust
 verifier are pinned together by a **shared known-answer test vector** (asserted in both
 `internal_sig.rs` and `tests/oauth/wire-contract.test.ts`), so they cannot drift on the HMAC
-construction. Rejection is verified end-to-end for wrong-secret, stale-timestamp, and
-tampered-body in `crates/temper-api/tests/internal_saml_test.rs`.
+construction. Rejection is verified end-to-end for wrong-secret, stale-timestamp, tampered-body,
+replay, cross-door and the original construction in `crates/temper-api/tests/internal_saml_test.rs`.
 
 ### Secret strength & rotation
 

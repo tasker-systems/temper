@@ -1,6 +1,6 @@
 import { logger } from "../logger.js";
 import { requireEnv } from "./env.js";
-import { SIGNATURE_HEADER, signReconcile, TIMESTAMP_HEADER } from "./reconcile.js";
+import { RESOLVE_DOOR, signedHeaders } from "./reconcile.js";
 
 /** Ceiling on an internal server-to-server call, so a slow dependency fails open rather than hanging. */
 const INTERNAL_CALL_TIMEOUT_MS = 5000;
@@ -39,8 +39,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * silence — the join would match nothing, `standing_service::apply` would revoke nothing, and
  * nothing anywhere would say so. Asking the side that owns the config keeps one answer.
  *
- * Shares the reconcile gate's key and signing scheme (`INTERNAL_RECONCILE_SECRET`, HMAC over
- * `{timestamp}.{raw body}`) because it is the same caller making the same kind of call at the same
+ * Shares the reconcile gate's key and signing scheme (`INTERNAL_RECONCILE_SECRET`, `signedHeaders`
+ * for this door) because it is the same caller making the same kind of call at the same
  * trust level. Throws on transport error or non-2xx; every caller treats that as "no owner yet"
  * rather than as a reason to refuse a login.
  */
@@ -52,13 +52,11 @@ export async function resolvePrincipal(
   // Sign the exact body string we send — raw-body discipline, no re-serialization.
   const body = JSON.stringify(payload);
   const timestamp = Math.floor(Date.now() / 1000);
-  const signature = signReconcile(secret, timestamp, body);
   const res = await fetch(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      [TIMESTAMP_HEADER]: String(timestamp),
-      [SIGNATURE_HEADER]: signature,
+      ...signedHeaders(secret, RESOLVE_DOOR, timestamp, body),
     },
     body,
     // Fail-open is only a mercy if it fails FAST. Both callers catch and carry on, but an

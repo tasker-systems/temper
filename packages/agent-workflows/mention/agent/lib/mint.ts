@@ -1,14 +1,15 @@
 import {
   assertSlackSecretsDistinct,
   requireEndpointEnv,
+  MINT_DOOR,
   requireEnv,
-  signIntentRequest,
+  signedHeaders,
 } from "./link.js";
 
 /**
  * The act-as-the-human mint call: agent -> temper-api.
  *
- * Same signing scheme as the link-state call (`signIntentRequest`, reused rather than
+ * Same signing scheme as the link-state call (`signedHeaders`, reused rather than
  * reimplemented), but keyed on a DIFFERENT secret and that is load-bearing, not tidiness.
  * `SLACK_LINK_SECRET` gates an endpoint that answers a question — "is this principal linked?".
  * `SLACK_MINT_SECRET` gates one that hands back a token carrying that human's ENTIRE temper
@@ -134,9 +135,7 @@ export async function requestMintedToken(principalId: string): Promise<MintOutco
   const secret = requireEnv("SLACK_MINT_SECRET");
 
   const body = JSON.stringify({ slack_principal_id: principalId });
-  const { timestamp, signature } = signIntentRequest(secret, Date.now() / 1000, body);
-
-  const res = await fetch(`${baseUrl.replace(/\/$/, "")}/internal/slack/mint`, {
+  const res = await fetch(`${baseUrl.replace(/\/$/, "")}${MINT_DOOR}`, {
     method: "POST",
     // Never follow a redirect. fetch strips `Authorization` on a cross-origin hop but resends
     // these signature headers and the body, and the signature does not cover the host — so a 307 to
@@ -144,8 +143,7 @@ export async function requestMintedToken(principalId: string): Promise<MintOutco
     redirect: "error",
     headers: {
       "content-type": "application/json",
-      "X-Temper-Timestamp": timestamp,
-      "X-Temper-Signature": signature,
+      ...signedHeaders(secret, MINT_DOOR, Date.now() / 1000, body),
     },
     body,
   });
