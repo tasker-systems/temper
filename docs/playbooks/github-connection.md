@@ -829,14 +829,20 @@ guessing the event name from the payload.
 names the whole Vercel team in `aud`, so two more checks bind it to one receipt for this project:
 its `project_id` must be `VERCEL_CONNECT_PROJECT_ID`, and the same attestation is accepted once
 (temper records a hash of it, never the token, until it expires). With
-`VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING` unset, a failed check logs
+`VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING` unset (the startup log says
+`inbound attestation binding: observing`), a failed check logs
 `inbound attestation: would refuse once binding is enforced` with `reason` = `project_mismatch` or
 `replayed`, and the webhook still lands. Let real traffic run for a day or so: if no such line
-appears, set the variable to `true` and redeploy. A `project_mismatch` line means
-`VERCEL_CONNECT_PROJECT_ID` is not the project Connect forwards to. A `replayed` line on ordinary
-traffic means Connect sent one attestation more than once, and enforcing would refuse those
-repeats; investigate before enforcing. Once enforced, both refusals are the same opaque `401` as
-any other, with the reason in the log.
+appears, set the variable to `true` and redeploy; the startup log then says `enforced`. A value the
+API cannot read as a boolean also enforces, and logs an error saying so.
+
+A `project_mismatch` line means `VERCEL_CONNECT_PROJECT_ID` is not the project Connect forwards
+to. A `replayed` line on ordinary traffic means Connect sent one attestation more than once, and
+enforcing would refuse those repeats; investigate before enforcing. Once enforced, both refusals
+are the same opaque `401` as any other, with the reason in the log. One more case then fails
+closed: a receipt cut off mid-flight (the function timed out or was killed after the attestation
+was recorded) keeps its record, so a redelivery under that same attestation is refused, while a
+redelivery under a fresh attestation lands.
 
 **`401` on `/api/intake/webhook`** — the attestation verified but resolved to no
 live credentialed connection. Either Step 6 has not been completed for this

@@ -75,6 +75,11 @@ fn attestation(connector_uid: &str) -> String {
 /// An attestation for `connector_uid` issued to `project_id` at `iat` — a second forward is a second
 /// attestation, which differs from the first in `iat` if in nothing else.
 fn attestation_issued(connector_uid: &str, project_id: &str, iat: i64) -> String {
+    attestation_full(connector_uid, project_id, iat, 9_999_999_999)
+}
+
+/// An attestation with every varying claim chosen, including when it expires.
+fn attestation_full(connector_uid: &str, project_id: &str, iat: i64, exp: i64) -> String {
     let claims = serde_json::json!({
         "iss": format!("https://oidc.vercel.com/{TEAM_SLUG}"),
         "aud": format!("https://vercel.com/{TEAM_SLUG}"),
@@ -82,7 +87,7 @@ fn attestation_issued(connector_uid: &str, project_id: &str, iat: i64) -> String
         "project_id": project_id,
         "client_id": "api-connex",
         "iat": iat,
-        "exp": 9_999_999_999_i64,
+        "exp": exp,
         "trigger": {
             "id": "scl_test",
             "uid": connector_uid,
@@ -655,4 +660,33 @@ async fn an_enforced_binding_refuses_another_projects_attestation(pool: PgPool) 
         .expect("body");
     assert_eq!(sibling_body, forged_body, "one answer for every refusal");
     assert_eq!(webhook_event_count(&pool, conn).await, 0);
+}
+
+/// An attestation still verifies for the verifier's clock-skew leeway past its `exp`, so it must be
+/// remembered at least that long. Here one already past `exp` — accepted on leeway — is presented,
+/// another receipt's claim runs the prune, and the first is presented again: still refused.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_enforced_binding_remembers_an_attestation_through_its_leeway(pool: PgPool) {
+    let (_team, conn) = seed_world(&pool, Some(pr_selector())).await;
+    let app =
+        common::setup_test_app_with_state(pool.clone(), |s| s.broker = enforcing_broker()).await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs() as i64;
+    let expired_on_leeway = attestation_full(CONNECTOR_UID, PROJECT_ID, now - 600, now - 20);
+
+    assert_eq!(
+        post_pr(&app, &expired_on_leeway, true).await,
+        StatusCode::ACCEPTED,
+        "still inside the verifier's leeway"
+    );
+    let other = attestation_issued(CONNECTOR_UID, PROJECT_ID, now);
+    assert_eq!(post_pr(&app, &other, true).await, StatusCode::ACCEPTED);
+    assert_eq!(
+        post_pr(&app, &expired_on_leeway, true).await,
+        StatusCode::UNAUTHORIZED,
+        "pruned at exp, the replay would claim the attestation afresh"
+    );
+    assert_eq!(webhook_event_count(&pool, conn).await, 2);
 }

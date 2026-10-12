@@ -36,7 +36,15 @@ pub use vercel_connect::{VercelConnectBroker, VercelConnectConfig};
 /// `resolve_token_store`. Tests inject a [`FakeBroker`] directly.
 pub fn resolve_broker(vercel: Option<VercelConnectConfig>) -> Arc<dyn CredentialBroker> {
     match vercel {
-        Some(cfg) => Arc::new(VercelConnectBroker::new(cfg)),
+        Some(cfg) => {
+            // Said once at startup, so an operator who set the flag can see whether it took.
+            if cfg.enforce_attestation_binding {
+                tracing::info!("inbound attestation binding: enforced (repeats and other projects' attestations are refused)");
+            } else {
+                tracing::info!("inbound attestation binding: observing (would-be refusals are logged; set VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING=true to enforce)");
+            }
+            Arc::new(VercelConnectBroker::new(cfg))
+        }
         None => Arc::new(NullBroker),
     }
 }
@@ -135,8 +143,9 @@ pub struct VerifiedInbound {
     /// presented. A replay presents the same bearer, so it carries the same key; the bearer itself
     /// is never stored.
     pub replay_key: String,
-    /// When the attestation stops being accepted (Unix seconds, its signed `exp`). A replay key
-    /// need not be remembered past this.
+    /// Until when a repeat must be recognised (Unix seconds): the signed `exp`, plus the verifier's
+    /// clock-skew leeway (it accepts the token that long past `exp`), plus the leeway again for API
+    /// instances whose clocks disagree. A replay key need not be remembered past this.
     pub expires_at: i64,
     /// Whether the broker's binding checks refuse, or only report. While `false`, a replayed
     /// attestation or one issued to another project is logged as a would-be refusal and still
@@ -145,6 +154,11 @@ pub struct VerifiedInbound {
 }
 
 /// The single-use key for an attestation bearer: its lowercase-hex SHA-256.
+///
+/// Sound only while a verified token has exactly one valid encoding, which holds for the
+/// deterministic signatures `JwksKeyStore` accepts (RS256, EdDSA) under jsonwebtoken's strict
+/// base64url decoding. ECDSA would break it; `state.rs`'s
+/// `is_supported_key_refuses_ecdsa_because_replay_keys_assume_one_signature_per_token` holds the line.
 pub fn replay_key(bearer: &str) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(bearer.as_bytes()))

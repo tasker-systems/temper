@@ -30,8 +30,10 @@
 //!   (goal C4) and a routed-nowhere payload is a well-formed act the system said no to. Returning
 //!   non-2xx would make GitHub retry a payload temper deliberately routed nowhere — and retry it
 //!   to the same conclusion, forever.
-//! - An unverifiable attestation and an unknown connector return the **same** 401 with the same
-//!   body. A probe must not learn whether a connector is provisioned by diffing responses.
+//! - An unverifiable attestation, an unknown connector, and — once the binding is enforced — an
+//!   attestation issued to another project or presented a second time all return the **same** 401
+//!   with the same body. A probe must not learn whether a connector is provisioned, or how far its
+//!   attestation got, by diffing responses.
 //! - Everything temper cannot do — an ambiguous connector, a provider with no event-name rule — is
 //!   a **500**, because the system is unable to act rather than saying no. A retry is then the
 //!   right behaviour: the condition is a misconfiguration someone will fix.
@@ -45,7 +47,7 @@ use uuid::Uuid;
 
 use temper_services::broker::InboundRequest;
 use temper_services::error::{ApiError, ApiResult};
-use temper_services::services::intake_service::{self, ProviderEvent};
+use temper_services::services::intake_service::{self, AttestationSeen, ProviderEvent, Receipt};
 use temper_services::services::{connection_service, intake_service as intake};
 use temper_services::state::AppState;
 
@@ -115,56 +117,7 @@ pub async fn receive(
         other => other,
     })?;
 
-    // 3. Once per attestation. A captured attestation verifies until its `exp` (twelve hours), so
-    //    it is recorded on first acceptance and a repeat is recognised. Whether a repeat is
-    //    refused or only reported is the broker's binding flag: the record is kept either way,
-    //    which is what lets the log show repeats before anything refuses one. Refused, it is the
-    //    same 401 as every other refusal here.
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let claimed =
-        intake::claim_attestation(&state.pool, &verified.replay_key, verified.expires_at, now)
-            .await?;
-    if !claimed {
-        if verified.binding_enforced {
-            tracing::warn!(reason = "replayed", "inbound webhook attestation refused");
-            return Err(ApiError::Unauthorized(REFUSAL.to_string()));
-        }
-        tracing::warn!(
-            reason = "replayed",
-            would_refuse = true,
-            "inbound attestation: would refuse once binding is enforced"
-        );
-    }
-
-    // A receipt that fails from here on was never recorded, so its claim is released: a
-    // redelivery of it is not a replay. A repeat that was only reported holds no claim of its own.
-    match record(&state, connection.id, &verified.provider, &headers, &body).await {
-        Ok(accepted) => Ok(accepted),
-        Err(e) => {
-            if claimed {
-                if let Err(release) =
-                    intake::release_attestation(&state.pool, &verified.replay_key).await
-                {
-                    tracing::error!(error = %release, "could not release a failed receipt's attestation");
-                }
-            }
-            Err(e)
-        }
-    }
-}
-
-/// Steps 4 and 5 of [`receive`]: read the event name and hand the receipt over.
-async fn record(
-    state: &AppState,
-    connection_id: Uuid,
-    provider: &str,
-    headers: &HeaderMap,
-    body: &Bytes,
-) -> ApiResult<(StatusCode, Json<WebhookAccepted>)> {
-    // 4. Read the provider's own event name. `provider` comes from the signed `trigger` claim, so
+    // 3. Read the provider's own event name. `provider` comes from the signed `trigger` claim, so
     //    the *dispatch* is attested even though the value it selects is not.
     //
     //    A provider with a rule whose header is absent is a FAILURE, not a refusal: the event name
@@ -174,16 +127,34 @@ async fn record(
     //    (research `019f62e6`: "whether Connect adds any provider-specific header for GitHub …
     //    assume the same, verify when B5's read-only App exists"), so this is the branch that
     //    makes that assumption fail loudly on the first real forward rather than quietly.
-    let event_type = provider_event_type(provider, headers)?;
+    let event_type = provider_event_type(&verified.provider, &headers)?;
 
-    // 5. Hand over. Everything below here shipped in chunks B and C.
-    let event_id = intake::receive_webhook(
+    // 4. Hand over, once per attestation. A captured attestation verifies until past its `exp`
+    //    (twelve hours), so the receipt records it in the same transaction as the event: it is
+    //    spent exactly when a receipt lands, and a receipt that fails or is cut off never spends
+    //    it. Whether a repeat is refused or only reported is the broker's binding flag; refused,
+    //    it is the same 401 as every other refusal here.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let receipt = intake::receive_attested_webhook(
         &state.pool,
-        connection_id,
+        connection.id,
         ProviderEvent::from_header(&event_type),
-        &parse_payload(body)?,
+        &parse_payload(&body)?,
+        AttestationSeen {
+            replay_key: &verified.replay_key,
+            expires_at: verified.expires_at,
+            now,
+            enforced: verified.binding_enforced,
+        },
     )
     .await?;
+    let event_id = match receipt {
+        Receipt::Recorded(event_id) => event_id,
+        Receipt::RefusedAsReplay => return Err(ApiError::Unauthorized(REFUSAL.to_string())),
+    };
 
     // 202, not 200: temper has accepted and durably recorded the receipt, and what any subscriber
     // makes of it happens later, on a steward's own tick. A payload that matched zero

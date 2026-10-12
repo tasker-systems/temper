@@ -567,9 +567,33 @@ fn parse_vercel_connect(lookup: impl Fn(&str) -> Option<String>) -> Option<Verce
         project_id: get("VERCEL_CONNECT_PROJECT_ID")?,
         team_id: get("VERCEL_CONNECT_TEAM_ID")?,
         team_slug: get("VERCEL_CONNECT_TEAM_SLUG")?,
-        enforce_attestation_binding: get("VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING")
-            .is_some_and(|v| v == "true" || v == "1"),
+        enforce_attestation_binding: parse_enforce_flag(
+            lookup("VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING").as_deref(),
+        ),
     })
+}
+
+/// `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING`, read so that a mistyped value never quietly means
+/// "observe". Unset or empty is off, the documented default. `true`/`1`/`yes`/`on` and
+/// `false`/`0`/`no`/`off` are read in any case, trimmed. Anything else is a value someone set
+/// meaning *something*, and the safe reading of an unreadable security switch is on: it enforces,
+/// and says so.
+fn parse_enforce_flag(raw: Option<&str>) -> bool {
+    let Some(value) = raw.map(str::trim).filter(|v| !v.is_empty()) else {
+        return false;
+    };
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => true,
+        "false" | "0" | "no" | "off" => false,
+        _ => {
+            tracing::error!(
+                value,
+                "VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING is not a recognised boolean; \
+                 enforcing the attestation binding"
+            );
+            true
+        }
+    }
 }
 
 /// Build the Slack link config from env — `Some` only when all FOUR values are present, non-empty,
@@ -711,6 +735,23 @@ fn check_secret_distinctness(lookup: impl Fn(&str) -> Option<String>) -> Result<
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_enforce_flag_reads_any_spelling_and_fails_closed_on_nonsense() {
+        assert!(!super::parse_enforce_flag(None));
+        assert!(!super::parse_enforce_flag(Some("")));
+        assert!(!super::parse_enforce_flag(Some("  ")));
+        for on in ["true", "TRUE", " True ", "1", "yes", "On"] {
+            assert!(super::parse_enforce_flag(Some(on)), "{on:?} enforces");
+        }
+        for off in ["false", "FALSE", "0", "no", " off "] {
+            assert!(!super::parse_enforce_flag(Some(off)), "{off:?} observes");
+        }
+        assert!(
+            super::parse_enforce_flag(Some("ture")),
+            "an unreadable security switch reads as on"
+        );
+    }
     use super::*;
     use std::collections::HashMap;
 

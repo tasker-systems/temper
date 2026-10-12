@@ -171,11 +171,17 @@ async fn verify_inbound_impl(
         );
     }
 
+    // How long a repeat must be recognised: as long as this verifier would still accept the
+    // token, which is past `exp` by the store's clock-skew leeway, and the leeway again for API
+    // instances whose clocks disagree. Remembering it only until `exp` left the leeway window open:
+    // the row was pruned while the token still verified, and a replay claimed it afresh.
+    let leeway = JwksKeyStore::CLOCK_SKEW_LEEWAY_SECONDS as i64;
     let expires_at = data
         .claims
         .get("exp")
         .and_then(|v| v.as_i64())
-        .ok_or_else(|| BrokerError::Verification("attestation `exp` is not an integer".into()))?;
+        .ok_or_else(|| BrokerError::Verification("attestation `exp` is not an integer".into()))?
+        .saturating_add(2 * leeway);
 
     Ok(VerifiedInbound {
         provider: trigger.provider,
@@ -473,7 +479,9 @@ mod verify_inbound_tests {
             .expect("verify");
         assert_eq!(v.replay_key, crate::broker::replay_key(&token));
         assert!(!v.replay_key.contains(&token));
-        assert_eq!(v.expires_at, 9_999_999_999);
+        // Past `exp` by the verifier's leeway, and the leeway again.
+        let leeway = JwksKeyStore::CLOCK_SKEW_LEEWAY_SECONDS as i64;
+        assert_eq!(v.expires_at, 9_999_999_999 + 2 * leeway);
         assert!(v.binding_enforced);
     }
 

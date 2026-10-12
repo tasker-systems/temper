@@ -6,9 +6,11 @@
 -- Connect's attestation carries no jti, so the key is the SHA-256 of the bearer as presented: a
 -- replay presents the same bearer. The bearer itself is never stored.
 --
--- A row is kept until the attestation's exp; nothing reads it after. The intake deletes expired rows
--- as it claims new ones. A receipt that fails after its claim releases it, so a redelivery of an
--- event temper never recorded is not refused as a replay.
+-- A row is kept until the attestation can no longer verify (its exp plus the verifier's clock-skew
+-- leeway, and the leeway again for instances whose clocks disagree); nothing reads it after. The
+-- intake deletes expired rows as it claims new ones. The row is written in the same transaction as
+-- the receipt's event, so a receipt that fails or is cut off never records its attestation, and a
+-- redelivery of an event temper never recorded is not a replay.
 --
 -- Whether a repeat is refused or only reported is VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING's:
 -- the table records either way, which is what lets the log say a repeat happened before anything
