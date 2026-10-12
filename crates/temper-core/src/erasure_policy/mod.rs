@@ -801,22 +801,13 @@ refine = [
     #[test]
     fn a_rule_reason_or_retention_is_never_blank() {
         for (from, to) in [
-            (
-                r#"rule = "the subject's @me contexts""#,
-                r#"rule = "  ""#,
-            ),
-            (
-                r#"reason = "the ledger is append-only""#,
-                r#"reason = " ""#,
-            ),
+            (r#"rule = "the subject's @me contexts""#, r#"rule = "  ""#),
+            (r#"reason = "the ledger is append-only""#, r#"reason = " ""#),
             (
                 r#"retention = "credential-replay-evidence""#,
                 r#"retention = "  ""#,
             ),
-            (
-                r#"retention = "moderation-record""#,
-                r#"retention = """#,
-            ),
+            (r#"retention = "moderation-record""#, r#"retention = """#),
         ] {
             let estate = estate_with(from, to);
             let text = fails_in(
