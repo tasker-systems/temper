@@ -32,6 +32,10 @@ vi.mock("../agent/lib/mint.js", () => ({ requestMintedToken }));
 const PRINCIPAL = "slack:T012AB3CD:U024BE7LH";
 const USER_ID = "U024BE7LH";
 
+/** The re-link URL temper issues on the mint's `not_vaulted` refusal. */
+const RELINK_URL = "https://temper.test/authorize/relink-456";
+const NOT_VAULTED = { status: "refused", reason: "not_vaulted", authorize_url: RELINK_URL } as const;
+
 /** A human `SessionAuthContext`, reduced to what the channel reads. */
 function humanAuth() {
   return {
@@ -102,9 +106,9 @@ describe("onAppMention — the mint pre-flight", () => {
   // FAILS IF: a not_vaulted user is DISPATCHED. That is the headline bug this fork exists to
   // prevent — the turn would die inside `getToken` and the user would get `turn.failed`'s
   // deliberately detail-free line instead of the one message that tells them what to do.
-  it("never dispatches a not_vaulted user, and says something specific instead", async () => {
+  it("never dispatches a not_vaulted user, and hands them the re-link URL instead", async () => {
     requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
-    requestMintedToken.mockResolvedValue({ status: "refused", reason: "not_vaulted" });
+    requestMintedToken.mockResolvedValue(NOT_VAULTED);
     const { ctx, request, post } = fakeCtx();
 
     const result = await mention(ctx);
@@ -112,10 +116,12 @@ describe("onAppMention — the mint pre-flight", () => {
     expect(result).toBeNull();
     const [text] = ephemeralTexts(request);
     expect(text).toBeDefined();
-    // The load-bearing content: retrying is futile, and here is the remedy.
+    // The load-bearing content: retrying is futile, and here is the remedy — usable from Slack,
+    // with no CLI round trip.
     expect(text).toMatch(/won't fix/i);
-    expect(text).toContain("temper slack disconnect");
-    // Private, always. A credential-adjacent status line must not reach the channel.
+    expect(text).toContain(RELINK_URL);
+    expect(text).not.toContain("temper slack disconnect");
+    // Private, always. The URL is a credential and must not reach the channel.
     expect(post).not.toHaveBeenCalled();
   });
 
@@ -137,6 +143,7 @@ describe("onAppMention — the mint pre-flight", () => {
     const [text] = ephemeralTexts(request);
     expect(text).toMatch(/admin/i);
     expect(text).not.toContain("temper slack disconnect");
+    expect(text).not.toContain("http");
     expect(post).not.toHaveBeenCalled();
   });
 
@@ -157,7 +164,7 @@ describe("onAppMention — the mint pre-flight", () => {
     // One per REMEDY, which is the axis the copy splits on: re-link, admin-decides,
     // wait, our-bug, and the link-vanished race.
     const refusals = [
-      { status: "refused", reason: "not_vaulted" },
+      NOT_VAULTED,
       { status: "refused", reason: "standing", refusal: { kind: "denied" } },
       { status: "refused", reason: "standing", refusal: { kind: "requested" } },
       { status: "refused", reason: "standing", refusal: { kind: "unrecognized_standing", raw: "x" } },
@@ -176,16 +183,20 @@ describe("onAppMention — the mint pre-flight", () => {
 
     expect(replies).toHaveLength(refusals.length + 1);
     expect(new Set(replies).size).toBe(refusals.length + 1);
-    // And the unlinked one is the only one carrying a URL — every refusal is reached from
-    // the `linked` arm, which has none to offer.
-    expect(replies.filter((r) => r.includes("http"))).toHaveLength(1);
+    // Exactly two carry a URL: unlinked (first link) and not_vaulted (re-link), each the URL
+    // temper issued for it. No other refusal is fixed by linking, so a URL anywhere else is
+    // invented or a false remedy.
+    const withUrl = replies.filter((r) => r.includes("http"));
+    expect(withUrl).toHaveLength(2);
+    expect(withUrl[0]).toContain("https://temper.test/authorize/abc123");
+    expect(withUrl[1]).toContain(RELINK_URL);
   });
 
   // FAILS IF: the mint is called with anything but the whole principal, or the pre-flight is
   // moved after the dispatch (in which case it would not run at all on this path).
   it("mints for the WHOLE principal before deciding", async () => {
     requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });
-    requestMintedToken.mockResolvedValue({ status: "refused", reason: "not_vaulted" });
+    requestMintedToken.mockResolvedValue(NOT_VAULTED);
 
     await mention(fakeCtx().ctx);
 
@@ -351,7 +362,7 @@ describe("onAppMention — an unrecognized mint status", () => {
   // FAILS IF: the INNER switch loses its `default:`. The outer one being covered proves
   // nothing about the inner one — a refusal with an unknown `reason` gets past `case
   // "refused"` and then falls out of the nested switch, which is the same silent-undefined
-  // death one level down. This is the arm a new Rust `LinkRefusal` variant lands in.
+  // death one level down. This is the arm a new Rust `SlackMintRefusal` variant lands in.
   it("also covers an unrecognized refusal REASON, not just an unrecognized status", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     requestLinkState.mockResolvedValue({ status: "linked", handle: "j-cole-taylor" });

@@ -1,0 +1,34 @@
+title    = "The Slack mint's `not_vaulted` refusal carries a fresh re-link `authorize_url`, so a user with a missing or expired grant can reconnect from Slack"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "internal"]
+status   = "signal-only"
+body = '''
+`POST /internal/slack/mint` now answers a `not_vaulted` refusal as
+`{"status":"refused","reason":"not_vaulted","authorize_url":"…"}`. The URL is a fresh single-use
+link (15-minute TTL) minted at the point the mint decides the grant is missing or refused by the IdP
+as `invalid_grant`. The `not_linked` and `standing` refusals are unchanged and carry no URL. The
+refusal is a new ts-rs type, `SlackMintRefusal` (temper-core), which the mention agent's generated
+tree now exports in place of `LinkRefusal`.
+
+Behind the shape: the mint now writes a `kb_slack_link_intents` row on that arm. Completing the URL
+under the same login re-links the principal and replaces the dead grant (`store_grant` upserts).
+Completing it under any other login is refused, because `link_slack_principal` never rebinds, so a
+stolen URL cannot move the principal. A re-link overwrites the vaulted refresh token, which may
+still be live (`invalid_grant` is not always a dead grant, and a user can complete two outstanding
+link URLs). In AS mode the callback now revokes the superseded token locally, in the same
+transaction, before overwriting it. In ExternalIdp mode it is deliberately not revoked, because with
+Auth0's "Refresh Token Revocation Deletes Grant" enabled a revoke would also kill the fresh
+replacement grant; the overwrite destroys temper's only copy, and the supersede is logged at info.
+Link-state URL issuance moved into
+`slack_link_service::issue_authorize_url` unchanged, and both endpoints share it.
+
+Who observes it: Slack users of the mention agent whose stored grant is gone or expired. Their
+ephemeral `not_vaulted` reply now contains the reconnect link instead of telling them to run
+`temper slack disconnect`, so they no longer need the temper CLI installed and logged in to recover.
+
+Release relevance: an internal HMAC-gated endpoint whose only caller is the mention agent. Old
+agent + new server: the extra field is ignored, and the old disconnect advice still works. New agent
++ old server: the agent rejects a `not_vaulted` without `authorize_url` and shows its generic
+"try again" line. So deploy temper-api before the agent.
+'''

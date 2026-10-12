@@ -18,7 +18,6 @@ name = "emit-openapi"
 path = "src/bin/emit-openapi.rs"
 
 [dependencies]
-temperkb-auth.workspace = true
 temperkb-principal.workspace = true
 temperkb-core = { workspace = true, features = ["web-api"] }
 temper-services = { path = "../temper-services" }

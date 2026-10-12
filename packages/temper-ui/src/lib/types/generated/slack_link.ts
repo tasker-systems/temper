@@ -19,3 +19,25 @@ import type { Refusal } from "./admission";
  *
  */
 export type LinkRefusal = { "reason": "not_linked" } | { "reason": "not_vaulted" } | { "reason": "standing", refusal: Refusal, };
+
+/**
+ * The mint's refusal as it reaches the mention agent: a [`LinkRefusal`] with the remedy attached
+ * where the server can hand one over.
+ *
+ * **A separate type from `LinkRefusal`, because this one carries a credential.** The `NotVaulted`
+ * arm holds a fresh single-use authorize URL, and whoever completes it binds their temper login to
+ * the Slack principal. `LinkRefusal` is a pure reason: `resolve` produces it, the mint logs it
+ * with `?`, and the callback page renders it. Putting a URL on it would put a credential into
+ * every one of those places. This type exists only at the wire, and its `Debug` redacts the URL.
+ *
+ * **Only `NotVaulted` carries a URL, and the variant shapes make that structural.** Re-linking is
+ * the remedy for a missing or dead grant and for nothing else. A `Standing` refusal is fixed by an
+ * admin, so a URL there would be the false remedy the typed refusal exists to end. `NotLinked`
+ * means the link vanished mid-mention, and the user's next mention takes link-state's `unlinked`
+ * arm and gets a URL from there.
+ *
+ * The tag scheme matches `LinkRefusal` (`reason`, snake_case, `Standing` as a struct variant), so
+ * the wire spelling of `not_linked` and `standing` is unchanged and `not_vaulted` only gains a
+ * field.
+ */
+export type SlackMintRefusal = { "reason": "not_linked" } | { "reason": "not_vaulted", authorize_url: string, } | { "reason": "standing", refusal: Refusal, };

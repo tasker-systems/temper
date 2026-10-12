@@ -2,20 +2,23 @@
 import type { Refusal } from "./admission.js";
 
 /**
- * Why a linked-identity mint or link-state read was refused, typed.
+ * The mint's refusal as it reaches the mention agent: a [`LinkRefusal`] with the remedy attached
+ * where the server can hand one over.
  *
- * The Slack surface's analogue of [`temper_principal::Refusal`], and it carries that type
- * **verbatim** in its `Standing` arm rather than restating the standing reasons — the same
- * shared-types-at-boundaries move [`super::access_gate::SystemAccessDetails`] makes with its
- * `refusal` field. `temper_principal::admit` is the sole producer of the embedded `Refusal`, so
- * only its reachable variants ever appear here (pinned by a test beside the resolver in
- * temper-services).
+ * **A separate type from `LinkRefusal`, because this one carries a credential.** The `NotVaulted`
+ * arm holds a fresh single-use authorize URL, and whoever completes it binds their temper login to
+ * the Slack principal. `LinkRefusal` is a pure reason: `resolve` produces it, the mint logs it
+ * with `?`, and the callback page renders it. Putting a URL on it would put a credential into
+ * every one of those places. This type exists only at the wire, and its `Debug` redacts the URL.
  *
- * **The tag is `reason`, not `kind`, and `Standing` is a struct variant — both load-bearing.**
- * `Refusal` is itself `#[serde(tag = "kind")]`; a newtype `Standing(Refusal)` under a `kind` tag
- * would flatten two internal tags into one object and emit a duplicate `kind` key that fails to
- * deserialize (and an uninhabitable `never` in the generated TypeScript). A distinct tag plus a
- * named `refusal` field nests it cleanly: `{"reason":"standing","refusal":{"kind":"denied"}}`.
+ * **Only `NotVaulted` carries a URL, and the variant shapes make that structural.** Re-linking is
+ * the remedy for a missing or dead grant and for nothing else. A `Standing` refusal is fixed by an
+ * admin, so a URL there would be the false remedy the typed refusal exists to end. `NotLinked`
+ * means the link vanished mid-mention, and the user's next mention takes link-state's `unlinked`
+ * arm and gets a URL from there.
  *
+ * The tag scheme matches `LinkRefusal` (`reason`, snake_case, `Standing` as a struct variant), so
+ * the wire spelling of `not_linked` and `standing` is unchanged and `not_vaulted` only gains a
+ * field.
  */
-export type LinkRefusal = { "reason": "not_linked" } | { "reason": "not_vaulted" } | { "reason": "standing", refusal: Refusal, };
+export type SlackMintRefusal = { "reason": "not_linked" } | { "reason": "not_vaulted", authorize_url: string, } | { "reason": "standing", refusal: Refusal, };

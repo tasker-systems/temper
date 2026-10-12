@@ -107,6 +107,8 @@ export function decideIdentity<T extends PrincipalLike>(auth: T | null): Identit
  * ephemerally (`postEphemeral`), never via a public `thread.post`: whoever
  * opens this URL binds their temper identity to the mentioning Slack
  * principal. See `agent/channels/slack.ts` for the delivery side.
+ *
+ * One of exactly two replies that carry a URL. The other is {@link notVaultedPrompt}.
  */
 export function unlinkedPrompt(authorizeUrl: string): string {
   return [
@@ -119,25 +121,7 @@ export function unlinkedPrompt(authorizeUrl: string): string {
 }
 
 /**
- * The remedy for the one refusal re-linking actually fixes.
- *
- * There is no authorize URL to offer here, and that is structural rather than an omission:
- * `link-state` only carries `authorize_url` on its `unlinked` arm (`link.ts`, `LinkState`),
- * and this state is reached from the `linked` arm. So the honest instruction is the one that
- * MAKES the user unlinked — after `temper slack disconnect`, the next mention takes the
- * unlinked arm and gets a fresh URL from `unlinkedPrompt`.
- *
- * **Used by {@link notVaultedPrompt} and nothing else, deliberately.** It once ended the
- * revoked reply too, which is precisely how the false remedy shipped: a standing refusal is not
- * a link problem, so sending that user through disconnect-and-reconnect returns them to the
- * same refusal with one more step behind them. If you are about to add a second caller, check
- * first that re-linking really is the remedy for it.
- */
-const RECONNECT_REMEDY =
-  "Run `temper slack disconnect`, then mention me again — I'll send you a fresh connect link.";
-
-/**
- * The reply for a linked user whose stored credential is missing.
+ * The reply for a linked user whose stored credential is missing, carrying the URL that fixes it.
  *
  * Distinct from {@link standingRefusedPrompt} on purpose. This user did nothing wrong and
  * nothing was withheld: their link predates the credential store, the link never completed, or —
@@ -149,14 +133,26 @@ const RECONNECT_REMEDY =
  * refusal whose remedy the user can carry out alone.
  * The load-bearing sentence is that RETRYING WILL NOT FIX IT — without it the user mentions
  * again, gets the same nothing, and reasonably concludes the agent is broken.
+ *
+ * `authorizeUrl` comes from the mint's `not_vaulted` refusal, which temper issues only after it has
+ * decided the grant is missing or dead. It re-links this Slack identity to the account it is already
+ * bound to: temper refuses to bind it to any other login, so a stolen copy cannot move it. It is
+ * still a credential, so this reply has the same delivery rule as {@link unlinkedPrompt}: ephemeral,
+ * to the mentioning user only.
+ *
+ * **This is the only refusal reply that may carry a URL.** A `standing` refusal is fixed by an
+ * admin, and a re-link there is a loop with no exit. The mint's type has no URL on that arm, so
+ * there is none to pass, and `tests/identity.test.ts` checks the copy.
  */
-export function notVaultedPrompt(handle: string): string {
+export function notVaultedPrompt(handle: string, authorizeUrl: string): string {
   return [
     `You're connected as @${handle}, but I don't have a working stored credential to look things up as you — it may have expired since you last used me.`,
     "",
     "Mentioning me again won't fix this — the connection needs to be made afresh.",
     "",
-    RECONNECT_REMEDY,
+    `Reconnect your account: ${authorizeUrl}`,
+    "",
+    "This link is single-use and just for you — please don't forward it.",
   ].join("\n");
 }
 
@@ -287,8 +283,8 @@ export function standingReply(refusal: Refusal, handle: string): string {
  * **This is the one broken-credential reply where "mention me again" IS the remedy**, and the
  * asymmetry is the point: the user is now genuinely unlinked, so their next mention takes
  * link-state's `unlinked` arm and gets a fresh authorize URL from {@link unlinkedPrompt}. We
- * cannot hand them that URL here — this arm is reached from `linked`, which carries no
- * `authorize_url` — so the next mention is how they get one.
+ * cannot hand them that URL here, because the mint's `not_linked` refusal carries no
+ * `authorize_url`, so the next mention is how they get one.
  */
 export function linkVanishedPrompt(handle: string): string {
   return [

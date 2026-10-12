@@ -16,7 +16,7 @@ only, `POST /internal/slack/mint` asks for that person's access token. The four 
 | ---------- | ---- | ------ |
 | `unlinked` | not called | ephemeral authorize-URL prompt, **drop** |
 | `linked` | `token` | **dispatch** — `return { auth }` |
-| `linked` | `refused` / `not_vaulted` | ephemeral "no working stored credential, retrying won't fix it, re-link", **drop** — includes an **expired** grant (below) |
+| `linked` | `refused` / `not_vaulted` | ephemeral "no working stored credential, retrying won't fix it, reconnect here: `<authorize_url>`", **drop** — includes an **expired** grant (below) |
 | `linked` | `refused` / `standing` | ephemeral "an admin has to approve your access" — **never** re-link, **drop** |
 | `linked` | `refused` / `not_linked` | ephemeral "mention me again for a fresh link" (the link vanished mid-mention), **drop** |
 
@@ -26,23 +26,28 @@ only, `POST /internal/slack/mint` asks for that person's access token. The four 
 > tags — `status`, `reason`, `kind` — distinct on purpose so they nest without collision.
 >
 > **Re-linking fixes `not_vaulted` and NOTHING else.** Every `standing` refusal is an admin
-> decision; `temper slack disconnect` cannot move principal standing, so offering it there is a
-> loop with no exit. The former flat `revoked` arm offered exactly that to everyone, which is the
-> false remedy the linked-identity state machine (PR #522) exists to end. `standingReply`
+> decision; re-linking cannot move principal standing, so offering it there is a loop with no
+> exit. The former flat `revoked` arm offered exactly that to everyone, which is the false remedy
+> the linked-identity state machine (PR #522) exists to end. `standingReply`
 > (`agent/lib/identity.ts`) is the one place the six admit-reachable kinds collapse onto three
 > remedies: admin-decides (`denied` / `no_standing` / `revoked` / `deactivated`), wait
 > (`requested`), and our-bug (`unrecognized_standing`, which also logs the raw value).
 >
-> The TS mirror of `Refusal` in `agent/lib/mint.ts` is **hand-written and ungated** — this package
-> is workspace-isolated and cannot import the ts-rs export in temper-ui. Emitting it here and
-> gating the drift is Task 8/9 of the linked-identity plan. Until then a `never` binding at each
-> switch is the only thing that notices a new Rust variant, and it only notices at compile time.
+> **The refusal arrives as `SlackMintRefusal`, which carries the remedy where there is one.** The
+> mint's `not_vaulted` arm holds `authorize_url`, a fresh single-use re-link URL that temper issues
+> only after it has itself decided the grant is missing or dead. `not_linked` and `standing` carry
+> no URL, so there is nothing to offer there. `SlackMintRefusal` (and the `Refusal` it embeds) is
+> **generated** into `agent/generated/` by ts-rs and drift-gated (`check-ts-rs-drift.sh`); never
+> hand-edit it. The `{ status }` envelope around it (`MintOutcome` in `agent/lib/mint.ts`) and the
+> whole `LinkState` union are still hand-mirrored, so a `never` binding at each switch plus the
+> runtime body checks are what notice a new Rust arm there.
 
 **An expired grant is `not_vaulted`, not an error.** The vaulted refresh token has a lifetime at
 the IdP (Auth0's inactivity/absolute expiry; the AS's `AS_REFRESH_TTL_SECONDS`), so a user who goes
 long enough between mentions comes back to a dead grant. The server recognises the IdP's
 `invalid_grant` refusal (`oauth_client::refresh_grant` → `RefreshOutcome::GrantRejected`) and
-answers `refused` / `not_vaulted` — whose reply is the true one: retrying won't fix it, reconnect.
+answers `refused` / `not_vaulted` — whose reply is the true one: retrying won't fix it, reconnect
+here. The reply carries the re-link URL, so the user recovers from Slack alone, with no temper CLI.
 Before that it surfaced as a **401 from the mint**, which `requestMintedToken` throws on, which lands
 in the channel's catch-all "try again in a moment" — a retry that could never succeed. The vault row
 is **kept**, not deleted: Auth0 answers `invalid_grant` for a misconfigured client, so deleting would
@@ -63,15 +68,25 @@ handler, which says one deliberately detail-free sentence — collapsing "you we
 the last is worth retrying. Do not move the mint into `getToken` alone.
 
 **The failure replies must stay distinct**, and `tests/identity.test.ts` +
-`tests/slack-dispatch.test.ts` assert it (unlinked and every mint refusal must be different
-strings, and only the unlinked one may carry a URL — every refusal is reached from link-state's
-`linked` arm, which carries no `authorize_url`, so any URL in that copy is invented).
+`tests/slack-dispatch.test.ts` assert it. Unlinked and every mint refusal must be different
+strings. Exactly two may carry a URL, each the one temper issued for it: unlinked (link-state's
+`authorize_url`) and `not_vaulted` (the mint's). A URL in any other reply is invented.
 
-**Only `not_vaulted` may offer `temper slack disconnect`**, which routes the user back through the
-unlinked arm and its fresh URL. A standing refusal offers the admin instead, and
+**Only `not_vaulted` may offer re-linking**, and it offers the URL itself rather than a detour
+through `temper slack disconnect`. A standing refusal offers the admin instead, and
 `offers re-link ONLY where re-linking is the actual remedy` (`tests/identity.test.ts`) fails if
 that leaks back. The one other reply that says "mention me again" is the `not_linked` race — and
 there it is correct, because the user genuinely IS unlinked by then.
+
+> **Handing an already-LINKED user a link URL is safe because the callback never rebinds.**
+> Completing the re-link URL under the same login re-stamps the link and `store_grant` replaces the
+> dead grant. Completing it under any other login is refused (`link_slack_principal`) before
+> anything is vaulted, so a stolen re-link URL cannot move the principal. The e2e tests
+> `a_dead_grant_mints_a_relink_url_that_restores_minting` and
+> `a_stolen_relink_url_cannot_move_the_principal` pin both halves. A re-link overwrites the stored
+> grant, which may still be live. In AS mode the callback revokes it first
+> (`revoke_superseded_grant`, pinned by `an_as_mode_relink_revokes_the_superseded_refresh_token`).
+> In ExternalIdp mode it is left alone, because Auth0 can revoke the replacement along with it.
 
 **The endpoint answers "what do I say?", never "mint me a URL".** Asking for a URL unconditionally —
 which is what the first cut did — re-prompted an already-linked user to link again on **every**
@@ -79,11 +94,16 @@ mention, forever, and minted a junk `kb_slack_link_intents` row each time. `agen
 returns a `LinkState` discriminated union mirroring the Rust `SlackLinkStateResponse`
 (`#[serde(tag = "status")]`); `agent/channels/slack.ts` branches on `status`. Only the `unlinked`
 arm costs a write. If you find yourself adding a nullable field to that union, you are rebuilding
-the bug: the two arms carry disjoint data on purpose.
+the bug: the two arms carry disjoint data on purpose. The mint's `not_vaulted` refusal is the one
+other place a URL (and an intent row) is minted, and only after the mint has decided the grant is
+unusable. It is reached on that arm alone: a user whose grant works never gets one. The rare
+`getToken` race (a grant that died between pre-flight and tool call) also mints one, and that URL
+is discarded, never logged.
 
-**Every non-dispatching arm delivers a channel-root ephemeral, and then drops.** The unlinked
-message carries a credential and must never reach a public channel; the two broken-credential
-messages name the user's handle and their account state, which is nobody else's business. The
+**Every non-dispatching arm delivers a channel-root ephemeral, and then drops.** The unlinked and
+`not_vaulted` messages each carry a credential and must never reach a public channel; the other
+broken-credential messages name the user's handle and their account state, which is nobody else's
+business. The
 dispatching arm sends no ephemeral of its own — the model's answer *is* the reply, delivered by
 the `message.completed` override, which is ephemeral for the stronger reason that it was produced
 under that human's full temper reach. In all of it: no task numbers, no dates, no internal plans

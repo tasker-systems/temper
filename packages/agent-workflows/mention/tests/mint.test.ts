@@ -44,7 +44,7 @@ describe("requestMintedToken", () => {
   // Fails CLOSED: the most privileged call in the agent is not made at all.
   it("makes no mint call when the two secrets collide", async () => {
     vi.stubEnv("SLACK_LINK_SECRET", MINT_SECRET); // the copy-paste an operator actually makes
-    const fetchMock = stubFetch(200, { status: "refused", reason: "not_vaulted" });
+    const fetchMock = stubFetch(200, { status: "refused", reason: "not_vaulted", authorize_url: "https://idp.test/authorize?state=n" });
 
     await expect(requestMintedToken(PRINCIPAL)).rejects.toThrow(/same value/);
     expect(fetchMock).not.toHaveBeenCalled();
@@ -55,7 +55,7 @@ describe("requestMintedToken", () => {
   // config.rs:32-48 is the whole reason `/internal/slack/mint` has its own router and layer.
   // temper's own e2e `mint_refuses_the_link_state_key` is the server-side half of this pair.
   it("signs with SLACK_MINT_SECRET, never SLACK_LINK_SECRET", async () => {
-    const fetchMock = stubFetch(200, { status: "refused", reason: "not_vaulted" });
+    const fetchMock = stubFetch(200, { status: "refused", reason: "not_vaulted", authorize_url: "https://idp.test/authorize?state=n" });
 
     await requestMintedToken(PRINCIPAL);
 
@@ -75,7 +75,7 @@ describe("requestMintedToken", () => {
   // would sign happily instead of throwing, so this asserts the absence of that fallback.
   it("throws when SLACK_MINT_SECRET is missing rather than falling back", async () => {
     vi.stubEnv("SLACK_MINT_SECRET", "");
-    stubFetch(200, { status: "refused", reason: "not_vaulted" });
+    stubFetch(200, { status: "refused", reason: "not_vaulted", authorize_url: "https://idp.test/authorize?state=n" });
 
     await expect(requestMintedToken(PRINCIPAL)).rejects.toThrow("SLACK_MINT_SECRET");
   });
@@ -119,7 +119,7 @@ describe("requestMintedToken", () => {
   // that carries a payload — so it is the one a careless re-shape would silently lose.
   it.each([
     [{ status: "refused", reason: "not_linked" }],
-    [{ status: "refused", reason: "not_vaulted" }],
+    [{ status: "refused", reason: "not_vaulted", authorize_url: "https://idp.test/authorize?state=n" }],
     [{ status: "refused", reason: "standing", refusal: { kind: "denied" } }],
     [{ status: "refused", reason: "standing", refusal: { kind: "requested" } }],
     [{ status: "refused", reason: "standing", refusal: { kind: "revoked" } }],
@@ -145,8 +145,37 @@ describe("requestMintedToken", () => {
     stubFetch(200, { status: "quarantined" });
 
     await expect(requestMintedToken(PRINCIPAL)).rejects.toThrow(
-      "mint returned an unrecognized response (status: quarantined)",
+      "mint returned an unrecognized response (status: quarantined",
     );
+  });
+
+  // FAILS IF: a `not_vaulted` refusal is accepted without its re-link URL. The reply for that arm
+  // is built around the URL; accepting it bare would hand `notVaultedPrompt` `undefined` and put
+  // the literal string "undefined" where the remedy should be.
+  it("throws when not_vaulted arrives without its re-link URL, naming the likely skew", async () => {
+    stubFetch(200, { status: "refused", reason: "not_vaulted" });
+
+    await expect(requestMintedToken(PRINCIPAL)).rejects.toThrow(
+      /reason: not_vaulted, authorize_url: undefined\) — not_vaulted without authorize_url: is temper-api older than this agent\?/,
+    );
+  });
+
+  // FAILS IF: an EMPTY re-link URL is accepted. The reply would read "Reconnect your account: "
+  // with nothing after it — a remedy-shaped sentence with no remedy.
+  it("throws when not_vaulted carries an empty re-link URL", async () => {
+    stubFetch(200, { status: "refused", reason: "not_vaulted", authorize_url: "" });
+
+    await expect(requestMintedToken(PRINCIPAL)).rejects.toThrow(/reason: not_vaulted/);
+  });
+
+  // FAILS IF: the error text ever carries the body. It is logged by the channel's catch, and a
+  // malformed body may still hold a credential.
+  it("never puts the response body into the error", async () => {
+    stubFetch(200, { status: "refused", reason: "standing", note: "secret-nonce" });
+
+    const err = (await requestMintedToken(PRINCIPAL).catch((e: unknown) => e)) as Error;
+    expect(err.message).not.toContain("secret-nonce");
+    expect(err.message).toContain("reason: standing");
   });
 
   // FAILS IF: the token arm is accepted with its credential or expiry missing — the cache would
@@ -155,14 +184,14 @@ describe("requestMintedToken", () => {
     stubFetch(200, { status: "token" });
 
     await expect(requestMintedToken(PRINCIPAL)).rejects.toThrow(
-      "mint returned an unrecognized response (status: token)",
+      "mint returned an unrecognized response (status: token",
     );
   });
 
   // FAILS IF: the principal is split/reordered, the route path drifts from /internal/slack/mint
   // (e.g. copied as link-state), or the base URL's trailing slash is doubled up.
   it("posts the WHOLE principal to the mint route with no trailing-slash dupe", async () => {
-    const fetchMock = stubFetch(200, { status: "refused", reason: "not_vaulted" });
+    const fetchMock = stubFetch(200, { status: "refused", reason: "not_vaulted", authorize_url: "https://idp.test/authorize?state=n" });
 
     await requestMintedToken(PRINCIPAL);
 

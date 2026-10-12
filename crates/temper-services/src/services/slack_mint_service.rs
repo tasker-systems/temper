@@ -51,9 +51,10 @@
 use sqlx::PgPool;
 
 use temper_core::internal_sig;
+use temper_core::types::slack::{LinkRefusal, SlackMintRefusal};
 
 use super::slack_grant_vault_service::{self, MintOutcome};
-use super::slack_link_service::validate_slack_principal;
+use super::slack_link_service::{issue_authorize_url, validate_slack_principal};
 use crate::config::ApiConfig;
 use crate::error::{ApiError, ApiResult};
 use crate::link_provider;
@@ -166,6 +167,49 @@ pub async fn mint_for_mention(
         slack_principal_id,
     )
     .await
+}
+
+/// Turn a mint refusal into the refusal the mention agent receives, attaching the remedy the
+/// server can hand over.
+///
+/// Only [`LinkRefusal::NotVaulted`] gets one: a fresh authorize URL that re-links this principal.
+/// It is issued HERE, after the mint has itself decided `NotVaulted`, so the URL exists exactly when
+/// re-linking is the remedy. The other arms pass through without a URL, so the agent cannot offer
+/// re-linking to a user whose standing refuses them. The match is exhaustive, so a new
+/// `LinkRefusal` variant has to choose its remedy here.
+///
+/// A re-link URL for an already-linked principal is safe because the callback never rebinds: see
+/// [`super::slack_link_service::issue_authorize_url`].
+///
+/// The same caveat as [`mint_for_mention`] applies: this authorizes nothing. Its caller must hold a
+/// [`VerifiedSlackPrincipal`] for `slack_principal_id`.
+pub async fn refusal_for_mention(
+    pool: &PgPool,
+    config: &ApiConfig,
+    slack_principal_id: &str,
+    refusal: LinkRefusal,
+) -> ApiResult<SlackMintRefusal> {
+    Ok(match refusal {
+        LinkRefusal::NotLinked => SlackMintRefusal::NotLinked,
+        LinkRefusal::NotVaulted => {
+            let cfg = config
+                .slack_link
+                .as_ref()
+                .ok_or_else(|| ApiError::Unauthorized("slack link disabled".to_string()))?;
+            let authorize_url = issue_authorize_url(pool, &config.auth, cfg, slack_principal_id)
+                .await
+                .inspect_err(|e| {
+                    // The 500 this becomes tells the agent nothing about which step failed.
+                    tracing::error!(
+                        principal = %slack_principal_id,
+                        error = %e,
+                        "slack mint: issuing the not_vaulted re-link URL failed"
+                    );
+                })?;
+            SlackMintRefusal::NotVaulted { authorize_url }
+        }
+        LinkRefusal::Standing { refusal } => SlackMintRefusal::Standing { refusal },
+    })
 }
 
 #[cfg(test)]
