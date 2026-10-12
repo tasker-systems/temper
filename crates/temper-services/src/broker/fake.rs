@@ -141,6 +141,10 @@ impl CredentialBroker for FakeBroker {
                 connector_uid: connector_uid.clone(),
                 connector_id: connector_id.clone(),
                 payload: req.body.to_vec(),
+                replay_key: super::replay_key(req.authorization.unwrap_or_default()),
+                // 2100-01-01: far past any test, and inside Postgres's timestamp range.
+                expires_at: 4_102_444_800,
+                binding_enforced: false,
             }),
             FakeInbound::Refuses => Err(BrokerError::Verification("fake refusal".into())),
         }

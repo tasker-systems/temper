@@ -37,6 +37,9 @@ pub struct VercelConnectConfig {
     /// The Vercel team slug — determines the OIDC issuer/audience/JWKS in
     /// team-issuer mode (`https://oidc.vercel.com/<slug>`).
     pub team_slug: String,
+    /// Whether an attestation issued to another project, or presented twice, is refused (`true`)
+    /// or only logged as a would-be refusal (`false`, the default). See [`VerifiedInbound`].
+    pub enforce_attestation_binding: bool,
 }
 
 impl std::fmt::Debug for VercelConnectConfig {
@@ -46,6 +49,10 @@ impl std::fmt::Debug for VercelConnectConfig {
             .field("project_id", &self.project_id)
             .field("team_id", &self.team_id)
             .field("team_slug", &self.team_slug)
+            .field(
+                "enforce_attestation_binding",
+                &self.enforce_attestation_binding,
+            )
             .finish_non_exhaustive()
     }
 }
@@ -109,6 +116,7 @@ async fn verify_inbound_impl(
     jwks: &JwksKeyStore,
     expected_iss: &str,
     expected_aud: &str,
+    binding: Binding<'_>,
     req: InboundRequest<'_>,
 ) -> Result<VerifiedInbound, BrokerError> {
     // 1. Pull the attestation bearer. This is the `Authorization` header — NOT
@@ -146,12 +154,51 @@ async fn verify_inbound_impl(
     //    signed `trigger` claim.
     let trigger = verify_attestation_claims(&data.claims, expected_iss, expected_aud)?;
 
+    // 5. The project binding. `aud` is team-wide, so a token Connect issued to a sibling project
+    //    in the same team passes everything above; its `project_id` claim is what names the
+    //    receiving project (identical to this deployment's own ambient token, research
+    //    `019f62e6`). Reported until enforced: see `VerifiedInbound::binding_enforced`.
+    let attested_project = data.claims.get("project_id").and_then(|v| v.as_str());
+    if attested_project != Some(binding.project_id) {
+        if binding.enforce {
+            return Err(BrokerError::Verification("project mismatch".into()));
+        }
+        tracing::warn!(
+            reason = "project_mismatch",
+            would_refuse = true,
+            attested_project = attested_project.unwrap_or("<absent>"),
+            "inbound attestation: would refuse once binding is enforced"
+        );
+    }
+
+    // How long a repeat must be recognised: as long as this verifier would still accept the
+    // token, which is past `exp` by the store's clock-skew leeway, and the leeway again for API
+    // instances whose clocks disagree. Remembering it only until `exp` left the leeway window open:
+    // the row was pruned while the token still verified, and a replay claimed it afresh.
+    let leeway = JwksKeyStore::CLOCK_SKEW_LEEWAY_SECONDS as i64;
+    let expires_at = data
+        .claims
+        .get("exp")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| BrokerError::Verification("attestation `exp` is not an integer".into()))?
+        .saturating_add(2 * leeway);
+
     Ok(VerifiedInbound {
         provider: trigger.provider,
         connector_uid: trigger.connector_uid,
         connector_id: trigger.connector_id,
         payload: req.body.to_vec(),
+        replay_key: super::replay_key(token),
+        expires_at,
+        binding_enforced: binding.enforce,
     })
+}
+
+/// The receiving project an attestation must name, and whether a mismatch refuses.
+#[derive(Clone, Copy)]
+struct Binding<'a> {
+    project_id: &'a str,
+    enforce: bool,
 }
 
 /// Build the Connect mint URL. The connector uid is **one url-encoded path
@@ -280,7 +327,18 @@ impl CredentialBroker for VercelConnectBroker {
         &self,
         req: InboundRequest<'_>,
     ) -> Result<VerifiedInbound, BrokerError> {
-        verify_inbound_impl(&self.jwks, &self.expected_iss, &self.expected_aud, req).await
+        let binding = Binding {
+            project_id: &self.config.project_id,
+            enforce: self.config.enforce_attestation_binding,
+        };
+        verify_inbound_impl(
+            &self.jwks,
+            &self.expected_iss,
+            &self.expected_aud,
+            binding,
+            req,
+        )
+        .await
     }
 }
 
@@ -363,11 +421,26 @@ mod verify_inbound_tests {
         encode(&Header::new(Algorithm::EdDSA), claims, &enc).expect("sign")
     }
 
+    const PROJECT: &str = "prj_receiving";
+
+    /// The receiving project, binding reported only — the default.
+    const OBSERVE: Binding<'static> = Binding {
+        project_id: PROJECT,
+        enforce: false,
+    };
+
+    /// The receiving project, binding enforced.
+    const ENFORCE: Binding<'static> = Binding {
+        project_id: PROJECT,
+        enforce: true,
+    };
+
     fn valid_attestation() -> serde_json::Value {
         serde_json::json!({
             "iss": ISS,
             "aud": AUD,
             "sub": "owner:acme:project:temper-api:environment:production",
+            "project_id": PROJECT,
             "client_id": "api-connex",
             "exp": 9_999_999_999_i64,
             "trigger": { "id": "scl_abc", "uid": "slack/acme", "type": "slack", "service": "slack" }
@@ -382,7 +455,7 @@ mod verify_inbound_tests {
             authorization: Some(&authz),
             body: b"{\"event\":\"hi\"}",
         };
-        let v = verify_inbound_impl(&store(), ISS, AUD, req)
+        let v = verify_inbound_impl(&store(), ISS, AUD, OBSERVE, req)
             .await
             .expect("verify");
         assert_eq!(v.provider, "slack");
@@ -391,13 +464,73 @@ mod verify_inbound_tests {
         assert_eq!(v.payload, b"{\"event\":\"hi\"}");
     }
 
+    /// An attestation carries what single use needs: a key derived from the bearer (never the
+    /// bearer) and the signed expiry.
+    #[tokio::test]
+    async fn carries_the_replay_key_and_expiry() {
+        let token = sign(&valid_attestation());
+        let authz = format!("Bearer {token}");
+        let req = InboundRequest {
+            authorization: Some(&authz),
+            body: b"{}",
+        };
+        let v = verify_inbound_impl(&store(), ISS, AUD, ENFORCE, req)
+            .await
+            .expect("verify");
+        assert_eq!(v.replay_key, crate::broker::replay_key(&token));
+        assert!(!v.replay_key.contains(&token));
+        // Past `exp` by the verifier's leeway, and the leeway again.
+        let leeway = JwksKeyStore::CLOCK_SKEW_LEEWAY_SECONDS as i64;
+        assert_eq!(v.expires_at, 9_999_999_999 + 2 * leeway);
+        assert!(v.binding_enforced);
+    }
+
+    /// A token Connect issued to a sibling project in the same team passes iss, aud and
+    /// client_id; enforced, the project binding refuses it.
+    #[tokio::test]
+    async fn an_enforced_binding_refuses_another_projects_attestation() {
+        let mut claims = valid_attestation();
+        claims["project_id"] = serde_json::json!("prj_sibling");
+        let authz = format!("Bearer {}", sign(&claims));
+        let req = || InboundRequest {
+            authorization: Some(&authz),
+            body: b"{}",
+        };
+        let err = verify_inbound_impl(&store(), ISS, AUD, ENFORCE, req())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BrokerError::Verification(_)), "got {err:?}");
+
+        // Observed only: the same attestation is accepted, and reported in the log.
+        let v = verify_inbound_impl(&store(), ISS, AUD, OBSERVE, req())
+            .await
+            .expect("reported, not refused");
+        assert!(!v.binding_enforced);
+    }
+
+    /// An attestation naming no project at all is no better than one naming another.
+    #[tokio::test]
+    async fn an_enforced_binding_refuses_an_attestation_naming_no_project() {
+        let mut claims = valid_attestation();
+        claims.as_object_mut().expect("object").remove("project_id");
+        let authz = format!("Bearer {}", sign(&claims));
+        let req = InboundRequest {
+            authorization: Some(&authz),
+            body: b"{}",
+        };
+        let err = verify_inbound_impl(&store(), ISS, AUD, ENFORCE, req)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BrokerError::Verification(_)), "got {err:?}");
+    }
+
     #[tokio::test]
     async fn rejects_a_missing_authorization_header() {
         let req = InboundRequest {
             authorization: None,
             body: b"{}",
         };
-        let err = verify_inbound_impl(&store(), ISS, AUD, req)
+        let err = verify_inbound_impl(&store(), ISS, AUD, OBSERVE, req)
             .await
             .unwrap_err();
         assert!(matches!(err, BrokerError::Verification(_)));
@@ -424,7 +557,7 @@ mod verify_inbound_tests {
             authorization: Some(&authz),
             body: b"{}",
         };
-        let err = verify_inbound_impl(&store(), ISS, AUD, req)
+        let err = verify_inbound_impl(&store(), ISS, AUD, OBSERVE, req)
             .await
             .unwrap_err();
         assert!(matches!(err, BrokerError::Verification(_)));
