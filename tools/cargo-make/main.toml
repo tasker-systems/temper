@@ -50,6 +50,7 @@ dependencies = [
   "config-reference-drift",
   "docs-public-only",
   "no-process-artifacts",
+  "migration-order",
   "docs-coverage",
   "ts-check"
 ]
@@ -168,6 +169,12 @@ script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-docs-publi
 [tasks.no-process-artifacts]
 description = "Fail if specs/plans/reviews/spikes/handoffs are tracked here — they live in temper-artifacts"
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-no-process-artifacts.sh"]
+
+[tasks.migration-order]
+description = "Fail if this branch adds a migration numbered at or below origin/main's newest"
+# Against the LOCAL origin/main, which is as fresh as your last fetch; a missing ref warns and skips.
+# CI runs the same script against the PR's real base (and a queue run's group parent).
+script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-migration-order.sh"]
 
 [tasks.ts-rs-drift]
 description = "Fail if any committed ts-rs generated type has drifted from the Rust that produces it"
