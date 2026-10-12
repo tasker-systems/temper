@@ -1,11 +1,8 @@
 //! The model of `resource-erasure.toml`: what resource erasure does with every carrier column
 //! (`[tables]`) and every free-text ledger path (`[payload]`).
 //!
-//! The vocabularies and grammars moved here from `resource_erasure_surface_test.rs`'s hand parser:
-//! `D2_STEPS`, `REDACT_CLASSES`, `enum Disposition`, `fn parse_disposition`,
-//! `enum PayloadDisposition` and `fn payload_lines`. One shape changed: a qualified payload line is
-//! nested under its unqualified line as `refine`, so a qualified line that refines nothing cannot
-//! be written.
+//! A qualified payload line is nested under its unqualified line as `refine`, so a qualified line
+//! that refines nothing cannot be written.
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -15,21 +12,7 @@ use serde::{Deserialize, Deserializer};
 use super::columns::ColumnKey;
 use super::GrammarError;
 
-/// The spec's D2 step numbering, which `handled:`, `repointed:` and `resource-erasure:` cite.
-const D2_STEPS: &[&str] = &["1", "2", "3", "4", "5", "6", "7", "7a", "8", "9", "9f"];
-
-/// `step` if it is a D2 step.
-pub(super) fn d2_step(step: &str) -> Result<String, GrammarError> {
-    if D2_STEPS.contains(&step) {
-        Ok(step.to_owned())
-    } else {
-        Err(GrammarError(format!(
-            "no D2 step {step:?} (known: {D2_STEPS:?})"
-        )))
-    }
-}
-
-/// The redaction classes of D4, one per sentinel shape.
+/// The redaction classes, one per sentinel shape.
 const REDACT_CLASSES: &[&str] = &[
     "title",
     "origin-uri",
@@ -48,11 +31,11 @@ const REDACT_CLASSES: &[&str] = &[
 /// What resource erasure does with a `[tables]` column.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Disposition {
-    /// `handled:D2.<step>`: emptied or sentineled by this D2 step.
-    Handled { step: String },
-    /// `repointed:D2.<step>:<table>.<column>`: its citers are re-pointed through `via` and the
-    /// orphaned original deleted.
-    Repointed { step: String, via: ColumnKey },
+    /// `handled`: the act empties or sentinels it.
+    Handled,
+    /// `repointed:<table>.<column>`: its citers are re-pointed through `via` and the orphaned
+    /// original deleted.
+    Repointed { via: ColumnKey },
     /// `out-of-scope`: deliberately left; the note carries the reason.
     OutOfScope,
 }
@@ -61,28 +44,17 @@ impl FromStr for Disposition {
     type Err = GrammarError;
 
     fn from_str(raw: &str) -> Result<Self, GrammarError> {
-        if let Some(step) = raw.strip_prefix("handled:D2.") {
-            return Ok(Self::Handled {
-                step: d2_step(step)?,
-            });
+        match raw {
+            "handled" => return Ok(Self::Handled),
+            "out-of-scope" => return Ok(Self::OutOfScope),
+            _ => {}
         }
-        if let Some(rest) = raw.strip_prefix("repointed:D2.") {
-            let (step, via) = rest.split_once(':').ok_or_else(|| {
-                GrammarError(format!(
-                    "expected `repointed:D2.<step>:<table>.<column>`, got {raw:?}"
-                ))
-            })?;
-            return Ok(Self::Repointed {
-                step: d2_step(step)?,
-                via: via.parse()?,
-            });
-        }
-        if raw == "out-of-scope" {
-            return Ok(Self::OutOfScope);
+        if let Some(via) = raw.strip_prefix("repointed:") {
+            return Ok(Self::Repointed { via: via.parse()? });
         }
         Err(GrammarError(format!(
-            "unknown disposition {raw:?} (known: `handled:D2.<step>`, \
-             `repointed:D2.<step>:<table>.<column>`, `out-of-scope`)"
+            "unknown disposition {raw:?} (known: `handled`, `repointed:<table>.<column>`, \
+             `out-of-scope`)"
         )))
     }
 }
@@ -95,15 +67,15 @@ deserialize_from_str!(Disposition);
 pub struct TableLine {
     /// What the act does with the column.
     pub disposition: Disposition,
-    /// Free text for the reader; empty when absent.
-    #[serde(default)]
+    /// Free text for the reader, trimmed; empty when absent.
+    #[serde(default, deserialize_with = "super::trimmed")]
     pub note: String,
 }
 
 /// What resource erasure does with a ledger path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PayloadDisposition {
-    /// `redact:<class>`: rewritten to the D4 sentinel of the class and recorded in
+    /// `redact:<class>`: rewritten to the sentinel of the class and recorded in
     /// `redacted_fields`.
     Redact(String),
     /// `structural`: a hash, a vocabulary word or a record's own fixed text; kept.
@@ -135,7 +107,7 @@ impl FromStr for PayloadDisposition {
             Ok(Self::Redact(class.to_owned()))
         } else {
             Err(GrammarError(format!(
-                "no D4 class {class:?} (known: {REDACT_CLASSES:?})"
+                "no redaction class {class:?} (known: {REDACT_CLASSES:?})"
             )))
         }
     }
@@ -149,8 +121,8 @@ deserialize_from_str!(PayloadDisposition);
 pub struct PayloadLine {
     /// What the act does with the path.
     pub disposition: PayloadDisposition,
-    /// Free text for the reader; empty when absent.
-    #[serde(default)]
+    /// Free text for the reader, trimmed; empty when absent.
+    #[serde(default, deserialize_with = "super::trimmed")]
     pub note: String,
     /// Narrower dispositions for the same path, each matched by its event's own fields. The most
     /// specific line wins.
@@ -167,8 +139,8 @@ pub struct Refinement {
     pub r#where: Qualifier,
     /// What the act does with the path on a matching event.
     pub disposition: PayloadDisposition,
-    /// Free text for the reader; empty when absent.
-    #[serde(default)]
+    /// Free text for the reader, trimmed; empty when absent.
+    #[serde(default, deserialize_with = "super::trimmed")]
     pub note: String,
 }
 
@@ -195,14 +167,12 @@ pub struct ResourceErasure {
 }
 
 impl ResourceErasure {
-    /// Each `[tables]` column handled by a D2 step, with the step.
-    pub fn handled(&self) -> impl Iterator<Item = (&ColumnKey, &str)> {
+    /// Each `[tables]` column the act handles.
+    pub fn handled(&self) -> impl Iterator<Item = &ColumnKey> {
         self.tables
             .iter()
-            .filter_map(|(key, line)| match &line.disposition {
-                Disposition::Handled { step } => Some((key, step.as_str())),
-                _ => None,
-            })
+            .filter(|(_, line)| line.disposition == Disposition::Handled)
+            .map(|(key, _)| key)
     }
 }
 
@@ -222,10 +192,14 @@ fn payload<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Payload, D::Err
 }
 
 /// A path is a JSON pointer or `*`; `*` and `permissive` go together, on the line and on each of
-/// its refinements; a refinement names a qualifier, and no two refinements name the same one.
+/// its refinements; `*` takes no refinement; a refinement names a qualifier, and no two
+/// refinements name the same one.
 fn check_payload_line(path: &str, line: &PayloadLine) -> Result<(), String> {
     if path != "*" && !path.starts_with('/') {
         return Err("a path is a JSON pointer or `*`".to_owned());
+    }
+    if path == "*" && !line.refine.is_empty() {
+        return Err("`*` takes no refinement".to_owned());
     }
     let star_goes_with_permissive = |disposition: &PayloadDisposition| {
         (path == "*") == (*disposition == PayloadDisposition::Permissive)

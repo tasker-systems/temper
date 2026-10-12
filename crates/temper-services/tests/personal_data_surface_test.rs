@@ -279,15 +279,14 @@ async fn act(pool: &PgPool) -> Act {
     }
 }
 
-/// `table.column` → step, for every `handled:D2.<step>` entry of `policy/erasure/resource-erasure.toml`
-/// `[tables]`: which columns resource erasure handles, and at which D2 step. Its own test binds each
-/// `handled` entry to `_resource_erasure_apply_redaction`; this test reuses that binding rather than
-/// repeating it.
-fn resource_handled() -> BTreeMap<&'static str, &'static str> {
+/// Every `table.column` declared `handled` in `policy/erasure/resource-erasure.toml` `[tables]`:
+/// which columns resource erasure handles. Its own test binds each `handled` entry to
+/// `_resource_erasure_apply_redaction`; this test reuses that binding rather than repeating it.
+fn resource_handled() -> BTreeSet<&'static str> {
     in_force()
         .resource_erasure
         .handled()
-        .map(|(key, step)| (key.as_str(), step))
+        .map(ColumnKey::as_str)
         .collect()
 }
 
@@ -320,7 +319,7 @@ fn assigns_erasure(t: &[String], key: &str) -> bool {
 }
 
 /// Whether the live act does what `claim` says for `key`.
-fn binds(act: &Act, handled: &BTreeMap<&str, &str>, key: &ColumnKey, claim: &Claim) -> bool {
+fn binds(act: &Act, handled: &BTreeSet<&str>, key: &ColumnKey, claim: &Claim) -> bool {
     let table = key.table();
     let redaction_runs = calls(&act.execute, REDACTION_FN);
     match claim {
@@ -331,10 +330,10 @@ fn binds(act: &Act, handled: &BTreeMap<&str, &str>, key: &ColumnKey, claim: &Cla
                 && deletes_from(&act.redaction, parent)
                 && act.cascades.contains(&(table.to_string(), parent.clone()))
         }
-        Claim::ResourceErasure { step } => {
+        Claim::ResourceErasure => {
             calls(&act.execute, RESOURCE_EXECUTE_FN)
                 && calls(&act.resource_execute, RESOURCE_REDACTION_FN)
-                && handled.get(key.as_str()) == Some(&step.as_str())
+                && handled.contains(key.as_str())
         }
     }
 }
@@ -371,7 +370,7 @@ fn every_full_line_states_its_achieved_reach() {
         silent.is_empty(),
         "these `full` lines say how far erasure could reach and nothing about what the person act \
          does. Name what reaches each (`erased:<arm>`, `deleted:<arm>`, `cascaded:<arm>:<table>`, \
-         `resource-erasure:D2.<step>`) or declare `remainder: <reason>`.\nSilent: {silent:#?}"
+         `resource-erasure`) or declare `remainder: <reason>`.\nSilent: {silent:#?}"
     );
     assert!(
         unreasoned.is_empty(),
@@ -387,7 +386,7 @@ fn every_full_line_states_its_achieved_reach() {
 /// FAILS IF: a line claims a reach the live person act does not have: an `erased` column no UPDATE
 /// assigns an erasure value, a `deleted` or `cascaded` table no DELETE reaches, or a
 /// `resource-erasure` column the act no longer runs resource erasure for, or whose resource
-/// manifest line no longer handles it at that step.
+/// manifest line no longer declares it `handled`.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn every_achieved_claim_is_carried_out_by_the_act(pool: PgPool) {
     let broken = unbound(&act(&pool).await);
@@ -544,7 +543,7 @@ async fn an_act_that_skips_a_body_unbinds_what_it_reaches(pool: PgPool) {
         .filter(|(_, d)| match &d.achieved {
             Achieved::Claims(c) => c
                 .iter()
-                .any(|c| !matches!(c, Claim::ResourceErasure { .. })),
+                .any(|c| !matches!(c, Claim::ResourceErasure)),
             _ => false,
         })
         .map(|(k, _)| k.to_string())

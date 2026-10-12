@@ -317,7 +317,7 @@ async fn the_surface_registry_covers_both_manifests(pool: PgPool) {
     let policy = in_force();
     let declared = [
         (
-            manifest_keys(policy.sensitivity.keys(ScanDisposition::Scan)),
+            manifest_keys(policy.sensitivity_scan.keys(ScanDisposition::Scan)),
             "text",
         ),
         (

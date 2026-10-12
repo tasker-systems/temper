@@ -1,8 +1,5 @@
-//! The column models of `personal-data.toml` and `sensitivity-scan.toml`, and their vocabularies.
-//!
-//! The vocabularies and the achieved-claim grammar moved here from the hand parsers they replace:
-//! `personal_data_surface_test.rs`'s `CLASSES`, `CEILINGS`, `ARMS`, `enum Claim`, `enum Achieved`
-//! and `fn parse_claim`, and `sensitivity_scan_surface_test.rs`'s `DISPOSITIONS`.
+//! The column models of `personal-data.toml` and `sensitivity-scan.toml`, their vocabularies, and
+//! the grammar of an achieved claim.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -10,7 +7,6 @@ use std::str::FromStr;
 
 use serde::Deserialize;
 
-use super::resource_erasure::d2_step;
 use super::GrammarError;
 
 /// A `table.column` key, both halves non-empty. Ordered by its text.
@@ -60,7 +56,7 @@ impl fmt::Display for ColumnKey {
 
 deserialize_from_str!(ColumnKey);
 
-/// What class of personal data a column holds (formerly `CLASSES`).
+/// What class of personal data a column holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Class {
@@ -81,7 +77,7 @@ pub enum Class {
     None,
 }
 
-/// How far erasure can reach a column (formerly `CEILINGS`).
+/// How far erasure can reach a column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Ceiling {
@@ -124,9 +120,9 @@ pub enum Claim {
     /// `cascaded:<arm>:<parent>`: `_erasure_apply_redaction` deletes from `parent`, which cascades
     /// to the column's table.
     Cascaded { arm: String, parent: String },
-    /// `resource-erasure:D2.<step>`: the resource erasures the act runs over the estate, whose
-    /// manifest handles the column.
-    ResourceErasure { step: String },
+    /// `resource-erasure`: the resource erasures the act runs over the estate, whose manifest
+    /// declares the column `handled`.
+    ResourceErasure,
 }
 
 impl FromStr for Claim {
@@ -150,15 +146,13 @@ impl FromStr for Claim {
                 parent: parent.to_owned(),
             });
         }
-        let step = raw.strip_prefix("resource-erasure:D2.").ok_or_else(|| {
-            GrammarError(format!(
-                "unknown achieved claim {raw:?} (known: `erased:<arm>`, `deleted:<arm>`, \
-                 `cascaded:<arm>:<table>`, `resource-erasure:D2.<step>`, `remainder: <reason>`, `-`)"
-            ))
-        })?;
-        Ok(Self::ResourceErasure {
-            step: d2_step(step)?,
-        })
+        if raw == "resource-erasure" {
+            return Ok(Self::ResourceErasure);
+        }
+        Err(GrammarError(format!(
+            "unknown achieved claim {raw:?} (known: `erased:<arm>`, `deleted:<arm>`, \
+             `cascaded:<arm>:<table>`, `resource-erasure`, `remainder: <reason>`, `-`)"
+        )))
     }
 }
 
@@ -202,13 +196,12 @@ pub struct PersonalColumn {
     pub ceiling: Ceiling,
     /// What the person act does reach.
     pub achieved: Achieved,
-    /// Free text for the reader; empty when absent.
-    #[serde(default)]
+    /// Free text for the reader, trimmed; empty when absent.
+    #[serde(default, deserialize_with = "super::trimmed")]
     pub note: String,
 }
 
-/// How the sensitivity sweep treats a text column (formerly `DISPOSITIONS`). There is deliberately
-/// no `unadjudicated` disposition.
+/// How the sweep treats a text column. There is deliberately no `unadjudicated` disposition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ScanDisposition {
@@ -228,8 +221,8 @@ pub enum ScanDisposition {
 pub struct ScanColumn {
     /// How the sweep treats the column.
     pub disposition: ScanDisposition,
-    /// Free text for the reader; empty when absent.
-    #[serde(default)]
+    /// Free text for the reader, trimmed; empty when absent.
+    #[serde(default, deserialize_with = "super::trimmed")]
     pub note: String,
 }
 

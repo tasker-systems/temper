@@ -98,34 +98,34 @@
 [tables]
 
 # ── handled: the content shape (D2) ─────────────────────────────────────────────────────────
-"kb_chunk_content.content"                = { disposition = "handled:D2.1", note = "every chunk of the resource, current and superseded, emptied to ''" }
-"kb_chunks.header_path"                   = { disposition = "handled:D2.1", note = "joint-read fix: the heading trail is authored prose" }
-"kb_block_content.content"                = { disposition = "handled:D2.2", note = "every revision of every block, live and folded" }
-"kb_chunks.embedding"                     = { disposition = "handled:D2.3", note = "nulled with embedded_with, together. Vectors computed FROM it (region centroids, a context's telos) are separate lines below" }
-"kb_resource_search_index.search_vector"  = { disposition = "handled:D2.4", note = "emptied to ''" }
-"kb_data_artifact_content.content"        = { disposition = "handled:D2.5", note = "every artifact of the resource, whatever its kind owner, intent or fold state" }
-"kb_workflow_jobs.payload"                = { disposition = "handled:D2.7", note = "jobs whose resource_id is R, in every status. Context-, cogmap- and system-scoped jobs are left (see last_error)" }
-"kb_workflow_jobs.last_error"             = { disposition = "handled:D2.7", note = "jobs whose resource_id is R, in every status. Context-, cogmap- and system-scoped jobs whose error text quotes R are left" }
-"kb_ingestion_records.source_uri"         = { disposition = "handled:D2.7a", note = "the origin_uri class sentinel 'erased:<resource_id>'" }
-"kb_data_artifact_verdicts.detail"        = { disposition = "handled:D2.7a", note = "every verdict on an artifact of the resource" }
-"kb_data_artifacts.artifact_kind"         = { disposition = "handled:D2.9f", note = "D4 artifact family: 'erased:<asserted_by_event_id>', every artifact of the resource whatever its intent or fold state; husks erased before (9f) existed got it once (20261008100000)" }
-"kb_citation_audits.reason"               = { disposition = "handled:D2.8", note = "joint-read fix: audits whose block is R's. Audits by other findings that cite R are left, and named in the remainder only when their payload carries R's id" }
+"kb_chunk_content.content"                = { disposition = "handled", note = "every chunk of the resource, current and superseded, emptied to ''" }
+"kb_chunks.header_path"                   = { disposition = "handled", note = "joint-read fix: the heading trail is authored prose" }
+"kb_block_content.content"                = { disposition = "handled", note = "every revision of every block, live and folded" }
+"kb_chunks.embedding"                     = { disposition = "handled", note = "nulled with embedded_with, together. Vectors computed FROM it (region centroids, a context's telos) are separate lines below" }
+"kb_resource_search_index.search_vector"  = { disposition = "handled", note = "emptied to ''" }
+"kb_data_artifact_content.content"        = { disposition = "handled", note = "every artifact of the resource, whatever its kind owner, intent or fold state" }
+"kb_workflow_jobs.payload"                = { disposition = "handled", note = "jobs whose resource_id is R, in every status. Context-, cogmap- and system-scoped jobs are left (see last_error)" }
+"kb_workflow_jobs.last_error"             = { disposition = "handled", note = "jobs whose resource_id is R, in every status. Context-, cogmap- and system-scoped jobs whose error text quotes R are left" }
+"kb_ingestion_records.source_uri"         = { disposition = "handled", note = "the origin_uri class sentinel 'erased:<resource_id>'" }
+"kb_data_artifact_verdicts.detail"        = { disposition = "handled", note = "every verdict on an artifact of the resource" }
+"kb_data_artifacts.artifact_kind"         = { disposition = "handled", note = "D4 artifact family: 'erased:<asserted_by_event_id>', every artifact of the resource whatever its intent or fold state; husks erased before (9f) existed got it once (20261008100000)" }
+"kb_citation_audits.reason"               = { disposition = "handled", note = "joint-read fix: audits whose block is R's. Audits by other findings that cite R are left, and named in the remainder only when their payload carries R's id" }
 
 # ── handled: projection-side sentinels (D2 step 9, D4 classes) ──────────────────────────────
-"kb_resources.title"                      = { disposition = "handled:D2.9", note = "D4 title: 'erased-<resource_id>'" }
-"kb_resources.origin_uri"                 = { disposition = "handled:D2.9", note = "D4 origin_uri: 'erased:<resource_id>'" }
-"kb_properties.property_key"              = { disposition = "handled:D2.9", note = "D4 'erased-key-<n>', for properties of R, of every edge touching it, and of every block of R (step 9d′)" }
-"kb_properties.property_value"            = { disposition = "handled:D2.9", note = "D4 '\"erased\"', on the same rows as property_key" }
-"kb_edges.label"                          = { disposition = "handled:D2.9", note = "D4 edge label: NULL, on every edge touching the resource" }
-"kb_remote_sources.uri"                   = { disposition = "repointed:D2.9:kb_block_provenance.source_id", note = "outside the walk (see header). The original row is deleted only when nothing else cites it; a URL another resource still cites stays, named by id in the remainder (D8)" }
+"kb_resources.title"                      = { disposition = "handled", note = "D4 title: 'erased-<resource_id>'" }
+"kb_resources.origin_uri"                 = { disposition = "handled", note = "D4 origin_uri: 'erased:<resource_id>'" }
+"kb_properties.property_key"              = { disposition = "handled", note = "D4 'erased-key-<n>', for properties of R, of every edge touching it, and of every block of R (step 9d′)" }
+"kb_properties.property_value"            = { disposition = "handled", note = "D4 '\"erased\"', on the same rows as property_key" }
+"kb_edges.label"                          = { disposition = "handled", note = "D4 edge label: NULL, on every edge touching the resource" }
+"kb_remote_sources.uri"                   = { disposition = "repointed:kb_block_provenance.source_id", note = "outside the walk (see header). The original row is deleted only when nothing else cites it; a URL another resource still cites stays, named by id in the remainder (D8)" }
 
 # ── out of scope: the ledger (cut 2) ────────────────────────────────────────────────────────
 "kb_events.payload"                       = { disposition = "out-of-scope", note = "the ledger, not this section's: the act rewrites the free text of R's own trail events path by path (cut 2, 20261009100000), declared under [payload] below, and this section's binding cannot see a payload rewrite. Events outside R's trail that quote R are not named" }
 "kb_events.metadata"                      = { disposition = "out-of-scope", note = "the ledger, not this section's: authorship reasoning, rationale, persona and model on R's trail events are rewritten to the authorship sentinel (cut 2), declared by [payload]'s metadata: lines; the fence walks AgentAuthorship's schema" }
 
 # ── derived vectors ──────────────────────────────────────────────────────────────────────────
-"kb_cogmap_regions.centroid"              = { disposition = "handled:D2.6", note = "a FOLDED region holding R as a member is zeroed (never recomputed; R's vector was recoverable from it). A LIVE region holding R is recomputed over the survivors by _resource_erasure_recompute_live_centroids, which the body PERFORMs: a recompute is not an erasure constant, so this fence does not bind it; the act's witnesses do. The re-form the service queues after commit then folds a clean row; a materialize already in flight at the act, which loaded R live, is followed by the region drain's erased-member gate (region_clocks::tick), which re-forms the anchor's default-lens regions (ruled 2026-10-04). Every materialize recomputes, under its anchor lock and before it folds, the live regions of its lens that list an erased resource (_region_recompute_erased_member_centroids, ruled 2026-10-08)" }
-"kb_contexts.telos_centroid"              = { disposition = "handled:D2.6", note = "R's home context's snapshot nulled beside its watermark, whatever R's doc type; the drain's materialize re-arms it from the live telos, which already excludes R. The copies in region_materialized / salience_refreshed payloads are named in ledger_remainder when R is a goal: the ledger exception does not reach them, so they are a permanent remainder (ruled 2026-10-04)" }
+"kb_cogmap_regions.centroid"              = { disposition = "handled", note = "a FOLDED region holding R as a member is zeroed (never recomputed; R's vector was recoverable from it). A LIVE region holding R is recomputed over the survivors by _resource_erasure_recompute_live_centroids, which the body PERFORMs: a recompute is not an erasure constant, so this fence does not bind it; the act's witnesses do. The re-form the service queues after commit then folds a clean row; a materialize already in flight at the act, which loaded R live, is followed by the region drain's erased-member gate (region_clocks::tick), which re-forms the anchor's default-lens regions (ruled 2026-10-04). Every materialize recomputes, under its anchor lock and before it folds, the live regions of its lens that list an erased resource (_region_recompute_erased_member_centroids, ruled 2026-10-08)" }
+"kb_contexts.telos_centroid"              = { disposition = "handled", note = "R's home context's snapshot nulled beside its watermark, whatever R's doc type; the drain's materialize re-arms it from the live telos, which already excludes R. The copies in region_materialized / salience_refreshed payloads are named in ledger_remainder when R is a goal: the ledger exception does not reach them, so they are a permanent remainder (ruled 2026-10-04)" }
 "kb_cogmaps.telos_centroid"               = { disposition = "out-of-scope", note = "derived from the charter's content, so R-derived only when R is the charter, which the act refuses (D5). The map-grain task owns it" }
 
 # ── out of scope: the map's text ────────────────────────────────────────────────────────────

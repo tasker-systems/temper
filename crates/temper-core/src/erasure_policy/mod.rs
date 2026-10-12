@@ -10,14 +10,15 @@
 //!
 //! Every column entry sits under a quoted `"table.column"` key, so a column declared twice fails the
 //! TOML parse itself. Claims and dispositions keep their compact string forms (`"erased:7"`,
-//! `"handled:D2.1"`, `"redact:title"`) and are read through `FromStr` into the enums below; an
-//! unknown word is a parse error that names its file, line and column.
+//! `"handled"`, `"redact:title"`) and are read through `FromStr` into the enums below; an unknown
+//! word is a parse error that names its file, line and column. Every `note` is trimmed as it is
+//! read, so a note of only whitespace reads as empty.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 /// `Deserialize` for a type with a `FromStr` grammar: read a string, parse it, and report a grammar
 /// failure as a deserialize error, so the TOML error carries the offending value's position.
@@ -40,7 +41,9 @@ pub use columns::{
     Achieved, Ceiling, Claim, Class, ColumnKey, PersonalColumn, ScanColumn, ScanDisposition,
     SensitivityScan,
 };
-pub use estate::{Estate, Grain, Home, Link, Mechanism, ParentPath, Reach, ScopeRule, TableGrain};
+pub use estate::{
+    CitedBy, Estate, Gap, Grain, Home, Link, Mechanism, ParentPath, Reach, ScopeRule, TableGrain,
+};
 pub use resource_erasure::{
     Disposition, PayloadDisposition, PayloadLine, Qualifier, Refinement, ResourceErasure, TableLine,
 };
@@ -118,7 +121,7 @@ pub struct ErasurePolicy {
     /// `table.column` → its personal-data class, ceiling and achieved reach (`personal-data.toml`).
     pub personal_data: BTreeMap<ColumnKey, PersonalColumn>,
     /// The sensitivity-scan columns and their stated count (`sensitivity-scan.toml`).
-    pub sensitivity: SensitivityScan,
+    pub sensitivity_scan: SensitivityScan,
     /// What resource erasure does with each carrier column and ledger path (`resource-erasure.toml`).
     pub resource_erasure: ResourceErasure,
 }
@@ -159,6 +162,11 @@ struct PersonalDataFile {
     columns: BTreeMap<ColumnKey, PersonalColumn>,
 }
 
+/// A `note`, trimmed, so a note of only whitespace reads as empty.
+fn trimmed<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Ok(String::deserialize(deserializer)?.trim().to_owned())
+}
+
 fn read<T: DeserializeOwned>(file: ManifestFile, text: &str) -> Result<T, ParseError> {
     toml::from_str(text).map_err(|source| ParseError { file, source })
 }
@@ -168,38 +176,44 @@ pub fn parse(files: &ManifestFiles<'_>) -> Result<ErasurePolicy, ParseError> {
     let root: RootFile = read(ManifestFile::Root, files.root)?;
     let estate: Estate = read(ManifestFile::Estate, files.estate)?;
     let personal: PersonalDataFile = read(ManifestFile::PersonalData, files.personal_data)?;
-    let sensitivity: SensitivityScan = read(ManifestFile::SensitivityScan, files.sensitivity_scan)?;
+    let sensitivity_scan: SensitivityScan =
+        read(ManifestFile::SensitivityScan, files.sensitivity_scan)?;
     let resource_erasure: ResourceErasure =
         read(ManifestFile::ResourceErasure, files.resource_erasure)?;
     Ok(ErasurePolicy {
         format: root.format,
         estate,
         personal_data: personal.columns,
-        sensitivity,
+        sensitivity_scan,
         resource_erasure,
     })
 }
 
 #[cfg(test)]
 mod tests {
+    use uuid::Uuid;
+
     use super::*;
 
     const ROOT: &str = "format = 1\n";
 
+    /// The task the fixture's gaps name.
+    const TASK: &str = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c";
+
     const ESTATE: &str = r#"
 scope = [
   { rule = "the subject's @me contexts", mechanism = { bound = "_erasure_estate_contexts" } },
-  { rule = "cogmaps whose only team join is the personal team", mechanism = { gap = "2a: R15 cogmap scope" } },
+  { rule = "cogmaps whose only team join is the personal team", mechanism = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "cogmaps whose only kb_team_cogmaps row is the personal team" } } },
 ]
 
 [tables.kb_resources]
 grain = { kind = "per-item", container = false, fence = { bound = "is_active" }, unit = { bound = "resource_erasure_execute" }, home = { table = "kb_resource_homes", table_column = "anchor_table", id_column = "anchor_id" } }
 
 [tables.kb_contexts]
-grain = { kind = "per-item", container = true, fence = { bound = "is_active" }, unit = { gap = "2a: context unit" } }
+grain = { kind = "per-item", container = true, fence = { bound = "is_active" }, unit = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "the unit that erases one context" } } }
 
 [tables.kb_edges]
-grain = { kind = "per-item", container = false, fence = { bound = "is_folded" }, unit = { gap = "2a: label redaction" } }
+grain = { kind = "per-item", container = false, fence = { bound = "is_folded" }, unit = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "label redaction" } } }
 also_reached = [
   { path = { table = "kb_resources", link = { fk = "source_id" } }, mechanism = { bound = "resource_erasure_execute" } },
 ]
@@ -208,11 +222,14 @@ also_reached = [
 grain = { kind = "covered", parent = { table = "kb_resources", link = { pair = { table_column = "owner_table", id_column = "owner_id" } } } }
 
 [tables.kb_remote_sources]
-grain = { kind = "covered", parent = { table = "kb_block_provenance", link = { pair = { table_column = "source_kind", id_column = "source_id" } }, via = "source_kind = 'remote_source'; no foreign key" } }
+grain = { kind = "covered", parent = { table = "kb_block_provenance", link = { ref = "source_id" }, cited_by = { column = "source_kind", value = "remote" } } }
 note = "re-pointed, not erased"
 
 [tables.kb_profiles]
 grain = { kind = "identity", mechanism = { bound = "_erasure_apply_redaction" } }
+
+[tables.kb_oauth_refresh_tokens]
+grain = { kind = "identity", mechanism = { bound = "_erasure_apply_redaction" }, retention = "credential-replay-evidence" }
 
 [tables.kb_events]
 grain = { kind = "declared-out", reason = "the ledger is append-only" }
@@ -225,33 +242,33 @@ grain = { kind = "declared-out", reason = "kept under the deployment's policy", 
 [columns]
 "kb_profiles.id" = { class = "reference", ceiling = "pseudonym", achieved = "-", note = "THE pseudonym" }
 "kb_profiles.email" = { class = "identifier", ceiling = "full", achieved = "erased:7" }
-"kb_chunks.embedding" = { class = "derived", ceiling = "full", achieved = "resource-erasure:D2.3 + erased:4", note = "estate resources" }
+"kb_chunks.embedding" = { class = "derived", ceiling = "full", achieved = "resource-erasure + erased:4", note = "estate resources" }
 "kb_blob_upload_segments.bytes" = { class = "content", ceiling = "full", achieved = "cascaded:6a:kb_blob_uploads" }
 "kb_slack_link_intents.slack_principal_id" = { class = "identifier", ceiling = "full", achieved = "deleted:8" }
 "kb_invocations.outcome" = { class = "incidental", ceiling = "full", achieved = "remainder:  no arm reaches it " }
 "kb_access_grants.principal_table" = { class = "discriminator", ceiling = "n-a", achieved = "-" }
 "#;
 
-    const SENSITIVITY: &str = r#"
+    const SENSITIVITY_SCAN: &str = r#"
 count_at = "20261023100000"
 declared_count = 3
 
 [columns]
-"kb_resources.title" = { disposition = "scan", note = "the commonest PII carrier" }
+"kb_resources.title" = { disposition = "scan", note = "the commonest carrier of personal data" }
 "kb_blobs.content_hash" = { disposition = "structural", note = "sha256" }
 "kb_team_invitations.token" = { disposition = "credential" }
 "#;
 
     const RESOURCE: &str = r#"
 [tables]
-"kb_chunks.embedding" = { disposition = "handled:D2.3", note = "nulled with embedded_with" }
-"kb_ingestion_records.source_uri" = { disposition = "handled:D2.7a" }
-"kb_remote_sources.uri" = { disposition = "repointed:D2.9:kb_block_provenance.source_id", note = "outside the walk" }
+"kb_chunks.embedding" = { disposition = "handled", note = "nulled with embedded_with" }
+"kb_ingestion_records.source_uri" = { disposition = "handled" }
+"kb_remote_sources.uri" = { disposition = "repointed:kb_block_provenance.source_id", note = "outside the walk" }
 "kb_events.payload" = { disposition = "out-of-scope", note = "the ledger" }
 
 [payload.resource_updated]
 "*" = { disposition = "permissive", note = "fields from payloads.rs ResourceUpdated" }
-"/title" = { disposition = "redact:title", note = "F3" }
+"/title" = { disposition = "redact:title", note = "a title" }
 
 [payload.property_set]
 "/value" = { disposition = "redact:property-value", note = "erased:<event_id>", refine = [ { where = { key = "facet" }, disposition = "redact:facet-value" } ] }
@@ -265,7 +282,7 @@ refine = [
 ]
 
 [payload.metadata]
-"/reasoning" = { disposition = "redact:authorship", note = "D4: \"erased\"" }
+"/reasoning" = { disposition = "redact:authorship", note = "the sentinel \"erased\"" }
 "#;
 
     fn files() -> ManifestFiles<'static> {
@@ -273,13 +290,20 @@ refine = [
             root: ROOT,
             estate: ESTATE,
             personal_data: PERSONAL,
-            sensitivity_scan: SENSITIVITY,
+            sensitivity_scan: SENSITIVITY_SCAN,
             resource_erasure: RESOURCE,
         }
     }
 
     fn key(raw: &str) -> ColumnKey {
         raw.parse().expect("a well-formed column key")
+    }
+
+    fn gap(what: &str) -> Mechanism {
+        Mechanism::Gap(Gap {
+            task: Uuid::parse_str(TASK).expect("the fixture's task is a uuid"),
+            what: what.into(),
+        })
     }
 
     /// Parse `files`, expecting a failure in `file`; returns the error's text.
@@ -292,6 +316,13 @@ refine = [
             "the message names no file: {text}"
         );
         text
+    }
+
+    /// `ESTATE` with `from` replaced by `to`, asserting the replacement changed it.
+    fn estate_with(from: &str, to: &str) -> String {
+        let estate = ESTATE.replace(from, to);
+        assert_ne!(estate, ESTATE, "the probe must change the fixture");
+        estate
     }
 
     #[test]
@@ -309,7 +340,7 @@ refine = [
         assert_eq!(
             policy.personal_data[&key("kb_chunks.embedding")].achieved,
             Achieved::Claims(vec![
-                Claim::ResourceErasure { step: "3".into() },
+                Claim::ResourceErasure,
                 Claim::Erased { arm: "4".into() },
             ])
         );
@@ -349,10 +380,10 @@ refine = [
             ]
         );
 
-        assert_eq!(policy.sensitivity.count_at, "20261023100000");
-        assert_eq!(policy.sensitivity.declared_count, 3);
-        let scanned: Vec<&str> = policy
-            .sensitivity
+        let scan = &policy.sensitivity_scan;
+        assert_eq!(scan.count_at, "20261023100000");
+        assert_eq!(scan.declared_count, 3);
+        let scanned: Vec<&str> = scan
             .keys(ScanDisposition::Scan)
             .map(ColumnKey::as_str)
             .collect();
@@ -362,7 +393,6 @@ refine = [
         assert_eq!(
             tables[&key("kb_remote_sources.uri")].disposition,
             Disposition::Repointed {
-                step: "9".into(),
                 via: key("kb_block_provenance.source_id"),
             }
         );
@@ -370,17 +400,14 @@ refine = [
             tables[&key("kb_events.payload")].disposition,
             Disposition::OutOfScope
         );
-        let handled: Vec<(&str, &str)> = policy
+        let handled: Vec<&str> = policy
             .resource_erasure
             .handled()
-            .map(|(k, step)| (k.as_str(), step))
+            .map(ColumnKey::as_str)
             .collect();
         assert_eq!(
             handled,
-            [
-                ("kb_chunks.embedding", "3"),
-                ("kb_ingestion_records.source_uri", "7a")
-            ]
+            ["kb_chunks.embedding", "kb_ingestion_records.source_uri"]
         );
 
         let payload = &policy.resource_erasure.payload;
@@ -416,7 +443,7 @@ refine = [
         let estate = &policy.estate;
         assert_eq!(
             estate.scope[1].mechanism,
-            Mechanism::Gap("2a: R15 cogmap scope".into())
+            gap("cogmaps whose only kb_team_cogmaps row is the personal team")
         );
         assert_eq!(
             estate.tables["kb_resources"].grain,
@@ -437,7 +464,7 @@ refine = [
                 path: ParentPath {
                     table: "kb_resources".into(),
                     link: Link::Fk("source_id".into()),
-                    via: None,
+                    cited_by: None,
                 },
                 mechanism: Mechanism::Bound("resource_erasure_execute".into()),
                 column: None,
@@ -448,11 +475,11 @@ refine = [
             Grain::Covered {
                 parent: ParentPath {
                     table: "kb_block_provenance".into(),
-                    link: Link::Pair {
-                        table_column: "source_kind".into(),
-                        id_column: "source_id".into(),
-                    },
-                    via: Some("source_kind = 'remote_source'; no foreign key".into()),
+                    link: Link::Ref("source_id".into()),
+                    cited_by: Some(CitedBy {
+                        column: "source_kind".into(),
+                        value: "remote".into(),
+                    }),
                 },
                 unit: None,
             }
@@ -461,6 +488,14 @@ refine = [
             estate.tables["kb_profiles"].grain,
             Grain::Identity {
                 mechanism: Mechanism::Bound("_erasure_apply_redaction".into()),
+                retention: None,
+            }
+        );
+        assert_eq!(
+            estate.tables["kb_oauth_refresh_tokens"].grain,
+            Grain::Identity {
+                mechanism: Mechanism::Bound("_erasure_apply_redaction".into()),
+                retention: Some("credential-replay-evidence".into()),
             }
         );
         assert_eq!(
@@ -502,7 +537,7 @@ refine = [
             },
             ManifestFile::PersonalData,
         );
-        let scan = SENSITIVITY.replace(r#""scan""#, r#""unadjudicated""#);
+        let scan = SENSITIVITY_SCAN.replace(r#""scan""#, r#""unadjudicated""#);
         fails_in(
             ManifestFiles {
                 sensitivity_scan: &scan,
@@ -510,13 +545,12 @@ refine = [
             },
             ManifestFile::SensitivityScan,
         );
-        for bad in [
-            "handled:D2.10",
-            "repointed:D2.9",
-            "repointed:D2.9:source_id",
-            "erased",
-        ] {
-            let resource = RESOURCE.replace("handled:D2.3", bad);
+        for bad in ["handled:3", "repointed", "repointed:source_id", "erased"] {
+            let resource = RESOURCE.replace(
+                r#"{ disposition = "handled", note = "nulled"#,
+                &format!(r#"{{ disposition = "{bad}", note = "nulled"#),
+            );
+            assert_ne!(resource, RESOURCE, "the probe must change the fixture");
             fails_in(
                 ManifestFiles {
                     resource_erasure: &resource,
@@ -539,7 +573,7 @@ refine = [
     fn an_unknown_field_fails_in_every_file() {
         let root = "format = 1\nversion = 2\n";
         fails_in(ManifestFiles { root, ..files() }, ManifestFile::Root);
-        let estate = ESTATE.replace(
+        let estate = estate_with(
             r#"reason = "the ledger is append-only""#,
             r#"reason = "the ledger is append-only", why = "x""#,
         );
@@ -561,7 +595,7 @@ refine = [
             },
             ManifestFile::PersonalData,
         );
-        let scan = SENSITIVITY.replace(r#"note = "sha256""#, r#"notes = "sha256""#);
+        let scan = SENSITIVITY_SCAN.replace(r#"note = "sha256""#, r#"notes = "sha256""#);
         fails_in(
             ManifestFiles {
                 sensitivity_scan: &scan,
@@ -569,7 +603,10 @@ refine = [
             },
             ManifestFile::SensitivityScan,
         );
-        let resource = RESOURCE.replace(r#"note = "F3""#, r#"note = "F3", class = "title""#);
+        let resource = RESOURCE.replace(
+            r#"note = "a title""#,
+            r#"note = "a title", class = "title""#,
+        );
         fails_in(
             ManifestFiles {
                 resource_erasure: &resource,
@@ -598,7 +635,7 @@ refine = [
         for bad in [
             "erased:99",
             "cascaded:6a",
-            "resource-erasure:D2.10",
+            "resource-erasure:3",
             "scrubbed:7",
             "erased:7 + ",
         ] {
@@ -680,11 +717,30 @@ refine = [
         }
     }
 
+    /// FAILS IF: a `*` line carries a refinement. A permissive refinement of `*` never becomes an
+    /// allowlist row, so it would read as a declaration that does nothing.
+    #[test]
+    fn a_star_line_takes_no_refinement() {
+        let resource = RESOURCE.replace(
+            r#""*" = { disposition = "permissive", note = "fields from payloads.rs ResourceUpdated" }"#,
+            r#""*" = { disposition = "permissive", note = "fields from payloads.rs ResourceUpdated", refine = [ { where = { key = "x" }, disposition = "permissive" } ] }"#,
+        );
+        assert_ne!(resource, RESOURCE, "the probe must change the fixture");
+        let text = fails_in(
+            ManifestFiles {
+                resource_erasure: &resource,
+                ..files()
+            },
+            ManifestFile::ResourceErasure,
+        );
+        assert!(text.contains("`*` takes no refinement"), "{text}");
+    }
+
     #[test]
     fn a_mechanism_names_exactly_one_of_bound_or_gap() {
-        let estate = ESTATE.replace(
-            r#"unit = { gap = "2a: context unit" }"#,
-            r#"unit = { gap = "2a: context unit", bound = "context_erasure_execute" }"#,
+        let estate = estate_with(
+            r#"unit = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "label redaction" } }"#,
+            r#"unit = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "label redaction" }, bound = "edge_erasure_execute" }"#,
         );
         fails_in(
             ManifestFiles {
@@ -695,11 +751,71 @@ refine = [
         );
     }
 
+    /// FAILS IF: a gap parses without naming its task as a whole UUID, or without saying what is
+    /// uncovered. A gap is the record of uncovered work, so both halves are required.
+    #[test]
+    fn a_gap_names_a_well_formed_task_and_what_is_uncovered() {
+        let well_formed =
+            r#"{ gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "label redaction" } }"#;
+        for (bad, named) in [
+            (r#"{ gap = { what = "label redaction" } }"#, "task"),
+            (
+                r#"{ gap = { task = "01a12dcf", what = "label redaction" } }"#,
+                "01a12dcf",
+            ),
+            (
+                r#"{ gap = { task = "01a12dcf2ef5729db6ef051fdee3ef8c", what = "label redaction" } }"#,
+                "01a12dcf2ef5729db6ef051fdee3ef8c",
+            ),
+            (
+                r#"{ gap = { task = "01A12DCF-2EF5-729D-B6EF-051FDEE3EF8C", what = "label redaction" } }"#,
+                "01A12DCF",
+            ),
+            (
+                r#"{ gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c" } }"#,
+                "what",
+            ),
+            (
+                r#"{ gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "   " } }"#,
+                "blank",
+            ),
+            (
+                r#"{ gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "label redaction", slice = "2a" } }"#,
+                "slice",
+            ),
+            (r#"{ gap = "label redaction" }"#, "struct Gap"),
+        ] {
+            let estate = estate_with(&format!("unit = {well_formed}"), &format!("unit = {bad}"));
+            let text = fails_in(
+                ManifestFiles {
+                    estate: &estate,
+                    ..files()
+                },
+                ManifestFile::Estate,
+            );
+            assert!(text.contains(named), "{bad}: {text}");
+        }
+    }
+
+    #[test]
+    fn a_gap_what_is_trimmed() {
+        let estate = estate_with(r#"what = "label redaction""#, r#"what = "  label redaction ""#);
+        let policy = parse(&ManifestFiles {
+            estate: &estate,
+            ..files()
+        })
+        .expect("a padded what parses");
+        let Grain::PerItem { unit, .. } = &policy.estate.tables["kb_edges"].grain else {
+            panic!("kb_edges is per-item in the fixture");
+        };
+        assert_eq!(*unit, gap("label redaction"));
+    }
+
     #[test]
     fn a_covered_grain_may_name_its_own_unit() {
         let estate = format!(
             "{ESTATE}\n[tables.kb_invocations]\n\
-             grain = {{ kind = \"covered\", parent = {{ table = \"kb_cogmaps\", link = {{ fk = \"originating_cogmap_id\" }} }}, unit = {{ gap = \"task 01a12c03-2663-7562-b6bb-2d0a67c61972: invocation outcome\" }} }}\n"
+             grain = {{ kind = \"covered\", parent = {{ table = \"kb_cogmaps\", link = {{ fk = \"originating_cogmap_id\" }} }}, unit = {{ gap = {{ task = \"{TASK}\", what = \"invocation outcomes\" }} }} }}\n"
         );
         let policy = parse(&ManifestFiles {
             estate: &estate,
@@ -712,11 +828,9 @@ refine = [
                 parent: ParentPath {
                     table: "kb_cogmaps".into(),
                     link: Link::Fk("originating_cogmap_id".into()),
-                    via: None,
+                    cited_by: None,
                 },
-                unit: Some(Mechanism::Gap(
-                    "task 01a12c03-2663-7562-b6bb-2d0a67c61972: invocation outcome".into()
-                )),
+                unit: Some(gap("invocation outcomes")),
             }
         );
         let Grain::Covered { unit, .. } = &policy.estate.tables["kb_properties"].grain else {
@@ -725,8 +839,8 @@ refine = [
         assert_eq!(*unit, None, "an absent unit is None");
 
         let estate = estate.replace(
-            r#"unit = { gap = "task 01a12c03"#,
-            r#"unit = { gone = "task 01a12c03"#,
+            r#"unit = { gap = { task"#,
+            r#"unit = { gone = { task"#,
         );
         fails_in(
             ManifestFiles {
@@ -743,8 +857,8 @@ refine = [
             "{ESTATE}\n[tables.kb_teams]\n\
              grain = {{ kind = \"identity\", mechanism = {{ bound = \"_erasure_apply_redaction\" }} }}\n\
              [[tables.kb_teams.also_reached]]\n\
-             path = {{ table = \"kb_profiles\", link = {{ fk = \"personal_of\" }} }}\n\
-             mechanism = {{ gap = \"2a: team description erased at declaration\" }}\n\
+             path = {{ table = \"kb_profiles\", link = {{ ref = \"personal_of\" }} }}\n\
+             mechanism = {{ gap = {{ task = \"{TASK}\", what = \"the personal team's description\" }} }}\n\
              column = \"description\"\n"
         );
         let policy = parse(&ManifestFiles {
@@ -757,16 +871,42 @@ refine = [
             [Reach {
                 path: ParentPath {
                     table: "kb_profiles".into(),
-                    link: Link::Fk("personal_of".into()),
-                    via: None,
+                    link: Link::Ref("personal_of".into()),
+                    cited_by: None,
                 },
-                mechanism: Mechanism::Gap("2a: team description erased at declaration".into()),
+                mechanism: gap("the personal team's description"),
                 column: Some("description".into()),
             }]
         );
         assert_eq!(
             policy.estate.tables["kb_edges"].also_reached[0].column, None,
             "an absent column is None"
+        );
+    }
+
+    #[test]
+    fn a_reverse_citation_names_its_column_and_value() {
+        let estate = estate_with(
+            r#"cited_by = { column = "source_kind", value = "remote" }"#,
+            r#"cited_by = { column = "source_kind" }"#,
+        );
+        fails_in(
+            ManifestFiles {
+                estate: &estate,
+                ..files()
+            },
+            ManifestFile::Estate,
+        );
+        let estate = estate_with(
+            r#"cited_by = { column = "source_kind", value = "remote" }"#,
+            r#"via = "source_kind = 'remote'""#,
+        );
+        fails_in(
+            ManifestFiles {
+                estate: &estate,
+                ..files()
+            },
+            ManifestFile::Estate,
         );
     }
 
@@ -786,7 +926,7 @@ refine = [
         let policy = parse(&files()).expect("the fixture parses");
         assert_eq!(policy.personal_data[&key("kb_profiles.email")].note, "");
         assert_eq!(
-            policy.sensitivity.columns[&key("kb_team_invitations.token")].note,
+            policy.sensitivity_scan.columns[&key("kb_team_invitations.token")].note,
             ""
         );
         assert_eq!(
@@ -798,6 +938,56 @@ refine = [
             ""
         );
         assert_eq!(policy.estate.tables["kb_resources"].note, "");
+    }
+
+    /// FAILS IF: a note of only whitespace reads as a note. The fences that require a reason test
+    /// `note.is_empty()`, so an untrimmed blank note would pass them.
+    #[test]
+    fn a_blank_note_parses_as_empty() {
+        let personal = PERSONAL.replace(r#"note = "THE pseudonym""#, r#"note = "   ""#);
+        let scan = SENSITIVITY_SCAN.replace(r#"note = "sha256""#, r#"note = " ""#);
+        let resource = RESOURCE
+            .replace(r#"note = "the ledger""#, r#"note = "  ""#)
+            .replace(r#"note = "the literal key stays""#, r#"note = "\t""#);
+        let estate = estate_with(r#"note = "re-pointed, not erased""#, r#"note = "  ""#);
+        for changed in [&personal, &scan, &resource] {
+            assert!(
+                ![PERSONAL, SENSITIVITY_SCAN, RESOURCE].contains(&changed.as_str()),
+                "the probe must change the fixture"
+            );
+        }
+        let policy = parse(&ManifestFiles {
+            personal_data: &personal,
+            sensitivity_scan: &scan,
+            resource_erasure: &resource,
+            estate: &estate,
+            ..files()
+        })
+        .expect("blank notes parse");
+        assert_eq!(policy.personal_data[&key("kb_profiles.id")].note, "");
+        assert_eq!(
+            policy.sensitivity_scan.columns[&key("kb_blobs.content_hash")].note,
+            ""
+        );
+        assert_eq!(
+            policy.resource_erasure.tables[&key("kb_events.payload")].note,
+            ""
+        );
+        assert_eq!(
+            policy.resource_erasure.payload["property_set"]["/property_key"].refine[0].note,
+            ""
+        );
+        assert_eq!(policy.estate.tables["kb_remote_sources"].note, "");
+
+        let padded = parse(&ManifestFiles {
+            resource_erasure: &RESOURCE.replace(r#"note = "the ledger""#, r#"note = " the ledger ""#),
+            ..files()
+        })
+        .expect("a padded note parses");
+        assert_eq!(
+            padded.resource_erasure.tables[&key("kb_events.payload")].note,
+            "the ledger"
+        );
     }
 
     #[test]

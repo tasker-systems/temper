@@ -1,29 +1,63 @@
 //! The model of `estate.toml`: the scope rules that say what is in an estate, and one grain per
-//! table that says how an erasure reaches the table's rows (spec D3 *Contents*, D7.4).
+//! table that says how an erasure reaches the table's rows.
 //!
 //! Every place the manifest names a mechanism, it says whether that mechanism exists
-//! ([`Mechanism::Bound`]) or is still to be built ([`Mechanism::Gap`]), so nothing reads as covered
-//! by being absent.
+//! ([`Mechanism::Bound`]) or is uncovered work tracked by a task ([`Mechanism::Gap`]).
 
 use std::collections::BTreeMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+use uuid::Uuid;
 
-/// A mechanism the manifest relies on: in TOML `{ bound = "…" }` or `{ gap = "…" }`, exactly one.
+/// A mechanism the manifest relies on: in TOML `{ bound = "…" }` or
+/// `{ gap = { task = "<uuid>", what = "…" } }`, exactly one.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mechanism {
     /// It exists: the live name of the function, view or column that does it.
     Bound(String),
-    /// It does not exist yet: `<slice>: <what>`, naming where it will be built.
-    Gap(String),
+    /// It does not exist: what is uncovered, and the task that tracks it.
+    Gap(Gap),
+}
+
+/// Uncovered work: what no mechanism reaches, and the task that tracks it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Gap {
+    /// The task, as a hyphenated lowercase UUID.
+    #[serde(deserialize_with = "task_id")]
+    pub task: Uuid,
+    /// What is uncovered, in plain words. Never blank.
+    #[serde(deserialize_with = "what")]
+    pub what: String,
+}
+
+/// A task id: a UUID written in its hyphenated lowercase form, so a task is never abbreviated.
+fn task_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Uuid, D::Error> {
+    let raw = String::deserialize(deserializer)?;
+    match Uuid::try_parse(&raw) {
+        Ok(id) if id.hyphenated().to_string() == raw => Ok(id),
+        _ => Err(serde::de::Error::custom(format!(
+            "task {raw:?} is not a UUID in hyphenated lowercase form"
+        ))),
+    }
+}
+
+/// A gap's `what`: trimmed, and refused when blank.
+fn what<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let raw = String::deserialize(deserializer)?;
+    let what = raw.trim();
+    if what.is_empty() {
+        return Err(serde::de::Error::custom("a gap's `what` is blank"));
+    }
+    Ok(what.to_owned())
 }
 
 /// `estate.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Estate {
-    /// The rules that put containers in an estate, one per D3 bullet.
+    /// The rules that put containers in an estate.
     pub scope: Vec<ScopeRule>,
     /// Table name → its grain. One grain per table, since a TOML table key is unique.
     pub tables: BTreeMap<String, TableGrain>,
@@ -49,13 +83,13 @@ pub struct TableGrain {
     /// own home and by its endpoints), each with what follows it.
     #[serde(default)]
     pub also_reached: Vec<Reach>,
-    /// Free text for the reader; empty when absent.
-    #[serde(default)]
+    /// Free text for the reader, trimmed; empty when absent.
+    #[serde(default, deserialize_with = "super::trimmed")]
     pub note: String,
 }
 
-/// D3's grains. In TOML an inline table tagged by `kind`: `per-item`, `covered`, `identity` or
-/// `declared-out`.
+/// How an erasure reaches a table's rows. In TOML an inline table tagged by `kind`: `per-item`,
+/// `covered`, `identity` or `declared-out`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Grain {
@@ -83,6 +117,9 @@ pub enum Grain {
     Identity {
         /// What erases it.
         mechanism: Mechanism,
+        /// The retention category under which a deployment keeps what the mechanism would
+        /// otherwise erase, when one applies.
+        retention: Option<String>,
     },
     /// Deliberately not erased.
     DeclaredOut {
@@ -111,23 +148,35 @@ pub struct Home {
 pub struct ParentPath {
     /// The table the path reaches.
     pub table: String,
-    /// The columns that make the link: on the row's own table, or, for a path with `via`, on
-    /// `table`, the table whose rows cite this one.
+    /// The columns that make the link: on the row's own table, or, for a path with `cited_by`,
+    /// on `table`, the table whose rows cite this one.
     pub link: Link,
-    /// For a path read in reverse, from a citing table with no foreign key (`kb_remote_sources`
-    /// is cited by `kb_block_provenance`'s `(source_kind, source_id)`): how the citation is read.
-    /// Its presence moves `link`'s columns onto `table`.
-    pub via: Option<String>,
+    /// For a path read in reverse: the discriminator on `table` that says a citing row cites
+    /// this table. Its presence moves `link`'s columns onto `table`.
+    pub cited_by: Option<CitedBy>,
 }
 
-/// The columns of a [`ParentPath`]: in TOML `{ fk = "…" }` or
+/// The discriminator a citing table uses to say which table a row of it cites:
+/// `cited_by = { column = "source_kind", value = "remote" }`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CitedBy {
+    /// The discriminator column, on the citing table.
+    pub column: String,
+    /// The value of `column` that marks a citation of this table.
+    pub value: String,
+}
+
+/// The columns of a [`ParentPath`]: in TOML `{ fk = "…" }`, `{ ref = "…" }` or
 /// `{ pair = { table_column = "…", id_column = "…" } }`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase", deny_unknown_fields)]
 pub enum Link {
-    /// A column holding the other row's id: a foreign key, or a uuid reference with no
-    /// constraint (`kb_teams.personal_of`).
+    /// A column holding the other row's id under a foreign-key constraint.
     Fk(String),
+    /// A uuid column holding the other row's id with no foreign-key constraint
+    /// (`kb_teams.personal_of`).
+    Ref(String),
     /// A CHECKed discriminator pair.
     Pair {
         /// The `*_table` column naming the other row's table.

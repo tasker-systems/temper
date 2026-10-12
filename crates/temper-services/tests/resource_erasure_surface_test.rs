@@ -109,7 +109,7 @@ fn reachable_tables_sql() -> String {
 
 /// `table.column` → its disposition and note: the declaration half, the `[tables]` of
 /// `policy/erasure/resource-erasure.toml` in force. The parser (`temper_core::erasure_policy::parse`)
-/// refuses an unknown disposition or D2 step, a malformed `repointed` column and a column declared
+/// refuses an unknown disposition, a malformed `repointed` column and a column declared
 /// twice, so a malformed entry fails the parse rather than dropping a declaration and reading as
 /// uncovered.
 fn declarations() -> &'static BTreeMap<ColumnKey, TableLine> {
@@ -121,7 +121,7 @@ fn declarations() -> &'static BTreeMap<ColumnKey, TableLine> {
 fn carriers() -> BTreeSet<String> {
     let policy = in_force();
     policy
-        .sensitivity
+        .sensitivity_scan
         .keys(ScanDisposition::Scan)
         .chain(
             CARRIER_CLASSES
@@ -170,11 +170,11 @@ fn reads_column(expr: &[String], column: &str) -> bool {
 fn binds(body: &str, key: &str, disposition: &Disposition) -> bool {
     let t = tokens(body);
     match disposition {
-        Disposition::Handled { .. } => {
+        Disposition::Handled => {
             let values = assignments(&t, key);
             !values.is_empty() && values.into_iter().all(is_erasure_value)
         }
-        Disposition::Repointed { via, .. } => {
+        Disposition::Repointed { via } => {
             assignments(&t, via.as_str()).into_iter().any(|expr| {
                 !expr.is_empty()
                     && !reads_column(expr, via.column())
@@ -223,7 +223,7 @@ async fn every_reachable_carrier_is_handled_or_declared(pool: PgPool) {
         "these columns are carriers (`scan` in policy/erasure/sensitivity-scan.toml, or \
          content/incidental/derived in policy/erasure/personal-data.toml), sit in a table a \
          resource reaches, and have no entry in policy/erasure/resource-erasure.toml [tables].\n\
-         Either make `{REDACTION_FN}` erase the column and declare it `handled:D2.<step>`, or \
+         Either make `{REDACTION_FN}` erase the column and declare it `handled`, or \
          declare it `out-of-scope` with the reason the act leaves it.\n\
          Uncovered: {missing:#?}"
     );
@@ -240,7 +240,7 @@ async fn every_handled_declaration_is_carried_out_by_the_redaction(pool: PgPool)
          `{REDACTION_FN}` does not do what the entry says: a `handled` column needs an UPDATE of its \
          table assigning NULL, '', '{{}}', '\"erased\"' or an 'erased…' sentinel; a `repointed` \
          one needs the re-point UPDATE and the DELETE.\n\
-         Restore the step, or change the entry to say what the act now does.\n\
+         Restore the statement, or change the entry to say what the act now does.\n\
          Unbound: {broken:#?}"
     );
 }
@@ -541,7 +541,7 @@ fn the_binding_reads_erasing_assignments_not_mentions() {
         UPDATE kb_block_provenance bp SET source_id = (v ->> bp.id::text)::uuid;
         DELETE FROM kb_remote_sources r WHERE r.id = v;
     ";
-    let handled = Disposition::Handled { step: "9".into() };
+    let handled = Disposition::Handled;
     for key in [
         "kb_chunks.embedding",
         "kb_chunks.embedded_with",
@@ -584,7 +584,6 @@ fn the_binding_reads_erasing_assignments_not_mentions() {
     }
 
     let repointed = Disposition::Repointed {
-        step: "9".into(),
         via: "kb_block_provenance.source_id".parse().unwrap(),
     };
     assert!(binds(sql, "kb_remote_sources.uri", &repointed));
@@ -610,7 +609,7 @@ fn the_binding_reads_erasing_assignments_not_mentions() {
 /// The binding's remaining rules, each case excluded by exactly the one named beside it.
 #[test]
 fn the_binding_is_not_fooled_by_spacing_restoring_or_parking() {
-    let handled = Disposition::Handled { step: "9".into() };
+    let handled = Disposition::Handled;
     let bound = |sql: &str, key: &str| binds(sql, key, &handled);
 
     assert!(
@@ -679,7 +678,6 @@ fn the_binding_is_not_fooled_by_spacing_restoring_or_parking() {
     }
 
     let repointed = Disposition::Repointed {
-        step: "9".into(),
         via: "kb_block_provenance.source_id".parse().unwrap(),
     };
     assert!(

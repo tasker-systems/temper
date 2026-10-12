@@ -25,7 +25,6 @@ use std::collections::BTreeSet;
 use sqlx::PgPool;
 use temper_core::erasure_policy::{
     Class, ErasurePolicy, Grain, Link, Mechanism, ParentPath, ScanColumn, ScanDisposition,
-    ScopeRule,
 };
 use temper_services::erasure_policy::in_force;
 
@@ -42,7 +41,7 @@ fn content_or_identity_tables(policy: &ErasurePolicy) -> BTreeSet<&str> {
     let personal = CARRIER_CLASSES
         .iter()
         .flat_map(move |&class| policy.personal_data_keys(class));
-    let scanned = policy.sensitivity.keys(ScanDisposition::Scan);
+    let scanned = policy.sensitivity_scan.keys(ScanDisposition::Scan);
     personal.chain(scanned).map(|key| key.table()).collect()
 }
 
@@ -172,13 +171,13 @@ fn path_problems(at: &str, row_table: &str, path: &ParentPath, catalog: &Catalog
     if !catalog.tables.contains(&path.table) {
         problems.push(format!("{at}: reaches no table {}", path.table));
     }
-    let columns_on = if path.via.is_some() {
+    let columns_on = if path.cited_by.is_some() {
         path.table.as_str()
     } else {
         row_table
     };
     let columns: Vec<&str> = match &path.link {
-        Link::Fk(column) => vec![column.as_str()],
+        Link::Fk(column) | Link::Ref(column) => vec![column.as_str()],
         Link::Pair {
             table_column,
             id_column,
@@ -255,34 +254,6 @@ fn catalog_problems(policy: &ErasurePolicy, catalog: &Catalog) -> Vec<String> {
     problems
 }
 
-/// The slices a gap may name, from the spec's *Slices*; or a filed task (`task <uuid>`).
-const SLICES: &[&str] = &["1b", "1c", "1d", "2a", "2b", "2c", "3", "prereq 2a"];
-
-/// Whether `gap` matches `^(1b|1c|1d|2a|2b|2c|3|prereq 2a|task [0-9a-f-]{36}):`.
-fn names_its_slice(gap: &str) -> bool {
-    let Some((slice, _)) = gap.split_once(':') else {
-        return false;
-    };
-    SLICES.contains(&slice)
-        || slice.strip_prefix("task ").is_some_and(|id| {
-            id.len() == 36
-                && id
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || b == b'-')
-        })
-}
-
-/// Every gap in `policy`'s estate that does not name its slice, with where it is.
-fn unslotted_gaps(policy: &ErasurePolicy) -> Vec<String> {
-    mechanisms(policy)
-        .into_iter()
-        .filter_map(|site| match site.mechanism {
-            Mechanism::Gap(gap) if !names_its_slice(gap) => Some(format!("{}: {gap:?}", site.at)),
-            Mechanism::Gap(_) | Mechanism::Bound(_) => None,
-        })
-        .collect()
-}
-
 /// FAILS IF: a table with a content or identity column has no grain, so no erasure path says how
 /// its rows are reached.
 #[test]
@@ -309,7 +280,7 @@ fn every_content_or_identity_table_has_exactly_one_grain() {
 #[test]
 fn an_added_carrier_table_without_a_grain_is_reported() {
     let mut policy = in_force().clone();
-    policy.sensitivity.columns.insert(
+    policy.sensitivity_scan.columns.insert(
         "kb_probe_t.note".parse().expect("a well-formed column key"),
         ScanColumn {
             disposition: ScanDisposition::Scan,
@@ -350,31 +321,5 @@ async fn a_bound_function_that_does_not_exist_is_reported(pool: PgPool) {
     assert_eq!(
         problems,
         ["kb_resources unit: no function resource_erasure_execute_probe"]
-    );
-}
-
-/// FAILS IF: a gap does not say which slice (or filed task) builds what it is missing, so nobody
-/// owns it.
-#[test]
-fn every_gap_names_its_slice() {
-    let unslotted = unslotted_gaps(in_force());
-    assert!(
-        unslotted.is_empty(),
-        "these gaps in policy/erasure/estate.toml name no slice. A gap reads \
-         `<slice>: <what>`, the slice one of {SLICES:?} or `task <uuid>`:\n{unslotted:#?}"
-    );
-}
-
-/// The gap check's bite: a gap naming no slice is reported, and nothing else is.
-#[test]
-fn a_gap_without_its_slice_is_reported() {
-    let mut policy = in_force().clone();
-    policy.estate.scope.push(ScopeRule {
-        rule: "a probe".into(),
-        mechanism: Mechanism::Gap("someday: a probe".into()),
-    });
-    assert_eq!(
-        unslotted_gaps(&policy),
-        [r#"scope rule "a probe": "someday: a probe""#]
     );
 }

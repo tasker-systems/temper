@@ -45,7 +45,7 @@ SELECT c.table_name || '.' || c.column_name
 /// is deliberately no `unadjudicated` one) and a column declared twice, so a malformed entry fails
 /// the parse rather than dropping a declaration and reading as an undeclared column.
 fn scan_declarations() -> &'static BTreeMap<ColumnKey, ScanColumn> {
-    &in_force().sensitivity.columns
+    &in_force().sensitivity_scan.columns
 }
 
 /// The other side of the partition: the sibling's declared keys. Its own test owns the rest of
@@ -196,7 +196,7 @@ fn every_out_of_scope_line_states_its_reason() {
 /// catalog said 147.
 #[test]
 fn the_header_count_matches_the_declarations() {
-    let sensitivity = &in_force().sensitivity;
+    let sensitivity = &in_force().sensitivity_scan;
     let declared = sensitivity.columns.len();
     let stated = sensitivity.declared_count;
     assert_eq!(

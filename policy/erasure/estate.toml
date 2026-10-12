@@ -82,7 +82,7 @@
 scope = [
   { rule = "the subject's own (@me) contexts", mechanism = { bound = "_erasure_estate_contexts" } },
   { rule = "the subject's personal team's contexts (kb_teams.personal_of)", mechanism = { bound = "_erasure_estate_contexts" } },
-  { rule = "cogmaps whose only kb_team_cogmaps row is the personal team (R15)", mechanism = { gap = "2a: R15 cogmap scope" } },
+  { rule = "cogmaps whose only kb_team_cogmaps row is the personal team (R15)", mechanism = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "cogmaps whose only kb_team_cogmaps row is the personal team" } } },
 ]
 
 [tables]
@@ -106,7 +106,7 @@ note = "a container, reached by the scope rules"
 kind = "per-item"
 container = true
 fence = { bound = "is_active" }
-unit = { gap = "2a: context unit" }
+unit = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "the unit that erases one context of the estate" } }
 
 [tables.kb_cogmaps]
 note = "a container, reached by the R15 scope rule (itself a gap). The fence is D2's new flag, mirroring context retirement. The unit waits on map-grain (charter) erasure, which resource_erasure_execute refuses today"
@@ -114,8 +114,8 @@ note = "a container, reached by the R15 scope rule (itself a gap). The fence is 
 [tables.kb_cogmaps.grain]
 kind = "per-item"
 container = true
-fence = { gap = "1c: kb_cogmaps.is_active" }
-unit = { gap = "prereq 2a: charter erasure 01a0e960-0ca2-7f42-b33e-1ed19b024e6b" }
+fence = { gap = { task = "01a12dcf-1a90-741c-9ea1-64a1dd44aefc", what = "a liveness flag on kb_cogmaps that fences a declared cogmap" } }
+unit = { gap = { task = "01a0e960-0ca2-7f42-b33e-1ed19b024e6b", what = "erasure of a cogmap and its charter" } }
 
 [tables.kb_blobs]
 note = "a leaf, homed by its own pair (kb_blobs_home_context_only admits kb_contexts alone). Blob gates will consult the map (D2); no flag binds it"
@@ -123,7 +123,7 @@ note = "a leaf, homed by its own pair (kb_blobs_home_context_only admits kb_cont
 [tables.kb_blobs.grain]
 kind = "per-item"
 container = false
-fence = { gap = "1d: blob map view" }
+fence = { gap = { task = "01a12dcf-24ab-705d-809a-35e3a2f9c169", what = "a fence that makes a declared blob unreachable" } }
 unit = { bound = "blob_delete" }
 home = { table = "kb_blobs", table_column = "home_table", id_column = "home_id" }
 
@@ -134,7 +134,7 @@ note = "homed in the estate: folded at declaration, the label redacted by the un
 kind = "per-item"
 container = false
 fence = { bound = "is_folded" }
-unit = { gap = "2a: label redaction" }
+unit = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "redaction of the label of an edge homed in the estate" } }
 home = { table = "kb_edges", table_column = "home_anchor_table", id_column = "home_anchor_id" }
 
 [[tables.kb_edges.also_reached]]
@@ -147,19 +147,19 @@ mechanism = { bound = "resource_erasure_execute" }
 
 [[tables.kb_edges.also_reached]]
 path = { table = "kb_blobs", link = { pair = { table_column = "source_table", id_column = "source_id" } } }
-mechanism = { gap = "3: P4 blob-edge labels" }
+mechanism = { gap = { task = "01a12fcb-69cf-7051-a078-6af3a5e91905", what = "labels of edges whose source or target is an estate blob" } }
 
 [[tables.kb_edges.also_reached]]
 path = { table = "kb_blobs", link = { pair = { table_column = "target_table", id_column = "target_id" } } }
-mechanism = { gap = "3: P4 blob-edge labels" }
+mechanism = { gap = { task = "01a12fcb-69cf-7051-a078-6af3a5e91905", what = "labels of edges whose source or target is an estate blob" } }
 
 [[tables.kb_edges.also_reached]]
 path = { table = "kb_cogmaps", link = { pair = { table_column = "source_table", id_column = "source_id" } } }
-mechanism = { gap = "prereq 2a: charter erasure 01a0e960-0ca2-7f42-b33e-1ed19b024e6b" }
+mechanism = { gap = { task = "01a0e960-0ca2-7f42-b33e-1ed19b024e6b", what = "edges whose source or target is an estate cogmap" } }
 
 [[tables.kb_edges.also_reached]]
 path = { table = "kb_cogmaps", link = { pair = { table_column = "target_table", id_column = "target_id" } } }
-mechanism = { gap = "prereq 2a: charter erasure 01a0e960-0ca2-7f42-b33e-1ed19b024e6b" }
+mechanism = { gap = { task = "01a0e960-0ca2-7f42-b33e-1ed19b024e6b", what = "edges whose source or target is an estate cogmap" } }
 
 # ── covered: content beneath a resource ──────────────────────────────────────────────────────────
 
@@ -207,7 +207,7 @@ parent = { table = "kb_resources", link = { pair = { table_column = "owner_table
 
 [[tables.kb_properties.also_reached]]
 path = { table = "kb_edges", link = { pair = { table_column = "owner_table", id_column = "owner_id" } } }
-mechanism = { gap = "2a: edge unit, edge-owned properties" }
+mechanism = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "properties owned by an edge homed in the estate" } }
 
 [[tables.kb_properties.also_reached]]
 path = { table = "kb_content_blocks", link = { pair = { table_column = "owner_table", id_column = "owner_id" } } }
@@ -215,7 +215,7 @@ mechanism = { bound = "resource_erasure_execute" }
 
 [[tables.kb_properties.also_reached]]
 path = { table = "kb_cogmaps", link = { pair = { table_column = "owner_table", id_column = "owner_id" } } }
-mechanism = { gap = "prereq 2a: charter erasure 01a0e960-0ca2-7f42-b33e-1ed19b024e6b" }
+mechanism = { gap = { task = "01a0e960-0ca2-7f42-b33e-1ed19b024e6b", what = "properties owned by an estate cogmap" } }
 
 [tables.kb_data_artifacts]
 note = "resource erasure D2.9f (the artifact family)"
@@ -258,7 +258,7 @@ note = "jobs whose resource_id is an estate resource go with it (resource erasur
 [tables.kb_workflow_jobs.grain]
 kind = "covered"
 parent = { table = "kb_resources", link = { fk = "resource_id" } }
-unit = { gap = "2a: container-scoped jobs cancelled at declaration" }
+unit = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "jobs scoped only to an estate context or cogmap, cancelled at declaration" } }
 
 [tables.kb_block_provenance]
 note = "covered by its block (ruled 2026-10-11). A row on a block outside the estate whose (source_kind, source_id) cites an estate resource or event is declared out as a pseudonymous reference: it holds ids only, and its target is fenced (resource-erasure Q1: never across the resource boundary)"
@@ -272,7 +272,7 @@ note = "re-pointed, not erased: resource erasure D2.9 (step 9e) re-points R's ci
 
 [tables.kb_remote_sources.grain]
 kind = "covered"
-parent = { table = "kb_block_provenance", link = { pair = { table_column = "source_kind", id_column = "source_id" } }, via = "kb_block_provenance rows with source_kind = 'remote' (enum provenance_source_kind) cite kb_remote_sources.id in source_id; no foreign key" }
+parent = { table = "kb_block_provenance", link = { ref = "source_id" }, cited_by = { column = "source_kind", value = "remote" } }
 
 # ── covered: through a container ─────────────────────────────────────────────────────────────────
 
@@ -285,7 +285,7 @@ parent = { table = "kb_contexts", link = { pair = { table_column = "home_anchor_
 
 [[tables.kb_data_artifact_shapes.also_reached]]
 path = { table = "kb_cogmaps", link = { pair = { table_column = "home_anchor_table", id_column = "home_anchor_id" } } }
-mechanism = { gap = "prereq 2a: charter erasure 01a0e960-0ca2-7f42-b33e-1ed19b024e6b" }
+mechanism = { gap = { task = "01a0e960-0ca2-7f42-b33e-1ed19b024e6b", what = "shapes homed in an estate cogmap" } }
 
 [tables.kb_cogmap_lenses]
 note = "covered by its cogmap"
@@ -293,7 +293,7 @@ note = "covered by its cogmap"
 [tables.kb_cogmap_lenses.grain]
 kind = "covered"
 parent = { table = "kb_cogmaps", link = { fk = "cogmap_id" } }
-unit = { gap = "prereq 2a: charter erasure 01a0e960-0ca2-7f42-b33e-1ed19b024e6b" }
+unit = { gap = { task = "01a0e960-0ca2-7f42-b33e-1ed19b024e6b", what = "lenses of an estate cogmap" } }
 
 [tables.kb_cogmap_regions]
 note = "covered by its cogmap. A region in a cogmap outside the estate whose label or centroid was derived from estate members is a declared-out remainder (deriver, deferred by the spec); resource erasure D2.6 re-settles its centroid as today"
@@ -301,7 +301,7 @@ note = "covered by its cogmap. A region in a cogmap outside the estate whose lab
 [tables.kb_cogmap_regions.grain]
 kind = "covered"
 parent = { table = "kb_cogmaps", link = { fk = "cogmap_id" } }
-unit = { gap = "prereq 2a: charter erasure 01a0e960-0ca2-7f42-b33e-1ed19b024e6b" }
+unit = { gap = { task = "01a0e960-0ca2-7f42-b33e-1ed19b024e6b", what = "regions of an estate cogmap" } }
 
 [tables.kb_invocations]
 note = "covered by the cogmap it ran over: originating_cogmap_id (NOT NULL, foreign key, indexed). parent_cogmap_id is set only for delegated launches and is not the covering path. No arm reaches outcome today"
@@ -309,7 +309,7 @@ note = "covered by the cogmap it ran over: originating_cogmap_id (NOT NULL, fore
 [tables.kb_invocations.grain]
 kind = "covered"
 parent = { table = "kb_cogmaps", link = { fk = "originating_cogmap_id" } }
-unit = { gap = "task 01a12c03-2663-7562-b6bb-2d0a67c61972: invocation outcome" }
+unit = { gap = { task = "01a12c03-2663-7562-b6bb-2d0a67c61972", what = "the outcome of an invocation over an estate cogmap" } }
 
 [tables.kb_blob_upload_segments]
 note = "segments cascade (ON DELETE CASCADE) from their upload session; the act's arm 6a deletes the sessions owned by the subject or homed in the estate (kb_blob_uploads home_table/home_id) (ruled 2026-10-11)"
@@ -350,8 +350,8 @@ kind = "identity"
 mechanism = { bound = "_erasure_apply_redaction" }
 
 [[tables.kb_teams.also_reached]]
-path = { table = "kb_profiles", link = { fk = "personal_of" } }
-mechanism = { gap = "2a: team description erased at declaration" }
+path = { table = "kb_profiles", link = { ref = "personal_of" } }
+mechanism = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "the personal team's description" } }
 column = "description"
 
 [tables.kb_team_invitations]
