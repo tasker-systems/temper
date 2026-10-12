@@ -15,6 +15,19 @@ use sha2::{Digest, Sha256};
 /// Prefix on temper-minted client ids, distinguishing them from Auth0 client ids at a glance.
 const CLIENT_ID_PREFIX: &str = "tmpr_";
 
+/// Prefix on the client ids the TS AS mints at dynamic client registration
+/// (`packages/temper-cloud/src/oauth/register.ts`, pinned there by `register.test.ts`).
+const DCR_CLIENT_ID_PREFIX: &str = "conn_";
+
+/// Every client-id namespace temper mints into. A caller-supplied client id may not start with one.
+///
+/// The machine gate looks a machine up by `client_id` alone, whoever issued its token
+/// (`profile_service::resolve_machine_from_claims`). The AS issues `client_credentials` tokens to
+/// DCR clients, so a machine registered under a `conn_` id would take over every token issued to
+/// that DCR client. A registered `tmpr_` id would sit in the namespace [`mint_client_id`] draws
+/// from.
+pub const MINTED_CLIENT_ID_PREFIXES: [&str; 2] = [CLIENT_ID_PREFIX, DCR_CLIENT_ID_PREFIX];
+
 /// Lowercase SHA-256 hex of `input`. Matches the TS AS's `hashToken`.
 ///
 /// A fast hash is correct here for one reason, and it is a fact about the INPUT rather than about

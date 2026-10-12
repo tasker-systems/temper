@@ -129,12 +129,30 @@ fn map_duplicate_from_conflict(err: ApiError, client_id: &str) -> ApiError {
     }
 }
 
+/// Refuse a caller-supplied client id in a namespace temper mints into
+/// ([`MINTED_CLIENT_ID_PREFIXES`](crate::auth::secret::MINTED_CLIENT_ID_PREFIXES), which says why).
+/// `provision` and `rebind` are the two doors that take a client id from the caller; `issue`
+/// mints its own.
+fn refuse_minted_namespace(client_id: &str) -> ApiResult<()> {
+    match crate::auth::secret::MINTED_CLIENT_ID_PREFIXES
+        .iter()
+        .find(|prefix| client_id.starts_with(*prefix))
+    {
+        Some(prefix) => Err(ApiError::BadRequest(format!(
+            "client id '{client_id}' is in the '{prefix}' namespace, which temper mints itself; \
+             register the client id your identity provider issued"
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// Register a new machine principal, creating its agent profile. One transaction.
 pub async fn provision(
     pool: &PgPool,
     authed: &HumanPrincipal,
     req: &ProvisionMachineRequest,
 ) -> ApiResult<MachineClient> {
+    refuse_minted_namespace(&req.client_id)?;
     let caller = ProfileId::from(authed.profile().id);
     // Auth before writes: a rejected registration must leave the DB completely unchanged —
     // no orphaned agent profile, no partial enrollment. Resolving before the transaction is
@@ -336,6 +354,7 @@ pub async fn rebind(
     // Auth before writes. Admin-only (see the fn doc): team ownership cannot bound the reach a rebind
     // inherits — which is why this takes a `&SystemAdmin` proof, NOT `machine_authz`. The proof itself
     // IS the check (admin-authz enclosure, spec §3); do not widen it back to a scoped gate.
+    refuse_minted_namespace(&req.client_id)?;
     let old = machine_client_service::get(pool, req.from_machine_client_id).await?;
 
     // A revoked credential is dead; it must be re-created by a fresh `provision`, never
@@ -1101,6 +1120,65 @@ mod tests {
         .await
         .expect("count link");
         assert_eq!(link, Some(1));
+    }
+
+    /// A machine is looked up by `client_id` alone, so registering one under an id temper's AS mints
+    /// would hand it every token issued to that id: a DCR client's `conn_` tokens, or a future
+    /// `tmpr_` credential's. Both caller-supplied doors refuse those namespaces, for an admin too,
+    /// and write nothing.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_client_id_temper_mints_is_never_registered_by_hand(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let human = crate::test_support::human_principal_for(&pool, admin.uuid()).await;
+        let proof = crate::test_support::system_admin_proof_for(&pool, *admin).await;
+        let source = svc::provision(&pool, &human, &req("rebind-source"))
+            .await
+            .expect("an ordinary client id provisions");
+
+        for client_id in ["conn_a1b2c3d4e5f6g7h8", "tmpr_handpicked"] {
+            let err = svc::provision(&pool, &human, &req(client_id))
+                .await
+                .expect_err("provision must refuse a minted namespace");
+            assert!(
+                matches!(&err, crate::error::ApiError::BadRequest(m) if m.contains(client_id)),
+                "provision of {client_id}: expected a 400 naming the id, got {err:?}"
+            );
+
+            let err = svc::rebind(
+                &pool,
+                &proof,
+                &RebindMachineRequest {
+                    client_id: client_id.to_string(),
+                    from_machine_client_id: source.id,
+                    label: "rebound".to_string(),
+                    keep_old_active: false,
+                },
+            )
+            .await
+            .expect_err("rebind must refuse a minted namespace");
+            assert!(
+                matches!(&err, crate::error::ApiError::BadRequest(m) if m.contains(client_id)),
+                "rebind to {client_id}: expected a 400 naming the id, got {err:?}"
+            );
+
+            let written: i64 = sqlx::query_scalar(
+                "SELECT (SELECT count(*) FROM kb_machine_clients WHERE client_id = $1) \
+                      + (SELECT count(*) FROM kb_profile_auth_links WHERE auth_provider_user_id = $1)",
+            )
+            .bind(client_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count rows");
+            assert_eq!(written, 0, "a refused {client_id} wrote nothing");
+        }
+
+        let source_row = crate::services::machine_client_service::get(&pool, source.id)
+            .await
+            .expect("source row");
+        assert!(
+            source_row.revoked_at.is_none(),
+            "a refused rebind left its source live"
+        );
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]

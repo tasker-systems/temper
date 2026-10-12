@@ -283,7 +283,7 @@ claim crates/temper-services/src/services/erasure_retention_service.rs 1 is_syst
 claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
 claim crates/temper-services/src/services/machine_authz.rs 7 machine
-claim crates/temper-services/src/services/machine_client_service.rs 6 machine
+claim crates/temper-services/src/services/machine_client_service.rs 7 machine
 claim crates/temper-services/src/services/machine_registration_service.rs 4 machine
 claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
 claim crates/temper-services/src/services/subscription_service.rs 6 subscription
