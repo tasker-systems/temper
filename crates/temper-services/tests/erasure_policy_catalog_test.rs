@@ -352,7 +352,11 @@ fn catalog_problems(policy: &ErasurePolicy, catalog: &Catalog) -> Vec<String> {
 fn unended_chains(policy: &ErasurePolicy) -> Vec<String> {
     let tables = &policy.estate.tables;
     let mut problems = Vec::new();
-    for table in tables.keys() {
+    let covered = tables
+        .iter()
+        .filter(|(_, entry)| matches!(entry.grain, Grain::Covered { .. }))
+        .map(|(table, _)| table);
+    for table in covered {
         let mut seen = BTreeSet::from([table.as_str()]);
         let mut at = table.as_str();
         loop {
