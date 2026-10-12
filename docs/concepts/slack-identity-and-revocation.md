@@ -183,6 +183,33 @@ must work.
 Temper deliberately does not keep the token around to retry revocation later —
 doing so would preserve the exact secret the user just asked it to destroy.
 
+**A mention after a rotation depends on whether you declared it.** A wrong key
+and a deliberately rotated one fail the same way when Temper tries to open a
+grant. Telling them apart matters: a wrong key is fixed for every user at once
+by deploying the right one, so Temper must not offer users a reconnect that
+would overwrite grants the right key could still open. So each stored grant
+records a fingerprint of the key that sealed it: a short, non-secret identifier
+that Temper logs at boot as `slack vault key fingerprint: …`. When a grant will
+not open, the mint compares that fingerprint with the configured key and the
+keys you have retired:
+
+| The grant was sealed under | Mention result |
+|---|---|
+| a key you listed in `SLACK_VAULT_RETIRED_KEY_FINGERPRINTS` | "reconnect here", with a fresh link. The user re-links from Slack. |
+| the configured key, yet it will not open (a tampered row) | "reconnect here". An error is logged: investigate the row. |
+| any other key | an error (HTTP 500), and the grant is left untouched. The log names both fingerprints. Deploy the right key and every such grant works again. |
+
+To rotate on purpose, copy the old key's fingerprint from the boot log (or run
+`SELECT DISTINCT encode(key_fingerprint, 'hex') FROM kb_slack_grant_vault`)
+before you change the key. Then set it in `SLACK_VAULT_RETIRED_KEY_FINGERPRINTS`
+alongside the new key. Grants sealed before fingerprints existed get one the
+first time they are used. If any are still unstamped when you rotate, add the
+word `unstamped` to the list.
+
+If some users re-linked while a wrong key was deployed, their new grants carry
+the wrong key's fingerprint. After you restore the right key, retire that
+fingerprint and those users are offered a reconnect.
+
 ## Reconnecting
 
 Just mention `@temper` again. The principal is unlinked, so the normal flow

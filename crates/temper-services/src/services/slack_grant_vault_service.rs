@@ -6,6 +6,10 @@
 //! T2's `offline_access` consent minted, never an export of that user's local CLI grant. The RT
 //! (and a cached access token) are stored as XChaCha20-Poly1305 ciphertext via
 //! [`grant_crypto`](super::grant_crypto); the database never sees plaintext or the key.
+//!
+//! Each row also records the fingerprint of the key that sealed it (`key_fingerprint`). It is what
+//! lets [`mint_access_token`] tell a misconfigured key (restore it, and every row heals) apart from
+//! a deliberately retired key or a bad row (only a re-link heals those). See `Unopenable`.
 
 use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
@@ -13,7 +17,7 @@ use uuid::Uuid;
 
 use temper_core::types::slack::LinkRefusal;
 
-use super::grant_crypto::VaultKey;
+use super::grant_crypto::{CryptoError, KeyFingerprint, VaultKey};
 use super::slack_link_state::{resolve, LinkEvidence};
 use crate::error::{ApiError, ApiResult};
 use crate::oauth_client;
@@ -141,6 +145,229 @@ fn aad(slack_principal_id: &str, field: &[u8]) -> Vec<u8> {
 const FIELD_RT: &[u8] = b"rt";
 const FIELD_AT: &[u8] = b"at";
 
+/// The `SLACK_VAULT_RETIRED_KEY_FINGERPRINTS` entry that retires legacy rows: those written before
+/// `key_fingerprint` existed and never opened since, so the vault cannot say which key sealed them.
+const UNSTAMPED: &str = "unstamped";
+
+/// Keys an operator has deliberately rotated out of the vault, named by [`KeyFingerprint`]. This is
+/// how a deliberate rotation is told apart from a misconfigured key: a row sealed under a retired key
+/// that will not open is a `NotVaulted` refusal (the user gets a re-link URL), while a row sealed
+/// under any other key the deployment does not hold stays a 500.
+///
+/// Retiring a key is an explicit act because the two cases fail identically, and guessing wrong in
+/// the generous direction is what PR #1120 reverted: with a wrong key deployed, each re-link would
+/// overwrite a row that restoring the key would have healed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RetiredKeys {
+    fingerprints: Vec<KeyFingerprint>,
+    /// Whether legacy rows (`key_fingerprint IS NULL`) that do not open count as retired.
+    unstamped: bool,
+}
+
+impl RetiredKeys {
+    /// Parse the comma-separated env value: 16-hex-character fingerprints, and optionally the word
+    /// `unstamped`. Blank entries are skipped. An entry naming `current` (the configured key) is
+    /// dropped with a warning: a row that opens is used before any fingerprint is consulted, so it
+    /// would never take effect, and keeping it would only mislead the next reader.
+    ///
+    /// The error never echoes an entry. An operator who pasted the key itself here by mistake must
+    /// not have it written to the log.
+    pub fn parse(raw: &str, current: KeyFingerprint) -> Result<Self, String> {
+        let mut out = Self::default();
+        for (i, entry) in raw.split(',').map(str::trim).enumerate() {
+            if entry.is_empty() {
+                continue;
+            }
+            if entry.eq_ignore_ascii_case(UNSTAMPED) {
+                out.unstamped = true;
+                continue;
+            }
+            let fp = KeyFingerprint::from_hex(entry).ok_or_else(|| {
+                format!(
+                    "entry {} is neither a 16-hex-character fingerprint nor `{UNSTAMPED}`",
+                    i + 1
+                )
+            })?;
+            if fp == current {
+                tracing::warn!(
+                    key_fingerprint = %fp,
+                    "SLACK_VAULT_RETIRED_KEY_FINGERPRINTS names the configured SLACK_VAULT_ENC_KEY; \
+                     that entry is ignored"
+                );
+                continue;
+            }
+            if !out.fingerprints.contains(&fp) {
+                out.fingerprints.push(fp);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Whether a row stamped `stored` (or unstamped, `None`) was sealed under a retired key.
+    fn retires(&self, stored: Option<KeyFingerprint>) -> bool {
+        match stored {
+            Some(fp) => self.fingerprints.contains(&fp),
+            None => self.unstamped,
+        }
+    }
+}
+
+/// Why a stored secret could not be turned into a token.
+#[derive(Debug)]
+enum OpenFailure {
+    /// The AEAD open failed: a different key, a tampered byte, a mismatched `aad` (a transplanted
+    /// ciphertext), or a malformed nonce. AEAD cannot say which.
+    Sealed(CryptoError),
+    /// The open SUCCEEDED, so the tag verified, but the plaintext is not UTF-8 (tokens are ASCII).
+    NotUtf8,
+}
+
+/// Open a stored `(nonce, ciphertext)` pair to a UTF-8 token string, keeping the two failures apart.
+fn open_secret(
+    key: &VaultKey,
+    nonce: &[u8],
+    ciphertext: &[u8],
+    aad: &[u8],
+) -> Result<String, OpenFailure> {
+    let bytes = key
+        .decrypt(nonce, ciphertext, aad)
+        .map_err(OpenFailure::Sealed)?;
+    String::from_utf8(bytes).map_err(|_| OpenFailure::NotUtf8)
+}
+
+/// What the mint makes of a vault row that would not open. Decided by [`classify`] from the failure
+/// and the row's `key_fingerprint`; [`unopenable_outcome`] turns it into the answer.
+///
+/// | Failure | Stored fingerprint | Outcome |
+/// |---|---|---|
+/// | opened, not UTF-8 | any | [`Unopenable::NotUtf8`]: 500 |
+/// | tag or nonce | the configured key's | [`Unopenable::RowFault`]: `NotVaulted` |
+/// | tag or nonce | retired | [`Unopenable::Retired`]: `NotVaulted` |
+/// | tag or nonce | anything else, or NULL not retired | [`Unopenable::UnknownKey`]: 500 |
+#[derive(Debug, PartialEq, Eq)]
+enum Unopenable {
+    /// The key opened it, so something holding the key sealed bytes that are not a token: a sealing
+    /// bug or a compromised key. Never a refusal: a re-link would hide it.
+    NotUtf8,
+    /// Sealed under the configured key, yet it will not open: the row was tampered with or
+    /// transplanted, or a bug sealed it wrong. No key change heals it, so a re-link destroys nothing
+    /// recoverable and is the user's only way back. A pinned seal-format test guards the one bug
+    /// that would put every row here (a change to how rows are opened).
+    RowFault,
+    /// Sealed under a key the operator retired in `SLACK_VAULT_RETIRED_KEY_FINGERPRINTS`.
+    Retired,
+    /// Sealed under a key this deployment neither holds nor has retired, or a legacy row whose key
+    /// is unknown. Most likely `SLACK_VAULT_ENC_KEY` is wrong, and restoring it heals every such
+    /// row, so the row must not be overwritten: a 500, and nothing is written.
+    UnknownKey,
+}
+
+fn classify(
+    failure: &OpenFailure,
+    stored: Option<KeyFingerprint>,
+    current: KeyFingerprint,
+    retired: &RetiredKeys,
+) -> Unopenable {
+    match failure {
+        OpenFailure::NotUtf8 => Unopenable::NotUtf8,
+        OpenFailure::Sealed(_) if stored == Some(current) => Unopenable::RowFault,
+        OpenFailure::Sealed(_) if retired.retires(stored) => Unopenable::Retired,
+        OpenFailure::Sealed(_) => Unopenable::UnknownKey,
+    }
+}
+
+/// A stored fingerprint for a log line: its hex, or `unstamped`.
+fn sealed_by(stored: Option<KeyFingerprint>) -> String {
+    stored.map_or_else(|| UNSTAMPED.to_string(), |fp| fp.to_string())
+}
+
+/// The mint's answer for an [`Unopenable`] row, logged. The caller returns it without writing, so
+/// the transaction rolls back and the row's bytes are untouched. Fingerprints are not secret; the
+/// ciphertext, nonce, key and error text never reach a log line. `ApiError::Internal`'s text is not
+/// shown to the client either.
+fn unopenable_outcome(
+    kind: Unopenable,
+    field: &str,
+    slack_principal_id: &str,
+    stored: Option<KeyFingerprint>,
+    current: KeyFingerprint,
+) -> ApiResult<MintOutcome> {
+    let sealed_by = sealed_by(stored);
+    match kind {
+        Unopenable::NotUtf8 => {
+            tracing::error!(
+                principal = %slack_principal_id,
+                field,
+                sealed_by = %sealed_by,
+                configured = %current,
+                "slack mint: a vault grant opened under the configured key but is not a token (not \
+                 UTF-8). Something holding SLACK_VAULT_ENC_KEY sealed it: a sealing bug, or a \
+                 compromised key."
+            );
+            Err(ApiError::Internal(
+                "vault: decrypted grant was not valid UTF-8".to_string(),
+            ))
+        }
+        Unopenable::RowFault => {
+            tracing::error!(
+                principal = %slack_principal_id,
+                field,
+                sealed_by = %sealed_by,
+                configured = %current,
+                "slack mint: a vault grant sealed under the configured key will not open. The row \
+                 was tampered with or transplanted, or a bug sealed it wrong. Answering not_vaulted \
+                 so the user can re-link; investigate the row."
+            );
+            Ok(MintOutcome::Refused(LinkRefusal::NotVaulted))
+        }
+        Unopenable::Retired => {
+            tracing::info!(
+                principal = %slack_principal_id,
+                field,
+                sealed_by = %sealed_by,
+                configured = %current,
+                "slack mint: the vault grant was sealed under a retired key; answering not_vaulted \
+                 so the user can re-link"
+            );
+            Ok(MintOutcome::Refused(LinkRefusal::NotVaulted))
+        }
+        Unopenable::UnknownKey => {
+            tracing::error!(
+                principal = %slack_principal_id,
+                field,
+                sealed_by = %sealed_by,
+                configured = %current,
+                "slack mint: the vault grant was sealed under key {sealed_by}, but \
+                 SLACK_VAULT_ENC_KEY is {current}. Is the deployed key the one that sealed the \
+                 vault? Restoring it heals every such grant. If the key was rotated on purpose, \
+                 list the old fingerprint (or `unstamped`) in \
+                 SLACK_VAULT_RETIRED_KEY_FINGERPRINTS. Answering 500 and leaving the row untouched."
+            );
+            Err(ApiError::Internal(
+                "vault: the grant was sealed under a key this deployment does not hold".to_string(),
+            ))
+        }
+    }
+}
+
+/// Record that the row opened under `key` — its first open since fingerprints existed, or a row
+/// whose stored fingerprint was wrong. Does not touch `updated_at`: nothing was resealed, and the
+/// startup check reads the most recently SEALED rows.
+async fn stamp_fingerprint(
+    conn: &mut sqlx::PgConnection,
+    slack_principal_id: &str,
+    fingerprint: KeyFingerprint,
+) -> ApiResult<()> {
+    sqlx::query!(
+        "UPDATE kb_slack_grant_vault SET key_fingerprint = $2 WHERE slack_principal_id = $1",
+        slack_principal_id,
+        fingerprint.as_bytes(),
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 /// Seal a freshly obtained grant for its principal. Called at T2's callback seam once the
 /// directory row is written.
 ///
@@ -179,16 +406,18 @@ pub async fn store_grant(
         &aad(grant.slack_principal_id, FIELD_AT),
     );
     let access_expires_at = Utc::now() + access_ttl(grant.access_ttl_secs);
+    let fingerprint = key.fingerprint();
 
     sqlx::query!(
         r#"
         INSERT INTO kb_slack_grant_vault
-            (id, profile_id, slack_principal_id, key_version,
+            (id, profile_id, slack_principal_id, key_version, key_fingerprint,
              rt_nonce, rt_ciphertext, at_nonce, at_ciphertext, access_expires_at, revoked_at)
-        VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8, NULL)
+        VALUES ($1, $2, $3, 1, $9, $4, $5, $6, $7, $8, NULL)
         ON CONFLICT (slack_principal_id) DO UPDATE
             SET profile_id        = EXCLUDED.profile_id,
                 key_version       = EXCLUDED.key_version,
+                key_fingerprint   = EXCLUDED.key_fingerprint,
                 rt_nonce          = EXCLUDED.rt_nonce,
                 rt_ciphertext     = EXCLUDED.rt_ciphertext,
                 at_nonce          = EXCLUDED.at_nonce,
@@ -205,6 +434,7 @@ pub async fn store_grant(
         &at_nonce[..],
         at_ciphertext,
         access_expires_at,
+        fingerprint.as_bytes(),
     )
     .execute(&mut *conn)
     .await?;
@@ -244,6 +474,13 @@ pub async fn store_grant(
 /// client that minted the grant. They are NOT stored on the row: the instance's config is
 /// authoritative, and a config change that invalidates old grants invalidates them at the IdP too.
 ///
+/// **A row that will not open** is classified by its `key_fingerprint` (see `Unopenable` for the
+/// table). A misconfigured key is a 500 that writes nothing, so restoring the key heals every user.
+/// A retired key, or a row that fails under the very key that sealed it, is `NotVaulted`, so the
+/// user gets a re-link URL. A row that opens is stamped with the configured key's fingerprint if it
+/// is not already: that is how a legacy (NULL) row gets one. Both ciphertexts in a row are always
+/// sealed under one key in one statement, so opening either proves the key for the row.
+///
 /// AUTHORIZATION: this function enforces none — it mints for whatever principal it is handed. Its
 /// caller (T4's mention path) MUST derive `slack_principal_id` from an HMAC-verified server-to-
 /// server request whose principal comes from Slack's own verified event, never a client-supplied
@@ -251,6 +488,7 @@ pub async fn store_grant(
 pub async fn mint_access_token(
     pool: &PgPool,
     key: &VaultKey,
+    retired: &RetiredKeys,
     token_url: &str,
     client_id: &str,
     slack_principal_id: &str,
@@ -275,6 +513,7 @@ pub async fn mint_access_token(
                v.at_nonce          AS "at_nonce?",
                v.at_ciphertext     AS "at_ciphertext?",
                v.access_expires_at AS "access_expires_at?",
+               v.key_fingerprint   AS "key_fingerprint?",
                (v.id IS NOT NULL)  AS "vaulted!",
                s.state             AS "standing?"
           FROM kb_profile_auth_links l
@@ -314,17 +553,34 @@ pub async fn mint_access_token(
         ));
     };
 
+    let current = key.fingerprint();
+    // A malformed stored value is unreachable (the column's CHECK) and reads as unstamped.
+    let stored = row
+        .key_fingerprint
+        .as_deref()
+        .and_then(KeyFingerprint::from_bytes);
+    let needs_stamp = stored != Some(current);
+
     // Cached access token still comfortably valid? Hand it back — no refresh, no RT rotation.
     if let (Some(at_nonce), Some(at_ciphertext), Some(expires_at)) =
         (&row.at_nonce, &row.at_ciphertext, row.access_expires_at)
     {
         if expires_at > Utc::now() + AT_REFRESH_SKEW {
-            let token = decrypt_to_string(
+            let token = match open_secret(
                 key,
                 at_nonce,
                 at_ciphertext,
                 &aad(slack_principal_id, FIELD_AT),
-            )?;
+            ) {
+                Ok(token) => token,
+                Err(failure) => {
+                    let kind = classify(&failure, stored, current, retired);
+                    return unopenable_outcome(kind, "at", slack_principal_id, stored, current);
+                }
+            };
+            if needs_stamp {
+                stamp_fingerprint(&mut tx, slack_principal_id, current).await?;
+            }
             tx.commit().await?;
             return Ok(MintOutcome::Token {
                 access_token: token,
@@ -334,12 +590,23 @@ pub async fn mint_access_token(
     }
 
     // The cached token is gone or stale: spend the RT, then rotate everything the response gave.
-    let refresh_token = decrypt_to_string(
+    let refresh_token = match open_secret(
         key,
         rt_nonce,
         rt_ciphertext,
         &aad(slack_principal_id, FIELD_RT),
-    )?;
+    ) {
+        Ok(token) => token,
+        Err(failure) => {
+            let kind = classify(&failure, stored, current, retired);
+            return unopenable_outcome(kind, "rt", slack_principal_id, stored, current);
+        }
+    };
+    // Stamped now, not only by the re-seal below, so a grant the IdP refuses (the arm below
+    // commits) is still recorded as sealed under this key.
+    if needs_stamp {
+        stamp_fingerprint(&mut tx, slack_principal_id, current).await?;
+    }
     let tokens = match oauth_client::refresh_grant(token_url, client_id, &refresh_token).await? {
         oauth_client::RefreshOutcome::Refreshed(tokens) => tokens,
         oauth_client::RefreshOutcome::GrantRejected => {
@@ -350,19 +617,20 @@ pub async fn mint_access_token(
             // ("retrying won't fix it; reconnect"). Not an `Err`: that is a 401 to the agent,
             // which can only say "try again", forever.
             //
-            // The row is deliberately LEFT IN PLACE (rolled back with this transaction), not
-            // deleted. `invalid_grant` is the IdP's word, and it is not always about the grant:
-            // Auth0 answers it when the RT is presented to the wrong client or tenant, so a
-            // misconfigured `client_id` / issuer would refuse EVERY grant. (The temper AS answers
-            // a store failure during rotation with `temporarily_unavailable`, a 503 that
-            // `refresh_grant` reports as an `Err`, never as this arm.) Deleting would turn a
-            // config slip into permanent loss — and, worse, destroy the only plaintext source of a
-            // possibly-live RT, so disconnect and erasure could never revoke it. Kept, a config
-            // fix heals every user at once, and disconnect still revokes before it deletes. The
-            // cost is that a truly dead RT is re-presented to the IdP on each mention, which is
-            // harmless.
+            // The row is deliberately LEFT IN PLACE, not deleted. The transaction is committed only
+            // for the fingerprint stamp above, the one write it can hold. `invalid_grant` is the
+            // IdP's word, and it is not always about the grant: Auth0 answers it when the RT is
+            // presented to the wrong client or tenant, so a misconfigured `client_id` / issuer
+            // would refuse EVERY grant. (The temper AS answers a store failure during rotation with
+            // `temporarily_unavailable`, a 503 that `refresh_grant` reports as an `Err`, never as
+            // this arm.) Deleting would turn a config slip into permanent loss — and, worse,
+            // destroy the only plaintext source of a possibly-live RT, so disconnect and erasure
+            // could never revoke it. Kept, a config fix heals every user at once, and disconnect
+            // still revokes before it deletes. The cost is that a truly dead RT is re-presented to
+            // the IdP on each mention, which is harmless.
             // A re-link overwrites the row (`store_grant` upserts); in AS mode the callback first
             // revokes the RT it overwrites (`slack_disconnect_service::revoke_superseded_grant`).
+            tx.commit().await?;
             return Ok(MintOutcome::Refused(LinkRefusal::NotVaulted));
         }
     };
@@ -385,7 +653,7 @@ pub async fn mint_access_token(
         UPDATE kb_slack_grant_vault
            SET rt_nonce = $2, rt_ciphertext = $3,
                at_nonce = $4, at_ciphertext = $5,
-               access_expires_at = $6, updated_at = now()
+               access_expires_at = $6, key_fingerprint = $7, updated_at = now()
          WHERE slack_principal_id = $1
         "#,
         slack_principal_id,
@@ -394,6 +662,7 @@ pub async fn mint_access_token(
         &at_nonce[..],
         at_ciphertext,
         access_expires_at,
+        current.as_bytes(),
     )
     .execute(&mut *tx)
     .await?;
@@ -403,6 +672,121 @@ pub async fn mint_access_token(
         access_token: tokens.access_token,
         expires_at: access_expires_at,
     })
+}
+
+/// How many of the most recently sealed rows [`check_configured_key`] reads.
+const KEY_CHECK_SAMPLE: i64 = 20;
+
+/// What [`check_configured_key`] found among the most recently sealed rows.
+#[derive(Debug, PartialEq, Eq)]
+pub struct KeyCheck {
+    /// Rows read (stamped rows only; at most `KEY_CHECK_SAMPLE`).
+    pub sampled: usize,
+    /// Rows sealed under the configured key.
+    pub matching: usize,
+    /// Fingerprints that are neither the configured key nor retired, with how many rows carry each,
+    /// most common first.
+    pub unknown: Vec<(KeyFingerprint, usize)>,
+}
+
+impl KeyCheck {
+    fn assess(
+        sample: impl IntoIterator<Item = KeyFingerprint>,
+        current: KeyFingerprint,
+        retired: &RetiredKeys,
+    ) -> Self {
+        let mut check = Self {
+            sampled: 0,
+            matching: 0,
+            unknown: Vec::new(),
+        };
+        for fp in sample {
+            check.sampled += 1;
+            if fp == current {
+                check.matching += 1;
+            } else if !retired.retires(Some(fp)) {
+                match check.unknown.iter_mut().find(|(seen, _)| *seen == fp) {
+                    Some((_, n)) => *n += 1,
+                    None => check.unknown.push((fp, 1)),
+                }
+            }
+        }
+        check.unknown.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+        check
+    }
+
+    /// The configured key sealed none of the sampled rows, and something it does not know did: every
+    /// mint of those grants will 500. Almost certainly the wrong `SLACK_VAULT_ENC_KEY`.
+    pub fn is_mismatch(&self) -> bool {
+        self.matching == 0 && !self.unknown.is_empty()
+    }
+}
+
+/// Compare the configured vault key against the fingerprints of the most recently sealed rows, and
+/// log loudly if it does not look like the key that sealed them. Call once per process at startup,
+/// after the pool connects. It never fails boot: a query error is a warning, and the result is also
+/// returned for tests.
+///
+/// The mint already logs an error for every grant sealed under an unknown key; this says the same
+/// thing once, at boot, before any user mentions @temper, and names the fingerprints. Legacy
+/// (unstamped) rows carry no evidence and are not read.
+pub async fn check_configured_key(
+    pool: &PgPool,
+    cfg: &crate::config::SlackLinkConfig,
+) -> Option<KeyCheck> {
+    let current = cfg.vault_key.fingerprint();
+    let sample = match sqlx::query_scalar!(
+        r#"
+        SELECT key_fingerprint AS "key_fingerprint!"
+          FROM kb_slack_grant_vault
+         WHERE key_fingerprint IS NOT NULL
+         ORDER BY updated_at DESC
+         LIMIT $1
+        "#,
+        KEY_CHECK_SAMPLE,
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(error = %e, "slack vault key check: could not read the vault; skipped");
+            return None;
+        }
+    };
+    let check = KeyCheck::assess(
+        sample.iter().filter_map(|b| KeyFingerprint::from_bytes(b)),
+        current,
+        &cfg.retired_vault_keys,
+    );
+    let unknown = check
+        .unknown
+        .iter()
+        .map(|(fp, n)| format!("{fp} ({n})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if check.is_mismatch() {
+        tracing::error!(
+            configured = %current,
+            sampled = check.sampled,
+            unknown = %unknown,
+            "slack vault key check: SLACK_VAULT_ENC_KEY ({current}) sealed none of the {} most \
+             recently sealed vault rows, which carry {unknown}. Every mint of those grants will \
+             answer 500 until the key that sealed them is restored, or, if it was rotated on \
+             purpose, its fingerprint is listed in SLACK_VAULT_RETIRED_KEY_FINGERPRINTS.",
+            check.sampled,
+        );
+    } else if !check.unknown.is_empty() {
+        tracing::warn!(
+            configured = %current,
+            sampled = check.sampled,
+            matching = check.matching,
+            unknown = %unknown,
+            "slack vault key check: some recently sealed vault rows carry a key fingerprint that is \
+             neither SLACK_VAULT_ENC_KEY's nor retired ({unknown}); their mints will answer 500"
+        );
+    }
+    Some(check)
 }
 
 /// Read and decrypt the stored refresh token under a row lock, for a caller about to destroy or
@@ -439,7 +823,7 @@ pub async fn take_refresh_token_locked(
 ) -> ApiResult<Option<String>> {
     let row = sqlx::query!(
         r#"
-        SELECT rt_nonce, rt_ciphertext
+        SELECT rt_nonce, rt_ciphertext, key_fingerprint
           FROM kb_slack_grant_vault
          WHERE slack_principal_id = $1
          FOR UPDATE
@@ -465,8 +849,12 @@ pub async fn take_refresh_token_locked(
             // never the underlying error text either: `ApiError::Internal` is
             // echoed verbatim to clients, and this branch's inputs are secret
             // material.
+            // The fingerprints say which case it was: `sealed_by` equal to `configured` is a bad
+            // row; anything else is a rotated or misconfigured key.
             tracing::warn!(
                 principal = %slack_principal_id,
+                sealed_by = %sealed_by(row.key_fingerprint.as_deref().and_then(KeyFingerprint::from_bytes)),
+                configured = %key.fingerprint(),
                 "slack grant: the stored grant could not be opened (key rotated, or the row was \
                  tampered with), so it cannot be revoked. The caller (a disconnect or a re-link) \
                  destroys or overwrites it anyway. Revoke at the IdP out-of-band if that matters."
@@ -505,7 +893,7 @@ pub async fn grants_for_erasure(
 ) -> ApiResult<Vec<SubjectGrant>> {
     let rows = sqlx::query!(
         r#"
-        SELECT slack_principal_id, rt_nonce, rt_ciphertext
+        SELECT slack_principal_id, rt_nonce, rt_ciphertext, key_fingerprint
           FROM kb_slack_grant_vault
          WHERE slack_principal_id IN (SELECT _erasure_subject_slack_principals($1))
          ORDER BY slack_principal_id
@@ -525,8 +913,11 @@ pub async fn grants_for_erasure(
             )
             .ok();
             if refresh_token.is_none() {
-                // No principal in the line: the erasure is removing it.
+                // No principal in the line: the erasure is removing it. The fingerprints are not
+                // identifying, and say whether the key or the row was at fault.
                 tracing::warn!(
+                    sealed_by = %sealed_by(r.key_fingerprint.as_deref().and_then(KeyFingerprint::from_bytes)),
+                    configured = %key.fingerprint(),
                     "erasure: a Slack grant could not be opened (key rotated, or the row was \
                      tampered with). It is destroyed with the subject's other stores and cannot \
                      be revoked at Slack."
@@ -565,22 +956,21 @@ pub fn open_for_revocation(
     decrypt_to_string(key, nonce, ciphertext, &revocation_aad(row))
 }
 
-/// Open a stored `(nonce, ciphertext)` pair to a UTF-8 token string, under the `aad` it was sealed
-/// with. A decrypt failure means the key changed, the row was tampered, or the ciphertext was
-/// transplanted from another principal/field (AAD mismatch); a non-UTF-8 payload means the same
-/// (tokens are ASCII). Either way the grant is unusable — surface an internal error rather than a
-/// token we can't trust.
+/// [`open_secret`] for a caller that does not classify the failure: either way the secret is
+/// unusable, so it is an internal error rather than a token we can't trust. The mint classifies
+/// instead (see [`Unopenable`]); disconnect and erasure downgrade the error to "nothing to revoke".
 fn decrypt_to_string(
     key: &VaultKey,
     nonce: &[u8],
     ciphertext: &[u8],
     aad: &[u8],
 ) -> ApiResult<String> {
-    let bytes = key
-        .decrypt(nonce, ciphertext, aad)
-        .map_err(|e| ApiError::Internal(format!("vault: {e}")))?;
-    String::from_utf8(bytes)
-        .map_err(|_| ApiError::Internal("vault: decrypted grant was not valid UTF-8".to_string()))
+    open_secret(key, nonce, ciphertext, aad).map_err(|failure| match failure {
+        OpenFailure::Sealed(e) => ApiError::Internal(format!("vault: {e}")),
+        OpenFailure::NotUtf8 => {
+            ApiError::Internal("vault: decrypted grant was not valid UTF-8".to_string())
+        }
+    })
 }
 
 #[cfg(all(test, feature = "test-db"))]
@@ -648,12 +1038,25 @@ mod tests {
         at: &str,
         ttl: Option<u64>,
     ) {
+        store_sealed_by(pool, &key(), profile, principal, rt, at, ttl).await;
+    }
+
+    /// [`store`], sealed under a given key: a deployment that held a different key at link time.
+    async fn store_sealed_by(
+        pool: &PgPool,
+        sealing_key: &VaultKey,
+        profile: Uuid,
+        principal: &str,
+        rt: &str,
+        at: &str,
+        ttl: Option<u64>,
+    ) {
         link(pool, profile, principal).await;
         let owner = crate::test_support::human_principal_for(pool, profile).await;
         let mut conn = pool.acquire().await.expect("acquire");
         store_grant(
             &mut conn,
-            &key(),
+            sealing_key,
             NewGrant {
                 owner: &owner,
                 slack_principal_id: principal,
@@ -731,6 +1134,7 @@ mod tests {
         let out = mint_access_token(
             &pool,
             &key(),
+            &RetiredKeys::default(),
             "http://127.0.0.1:1/unused",
             "client",
             PRINCIPAL,
@@ -796,6 +1200,7 @@ mod tests {
         let out = mint_access_token(
             &pool,
             &key(),
+            &RetiredKeys::default(),
             "http://127.0.0.1:1/unused",
             "client",
             PRINCIPAL,
@@ -858,9 +1263,16 @@ mod tests {
     /// vault-rooted query conflated "never linked" with "linked, not vaulted".
     #[sqlx::test(migrations = "../../migrations")]
     async fn mint_reports_not_linked_for_an_unknown_principal(pool: PgPool) {
-        let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1", "c", PRINCIPAL)
-            .await
-            .unwrap();
+        let out = mint_access_token(
+            &pool,
+            &key(),
+            &RetiredKeys::default(),
+            "http://127.0.0.1:1",
+            "c",
+            PRINCIPAL,
+        )
+        .await
+        .unwrap();
         assert_eq!(out, MintOutcome::Refused(LinkRefusal::NotLinked));
     }
 
@@ -871,9 +1283,16 @@ mod tests {
         let profile = insert_profile(&pool).await; // approved
         link(&pool, profile, PRINCIPAL).await; // linked, but no `store` → no vault row
 
-        let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1", "c", PRINCIPAL)
-            .await
-            .unwrap();
+        let out = mint_access_token(
+            &pool,
+            &key(),
+            &RetiredKeys::default(),
+            "http://127.0.0.1:1",
+            "c",
+            PRINCIPAL,
+        )
+        .await
+        .unwrap();
         assert_eq!(out, MintOutcome::Refused(LinkRefusal::NotVaulted));
     }
 
@@ -886,9 +1305,16 @@ mod tests {
         set_standing(&pool, profile, "denied").await;
         link(&pool, profile, PRINCIPAL).await; // linked, denied, NOT vaulted
 
-        let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1", "c", PRINCIPAL)
-            .await
-            .unwrap();
+        let out = mint_access_token(
+            &pool,
+            &key(),
+            &RetiredKeys::default(),
+            "http://127.0.0.1:1",
+            "c",
+            PRINCIPAL,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             out,
             MintOutcome::Refused(LinkRefusal::Standing {
@@ -910,9 +1336,16 @@ mod tests {
         // Vault the SAME principal, but owned by the OTHER profile — the skew.
         store(&pool, grant_owner, PRINCIPAL, "rt", "at", Some(3600)).await;
 
-        let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1", "c", PRINCIPAL)
-            .await
-            .unwrap();
+        let out = mint_access_token(
+            &pool,
+            &key(),
+            &RetiredKeys::default(),
+            "http://127.0.0.1:1",
+            "c",
+            PRINCIPAL,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             out,
             MintOutcome::Refused(LinkRefusal::NotVaulted),
@@ -944,9 +1377,16 @@ mod tests {
         .await
         .unwrap();
 
-        let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1/unused", "c", PRINCIPAL)
-            .await
-            .unwrap();
+        let out = mint_access_token(
+            &pool,
+            &key(),
+            &RetiredKeys::default(),
+            "http://127.0.0.1:1/unused",
+            "c",
+            PRINCIPAL,
+        )
+        .await
+        .unwrap();
         match out {
             MintOutcome::Token { access_token, .. } => assert_eq!(access_token, "still-valid-at"),
             other => panic!("a flagged revoked_at must no longer block minting, got {other:?}"),
@@ -971,9 +1411,16 @@ mod tests {
         .await;
         set_standing(&pool, profile, "deactivated").await;
 
-        let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1/unused", "c", PRINCIPAL)
-            .await
-            .unwrap();
+        let out = mint_access_token(
+            &pool,
+            &key(),
+            &RetiredKeys::default(),
+            "http://127.0.0.1:1/unused",
+            "c",
+            PRINCIPAL,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             out,
             MintOutcome::Refused(LinkRefusal::Standing {
@@ -1000,9 +1447,16 @@ mod tests {
         .await;
         set_standing(&pool, profile, "revoked").await;
 
-        let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1/unused", "c", PRINCIPAL)
-            .await
-            .unwrap();
+        let out = mint_access_token(
+            &pool,
+            &key(),
+            &RetiredKeys::default(),
+            "http://127.0.0.1:1/unused",
+            "c",
+            PRINCIPAL,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             out,
             MintOutcome::Refused(LinkRefusal::Standing {
@@ -1029,9 +1483,16 @@ mod tests {
         .await;
         set_standing(&pool, profile, "denied").await;
 
-        let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1/unused", "c", PRINCIPAL)
-            .await
-            .unwrap();
+        let out = mint_access_token(
+            &pool,
+            &key(),
+            &RetiredKeys::default(),
+            "http://127.0.0.1:1/unused",
+            "c",
+            PRINCIPAL,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             out,
             MintOutcome::Refused(LinkRefusal::Standing {
@@ -1078,12 +1539,21 @@ mod tests {
         .await
         .unwrap();
 
-        let result =
-            mint_access_token(&pool, &key(), "http://127.0.0.1:1/unused", "c", PRINCIPAL_B).await;
+        // B's row still carries the configured key's fingerprint, so the failure is a row-level
+        // fault: B is told to re-link (and an error is logged). What must never happen is a token.
+        let result = mint_access_token(
+            &pool,
+            &key(),
+            &RetiredKeys::default(),
+            "http://127.0.0.1:1/unused",
+            "c",
+            PRINCIPAL_B,
+        )
+        .await;
         assert!(
-            result.is_err(),
+            matches!(result, Ok(MintOutcome::Refused(LinkRefusal::NotVaulted))),
             "a ciphertext sealed for principal A must not decrypt under principal B — the AAD \
-             binding must fail the tag rather than yield A's refresh token to B",
+             binding must fail the tag rather than yield A's refresh token to B; got {result:?}",
         );
     }
 
@@ -1117,9 +1587,16 @@ mod tests {
         assert_eq!(rows, 1, "re-store must not duplicate the row");
 
         // The revocation is cleared and the new cached AT is served.
-        let out = mint_access_token(&pool, &key(), "http://127.0.0.1:1/unused", "c", PRINCIPAL)
-            .await
-            .unwrap();
+        let out = mint_access_token(
+            &pool,
+            &key(),
+            &RetiredKeys::default(),
+            "http://127.0.0.1:1/unused",
+            "c",
+            PRINCIPAL,
+        )
+        .await
+        .unwrap();
         match out {
             MintOutcome::Token {
                 access_token,
@@ -1145,6 +1622,7 @@ mod tests {
         let out = mint_access_token(
             &pool,
             &key(),
+            &RetiredKeys::default(),
             "http://127.0.0.1:1",
             "c",
             "slack:T0BHAHEN79C:UOTHER",
@@ -1152,6 +1630,412 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(out, MintOutcome::Refused(LinkRefusal::NotLinked));
+    }
+
+    // --- key fingerprints -------------------------------------------------------------------
+
+    /// A key this deployment does not hold: the one an operator mis-pasted, or the one rotated to.
+    fn other_key() -> VaultKey {
+        VaultKey::from_base64(&STANDARD.encode([4u8; 32])).unwrap()
+    }
+
+    /// Every byte of a vault row the mint could write, for "nothing changed" assertions.
+    type RowBytes = (
+        Vec<u8>,
+        Vec<u8>,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        Option<DateTime<Utc>>,
+        DateTime<Utc>,
+    );
+
+    async fn row_bytes(pool: &PgPool, principal: &str) -> RowBytes {
+        let r = sqlx::query!(
+            "SELECT rt_nonce, rt_ciphertext, at_nonce, at_ciphertext, key_fingerprint, \
+                    access_expires_at, updated_at \
+               FROM kb_slack_grant_vault WHERE slack_principal_id = $1",
+            principal,
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        (
+            r.rt_nonce,
+            r.rt_ciphertext,
+            r.at_nonce,
+            r.at_ciphertext,
+            r.key_fingerprint,
+            r.access_expires_at,
+            r.updated_at,
+        )
+    }
+
+    async fn stored_fingerprint(pool: &PgPool, principal: &str) -> Option<Vec<u8>> {
+        sqlx::query_scalar!(
+            "SELECT key_fingerprint FROM kb_slack_grant_vault WHERE slack_principal_id = $1",
+            principal,
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// Make the row legacy: written before fingerprints existed.
+    async fn unstamp(pool: &PgPool, principal: &str) {
+        sqlx::query!(
+            "UPDATE kb_slack_grant_vault SET key_fingerprint = NULL WHERE slack_principal_id = $1",
+            principal,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Flip one byte of the cached access-token ciphertext: tamper under the right key.
+    async fn tamper_at(pool: &PgPool, principal: &str) {
+        sqlx::query!(
+            "UPDATE kb_slack_grant_vault \
+                SET at_ciphertext = set_byte(at_ciphertext, 0, get_byte(at_ciphertext, 0) # 255) \
+              WHERE slack_principal_id = $1",
+            principal,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn retiring(raw: &str) -> RetiredKeys {
+        RetiredKeys::parse(raw, key().fingerprint()).expect("valid retirement list")
+    }
+
+    async fn mint_with(
+        pool: &PgPool,
+        key: &VaultKey,
+        retired: &RetiredKeys,
+        token_url: &str,
+    ) -> ApiResult<MintOutcome> {
+        mint_access_token(pool, key, retired, token_url, "c", PRINCIPAL).await
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn store_grant_stamps_the_sealing_keys_fingerprint(pool: PgPool) {
+        let profile = insert_profile(&pool).await;
+        store(&pool, profile, PRINCIPAL, "rt", "at", Some(3600)).await;
+        assert_eq!(
+            stored_fingerprint(&pool, PRINCIPAL).await.as_deref(),
+            Some(key().fingerprint().as_bytes()),
+        );
+    }
+
+    /// **The hazard PR #1120 reverted.** A wrong-but-well-formed key is a 500 that writes nothing,
+    /// so restoring the right key heals the grant.
+    ///
+    /// **Why this bites:** mapping [`Unopenable::UnknownKey`] to `NotVaulted` (the reverted
+    /// behaviour) fails the first assertion. COMMITTING a write on the failure path (a stamp, a
+    /// reseal) fails the byte comparison; an uncommitted one rolls back with the transaction, which
+    /// is correct and does not fail it. And if the failure path overwrote the ciphertext, the right
+    /// key could no longer mint.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_wrong_key_is_a_500_that_leaves_the_row_for_the_right_key(pool: PgPool) {
+        let profile = insert_profile(&pool).await;
+        store(&pool, profile, PRINCIPAL, "rt", "cached-at", Some(3600)).await;
+        let before = row_bytes(&pool, PRINCIPAL).await;
+
+        let wrong = mint_with(
+            &pool,
+            &other_key(),
+            &RetiredKeys::default(),
+            "http://127.0.0.1:1",
+        )
+        .await;
+        assert!(
+            matches!(wrong, Err(ApiError::Internal(_))),
+            "a key that did not seal the row and is not retired must be a 500, got {wrong:?}",
+        );
+        assert_eq!(
+            row_bytes(&pool, PRINCIPAL).await,
+            before,
+            "a wrong-key mint must not write the row",
+        );
+
+        let healed = mint_with(&pool, &key(), &RetiredKeys::default(), "http://127.0.0.1:1").await;
+        match healed {
+            Ok(MintOutcome::Token { access_token, .. }) => assert_eq!(access_token, "cached-at"),
+            other => panic!("restoring the key must heal the grant, got {other:?}"),
+        }
+    }
+
+    /// The same on the refresh path (no usable cached token): the refresh token is not spent, and
+    /// the row is not written.
+    ///
+    /// **Why this bites:** the token URL is unreachable, so any attempt to refresh would also be an
+    /// `Err` — but an `Internal` one only by accident. The byte comparison is what bites: a stamp or
+    /// reseal before the open is classified changes the row.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_wrong_key_on_the_refresh_path_is_a_500_that_leaves_the_row(pool: PgPool) {
+        let profile = insert_profile(&pool).await;
+        store(&pool, profile, PRINCIPAL, "rt", "at", Some(0)).await;
+        let before = row_bytes(&pool, PRINCIPAL).await;
+
+        let out = mint_with(
+            &pool,
+            &other_key(),
+            &RetiredKeys::default(),
+            "http://127.0.0.1:1",
+        )
+        .await;
+        assert!(matches!(out, Err(ApiError::Internal(_))), "got {out:?}");
+        assert_eq!(row_bytes(&pool, PRINCIPAL).await, before);
+    }
+
+    /// A deliberate rotation, acknowledged by naming the old key's fingerprint, turns a row sealed
+    /// under that key into `NotVaulted`, so the user gets a re-link URL.
+    ///
+    /// **Why this bites:** without the retirement the same row is a 500 (asserted first), so only
+    /// consulting the retired set can produce the refusal.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_declared_rotation_mints_not_vaulted(pool: PgPool) {
+        let profile = insert_profile(&pool).await;
+        // Sealed under the OLD key; the deployment now holds key().
+        store_sealed_by(
+            &pool,
+            &other_key(),
+            profile,
+            PRINCIPAL,
+            "rt",
+            "at",
+            Some(3600),
+        )
+        .await;
+
+        let unacknowledged =
+            mint_with(&pool, &key(), &RetiredKeys::default(), "http://127.0.0.1:1").await;
+        assert!(
+            matches!(unacknowledged, Err(ApiError::Internal(_))),
+            "an unacknowledged rotation must stay a 500, got {unacknowledged:?}",
+        );
+
+        let retired = retiring(&other_key().fingerprint().to_string());
+        let out = mint_with(&pool, &key(), &retired, "http://127.0.0.1:1")
+            .await
+            .unwrap();
+        assert_eq!(out, MintOutcome::Refused(LinkRefusal::NotVaulted));
+    }
+
+    /// A row that fails under the very key that sealed it is a row-level fault (tamper, transplant,
+    /// a sealing bug). No key change heals it, so the user is offered a re-link.
+    ///
+    /// **Why this bites:** dropping the [`Unopenable::RowFault`] arm sends this row to `UnknownKey`
+    /// (no retirement is configured), which is a 500.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn tamper_under_the_right_key_mints_not_vaulted(pool: PgPool) {
+        let profile = insert_profile(&pool).await;
+        store(&pool, profile, PRINCIPAL, "rt", "at", Some(3600)).await;
+        tamper_at(&pool, PRINCIPAL).await;
+
+        let out = mint_with(&pool, &key(), &RetiredKeys::default(), "http://127.0.0.1:1")
+            .await
+            .unwrap();
+        assert_eq!(out, MintOutcome::Refused(LinkRefusal::NotVaulted));
+    }
+
+    /// Bytes that open under the right key but are not UTF-8 were sealed by something holding the
+    /// key. That is a bug or a compromise, never a refusal.
+    ///
+    /// **Why this bites:** classifying a decoded-but-invalid payload as a tag failure would land it
+    /// in `RowFault` (the row carries the configured key's fingerprint), which is `NotVaulted`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn invalid_utf8_under_the_right_key_is_a_500(pool: PgPool) {
+        let profile = insert_profile(&pool).await;
+        store(&pool, profile, PRINCIPAL, "rt", "at", Some(3600)).await;
+        let (nonce, ciphertext) = key().encrypt(&[0xff, 0xfe, 0xfd], &aad(PRINCIPAL, FIELD_AT));
+        sqlx::query!(
+            "UPDATE kb_slack_grant_vault SET at_nonce = $2, at_ciphertext = $3 \
+              WHERE slack_principal_id = $1",
+            PRINCIPAL,
+            &nonce[..],
+            ciphertext,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let out = mint_with(&pool, &key(), &RetiredKeys::default(), "http://127.0.0.1:1").await;
+        assert!(matches!(out, Err(ApiError::Internal(_))), "got {out:?}");
+    }
+
+    /// A legacy row (NULL fingerprint) gets one on its first successful open.
+    ///
+    /// **Why this bites:** without the stamp on the cached path the column stays NULL.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_legacy_row_is_stamped_on_its_first_cached_open(pool: PgPool) {
+        let profile = insert_profile(&pool).await;
+        store(&pool, profile, PRINCIPAL, "rt", "cached-at", Some(3600)).await;
+        unstamp(&pool, PRINCIPAL).await;
+
+        let out = mint_with(&pool, &key(), &RetiredKeys::default(), "http://127.0.0.1:1")
+            .await
+            .unwrap();
+        assert!(matches!(out, MintOutcome::Token { .. }), "got {out:?}");
+        assert_eq!(
+            stored_fingerprint(&pool, PRINCIPAL).await.as_deref(),
+            Some(key().fingerprint().as_bytes()),
+        );
+    }
+
+    /// The refresh path stamps a legacy row even when the IdP refuses the grant: the refusal arm
+    /// commits the stamp, so a dead grant is still classified when the key later rotates.
+    ///
+    /// **Why this bites:** stamping only in the reseal `UPDATE` (which the refusal never reaches),
+    /// or not committing on the refusal arm, leaves the column NULL.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_legacy_row_is_stamped_on_the_refresh_path_even_when_the_idp_refuses(pool: PgPool) {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let idp = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_json(serde_json::json!({ "error": "invalid_grant" })),
+            )
+            .mount(&idp)
+            .await;
+
+        let profile = insert_profile(&pool).await;
+        store(&pool, profile, PRINCIPAL, "rt", "at", Some(0)).await;
+        unstamp(&pool, PRINCIPAL).await;
+
+        let out = mint_with(&pool, &key(), &RetiredKeys::default(), &idp.uri())
+            .await
+            .unwrap();
+        assert_eq!(out, MintOutcome::Refused(LinkRefusal::NotVaulted));
+        assert_eq!(
+            stored_fingerprint(&pool, PRINCIPAL).await.as_deref(),
+            Some(key().fingerprint().as_bytes()),
+        );
+    }
+
+    /// The reseal after a successful refresh stamps the configured key's fingerprint. The row here
+    /// is stamped with the WRONG fingerprint but opens, which is also the restamp case.
+    ///
+    /// **Why this bites:** only when BOTH writers are removed. The early stamp (which runs for any
+    /// row not already carrying the configured key's fingerprint) and the reseal `UPDATE` each set
+    /// the column, so dropping either one alone still passes. Dropping both leaves the old key's
+    /// fingerprint on a row now sealed under the new one.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_refresh_reseals_and_stamps_the_configured_key(pool: PgPool) {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let idp = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "fresh-at",
+                "refresh_token": "rotated-rt",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+            })))
+            .mount(&idp)
+            .await;
+
+        let profile = insert_profile(&pool).await;
+        store(&pool, profile, PRINCIPAL, "rt", "at", Some(0)).await;
+        let stale = other_key().fingerprint();
+        sqlx::query!(
+            "UPDATE kb_slack_grant_vault SET key_fingerprint = $2 WHERE slack_principal_id = $1",
+            PRINCIPAL,
+            stale.as_bytes(),
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let out = mint_with(&pool, &key(), &RetiredKeys::default(), &idp.uri())
+            .await
+            .unwrap();
+        match out {
+            MintOutcome::Token { access_token, .. } => assert_eq!(access_token, "fresh-at"),
+            other => panic!("expected a refreshed token, got {other:?}"),
+        }
+        assert_eq!(
+            stored_fingerprint(&pool, PRINCIPAL).await.as_deref(),
+            Some(key().fingerprint().as_bytes()),
+        );
+    }
+
+    /// A legacy row that does not open has no evidence of its key: a 500, unless the operator
+    /// retired `unstamped`.
+    ///
+    /// **Why this bites:** treating NULL as the configured key would make the first call a
+    /// `RowFault` refusal; ignoring `unstamped` would make the second a 500.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_unopenable_legacy_row_is_a_500_unless_unstamped_is_retired(pool: PgPool) {
+        let profile = insert_profile(&pool).await;
+        store_sealed_by(
+            &pool,
+            &other_key(),
+            profile,
+            PRINCIPAL,
+            "rt",
+            "at",
+            Some(3600),
+        )
+        .await;
+        unstamp(&pool, PRINCIPAL).await;
+
+        let out = mint_with(&pool, &key(), &RetiredKeys::default(), "http://127.0.0.1:1").await;
+        assert!(matches!(out, Err(ApiError::Internal(_))), "got {out:?}");
+
+        let out = mint_with(&pool, &key(), &retiring("unstamped"), "http://127.0.0.1:1")
+            .await
+            .unwrap();
+        assert_eq!(out, MintOutcome::Refused(LinkRefusal::NotVaulted));
+    }
+
+    /// The startup check reports a mismatch when the configured key sealed none of the recent rows.
+    ///
+    /// **Why this bites:** each assertion pins one arm: a mismatch under the wrong key, a match
+    /// under the right one, and a retired key that no longer counts as unknown.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_startup_check_flags_a_key_that_sealed_none_of_the_recent_rows(pool: PgPool) {
+        let profile = insert_profile(&pool).await;
+        store(&pool, profile, PRINCIPAL, "rt", "at", Some(3600)).await;
+        let cfg =
+            |vault_key: VaultKey, retired_vault_keys: RetiredKeys| crate::config::SlackLinkConfig {
+                client_id: "c".to_string(),
+                hmac_secret: "s".to_string(),
+                public_base_url: "https://temper.test".to_string(),
+                vault_key,
+                retired_vault_keys,
+            };
+
+        let wrong = check_configured_key(&pool, &cfg(other_key(), RetiredKeys::default()))
+            .await
+            .expect("the query runs");
+        assert!(wrong.is_mismatch(), "{wrong:?}");
+        assert_eq!(wrong.unknown, vec![(key().fingerprint(), 1)]);
+
+        let right = check_configured_key(&pool, &cfg(key(), RetiredKeys::default()))
+            .await
+            .expect("the query runs");
+        assert_eq!(
+            right,
+            KeyCheck {
+                sampled: 1,
+                matching: 1,
+                unknown: vec![],
+            }
+        );
+
+        let retired =
+            RetiredKeys::parse(&key().fingerprint().to_string(), other_key().fingerprint())
+                .unwrap();
+        let rotated = check_configured_key(&pool, &cfg(other_key(), retired))
+            .await
+            .expect("the query runs");
+        assert!(!rotated.is_mismatch(), "{rotated:?}");
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -1185,6 +2069,136 @@ mod tests {
         assert!(
             got.is_none(),
             "an unvaulted principal must yield None, not an error"
+        );
+    }
+}
+
+#[cfg(test)]
+mod key_fingerprint_tests {
+    use super::*;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+
+    fn key_of(byte: u8) -> VaultKey {
+        VaultKey::from_base64(&STANDARD.encode([byte; 32])).unwrap()
+    }
+
+    // The seal format's pinned vectors live in tests/slack_vault_seal_format_test.rs: a fixed nonce
+    // in `src/` is a CodeQL finding, and the integration test pins the real open path anyway.
+
+    #[test]
+    fn retired_keys_parse_fingerprints_and_unstamped() {
+        let current = key_of(1).fingerprint();
+        let old = key_of(2).fingerprint();
+        let retired = RetiredKeys::parse(&format!(" {old} , ,UNSTAMPED,{old}"), current).unwrap();
+        assert!(retired.retires(Some(old)));
+        assert!(retired.retires(None), "`unstamped` retires legacy rows");
+        assert!(!retired.retires(Some(current)));
+        assert_eq!(retired.fingerprints, vec![old], "duplicates collapse");
+
+        assert_eq!(
+            RetiredKeys::parse("", current).unwrap(),
+            RetiredKeys::default()
+        );
+        assert!(!RetiredKeys::default().retires(None));
+    }
+
+    #[test]
+    fn retiring_the_configured_key_is_dropped() {
+        let current = key_of(1).fingerprint();
+        let retired = RetiredKeys::parse(&current.to_string(), current).unwrap();
+        assert_eq!(retired, RetiredKeys::default());
+    }
+
+    /// A malformed entry is an error naming its position, never its text: an operator who pasted
+    /// the key itself here must not have it logged.
+    #[test]
+    fn a_malformed_entry_is_an_error_that_does_not_echo_it() {
+        let current = key_of(1).fingerprint();
+        let pasted_key = STANDARD.encode([5u8; 32]);
+        let err = RetiredKeys::parse(&format!("unstamped,{pasted_key}"), current).unwrap_err();
+        assert!(err.contains("entry 2"), "{err}");
+        assert!(
+            !err.contains(&pasted_key),
+            "the entry must not be echoed: {err}"
+        );
+    }
+
+    #[test]
+    fn classify_follows_the_table() {
+        let current = key_of(1).fingerprint();
+        let old = key_of(2).fingerprint();
+        let stranger = key_of(3).fingerprint();
+        let retired = RetiredKeys::parse(&format!("{old},unstamped"), current).unwrap();
+        let none = RetiredKeys::default();
+        let sealed = || OpenFailure::Sealed(CryptoError::OpenFailed);
+
+        assert_eq!(
+            classify(&OpenFailure::NotUtf8, Some(current), current, &retired),
+            Unopenable::NotUtf8
+        );
+        assert_eq!(
+            classify(&OpenFailure::NotUtf8, Some(old), current, &retired),
+            Unopenable::NotUtf8
+        );
+        assert_eq!(
+            classify(&sealed(), Some(current), current, &none),
+            Unopenable::RowFault
+        );
+        assert_eq!(
+            classify(
+                &OpenFailure::Sealed(CryptoError::BadNonce),
+                Some(current),
+                current,
+                &none
+            ),
+            Unopenable::RowFault
+        );
+        assert_eq!(
+            classify(&sealed(), Some(old), current, &retired),
+            Unopenable::Retired
+        );
+        assert_eq!(
+            classify(&sealed(), None, current, &retired),
+            Unopenable::Retired
+        );
+        assert_eq!(
+            classify(&sealed(), Some(old), current, &none),
+            Unopenable::UnknownKey
+        );
+        assert_eq!(
+            classify(&sealed(), None, current, &none),
+            Unopenable::UnknownKey
+        );
+        assert_eq!(
+            classify(&sealed(), Some(stranger), current, &retired),
+            Unopenable::UnknownKey
+        );
+    }
+
+    #[test]
+    fn the_key_check_counts_matches_and_unknowns() {
+        let current = key_of(1).fingerprint();
+        let old = key_of(2).fingerprint();
+        let stranger = key_of(3).fingerprint();
+        let retired = RetiredKeys::parse(&old.to_string(), current).unwrap();
+
+        let empty = KeyCheck::assess([], current, &retired);
+        assert!(!empty.is_mismatch(), "an empty vault is no evidence");
+
+        let mixed = KeyCheck::assess([current, stranger, old, stranger], current, &retired);
+        assert_eq!(mixed.sampled, 4);
+        assert_eq!(mixed.matching, 1);
+        assert_eq!(mixed.unknown, vec![(stranger, 2)]);
+        assert!(!mixed.is_mismatch());
+
+        let wrong = KeyCheck::assess([stranger, old], current, &retired);
+        assert!(wrong.is_mismatch());
+
+        let rotated = KeyCheck::assess([old, old], current, &retired);
+        assert!(
+            !rotated.is_mismatch(),
+            "rows under a retired key are not a misconfiguration"
         );
     }
 }

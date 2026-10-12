@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_slack_grant_vault SET at_ciphertext = set_byte(at_ciphertext, 0, get_byte(at_ciphertext, 0) # 255) WHERE slack_principal_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "649ac42fe4a1dc5622d9a65e6c84f681316e5c350a44efb8cfbf9c23c3aba45a"
+}

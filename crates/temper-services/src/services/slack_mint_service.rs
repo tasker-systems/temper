@@ -159,6 +159,7 @@ pub async fn mint_for_mention(
     slack_grant_vault_service::mint_access_token(
         pool,
         &cfg.vault_key,
+        &cfg.retired_vault_keys,
         &provider.token_url,
         &provider.client_id,
         slack_principal_id,

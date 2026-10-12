@@ -1,0 +1,32 @@
+title    = "Each Slack vault grant records its sealing key's fingerprint, so a declared vault-key rotation answers the mint with `not_vaulted` and a re-link URL while a wrong key stays a 500"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["erasure-policy", "internal", "schema"]
+status   = "signal-only"
+body = '''
+`kb_slack_grant_vault` gains a nullable `key_fingerprint` column (migration 20261029100000): the
+first 8 bytes of HMAC-SHA256 under the sealing key, which is not secret. `store_grant` and the
+mint's reseal stamp it. A row written earlier gets it on its first successful open. temper-api logs
+the configured key's fingerprint at boot (`slack vault key fingerprint: …`). A new optional,
+non-secret env var, `SLACK_VAULT_RETIRED_KEY_FINGERPRINTS`, names deliberately retired keys, plus
+`unstamped` for rows that never opened since this shipped.
+
+The erasure policy gains one declared column, `kb_slack_grant_vault.key_fingerprint`, as `none` /
+`n-a` in `policy/erasure/personal-data.toml`. It names a key, not a person, and goes when the row
+does. What erasure covers is otherwise unchanged.
+
+Behind the unchanged `POST /internal/slack/mint` shape, a grant that will not open is now
+classified. Sealed under a retired key: `refused` / `not_vaulted` with a re-link URL (previously a
+500). Fails under the very key that sealed it (a tampered or transplanted row): also `not_vaulted`,
+logged at error (previously a 500). Sealed under any other key, or unstamped and not retired: still
+a 500, and the row is left untouched, so restoring the right key heals it. Opens but is not UTF-8:
+still a 500. Disconnect and erasure behave as before; their log lines now name the stored and
+configured fingerprints. A startup check in temper-api and the internal function logs an error when
+the configured key sealed none of the 20 most recently sealed rows.
+
+Who observes it: operators, through the new log lines and env var; Slack users after a declared
+rotation, who get a reconnect link instead of "try again in a moment".
+
+Release relevance: additive schema with no shape change on the wire. A binary without the
+migration never names the column. Deploying this changes nothing until a grant fails to open.
+'''

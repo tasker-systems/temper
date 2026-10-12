@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT key_fingerprint AS \"key_fingerprint!\"\n          FROM kb_slack_grant_vault\n         WHERE key_fingerprint IS NOT NULL\n         ORDER BY updated_at DESC\n         LIMIT $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "key_fingerprint!",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "ae7fb713c77fc29e51da0f88d105fe60f14d952f8d67558310eefda87d105bee"
+}

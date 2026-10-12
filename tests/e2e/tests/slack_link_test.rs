@@ -199,6 +199,7 @@ async fn setup_slack_app_with(
             hmac_secret: SLACK_SECRET.to_string(),
             public_base_url: "https://temper.test".to_string(),
             vault_key: vault_key(),
+            retired_vault_keys: Default::default(),
         }),
         slack_mint_secret: mint_secret.map(str::to_owned),
         rate_limit: None,
@@ -1019,9 +1020,16 @@ async fn a_successful_link_vaults_an_encrypted_grant_that_mints_a_token(pool: Pg
 
     // First mint: the cached AT from the exchange is still valid, so this returns it with no
     // refresh — proving the store → decrypt-cached round-trip through the real DB and crypto.
-    match mint_access_token(&pool, &vault_key(), &token_url, CLIENT_ID, SLACK_PRINCIPAL)
-        .await
-        .expect("mint")
+    match mint_access_token(
+        &pool,
+        &vault_key(),
+        &Default::default(),
+        &token_url,
+        CLIENT_ID,
+        SLACK_PRINCIPAL,
+    )
+    .await
+    .expect("mint")
     {
         MintOutcome::Token { access_token, .. } => {
             assert!(
@@ -1040,9 +1048,16 @@ async fn a_successful_link_vaults_an_encrypted_grant_that_mints_a_token(pool: Pg
         .await
         .expect("expire the cached access token");
 
-    match mint_access_token(&pool, &vault_key(), &token_url, CLIENT_ID, SLACK_PRINCIPAL)
-        .await
-        .expect("refreshing mint")
+    match mint_access_token(
+        &pool,
+        &vault_key(),
+        &Default::default(),
+        &token_url,
+        CLIENT_ID,
+        SLACK_PRINCIPAL,
+    )
+    .await
+    .expect("refreshing mint")
     {
         MintOutcome::Token { access_token, .. } => assert!(
             !access_token.is_empty(),
@@ -1114,9 +1129,16 @@ async fn a_grant_the_idp_rejects_mints_a_not_vaulted_refusal_and_is_kept(pool: P
         .expect("expire the cached access token");
 
     let token_url = format!("{}/oauth/token", app.issuer());
-    let outcome = mint_access_token(&pool, &vault_key(), &token_url, CLIENT_ID, SLACK_PRINCIPAL)
-        .await
-        .expect("a dead grant is a refusal, not an error");
+    let outcome = mint_access_token(
+        &pool,
+        &vault_key(),
+        &Default::default(),
+        &token_url,
+        CLIENT_ID,
+        SLACK_PRINCIPAL,
+    )
+    .await
+    .expect("a dead grant is a refusal, not an error");
     assert_eq!(outcome, MintOutcome::Refused(LinkRefusal::NotVaulted));
 
     // Nothing was destroyed: the vault row (and its ciphertext) and the link both survive, so a
@@ -1140,9 +1162,16 @@ async fn a_grant_the_idp_rejects_mints_a_not_vaulted_refusal_and_is_kept(pool: P
 
     // A second mint asks the IdP again (the mock's `.expect(2)` is verified on drop) and gets the
     // same typed refusal — and once the IdP answers 200 again, the same row mints.
-    let again = mint_access_token(&pool, &vault_key(), &token_url, CLIENT_ID, SLACK_PRINCIPAL)
-        .await
-        .expect("second mint");
+    let again = mint_access_token(
+        &pool,
+        &vault_key(),
+        &Default::default(),
+        &token_url,
+        CLIENT_ID,
+        SLACK_PRINCIPAL,
+    )
+    .await
+    .expect("second mint");
     assert_eq!(again, MintOutcome::Refused(LinkRefusal::NotVaulted));
 }
 
@@ -1194,9 +1223,16 @@ async fn a_non_invalid_grant_idp_refusal_stays_an_error_and_keeps_the_grant(pool
     .expect("read the grant");
 
     let token_url = format!("{}/oauth/token", app.issuer());
-    mint_access_token(&pool, &vault_key(), &token_url, CLIENT_ID, SLACK_PRINCIPAL)
-        .await
-        .expect_err("invalid_client is a deployment fault, not a verdict on the grant");
+    mint_access_token(
+        &pool,
+        &vault_key(),
+        &Default::default(),
+        &token_url,
+        CLIENT_ID,
+        SLACK_PRINCIPAL,
+    )
+    .await
+    .expect_err("invalid_client is a deployment fault, not a verdict on the grant");
 
     let after: Vec<u8> = sqlx::query_scalar(
         "SELECT rt_ciphertext FROM kb_slack_grant_vault WHERE slack_principal_id = $1",

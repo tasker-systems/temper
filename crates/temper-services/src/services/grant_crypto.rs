@@ -16,6 +16,11 @@
 //! gets `OpenFailed`, not another user's token. The key alone is no longer enough to relocate a
 //! sealed secret.
 //!
+//! **Each key has a non-secret fingerprint** ([`VaultKey::fingerprint`]), which the vault records
+//! on every row it seals. AEAD cannot say *why* an open failed: a wrong key, a tampered byte and a
+//! mismatched `aad` all fail the same tag. The fingerprint lets the vault tell "this deployment holds
+//! a different key from the one that sealed the row" apart from "the row is bad under the right key".
+//!
 //! This is deliberately the ONLY place that touches cipher internals. The vault service seals
 //! and opens through here; it never sees a nonce size or a key byte.
 
@@ -23,6 +28,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
+use hmac::{Hmac, Mac};
 // rand 0.10 renamed `OsRng` to `SysRng` and made it fallible (`TryRng`); `UnwrapErr` restores
 // the infallible `Rng` interface with 0.8's semantics — an OS RNG failure panics.
 use rand::rand_core::UnwrapErr;
@@ -34,6 +40,62 @@ pub const NONCE_LEN: usize = 24;
 
 /// Raw AEAD key length: 32 bytes.
 const KEY_LEN: usize = 32;
+
+/// Stored fingerprint length: the first 8 bytes of the HMAC. It only has to tell apart the handful of
+/// keys one deployment ever holds, where two keys collide with probability 2^-64.
+pub const FINGERPRINT_LEN: usize = 8;
+
+/// The HMAC message a fingerprint is computed over. Versioned so a future derivation cannot be
+/// mistaken for this one. Changing it re-fingerprints every key, which turns every stored row into
+/// an "unknown key" row: never edit it in place.
+const FINGERPRINT_DOMAIN: &[u8] = b"temper-slack-vault-key-id/v1";
+
+/// A non-secret identifier for a [`VaultKey`]: `HMAC-SHA256(key, FINGERPRINT_DOMAIN)`, truncated to
+/// [`FINGERPRINT_LEN`] bytes. It is shown to operators as 16 lowercase hex characters.
+///
+/// Safe to log and to store beside the ciphertext. It is a PRF output under a 256-bit random key,
+/// so it lets nobody confirm a guessed key faster than trying to open a stored row already does.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct KeyFingerprint([u8; FINGERPRINT_LEN]);
+
+impl KeyFingerprint {
+    /// Read a fingerprint back from its stored bytes. `None` for any other length: the column's
+    /// CHECK constraint makes that unreachable, and a caller treats it as "no fingerprint".
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        bytes.try_into().ok().map(Self)
+    }
+
+    /// Parse the 16-hex-character form an operator copies from a log line. Case-insensitive, and
+    /// surrounding whitespace is ignored.
+    pub fn from_hex(s: &str) -> Option<Self> {
+        let s = s.trim();
+        // `from_str_radix` alone would accept a leading `+`, so the digits are checked first.
+        if s.len() != FINGERPRINT_LEN * 2 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let mut out = [0u8; FINGERPRINT_LEN];
+        for (i, byte) in out.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+        }
+        Some(Self(out))
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for KeyFingerprint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.iter().try_for_each(|b| write!(f, "{b:02x}"))
+    }
+}
+
+impl std::fmt::Debug for KeyFingerprint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "KeyFingerprint({self})")
+    }
+}
 
 /// A parsed, validated vault key. Constructed once from `SLACK_VAULT_ENC_KEY`; from then on the
 /// type IS the proof that the key is well-formed (parse, don't validate).
@@ -78,6 +140,18 @@ impl VaultKey {
             .try_into()
             .map_err(|_| CryptoError::KeyWrongLength { got: bytes.len() })?;
         Ok(Self(arr))
+    }
+
+    /// This key's [`KeyFingerprint`]. The vault stamps it on every row it seals, and boot logs it so
+    /// an operator can name the key when retiring it.
+    pub fn fingerprint(&self) -> KeyFingerprint {
+        let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(&self.0)
+            .expect("HMAC accepts any key length");
+        mac.update(FINGERPRINT_DOMAIN);
+        let digest = mac.finalize().into_bytes();
+        let mut out = [0u8; FINGERPRINT_LEN];
+        out.copy_from_slice(&digest[..FINGERPRINT_LEN]);
+        KeyFingerprint(out)
     }
 
     fn cipher(&self) -> XChaCha20Poly1305 {
@@ -222,6 +296,39 @@ mod tests {
             Err(CryptoError::KeyWrongLength { got: 16 })
         ));
         assert!(VaultKey::from_base64(&STANDARD.encode([0u8; KEY_LEN])).is_ok());
+    }
+
+    /// The fingerprint is a pinned function of the key. Stored rows carry it, so a change to the
+    /// derivation (domain, hash, truncation) silently turns every row into an unknown-key row.
+    ///
+    /// **Why this bites:** the expected value is pinned, computed independently with
+    /// `printf 'temper-slack-vault-key-id/v1' | openssl dgst -sha256 -mac HMAC -macopt hexkey:0707…07`
+    /// and truncated to 8 bytes. Any change to the derivation fails it.
+    #[test]
+    fn the_fingerprint_is_a_pinned_function_of_the_key() {
+        assert_eq!(
+            a_key().fingerprint().to_string(),
+            PINNED_FINGERPRINT_OF_SEVENS
+        );
+        let other = VaultKey::from_base64(&STANDARD.encode([9u8; KEY_LEN])).unwrap();
+        assert_ne!(other.fingerprint(), a_key().fingerprint());
+    }
+
+    const PINNED_FINGERPRINT_OF_SEVENS: &str = "44ea0411541ec61c";
+
+    #[test]
+    fn a_fingerprint_roundtrips_through_hex_and_bytes() {
+        let fp = a_key().fingerprint();
+        assert_eq!(KeyFingerprint::from_hex(&fp.to_string()), Some(fp));
+        assert_eq!(
+            KeyFingerprint::from_hex(&format!("  {}  ", fp.to_string().to_uppercase())),
+            Some(fp)
+        );
+        assert_eq!(KeyFingerprint::from_bytes(fp.as_bytes()), Some(fp));
+        assert_eq!(KeyFingerprint::from_hex("abc"), None);
+        assert_eq!(KeyFingerprint::from_hex("zz00000000000000"), None);
+        assert_eq!(KeyFingerprint::from_hex("+f00000000000000"), None);
+        assert_eq!(KeyFingerprint::from_bytes(&[0u8; 7]), None);
     }
 
     #[test]

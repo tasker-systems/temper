@@ -48,6 +48,14 @@ long enough between mentions comes back to a dead grant. The server recognises t
 `invalid_grant` refusal (`oauth_client::refresh_grant` → `RefreshOutcome::GrantRejected`) and
 answers `refused` / `not_vaulted` — whose reply is the true one: retrying won't fix it, reconnect
 here. The reply carries the re-link URL, so the user recovers from Slack alone, with no temper CLI.
+A grant temper cannot open is `not_vaulted` only when the vault can tell a re-link is the remedy:
+the grant was sealed under a key the operator **retired** (`SLACK_VAULT_RETIRED_KEY_FINGERPRINTS`),
+or it fails under the very key that sealed it (a tampered row, logged at error). Sealed under any
+other key is a **500**, so this agent shows its generic "try again" line. That is deliberate:
+it is what a wrong `SLACK_VAULT_ENC_KEY` looks like, and restoring the key heals every grant, while
+offering a re-link would overwrite them. Each vault row records its sealing key's fingerprint
+(`key_fingerprint`), and the mint decides on that (`slack_grant_vault_service.rs`, `Unopenable`).
+Do not "fix" the 500 in the agent by offering a re-link on it.
 Before that it surfaced as a **401 from the mint**, which `requestMintedToken` throws on, which lands
 in the channel's catch-all "try again in a moment" — a retry that could never succeed. The vault row
 is **kept**, not deleted: Auth0 answers `invalid_grant` for a misconfigured client, so deleting would
