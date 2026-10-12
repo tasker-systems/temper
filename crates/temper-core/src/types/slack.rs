@@ -30,7 +30,9 @@ use temper_principal::Refusal;
 pub enum LinkRefusal {
     /// No `kb_profile_auth_links` row — this Slack principal is not linked to any temper profile.
     NotLinked,
-    /// Linked, but no mintable grant is vaulted (a pre-T3 link). Re-linking is the remedy.
+    /// Linked, but no usable grant is vaulted: none was ever stored (a pre-T3 link), or the IdP
+    /// refused the stored one as `invalid_grant` (expired, rotated out, or revoked). Re-linking is
+    /// the remedy.
     NotVaulted,
     /// Linked and vaulted, but the human's principal standing does not admit them. The remedy is an
     /// admin approving them — **not** re-linking, which is exactly why this is distinct from
@@ -53,6 +55,107 @@ impl LinkRefusal {
             }
             LinkRefusal::Standing { refusal } => refusal.reason(),
         }
+    }
+}
+
+/// The mint's refusal as it reaches the mention agent: a [`LinkRefusal`] with the remedy attached
+/// where the server can hand one over.
+///
+/// **A separate type from `LinkRefusal`, because this one carries a credential.** The `NotVaulted`
+/// arm holds a fresh single-use authorize URL, and whoever completes it binds their temper login to
+/// the Slack principal. `LinkRefusal` is a pure reason: `resolve` produces it, the mint logs it
+/// with `?`, and the callback page renders it. Putting a URL on it would put a credential into
+/// every one of those places. This type exists only at the wire, and its `Debug` redacts the URL.
+///
+/// **Only `NotVaulted` carries a URL, and the variant shapes make that structural.** Re-linking is
+/// the remedy for a missing or dead grant and for nothing else. A `Standing` refusal is fixed by an
+/// admin, so a URL there would be the false remedy the typed refusal exists to end. `NotLinked`
+/// means the link vanished mid-mention, and the user's next mention takes link-state's `unlinked`
+/// arm and gets a URL from there.
+///
+/// The tag scheme matches `LinkRefusal` (`reason`, snake_case, `Standing` as a struct variant), so
+/// the wire spelling of `not_linked` and `standing` is unchanged and `not_vaulted` only gains a
+/// field.
+// NOT `web-api`/`utoipa`, for the same reason as `LinkRefusal`: it rides an internal route that is
+// allow-listed out of openapi.json.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "slack_link.ts"))]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "reason")]
+pub enum SlackMintRefusal {
+    /// See [`LinkRefusal::NotLinked`].
+    NotLinked,
+    /// See [`LinkRefusal::NotVaulted`]. `authorize_url` is a fresh single-use link that re-links
+    /// this principal to the profile it is already bound to. A different login is refused by
+    /// `link_slack_principal`, which never rebinds a principal. A credential: deliver it to the
+    /// mentioning user only.
+    NotVaulted { authorize_url: String },
+    /// See [`LinkRefusal::Standing`].
+    Standing { refusal: Refusal },
+}
+
+impl std::fmt::Debug for SlackMintRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotLinked => f.write_str("NotLinked"),
+            Self::NotVaulted { .. } => f.write_str("NotVaulted { authorize_url: redacted }"),
+            Self::Standing { refusal } => f
+                .debug_struct("Standing")
+                .field("refusal", refusal)
+                .finish(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod slack_mint_refusal_tests {
+    use super::{LinkRefusal, SlackMintRefusal};
+    use temper_principal::Refusal;
+
+    const URL: &str = "https://idp.example/authorize?state=secret-nonce";
+
+    #[test]
+    fn debug_redacts_the_authorize_url() {
+        let dbg = format!(
+            "{:?}",
+            SlackMintRefusal::NotVaulted {
+                authorize_url: URL.to_string()
+            }
+        );
+        assert!(!dbg.contains("secret-nonce"), "URL must be redacted: {dbg}");
+        assert!(dbg.contains("NotVaulted"), "{dbg}");
+    }
+
+    /// `not_linked` and `standing` serialize exactly as `LinkRefusal` does, so the agent's existing
+    /// branches read them unchanged. Only `not_vaulted` differs, and only by gaining a field.
+    #[test]
+    fn the_shared_arms_keep_link_refusals_wire_spelling() {
+        let pairs = [
+            (SlackMintRefusal::NotLinked, LinkRefusal::NotLinked),
+            (
+                SlackMintRefusal::Standing {
+                    refusal: Refusal::Denied,
+                },
+                LinkRefusal::Standing {
+                    refusal: Refusal::Denied,
+                },
+            ),
+        ];
+        for (mint, link) in pairs {
+            assert_eq!(
+                serde_json::to_value(&mint).unwrap(),
+                serde_json::to_value(&link).unwrap()
+            );
+        }
+
+        let not_vaulted = serde_json::to_value(SlackMintRefusal::NotVaulted {
+            authorize_url: URL.to_string(),
+        })
+        .unwrap();
+        assert_eq!(
+            not_vaulted,
+            serde_json::json!({ "reason": "not_vaulted", "authorize_url": URL })
+        );
     }
 }
 

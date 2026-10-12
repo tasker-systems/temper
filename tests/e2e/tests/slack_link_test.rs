@@ -27,7 +27,7 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use serde::Serialize;
 use sqlx::PgPool;
 use tokio::net::TcpListener;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use tempfile::TempDir;
@@ -154,6 +154,17 @@ async fn setup_slack_app_with_mint_secret(
     pool: &PgPool,
     mint_secret: Option<&str>,
 ) -> SlackLinkApp {
+    setup_slack_app_with(pool, mint_secret, AuthMode::ExternalIdp).await
+}
+
+/// As [`setup_slack_app`], but under `mode`. `TemperAs` keeps the stub workable: `link_provider`
+/// derives the same `{issuer}/oauth/token` there, and only the authorize path and the revocation
+/// strategy differ.
+async fn setup_slack_app_with(
+    pool: &PgPool,
+    mint_secret: Option<&str>,
+    mode: AuthMode,
+) -> SlackLinkApp {
     let idp = MockServer::start().await;
 
     let decoding_key =
@@ -165,12 +176,12 @@ async fn setup_slack_app_with_mint_secret(
         database_url: "unused".to_string(),
         auth: AuthConfig {
             // The stub IdP. `link_provider::derive` turns this into `{issuer}/oauth/token`
-            // under `ExternalIdp`, which is the route the stub below mounts.
+            // in both modes, which is the route the stubs below mount.
             issuer: idp.uri(),
             jwks_url: "unused".to_string(),
             audience: common::TEST_AUDIENCE.to_string(),
             mcp_audience: common::TEST_AUDIENCE.to_string(),
-            mode: AuthMode::ExternalIdp,
+            mode,
         },
         auth_provider_name: PROVIDER.to_string(),
         cors_origins: vec![],
@@ -666,10 +677,12 @@ async fn a_replayed_state_is_rejected(pool: PgPool) {
 /// than stylistic: `link-state` answers `linked` once the first callback lands, so a
 /// mint-callback-mint-callback loop could never obtain the second URL. This is the real
 /// scenario the ordering models — a user mentions twice, then clicks both links — and it is
-/// the only route to a second callback now that a linked principal is never issued a
-/// challenge. Consequence worth naming: re-link is no longer reachable by mentioning again.
-/// The upsert stays idempotent for the concurrent case above; a deliberate "connect a
-/// different account" affordance is a separate feature, not a side effect of the old bug.
+/// one of two routes to a second callback: link-state never re-issues a URL to a linked
+/// principal, and the other route is the mint's `not_vaulted` refusal, which hands one out
+/// only when the stored grant is missing or dead
+/// (`a_dead_grant_mints_a_relink_url_that_restores_minting`).
+/// The upsert stays idempotent for both; a deliberate "connect a different account"
+/// affordance is a separate feature, not a side effect of re-linking.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn relinking_the_same_principal_is_idempotent(pool: PgPool) {
     let app = setup_slack_app(&pool).await;
@@ -713,7 +726,8 @@ async fn relinking_the_same_principal_is_idempotent(pool: PgPool) {
 /// URL-theft threat is: steal the victim's ephemeral link message, complete the login as
 /// yourself, and bind their principal to YOUR profile — every future `@temper` from the victim
 /// then writes into your KB. Refusing here closes that attack for an already-linked victim
-/// outright (and D9 means they are never issued a URL to steal in the first place).
+/// outright. It is also what makes the mint's re-link URL safe to hand an already-linked user
+/// whose grant has died: a thief who completes it as themselves lands here.
 ///
 /// The page text is not the load-bearing assertion — the row is. A regression that renders the
 /// refusal while the write still lands would pass a text-only check and leak exactly what the
@@ -1039,8 +1053,8 @@ async fn a_successful_link_vaults_an_encrypted_grant_that_mints_a_token(pool: Pg
 /// **A grant the IdP refuses is a typed refusal, not an error.** When the cached AT is stale and
 /// the IdP answers the refresh with `invalid_grant` — the RT aged out, was rotated out, or was
 /// revoked — the mint must report `Refused(NotVaulted)` (whose agent reply says "reconnect") and KEEP
-/// the row: `invalid_grant` can also mean a transient AS failure or a misconfigured client, and a
-/// deleted row is unrecoverable and unrevocable. It used to surface as `Err(Unauthorized)`: a 401 the mention agent can only render
+/// the row: `invalid_grant` can also mean a misconfigured client, and a deleted row is
+/// unrecoverable and unrevocable. It used to surface as `Err(Unauthorized)`: a 401 the mention agent can only render
 /// as "try again in a moment", forever, which is what a long-idle production user hit.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_grant_the_idp_rejects_mints_a_not_vaulted_refusal_and_is_kept(pool: PgPool) {
@@ -1091,7 +1105,7 @@ async fn a_grant_the_idp_rejects_mints_a_not_vaulted_refusal_and_is_kept(pool: P
     assert_eq!(outcome, MintOutcome::Refused(LinkRefusal::NotVaulted));
 
     // Nothing was destroyed: the vault row (and its ciphertext) and the link both survive, so a
-    // transient refusal heals and disconnect can still revoke.
+    // config fix heals and disconnect can still revoke.
     let vaulted: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM kb_slack_grant_vault WHERE slack_principal_id = $1)",
     )
@@ -1836,6 +1850,10 @@ async fn an_unapproved_principal_links_but_cannot_mint_until_approved(pool: PgPo
         mint["access_token"].is_null(),
         "no token may ride along on a refusal: {mint}",
     );
+    assert!(
+        mint["authorize_url"].is_null(),
+        "a standing refusal must never carry a re-link URL — re-linking cannot fix it: {mint}",
+    );
 
     // An admin approves. Nothing else changes — no re-link, no new intent, no new grant.
     approve_standing(&pool, profile_id_for_sub(&pool, sub).await).await;
@@ -1942,9 +1960,9 @@ async fn mint_rejects_forged_and_unsigned_calls(pool: PgPool) {
 ///  2. `kb_profile_auth_links` must be EMPTY — a fix that only changed the page but left the
 ///     directory row would pass a page-only test, and leaves the user in the worst state of the
 ///     three: `lookup_linked_handle` reads that table, so link-state would keep reporting them
-///     connected while every mint answers `not_vaulted`, and `link_slack_principal` refuses to
-///     rebind, so re-linking cannot repair it. Rolled back, they are cleanly unlinked and one
-///     mention away from retrying.
+///     connected and their next mention would cost a mint that answers `not_vaulted` before it
+///     hands them a re-link URL. Rolled back, they are cleanly unlinked and one mention away from
+///     retrying.
 ///  3. `kb_slack_grant_vault` must be empty too — the obvious sanity leg.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn callback_without_a_refresh_token_does_not_report_success(pool: PgPool) {
@@ -1993,8 +2011,8 @@ async fn callback_without_a_refresh_token_does_not_report_success(pool: PgPool) 
     .expect("count auth links");
     assert_eq!(
         links, 0,
-        "the directory row must be rolled back — a link with no grant is unrepairable, because \
-         link-state reads this table and link_slack_principal refuses to rebind",
+        "the directory row must be rolled back — link-state reads this table, so a link with no \
+         grant would report the user connected when the link never completed",
     );
 
     let grants: i64 = sqlx::query_scalar(
@@ -2062,6 +2080,279 @@ async fn mint_reports_not_vaulted_distinctly_from_not_linked(pool: PgPool) {
     assert!(
         body["access_token"].is_null(),
         "no token may ride along on a refusal: {body}",
+    );
+    assert!(
+        body["authorize_url"].as_str().is_some(),
+        "not_vaulted carries the re-link URL that fixes it: {body}",
+    );
+}
+
+/// Make [`SLACK_PRINCIPAL`]'s vaulted grant dead: the IdP answers every REFRESH with
+/// `invalid_grant`, and the cached access token is expired so the next mint must refresh.
+///
+/// The mock matches `grant_type=refresh_token` only, so it stays mounted through a later re-link:
+/// a code exchange stub mounted after it (`grant_type=authorization_code`) does not overlap it, and
+/// any refresh after the re-link is still refused. That is what makes "the re-link replaced the
+/// grant" observable. wiremock's first-registered match wins, so the matchers must be disjoint.
+async fn kill_the_grant(app: &SlackLinkApp, pool: &PgPool) {
+    app.idp.reset().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "error": "invalid_grant",
+            "error_description": "Unknown or invalid refresh token."
+        })))
+        .mount(&app.idp)
+        .await;
+    sqlx::query("UPDATE kb_slack_grant_vault SET access_expires_at = now() - interval '1 hour' WHERE slack_principal_id = $1")
+        .bind(SLACK_PRINCIPAL)
+        .execute(pool)
+        .await
+        .expect("expire the cached access token");
+}
+
+/// Mint for [`SLACK_PRINCIPAL`], assert it is a `not_vaulted` refusal, and return the state nonce
+/// carried by its re-link URL.
+async fn mint_relink_state_nonce(app: &SlackLinkApp) -> String {
+    let res = post_mint(app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
+    assert_eq!(res.status(), 200, "a dead grant is a refusal, not an error");
+    let body: serde_json::Value = res.json().await.expect("mint body");
+    assert_eq!(body["status"], "refused", "{body}");
+    assert_eq!(body["reason"], "not_vaulted", "{body}");
+    let authorize_url = body["authorize_url"]
+        .as_str()
+        .unwrap_or_else(|| panic!("not_vaulted must carry a re-link URL: {body}"));
+    reqwest::Url::parse(authorize_url)
+        .expect("authorize_url is a URL")
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .map(|(_, v)| v.into_owned())
+        .expect("the re-link URL carries the opaque state")
+}
+
+/// **An expired grant is fixable from Slack alone.** A linked user whose grant the IdP refuses gets
+/// a re-link URL on the mint's `not_vaulted` refusal. Completing it under the SAME login replaces
+/// the dead grant, and the next mint returns a token. No CLI and no disconnect are involved.
+///
+/// Why this bites: the IdP keeps refusing every refresh after the re-link (see [`kill_the_grant`]),
+/// so the final mint can only answer `token` from the fresh access token `store_grant` cached. A
+/// callback that refused the re-link, or one that kept the old grant (whose cached token
+/// `kill_the_grant` expired), leaves the mint on `not_vaulted`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_dead_grant_mints_a_relink_url_that_restores_minting(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+    link_a_vaulted_principal(&app, &pool).await;
+    kill_the_grant(&app, &pool).await;
+
+    let state_nonce = mint_relink_state_nonce(&app).await;
+
+    // The user completes the re-link URL as themselves. NO `reset()`: the refresh refusal stays
+    // mounted, and only the code exchange is answered.
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=authorization_code"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(StubTokenResponse {
+            access_token: sign_idp_access_token(
+                &app.issuer(),
+                "idp-sub-mint",
+                "mint-7c41de@example.invalid",
+            ),
+            refresh_token: Some(STUB_REFRESH_TOKEN.to_string()),
+            expires_in: 86400,
+        }))
+        .mount(&app.idp)
+        .await;
+    let page = app
+        .http
+        .get(app.callback_url(&state_nonce))
+        .send()
+        .await
+        .expect("re-link callback")
+        .text()
+        .await
+        .expect("re-link body");
+    assert!(
+        page.contains("Linked as"),
+        "the re-link must succeed: {page}"
+    );
+    assert_eq!(
+        count_slack_links(&pool).await,
+        1,
+        "re-linking must upsert the existing link, not add one"
+    );
+
+    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.expect("mint body");
+    assert_eq!(
+        body["status"], "token",
+        "the re-link must replace the dead grant with a working one: {body}",
+    );
+}
+
+/// **In AS mode, a re-link revokes the grant it overwrites — at the real call site.** The token a
+/// re-link overwrites may be live (a user who completes two outstanding link URLs supersedes the
+/// grant the first one stored), and once overwritten nothing could revoke it. The callback revokes it, in its own transaction,
+/// before `store_grant`.
+///
+/// Why this bites where the unit test cannot: the unit test calls `revoke_superseded_grant` alone.
+/// This one fails if the call is deleted, if it is passed the wrong mode, or if it is moved after
+/// `store_grant` (it would then read the replacement and skip it as "the token being stored"). It
+/// needs a DIFFERENT replacement token for that last case, hence `RELINKED_REFRESH_TOKEN`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_as_mode_relink_revokes_the_superseded_refresh_token(pool: PgPool) {
+    use sha2::{Digest, Sha256};
+    const RELINKED_REFRESH_TOKEN: &str = "relinked-refresh-token";
+
+    let app = setup_slack_app_with(&pool, Some(MINT_SECRET), AuthMode::TemperAs).await;
+    link_a_vaulted_principal(&app, &pool).await;
+
+    // The AS's own row for the vaulted token, as the TypeScript writer leaves it.
+    let superseded_hash = format!("{:x}", Sha256::digest(STUB_REFRESH_TOKEN.as_bytes()));
+    sqlx::query(
+        "INSERT INTO kb_oauth_refresh_tokens (token_hash, client_id, claims, expires_at) \
+         VALUES ($1, $2, '{}'::jsonb, now() + interval '30 days')",
+    )
+    .bind(&superseded_hash)
+    .bind(CLIENT_ID)
+    .execute(&pool)
+    .await
+    .expect("seed the AS refresh-token row");
+
+    kill_the_grant(&app, &pool).await;
+    let state_nonce = mint_relink_state_nonce(&app).await;
+
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=authorization_code"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(StubTokenResponse {
+            access_token: sign_idp_access_token(
+                &app.issuer(),
+                "idp-sub-mint",
+                "mint-7c41de@example.invalid",
+            ),
+            refresh_token: Some(RELINKED_REFRESH_TOKEN.to_string()),
+            expires_in: 86400,
+        }))
+        .mount(&app.idp)
+        .await;
+    let page = app
+        .http
+        .get(app.callback_url(&state_nonce))
+        .send()
+        .await
+        .expect("re-link callback")
+        .text()
+        .await
+        .expect("re-link body");
+    assert!(
+        page.contains("Linked as"),
+        "the re-link must succeed: {page}"
+    );
+
+    let (revoked_at, rotated_at): (
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    ) = sqlx::query_as(
+        "SELECT revoked_at, rotated_at FROM kb_oauth_refresh_tokens WHERE token_hash = $1",
+    )
+    .bind(&superseded_hash)
+    .fetch_one(&pool)
+    .await
+    .expect("read the AS row back");
+    assert!(
+        revoked_at.is_some(),
+        "the superseded AS refresh token must be revoked by the re-link"
+    );
+    assert!(
+        rotated_at.is_none(),
+        "a revoke is not a rotation; claiming one would make a later presentation look like replay"
+    );
+
+    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
+    let body: serde_json::Value = res.json().await.expect("mint body");
+    assert_eq!(
+        body["status"], "token",
+        "the replacement grant must still mint: {body}"
+    );
+}
+
+/// **A stolen re-link URL cannot move the principal.** The mint hands an already-linked user a link
+/// URL, which first-link URLs never were. That is safe only because the callback never rebinds: a
+/// thief who completes the URL as themselves is refused, and neither the link nor the vaulted grant
+/// changes.
+///
+/// Why this bites: it asserts on the rows, not the page. If the callback rebound the principal,
+/// the link row would name the attacker's profile. If anything from the refused re-link were
+/// committed to the vault, the grant ciphertext would change (it is sealed under a fresh nonce on
+/// every write).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_stolen_relink_url_cannot_move_the_principal(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+    link_a_vaulted_principal(&app, &pool).await;
+    let victim_profile_id = profile_id_for_sub(&pool, "idp-sub-mint").await;
+
+    let attacker_sub = "idp-sub-relink-thief";
+    let attacker_email = "relink-thief-3be7a0@example.invalid";
+    provision_profile(&app, attacker_sub, attacker_email).await;
+
+    kill_the_grant(&app, &pool).await;
+    let state_nonce = mint_relink_state_nonce(&app).await;
+
+    let grant_before: Vec<u8> = sqlx::query_scalar(
+        "SELECT rt_ciphertext FROM kb_slack_grant_vault WHERE slack_principal_id = $1",
+    )
+    .bind(SLACK_PRINCIPAL)
+    .fetch_one(&pool)
+    .await
+    .expect("read the vaulted grant");
+
+    // The thief completes the victim's re-link URL, authenticating as THEMSELVES. `reset()` first,
+    // for the reason `a_callback_for_a_principal_linked_to_another_profile_is_refused` gives.
+    app.idp.reset().await;
+    stub_token_endpoint(
+        &app,
+        sign_idp_access_token(&app.issuer(), attacker_sub, attacker_email),
+    )
+    .await;
+    let page = app
+        .http
+        .get(app.callback_url(&state_nonce))
+        .send()
+        .await
+        .expect("thief callback")
+        .text()
+        .await
+        .expect("thief body");
+    assert!(
+        page.contains("already connected to a different temper account"),
+        "the rebind must be refused: {page}"
+    );
+
+    let linked_to: uuid::Uuid = sqlx::query_scalar(
+        "SELECT profile_id FROM kb_profile_auth_links \
+         WHERE auth_provider = 'slack' AND auth_provider_user_id = $1",
+    )
+    .bind(SLACK_PRINCIPAL)
+    .fetch_one(&pool)
+    .await
+    .expect("the link row survives");
+    assert_eq!(
+        linked_to, victim_profile_id,
+        "the principal must stay bound to its owner"
+    );
+
+    let grant_after: Vec<u8> = sqlx::query_scalar(
+        "SELECT rt_ciphertext FROM kb_slack_grant_vault WHERE slack_principal_id = $1",
+    )
+    .bind(SLACK_PRINCIPAL)
+    .fetch_one(&pool)
+    .await
+    .expect("read the vaulted grant");
+    assert_eq!(
+        grant_after, grant_before,
+        "a refused re-link must not touch the vaulted grant"
     );
 }
 

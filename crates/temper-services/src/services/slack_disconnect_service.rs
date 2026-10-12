@@ -125,7 +125,7 @@ pub(crate) async fn disconnect_slack_principal(
     let mut tx = pool.begin().await?;
 
     // 1. Read + decrypt the RT while it still exists (locks the vault row).
-    let refresh_token = slack_grant_vault_service::take_refresh_token_for_disconnect(
+    let refresh_token = slack_grant_vault_service::take_refresh_token_locked(
         &mut tx,
         req.key,
         req.slack_principal_id,
@@ -135,7 +135,7 @@ pub(crate) async fn disconnect_slack_principal(
     // 2. Revoke. Best-effort in ExternalIdp mode; real and atomic in AS mode.
     let idp_revocation = match &refresh_token {
         // No grant on file (or one we could not open — see
-        // `take_refresh_token_for_disconnect`), so nothing was attempted.
+        // `take_refresh_token_locked`), so nothing was attempted.
         None => IdpRevocation::NotAttempted,
         Some(rt) => {
             revoke_at_idp(
@@ -347,6 +347,73 @@ pub async fn admin_disconnect_slack_principal(
     );
 
     disconnect_slack_principal(pool, admin.actor(), req).await
+}
+
+/// Revoke the stored grant a re-link is about to overwrite. Call it in the callback's transaction,
+/// after the link row is confirmed and before `store_grant`. **It revokes in AS mode only.**
+///
+/// A re-link replaces the vaulted refresh token (`store_grant` upserts on the principal), and the
+/// vault is the only place that token's plaintext lives. Once it is overwritten, nothing can revoke
+/// it. Disconnect revokes before it deletes for exactly that reason. The superseded token may be
+/// live: a user who completes two outstanding link URLs supersedes the live grant the first one
+/// stored, and Auth0 answers `invalid_grant` for a misconfigured client as well as for a dead grant
+/// (see `mint_access_token`'s `GrantRejected` arm). Which mode decides the asymmetry:
+///
+/// - **AS mode: revoked here.** Its revocation is a local update to that one token's hash row, in
+///   this transaction. It cannot reach the replacement grant (a new chain with a different hash),
+///   and it commits or rolls back with the re-link.
+/// - **ExternalIdp mode: deliberately NOT revoked, even though it may be live.** A revoke call is
+///   not safe after the new consent. With Auth0's "Refresh Token Revocation Deletes Grant" enabled,
+///   revoking one refresh token revokes every token for the same user, application and audience,
+///   and that includes the replacement this callback just obtained, so a re-link would brick
+///   itself. The overwrite still destroys temper's only copy of the old token, so temper can never
+///   present it again. The supersede is logged so the orphaned grant is at least visible.
+///
+/// A token equal to the replacement is never revoked. A missing grant is a no-op. An unopenable one
+/// is a no-op too, logged by [`slack_grant_vault_service::take_refresh_token_locked`], whose row
+/// lock this takes.
+pub async fn revoke_superseded_grant(
+    conn: &mut sqlx::PgConnection,
+    key: &VaultKey,
+    mode: AuthMode,
+    slack_principal_id: &str,
+    replacement_refresh_token: &str,
+) -> ApiResult<()> {
+    let Some(superseded) =
+        slack_grant_vault_service::take_refresh_token_locked(conn, key, slack_principal_id).await?
+    else {
+        return Ok(());
+    };
+    if superseded == replacement_refresh_token {
+        return Ok(());
+    }
+    match mode {
+        AuthMode::TemperAs => {
+            let revoked = revoke_as_refresh_token(conn, &superseded).await?;
+            if revoked {
+                tracing::info!(
+                    principal = %slack_principal_id,
+                    "slack re-link: superseded AS refresh token revoked"
+                );
+            } else {
+                // Usually benign: a grant the AS refused is often already revoked there, which is
+                // why the user is re-linking. It is also what a missing AS row looks like (reaped,
+                // or a hash drift — which the pinned-hash test guards), so it is not silent.
+                tracing::info!(
+                    principal = %slack_principal_id,
+                    "slack re-link: superseded AS refresh token matched no unrevoked AS row"
+                );
+            }
+        }
+        AuthMode::ExternalIdp => {
+            tracing::info!(
+                principal = %slack_principal_id,
+                "slack re-link: superseded refresh token overwritten without IdP revocation \
+                 (ExternalIdp; revoking could also revoke the replacement grant)"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Revoke a temper-AS refresh token locally, in the caller's transaction.
@@ -1158,7 +1225,7 @@ mod tests {
     ///
     /// Rotating the key makes every pre-rotation ciphertext unopenable by
     /// design. Before this fix the AEAD failure propagated out of
-    /// `take_refresh_token_for_disconnect` via `?`, so the whole transaction
+    /// `take_refresh_token_locked` via `?`, so the whole transaction
     /// aborted before COMMIT and **nothing was deleted** — both disconnect
     /// surfaces 500'd and unbound nothing, on a fleet where every grant is in
     /// that state, in the exact situation (key compromise) that motivates the
@@ -1521,5 +1588,81 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(remaining, vec!["slack:T1:ULIVE".to_string()]);
+    }
+
+    /// **A re-link revokes the grant it overwrites, in AS mode only.** Three poles, each against the
+    /// AS's own token row rather than a return value:
+    /// - AS mode, different replacement token: the superseded row is revoked;
+    /// - AS mode, the SAME token: untouched (revoking it would kill the grant being stored);
+    /// - ExternalIdp mode: untouched (the doc on `revoke_superseded_grant` explains why that mode
+    ///   must not revoke).
+    ///
+    /// Why this bites: a no-op body fails pole one, a body that ignores the mode fails pole three,
+    /// and one that skips the equality check fails pole two.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_relink_revokes_the_superseded_grant_in_as_mode_only(pool: PgPool) {
+        const HASH: &str = "9d16e5d809978fbc29ae240d1b95273fc1ff0de968d8e4f98cadfa0b5802e199";
+        let principal = "slack:T4:U4";
+        let key = key();
+        let profile_id = insert_profile(&pool).await;
+        seed_link(&pool, profile_id, principal).await;
+        seed_grant(
+            &pool,
+            &key,
+            profile_id,
+            principal,
+            "as-refresh-token-sample",
+        )
+        .await;
+        sqlx::query(
+            r#"
+            INSERT INTO kb_oauth_refresh_tokens (token_hash, client_id, claims, expires_at)
+            VALUES ($1, $2, '{}'::jsonb, now() + interval '30 days')
+            "#,
+        )
+        .bind(HASH)
+        .bind("slack-link-client")
+        .execute(&pool)
+        .await
+        .expect("seed AS refresh token");
+
+        let revoked = |pool: PgPool| async move {
+            sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+                "SELECT revoked_at FROM kb_oauth_refresh_tokens WHERE token_hash = $1",
+            )
+            .bind(HASH)
+            .fetch_one(&pool)
+            .await
+            .expect("read back")
+            .is_some()
+        };
+        let supersede = |mode: AuthMode, replacement: &'static str| {
+            let pool = pool.clone();
+            let key = key.clone();
+            async move {
+                let mut conn = pool.acquire().await.expect("acquire");
+                revoke_superseded_grant(&mut conn, &key, mode, principal, replacement)
+                    .await
+                    .expect("supersede");
+            }
+        };
+
+        supersede(AuthMode::ExternalIdp, "replacement-rt").await;
+        assert!(
+            !revoked(pool.clone()).await,
+            "ExternalIdp mode must not revoke"
+        );
+
+        supersede(AuthMode::TemperAs, "as-refresh-token-sample").await;
+        assert!(
+            !revoked(pool.clone()).await,
+            "the grant being stored must never be revoked"
+        );
+
+        supersede(AuthMode::TemperAs, "replacement-rt").await;
+        assert!(
+            revoked(pool.clone()).await,
+            "AS mode must revoke the grant the re-link overwrites"
+        );
     }
 }
