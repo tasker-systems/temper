@@ -471,5 +471,5 @@ refine = [
 "/outcome"     = { disposition = "out-of-scope", note = "an agent's free-form account of a run, anchored on the invocation, not R; it may quote R, and arm 3 lists it when it carries R's id (Q1)" }
 
 [payload."webhook_received"]
-"*"     = { disposition = "permissive", note = "a remote's body: under `body` since version 2; a version-1 row (1322 of 1328 in production, 2026-10-08) carries it at the payload root" }
+"*"     = { disposition = "permissive", note = "a remote's body: under `body` since version 2; a version-1 row carries it at the payload root" }
 "/body" = { disposition = "out-of-scope", note = "foreign text in no trail (20261007100000); a delivery that quotes R is named (D8, arm 5)" }
