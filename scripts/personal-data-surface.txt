@@ -156,6 +156,7 @@ kb_slack_grant_vault.rt_ciphertext        | identifier    | full      | deleted:
 kb_slack_grant_vault.at_ciphertext        | identifier    | full      | deleted:8                         | AEAD-sealed cached Slack access token
 kb_slack_grant_vault.rt_nonce             | none          | n-a       | -                                 | per-row random AEAD nonce — no personal data
 kb_slack_grant_vault.at_nonce             | none          | n-a       | -                                 | per-row random AEAD nonce — no personal data
+kb_slack_grant_vault.key_fingerprint      | none          | n-a       | -                                 | truncated HMAC of the instance vault key, identical on every row that key sealed — names a key, not a person
 kb_erasure_slack_revocations.rt_ciphertext | identifier   | full      | remainder: not the act's to reach — the erasure drain (erasure_slack_revocation_service) NULLs it at revocation or at the retry cap, outside any act body | a Slack refresh token whose revoke failed during an erasure, re-sealed under the row id; no Slack id or profile beside it
 kb_erasure_slack_revocations.rt_nonce     | none          | n-a       | -                                 | per-row random AEAD nonce — no personal data
 kb_erasure_retention_policies.set_by_profile_id | reference | pseudonym | -                                 | the operator who set the policy

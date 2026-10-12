@@ -2083,27 +2083,8 @@ mod key_fingerprint_tests {
         VaultKey::from_base64(&STANDARD.encode([byte; 32])).unwrap()
     }
 
-    const PRINCIPAL: &str = "slack:T0BHAHEN79C:U0BH6A3L6JF";
-
-    /// **The seal format is pinned.** A grant sealed by an earlier binary must open in this one.
-    /// [`Unopenable::RowFault`] answers `NotVaulted` on the premise that a row failing under the key
-    /// that sealed it is the row's fault. A change to how rows are opened (the AAD layout, the field
-    /// tags, the cipher) would fail EVERY row that way and offer every user a re-link, so it must
-    /// fail the build instead.
-    ///
-    /// **Why this bites:** the nonce and ciphertext are fixed bytes, computed outside this code
-    /// (Python: HChaCha20 checked against the XChaCha draft's test vector, then `cryptography`'s
-    /// ChaCha20-Poly1305) for key `[3; 32]` and AAD `slack:T0BHAHEN79C:U0BH6A3L6JF\0rt`. Any
-    /// change to `aad`, `FIELD_RT` or the cipher fails the open.
-    #[test]
-    fn a_grant_sealed_by_an_earlier_binary_still_opens() {
-        const NONCE: [u8; 24] = [0x11; 24];
-        const SEALED: &str = "80Tufn1JNLvHIxkeNVa8kphjNkwKUtfjCD7f6QwFxFYT/GoH";
-        let ciphertext = STANDARD.decode(SEALED).unwrap();
-        let opened = open_secret(&key_of(3), &NONCE, &ciphertext, &aad(PRINCIPAL, FIELD_RT))
-            .expect("the pinned grant must open");
-        assert_eq!(opened, "pinned-refresh-token");
-    }
+    // The seal format's pinned vectors live in tests/slack_vault_seal_format_test.rs: a fixed nonce
+    // in `src/` is a CodeQL finding, and the integration test pins the real open path anyway.
 
     #[test]
     fn retired_keys_parse_fingerprints_and_unstamped() {
