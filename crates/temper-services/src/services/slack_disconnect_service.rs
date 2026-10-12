@@ -355,9 +355,9 @@ pub async fn admin_disconnect_slack_principal(
 /// A re-link replaces the vaulted refresh token (`store_grant` upserts on the principal), and the
 /// vault is the only place that token's plaintext lives. Once it is overwritten, nothing can revoke
 /// it. Disconnect revokes before it deletes for exactly that reason. The superseded token may be
-/// live: the AS and Auth0 both answer `invalid_grant` for things other than a dead grant (see
-/// `mint_access_token`'s `GrantRejected` arm), and a user who completes two outstanding link URLs
-/// supersedes the live grant the first one stored. Which mode decides the asymmetry:
+/// live: a user who completes two outstanding link URLs supersedes the live grant the first one
+/// stored, and Auth0 answers `invalid_grant` for a misconfigured client as well as for a dead grant
+/// (see `mint_access_token`'s `GrantRejected` arm). Which mode decides the asymmetry:
 ///
 /// - **AS mode: revoked here.** Its revocation is a local update to that one token's hash row, in
 ///   this transaction. It cannot reach the replacement grant (a new chain with a different hash),

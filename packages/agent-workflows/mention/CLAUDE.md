@@ -50,12 +50,12 @@ answers `refused` / `not_vaulted` — whose reply is the true one: retrying won'
 here. The reply carries the re-link URL, so the user recovers from Slack alone, with no temper CLI.
 Before that it surfaced as a **401 from the mint**, which `requestMintedToken` throws on, which lands
 in the channel's catch-all "try again in a moment" — a retry that could never succeed. The vault row
-is **kept**, not deleted: the temper AS answers `invalid_grant` for transient failures too, and Auth0
-answers it for a misconfigured client, so deleting would make a blip or a config slip permanent and
-leave a possibly-live grant unrevocable. Any *other* IdP refusal (`invalid_client`,
-`unauthorized_client`, a 5xx) is still a 401, as are a signature/secret mismatch and `slack link
-disabled` — temper-api's log names which (the refusal's `error` code is logged when it is a known
-RFC 6749 code).
+is **kept**, not deleted: Auth0 answers `invalid_grant` for a misconfigured client, so deleting would
+make a config slip permanent and leave a possibly-live grant unrevocable. (The temper AS answers a
+store failure during rotation with a 503 `temporarily_unavailable`, which takes the 5xx path below.)
+Any *other* IdP refusal (`invalid_client`, `unauthorized_client`, a 5xx) is still a 401, as are a
+signature/secret mismatch and `slack link disabled` — temper-api's log names which (the refusal's
+`error` code is logged when it is a known RFC 6749 code).
 
 **The mint is PRE-FLIGHTED in `onAppMention`, deliberately.** The connection's `getToken` mints
 too, so a successful turn mints twice — that is cheap on purpose: the server hands back the

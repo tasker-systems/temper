@@ -1053,8 +1053,8 @@ async fn a_successful_link_vaults_an_encrypted_grant_that_mints_a_token(pool: Pg
 /// **A grant the IdP refuses is a typed refusal, not an error.** When the cached AT is stale and
 /// the IdP answers the refresh with `invalid_grant` — the RT aged out, was rotated out, or was
 /// revoked — the mint must report `Refused(NotVaulted)` (whose agent reply says "reconnect") and KEEP
-/// the row: `invalid_grant` can also mean a transient AS failure or a misconfigured client, and a
-/// deleted row is unrecoverable and unrevocable. It used to surface as `Err(Unauthorized)`: a 401 the mention agent can only render
+/// the row: `invalid_grant` can also mean a misconfigured client, and a deleted row is
+/// unrecoverable and unrevocable. It used to surface as `Err(Unauthorized)`: a 401 the mention agent can only render
 /// as "try again in a moment", forever, which is what a long-idle production user hit.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_grant_the_idp_rejects_mints_a_not_vaulted_refusal_and_is_kept(pool: PgPool) {
@@ -1105,7 +1105,7 @@ async fn a_grant_the_idp_rejects_mints_a_not_vaulted_refusal_and_is_kept(pool: P
     assert_eq!(outcome, MintOutcome::Refused(LinkRefusal::NotVaulted));
 
     // Nothing was destroyed: the vault row (and its ciphertext) and the link both survive, so a
-    // transient refusal heals and disconnect can still revoke.
+    // config fix heals and disconnect can still revoke.
     let vaulted: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM kb_slack_grant_vault WHERE slack_principal_id = $1)",
     )
@@ -2191,9 +2191,9 @@ async fn a_dead_grant_mints_a_relink_url_that_restores_minting(pool: PgPool) {
     );
 }
 
-/// **In AS mode, a re-link revokes the grant it overwrites — at the real call site.** The AS answers
-/// `invalid_grant` for transient failures too, so the token a re-link overwrites may be live, and
-/// once overwritten nothing could revoke it. The callback revokes it, in its own transaction,
+/// **In AS mode, a re-link revokes the grant it overwrites — at the real call site.** The token a
+/// re-link overwrites may be live (a user who completes two outstanding link URLs supersedes the
+/// grant the first one stored), and once overwritten nothing could revoke it. The callback revokes it, in its own transaction,
 /// before `store_grant`.
 ///
 /// Why this bites where the unit test cannot: the unit test calls `revoke_superseded_grant` alone.
