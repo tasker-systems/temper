@@ -780,8 +780,8 @@ refine = [
                 "blank",
             ),
             (
-                r#"{ gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "label redaction", slice = "2a" } }"#,
-                "slice",
+                r#"{ gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "label redaction", due = "soon" } }"#,
+                "due",
             ),
             (r#"{ gap = "label redaction" }"#, "struct Gap"),
         ] {

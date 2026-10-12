@@ -49,7 +49,7 @@ the day someone adds a column. So the work is split:
 | `personal_data_surface_test.rs` | Every derived candidate has a `personal-data.toml` entry. Every `achieved` claim is bound to the live person act. |
 | `sensitivity_scan_surface_test.rs` | The two column manifests partition the text columns, and `declared_count` is right. |
 | `resource_erasure_surface_test.rs` | Every carrier a resource reaches has a line. Each `handled`/`repointed` line is bound to a statement in the live resource act. Every string path of a registered payload schema has a `[payload]` line. A type with no schema is declared `permissive` and its paths are listed by hand, so this fence cannot check that list is complete. |
-| `erasure_policy_catalog_test.rs` | Every content or identity table has exactly one grain. Every named table, column and bound function exists. Every gap names its slice. |
+| `erasure_policy_catalog_test.rs` | Every content or identity table has exactly one grain. Every named table, column and bound function exists. An `fk` link is a foreign key and a `ref` link is not. A `cited_by` value is in its discriminator's vocabulary. Every covered chain ends in a unit. Every `scan` column of an identity table is reached by the person act or recorded as a column-scoped gap. |
 | `erasure_policy_parse_test.rs` | The shipped manifest parses, and corrupt input is refused, with the failing file named. |
 | `sensitivity_store_test.rs` | The sweep's surface registry covers both manifests: each `scan` column as a `text` surface, and each `incidental` column of `personal-data.toml` as a `jsonb` surface. A surface that neither manifest names any longer is disabled. |
 
@@ -57,22 +57,40 @@ All but `erasure_policy_parse_test.rs` need a database. Run them with `cargo mak
 run a single target with
 `cargo nextest run -p temper-services --features test-db --test <target>`.
 
-## Nothing reads as covered by being absent
+## Bound mechanisms and gaps
 
-Wherever these files name a mechanism, they say whether it exists or is still to be built:
+Wherever these files name a mechanism, they say whether it exists or is uncovered work:
 
 ```toml
-mechanism = { bound = "_erasure_apply_redaction" }       # a live function or flag column
-mechanism = { gap = "2a: team description erased at declaration" }   # not built yet
+mechanism = { bound = "_erasure_apply_redaction" }   # a live function or flag column
+mechanism = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "the personal team's description" } }
 ```
 
-A gap names the slice that builds it (`1b`, `1c`, `1d`, `2a`, `2b`, `2c`, `3`, `prereq 2a`) or
-the task that tracks it (`task <uuid>`). The rows behind a gap are reached by no erasure until
-that work lands. The gap says so, and the catalog fence makes sure it names its owner.
+A gap names the task that tracks it, as a full UUID, and states what no mechanism reaches. The
+parser refuses a gap without both. The gap and its task are the whole record of uncovered work,
+so notes do not restate it.
 
-Each file's header also has a section on **what its fence does not see**: rows rather than
-columns, control flow, references with neither a foreign key nor a CHECKed discriminator, and
-schemas other than `public`. Read that section before you treat a green test as coverage.
+Each file's header also says **what its check reads**: columns rather than rows, statements rather
+than control flow, references with neither a foreign key nor a CHECKed discriminator, and schemas
+other than `public`. Read that section before you treat a green test as coverage.
+
+## The vocabulary at a glance
+
+- **Grains** (`estate.toml`): `per-item` (fence, unit, home), `covered` (a parent path, and an
+  optional `unit` of its own), `identity` (the person act's mechanism, and an optional
+  `retention` category), `declared-out` (a reason, and an optional `retention` category).
+- **Paths** (`estate.toml`): a `link` is `fk` (a column under a foreign-key constraint), `ref` (a
+  uuid column with no constraint) or `pair` (a CHECKed `*_table` / `*_id` pair). A path read in
+  reverse carries `cited_by = { column, value }`: the discriminator on the citing table, and the
+  value that marks a citation.
+- **Achieved claims** (`personal-data.toml`): `erased:<arm>`, `deleted:<arm>`,
+  `cascaded:<arm>:<table>`, `resource-erasure`, `remainder: <reason>`, or `-`. An arm is a section
+  of the person act's body, numbered as its comments number it.
+- **Dispositions** (`resource-erasure.toml` `[tables]`): `handled`, `repointed:<table>.<column>`,
+  `out-of-scope`. Under `[payload]`: `redact:<class>`, `structural`, `out-of-scope`, and
+  `permissive` for the `*` line of a type with no schema.
+- **Notes** are trimmed as they are read, so a note of only whitespace is empty, and a line that
+  requires a reason fails without one.
 
 ## How the manifest is read
 
@@ -98,7 +116,8 @@ describe. The fences fail until you do.
   path to a parent, or its own unit, or say why it is declared out.
 - **A new event type or payload field.** Declare its free-text paths under
   `[payload."<type>"]` in `resource-erasure.toml`.
-- **A new erasure function.** Change the `{ gap = … }` entries it fills to `{ bound = … }`.
+- **A new erasure function.** Change the `{ gap = … }` entries it fills to `{ bound = … }`, and
+  close their tasks.
 
 Any change to this directory is gated three ways:
 

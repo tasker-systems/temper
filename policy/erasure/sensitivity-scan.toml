@@ -1,18 +1,16 @@
-# The sensitivity scan surface: the declared COMPLEMENT of the personal-data surface.
-#
-# Under goal "Sensitivity sweep" (spec: temper-artifacts specs/2026-09-28-sensitivity-sweep-design.md,
-# D3 and Q9). Sibling of personal-data.toml.
+# The sensitivity scan surface: the declared COMPLEMENT of the personal-data surface. Sibling of
+# personal-data.toml.
 #
 # WHY THIS FILE EXISTS.
 #
 # personal-data.toml is built from STRUCTURE: foreign keys, polymorphic pairs, principal
-# tables, vector/jsonb/bytea types, and a name heuristic. Every `text` / `character varying` column
-# those derivations do not nominate used to be a stated silence in that file's header. The silence
-# included the whole authored corpus (kb_block_content.content, kb_chunk_content.content), because
-# `text` is the type of everything and structure cannot tell prose from a hash.
+# tables, vector/jsonb/bytea types, and a name heuristic. The `text` / `character varying` columns
+# those derivations do not nominate include the whole authored corpus (kb_block_content.content,
+# kb_chunk_content.content), because `text` is the type of everything and structure cannot tell
+# prose from a hash.
 #
-# This file turns that silence into a checked invariant. Every text/varchar column of a public base
-# table appears in EXACTLY ONE of the two manifests:
+# This file declares each of those columns, and the partition is a checked invariant. Every
+# text/varchar column of a public base table appears in EXACTLY ONE of the two manifests:
 #
 #   * nominated by a personal-data derivation  -> declared in personal-data.toml
 #   * nominated by nothing                     -> declared here
@@ -28,8 +26,6 @@
 # COUNT at `count_at`: 172 text/varchar columns; 18 declared in the sibling; `declared_count` declared here.
 count_at = "20261023100000"
 declared_count = 154
-# (The spec measured 147 at 7c6d0f2. The schema did not change between the two commits; the
-# difference is `_sqlx_migrations.description`, which exists in every migrated test database.)
 #
 # THERE IS NO `unadjudicated` CLASS. A class that means "we will decide later" is how a manifest
 # starts accumulating lines nobody reads. A new column is declared by the PR that adds it.
@@ -59,10 +55,10 @@ declared_count = 154
 "kb_block_content.content"                        = { disposition = "scan", note = "the corpus" }
 "kb_chunk_content.content"                        = { disposition = "scan", note = "the corpus, windowed; hash-deduped against block content" }
 "kb_chunks.header_path"                           = { disposition = "scan", note = "the markdown heading trail is authored prose" }
-"kb_resources.title"                              = { disposition = "scan", note = "erasure spec F3: the commonest PII carrier" }
+"kb_resources.title"                              = { disposition = "scan", note = "the commonest carrier of personal data" }
 "kb_resources.origin_uri"                         = { disposition = "scan", note = "local paths: /Users/<name>/..." }
-"kb_properties.property_key"                      = { disposition = "scan", note = "non-structural by erasure Q3" }
-"kb_edges.label"                                  = { disposition = "scan", note = "free text by construction (erasure D4)" }
+"kb_properties.property_key"                      = { disposition = "scan", note = "a property key is free text, not a vocabulary" }
+"kb_edges.label"                                  = { disposition = "scan", note = "free text by construction" }
 "kb_citation_audits.reason"                       = { disposition = "scan", note = "auditor's free text" }
 "kb_remote_sources.uri"                           = { disposition = "scan", note = "a URL can name a person" }
 "kb_ingestion_records.source_uri"                 = { disposition = "scan", note = "the source path or URL an ingest read; the same shape as origin_uri" }
@@ -154,8 +150,8 @@ declared_count = 154
 "kb_workflow_jobs.dispatch_type"                  = { disposition = "structural", note = "dispatch vocabulary" }
 "kb_workflow_jobs.persona"                        = { disposition = "structural", note = "persona vocabulary" }
 "kb_cogmap_lenses.selection_kind"                 = { disposition = "structural", note = "lens vocabulary" }
-"kb_data_artifact_shapes.artifact_kind"           = { disposition = "scan", note = "a family name is free text: no family table, and the doors accept any name (erasure F3, corrected 2026-10-03)" }
-"kb_data_artifacts.artifact_kind"                 = { disposition = "scan", note = "a family name is free text: no family table, and the doors accept any name (erasure F3, corrected 2026-10-03)" }
+"kb_data_artifact_shapes.artifact_kind"           = { disposition = "scan", note = "a family name is free text: no family table, and the doors accept any name" }
+"kb_data_artifacts.artifact_kind"                 = { disposition = "scan", note = "a family name is free text: no family table, and the doors accept any name" }
 "kb_migration_ledger.recorded_by"                 = { disposition = "structural", note = "provenance vocabulary" }
 "kb_rate_counters.route"                          = { disposition = "structural", note = "route name, the counter key" }
 "kb_system_settings.terms_version"                = { disposition = "structural", note = "version string" }

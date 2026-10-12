@@ -1,14 +1,13 @@
 //! A malformed entry in any of the erasure-policy manifest's files fails the parse, and the error
 //! names the file it is in.
 //!
-//! The four erasure fences (`personal_data_surface_test.rs`, `sensitivity_scan_surface_test.rs`,
-//! `resource_erasure_surface_test.rs`, `sensitivity_store_test.rs`) read the manifest only through
-//! `temper_services::erasure_policy::in_force`, and so only through
-//! `temper_core::erasure_policy::parse`. The hand parsers they used to carry each refused a
-//! malformed line with its file and line number. These probes hold the parser to the same refusal,
-//! one per file: each corrupts one entry of the shipped text, so the probe reads the real file and
-//! not a fixture, and asserts that `parse` errs, names that file, and names the corrupted word.
-//! Needs no database.
+//! The erasure fences (`personal_data_surface_test.rs`, `sensitivity_scan_surface_test.rs`,
+//! `resource_erasure_surface_test.rs`, `sensitivity_store_test.rs`, `erasure_policy_catalog_test.rs`)
+//! read the manifest only through `temper_services::erasure_policy::in_force`, and so only through
+//! `temper_core::erasure_policy::parse`. These probes hold the parser to refusing a malformed
+//! entry, one per file: each corrupts one entry of the shipped text, so the probe reads the real
+//! file and not a fixture, and asserts that `parse` errs, names that file, and names the corrupted
+//! word. Needs no database.
 
 use temper_core::erasure_policy::{parse, ManifestFile, ManifestFiles};
 use temper_services::erasure_policy::FILES;
@@ -70,8 +69,8 @@ fn an_unknown_class_in_personal_data_fails_and_names_its_file() {
 fn a_bad_disposition_in_sensitivity_scan_fails_and_names_its_file() {
     assert_corruption_fails(
         ManifestFile::SensitivityScan,
-        r#"{ disposition = "scan", note = "erasure spec F3"#,
-        r#"{ disposition = "scanned", note = "erasure spec F3"#,
+        r#"{ disposition = "scan", note = "the commonest carrier"#,
+        r#"{ disposition = "scanned", note = "the commonest carrier"#,
         "scanned",
     );
 }

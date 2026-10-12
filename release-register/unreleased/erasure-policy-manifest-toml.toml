@@ -8,11 +8,23 @@ What erasure and the sensitivity scan cover (which personal-data columns exist a
 classed, which text columns the scan reads, which paths a resource's erasure reaches or leaves out)
 was declared in three line-oriented text files under `scripts/`. It is now declared in five TOML
 files in `policy/erasure/`, read through one parser, `temper_core::erasure_policy`, which the
-personal-data, sensitivity-scan and resource-erasure fences and the migration-time checks all use.
-The three `.txt` manifests are removed. Every entry, classification and disposition carries over
-unchanged, and the fences still join the manifest against the live catalog. There is no behaviour
-change at any door: no route, request or answer shape, CLI output or ledger event moves. Who
-observes: contributors who edit the policy, and CI. User-visible: no. Release relevance: additive.
+personal-data, sensitivity-scan and resource-erasure fences all use. The three `.txt` manifests are
+removed. Every column entry and classification carries over, and the fences still join the
+manifest against the live catalog. A new file, `estate.toml`, gives every table that holds content
+or identity one grain saying how an erasure reaches its rows, and a catalog fence fails on such a
+table with no grain, on a grain that names what the schema does not have, and on a covered chain
+that ends in no unit.
+
+Format 1 reads as follows. A resource-erasure disposition is `handled`,
+`repointed:<table>.<column>` or `out-of-scope`, and a personal-data claim that resource erasure
+reaches a column is `resource-erasure`. Wherever the manifest names a
+mechanism it is either `bound` to a live function or column, or a `gap` that names the task
+tracking it and states what is uncovered: `{ gap = { task = "<uuid>", what = "…" } }`. The parser
+refuses a gap without a well-formed task or a stated `what`, and every unknown field.
+
+There is no behaviour change at any door: no route, request or answer shape, CLI output or ledger
+event moves. Who observes: contributors who edit the policy, and CI. User-visible: no. Release
+relevance: additive.
 
 The policy is versioned from here on. Any later PR that changes `policy/erasure/` must add a
 register entry listing the `erasure-policy` surface; the declared-class gate fails the PR

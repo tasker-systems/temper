@@ -1,12 +1,10 @@
 # The erasure estate: what an erasure holds, and how it reaches each table's rows.
 #
-# Under goal "A person can be erased without the ledger losing what happened".
-#
 # An estate is the set of containers an erasure takes in, and everything homed in them. This file
-# says two things about it (spec D3 *Contents*, D7.4):
+# says two things about it:
 #
-#   * scope   the rules that put containers in an estate, one per D3 bullet, each with the
-#             mechanism that selects its set.
+#   * scope   the rules that put containers in an estate, each with the mechanism that selects
+#             its set.
 #   * tables  one grain per table: how an erasure reaches the table's rows.
 #
 # THE GRAINS.
@@ -16,13 +14,16 @@
 #                 erases one item), whether the table is a container, and, for a leaf, how an item
 #                 names the container it is homed in. kb_resources, kb_contexts, kb_cogmaps,
 #                 kb_blobs, and kb_edges homed in the estate.
-#   covered       reached through a parent, by a foreign key or a CHECKed discriminator pair, and
-#                 erased by the parent's unit. A `unit` on a covered entry names what erases rows the
-#                 parent's unit does not.
+#   covered       reached through a parent, and erased by the parent's unit. A `unit` on a covered
+#                 entry names what erases rows the parent's unit does not. Every covered chain ends
+#                 in a unit: a per-item or identity grain, or a covered entry with its own `unit`.
 #   identity      erased at declaration, with the subject's identity. The mechanism is the person
 #                 act's body, `_erasure_apply_redaction`; the note names its arms, as the body's
 #                 comments number them (20261023100000). Which columns each arm reaches is
-#                 personal-data.toml's `achieved`, at column grain.
+#                 personal-data.toml's `achieved`, at column grain, and a `scan` column of an
+#                 identity table the act does not reach is a column-scoped `also_reached` gap.
+#                 `retention` names the category under which a deployment keeps what the act would
+#                 otherwise erase.
 #   declared-out  deliberately not erased, with its reason, and the retention category that keeps
 #                 it when one applies.
 #
@@ -30,30 +31,32 @@
 # entry with what follows it (an edge is reached by its home, and by each of its endpoints).
 #
 # Every place this file names a mechanism, it says whether the mechanism exists
-# (`{ bound = "<live name>" }`) or is still to be built (`{ gap = "<slice>: <what>" }`), so nothing
-# reads as covered by being absent. A gap names the slice that builds it (1b, 1c, 1d, 2a, 2b, 2c,
-# 3, `prereq 2a`) or the task that tracks it (`task <uuid>`).
+# (`{ bound = "<live name>" }`) or is uncovered work
+# (`{ gap = { task = "<uuid>", what = "<what is uncovered>" } }`). A gap names the task that
+# tracks it, and its `what` says what no mechanism reaches.
 #
 # WHICH TABLES MUST HAVE A GRAIN.
 # A content or identity table is a public base table with at least one column classed `content`,
 # `incidental`, `derived` or `identifier` in personal-data.toml, or `scan` in sensitivity-scan.toml.
 # erasure_policy_catalog_test.rs computes that set from those entries, never from a list, and fails
-# on a table in it with no grain here. Three tables outside the set are grained because D3 or a
-# ruling names them: kb_blobs (a per-item type), kb_content_blocks (the parent of most covered
-# content) and kb_block_provenance (ruled 2026-10-11).
+# on a table in it with no grain here. Tables outside the set are grained where an erasure path
+# runs through them: kb_blobs (a per-item type), kb_content_blocks, kb_block_revisions and
+# kb_block_provenance (parents of covered content), and kb_blob_uploads (the parent of upload
+# segments).
 #
-# WHAT THIS FILE DOES NOT SEE, STATED SO NOBODY INFERS COVERAGE FROM SILENCE.
-#   * A gap is work not yet built. The rows behind it are in reach of no erasure until its slice
-#     lands; the gap says so, and the catalog test only checks that it names its slice.
-#   * The catalog test checks names: every table, link column, flag column and reached column
-#     exists, and every bound function exists. It does not check that a bound function does what the entry says, or
-#     that a discriminator value in a `via` (kb_remote_sources) matches the live vocabulary.
-#   * The value set of a polymorphic pair's CHECK is not compared with the paths declared here.
-#     Every value admitted today has an entry (a parent or an `also_reached`), but a value a later
-#     migration adds to a CHECK is not caught by this file's test.
+# WHAT THE CHECK READS.
+#   * Names and liveness: every table, link column, home column, flag column and reached column
+#     exists; every bound function exists; an `fk` link is a foreign key to the table it names and
+#     a `ref` link has none; a `cited_by` value is in its discriminator's enum or CHECK.
+#   * Not what a bound function does. The one exception is the `scan` columns of identity tables,
+#     which the check binds to the person act's statements: statements, not the rows they reach
+#     or the branches that run them.
+#   * Not the value set of a polymorphic pair's CHECK against the paths declared here. Every value
+#     admitted today has an entry (a parent or an `also_reached`), but a value a later migration
+#     adds to a CHECK is not caught by this file's test.
 #
 # FORMAT (TOML; `#` comments and blank lines ignored)
-#   scope = [ { rule = "<the set, in words>", mechanism = { bound = "…" } | { gap = "…" } }, … ]
+#   scope = [ { rule = "<the set, in words>", mechanism = <mechanism> }, … ]
 #
 #   [tables.<table>]
 #   note = "<note>"                                                             (optional)
@@ -62,7 +65,7 @@
 #     per-item:     container = true|false, fence = <mechanism>, unit = <mechanism>,
 #                   home = { table, table_column, id_column }                   (a leaf only)
 #     covered:      parent = <path>, unit = <mechanism>                         (unit optional)
-#     identity:     mechanism = <mechanism>
+#     identity:     mechanism = <mechanism>, retention = "<category>"           (retention optional)
 #     declared-out: reason = "<why>", retention = "<category>"                  (retention optional)
 #   [[tables.<table>.also_reached]]                                             (optional, repeated)
 #   path = <path>
@@ -70,17 +73,27 @@
 #   column = "<column>"        (optional: the one column of the row the mechanism is for; absent,
 #                               the whole row)
 #
-#   <path>       { table = "<table reached>", link = { fk = "<column>" }
-#                                                  | { pair = { table_column, id_column } },
-#                  via = "<how a reverse citation is read>" }                   (via optional)
-#   A path's link columns are on the row's own table; with `via`, on the path's `table`, the
-#   table whose rows cite this one. A bound fence names a flag column on the grained table; every
-#   other bound mechanism names a function.
+#   <mechanism>  { bound = "<live name>" }
+#              | { gap = { task = "<task uuid, hyphenated lowercase>", what = "<what is uncovered>" } }
+#
+#   <path>       { table = "<table reached>",
+#                  link = { fk = "<column>" } | { ref = "<column>" }
+#                       | { pair = { table_column, id_column } },
+#                  cited_by = { column = "<discriminator>", value = "<value>" } } (cited_by optional)
+#
+#   fk    a column holding the other row's id under a foreign-key constraint
+#   ref   a uuid column holding the other row's id with no foreign-key constraint
+#   pair  a CHECKed `*_table` / `*_id` discriminator pair
+#
+#   A path's link columns are on the row's own table. With `cited_by`, the path is read in
+#   reverse: the link columns and the discriminator are on the path's `table`, whose rows cite
+#   this one when the discriminator holds `value`. A bound fence names a flag column on the
+#   grained table; every other bound mechanism names a function.
 
 scope = [
   { rule = "the subject's own (@me) contexts", mechanism = { bound = "_erasure_estate_contexts" } },
   { rule = "the subject's personal team's contexts (kb_teams.personal_of)", mechanism = { bound = "_erasure_estate_contexts" } },
-  { rule = "cogmaps whose only kb_team_cogmaps row is the personal team (R15)", mechanism = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "cogmaps whose only kb_team_cogmaps row is the personal team" } } },
+  { rule = "cogmaps whose only kb_team_cogmaps row is the personal team ", mechanism = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "cogmaps whose only kb_team_cogmaps row is the personal team" } } },
 ]
 
 [tables]
@@ -88,7 +101,7 @@ scope = [
 # ── per-item ─────────────────────────────────────────────────────────────────────────────────────
 
 [tables.kb_resources]
-note = "a leaf, homed through kb_resource_homes. The unit runs resource erasure's D2 steps on one resource (title and origin_uri at D2.9)"
+note = "a leaf, homed through kb_resource_homes. The unit runs resource erasure on one resource"
 
 [tables.kb_resources.grain]
 kind = "per-item"
@@ -107,7 +120,7 @@ fence = { bound = "is_active" }
 unit = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "the unit that erases one context of the estate" } }
 
 [tables.kb_cogmaps]
-note = "a container, reached by the R15 scope rule (itself a gap). The fence is D2's new flag, mirroring context retirement. The unit waits on map-grain (charter) erasure, which resource_erasure_execute refuses today"
+note = "a container, reached by the cogmap scope rule"
 
 [tables.kb_cogmaps.grain]
 kind = "per-item"
@@ -116,7 +129,7 @@ fence = { gap = { task = "01a12dcf-1a90-741c-9ea1-64a1dd44aefc", what = "a liven
 unit = { gap = { task = "01a0e960-0ca2-7f42-b33e-1ed19b024e6b", what = "erasure of a cogmap and its charter" } }
 
 [tables.kb_blobs]
-note = "a leaf, homed by its own pair (kb_blobs_home_context_only admits kb_contexts alone). Blob gates will consult the map (D2); no flag binds it"
+note = "a leaf, homed by its own pair (kb_blobs_home_context_only admits kb_contexts alone)"
 
 [tables.kb_blobs.grain]
 kind = "per-item"
@@ -126,7 +139,7 @@ unit = { bound = "blob_delete" }
 home = { table = "kb_blobs", table_column = "home_table", id_column = "home_id" }
 
 [tables.kb_edges]
-note = "homed in the estate: folded at declaration, the label redacted by the unit. Also reached by each endpoint: resource erasure nulls the label on every edge with the resource at either end (step 9c) and replaces its edge-owned properties (step 9d); an edge with an estate blob at either end is P4 (ruled 2026-10-11). kb_edges_source_table_check and kb_edges_target_table_check also admit kb_cogmaps: an edge with an estate cogmap at either end waits on charter erasure (the kb_cogmaps also_reached entries)"
+note = "homed in the estate: folded at declaration, its label redacted by the unit. Also reached by each endpoint: resource erasure nulls the label of every edge with the resource at either end and replaces its edge-owned properties. kb_edges_source_table_check and kb_edges_target_table_check also admit kb_blobs and kb_cogmaps, each an also_reached entry below"
 
 [tables.kb_edges.grain]
 kind = "per-item"
@@ -162,7 +175,7 @@ mechanism = { gap = { task = "01a0e960-0ca2-7f42-b33e-1ed19b024e6b", what = "edg
 # ── covered: content beneath a resource ──────────────────────────────────────────────────────────
 
 [tables.kb_content_blocks]
-note = "D2: content beneath a resource is covered by its resource"
+note = "content beneath a resource is covered by its resource"
 
 [tables.kb_content_blocks.grain]
 kind = "covered"
@@ -176,35 +189,35 @@ kind = "covered"
 parent = { table = "kb_content_blocks", link = { fk = "block_id" } }
 
 [tables.kb_block_content]
-note = "kb_block_revisions → kb_content_blocks (block_id) → kb_resources (resource_id); resource erasure D2.2"
+note = "a block revision's verbatim content"
 
 [tables.kb_block_content.grain]
 kind = "covered"
 parent = { table = "kb_block_revisions", link = { fk = "block_revision_id" } }
 
 [tables.kb_chunks]
-note = "resource erasure D2.1 (header_path) and D2.3 (embedding)"
+note = "resource erasure handles header_path and embedding"
 
 [tables.kb_chunks.grain]
 kind = "covered"
 parent = { table = "kb_resources", link = { fk = "resource_id" } }
 
 [tables.kb_chunk_content]
-note = "kb_chunks → kb_resources (resource_id); resource erasure D2.1"
+note = "a chunk's content"
 
 [tables.kb_chunk_content.grain]
 kind = "covered"
 parent = { table = "kb_chunks", link = { fk = "chunk_id" } }
 
 [tables.kb_resource_search_index]
-note = "resource erasure D2.4"
+note = "the resource's search vector"
 
 [tables.kb_resource_search_index.grain]
 kind = "covered"
 parent = { table = "kb_resources", link = { fk = "resource_id" } }
 
 [tables.kb_properties]
-note = "owned through kb_properties_owner_table_check's pair. Resource erasure D2.9 replaces the keys and values of R's properties (9b), of every edge touching R (9d) and of every block of R (9d′). The CHECK also admits kb_cogmaps: cogmap-owned properties wait on charter erasure (the kb_cogmaps also_reached entry)"
+note = "owned through kb_properties_owner_table_check's pair. Resource erasure replaces the keys and values of the resource's properties, of every edge touching it and of every block of it. The CHECK also admits kb_cogmaps, an also_reached entry below"
 
 [tables.kb_properties.grain]
 kind = "covered"
@@ -223,42 +236,42 @@ path = { table = "kb_cogmaps", link = { pair = { table_column = "owner_table", i
 mechanism = { gap = { task = "01a0e960-0ca2-7f42-b33e-1ed19b024e6b", what = "properties owned by an estate cogmap" } }
 
 [tables.kb_data_artifacts]
-note = "resource erasure D2.9f (the artifact family)"
+note = "resource erasure handles the artifact family"
 
 [tables.kb_data_artifacts.grain]
 kind = "covered"
 parent = { table = "kb_resources", link = { fk = "resource_id" } }
 
 [tables.kb_data_artifact_content]
-note = "kb_data_artifacts → kb_resources (resource_id); resource erasure D2.5"
+note = "an artifact's content"
 
 [tables.kb_data_artifact_content.grain]
 kind = "covered"
 parent = { table = "kb_data_artifacts", link = { fk = "artifact_id" } }
 
 [tables.kb_data_artifact_verdicts]
-note = "kb_data_artifacts → kb_resources (resource_id); resource erasure D2.7a"
+note = "verdicts on an artifact"
 
 [tables.kb_data_artifact_verdicts.grain]
 kind = "covered"
 parent = { table = "kb_data_artifacts", link = { fk = "artifact_id" } }
 
 [tables.kb_citation_audits]
-note = "kb_content_blocks → kb_resources (resource_id); resource erasure D2.8"
+note = "audits of a block"
 
 [tables.kb_citation_audits.grain]
 kind = "covered"
 parent = { table = "kb_content_blocks", link = { fk = "block_id" } }
 
 [tables.kb_ingestion_records]
-note = "resource erasure D2.7a"
+note = "the ingest record of a resource"
 
 [tables.kb_ingestion_records.grain]
 kind = "covered"
 parent = { table = "kb_resources", link = { fk = "resource_id" } }
 
 [tables.kb_workflow_jobs]
-note = "jobs whose resource_id is an estate resource go with it (resource erasure D2.7). Jobs scoped only by context_id or cogmap_id are cancelled at declaration (D4 step 5), which no unit does yet"
+note = "jobs whose resource_id is an estate resource go with it"
 
 [tables.kb_workflow_jobs.grain]
 kind = "covered"
@@ -266,14 +279,14 @@ parent = { table = "kb_resources", link = { fk = "resource_id" } }
 unit = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "jobs scoped only to an estate context or cogmap, cancelled at declaration" } }
 
 [tables.kb_block_provenance]
-note = "covered by its block (ruled 2026-10-11). A row on a block outside the estate whose (source_kind, source_id) cites an estate resource or event is declared out as a pseudonymous reference: it holds ids only, and its target is fenced (resource-erasure Q1: never across the resource boundary)"
+note = "covered by its block. A row on a block outside the estate whose (source_kind, source_id) cites an estate resource or event is declared out as a pseudonymous reference: it holds ids only, and its target is fenced, since resource erasure never reaches across the resource boundary"
 
 [tables.kb_block_provenance.grain]
 kind = "covered"
 parent = { table = "kb_content_blocks", link = { fk = "block_id" } }
 
 [tables.kb_remote_sources]
-note = "re-pointed, not erased: resource erasure D2.9 (step 9e) re-points R's citations and deletes the original row only when nothing else cites it"
+note = "re-pointed, not erased: resource erasure re-points the resource's citations and deletes the original row only when nothing else cites it"
 
 [tables.kb_remote_sources.grain]
 kind = "covered"
@@ -301,7 +314,7 @@ parent = { table = "kb_cogmaps", link = { fk = "cogmap_id" } }
 unit = { gap = { task = "01a0e960-0ca2-7f42-b33e-1ed19b024e6b", what = "lenses of an estate cogmap" } }
 
 [tables.kb_cogmap_regions]
-note = "covered by its cogmap. A region in a cogmap outside the estate whose label or centroid was derived from estate members is a declared-out remainder (deriver, deferred by the spec); resource erasure D2.6 re-settles its centroid as today"
+note = "covered by its cogmap. A region in a cogmap outside the estate whose label or centroid was derived from estate members is a declared-out remainder; resource erasure re-settles its centroid"
 
 [tables.kb_cogmap_regions.grain]
 kind = "covered"
@@ -309,7 +322,7 @@ parent = { table = "kb_cogmaps", link = { fk = "cogmap_id" } }
 unit = { gap = { task = "01a0e960-0ca2-7f42-b33e-1ed19b024e6b", what = "regions of an estate cogmap" } }
 
 [tables.kb_invocations]
-note = "covered by the cogmap it ran over: originating_cogmap_id (NOT NULL, foreign key, indexed). parent_cogmap_id is set only for delegated launches and is not the covering path. No arm reaches outcome today"
+note = "covered by the cogmap it ran over: originating_cogmap_id (NOT NULL, foreign key, indexed). parent_cogmap_id is set only for delegated launches and is not the covering path"
 
 [tables.kb_invocations.grain]
 kind = "covered"
@@ -317,7 +330,7 @@ parent = { table = "kb_cogmaps", link = { fk = "originating_cogmap_id" } }
 unit = { gap = { task = "01a12c03-2663-7562-b6bb-2d0a67c61972", what = "the outcome of an invocation over an estate cogmap" } }
 
 [tables.kb_blob_upload_segments]
-note = "segments cascade (ON DELETE CASCADE) from their upload session; the act's arm 6a deletes the sessions owned by the subject or homed in the estate (kb_blob_uploads home_table/home_id) (ruled 2026-10-11)"
+note = "segments cascade (ON DELETE CASCADE) from their upload session, which the act's arm 6a deletes"
 
 [tables.kb_blob_upload_segments.grain]
 kind = "covered"
@@ -348,7 +361,7 @@ kind = "identity"
 mechanism = { bound = "_erasure_apply_redaction" }
 
 [tables.kb_teams]
-note = "the personal team only, found by kb_teams.personal_of (a uuid of kb_profiles, unique, with no foreign key). Arm 1 scrubs slug and name. description is erased at declaration (D4 step 5), which no arm does yet (the description also_reached entry)"
+note = "the personal team only, found by kb_teams.personal_of. Arm 1 scrubs slug and name"
 
 [tables.kb_teams.grain]
 kind = "identity"
@@ -374,14 +387,14 @@ kind = "identity"
 mechanism = { bound = "_erasure_apply_redaction" }
 
 [tables.kb_blob_uploads]
-note = "arm 6a: upload sessions owned by the subject or homed in the estate (home_table/home_id), deleted; their segments cascade"
+note = "arm 6a: upload sessions owned by the subject or homed in the estate (home_table/home_id), deleted"
 
 [tables.kb_blob_uploads.grain]
 kind = "identity"
 mechanism = { bound = "_erasure_apply_redaction" }
 
 [tables.kb_oauth_refresh_tokens]
-note = "arm 7a: deleted; kept revoked with claims emptied when the deployment keeps credential-replay-evidence"
+note = "arm 7a: the subject's tokens. personal-data.toml's kb_oauth_refresh_tokens.claims says what the retention category keeps"
 
 [tables.kb_oauth_refresh_tokens.grain]
 kind = "identity"
@@ -403,7 +416,7 @@ kind = "identity"
 mechanism = { bound = "_erasure_apply_redaction" }
 
 [tables.kb_connections]
-note = "arm 6a: connections homed in the estate or whose profile is the subject, revoked at declaration (R4); credential and observed_reach nulled. The arm does not reach reach_affirmation"
+note = "arm 6a: connections homed in the estate or whose profile is the subject, revoked at declaration; credential and observed_reach nulled"
 
 [tables.kb_connections.grain]
 kind = "identity"
@@ -415,7 +428,7 @@ mechanism = { gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "the
 column = "reach_affirmation"
 
 [tables.kb_join_requests]
-note = "arm 9a: message and decision_note nulled unless the deployment keeps join-request-notes"
+note = "arm 9a: message and decision_note nulled"
 
 [tables.kb_join_requests.grain]
 kind = "identity"
@@ -423,7 +436,7 @@ mechanism = { bound = "_erasure_apply_redaction" }
 retention = "join-request-notes"
 
 [tables.kb_principal_review_requests]
-note = "arm 9a: message and decision_note nulled unless the deployment keeps review-request-notes"
+note = "arm 9a: message and decision_note nulled"
 
 [tables.kb_principal_review_requests.grain]
 kind = "identity"
@@ -431,7 +444,7 @@ mechanism = { bound = "_erasure_apply_redaction" }
 retention = "review-request-notes"
 
 [tables.kb_principal_standing_events]
-note = "arm 9a: reason nulled unless the deployment keeps standing-reasons"
+note = "arm 9a: reason nulled"
 
 [tables.kb_principal_standing_events.grain]
 kind = "identity"
@@ -442,11 +455,11 @@ retention = "standing-reasons"
 
 [tables.kb_events.grain]
 kind = "declared-out"
-reason = "the ledger is append-only. It is rewritten path by path under each item's authorising event (R13), and those paths are declared in resource-erasure.toml [payload] (ruled 2026-10-11)"
+reason = "the ledger is append-only. It is rewritten path by path under each item's authorising event, and those paths are declared in resource-erasure.toml [payload]"
 
 [tables.kb_subscription_deliveries.grain]
 kind = "declared-out"
-reason = "another principal's judgment of a delivery, never redacted across the resource boundary (resource-erasure Q1); named in the remainder"
+reason = "another principal's judgment of a delivery, never redacted across the resource boundary; named in the remainder"
 
 [tables.kb_erasure_retention_policies.grain]
 kind = "declared-out"
