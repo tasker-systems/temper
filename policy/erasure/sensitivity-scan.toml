@@ -1,0 +1,228 @@
+# The sensitivity scan surface: the declared COMPLEMENT of the personal-data surface.
+#
+# Under goal "Sensitivity sweep" (spec: temper-artifacts specs/2026-09-28-sensitivity-sweep-design.md,
+# D3 and Q9). Sibling of scripts/personal-data-surface.txt.
+#
+# WHY THIS FILE EXISTS.
+#
+# personal-data-surface.txt is built from STRUCTURE: foreign keys, polymorphic pairs, principal
+# tables, vector/jsonb/bytea types, and a name heuristic. Every `text` / `character varying` column
+# those derivations do not nominate used to be a stated silence in that file's header. The silence
+# included the whole authored corpus (kb_block_content.content, kb_chunk_content.content), because
+# `text` is the type of everything and structure cannot tell prose from a hash.
+#
+# This file turns that silence into a checked invariant. Every text/varchar column of a public base
+# table appears in EXACTLY ONE of the two manifests:
+#
+#   * nominated by a personal-data derivation  -> declared in personal-data-surface.txt
+#   * nominated by nothing                     -> declared here
+#
+# sensitivity_scan_surface_test.rs asserts the partition: the union is total, the intersection is
+# empty, and a line here naming a column that is not a live text/varchar column fails.
+#
+# METHOD. The column set is every column of information_schema.columns with data_type in
+# ('text','character varying') whose table is a BASE TABLE in schema `public`, as migrated by
+# temper_services::MIGRATOR (so `_sqlx_migrations` is included). The complement is that set minus
+# every `table.column` declared in personal-data-surface.txt.
+#
+# COUNT at `count_at`: 172 text/varchar columns; 18 declared in the sibling; `declared_count` declared here.
+count_at = "20261023100000"
+declared_count = 154
+# (The spec measured 147 at 7c6d0f2. The schema did not change between the two commits; the
+# difference is `_sqlx_migrations.description`, which exists in every migrated test database.)
+#
+# THERE IS NO `unadjudicated` CLASS. A class that means "we will decide later" is how a manifest
+# starts accumulating lines nobody reads. A new column is declared by the PR that adds it.
+#
+# FORMAT (TOML; `#` comments and blank lines ignored)
+#   count_at = "<migration>"      the migration the COUNT above was taken at
+#   declared_count = <n>          how many columns [columns] declares
+#   [columns]
+#   "<table>.<column>" = { disposition = "<disposition>", note = "<note>" }
+#
+#   One inline table per column, so a column declared twice fails the TOML parse itself. `note`
+#   may be left out, and then reads as empty.
+#
+# disposition
+#   scan          authored or user-supplied free text; the sweep reads it
+#   structural    hash, enum, discriminator, surrogate, vocabulary, or a value derived from one
+#   credential    secret material by design (hashed, or a short-lived plaintext bearer value); not
+#                 a PII surface, and a sweep must never echo it
+#   out-of-scope  anything else, with the reason in the note (a note is REQUIRED for this class)
+#
+# Remediability is not a column here. It comes from the sibling's `ceiling` for the surfaces the
+# sweep reads through that file, and from the erasure act for the surfaces declared `scan` here.
+
+[columns]
+
+# ── the corpus: every authored word ─────────────────────────────────────────────────────────
+"kb_block_content.content"                        = { disposition = "scan", note = "the corpus" }
+"kb_chunk_content.content"                        = { disposition = "scan", note = "the corpus, windowed; hash-deduped against block content" }
+"kb_chunks.header_path"                           = { disposition = "scan", note = "the markdown heading trail is authored prose" }
+"kb_resources.title"                              = { disposition = "scan", note = "erasure spec F3: the commonest PII carrier" }
+"kb_resources.origin_uri"                         = { disposition = "scan", note = "local paths: /Users/<name>/..." }
+"kb_properties.property_key"                      = { disposition = "scan", note = "non-structural by erasure Q3" }
+"kb_edges.label"                                  = { disposition = "scan", note = "free text by construction (erasure D4)" }
+"kb_citation_audits.reason"                       = { disposition = "scan", note = "auditor's free text" }
+"kb_remote_sources.uri"                           = { disposition = "scan", note = "a URL can name a person" }
+"kb_ingestion_records.source_uri"                 = { disposition = "scan", note = "the source path or URL an ingest read; the same shape as origin_uri" }
+"kb_workflow_jobs.last_error"                     = { disposition = "scan", note = "error text quotes the input that broke it" }
+
+# ── authored text outside the corpus ────────────────────────────────────────────────────────
+"kb_teams.description"                            = { disposition = "scan", note = "team description, author-supplied" }
+"kb_contexts.name"                                = { disposition = "scan", note = "author-chosen; ContextRenamed copies it to the ledger, permanently outside erasure" }
+"kb_cogmaps.name"                                 = { disposition = "scan", note = "author-chosen; ledger copy is outside erasure" }
+"kb_cogmap_lenses.name"                           = { disposition = "scan", note = "author-chosen; ledger copy is outside erasure" }
+"kb_cogmap_regions.label"                         = { disposition = "scan", note = "optional agent-authored region label" }
+"kb_join_requests.message"                        = { disposition = "scan", note = "a person's own words to a team; cascades with the requesting profile" }
+"kb_join_requests.decision_note"                  = { disposition = "scan", note = "reviewer's free text about a named requester" }
+"kb_principal_review_requests.message"            = { disposition = "scan", note = "a person's own words; cascades with the profile" }
+"kb_principal_review_requests.decision_note"      = { disposition = "scan", note = "reviewer's free text about a named principal" }
+"kb_principal_standing_events.reason"             = { disposition = "scan", note = "admin-typed revoke reason about a named principal" }
+"kb_subscription_deliveries.rationale"            = { disposition = "scan", note = "steward's free-text judgement of a delivery" }
+"kb_subscription_deliveries.scope_reason"         = { disposition = "scan", note = "caller-supplied reason for a scope verdict" }
+"kb_connections.reach_affirmation"                = { disposition = "scan", note = "free-text rationale for binding a connection's reach" }
+"kb_erasure_retention_policies.basis"             = { disposition = "scan", note = "operator-typed legal basis for keeping a category" }
+
+# ── content-addressed identities and digests ────────────────────────────────────────────────
+"kb_block_content.content_hash"                   = { disposition = "structural", note = "sha256" }
+"kb_chunks.content_hash"                          = { disposition = "structural", note = "sha256" }
+"kb_block_revisions.block_body_hash"              = { disposition = "structural", note = "sha256" }
+"kb_resources.body_hash"                          = { disposition = "structural", note = "sha256" }
+"kb_blobs.content_hash"                           = { disposition = "structural", note = "sha256" }
+"kb_blobs.blob_pathname"                          = { disposition = "structural", note = "`{hash[0:2]}/{hash}` (blob_store::blob_pathname); NULL after a strike; no filename reaches it" }
+"kb_blob_upload_segments.segment_hash"            = { disposition = "structural", note = "sha256" }
+"kb_erasure_retention_policies.name"              = { disposition = "structural", note = "an operator-chosen slug naming a policy" }
+"kb_erasure_retention_policies.category"          = { disposition = "structural", note = "closed vocabulary (RetentionCategory)" }
+"kb_erasure_slack_revocations.outcome"            = { disposition = "structural", note = "closed vocabulary: revoked, abandoned" }
+"kb_data_artifact_content.content_hash"           = { disposition = "structural", note = "sha256" }
+"kb_data_artifacts.content_hash"                  = { disposition = "structural", note = "sha256" }
+"kb_data_artifact_verdicts.content_hash"          = { disposition = "structural", note = "sha256" }
+"kb_event_field_redactions.path"                  = { disposition = "structural", note = "a dotted payload path from the erasure allowlist (_erasure_redact_paths), never a value" }
+"kb_event_field_redactions.authority"             = { disposition = "structural", note = "the authorising event's type, never a value" }
+"kb_erased_content.content_hash"                  = { disposition = "structural", note = "sha256; the erasure tombstone key" }
+"kb_erasure_blob_deletes.content_hash"            = { disposition = "structural", note = "sha256" }
+"kb_erasure_blob_deletes.pathname"                = { disposition = "structural", note = "copy of a content-addressed blob pathname" }
+"kb_ingestion_records.source_hash"                = { disposition = "structural", note = "sha256 of the source" }
+"kb_chunks.embedded_with"                         = { disposition = "structural", note = "sha256 of the embedding model" }
+"kb_cogmap_components.fingerprint"                = { disposition = "structural", note = "digest of a component's membership" }
+"kb_cogmaps.steward_boundary_fingerprint"         = { disposition = "structural", note = "digest of the steward's boundary" }
+"kb_remote_sources.uri_normalized"                = { disposition = "structural", note = "normalization of .uri, same row; a finding on .uri points here too" }
+
+# ── polymorphic discriminators (table names under a CHECK) ──────────────────────────────────
+"kb_blob_uploads.home_table"                      = { disposition = "structural", note = "discriminator" }
+"kb_blobs.home_table"                             = { disposition = "structural", note = "discriminator" }
+"kb_cogmap_components.home_anchor_table"          = { disposition = "structural", note = "discriminator" }
+"kb_cogmap_lenses.home_anchor_table"              = { disposition = "structural", note = "discriminator" }
+"kb_cogmap_region_members.member_table"           = { disposition = "structural", note = "discriminator" }
+"kb_cogmap_regions.home_anchor_table"             = { disposition = "structural", note = "discriminator" }
+"kb_data_artifact_shapes.home_anchor_table"       = { disposition = "structural", note = "discriminator" }
+"kb_edges.home_anchor_table"                      = { disposition = "structural", note = "discriminator" }
+"kb_edges.source_table"                           = { disposition = "structural", note = "discriminator" }
+"kb_edges.target_table"                           = { disposition = "structural", note = "discriminator" }
+"kb_events.producing_anchor_table"                = { disposition = "structural", note = "discriminator" }
+"kb_properties.owner_table"                       = { disposition = "structural", note = "discriminator" }
+"kb_resource_homes.anchor_table"                  = { disposition = "structural", note = "discriminator" }
+"kb_subscriptions.subscriber_table"               = { disposition = "structural", note = "discriminator" }
+
+# ── enums, states and closed vocabularies ───────────────────────────────────────────────────
+"kb_data_artifact_shapes.enforcement"             = { disposition = "structural", note = "CHECK enum" }
+"kb_data_artifacts.intent"                        = { disposition = "structural", note = "CHECK enum" }
+"kb_erasure_blob_deletes.status"                  = { disposition = "structural", note = "CHECK enum" }
+"kb_erasure_blob_deletes.resolution"              = { disposition = "structural", note = "coded completion constant (erasure_fence_service)" }
+"kb_event_types.category"                         = { disposition = "structural", note = "CHECK enum" }
+"kb_event_types.name"                             = { disposition = "structural", note = "event type vocabulary" }
+"kb_events.category"                              = { disposition = "structural", note = "CHECK enum, FK to kb_event_types" }
+"kb_internal_call_health.channel"                 = { disposition = "structural", note = "channel name" }
+"kb_internal_call_health.last_failure_cause"      = { disposition = "structural", note = "CHECK enum" }
+"kb_internal_call_health.last_failure_detail"     = { disposition = "structural", note = "classified by construction: an env-var name or HTTP status, never a raw error (column comment)" }
+"kb_invocations.status"                           = { disposition = "structural", note = "CHECK enum" }
+"kb_invocations.trigger_kind"                     = { disposition = "structural", note = "free-form by type, a label vocabulary by use (manual, delegated, scheduled)" }
+"kb_join_requests.source"                         = { disposition = "structural", note = "varchar(16) origin code" }
+"kb_join_requests.accepted_terms_version"         = { disposition = "structural", note = "version string" }
+"kb_oauth_flow.status"                            = { disposition = "structural", note = "CHECK enum" }
+"kb_principal_standing.state"                     = { disposition = "structural", note = "CHECK enum" }
+"kb_principal_standing_events.act"                = { disposition = "structural", note = "CHECK enum" }
+"kb_principal_standing_events.prior_state"        = { disposition = "structural", note = "CHECK enum" }
+"kb_principal_standing_events.resulting_state"    = { disposition = "structural", note = "CHECK enum" }
+"kb_resources.body_storage"                       = { disposition = "structural", note = "CHECK enum" }
+"kb_resources.ingest_state"                       = { disposition = "structural", note = "CHECK enum" }
+"kb_resource_search_index.search_config"          = { disposition = "structural", note = "tsearch config name" }
+"kb_subscription_deliveries.disposition"          = { disposition = "structural", note = "CHECK enum" }
+"kb_subscription_deliveries.status"               = { disposition = "structural", note = "CHECK enum" }
+"kb_workflow_jobs.status"                         = { disposition = "structural", note = "job state" }
+"kb_workflow_jobs.dispatch_type"                  = { disposition = "structural", note = "dispatch vocabulary" }
+"kb_workflow_jobs.persona"                        = { disposition = "structural", note = "persona vocabulary" }
+"kb_cogmap_lenses.selection_kind"                 = { disposition = "structural", note = "lens vocabulary" }
+"kb_data_artifact_shapes.artifact_kind"           = { disposition = "scan", note = "a family name is free text: no family table, and the doors accept any name (erasure F3, corrected 2026-10-03)" }
+"kb_data_artifacts.artifact_kind"                 = { disposition = "scan", note = "a family name is free text: no family table, and the doors accept any name (erasure F3, corrected 2026-10-03)" }
+"kb_migration_ledger.recorded_by"                 = { disposition = "structural", note = "provenance vocabulary" }
+"kb_rate_counters.route"                          = { disposition = "structural", note = "route name, the counter key" }
+"kb_system_settings.terms_version"                = { disposition = "structural", note = "version string" }
+"kb_system_settings.gating_team_slug"             = { disposition = "structural", note = "names a team slug, which the sibling declares" }
+"kb_topics.fqdn"                                  = { disposition = "structural", note = "topic path; the table has no writer today" }
+
+# ── file, conversion and media metadata ─────────────────────────────────────────────────────
+"kb_blob_uploads.content_type"                    = { disposition = "structural", note = "MIME type, allowlisted" }
+"kb_blobs.content_type"                           = { disposition = "structural", note = "MIME type, allowlisted" }
+"kb_ingestion_records.source_mimetype"            = { disposition = "structural", note = "MIME type" }
+"kb_ingestion_records.conversion_tool"            = { disposition = "structural", note = "tool name" }
+"kb_ingestion_records.conversion_version"         = { disposition = "structural", note = "tool version" }
+
+# ── OAuth, SAML and machine-client protocol state ───────────────────────────────────────────
+"kb_machine_clients.client_id"                    = { disposition = "structural", note = "IdP client identifier for a machine, not a person" }
+"kb_machine_clients.issuer"                       = { disposition = "structural", note = "issuer vocabulary" }
+"kb_oauth_dcr_clients.client_id"                  = { disposition = "structural", note = "server-minted client id" }
+"kb_oauth_dcr_clients.token_endpoint_auth_method" = { disposition = "structural", note = "RFC 7591 vocabulary" }
+"kb_oauth_flow.audience"                          = { disposition = "structural", note = "RFC 8707 resource indicator" }
+"kb_oauth_flow.client_id"                         = { disposition = "structural", note = "client id" }
+"kb_oauth_flow.code_challenge"                    = { disposition = "structural", note = "PKCE S256 digest; public by design in the authorize URL" }
+"kb_oauth_flow.code_challenge_method"             = { disposition = "structural", note = "PKCE vocabulary" }
+"kb_oauth_flow.redirect_uri"                      = { disposition = "structural", note = "client-registered callback" }
+"kb_oauth_refresh_replays.client_id"              = { disposition = "structural", note = "client id" }
+"kb_oauth_refresh_tokens.audience"                = { disposition = "structural", note = "RFC 8707 resource indicator" }
+"kb_oauth_refresh_tokens.client_id"               = { disposition = "structural", note = "client id" }
+"kb_saml_idp.idp_key"                             = { disposition = "structural", note = "IdP config key" }
+"kb_saml_idp.idp_entity_id"                       = { disposition = "structural", note = "IdP config" }
+"kb_saml_idp.idp_sso_url"                         = { disposition = "structural", note = "IdP config" }
+"kb_saml_idp.acs_url"                             = { disposition = "structural", note = "IdP config" }
+"kb_saml_idp.sp_entity_id"                        = { disposition = "structural", note = "IdP config" }
+"kb_saml_idp.nameid_format"                       = { disposition = "structural", note = "SAML vocabulary" }
+"kb_saml_idp.stable_id_attr"                      = { disposition = "structural", note = "an attribute NAME, not a value (as the sibling rules for email_attr)" }
+"kb_saml_idp.groups_attr"                         = { disposition = "structural", note = "an attribute NAME, not a value" }
+"kb_saml_group_mappings.idp_key"                  = { disposition = "structural", note = "FK to kb_saml_idp" }
+"kb_saml_seen_groups.idp_key"                     = { disposition = "structural", note = "FK to kb_saml_idp" }
+"kb_saml_principal_reconcile.idp_key"             = { disposition = "structural", note = "FK to kb_saml_idp" }
+"kb_saml_replay.assertion_id"                     = { disposition = "structural", note = "IdP-minted assertion id, the replay key" }
+
+# ── secrets ─────────────────────────────────────────────────────────────────────────────────
+"kb_machine_clients.secret_hash"                  = { disposition = "credential", note = "SHA-256 of the client secret" }
+"kb_machine_clients.secret_hash_previous"         = { disposition = "credential", note = "SHA-256 of the rotating secret" }
+"kb_oauth_dcr_clients.client_secret_hash"         = { disposition = "credential", note = "hashed client secret" }
+"kb_oauth_refresh_tokens.token_hash"              = { disposition = "credential", note = "hashed refresh token" }
+"kb_oauth_flow.code_hash"                         = { disposition = "credential", note = "hashed authorization code" }
+"kb_oauth_flow.oauth_state"                       = { disposition = "credential", note = "client anti-forgery state" }
+"kb_oauth_flow.relay_state"                       = { disposition = "credential", note = "SAML RelayState nonce" }
+"kb_slack_link_intents.state_nonce"               = { disposition = "credential", note = "OAuth state nonce" }
+"kb_slack_link_intents.code_verifier"             = { disposition = "credential", note = "PKCE verifier, plaintext for the redirect's lifetime" }
+"kb_team_invitations.token"                       = { disposition = "credential", note = "invitation bearer token, plaintext, 7-day expiry" }
+
+# ── out of scope, each with its reason ──────────────────────────────────────────────────────
+"kb_saml_idp.idp_cert"                            = { disposition = "out-of-scope", note = "a public X.509 certificate: not secret, not personal" }
+"kb_saml_idp.idp_cert_secondary"                  = { disposition = "out-of-scope", note = "a public X.509 certificate during rollover" }
+"kb_saml_group_mappings.group_value"              = { disposition = "out-of-scope", note = "IdP group names, admin-configured org structure" }
+"kb_saml_seen_groups.group_value"                 = { disposition = "out-of-scope", note = "IdP group names as observed in assertions; org structure" }
+"kb_connections.name"                             = { disposition = "out-of-scope", note = "operator-named integration config" }
+"kb_connections.slug"                             = { disposition = "out-of-scope", note = "operator-named integration config" }
+"kb_connections.provider"                         = { disposition = "structural", note = "provider vocabulary, deliberately without a CHECK" }
+"kb_connections.reach_granularity"                = { disposition = "structural", note = "scope-grain vocabulary (org, workspace, repo-set, ...)" }
+"kb_connections.reach_covers"                     = { disposition = "out-of-scope", note = "provider-terms scope (an org or account path), operator-declared" }
+"kb_machine_clients.label"                        = { disposition = "out-of-scope", note = "operator-named machine credential" }
+"kb_oauth_dcr_clients.client_name"                = { disposition = "out-of-scope", note = "self-description supplied by client software at registration" }
+"kb_oauth_dcr_clients.logo_uri"                   = { disposition = "out-of-scope", note = "self-description supplied by client software at registration" }
+"kb_system_settings.instance_name"                = { disposition = "out-of-scope", note = "operator config" }
+"kb_system_settings.terms_resource_uri"           = { disposition = "out-of-scope", note = "operator config" }
+"kb_contexts.slug"                                = { disposition = "out-of-scope", note = "derived from .name, which is scanned" }
+"kb_migration_ledger.reason"                      = { disposition = "out-of-scope", note = "written by migrations and operators about the schema, from the repository" }
+"_sqlx_migrations.description"                    = { disposition = "out-of-scope", note = "migration file names, from the repository" }
+"kb_erasure_blob_deletes.last_error"              = { disposition = "out-of-scope", note = "object-store error about a content-addressed pathname; no user input reaches the call" }

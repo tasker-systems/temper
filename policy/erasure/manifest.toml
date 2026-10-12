@@ -1,0 +1,18 @@
+# The erasure-policy manifest: what an erasure reaches, as one typed model read by one parser.
+#
+# The manifest is the five files in this directory, parsed as one unit by
+# `temper_core::erasure_policy::parse`:
+#
+#   manifest.toml           this root; it carries the format the other four are written in
+#   estate.toml             the scope rules that say what is in an estate, and one grain per table
+#   personal-data.toml      the personal-data class, ceiling and achieved reach of each column
+#   sensitivity-scan.toml   the text columns no personal-data derivation nominates, adjudicated
+#   resource-erasure.toml   what resource erasure does with every carrier column and ledger path
+#
+# The text in force is the deployed server's: temper-services embeds these files
+# (`temper_services::erasure_policy::in_force`), and a manifest that does not parse fails there.
+#
+# FORMAT
+#   format = <n>   the manifest format; a parser refuses any format it was not written for
+
+format = 1

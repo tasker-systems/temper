@@ -1,0 +1,28 @@
+# The erasure estate: what an erasure holds, and how it reaches each table's rows.
+#
+# An estate is the set of containers an erasure takes in, and everything homed in them. This file
+# says two things about it (spec D3 *Contents*, D7.4):
+#
+#   * scope   the rules that put containers in an estate, one per D3 bullet, each with the
+#             mechanism that selects its set.
+#   * tables  one grain per table: how an erasure reaches the table's rows. A grain is per-item
+#             (erased item by item, each by its own unit), covered (reached through a parent),
+#             identity (erased at declaration, with the subject's identity) or declared-out (with
+#             its reason).
+#
+# Every place this file names a mechanism, it says whether the mechanism exists
+# (`{ bound = "<live name>" }`) or is still to be built (`{ gap = "<slice>: <what>" }`), so nothing
+# reads as covered by being absent.
+#
+# Not yet populated: no scope rule and no grain is declared here yet.
+#
+# FORMAT
+#   scope = [ { rule = "<the set, in words>", mechanism = { bound = "…" } | { gap = "…" } }, … ]
+#   [tables.<table>]
+#   grain = { kind = "per-item" | "covered" | "identity" | "declared-out", … }
+#   also_reached = [ { path = { table = "…", link = { fk = "…" } }, mechanism = … }, … ]   (optional)
+#   note = "<note>"                                                                       (optional)
+
+scope = []
+
+[tables]
