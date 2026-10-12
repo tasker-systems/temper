@@ -39,8 +39,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * silence — the join would match nothing, `standing_service::apply` would revoke nothing, and
  * nothing anywhere would say so. Asking the side that owns the config keeps one answer.
  *
- * Shares the reconcile gate's key and signing scheme (`INTERNAL_RECONCILE_SECRET`, HMAC over
- * `{timestamp}.{raw body}`) because it is the same caller making the same kind of call at the same
+ * Shares the reconcile gate's key and signing scheme (`INTERNAL_RECONCILE_SECRET`, `signedHeaders`
+ * for this door) because it is the same caller making the same kind of call at the same
  * trust level. Throws on transport error or non-2xx; every caller treats that as "no owner yet"
  * rather than as a reason to refuse a login.
  */

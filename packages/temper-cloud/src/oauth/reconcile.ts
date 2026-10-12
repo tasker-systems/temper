@@ -128,8 +128,8 @@ function transportDetail(err: unknown): string {
 
 /**
  * Calls the internal temper-api reconcile endpoint (server-to-server), signing the request with
- * `HMAC(secret, "{timestamp}.{body}")` so the secret never crosses the wire and a captured request
- * is replay-proof. Throws on transport error or non-2xx — the ACS handler catches and proceeds
+ * `signedHeaders` so the secret never crosses the wire and the API accepts the request at this door,
+ * once. Throws on transport error or non-2xx — the ACS handler catches and proceeds
  * (fail-open), so a provisioning hiccup never blocks login. The verifier is temper-api's
  * `require_internal_signature` middleware.
  */

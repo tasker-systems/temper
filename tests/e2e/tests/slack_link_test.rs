@@ -304,31 +304,52 @@ fn now_unix() -> i64 {
         .as_secs() as i64
 }
 
-/// POST `/internal/slack/link-state` as the mention agent would: HMAC over the RAW body.
+/// The v2 signature headers for `body` sent to `door` now, under a fresh nonce, keyed on `secret`.
 ///
-/// The signature is produced by `temper_core::internal_sig::sign` — the same function the
-/// gate verifies with — rather than re-derived here. A hand-rolled MAC would be testing this
-/// file's idea of the scheme against itself.
+/// Produced by `temper_core::internal_sig::v2_headers` — the same construction the gate verifies —
+/// rather than re-derived here. A hand-rolled MAC would be testing this file's idea of the scheme
+/// against itself.
+fn signed_now(
+    builder: reqwest::RequestBuilder,
+    secret: &[u8],
+    door: &str,
+    nonce: &str,
+    ts: i64,
+    body: &str,
+) -> reqwest::RequestBuilder {
+    temper_core::internal_sig::v2_headers(secret, "POST", door, ts, nonce, body.as_bytes())
+        .into_iter()
+        .fold(builder, |b, (name, value)| b.header(name, value))
+}
+
+/// A fresh v2 nonce, as the agent's `randomBytes(16)` would make one.
+fn fresh_nonce() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
+/// POST `/internal/slack/link-state` as the mention agent would: a v2 signature over the RAW body,
+/// keyed on [`SLACK_SECRET`], or on `forge_with` when a test needs the wrong key.
 async fn post_link_state(
     app: &SlackLinkApp,
     principal: &str,
-    signature: Option<String>,
+    forge_with: Option<&[u8]>,
 ) -> reqwest::Response {
     let body = format!(r#"{{"slack_principal_id":"{principal}"}}"#);
-    let ts = now_unix();
-    let sig = signature.unwrap_or_else(|| {
-        temper_core::internal_sig::sign(SLACK_SECRET.as_bytes(), ts, body.as_bytes())
-    });
-
-    app.http
-        .post(format!("http://{}/internal/slack/link-state", app.addr))
-        .header("Content-Type", "application/json")
-        .header(temper_core::internal_sig::TIMESTAMP_HEADER, ts.to_string())
-        .header(temper_core::internal_sig::SIGNATURE_HEADER, sig)
-        .body(body)
-        .send()
-        .await
-        .expect("post link state")
+    let secret = forge_with.unwrap_or(SLACK_SECRET.as_bytes());
+    signed_now(
+        app.http
+            .post(format!("http://{}/internal/slack/link-state", app.addr))
+            .header("Content-Type", "application/json"),
+        secret,
+        temper_core::internal_sig::DOOR_SLACK_LINK_STATE,
+        &fresh_nonce(),
+        now_unix(),
+        &body,
+    )
+    .body(body)
+    .send()
+    .await
+    .expect("post link state")
 }
 
 /// Mint an intent for [`SLACK_PRINCIPAL`] and return the opaque `state` the IdP would echo back.
@@ -919,13 +940,7 @@ async fn link_state_rejects_a_forged_signature(pool: PgPool) {
 
     // Well-formed lowercase hex of the right length, signed with the WRONG key — the shape a
     // real forgery has. A malformed string would prove only that hex decoding fails.
-    let forged = temper_core::internal_sig::sign(
-        b"not-the-slack-link-secret",
-        now_unix(),
-        format!(r#"{{"slack_principal_id":"{SLACK_PRINCIPAL}"}}"#).as_bytes(),
-    );
-
-    let res = post_link_state(&app, SLACK_PRINCIPAL, Some(forged)).await;
+    let res = post_link_state(&app, SLACK_PRINCIPAL, Some(b"not-the-slack-link-secret")).await;
     assert_eq!(res.status(), 401, "a forged signature must be refused");
     assert_eq!(
         count_intents(&pool).await,
@@ -1704,31 +1719,38 @@ async fn disconnect_unbinds_every_principal_the_profile_holds(pool: PgPool) {
 // by before.
 // ---------------------------------------------------------------------------------------------
 
-/// POST `/internal/slack/mint` as the mention agent would: HMAC over the RAW body, keyed on
-/// [`MINT_SECRET`].
+/// POST `/internal/slack/mint` as the mention agent would: a v2 signature over the RAW body, keyed
+/// on `secret`, under a fresh nonce.
 ///
 /// `secret` is a parameter rather than a constant so the cross-key probe can sign with the WRONG
 /// key without hand-rolling the scheme.
-async fn post_mint(
+async fn post_mint(app: &SlackLinkApp, principal: &str, secret: &[u8]) -> reqwest::Response {
+    post_mint_as(app, principal, secret, &fresh_nonce(), now_unix()).await
+}
+
+/// [`post_mint`] under a chosen nonce and timestamp, so a test can send the same request twice.
+async fn post_mint_as(
     app: &SlackLinkApp,
     principal: &str,
     secret: &[u8],
-    signature: Option<String>,
+    nonce: &str,
+    ts: i64,
 ) -> reqwest::Response {
     let body = format!(r#"{{"slack_principal_id":"{principal}"}}"#);
-    let ts = now_unix();
-    let sig =
-        signature.unwrap_or_else(|| temper_core::internal_sig::sign(secret, ts, body.as_bytes()));
-
-    app.http
-        .post(format!("http://{}/internal/slack/mint", app.addr))
-        .header("Content-Type", "application/json")
-        .header(temper_core::internal_sig::TIMESTAMP_HEADER, ts.to_string())
-        .header(temper_core::internal_sig::SIGNATURE_HEADER, sig)
-        .body(body)
-        .send()
-        .await
-        .expect("post mint")
+    signed_now(
+        app.http
+            .post(format!("http://{}/internal/slack/mint", app.addr))
+            .header("Content-Type", "application/json"),
+        secret,
+        temper_core::internal_sig::DOOR_SLACK_MINT,
+        nonce,
+        ts,
+        &body,
+    )
+    .body(body)
+    .send()
+    .await
+    .expect("post mint")
 }
 
 /// Link [`SLACK_PRINCIPAL`] through the real callback so a sealed grant exists to mint from, and
@@ -1777,7 +1799,7 @@ async fn mint_returns_a_token_for_a_vaulted_principal(pool: PgPool) {
     let app = setup_slack_app(&pool).await;
     link_a_vaulted_principal(&app, &pool).await;
 
-    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
+    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes()).await;
     assert_eq!(res.status(), 200, "a signed mint for a vaulted principal");
 
     let body: serde_json::Value = res.json().await.expect("mint body");
@@ -1796,6 +1818,31 @@ async fn mint_returns_a_token_for_a_vaulted_principal(pool: PgPool) {
         expires_at_ms > now_ms,
         "expiry must be in the future (ms since epoch); got {expires_at_ms} against now {now_ms} \
          — a value below `now` usually means seconds were sent where ms were expected",
+    );
+}
+
+/// A mint request is good once. The same signed request sent again inside its freshness window —
+/// a capture replayed — is refused, and hands back no second token. Before v2 it verified again,
+/// and the replayer got a fresh token carrying the human's whole reach.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn mint_refuses_a_replayed_request(pool: PgPool) {
+    let app = setup_slack_app(&pool).await;
+    link_a_vaulted_principal(&app, &pool).await;
+    let (nonce, ts) = (fresh_nonce(), now_unix());
+
+    let res = post_mint_as(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), &nonce, ts).await;
+    assert_eq!(res.status(), 200, "the first send mints");
+
+    let replay = post_mint_as(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), &nonce, ts).await;
+    assert_eq!(
+        replay.status(),
+        401,
+        "the same request again must be refused"
+    );
+    let body = replay.text().await.expect("replay body");
+    assert!(
+        !body.contains("access_token"),
+        "a refused replay must carry no token: {body}"
     );
 }
 
@@ -1838,7 +1885,7 @@ async fn an_unapproved_principal_links_but_cannot_mint_until_approved(pool: PgPo
     );
 
     // Mint names the STANDING refusal — the remedy is an admin approval, never re-linking.
-    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
+    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes()).await;
     assert_eq!(res.status(), 200, "a refusal is not a transport error");
     let mint: serde_json::Value = res.json().await.expect("mint body");
     assert_eq!(mint["status"], "refused", "{mint}");
@@ -1859,7 +1906,7 @@ async fn an_unapproved_principal_links_but_cannot_mint_until_approved(pool: PgPo
     approve_standing(&pool, profile_id_for_sub(&pool, sub).await).await;
 
     // The SAME principal now mints a token. Approval alone made the existing link mintable.
-    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
+    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes()).await;
     assert_eq!(res.status(), 200);
     let mint: serde_json::Value = res.json().await.expect("mint body");
     assert_eq!(
@@ -1890,7 +1937,7 @@ async fn mint_refuses_the_link_state_key(pool: PgPool) {
 
     // Signed correctly — with the WRONG secret. This is a well-formed signature by a caller who
     // legitimately holds the link-state key and nothing more.
-    let res = post_mint(&app, SLACK_PRINCIPAL, SLACK_SECRET.as_bytes(), None).await;
+    let res = post_mint(&app, SLACK_PRINCIPAL, SLACK_SECRET.as_bytes()).await;
     assert_eq!(
         res.status(),
         401,
@@ -1899,20 +1946,9 @@ async fn mint_refuses_the_link_state_key(pool: PgPool) {
     );
 
     // And the converse, so the separation is proven in both directions rather than assumed: the
-    // mint key must not open link-state either.
-    let body = format!(r#"{{"slack_principal_id":"{SLACK_PRINCIPAL}"}}"#);
-    let ts = now_unix();
-    let sig = temper_core::internal_sig::sign(MINT_SECRET.as_bytes(), ts, body.as_bytes());
-    let res = app
-        .http
-        .post(format!("http://{}/internal/slack/link-state", app.addr))
-        .header("Content-Type", "application/json")
-        .header(temper_core::internal_sig::TIMESTAMP_HEADER, ts.to_string())
-        .header(temper_core::internal_sig::SIGNATURE_HEADER, sig)
-        .body(body)
-        .send()
-        .await
-        .expect("post link state with the mint key");
+    // mint key must not open link-state either. A well-formed v2 request for the link-state door,
+    // so the refusal can only come from the key.
+    let res = post_link_state(&app, SLACK_PRINCIPAL, Some(MINT_SECRET.as_bytes())).await;
     assert_eq!(
         res.status(),
         401,
@@ -1926,12 +1962,7 @@ async fn mint_rejects_forged_and_unsigned_calls(pool: PgPool) {
     let app = setup_slack_app(&pool).await;
     link_a_vaulted_principal(&app, &pool).await;
 
-    let forged = temper_core::internal_sig::sign(
-        b"not-the-slack-mint-secret",
-        now_unix(),
-        format!(r#"{{"slack_principal_id":"{SLACK_PRINCIPAL}"}}"#).as_bytes(),
-    );
-    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), Some(forged)).await;
+    let res = post_mint(&app, SLACK_PRINCIPAL, b"not-the-slack-mint-secret").await;
     assert_eq!(res.status(), 401, "a forged signature must be refused");
 
     let res = app
@@ -2066,7 +2097,7 @@ async fn mint_reports_not_vaulted_distinctly_from_not_linked(pool: PgPool) {
         "the premise: an unvaulted user still reads as linked, which is why mint must be honest",
     );
 
-    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
+    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes()).await;
     assert_eq!(
         res.status(),
         200,
@@ -2115,7 +2146,7 @@ async fn kill_the_grant(app: &SlackLinkApp, pool: &PgPool) {
 /// Mint for [`SLACK_PRINCIPAL`], assert it is a `not_vaulted` refusal, and return the state nonce
 /// carried by its re-link URL.
 async fn mint_relink_state_nonce(app: &SlackLinkApp) -> String {
-    let res = post_mint(app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
+    let res = post_mint(app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes()).await;
     assert_eq!(res.status(), 200, "a dead grant is a refusal, not an error");
     let body: serde_json::Value = res.json().await.expect("mint body");
     assert_eq!(body["status"], "refused", "{body}");
@@ -2182,7 +2213,7 @@ async fn a_dead_grant_mints_a_relink_url_that_restores_minting(pool: PgPool) {
         "re-linking must upsert the existing link, not add one"
     );
 
-    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
+    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes()).await;
     assert_eq!(res.status(), 200);
     let body: serde_json::Value = res.json().await.expect("mint body");
     assert_eq!(
@@ -2270,7 +2301,7 @@ async fn an_as_mode_relink_revokes_the_superseded_refresh_token(pool: PgPool) {
         "a revoke is not a rotation; claiming one would make a later presentation look like replay"
     );
 
-    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
+    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes()).await;
     let body: serde_json::Value = res.json().await.expect("mint body");
     assert_eq!(
         body["status"], "token",
@@ -2368,7 +2399,7 @@ async fn a_stolen_relink_url_cannot_move_the_principal(pool: PgPool) {
 async fn mint_rejects_a_malformed_principal(pool: PgPool) {
     let app = setup_slack_app(&pool).await;
 
-    let res = post_mint(&app, "not-a-slack-principal", MINT_SECRET.as_bytes(), None).await;
+    let res = post_mint(&app, "not-a-slack-principal", MINT_SECRET.as_bytes()).await;
     assert_eq!(
         res.status(),
         400,
@@ -2391,7 +2422,7 @@ async fn mint_is_disabled_without_its_secret_but_linking_still_works(pool: PgPoo
 
     // Correctly signed with the key the ENABLED instance uses. It must still be refused, because
     // this instance has no mint key at all.
-    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes(), None).await;
+    let res = post_mint(&app, SLACK_PRINCIPAL, MINT_SECRET.as_bytes()).await;
     assert_eq!(
         res.status(),
         401,

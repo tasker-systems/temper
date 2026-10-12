@@ -50,9 +50,9 @@
 
 use sqlx::PgPool;
 
-use temper_core::internal_sig;
 use temper_core::types::slack::{LinkRefusal, SlackMintRefusal};
 
+use super::internal_sig_service::{self, SignedRequest};
 use super::slack_grant_vault_service::{self, MintOutcome};
 use super::slack_link_service::{issue_authorize_url, validate_slack_principal};
 use crate::config::ApiConfig;
@@ -101,35 +101,32 @@ struct MintRequestBody {
 /// constructor that trusted pre-verified bytes would be forgeable by any temper-api code; this one
 /// cannot be, because it does the verification itself.
 ///
-/// Checks, in order: fresh timestamp, valid HMAC over the exact bytes, a parseable body, a
-/// well-shaped principal. A stale timestamp or bad signature is [`ApiError::Unauthorized`]; a
-/// malformed body or principal is [`ApiError::BadRequest`] (400) — the shape error stays distinct
+/// Checks, in order: a valid v2 signature for this door ([`internal_sig_service::verify`]), a
+/// parseable body, a well-shaped principal, and then a nonce never accepted before
+/// ([`internal_sig_service::spend`]). The nonce is spent last so a malformed body stays a 400 rather
+/// than consuming it. A stale timestamp, a bad signature or a replay is [`ApiError::Unauthorized`];
+/// a malformed body or principal is [`ApiError::BadRequest`] (400) — the shape error stays distinct
 /// from the auth error (`mint_rejects_a_malformed_principal`).
+///
+/// **Single use lives here, not in the route.** A replay inside the freshness window used to verify
+/// again and hand the replayer a fresh token. Spending the nonce inside the sealed constructor means
+/// no code path can hold a [`VerifiedSlackPrincipal`] for a request whose nonce was already spent.
 ///
 /// **Cross-gate containment is structural.** The other two signature gates never call this, so a
 /// `SLACK_LINK_SECRET` or reconcile-secret holder cannot obtain a proof: the wrong secret fails the
 /// HMAC verify here, and no other code path constructs one. That is separation, not a discipline
 /// applied inside a shared helper — see the unit tests and `tests/compile_fail`.
-pub fn verify_mint_request(
+pub async fn verify_mint_request(
+    pool: &PgPool,
     secret: &str,
-    timestamp: i64,
+    request: &SignedRequest<'_>,
     now: i64,
-    body: &[u8],
-    signature: &str,
 ) -> ApiResult<VerifiedSlackPrincipal> {
-    if !internal_sig::timestamp_is_fresh(timestamp, now) {
-        return Err(ApiError::Unauthorized(
-            "stale internal signature".to_string(),
-        ));
-    }
-    if !internal_sig::verify(secret.as_bytes(), timestamp, body, signature) {
-        return Err(ApiError::Unauthorized(
-            "invalid internal signature".to_string(),
-        ));
-    }
-    let parsed: MintRequestBody = serde_json::from_slice(body)
+    internal_sig_service::verify(secret.as_bytes(), request, now, "slack mint")?;
+    let parsed: MintRequestBody = serde_json::from_slice(request.body)
         .map_err(|_| ApiError::BadRequest("malformed mint request body".to_string()))?;
     validate_slack_principal(&parsed.slack_principal_id)?;
+    internal_sig_service::spend(pool, request, now, "slack mint").await?;
     Ok(VerifiedSlackPrincipal {
         id: parsed.slack_principal_id,
     })
@@ -210,80 +207,4 @@ pub async fn refusal_for_mention(
         }
         LinkRefusal::Standing { refusal } => SlackMintRefusal::Standing { refusal },
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const MINT_SECRET: &str = "mint-secret";
-    const LINK_SECRET: &str = "link-secret-DIFFERENT";
-    const PRINCIPAL: &str = "slack:T0BHAHEN79C:U0BH6A3L6JF";
-
-    /// Build a signed mint request body + its headers, as the agent's `signIntentRequest` would.
-    fn signed(secret: &str, timestamp: i64, principal: &str) -> (Vec<u8>, String) {
-        let body = serde_json::to_vec(&serde_json::json!({ "slack_principal_id": principal }))
-            .expect("serialize body");
-        let signature = internal_sig::sign(secret.as_bytes(), timestamp, &body);
-        (body, signature)
-    }
-
-    #[test]
-    fn a_valid_mint_signature_yields_the_sealed_principal() {
-        let now = 1_700_000_000;
-        let (body, sig) = signed(MINT_SECRET, now, PRINCIPAL);
-        let verified =
-            verify_mint_request(MINT_SECRET, now, now, &body, &sig).expect("should verify");
-        assert_eq!(verified.id(), PRINCIPAL);
-    }
-
-    /// Cross-gate containment: a request signed with a DIFFERENT secret (the link-state key) does
-    /// not verify, so a `SLACK_LINK_SECRET` holder cannot obtain a mint proof. This is the negative
-    /// test the design requires (spec §5.2) — the seal's only constructor gates on the mint secret.
-    #[test]
-    fn a_link_secret_signature_cannot_mint_a_proof() {
-        let now = 1_700_000_000;
-        // Signed with the LINK secret, verified against the MINT secret — the cross-gate attempt.
-        let (body, sig) = signed(LINK_SECRET, now, PRINCIPAL);
-        let err = verify_mint_request(MINT_SECRET, now, now, &body, &sig)
-            .expect_err("a link-secret signature must not mint a proof");
-        assert!(
-            matches!(err, ApiError::Unauthorized(_)),
-            "wrong secret must be Unauthorized, got {err:?}",
-        );
-    }
-
-    #[test]
-    fn a_stale_timestamp_is_refused() {
-        let signed_at = 1_700_000_000;
-        let now = signed_at + internal_sig::MAX_SKEW_SECS + 1;
-        let (body, sig) = signed(MINT_SECRET, signed_at, PRINCIPAL);
-        let err = verify_mint_request(MINT_SECRET, signed_at, now, &body, &sig)
-            .expect_err("a stale timestamp must be refused");
-        assert!(matches!(err, ApiError::Unauthorized(_)), "got {err:?}");
-    }
-
-    /// A well-signed request whose principal is malformed is a 400, NOT a 401 — the shape error must
-    /// stay distinct from the auth error (`mint_rejects_a_malformed_principal` asserts the 400).
-    #[test]
-    fn a_malformed_principal_is_bad_request_not_unauthorized() {
-        let now = 1_700_000_000;
-        let (body, sig) = signed(MINT_SECRET, now, "not-a-slack-principal");
-        let err = verify_mint_request(MINT_SECRET, now, now, &body, &sig)
-            .expect_err("a malformed principal must be refused");
-        assert!(
-            matches!(err, ApiError::BadRequest(_)),
-            "a malformed principal must be BadRequest, got {err:?}",
-        );
-    }
-
-    #[test]
-    fn a_body_that_is_not_json_is_bad_request() {
-        let now = 1_700_000_000;
-        let body = b"not json at all";
-        let sig = internal_sig::sign(MINT_SECRET.as_bytes(), now, body);
-        let err = verify_mint_request(MINT_SECRET, now, now, body, &sig)
-            .expect_err("a non-JSON body must be refused");
-        assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
-    }
 }

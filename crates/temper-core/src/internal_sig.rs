@@ -1,9 +1,10 @@
 //! Request signing for the internal SAML reconcile channel (AS → temper-api).
 //!
 //! Replaces the earlier static shared-secret header with an HMAC signature over
-//! the **raw request body** plus a timestamp. Two wins over sending the secret
-//! itself: the secret never crosses the wire, and a captured request is
-//! replay-proof (the verifier rejects a stale timestamp).
+//! the **raw request body** plus a timestamp, so the secret never crosses the
+//! wire. The original construction below bounds a capture only by its 30-second
+//! freshness window; the v2 construction further down is what makes a signature
+//! good for one door, once.
 //!
 //! **We MAC the raw body bytes as transmitted — not a re-serialized form.** The
 //! signer HMACs the exact JSON bytes it sends; the verifier HMACs the exact
@@ -169,6 +170,26 @@ pub fn verify_v2(
         .is_ok()
 }
 
+/// The three v2 headers for `body` sent by `method` to `door` at `timestamp` under `nonce`, as
+/// `(name, value)` pairs. The signers outside Rust build the same three.
+pub fn v2_headers(
+    secret: &[u8],
+    method: &str,
+    door: &str,
+    timestamp: i64,
+    nonce: &str,
+    body: &[u8],
+) -> [(&'static str, String); 3] {
+    [
+        (TIMESTAMP_HEADER, timestamp.to_string()),
+        (NONCE_HEADER, nonce.to_owned()),
+        (
+            SIGNATURE_V2_HEADER,
+            sign_v2(secret, method, door, timestamp, nonce, body),
+        ),
+    ]
+}
+
 /// Whether `nonce` has the v2 shape: exactly [`NONCE_LEN`] lowercase hex characters.
 pub fn nonce_is_well_formed(nonce: &str) -> bool {
     nonce.len() == NONCE_LEN
@@ -179,8 +200,11 @@ pub fn nonce_is_well_formed(nonce: &str) -> bool {
 
 /// Whether a signed `timestamp` is within [`MAX_SKEW_SECS`] of `now` (Unix
 /// seconds), tolerating skew in either direction.
+///
+/// `abs_diff` rather than `(now - timestamp).abs()`: the subtraction wraps in a release build, and
+/// a timestamp near `i64::MIN` away from now would wrap to a "difference" that passes.
 pub fn timestamp_is_fresh(timestamp: i64, now: i64) -> bool {
-    (now - timestamp).abs() <= MAX_SKEW_SECS
+    now.abs_diff(timestamp) <= MAX_SKEW_SECS as u64
 }
 
 #[cfg(test)]
@@ -239,5 +263,13 @@ mod tests {
         assert!(timestamp_is_fresh(now + MAX_SKEW_SECS, now));
         assert!(!timestamp_is_fresh(now - MAX_SKEW_SECS - 1, now));
         assert!(!timestamp_is_fresh(now + MAX_SKEW_SECS + 1, now));
+    }
+
+    #[test]
+    fn freshness_does_not_wrap_at_the_extremes() {
+        let now: i64 = 1_750_000_000;
+        assert!(!timestamp_is_fresh(now.wrapping_add(i64::MIN), now));
+        assert!(!timestamp_is_fresh(i64::MIN, now));
+        assert!(!timestamp_is_fresh(i64::MAX, now));
     }
 }
