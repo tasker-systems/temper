@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT rt_nonce, rt_ciphertext, at_nonce, at_ciphertext, key_fingerprint, access_expires_at, updated_at FROM kb_slack_grant_vault WHERE slack_principal_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "rt_nonce",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "rt_ciphertext",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "at_nonce",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 3,
+        "name": "at_ciphertext",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 4,
+        "name": "key_fingerprint",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 5,
+        "name": "access_expires_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "532432280e3a55aced56a56d67a3f8832351d14de21e1937c822ab2da09c4f6e"
+}

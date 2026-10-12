@@ -84,6 +84,13 @@ There is no half-on state.
 | `PUBLIC_BASE_URL` | This instance's public origin, e.g. `https://temperkb.io`. The callback is `<PUBLIC_BASE_URL>/api/auth/slack/callback`. |
 | `SLACK_VAULT_ENC_KEY` | AEAD key encrypting each stored refresh token. **32 bytes, base64** — `openssl rand -base64 32`. |
 
+One optional variable names vault keys you have **deliberately retired**. It is
+not secret and is not part of the four:
+
+| Variable | What it is |
+|---|---|
+| `SLACK_VAULT_RETIRED_KEY_FINGERPRINTS` | Comma-separated fingerprints (16 hex characters each) of previous `SLACK_VAULT_ENC_KEY`s, plus optionally `unstamped`. A stored grant sealed under one of them is answered with a reconnect link instead of an error. Copy each fingerprint from the boot log line `slack vault key fingerprint: …` **before** you rotate the key. A malformed list is ignored, with an error in the log. See [After a vault key rotation](../concepts/slack-identity-and-revocation.md#after-a-vault-key-rotation). |
+
 A fifth secret gates the **mint** (vending an access token acting as the
 mentioning human) and is deliberately *not* part of the all-or-nothing four, so
 an instance that has not set it keeps a fully working link flow and loses only
@@ -245,6 +252,8 @@ bot token if it changed.
 | "Sign-in could not be completed" on the callback | The IdP client is confidential; make it a public/PKCE client. |
 | "No temper account is linked to this login" | The user has no Temper account yet — the link is lookup-only; sign in at the Temper UI first. |
 | "Account linking is not configured" | One of the four Temper API vars is missing or malformed. |
+| Linked users get "try again in a moment" on every mention; temper-api logs `the vault grant was sealed under key …, but SLACK_VAULT_ENC_KEY is …` (and at boot, `SLACK_VAULT_ENC_KEY (…) sealed none of the … most recently sealed vault rows`) | The deployed `SLACK_VAULT_ENC_KEY` is not the key that sealed the stored grants. The mint answers 500 and leaves every grant untouched. If the key changed by accident, restore the old one and every user works again. If you rotated it on purpose, list the old fingerprint (named in the log line) in `SLACK_VAULT_RETIRED_KEY_FINGERPRINTS`, and affected users get a reconnect link. Do **not** ask users to reconnect until you know which case it is: reconnecting overwrites a grant that restoring the key would otherwise heal. |
+| One user is told to reconnect, and temper-api logs `a vault grant sealed under the configured key will not open` at error | That user's stored grant fails under the key that sealed it: the row was altered in the database. Reconnecting fixes the user. Investigate how the row changed. |
 | Everything green but no logs on failure | The eve runtime swallows handler errors, and serverless logs surface HTTP events, not app stdout — "no error in the logs" proves nothing. Diagnose from observable Slack behavior. |
 
 ## Further reading

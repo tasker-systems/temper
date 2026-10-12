@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT slack_principal_id, rt_nonce, rt_ciphertext\n          FROM kb_slack_grant_vault\n         WHERE slack_principal_id IN (SELECT _erasure_subject_slack_principals($1))\n         ORDER BY slack_principal_id\n        ",
+  "query": "\n        SELECT slack_principal_id, rt_nonce, rt_ciphertext, key_fingerprint\n          FROM kb_slack_grant_vault\n         WHERE slack_principal_id IN (SELECT _erasure_subject_slack_principals($1))\n         ORDER BY slack_principal_id\n        ",
   "describe": {
     "columns": [
       {
@@ -17,6 +17,11 @@
         "ordinal": 2,
         "name": "rt_ciphertext",
         "type_info": "Bytea"
+      },
+      {
+        "ordinal": 3,
+        "name": "key_fingerprint",
+        "type_info": "Bytea"
       }
     ],
     "parameters": {
@@ -27,8 +32,9 @@
     "nullable": [
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "1c293dee115d13ab2a1d3257adde52e9c4b9d306822c537b424f046a5b0f7d35"
+  "hash": "d07bc65ff62b03026da4c8eeed7df1b6cbeb66d0d6df5a9bef299837d7851144"
 }

@@ -4,6 +4,7 @@ use tokio::net::TcpListener;
 
 use temper_api::routes::create_app;
 use temper_services::config::ApiConfig;
+use temper_services::services::slack_grant_vault_service;
 use temper_services::state::{AppState, JwksKeyStore};
 
 #[tokio::main]
@@ -24,6 +25,12 @@ async fn main() {
         .connect(&config.database_url)
         .await
         .expect("Failed to connect to database");
+
+    // Warn loudly, once per process, if the vault key is not the one that sealed the most recent
+    // grants. Never blocks boot.
+    if let Some(slack) = &config.slack_link {
+        slack_grant_vault_service::check_configured_key(&pool, slack).await;
+    }
 
     let jwks_store = JwksKeyStore::new(config.auth.jwks_url.clone());
     let port = config.port;

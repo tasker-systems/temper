@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT key_fingerprint FROM kb_slack_grant_vault WHERE slack_principal_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "key_fingerprint",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "b3741d0899cc295cb3985769419002b56ba905b4cc9235c31fdc82e0a2a24678"
+}

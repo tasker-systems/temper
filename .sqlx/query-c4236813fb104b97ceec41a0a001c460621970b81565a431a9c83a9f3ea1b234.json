@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_slack_grant_vault SET key_fingerprint = $2 WHERE slack_principal_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c4236813fb104b97ceec41a0a001c460621970b81565a431a9c83a9f3ea1b234"
+}
