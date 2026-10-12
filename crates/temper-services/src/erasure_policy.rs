@@ -1,9 +1,8 @@
 //! The erasure policy in force: the `policy/erasure/` manifest, embedded and parsed once.
 //!
 //! The parser and the model live in temper-core (`temper_core::erasure_policy`), so admin tooling
-//! and the CLI can express the shape. The text lives here, because the policy that governs an
-//! erasure is the deployed server's: a client learns it through a door, not from a copy compiled
-//! into it.
+//! and the CLI can express the shape. The text lives here, because the policy in force is the
+//! server's; a client never compiles its own copy.
 
 use std::sync::OnceLock;
 

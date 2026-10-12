@@ -70,9 +70,9 @@ A gap names the task that tracks it, as a full UUID, and states what no mechanis
 parser refuses a gap without both. The gap and its task are the whole record of uncovered work,
 so notes do not restate it.
 
-Each file's header also says **what its check reads**: columns rather than rows, statements rather
-than control flow, references with neither a foreign key nor a CHECKed discriminator, and schemas
-other than `public`. Read that section before you treat a green test as coverage.
+Where a file has a check with limits, its header says **what the check reads**: for example,
+columns rather than rows, statements rather than control flow, or names and liveness rather than
+what a function does. Read that section before you treat a green test as coverage.
 
 ## The vocabulary at a glance
 
@@ -99,8 +99,8 @@ other than `public`. Read that section before you treat a green test as coverage
   tooling and the CLI can express the policy's shape. Every table in it refuses unknown keys. A
   parse error names the file that failed.
 - **The policy in force:** `temper_services::erasure_policy::in_force()` embeds the five files
-  with `include_str!` and parses them once. The policy that governs an erasure is the deployed
-  server's, so a client learns it through a door, never from a copy compiled into the client.
+  with `include_str!` and parses them once. The policy in force is the server's; a client never
+  compiles its own copy.
 - This README is not part of the manifest, and nothing parses it.
 
 ## Changing the policy

@@ -41,8 +41,9 @@
 #   * Statements, not control flow. An UPDATE under a branch never taken, after a RETURN, or with a
 #     WHERE that matches nothing still binds. The one such RETURN is the block-set form: called with
 #     p_blocks (the block history scrub, its only caller) the function returns once it has emptied
-#     chunk and block content and the embedding, so every line past that point binds while the
-#     scrub reaches none of them.
+#     kb_chunk_content.content, kb_chunks.header_path, kb_block_content.content and
+#     kb_chunks.embedding (with embedded_with), so every other line here binds while the scrub
+#     reaches none of them.
 #   * Not derivation without reference. A vector computed from R's content is tied to R by no key:
 #     a region's centroid (a mean over its members) and a context's telos_centroid (a mean over its
 #     goals). The walk reaches both tables by other paths, so both have lines, but nothing
@@ -120,10 +121,10 @@
 # ── derived vectors ──────────────────────────────────────────────────────────────────────────
 "kb_cogmap_regions.centroid"              = { disposition = "handled", note = "a FOLDED region holding R as a member is zeroed (never recomputed; R's vector was recoverable from it). A LIVE region holding R is recomputed over the survivors by _resource_erasure_recompute_live_centroids, which the body PERFORMs: a recompute is not an erasure constant, so this fence does not bind it; the act's witnesses do. The re-form the service queues after commit then folds a clean row; a materialize already in flight at the act, which loaded R live, is followed by the region drain's erased-member gate (region_clocks::tick), which re-forms the anchor's default-lens regions. Every materialize recomputes, under its anchor lock and before it folds, the live regions of its lens that list an erased resource (_region_recompute_erased_member_centroids)" }
 "kb_contexts.telos_centroid"              = { disposition = "handled", note = "R's home context's snapshot nulled beside its watermark, whatever R's doc type; the drain's materialize re-arms it from the live telos, which already excludes R. The copies in region_materialized / salience_refreshed payloads are named in ledger_remainder when R is a goal: the ledger exception does not reach them, so they are a permanent remainder" }
-"kb_cogmaps.telos_centroid"               = { disposition = "out-of-scope", note = "derived from the charter's content, so R-derived only when R is the charter, which the act refuses. The map-grain task owns it" }
+"kb_cogmaps.telos_centroid"               = { disposition = "out-of-scope", note = "derived from the charter's content, so R-derived only when R is the charter, which the act refuses" }
 
 # ── out of scope: the map's text ────────────────────────────────────────────────────────────
-"kb_cogmaps.name"                         = { disposition = "out-of-scope", note = "reached through kb_cogmaps.telos_resource_id. The act refuses a charter resource; map-grain charter erasure is its own filed task" }
+"kb_cogmaps.name"                         = { disposition = "out-of-scope", note = "reached through kb_cogmaps.telos_resource_id. The act refuses a charter resource" }
 "kb_cogmap_lenses.name"                   = { disposition = "out-of-scope", note = "reached through kb_cogmaps: the map author's name for a lens" }
 "kb_cogmap_regions.label"                 = { disposition = "out-of-scope", note = "reached through kb_cogmaps; also tied to R when R is a member. An optional agent-written label that may summarize its members, R included, and a folded region keeps it. Left as the map's text by judgement, not because it cannot carry R" }
 "kb_invocations.outcome"                  = { disposition = "out-of-scope", note = "reached incidentally, through its cogmap and its telos (a charter, which the act refuses). An invocation over a map where R is only a region member is NOT refused, and its outcome may quote R. Its ledger copy, invocation_closed.outcome, is named in the remainder only when its payload carries R's id" }
@@ -383,7 +384,7 @@ refine = [
 "/content_type"  = { disposition = "structural", note = "a media type" }
 
 [payload."cogmap_seeded"]
-"/name"                                       = { disposition = "out-of-scope", note = "the map's text; a charter is refused, map-grain erasure is its own task" }
+"/name"                                       = { disposition = "out-of-scope", note = "the map's text; the act refuses a charter" }
 "/telos/title"                                = { disposition = "out-of-scope", note = "the charter's; refused" }
 "/telos/origin_uri"                           = { disposition = "out-of-scope", note = "the charter's; refused" }
 "/telos/blocks/*/incorporated/*/source/value" = { disposition = "out-of-scope", note = "the charter's; refused" }
