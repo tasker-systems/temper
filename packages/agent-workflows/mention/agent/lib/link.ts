@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 
 import { isLoopback, requireEndpoint } from "@tasker-systems/temper-ts";
 
@@ -23,6 +23,53 @@ export function signIntentRequest(
     .update(`${timestamp}.${body}`)
     .digest("hex");
   return { timestamp, signature };
+}
+
+/** The link-state route as temper-api registers it (`internal_sig::DOOR_SLACK_LINK_STATE`). */
+export const LINK_STATE_DOOR = "/internal/slack/link-state";
+/** The mint route as temper-api registers it (`internal_sig::DOOR_SLACK_MINT`). */
+export const MINT_DOOR = "/internal/slack/mint";
+
+/**
+ * The v2 construction (must match `temper_core::internal_sig::sign_v2` byte for byte):
+ *   HMAC-SHA256(secret, "v2\n{METHOD}\n{door}\n{timestamp}\n{nonce}\n{raw_body}") -> lowercase hex
+ *
+ * Binding the door and a nonce is what lets temper accept a signature at one door, once: a
+ * captured mint request cannot be replayed for a fresh token, nor a link-state body sent to mint.
+ */
+export function signRequestV2(
+  secret: string,
+  method: string,
+  door: string,
+  timestamp: string,
+  nonce: string,
+  body: string,
+): string {
+  return createHmac("sha256", secret)
+    .update(`v2\n${method}\n${door}\n${timestamp}\n${nonce}\n${body}`)
+    .digest("hex");
+}
+
+/**
+ * Both constructions' headers for one signed POST to `door`. Sent together until every temper-api
+ * requires v2: an API that reads only the original construction keeps working, and one that
+ * requires v2 never accepts the original, so the cutover never reopens what v2 closes. Drop the
+ * original pair once no API reads it.
+ */
+export function signedHeaders(
+  secret: string,
+  door: string,
+  timestampSecs: number,
+  body: string,
+): Record<string, string> {
+  const { timestamp, signature } = signIntentRequest(secret, timestampSecs, body);
+  const nonce = randomBytes(16).toString("hex");
+  return {
+    "X-Temper-Timestamp": timestamp,
+    "X-Temper-Signature": signature,
+    "X-Temper-Nonce": nonce,
+    "X-Temper-Signature-V2": signRequestV2(secret, "POST", door, timestamp, nonce, body),
+  };
 }
 
 /**
@@ -76,9 +123,7 @@ export async function requestLinkState(principalId: string): Promise<LinkState> 
   const secret = requireEnv("SLACK_LINK_SECRET");
 
   const body = JSON.stringify({ slack_principal_id: principalId });
-  const { timestamp, signature } = signIntentRequest(secret, Date.now() / 1000, body);
-
-  const res = await fetch(`${baseUrl.replace(/\/$/, "")}/internal/slack/link-state`, {
+  const res = await fetch(`${baseUrl.replace(/\/$/, "")}${LINK_STATE_DOOR}`, {
     method: "POST",
     // Never follow a redirect. fetch strips `Authorization` on a cross-origin hop but resends
     // these signature headers and the body, and the signature does not cover the host — so a 307 to
@@ -86,8 +131,7 @@ export async function requestLinkState(principalId: string): Promise<LinkState> 
     redirect: "error",
     headers: {
       "content-type": "application/json",
-      "X-Temper-Timestamp": timestamp,
-      "X-Temper-Signature": signature,
+      ...signedHeaders(secret, LINK_STATE_DOOR, Date.now() / 1000, body),
     },
     body,
   });

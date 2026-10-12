@@ -17,6 +17,27 @@
 //! Message construction: `"{timestamp}.{body}"`, where `timestamp` is Unix
 //! seconds and `body` is the raw request-body bytes. Signature is lowercase-hex
 //! HMAC-SHA256. Headers: [`TIMESTAMP_HEADER`] + [`SIGNATURE_HEADER`].
+//!
+//! # The v2 construction: one door, once
+//!
+//! The construction above binds neither the door nor the occasion. A body signed for
+//! `/internal/saml/reconcile` verifies at `/internal/principal/resolve`, which shares its key, and
+//! a captured request verifies again for as long as its timestamp is fresh. [`sign_v2`] closes
+//! both: its message names the method, the door and a per-request nonce, so a signature is good
+//! for one door, and a verifier that records the nonce accepts it once.
+//!
+//! ```text
+//! "v2\n{METHOD}\n{door}\n{timestamp}\n{nonce}\n{body}"
+//! ```
+//!
+//! `door` is the route as temper-api registers it (the `DOOR_*` constants), never the URL the
+//! signer posts to: a deployment may reach the API through a prefix or rewrite, and the route is
+//! the one name both sides hold. `nonce` is [`NONCE_LEN`] lowercase hex characters of fresh
+//! randomness. Headers: [`TIMESTAMP_HEADER`] (shared) + [`NONCE_HEADER`] + [`SIGNATURE_V2_HEADER`].
+//!
+//! The cutover runs on the signers, not the verifier. Signers send both constructions until every
+//! verifier requires v2; a verifier that accepted either would leave the old construction's gaps
+//! open to anyone who strips the v2 headers from a capture.
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -28,6 +49,33 @@ pub const TIMESTAMP_HEADER: &str = "X-Temper-Timestamp";
 
 /// Header carrying the lowercase-hex HMAC-SHA256 signature.
 pub const SIGNATURE_HEADER: &str = "X-Temper-Signature";
+
+/// Header carrying the v2 construction's per-request nonce.
+pub const NONCE_HEADER: &str = "X-Temper-Nonce";
+
+/// Header carrying the v2 construction's lowercase-hex HMAC-SHA256 signature.
+pub const SIGNATURE_V2_HEADER: &str = "X-Temper-Signature-V2";
+
+/// Length of a v2 nonce: 128 bits of randomness as lowercase hex.
+pub const NONCE_LEN: usize = 32;
+
+/// The SAML Authorization Server's membership reconcile.
+pub const DOOR_SAML_RECONCILE: &str = "/internal/saml/reconcile";
+/// The SAML Authorization Server's principal resolve. Same key as [`DOOR_SAML_RECONCILE`].
+pub const DOOR_PRINCIPAL_RESOLVE: &str = "/internal/principal/resolve";
+/// The mention agent's link-state question.
+pub const DOOR_SLACK_LINK_STATE: &str = "/internal/slack/link-state";
+/// The mention agent's act-as-the-human mint.
+pub const DOOR_SLACK_MINT: &str = "/internal/slack/mint";
+
+/// Every door the internal signature gates. A verifier that refuses a v2 signature checks it
+/// against the others, so a body sent to the wrong door is reported as that, not as a forgery.
+pub const DOORS: [&str; 4] = [
+    DOOR_SAML_RECONCILE,
+    DOOR_PRINCIPAL_RESOLVE,
+    DOOR_SLACK_LINK_STATE,
+    DOOR_SLACK_MINT,
+];
 
 /// Maximum accepted clock skew (seconds) between signer and verifier. A request
 /// whose timestamp is further than this from "now" (in either direction) is
@@ -59,6 +107,74 @@ pub fn verify(secret: &[u8], timestamp: i64, body: &[u8], presented_hex: &str) -
     mac_message(secret, timestamp, body)
         .verify_slice(&presented)
         .is_ok()
+}
+
+/// Feed the v2 message into a fresh MAC. Newline separates the fields: none of method, door,
+/// timestamp or nonce can contain one, and the body comes last, so no field can absorb another.
+fn mac_message_v2(
+    secret: &[u8],
+    method: &str,
+    door: &str,
+    timestamp: i64,
+    nonce: &str,
+    body: &[u8],
+) -> HmacSha256 {
+    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
+    mac.update(b"v2\n");
+    mac.update(method.as_bytes());
+    mac.update(b"\n");
+    mac.update(door.as_bytes());
+    mac.update(b"\n");
+    mac.update(timestamp.to_string().as_bytes());
+    mac.update(b"\n");
+    mac.update(nonce.as_bytes());
+    mac.update(b"\n");
+    mac.update(body);
+    mac
+}
+
+/// Compute the lowercase-hex v2 signature: `body` sent by `method` to `door`, at `timestamp`,
+/// under `nonce`.
+pub fn sign_v2(
+    secret: &[u8],
+    method: &str,
+    door: &str,
+    timestamp: i64,
+    nonce: &str,
+    body: &[u8],
+) -> String {
+    hex::encode(
+        mac_message_v2(secret, method, door, timestamp, nonce, body)
+            .finalize()
+            .into_bytes(),
+    )
+}
+
+/// Constant-time-verify a presented v2 signature. Returns `false` on any mismatch, including
+/// malformed hex — never panics. Single use is the caller's: this checks the MAC only.
+pub fn verify_v2(
+    secret: &[u8],
+    method: &str,
+    door: &str,
+    timestamp: i64,
+    nonce: &str,
+    body: &[u8],
+    presented_hex: &str,
+) -> bool {
+    let Ok(presented) = hex::decode(presented_hex) else {
+        return false;
+    };
+    mac_message_v2(secret, method, door, timestamp, nonce, body)
+        .verify_slice(&presented)
+        .is_ok()
+}
+
+/// Whether `nonce` has the v2 shape: exactly [`NONCE_LEN`] lowercase hex characters.
+pub fn nonce_is_well_formed(nonce: &str) -> bool {
+    nonce.len() == NONCE_LEN
+        && nonce
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Whether a signed `timestamp` is within [`MAX_SKEW_SECS`] of `now` (Unix
