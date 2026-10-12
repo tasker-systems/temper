@@ -618,20 +618,18 @@ pub async fn mint_access_token(
             // which can only say "try again", forever.
             //
             // The row is deliberately LEFT IN PLACE, not deleted. The transaction is committed only
-            // for the fingerprint stamp above, the one write it can hold. `invalid_grant` is the IdP's word, and it is not always about the grant:
-            //   - the temper AS answers `invalid_grant` for ANY failure inside its rotation,
-            //     including a transient database error (`packages/temper-cloud/src/oauth/
-            //     endpoints.ts`, the refresh branch's catch) — so the grant may be perfectly live;
-            //   - Auth0 answers `invalid_grant` when the RT is presented to the wrong client or
-            //     tenant, so a misconfigured `client_id` / issuer would refuse EVERY grant.
-            // Deleting would turn either into permanent loss — and, worse, destroy the only
-            // plaintext source of a possibly-live RT, so disconnect and erasure could never
-            // revoke it. Kept, a transient refusal heals on the next mention, a config fix heals
-            // every user at once, and disconnect still revokes before it deletes. The cost is that
-            // a truly dead RT is re-presented to the IdP on each mention, which is harmless.
-            // A re-link overwrites the row (`store_grant` upserts). In AS mode, where this refusal
-            // can be transient, the callback revokes the overwritten RT first
-            // (`slack_disconnect_service::revoke_superseded_grant`).
+            // for the fingerprint stamp above, the one write it can hold. `invalid_grant` is the
+            // IdP's word, and it is not always about the grant: Auth0 answers it when the RT is
+            // presented to the wrong client or tenant, so a misconfigured `client_id` / issuer
+            // would refuse EVERY grant. (The temper AS answers a store failure during rotation with
+            // `temporarily_unavailable`, a 503 that `refresh_grant` reports as an `Err`, never as
+            // this arm.) Deleting would turn a config slip into permanent loss — and, worse,
+            // destroy the only plaintext source of a possibly-live RT, so disconnect and erasure
+            // could never revoke it. Kept, a config fix heals every user at once, and disconnect
+            // still revokes before it deletes. The cost is that a truly dead RT is re-presented to
+            // the IdP on each mention, which is harmless.
+            // A re-link overwrites the row (`store_grant` upserts); in AS mode the callback first
+            // revokes the RT it overwrites (`slack_disconnect_service::revoke_superseded_grant`).
             tx.commit().await?;
             return Ok(MintOutcome::Refused(LinkRefusal::NotVaulted));
         }

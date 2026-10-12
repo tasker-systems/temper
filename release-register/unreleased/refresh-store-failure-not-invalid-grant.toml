@@ -1,0 +1,17 @@
+title    = "The AS answers a refresh it could not rotate for a store failure with 503 `temporarily_unavailable`, not `invalid_grant`"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http"]
+status   = "signal-only"
+body = '''
+`POST /oauth/token` with `grant_type=refresh_token` used to answer `400 invalid_grant` when the
+rotation statement failed for any reason, including a database connection error, timeout or cold
+start, so a client holding a live grant was told it was dead. A store failure there is now answered
+`503 temporarily_unavailable` with `Retry-After: 2`, as the issue leg of the same grant already
+answered its own infrastructure faults. `invalid_grant` is now reserved for a token the rotation
+guard found unknown, spent, revoked, expired or on an ended chain, and replay detection runs only on
+those. The response body shape is unchanged. Who observes: OAuth clients refreshing against the
+temper AS during a database blip, including temper-api's Slack grant vault, which already treats a
+5xx as transient. User-visible: yes, a blip no longer tells the user to reconnect. Release
+relevance: additive (the `Retry-After` header), behavioral (the status and error code).
+'''

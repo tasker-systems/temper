@@ -353,6 +353,9 @@ describe("replayed refresh token", () => {
 
     // A rotation gets past its guard: the tip is now spent, and nothing of the chain is live.
     const rotated = await rotateRefreshToken(db, second.refresh_token as string);
+    if (rotated === null) {
+      throw new Error("expected the chain's tip to rotate");
+    }
     expect(await liveInChain(rotated.chainId), "the gap the ending has to survive").toBe(0);
 
     // The ending lands inside the gap and honestly reports taking nothing…

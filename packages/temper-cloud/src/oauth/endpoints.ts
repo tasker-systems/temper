@@ -108,6 +108,14 @@ const MAX_REFRESH_CHAIN_SECONDS = 315360000;
 const DEFAULT_REFRESH_REPLAY_GRACE_SECONDS = 10;
 /** Ceiling on a configured replay grace window — one hour. A units check, not a policy. */
 const MAX_REPLAY_GRACE_SECONDS = 3600;
+/**
+ * `Retry-After` on a refresh whose rotation the token store did not answer. When the guard
+ * committed before its reply was lost, a retry inside the grace window is filed as a client retry
+ * and one outside it as a hostile replay. The window is measured from the rotation, not from this
+ * response, so a client honouring this lands inside the default window only when the failure
+ * surfaced promptly.
+ */
+const ROTATION_RETRY_AFTER_SECONDS = 2;
 
 /** Validated refresh-token TTL, read from AS_REFRESH_TTL_SECONDS (mirrors mint.ts's accessTtlSeconds). */
 function refreshTtlSeconds(): number {
@@ -503,15 +511,16 @@ interface OAuthErrorBody {
 function oauthJson(
   body: TokenResponse | MachineTokenResponse | OAuthErrorBody,
   status: number,
+  headers: Record<string, string> = {},
 ): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", "cache-control": "no-store" },
+    headers: { "content-type": "application/json", "cache-control": "no-store", ...headers },
   });
 }
 
-function oauthError(error: string, status = 400): Response {
-  return oauthJson({ error }, status);
+function oauthError(error: string, status = 400, headers: Record<string, string> = {}): Response {
+  return oauthJson({ error }, status, headers);
 }
 
 /**
@@ -671,10 +680,36 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
       return oauthError("invalid_request");
     }
 
+    // Two different failures, and only one of them is about the grant. `null` is the rotation
+    // guard matching no row — unknown, spent, revoked, expired, or chain ended — and is the only
+    // thing answered `invalid_grant`. A THROW is the store failing to answer (a Neon connection
+    // error, a timeout the driver surfaces, a cold start), which says nothing about the token;
+    // answering it `invalid_grant` would tell a client holding a live grant that it is dead, and
+    // the API's Slack grant vault would tell its user to reconnect over an AS blip. It is answered
+    // `temporarily_unavailable`, as the issue leg below answers its own infrastructure faults, and
+    // the refusal judge is not run — there is no refusal to judge.
+    //
+    // A guard that committed before its reply was lost is indistinguishable here from one that
+    // never ran, and is not tidied: clearing a fresh rotation mark would equally clear the mark of
+    // a concurrent refresh that won, hiding a real replay. The client's retry instead meets a token
+    // this instance rotated, with no successor, and the replay judge decides it on its real age —
+    // inside the grace window it is filed as a client retry, outside it as a hostile replay that
+    // ends a chain holding nothing live (`tokens_revoked = 0`). The session is lost either way, as
+    // it is after a lost success response. `Retry-After` asks the client to come back soon, which
+    // lands inside the default window when the failure surfaced promptly.
     let rotated: Awaited<ReturnType<typeof rotateRefreshToken>>;
     try {
       rotated = await rotateRefreshToken(db, String(refreshToken));
-    } catch {
+    } catch (rotateErr) {
+      logger.error(
+        { err: rotateErr instanceof Error ? rotateErr.message : String(rotateErr) },
+        "token: the token store did not answer the refresh rotation — answering temporarily_unavailable, not invalid_grant",
+      );
+      return oauthError("temporarily_unavailable", 503, {
+        "retry-after": String(ROTATION_RETRY_AFTER_SECONDS),
+      });
+    }
+    if (rotated === null) {
       // The refusal is settled; what follows only decides what is RECORDED and whether a chain
       // survives. It is wrapped because a failure to write an audit row must not convert a
       // well-formed `invalid_grant` into an unattributed 500 — the client's answer is the same

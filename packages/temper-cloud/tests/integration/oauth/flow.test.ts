@@ -239,6 +239,9 @@ describe("oauth flow store", () => {
       });
 
       const result = await rotateRefreshToken(db, "refresh-token-1");
+      if (result === null) {
+        throw new Error("expected a live token to rotate");
+      }
 
       expect(result.clientId).toBe("client-9");
       expect(result.claims.sub).toBe(CLAIMS.sub);
@@ -246,7 +249,7 @@ describe("oauth flow store", () => {
       expect(result.claims.email_verified).toBe(CLAIMS.email_verified);
     });
 
-    it("throws on a second rotation of the same token (single-use)", async () => {
+    it("refuses a second rotation of the same token (single-use) as null, not a throw", async () => {
       await storeRefreshToken(db, {
         token: "refresh-token-2",
         clientId: "client-9",
@@ -260,7 +263,9 @@ describe("oauth flow store", () => {
 
       await rotateRefreshToken(db, "refresh-token-2");
 
-      await expect(rotateRefreshToken(db, "refresh-token-2")).rejects.toThrow();
+      // `null`, not a throw: a throw is reserved for the store failing to answer, which the token
+      // endpoint reports as `temporarily_unavailable` rather than as a dead grant.
+      expect(await rotateRefreshToken(db, "refresh-token-2")).toBeNull();
     });
   });
 });
