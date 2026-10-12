@@ -51,7 +51,9 @@ run_case() {
     local name="$1" expected="$2" needle="${3:-}"
     shift 3 || shift $#
     local out actual=0
-    out="$(cd "$TREE" && env "$@" bash .github/scripts/check-migration-order.sh base 2>&1)" || actual=$?
+    # Clear the CI environment first, so a case run inside GitHub Actions (where GITHUB_ACTIONS is
+    # set) still sees only the environment it asks for.
+    out="$(cd "$TREE" && env -u GITHUB_ACTIONS -u GITHUB_BASE_SHA "$@" bash .github/scripts/check-migration-order.sh base 2>&1)" || actual=$?
     if [ "$actual" != "$expected" ]; then
         echo "FAIL: ${name}: exit ${actual}, expected ${expected}"
         echo "$out" | sed 's/^/    /'

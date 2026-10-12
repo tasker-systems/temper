@@ -20,6 +20,13 @@ ALTER TABLE kb_slack_grant_vault
         CONSTRAINT kb_slack_grant_vault_key_fingerprint_len
         CHECK (key_fingerprint IS NULL OR octet_length(key_fingerprint) = 8);
 
+-- The startup key check (slack_grant_vault_service::check_configured_key) reads the most recently
+-- sealed stamped rows on every cold start of the internal function, before any request is
+-- authenticated. Partial and ordered so that read is an index scan, not a sort of the table.
+CREATE INDEX idx_slack_grant_vault_recent_stamped
+    ON kb_slack_grant_vault (updated_at DESC)
+ WHERE key_fingerprint IS NOT NULL;
+
 COMMENT ON COLUMN kb_slack_grant_vault.key_fingerprint IS
     'First 8 bytes of HMAC-SHA256(sealing key, ''temper-slack-vault-key-id/v1''): which key sealed this '
     'row''s rt and at ciphertexts (always one key, written in one statement). Not secret. Stamped by '
@@ -35,7 +42,7 @@ SELECT declare_migration(
     20261028100000,
     'additive',
     'Adds a nullable key_fingerprint BYTEA column to kb_slack_grant_vault, with a CHECK that a present '
-    'value is 8 bytes, and comments it and key_version. No existing row changes. A binary without this '
+    'value is 8 bytes, a partial index on updated_at for stamped rows, and comments on it and key_version. No existing row changes. A binary without this '
     'migration never names the column: its INSERT leaves it NULL and its UPDATE leaves it as it was, '
     'and a stale fingerprint only changes how a later open failure is reported, since a row that '
     'opens is restamped.'
