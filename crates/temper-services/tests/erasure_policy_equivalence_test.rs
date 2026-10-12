@@ -397,7 +397,9 @@ mod scan {
                 let tail = rest.split("declared here").next()?;
                 tail.rsplit(';').next()?.trim().parse().ok()
             })
-            .expect("sensitivity-scan-surface.txt: a `# COUNT at <sha>: ...; <n> declared here.` line")
+            .expect(
+                "sensitivity-scan-surface.txt: a `# COUNT at <sha>: ...; <n> declared here.` line",
+            )
     }
 
     /// The migration the header's COUNT line names (`# COUNT at migration <m>: …`). New: the old
@@ -738,7 +740,10 @@ mod resource {
             for (path, line) in paths {
                 new.insert(
                     (event_type.clone(), path.clone(), None),
-                    (payload_disposition_text(&line.disposition), line.note.clone()),
+                    (
+                        payload_disposition_text(&line.disposition),
+                        line.note.clone(),
+                    ),
                 );
                 for refinement in &line.refine {
                     let key = (
