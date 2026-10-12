@@ -400,8 +400,8 @@ fn unreached_identity_scan_columns(policy: &ErasurePolicy, redaction: &[String])
             if !matches!(entry.grain, Grain::Identity { .. }) {
                 return false;
             }
-            let reached = assigns_erasure(redaction, key.as_str())
-                || deletes_from(redaction, key.table());
+            let reached =
+                assigns_erasure(redaction, key.as_str()) || deletes_from(redaction, key.table());
             let gapped = entry.also_reached.iter().any(|reach| {
                 reach.column.as_deref() == Some(key.column())
                     && matches!(reach.mechanism, Mechanism::Gap(_))
@@ -562,8 +562,10 @@ async fn a_cited_by_value_outside_the_vocabulary_is_reported(pool: PgPool) {
     let problems = catalog_problems(&policy, &catalog(&pool).await);
     assert_eq!(
         problems,
-        ["kb_remote_sources parent: \"remote_source\" is not in the vocabulary of \
-          kb_block_provenance.source_kind"]
+        [
+            "kb_remote_sources parent: \"remote_source\" is not in the vocabulary of \
+          kb_block_provenance.source_kind"
+        ]
     );
 }
 

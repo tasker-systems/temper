@@ -504,9 +504,7 @@ async fn an_act_that_skips_a_body_unbinds_what_it_reaches(pool: PgPool) {
     let claimed_by_redaction: Vec<String> = declarations()
         .iter()
         .filter(|(_, d)| match &d.achieved {
-            Achieved::Claims(c) => c
-                .iter()
-                .any(|c| !matches!(c, Claim::ResourceErasure)),
+            Achieved::Claims(c) => c.iter().any(|c| !matches!(c, Claim::ResourceErasure)),
             _ => false,
         })
         .map(|(k, _)| k.to_string())

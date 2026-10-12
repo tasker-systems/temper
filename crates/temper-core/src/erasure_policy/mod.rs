@@ -755,8 +755,7 @@ refine = [
     /// uncovered. A gap is the record of uncovered work, so both halves are required.
     #[test]
     fn a_gap_names_a_well_formed_task_and_what_is_uncovered() {
-        let well_formed =
-            r#"{ gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "label redaction" } }"#;
+        let well_formed = r#"{ gap = { task = "01a12dcf-2ef5-729d-b6ef-051fdee3ef8c", what = "label redaction" } }"#;
         for (bad, named) in [
             (r#"{ gap = { what = "label redaction" } }"#, "task"),
             (
@@ -799,7 +798,10 @@ refine = [
 
     #[test]
     fn a_gap_what_is_trimmed() {
-        let estate = estate_with(r#"what = "label redaction""#, r#"what = "  label redaction ""#);
+        let estate = estate_with(
+            r#"what = "label redaction""#,
+            r#"what = "  label redaction ""#,
+        );
         let policy = parse(&ManifestFiles {
             estate: &estate,
             ..files()
@@ -838,10 +840,7 @@ refine = [
         };
         assert_eq!(*unit, None, "an absent unit is None");
 
-        let estate = estate.replace(
-            r#"unit = { gap = { task"#,
-            r#"unit = { gone = { task"#,
-        );
+        let estate = estate.replace(r#"unit = { gap = { task"#, r#"unit = { gone = { task"#);
         fails_in(
             ManifestFiles {
                 estate: &estate,
@@ -980,7 +979,8 @@ refine = [
         assert_eq!(policy.estate.tables["kb_remote_sources"].note, "");
 
         let padded = parse(&ManifestFiles {
-            resource_erasure: &RESOURCE.replace(r#"note = "the ledger""#, r#"note = " the ledger ""#),
+            resource_erasure: &RESOURCE
+                .replace(r#"note = "the ledger""#, r#"note = " the ledger ""#),
             ..files()
         })
         .expect("a padded note parses");
