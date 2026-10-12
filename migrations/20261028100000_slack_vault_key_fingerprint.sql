@@ -23,16 +23,16 @@ ALTER TABLE kb_slack_grant_vault
 COMMENT ON COLUMN kb_slack_grant_vault.key_fingerprint IS
     'First 8 bytes of HMAC-SHA256(sealing key, ''temper-slack-vault-key-id/v1''): which key sealed this '
     'row''s rt and at ciphertexts (always one key, written in one statement). Not secret. Stamped by '
-    'store_grant and the mint''s re-seal; NULL until a row predating 20261026100000 first opens. Read '
+    'store_grant and the mint''s re-seal; NULL until a row predating 20261028100000 first opens. Read '
     'only to classify an open failure: current key = row-level fault, a fingerprint listed in '
     'SLACK_VAULT_RETIRED_KEY_FINGERPRINTS = deliberate rotation, anything else = misconfigured key.';
 
 COMMENT ON COLUMN kb_slack_grant_vault.key_version IS
-    'Inert: stamped 1 and never read. Superseded by key_fingerprint (20261026100000), which is derived '
+    'Inert: stamped 1 and never read. Superseded by key_fingerprint (20261028100000), which is derived '
     'from the key itself rather than numbered by an operator.';
 
 SELECT declare_migration(
-    20261026100000,
+    20261028100000,
     'additive',
     'Adds a nullable key_fingerprint BYTEA column to kb_slack_grant_vault, with a CHECK that a present '
     'value is 8 bytes, and comments it and key_version. No existing row changes. A binary without this '
