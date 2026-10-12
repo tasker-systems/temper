@@ -30,8 +30,10 @@
 //!   (goal C4) and a routed-nowhere payload is a well-formed act the system said no to. Returning
 //!   non-2xx would make GitHub retry a payload temper deliberately routed nowhere — and retry it
 //!   to the same conclusion, forever.
-//! - An unverifiable attestation and an unknown connector return the **same** 401 with the same
-//!   body. A probe must not learn whether a connector is provisioned by diffing responses.
+//! - An unverifiable attestation, an unknown connector, and — once the binding is enforced — an
+//!   attestation issued to another project or presented a second time all return the **same** 401
+//!   with the same body. A probe must not learn whether a connector is provisioned, or how far its
+//!   attestation got, by diffing responses.
 //! - Everything temper cannot do — an ambiguous connector, a provider with no event-name rule — is
 //!   a **500**, because the system is unable to act rather than saying no. A retry is then the
 //!   right behaviour: the condition is a misconfiguration someone will fix.
@@ -45,7 +47,7 @@ use uuid::Uuid;
 
 use temper_services::broker::InboundRequest;
 use temper_services::error::{ApiError, ApiResult};
-use temper_services::services::intake_service::{self, ProviderEvent};
+use temper_services::services::intake_service::{self, AttestationSeen, ProviderEvent, Receipt};
 use temper_services::services::{connection_service, intake_service as intake};
 use temper_services::state::AppState;
 
@@ -127,14 +129,32 @@ pub async fn receive(
     //    makes that assumption fail loudly on the first real forward rather than quietly.
     let event_type = provider_event_type(&verified.provider, &headers)?;
 
-    // 4. Hand over. Everything below here shipped in chunks B and C.
-    let event_id = intake::receive_webhook(
+    // 4. Hand over, once per attestation. A captured attestation verifies until past its `exp`
+    //    (twelve hours), so the receipt records it in the same transaction as the event: it is
+    //    spent exactly when a receipt lands, and a receipt that fails or is cut off never spends
+    //    it. Whether a repeat is refused or only reported is the broker's binding flag; refused,
+    //    it is the same 401 as every other refusal here.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let receipt = intake::receive_attested_webhook(
         &state.pool,
         connection.id,
         ProviderEvent::from_header(&event_type),
         &parse_payload(&body)?,
+        AttestationSeen {
+            replay_key: &verified.replay_key,
+            expires_at: verified.expires_at,
+            now,
+            enforced: verified.binding_enforced,
+        },
     )
     .await?;
+    let event_id = match receipt {
+        Receipt::Recorded(event_id) => event_id,
+        Receipt::RefusedAsReplay => return Err(ApiError::Unauthorized(REFUSAL.to_string())),
+    };
 
     // 202, not 200: temper has accepted and durably recorded the receipt, and what any subscriber
     // makes of it happens later, on a steward's own tick. A payload that matched zero
