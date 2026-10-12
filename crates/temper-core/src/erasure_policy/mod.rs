@@ -765,8 +765,7 @@ refine = [
             }]
         );
         assert_eq!(
-            policy.estate.tables["kb_edges"].also_reached[0].column,
-            None,
+            policy.estate.tables["kb_edges"].also_reached[0].column, None,
             "an absent column is None"
         );
     }

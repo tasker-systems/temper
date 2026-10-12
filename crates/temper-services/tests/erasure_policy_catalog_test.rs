@@ -133,7 +133,8 @@ struct Catalog {
 
 impl Catalog {
     fn has_column(&self, table: &str, column: &str) -> bool {
-        self.columns.contains(&(table.to_owned(), column.to_owned()))
+        self.columns
+            .contains(&(table.to_owned(), column.to_owned()))
     }
 }
 
@@ -309,9 +310,7 @@ fn every_content_or_identity_table_has_exactly_one_grain() {
 fn an_added_carrier_table_without_a_grain_is_reported() {
     let mut policy = in_force().clone();
     policy.sensitivity.columns.insert(
-        "kb_probe_t.note"
-            .parse()
-            .expect("a well-formed column key"),
+        "kb_probe_t.note".parse().expect("a well-formed column key"),
         ScanColumn {
             disposition: ScanDisposition::Scan,
             note: String::new(),
