@@ -3,6 +3,7 @@ import { importSPKI, jwtVerify } from "jose";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   RECONCILE_DOOR,
+  RESOLVE_DOOR,
   type ReconcileRequest,
   signReconcile,
   signRequestV2,
@@ -190,6 +191,13 @@ describe("internal reconcile signature (mirrors Rust temper_core::internal_sig)"
 
   it("produces the shared known-answer signature", () => {
     expect(signReconcile(KAT_SECRET, KAT_TIMESTAMP, KAT_BODY)).toBe(KAT_SIG);
+  });
+
+  // FAILS IF: a door drifts from the route temper-api registers (`internal_sig::DOORS`). Resolve
+  // is not covered by the vector below, and the signer tests compare against these constants.
+  it("names the routes temper-api registers", () => {
+    expect(RECONCILE_DOOR).toBe("/internal/saml/reconcile");
+    expect(RESOLVE_DOOR).toBe("/internal/principal/resolve");
   });
 
   // The v2 vector, asserted identically in crates/temper-core/src/internal_sig.rs

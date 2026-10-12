@@ -5,6 +5,7 @@ import {
   assertSlackSecretsDistinct,
   requestLinkState,
   LINK_STATE_DOOR,
+  MINT_DOOR,
   signIntentRequest,
   signRequestV2,
 } from "../agent/lib/link.js";
@@ -70,6 +71,17 @@ describe("signIntentRequest", () => {
       .digest("hex");
     expect(signature).toBe(expected);
     expect(signature).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+// FAILS IF: a door drifts from the route temper-api registers (`temper_core::internal_sig::DOORS`).
+// The v2 signature names the door, so a drifted string is a 401 on every mention once temper-api
+// requires v2 — and the header assertions below compare against these same constants, so only a
+// literal can catch it.
+describe("doors", () => {
+  it("name the routes temper-api registers", () => {
+    expect(LINK_STATE_DOOR).toBe("/internal/slack/link-state");
+    expect(MINT_DOOR).toBe("/internal/slack/mint");
   });
 });
 
