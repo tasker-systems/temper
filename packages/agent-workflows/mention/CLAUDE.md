@@ -48,8 +48,6 @@ long enough between mentions comes back to a dead grant. The server recognises t
 `invalid_grant` refusal (`oauth_client::refresh_grant` → `RefreshOutcome::GrantRejected`) and
 answers `refused` / `not_vaulted` — whose reply is the true one: retrying won't fix it, reconnect
 here. The reply carries the re-link URL, so the user recovers from Slack alone, with no temper CLI.
-A grant temper can no longer open (a rotated `SLACK_VAULT_ENC_KEY`, or a tampered row) is
-`not_vaulted` for the same reason: there is no usable credential, and the re-link overwrites it.
 Before that it surfaced as a **401 from the mint**, which `requestMintedToken` throws on, which lands
 in the channel's catch-all "try again in a moment" — a retry that could never succeed. The vault row
 is **kept**, not deleted: the temper AS answers `invalid_grant` for transient failures too, and Auth0

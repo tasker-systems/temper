@@ -231,8 +231,7 @@ pub async fn store_grant(
 /// grace window that tolerates a brief RT reuse). The recovery is re-link, and that part IS here: a
 /// grant the IdP refuses as `invalid_grant` — bricked this way, or simply aged past the IdP's
 /// refresh-token lifetime — reports [`LinkRefusal::NotVaulted`], whose reply tells the user to
-/// reconnect, rather than an error the agent can only call transient. So does a refresh token
-/// that will not open (a rotated `SLACK_VAULT_ENC_KEY`, or a tampered row). The row is kept, not
+/// reconnect, rather than an error the agent can only call transient. The row is kept, not
 /// deleted; see that arm for why. See the T3 spec's "grant vault" section.
 ///
 /// A principal whose standing does not admit them mints nothing — the decision is delegated to
@@ -316,61 +315,31 @@ pub async fn mint_access_token(
     };
 
     // Cached access token still comfortably valid? Hand it back — no refresh, no RT rotation.
-    //
-    // A cached token that will not open is not fatal: it is only a cache, so the mint falls
-    // through and refreshes as if it had expired. The refresh token below decides.
     if let (Some(at_nonce), Some(at_ciphertext), Some(expires_at)) =
         (&row.at_nonce, &row.at_ciphertext, row.access_expires_at)
     {
         if expires_at > Utc::now() + AT_REFRESH_SKEW {
-            match decrypt_to_string(
+            let token = decrypt_to_string(
                 key,
                 at_nonce,
                 at_ciphertext,
                 &aad(slack_principal_id, FIELD_AT),
-            ) {
-                Ok(token) => {
-                    tx.commit().await?;
-                    return Ok(MintOutcome::Token {
-                        access_token: token,
-                        expires_at,
-                    });
-                }
-                Err(_) => {
-                    // Principal only — never the ciphertext, nonce, key or error text.
-                    tracing::warn!(
-                        principal = %slack_principal_id,
-                        "slack mint: the cached access token could not be opened; refreshing",
-                    );
-                }
-            }
+            )?;
+            tx.commit().await?;
+            return Ok(MintOutcome::Token {
+                access_token: token,
+                expires_at,
+            });
         }
     }
 
     // The cached token is gone or stale: spend the RT, then rotate everything the response gave.
-    //
-    // **A refresh token that will not open is `NotVaulted`, not an error.** Rotating
-    // `SLACK_VAULT_ENC_KEY` makes every pre-rotation ciphertext unopenable by design (a tampered
-    // row does too). As an error it was a 500, which the agent can only call transient, so the
-    // user was told to "try again" on every mention, forever. `NotVaulted` is the truth — there
-    // is no usable credential on file — and its remedy works: the refusal carries a re-link URL,
-    // and the re-link's `store_grant` overwrites this row. The row is kept, as on `GrantRejected`
-    // below: deleting would destroy nothing recoverable, but it is also not this path's call, and
-    // disconnect already handles an unopenable row (`take_refresh_token_locked`).
-    let Ok(refresh_token) = decrypt_to_string(
+    let refresh_token = decrypt_to_string(
         key,
         rt_nonce,
         rt_ciphertext,
         &aad(slack_principal_id, FIELD_RT),
-    ) else {
-        // Principal only — never the ciphertext, nonce, key or error text.
-        tracing::warn!(
-            principal = %slack_principal_id,
-            "slack mint: the stored refresh token could not be opened (vault key rotated, or the \
-             row was tampered with); answering not_vaulted so the user is offered a re-link",
-        );
-        return Ok(MintOutcome::Refused(LinkRefusal::NotVaulted));
-    };
+    )?;
     let tokens = match oauth_client::refresh_grant(token_url, client_id, &refresh_token).await? {
         oauth_client::RefreshOutcome::Refreshed(tokens) => tokens,
         oauth_client::RefreshOutcome::GrantRejected => {
@@ -1079,11 +1048,6 @@ mod tests {
     /// ciphertext+nonce into B's row (the exact move a DB-write attacker would make), expire B's
     /// cached AT so mint must decrypt that transplanted RT, and require mint to FAIL CLOSED rather
     /// than hand back A's refresh token under B.
-    ///
-    /// Fail-closed is `Refused(NotVaulted)`: B has no usable credential on file. Asserting that
-    /// exact value is sharper than "some error" was. Had the tag NOT failed, the mint would have
-    /// spent A's RT against the unreachable `token_url` and errored, so an `Err` here would mean
-    /// the AAD binding broke.
     #[sqlx::test(migrations = "../../migrations")]
     async fn mint_rejects_a_transplanted_ciphertext(pool: PgPool) {
         const PRINCIPAL_B: &str = "slack:T0BHAHEN79C:UATTACKER";
@@ -1118,93 +1082,11 @@ mod tests {
 
         let result =
             mint_access_token(&pool, &key(), "http://127.0.0.1:1/unused", "c", PRINCIPAL_B).await;
-        assert_eq!(
-            result.expect("an unopenable grant is a refusal, not an error"),
-            MintOutcome::Refused(LinkRefusal::NotVaulted),
+        assert!(
+            result.is_err(),
             "a ciphertext sealed for principal A must not decrypt under principal B — the AAD \
              binding must fail the tag rather than yield A's refresh token to B",
         );
-    }
-
-    /// **A rotated vault key is `NotVaulted`, not an error.** Rotating `SLACK_VAULT_ENC_KEY` makes
-    /// every pre-rotation ciphertext unopenable. As a 500 the user was told "try again" on every
-    /// mention forever. As `NotVaulted` they are handed a re-link URL whose `store_grant`
-    /// overwrites the row. The row must survive the refusal, so the re-link has something to
-    /// overwrite and disconnect has something to delete.
-    ///
-    /// Why this bites: under the old `?` the mint returns `Err(Internal)`, and `expect` fails. The
-    /// cached AT is still fresh, so this also crosses the AT fall-through: an unopenable cache
-    /// must not error either.
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn a_grant_sealed_under_a_rotated_key_mints_not_vaulted(pool: PgPool) {
-        let profile = insert_profile(&pool).await;
-        store(&pool, profile, PRINCIPAL, "rt", "at", Some(3600)).await;
-        let rotated = VaultKey::from_base64(&STANDARD.encode([9u8; 32])).unwrap();
-
-        let out = mint_access_token(&pool, &rotated, "http://127.0.0.1:1/unused", "c", PRINCIPAL)
-            .await
-            .expect("an unopenable grant is a refusal, not an error");
-        assert_eq!(out, MintOutcome::Refused(LinkRefusal::NotVaulted));
-
-        let kept: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM kb_slack_grant_vault WHERE slack_principal_id = $1)",
-        )
-        .bind(PRINCIPAL)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert!(
-            kept,
-            "the unopenable row is kept for the re-link to overwrite"
-        );
-    }
-
-    /// **An unopenable CACHED token falls through to a refresh.** The access token is only a
-    /// cache, so if it alone will not open (here: corrupted while the RT is intact), the mint
-    /// refreshes as if it had expired and still returns a token.
-    ///
-    /// Why this bites: the old `?` on the cached decrypt returns `Err` before any refresh, and the
-    /// new RT arm would wrongly answer `NotVaulted` if the fall-through reached it with a bad RT.
-    /// Only a mint that skips the bad cache AND opens the RT reaches the stub and gets `token`.
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn an_unopenable_cached_token_falls_through_to_a_refresh(pool: PgPool) {
-        use wiremock::matchers::{body_string_contains, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let profile = insert_profile(&pool).await;
-        store(&pool, profile, PRINCIPAL, "rt", "at", Some(3600)).await;
-        sqlx::query("UPDATE kb_slack_grant_vault SET at_ciphertext = 'garbage'::bytea WHERE slack_principal_id = $1")
-            .bind(PRINCIPAL)
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        let idp = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/oauth/token"))
-            .and(body_string_contains("refresh_token=rt"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "access_token": "refreshed-at",
-                "token_type": "Bearer",
-                "expires_in": 3600
-            })))
-            .expect(1)
-            .mount(&idp)
-            .await;
-
-        let out = mint_access_token(
-            &pool,
-            &key(),
-            &format!("{}/oauth/token", idp.uri()),
-            "c",
-            PRINCIPAL,
-        )
-        .await
-        .expect("a bad cache is not an error");
-        match out {
-            MintOutcome::Token { access_token, .. } => assert_eq!(access_token, "refreshed-at"),
-            other => panic!("expected a refreshed token, got {other:?}"),
-        }
     }
 
     /// Re-storing the same principal upserts to ONE row and clears a prior revocation — a fresh

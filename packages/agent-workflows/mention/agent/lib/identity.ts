@@ -128,8 +128,7 @@ export function unlinkedPrompt(authorizeUrl: string): string {
  * the common case — the stored credential EXPIRED. When the identity provider refuses the stored
  * grant as `invalid_grant` (aged past the refresh-token lifetime after a long gap between mentions,
  * rotated out, or revoked), temper answers `not_vaulted` rather than an error this agent could only
- * call transient (`mint_access_token`, `slack_grant_vault_service.rs`). So does a stored grant
- * temper can no longer decrypt, e.g. after its vault key is rotated.
+ * call transient (`mint_access_token`, `slack_grant_vault_service.rs`).
  * Their access is fine — the credential is what is missing, which is why this is the one
  * refusal whose remedy the user can carry out alone.
  * The load-bearing sentence is that RETRYING WILL NOT FIX IT — without it the user mentions
