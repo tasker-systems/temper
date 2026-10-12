@@ -304,7 +304,13 @@ export interface RotateRefreshTokenResult {
  * Redeems a refresh token exactly once: atomically marks it revoked (guarded
  * by `revoked_at IS NULL AND expires_at > now()`) and returns its claims plus
  * owning client_id so the caller can mint a new access token and store a
- * successor refresh token. Throws if the token is unknown, already revoked, or expired.
+ * successor refresh token.
+ *
+ * **Answers `null` when the guard matched no row** — the token is unknown, already revoked or
+ * rotated, expired, or on a chain that has reached its absolute end. That is the only outcome the
+ * caller may report as `invalid_grant`, which RFC 6749 §5.2 defines as the grant itself being
+ * dead. Anything that THROWS is the database failing to answer at all, and says nothing about the
+ * grant; reporting it in the same words would tell a client holding a live token to throw it away.
  *
  * **`rotated_at` is set in this statement and not a later one.** It is the mark that says this row
  * was retired BY ROTATION. Rotation is one of FIVE writers of `revoked_at`: three administrative
@@ -321,7 +327,7 @@ export interface RotateRefreshTokenResult {
 export async function rotateRefreshToken(
   db: NeonClient,
   token: string,
-): Promise<RotateRefreshTokenResult> {
+): Promise<RotateRefreshTokenResult | null> {
   const rows = await db`
     UPDATE kb_oauth_refresh_tokens
     SET revoked_at = now(), rotated_at = now()
@@ -341,7 +347,7 @@ export async function rotateRefreshToken(
       }
     | undefined;
   if (!row) {
-    throw new Error("refresh token is unknown, revoked, expired, or its chain has ended");
+    return null;
   }
   return {
     tokenId: row.id,
