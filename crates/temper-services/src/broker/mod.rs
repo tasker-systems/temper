@@ -131,6 +131,23 @@ pub struct VerifiedInbound {
     pub connector_id: String,
     /// The event body, now trusted.
     pub payload: Vec<u8>,
+    /// What identifies this attestation for single use: the lowercase-hex SHA-256 of the bearer as
+    /// presented. A replay presents the same bearer, so it carries the same key; the bearer itself
+    /// is never stored.
+    pub replay_key: String,
+    /// When the attestation stops being accepted (Unix seconds, its signed `exp`). A replay key
+    /// need not be remembered past this.
+    pub expires_at: i64,
+    /// Whether the broker's binding checks refuse, or only report. While `false`, a replayed
+    /// attestation or one issued to another project is logged as a would-be refusal and still
+    /// accepted (`VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING`).
+    pub binding_enforced: bool,
+}
+
+/// The single-use key for an attestation bearer: its lowercase-hex SHA-256.
+pub fn replay_key(bearer: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(bearer.as_bytes()))
 }
 
 /// Why a broker operation failed. Models the actionable cases distinctly — a

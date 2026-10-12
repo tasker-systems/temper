@@ -231,6 +231,7 @@ run.
 | `VERCEL_CONNECT_PROJECT_ID` | The Vercel project ID the broker mints on behalf of | `prj_...` from `vercel project ls` or the project settings page |
 | `VERCEL_CONNECT_TEAM_ID` | Your Vercel team ID | `team_...` from `vercel teams ls` |
 | `VERCEL_CONNECT_TEAM_SLUG` | Your Vercel team slug | from `vercel teams ls` |
+| `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING` | Optional. `true` refuses an inbound attestation issued to another project, or presented a second time. Unset, both are logged as would-be refusals and the webhook still lands | Leave unset at first; see *Enforcing the attestation binding* below |
 
 **Set them on the temper-api Vercel project:**
 
@@ -823,6 +824,19 @@ an input it does not have, so this is a loud failure by design rather than an
 event landing with an empty radius. It means the forwarding path stopped
 carrying a header it previously did; it is not something to work around by
 guessing the event name from the payload.
+
+**Enforcing the attestation binding.** An inbound attestation is valid for twelve hours and
+names the whole Vercel team in `aud`, so two more checks bind it to one receipt for this project:
+its `project_id` must be `VERCEL_CONNECT_PROJECT_ID`, and the same attestation is accepted once
+(temper records a hash of it, never the token, until it expires). With
+`VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING` unset, a failed check logs
+`inbound attestation: would refuse once binding is enforced` with `reason` = `project_mismatch` or
+`replayed`, and the webhook still lands. Let real traffic run for a day or so: if no such line
+appears, set the variable to `true` and redeploy. A `project_mismatch` line means
+`VERCEL_CONNECT_PROJECT_ID` is not the project Connect forwards to. A `replayed` line on ordinary
+traffic means Connect sent one attestation more than once, and enforcing would refuse those
+repeats; investigate before enforcing. Once enforced, both refusals are the same opaque `401` as
+any other, with the reason in the log.
 
 **`401` on `/api/intake/webhook`** — the attestation verified but resolved to no
 live credentialed connection. Either Step 6 has not been completed for this

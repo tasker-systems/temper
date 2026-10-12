@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM kb_inbound_attestations_seen WHERE replay_key = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "95aef602d0a6d5ef800c019b7af91415b057e0c60c865b8c45eb02f6f50c976c"
+}

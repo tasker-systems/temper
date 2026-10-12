@@ -926,3 +926,45 @@ mod tests {
         );
     }
 }
+
+/// Record an inbound attestation as seen, unless it already is. Returns `false` for a repeat.
+///
+/// `replay_key` is [`crate::broker::replay_key`] of the bearer, kept until the attestation's
+/// `expires_at`. Expired rows are deleted in the same statement, judged on `now` — the caller's
+/// clock, the same one that will judge the next presentation's freshness — so the table holds
+/// at most one attestation lifetime of traffic.
+pub async fn claim_attestation(
+    pool: &PgPool,
+    replay_key: &str,
+    expires_at: i64,
+    now: i64,
+) -> ApiResult<bool> {
+    let claimed = sqlx::query_scalar!(
+        r#"WITH pruned AS (
+               DELETE FROM kb_inbound_attestations_seen WHERE expires_at < to_timestamp($3)
+           )
+           INSERT INTO kb_inbound_attestations_seen (replay_key, expires_at)
+           VALUES ($1, to_timestamp($2))
+           ON CONFLICT (replay_key) DO NOTHING
+           RETURNING replay_key"#,
+        replay_key,
+        expires_at as f64,
+        now as f64,
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(claimed.is_some())
+}
+
+/// Forget a claimed attestation, so the receipt it belonged to can be redelivered. Called only
+/// when that receipt failed before temper recorded it: a redelivery of an event temper never
+/// recorded is not a replay.
+pub async fn release_attestation(pool: &PgPool, replay_key: &str) -> ApiResult<()> {
+    sqlx::query!(
+        "DELETE FROM kb_inbound_attestations_seen WHERE replay_key = $1",
+        replay_key
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}

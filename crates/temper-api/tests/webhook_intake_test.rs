@@ -27,6 +27,8 @@ use temper_services::state::JwksKeyStore;
 const INTAKE_PATH: &str = "/api/intake/webhook";
 const TEAM_SLUG: &str = "acme";
 const CONNECTOR_UID: &str = "github/acme-temper";
+/// The receiving project — the one every genuine attestation below names.
+const PROJECT_ID: &str = "prj_test";
 
 /// An Ed25519 keypair for signing test attestations. Same pair `broker::vercel_connect`'s own
 /// tests use — the algorithm differs from production RS256, but `JwksKeyStore::with_static_key`
@@ -41,14 +43,25 @@ const ED_PUB: &str = "-----BEGIN PUBLIC KEY-----\n\
 /// production RS256 + claim gate (issuer, audience, the anti-decoy `client_id`, the signed
 /// `trigger` claim), not a test-only relaxation of it.
 fn real_broker() -> Arc<VercelConnectBroker> {
+    broker_with_binding(false)
+}
+
+/// [`real_broker`] with the attestation binding enforced: a repeated attestation, or one issued to
+/// another project, is refused rather than reported.
+fn enforcing_broker() -> Arc<VercelConnectBroker> {
+    broker_with_binding(true)
+}
+
+fn broker_with_binding(enforce_attestation_binding: bool) -> Arc<VercelConnectBroker> {
     let dec = DecodingKey::from_ed_pem(ED_PUB.as_bytes()).expect("ed pub");
     Arc::new(VercelConnectBroker::with_jwks(
         JwksKeyStore::with_static_key(dec, Algorithm::EdDSA),
         VercelConnectConfig {
             access_token: "unused".into(),
-            project_id: "prj_test".into(),
+            project_id: PROJECT_ID.into(),
             team_id: "team_test".into(),
             team_slug: TEAM_SLUG.into(),
+            enforce_attestation_binding,
         },
     ))
 }
@@ -56,11 +69,19 @@ fn real_broker() -> Arc<VercelConnectBroker> {
 /// A genuine Connect attestation for `CONNECTOR_UID`: the claim set captured from five real
 /// forwards (research `019f62e6`), signed.
 fn attestation(connector_uid: &str) -> String {
+    attestation_issued(connector_uid, PROJECT_ID, 1_750_000_000)
+}
+
+/// An attestation for `connector_uid` issued to `project_id` at `iat` — a second forward is a second
+/// attestation, which differs from the first in `iat` if in nothing else.
+fn attestation_issued(connector_uid: &str, project_id: &str, iat: i64) -> String {
     let claims = serde_json::json!({
         "iss": format!("https://oidc.vercel.com/{TEAM_SLUG}"),
         "aud": format!("https://vercel.com/{TEAM_SLUG}"),
         "sub": format!("owner:{TEAM_SLUG}:project:temper-api:environment:production"),
+        "project_id": project_id,
         "client_id": "api-connex",
+        "iat": iat,
         "exp": 9_999_999_999_i64,
         "trigger": {
             "id": "scl_test",
@@ -329,6 +350,12 @@ async fn a_receipt_performs_no_egress(pool: PgPool) {
 /// Decided 2026-08-19: a redelivery is a **second receipt**, recorded. GitHub redelivers on
 /// non-2xx and offers manual redelivery; suppressing the repeat would mean trusting an unsigned,
 /// unwitnessed `X-GitHub-Delivery` header to decide whether an event exists at all.
+///
+/// This sends one attestation twice, under the default broker, which reports a repeat rather than
+/// refusing it. Whether Connect's own redeliveries carry a fresh attestation is what that report
+/// exists to find out; enforced, a repeat of the same attestation is refused
+/// (`an_enforced_binding_accepts_an_attestation_once`) while a fresh one is still a second receipt
+/// (`an_enforced_binding_still_records_a_freshly_attested_redelivery`).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_redelivery_is_a_second_receipt(pool: PgPool) {
     let (_team, conn) = seed_world(&pool, Some(pr_selector())).await;
@@ -520,4 +547,112 @@ async fn curated_graph_counts(pool: &PgPool) -> (i64, i64, i64) {
         one("SELECT count(*) FROM kb_resource_homes").await,
         one("SELECT count(*) FROM kb_edges").await,
     )
+}
+
+// ── single use and the project binding (enforced) ───────────────────────────
+
+/// Post one PR webhook under `authorization`, with or without the event-name header.
+async fn post_pr(app: &common::TestApp, authorization: &str, event_header: bool) -> StatusCode {
+    let mut req = app
+        .client
+        .post(app.url(INTAKE_PATH))
+        .header("authorization", authorization);
+    if event_header {
+        req = req.header("x-github-event", "pull_request");
+    }
+    req.body(github_pr_payload(GITHUB_REPO).to_string())
+        .send()
+        .await
+        .expect("post webhook")
+        .status()
+}
+
+/// Enforced, an attestation is accepted once: the same attestation again — a capture replayed
+/// with any body — is refused with the uniform 401, and lands nothing.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_enforced_binding_accepts_an_attestation_once(pool: PgPool) {
+    let (_team, conn) = seed_world(&pool, Some(pr_selector())).await;
+    let app =
+        common::setup_test_app_with_state(pool.clone(), |s| s.broker = enforcing_broker()).await;
+    let authz = attestation(CONNECTOR_UID);
+
+    assert_eq!(post_pr(&app, &authz, true).await, StatusCode::ACCEPTED);
+    assert_eq!(
+        post_pr(&app, &authz, true).await,
+        StatusCode::UNAUTHORIZED,
+        "the same attestation again must be refused"
+    );
+    assert_eq!(webhook_event_count(&pool, conn).await, 1);
+}
+
+/// Enforced, a redelivery that arrives under a fresh attestation is still a second receipt — the
+/// 2026-08-19 decision holds for every forward Connect actually attests.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_enforced_binding_still_records_a_freshly_attested_redelivery(pool: PgPool) {
+    let (_team, conn) = seed_world(&pool, Some(pr_selector())).await;
+    let app =
+        common::setup_test_app_with_state(pool.clone(), |s| s.broker = enforcing_broker()).await;
+
+    for iat in [1_750_000_000, 1_750_000_001] {
+        let authz = attestation_issued(CONNECTOR_UID, PROJECT_ID, iat);
+        assert_eq!(post_pr(&app, &authz, true).await, StatusCode::ACCEPTED);
+    }
+    assert_eq!(webhook_event_count(&pool, conn).await, 2);
+}
+
+/// A receipt temper failed to record does not spend its attestation: the redelivery GitHub makes
+/// after the 500 is accepted, not refused as a replay.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_failed_receipt_does_not_spend_its_attestation(pool: PgPool) {
+    let (_team, conn) = seed_world(&pool, Some(pr_selector())).await;
+    let app =
+        common::setup_test_app_with_state(pool.clone(), |s| s.broker = enforcing_broker()).await;
+    let authz = attestation(CONNECTOR_UID);
+
+    assert_eq!(
+        post_pr(&app, &authz, false).await,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert_eq!(
+        post_pr(&app, &authz, true).await,
+        StatusCode::ACCEPTED,
+        "the retry of an unrecorded receipt is not a replay"
+    );
+    assert_eq!(webhook_event_count(&pool, conn).await, 1);
+}
+
+/// Enforced, an attestation Connect issued to a sibling project in the same team is refused with the
+/// same 401 and body as every other refusal, so it is no oracle.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_enforced_binding_refuses_another_projects_attestation(pool: PgPool) {
+    let (_team, conn) = seed_world(&pool, Some(pr_selector())).await;
+    let app =
+        common::setup_test_app_with_state(pool.clone(), |s| s.broker = enforcing_broker()).await;
+    let sibling = attestation_issued(CONNECTOR_UID, "prj_sibling", 1_750_000_000);
+
+    let res = app
+        .client
+        .post(app.url(INTAKE_PATH))
+        .header("authorization", sibling)
+        .header("x-github-event", "pull_request")
+        .body(github_pr_payload(GITHUB_REPO).to_string())
+        .send()
+        .await
+        .expect("post webhook");
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let sibling_body = res.text().await.expect("body");
+    let forged_body = app
+        .client
+        .post(app.url(INTAKE_PATH))
+        .header("authorization", "Bearer not-a-jwt")
+        .header("x-github-event", "pull_request")
+        .body(github_pr_payload(GITHUB_REPO).to_string())
+        .send()
+        .await
+        .expect("post forged")
+        .text()
+        .await
+        .expect("body");
+    assert_eq!(sibling_body, forged_body, "one answer for every refusal");
+    assert_eq!(webhook_event_count(&pool, conn).await, 0);
 }

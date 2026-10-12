@@ -1,0 +1,18 @@
+title    = "An inbound webhook attestation can be bound to this project and accepted once"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "schema"]
+status   = "signal-only"
+body = '''
+`POST /api/intake/webhook` gains two checks on the Vercel Connect attestation, behind a new optional
+env var, `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING`: its `project_id` claim must equal
+`VERCEL_CONNECT_PROJECT_ID`, and the same attestation is accepted once (its SHA-256, never the
+token, is recorded in the new `kb_inbound_attestations_seen` until it expires). Unset, which is the
+default, a failed check is logged as a would-be refusal (`reason` = `project_mismatch` /
+`replayed`) and the webhook lands as before; set to `true`, it is the same opaque 401 as every other
+intake refusal. A receipt that fails after its attestation is recorded releases it, so a redelivery
+of an unrecorded event is not refused. Request and response shapes are unchanged. Who observes:
+operators reading the intake log; with the flag set, a sender replaying an attestation or presenting
+another project's. Release relevance: additive (the table, the env var), behavioral only once an
+operator sets the flag.
+'''

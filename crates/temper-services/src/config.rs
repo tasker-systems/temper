@@ -567,6 +567,8 @@ fn parse_vercel_connect(lookup: impl Fn(&str) -> Option<String>) -> Option<Verce
         project_id: get("VERCEL_CONNECT_PROJECT_ID")?,
         team_id: get("VERCEL_CONNECT_TEAM_ID")?,
         team_slug: get("VERCEL_CONNECT_TEAM_SLUG")?,
+        enforce_attestation_binding: get("VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING")
+            .is_some_and(|v| v == "true" || v == "1"),
     })
 }
 
