@@ -2,7 +2,9 @@
 
 > Shared agent guidance — the source of truth for `AGENTS.md` and `CLAUDE.md`.
 
-All commands use **cargo-make** (install: `cargo install cargo-make`). Rust tests use **cargo-nextest** (install: `cargo install cargo-nextest`).
+All commands use **cargo-make**. Rust tests use **cargo-nextest**. Both are pinned in `mise.toml`
+with the rest of the dev tooling, so `mise install` from the repo root installs them (see
+[environment.md](environment.md#tooling-mise)).
 
 ```bash
 # Quality checks (Rust fmt + clippy + docs + machete, TS typecheck + biome)

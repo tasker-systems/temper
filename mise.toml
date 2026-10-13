@@ -1,0 +1,52 @@
+# Repo-pinned dev tooling. `mise install` from the checkout root installs all of it; bin/setup.sh
+# runs that for you. Setup + shell activation: internal/development/development.md.
+#
+# Deliberately NOT here:
+#   - the Rust toolchain: rustup owns it (CI: dtolnay/rust-toolchain@stable).
+#   - Docker, the dev Postgres, and libpq/psql: Brewfile (macOS) or your package manager.
+#   - onnxruntime: Brewfile locally; CI pins it in .github/actions/install-onnx.
+#   - task orchestration: cargo-make (Makefile.toml). Do not add [tasks] here.
+#   - Ruby: clients/temper-rb/mise.toml pins it for the gem, and mise merges that file in there.
+#
+# Pins are fuzzy on purpose (a major/minor line), except where another file fixes the exact version.
+# A committed mise.lock is what will make installs exact, and cloud agent sessions need one: they
+# cannot resolve versions themselves, because their GitHub API access is scoped to this repo.
+
+[settings]
+# Fuzzy pins resolve only to releases at least a week old. Exact pins and lockfile entries bypass it.
+minimum_release_age = "7d"
+lockfile_platforms = ["linux-x64", "macos-arm64"]
+
+[tools]
+# The repo's own gates (cargo make check → tools/manifest/manifest.py, scripts/*.py) need >= 3.11.
+# 3.12 agrees with clients/temper-py/.python-version, which uv reads in CI.
+python = "3.12"
+uv = "0.12"
+node = "24"   # == setup-node in CI
+bun = "1.4"
+
+# Lint and secret-scan binaries the gates and githooks/pre-commit call.
+shellcheck = "0.11"
+actionlint = "1.7"
+yq = "4"
+gitleaks = "8.30.1"   # == GITLEAKS_VERSION in .github/workflows/secret-scan.yml
+
+# Cargo tooling, from prebuilt release binaries rather than `cargo install`.
+cargo-make = "0.37"
+"aqua:nextest-rs/nextest/cargo-nextest" = "0.9"
+# No prebuilt carries this feature set, so this one compiles from source. Keep the 0.x line equal
+# to the workspace's `sqlx` (Cargo.toml): an unpinned `cargo install sqlx-cli` resolves 0.9.
+"cargo:sqlx-cli" = { version = "0.8", features = "postgres,rustls", default-features = false }
+
+# Code-intelligence (SCIP) indexing.
+#
+# rust-analyzer: a dated upstream release, NOT the rustup component. The rustup component follows the
+# Rust release cadence and lags rust-analyzer's own releases by up to six months. That suits an IDE,
+# but not an indexer: we once ran a months-old build that panicked on a sibling repo (a since-fixed
+# salsa cycle bug), and it nearly got written up as a defect in that repo's dependency graph. Bump the
+# date on purpose.
+rust-analyzer = "2026-10-12"
+# Sourcegraph's scip CLI. The backend is spelled out because the bare name is a trap: Homebrew's
+# `scip` formula is the SCIP Optimization Suite, an unrelated MIP solver. scip-typescript needs no
+# install; it runs as `bunx @sourcegraph/scip-typescript`.
+"github:sourcegraph/scip" = "0.9.0"

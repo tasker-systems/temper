@@ -38,7 +38,9 @@ setup_cargo_tools() {
   log_section "Cargo tools"
 
   install_cargo_tool cargo-make cargo-make --locked
-  install_cargo_tool sqlx        sqlx-cli  --no-default-features --features postgres,rustls
+  # Same version line and features as `cargo:sqlx-cli` in mise.toml: the 0.x line must equal the
+  # workspace's sqlx (0.8), and an unpinned install resolves sqlx-cli 0.9.
+  install_cargo_tool sqlx        sqlx-cli  --version '^0.8' --no-default-features --features postgres,rustls
   install_cargo_tool cargo-nextest cargo-nextest --locked
 }
 

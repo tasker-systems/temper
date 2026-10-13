@@ -12,7 +12,7 @@ reference material lives in `internal/agents/` — read the relevant file before
 | Branch/commit conventions + feature flags | [internal/agents/conventions.md](internal/agents/conventions.md) |
 | Key patterns — the operational invariants you must not break | [internal/agents/key-patterns.md](internal/agents/key-patterns.md) |
 | Code quality rules + SQL query checking | [internal/agents/code-quality.md](internal/agents/code-quality.md) |
-| Environment (Docker Postgres port, DATABASE_URL, pre-commit) + cloud agents | [internal/agents/environment.md](internal/agents/environment.md) |
+| Environment (Docker Postgres port, DATABASE_URL, pre-commit), tooling via mise + cloud agents | [internal/agents/environment.md](internal/agents/environment.md) |
 
 ## The temper workflow
 
