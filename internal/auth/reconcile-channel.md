@@ -34,10 +34,9 @@ front of the API changes nothing. Three properties:
 | `X-Temper-Nonce` | 32 lowercase hex characters of fresh randomness |
 | `X-Temper-Signature-V2` | lowercase-hex v2 signature (above) |
 
-The AS also still sends `X-Temper-Signature`, the original `"{timestamp}.{body}"` construction,
-which bound neither door nor occasion. The API ignores it: it is there only for a verifier that
-predates v2, and a verifier that accepted it would reopen both gaps to anyone who stripped the v2
-headers from a capture. Removing it from the signers is the last step of the cutover.
+These three are the whole credential. The original `"{timestamp}.{body}"` construction, sent as
+`X-Temper-Signature`, bound neither door nor occasion; no signer sends it and the API does not
+read it, so a request carrying only it is refused as `missing_headers`.
 
 Every refusal answers the same 401 on the wire; the log line carries a bounded `reason`
 (`stale`, `malformed_nonce`, `signature_mismatch`, `cross_door`, `replayed`, `missing_headers`,

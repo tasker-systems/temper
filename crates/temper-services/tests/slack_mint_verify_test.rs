@@ -5,6 +5,8 @@
 //! suppression, and `.github/codeql/codeql-config.yml` excludes `crates/*/tests/**` for this case.
 //! None of these reach a database.
 
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use sqlx::PgPool;
 use temper_core::internal_sig::{self, DOOR_SLACK_MINT};
 use temper_services::error::ApiError;
@@ -37,6 +39,15 @@ fn signed(secret: &str, timestamp: i64, body: &[u8]) -> String {
         NONCE,
         body,
     )
+}
+
+/// The retired `"{timestamp}.{body}"` construction (`X-Temper-Signature`), built here because
+/// nothing in `src/` signs it any more. It exists only so a test can show it is refused.
+fn sign_v1(secret: &[u8], timestamp: i64, body: &[u8]) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC accepts any key length");
+    mac.update(format!("{timestamp}.").as_bytes());
+    mac.update(body);
+    hex::encode(mac.finalize().into_bytes())
 }
 
 fn body_for(principal: &str) -> Vec<u8> {
@@ -97,7 +108,7 @@ async fn a_stale_timestamp_is_refused() {
 #[tokio::test]
 async fn the_original_construction_is_refused() {
     let body = body_for(PRINCIPAL);
-    let sig = internal_sig::sign(MINT_SECRET.as_bytes(), NOW, &body);
+    let sig = sign_v1(MINT_SECRET.as_bytes(), NOW, &body);
     let err = verify_mint_request(
         &unreachable_pool(),
         MINT_SECRET,

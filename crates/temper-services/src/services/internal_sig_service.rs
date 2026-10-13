@@ -5,9 +5,8 @@
 //! the mint's sealed constructor ([`super::slack_mint_service::verify_mint_request`]) call
 //! [`accept_once`], so no gate can verify a signature without also spending its nonce.
 //!
-//! Only the v2 construction is read. The original `X-Temper-Signature` is ignored here even though
-//! signers still send it: a verifier that accepted either would leave the original's gaps open to
-//! anyone who strips the v2 headers from a capture.
+//! Only the v2 construction is read. The retired `"{timestamp}.{body}"` construction is not sent by
+//! any signer, and a signature in it is refused here as a mismatch.
 //!
 //! Checks, in order, each before anything costlier: a fresh timestamp, a well-formed nonce, the MAC
 //! over this method and door, then the nonce claim. The claim comes last so that only a request

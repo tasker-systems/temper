@@ -7,7 +7,13 @@ import type { NeonClient } from "../../../src/db.js";
 import { handleAuthorize, handleSamlAcs, handleToken } from "../../../src/oauth/endpoints.js";
 import { getPublicJwks } from "../../../src/oauth/keys.js";
 import { hashToken } from "../../../src/oauth/mint.js";
-import { SIGNATURE_HEADER, signReconcile, TIMESTAMP_HEADER } from "../../../src/oauth/reconcile.js";
+import {
+  NONCE_HEADER,
+  RECONCILE_DOOR,
+  SIGNATURE_V2_HEADER,
+  signRequestV2,
+  TIMESTAMP_HEADER,
+} from "../../../src/oauth/reconcile.js";
 import { loadIdpFixtureCert, makeSignedSamlResponse } from "../../../test-fixtures/saml.js";
 import { makeTestDb, truncateOauthTables } from "../helpers/oauth-db.js";
 
@@ -322,7 +328,9 @@ describe("e2e: full mock-IdP SAML login", () => {
       body: unknown;
       rawBody: string;
       timestamp: string | null;
+      nonce: string | null;
       signature: string | null;
+      v1Signature: string | null;
     }> = [];
     vi.stubGlobal(
       "fetch",
@@ -334,7 +342,9 @@ describe("e2e: full mock-IdP SAML login", () => {
           body: JSON.parse(rawBody),
           rawBody,
           timestamp: headers.get(TIMESTAMP_HEADER),
-          signature: headers.get(SIGNATURE_HEADER),
+          nonce: headers.get(NONCE_HEADER),
+          signature: headers.get(SIGNATURE_V2_HEADER),
+          v1Signature: headers.get("X-Temper-Signature"),
         });
         return new Response(null, { status: 204 });
       }),
@@ -383,14 +393,17 @@ describe("e2e: full mock-IdP SAML login", () => {
         new URL(acsRes.headers.get("location") as string).searchParams.get("code"),
       ).toBeTruthy();
 
-      // the reconcile POST fired with the asserted groups and a valid HMAC signature
+      // the reconcile POST fired with the asserted groups and a valid v2 signature
       expect(reconcileCalls).toHaveLength(1);
       const call = reconcileCalls[0];
       expect(call.url).toBe("https://api.internal/internal/saml/reconcile");
       // The secret never travels the wire; a fresh signature over the body does.
       const timestamp = Number(call.timestamp);
       expect(Number.isInteger(timestamp)).toBe(true);
-      expect(call.signature).toBe(signReconcile("s3cr3t", timestamp, call.rawBody));
+      expect(call.signature).toBe(
+        signRequestV2("s3cr3t", "POST", RECONCILE_DOOR, timestamp, call.nonce ?? "", call.rawBody),
+      );
+      expect(call.v1Signature).toBeNull();
       expect(call.body).toMatchObject({
         idp_key: "test",
         external_user_id: "grp-user-1",
@@ -429,7 +442,7 @@ describe("e2e: full mock-IdP SAML login", () => {
         resolveCalls.push({
           url,
           rawBody: init.body as string,
-          signature: headers.get(SIGNATURE_HEADER),
+          signature: headers.get(SIGNATURE_V2_HEADER),
         });
         return new Response(JSON.stringify({ profile_id: profileId }), {
           status: 200,

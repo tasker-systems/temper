@@ -5,7 +5,6 @@ import {
   RECONCILE_DOOR,
   RESOLVE_DOOR,
   type ReconcileRequest,
-  signReconcile,
   signRequestV2,
 } from "../../src/oauth/reconcile.js";
 import { RECONCILE_CHANNEL } from "../../src/oauth/reconcile-health.js";
@@ -180,18 +179,13 @@ describe("ResolvePrincipalRequest wire contract (mirrors Rust temper_core::types
 });
 
 describe("internal reconcile signature (mirrors Rust temper_core::internal_sig)", () => {
-  // Shared known-answer vector. The identical inputs and expected signature are asserted
-  // on the Rust side in crates/temper-core/src/internal_sig.rs, so the TS signer and the
-  // Rust verifier cannot drift on the HMAC construction.
+  // Shared known-answer inputs. The identical inputs and expected signature are asserted on the
+  // Rust side in crates/temper-core/tests/internal_sig_v2.rs, so the TS signer and the Rust
+  // verifier cannot drift on the HMAC construction.
   const KAT_SECRET = "topsecret-abcdefghijklmnopqrstuvwxyz012345";
   const KAT_TIMESTAMP = 1_750_000_000;
   const KAT_BODY =
     '{"provider":"saml:acme","external_user_id":"nid-1","email":"a@corp.io","email_verified":true,"idp_key":"acme","groups":["engineering"]}';
-  const KAT_SIG = "41eed1973f8f2e35fa65ff4e300f076fa08c206ca6c51434bae7d8a0c827d485";
-
-  it("produces the shared known-answer signature", () => {
-    expect(signReconcile(KAT_SECRET, KAT_TIMESTAMP, KAT_BODY)).toBe(KAT_SIG);
-  });
 
   // FAILS IF: a door drifts from the route temper-api registers (`internal_sig::DOORS`). Resolve
   // is not covered by the vector below, and the signer tests compare against these constants.

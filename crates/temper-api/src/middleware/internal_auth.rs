@@ -11,9 +11,8 @@
 //! once, because its nonce is recorded (`internal_sig_service`). The construction + the shared
 //! known-answer vector live in `temper_core::internal_sig`.
 //!
-//! The original `X-Temper-Signature` header is ignored. Signers still send it, for verifiers that
-//! predate v2, but a verifier that accepted it would reopen the replay and cross-door gaps to anyone
-//! who stripped the v2 headers from a capture.
+//! Only the v2 headers are read. The retired `X-Temper-Signature` header is neither sent by any
+//! signer nor read here; a request carrying only it is refused like any unsigned one.
 //!
 //! Fail-closed: if a given gate's secret is unset, that endpoint is disabled and every
 //! request to it is rejected.

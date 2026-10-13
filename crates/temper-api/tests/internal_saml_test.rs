@@ -10,11 +10,12 @@ mod common;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
+use hmac::{Hmac, Mac};
 use reqwest::RequestBuilder;
+use sha2::Sha256;
 use sqlx::PgPool;
 use temper_core::internal_sig::{
-    sign, v2_headers, DOORS, DOOR_PRINCIPAL_RESOLVE, DOOR_SAML_RECONCILE, SIGNATURE_HEADER,
-    TIMESTAMP_HEADER,
+    v2_headers, DOORS, DOOR_PRINCIPAL_RESOLVE, DOOR_SAML_RECONCILE, TIMESTAMP_HEADER,
 };
 use temper_core::types::ReconcileRequest;
 use uuid::Uuid;
@@ -24,6 +25,15 @@ fn now_secs() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64
+}
+
+/// The retired `"{timestamp}.{body}"` construction (`X-Temper-Signature`), built here because
+/// nothing in `src/` signs it any more. It exists only so a test can show it is refused.
+fn sign_v1(secret: &[u8], timestamp: i64, body: &[u8]) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC accepts any key length");
+    mac.update(format!("{timestamp}.").as_bytes());
+    mac.update(body);
+    hex::encode(mac.finalize().into_bytes())
 }
 
 /// A fresh v2 nonce, as the AS's `randomBytes(16)` would make one.
@@ -408,8 +418,8 @@ async fn reconcile_endpoint_refuses_the_original_construction(pool: PgPool) {
         .header("content-type", "application/json")
         .header(TIMESTAMP_HEADER, timestamp.to_string())
         .header(
-            SIGNATURE_HEADER,
-            sign("s3cr3t".as_bytes(), timestamp, body.as_bytes()),
+            "X-Temper-Signature",
+            sign_v1("s3cr3t".as_bytes(), timestamp, body.as_bytes()),
         )
         .body(body);
     assert_rejected_and_no_provisioning(&pool, builder).await;
