@@ -307,7 +307,7 @@ module Temper::Generated
     end
 
     # Revoke a machine client
-    # Revokes a machine client so its credential no longer authenticates, and revokes the agent profile's standing if it was approved. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+    # Revokes a machine client so its credential no longer authenticates. When a system admin revokes the agent profile's last live credential, its standing is revoked too if it was approved; while another credential on the profile is still live, or when a team owner revokes, standing is left as an admin set it. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
     # @param id [String] Machine client ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -318,7 +318,7 @@ module Temper::Generated
     end
 
     # Revoke a machine client
-    # Revokes a machine client so its credential no longer authenticates, and revokes the agent profile&#39;s standing if it was approved. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine&#39;s owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+    # Revokes a machine client so its credential no longer authenticates. When a system admin revokes the agent profile&#39;s last live credential, its standing is revoked too if it was approved; while another credential on the profile is still live, or when a team owner revokes, standing is left as an admin set it. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine&#39;s owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
     # @param id [String] Machine client ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

@@ -243,6 +243,8 @@ export async function handleClientRegistration(req: Request, db: NeonClient): Pr
     );
   }
 
+  // `conn_` is reserved on the Rust side too (`MINTED_CLIENT_ID_PREFIXES`, auth/secret.rs): a
+  // machine may not be registered under it. Change the two together.
   const clientId = `conn_${newOpaqueToken().slice(0, 16)}`;
   const clientSecret = newOpaqueToken();
 

@@ -2367,7 +2367,7 @@ export interface paths {
         post?: never;
         /**
          * Revoke a machine client
-         * @description Revokes a machine client so its credential no longer authenticates, and revokes the agent profile's standing if it was approved. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+         * @description Revokes a machine client so its credential no longer authenticates. When a system admin revokes the agent profile's last live credential, its standing is revoked too if it was approved; while another credential on the profile is still live, or when a team owner revokes, standing is left as an admin set it. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         delete: operations["revoke_machine_client"];
         options?: never;
@@ -17122,7 +17122,7 @@ export interface operations {
                     "application/json": components["schemas"]["MachineClient"];
                 };
             };
-            /** @description Unknown team role in `teams` */
+            /** @description Unknown team role in `teams`, or a `client_id` beginning `conn_` or `tmpr_` (namespaces temper mints itself, which cannot be registered by hand) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -17348,7 +17348,7 @@ export interface operations {
                     "application/json": components["schemas"]["MachineClient"];
                 };
             };
-            /** @description The source client cannot be rebound (e.g. already revoked) */
+            /** @description The source client cannot be rebound (e.g. already revoked), or the new `client_id` begins `conn_` or `tmpr_` (namespaces temper mints itself) */
             400: {
                 headers: {
                     [name: string]: unknown;

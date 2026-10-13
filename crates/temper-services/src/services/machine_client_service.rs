@@ -12,12 +12,12 @@ use uuid::Uuid;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::machine::MachineClient;
 
-use temper_principal::{Act, ActorAuthority, Standing};
+use temper_principal::Standing;
 
 use crate::auth::HumanPrincipal;
 use crate::authz::{MachineClientControlAuthority, Principal};
 use crate::error::{ApiError, ApiResult};
-use crate::services::standing_service::{self, ApplyStandingParams};
+use crate::services::{access_service, standing_service};
 
 /// The refusal for a machine client the caller cannot see — absent, or present but outside the
 /// caller's authority. One sentence for both, on purpose: `get` renders it for a missing row and
@@ -190,14 +190,30 @@ pub async fn list(
     Ok(rows)
 }
 
-/// Mark a client dead. Idempotent in effect but not in record: a second revoke of an
-/// already-revoked row is a no-op that returns the existing row (the first revoker and
-/// first timestamp are the truth). Grants and memberships are deliberately untouched (D11).
+/// Mark a client dead. Grants and memberships are deliberately untouched (D11). A second revoke
+/// of an already-revoked row leaves the row as it was (the first revoker and first timestamp are
+/// the truth), but an admin's second revoke still runs the standing arm below: an admin can finish
+/// what an owner's revoke left.
+///
+/// **What it does to standing depends on who asks.**
+///
+/// - A system admin's revoke of a profile's **last** live credential also revokes the machine's
+///   standing (D17: one revocation fact, not two that can drift). While another credential on the
+///   profile is still live (the overlap window `rebind` opens with `keep_old_active`), standing is
+///   left alone: the machine is still admitted through that one, and revoking standing would cut
+///   it off too.
+/// - A team owner's revoke kills the login credential only (ruled 2026-10-09: "revoking a
+///   credential revokes the login credential only"). `Act::Revoke` on standing is an admin act,
+///   and an owner holds no [`SystemAdmin`](crate::auth::SystemAdmin) proof to perform it with.
+///   Standing stays as an admin set it, and admits nothing once no live credential remains: a
+///   revoked row never authenticates.
 pub async fn revoke(pool: &PgPool, id: Uuid, authed: &HumanPrincipal) -> ApiResult<MachineClient> {
     let revoker = ProfileId::from(authed.profile().id);
     // Auth before writes, keyed on the existing row's owning team (B2 D5).
     authorize_control(pool, authed, id).await?;
     let existing = get(pool, id).await?;
+    // `Some` only for a system admin. Holding the proof is what lets the standing arm below run.
+    let admin = Principal::Human(authed).system_admin(pool).await?;
 
     sqlx::query!(
         r#"UPDATE kb_machine_clients
@@ -209,35 +225,47 @@ pub async fn revoke(pool: &PgPool, id: Uuid, authed: &HumanPrincipal) -> ApiResu
     .execute(pool)
     .await?;
 
-    // D17 — one revocation fact, not two that can drift. `revoked_at` is an AUTHENTICATION detail (a
-    // revoked credential is rejected at profile resolution and never reaches admission); standing is
-    // the ADMISSION fact. If they disagree an audit reads badly — "credential dead" on one axis,
-    // "admitted" on the other — so a credential revocation also revokes standing.
+    // D17 — for an admin, one revocation fact, not two that can drift. `revoked_at` is an
+    // AUTHENTICATION detail (a revoked credential is rejected at profile resolution and never
+    // reaches admission); standing is the ADMISSION fact, and it belongs to the profile, which a
+    // second live credential may still be using.
     //
     // Load-first, not fire-and-swallow: Revoke is legal ONLY from `Approved` (transition.rs), and a
     // machine is born `Denied` (D11) and may never have been approved. Firing unconditionally would
     // fail the credential revocation on that illegal cell — but the credential is what the operator
-    // asked to kill, and it must succeed regardless. Routing through `standing_service::apply` (rather
-    // than an inlined committer) also means this inherits Task 15's demotion hook and Task 17's typed
-    // refusal once they land. Grants and memberships are deliberately left intact (D11): Revoke denies
-    // ADMISSION, which sits above them, so a later rebind still cannot silently resurrect them.
-    let subject = ProfileId::from(existing.profile_id);
-    if standing_service::load(pool, subject).await? == Some(Standing::Approved) {
-        standing_service::apply(
-            pool,
-            ApplyStandingParams {
+    // asked to kill, and it must succeed regardless. Routing through `access_service::admin_revoke`
+    // means the act carries the admin's own proof, and `standing_service::apply` brings the demotion
+    // hook and the typed refusal with it. Grants and memberships are deliberately left intact (D11):
+    // Revoke denies ADMISSION, which sits above them, so a later rebind still cannot silently
+    // resurrect them.
+    if let Some(admin) = admin {
+        let subject = ProfileId::from(existing.profile_id);
+        if !has_live_credential(pool, subject).await?
+            && standing_service::load(pool, subject).await? == Some(Standing::Approved)
+        {
+            access_service::admin_revoke(
+                pool,
+                &admin,
                 subject,
-                act: Act::Revoke {
-                    reason: format!("machine client {} revoked", existing.client_id),
-                },
-                actor: Some(revoker),
-                authority: ActorAuthority::Admin,
-            },
-        )
-        .await?;
+                format!("machine client {} revoked", existing.client_id),
+            )
+            .await?;
+        }
     }
 
     get(pool, id).await
+}
+
+/// Whether any credential on this agent profile is still live.
+async fn has_live_credential(pool: &PgPool, profile: ProfileId) -> ApiResult<bool> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM kb_machine_clients WHERE profile_id = $1 AND revoked_at IS NULL
+           ) AS "live!""#,
+        *profile,
+    )
+    .fetch_one(pool)
+    .await?)
 }
 
 /// The longest a rotated-away secret may remain valid. A rotation window is meant to be brief
@@ -324,6 +352,7 @@ mod tests {
     use sqlx::PgPool;
     use uuid::Uuid;
 
+    use crate::authz::Principal;
     use crate::services::machine_client_service as svc;
     use temper_core::types::ids::ProfileId;
 
@@ -717,10 +746,11 @@ mod tests {
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn revoking_a_credential_also_revokes_standing_but_leaves_grants(pool: PgPool) {
+    async fn an_admins_revoke_also_revokes_standing_but_leaves_grants(pool: PgPool) {
         // D17 — one revocation fact, one place. `revoked_at` becomes purely an authentication
-        // detail; standing tells the admission story; the two cannot drift because a credential
-        // revocation drives both.
+        // detail; standing tells the admission story; the two cannot drift because an admin's
+        // revocation of a machine's last live credential drives both. A team owner's revoke drives
+        // only the credential (`a_team_owners_revoke_kills_the_credential_and_leaves_standing`).
         let f = seed_machine_with_reach(&pool).await;
         crate::test_support::approve(&pool, f.machine_profile).await;
 
@@ -819,6 +849,72 @@ mod tests {
         );
     }
 
+    /// A team the given profile owns. The machine-client control gate keys on the owner of the
+    /// machine's owning team, so this is how a test makes a non-admin a machine's controller.
+    async fn team_owned_by(pool: &PgPool, slug: &str, owner: Uuid) -> Uuid {
+        let team: Uuid =
+            sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
+                .bind(slug)
+                .fetch_one(pool)
+                .await
+                .expect("seed team");
+        sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) \
+             VALUES ($1, $2, 'owner'::team_role)",
+        )
+        .bind(team)
+        .bind(owner)
+        .execute(pool)
+        .await
+        .expect("seed owner");
+        team
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_team_owners_revoke_kills_the_credential_and_leaves_standing(pool: PgPool) {
+        // `Act::Revoke` on standing is an admin act. A team owner controls the credential, not the
+        // admission an admin granted, so their revoke must stop at the credential (ruled
+        // 2026-10-09: revoking a credential revokes the login credential only).
+        let f = seed_machine_with_reach(&pool).await;
+        crate::test_support::approve(&pool, f.machine_profile).await;
+
+        let owner_profile = seed_agent_link(&pool, "revoking-team-owner").await;
+        let team = team_owned_by(&pool, "revoking-owners-team", owner_profile).await;
+        sqlx::query("UPDATE kb_machine_clients SET team_id = $2 WHERE id = $1")
+            .bind(f.machine_id)
+            .bind(team)
+            .execute(&pool)
+            .await
+            .expect("give the machine an owning team");
+        let owner = crate::test_support::human_principal_for(&pool, owner_profile).await;
+        assert!(
+            Principal::Human(&owner)
+                .system_admin(&pool)
+                .await
+                .unwrap()
+                .is_none(),
+            "the revoker must not be an admin, or this test proves nothing"
+        );
+
+        let revoked = svc::revoke(&pool, f.machine_id, &owner)
+            .await
+            .expect("the owner of the machine's team may revoke its credential");
+        assert!(revoked.revoked_at.is_some(), "the credential is dead");
+        assert_eq!(revoked.revoked_by_profile_id, Some(owner_profile));
+
+        let state: String = sqlx::query_scalar!(
+            "SELECT state FROM kb_principal_standing WHERE profile_id = $1",
+            f.machine_profile
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            state, "approved",
+            "a team owner's revoke must not perform the admin-only standing revoke"
+        );
+    }
+
     /// The existence oracle, closed: a caller outside a machine's authority gets the **same** error
     /// for an existing machine client as for a missing id — variant and message — on every per-row
     /// act. A `Forbidden` on any of these would mean the row exists.
@@ -833,26 +929,6 @@ mod tests {
     /// the gate and those rows answer differently from a missing id, which this test then catches.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_denied_machine_client_is_indistinguishable_from_a_missing_one(pool: PgPool) {
-        async fn team_owned_by(pool: &PgPool, slug: &str, owner: Uuid) -> Uuid {
-            let team: Uuid = sqlx::query_scalar(
-                "INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id",
-            )
-            .bind(slug)
-            .fetch_one(pool)
-            .await
-            .expect("seed team");
-            sqlx::query(
-                "INSERT INTO kb_team_members (team_id, profile_id, role) \
-                 VALUES ($1, $2, 'owner'::team_role)",
-            )
-            .bind(team)
-            .bind(owner)
-            .execute(pool)
-            .await
-            .expect("seed owner");
-            team
-        }
-
         let teamless = seed_temper_issued(&pool, "probe-teamless", "s3cret").await;
 
         let owned = seed_temper_issued(&pool, "probe-owned", "s3cret").await;

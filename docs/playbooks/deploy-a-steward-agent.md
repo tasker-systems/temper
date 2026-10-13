@@ -238,8 +238,10 @@ the principal, and the runbook is mint-forward — one deployment, one principal
 4. Verify a full tick under the new credential — `vw_agent_exercise`'s rungs advance on the
    new client — **before** revoking the old client id. A bad swap plus an early revocation
    orphans the agent.
-5. `admin machine revoke` the old client. Revocation denies authentication and nothing else:
-   grants, memberships, and authorship history stay intact.
+5. `admin machine revoke` the old client. Revocation denies that client's authentication;
+   grants, memberships, and authorship history stay intact. The new client is still live, so the
+   agent's standing is untouched too: an admin's revoke revokes standing only with the profile's
+   last live credential.
 
 ### The two issuer variants, side by side
 
