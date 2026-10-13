@@ -173,6 +173,20 @@ fn v2_refuses_malformed_hex_without_panicking() {
     ));
 }
 
+/// The deprecated 0.6.x items still compute exactly what they always did, so a downstream caller
+/// sees no change before their removal in 0.7.0. Nothing in temper calls them.
+#[test]
+#[allow(deprecated)]
+fn the_deprecated_v1_items_are_unchanged_until_removal() {
+    use temper_core::internal_sig::{sign, verify, SIGNATURE_HEADER};
+
+    assert_eq!(SIGNATURE_HEADER, "X-Temper-Signature");
+    assert_eq!(sign(KAT_SECRET, KAT_TIMESTAMP, KAT_BODY), KAT_V1_SIG);
+    assert!(verify(KAT_SECRET, KAT_TIMESTAMP, KAT_BODY, KAT_V1_SIG));
+    assert!(!verify(KAT_SECRET, KAT_TIMESTAMP + 1, KAT_BODY, KAT_V1_SIG));
+    assert!(!verify(KAT_SECRET, KAT_TIMESTAMP, KAT_BODY, "not-hex-zz"));
+}
+
 #[test]
 fn nonce_shape() {
     assert!(nonce_is_well_formed(KAT_V2_NONCE));
