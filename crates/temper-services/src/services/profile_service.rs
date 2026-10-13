@@ -253,10 +253,22 @@ async fn resolve_machine_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiR
         crate::services::machine_client_service::lookup_by_client_id(pool, client_id).await?
     else {
         tracing::warn!(client_id, "machine gate: rejected (unregistered client)");
-        return Err(ApiError::Unauthorized(format!(
-            "machine client '{client_id}' is not registered with this instance. \
-             An administrator must run: temper admin machine provision --client-id {client_id} --label <label>"
-        )));
+        // A client id in a namespace temper mints (a DCR client's `conn_`, say) cannot be
+        // provisioned, so the provision hint would send the operator to a command that refuses it.
+        let minted = crate::auth::secret::MINTED_CLIENT_ID_PREFIXES
+            .iter()
+            .any(|prefix| client_id.starts_with(prefix));
+        return Err(ApiError::Unauthorized(if minted {
+            format!(
+                "machine client '{client_id}' is not registered with this instance, and its id is \
+                 in a namespace temper mints, so it cannot be registered by hand"
+            )
+        } else {
+            format!(
+                "machine client '{client_id}' is not registered with this instance. \
+                 An administrator must run: temper admin machine provision --client-id {client_id} --label <label>"
+            )
+        }));
     };
 
     if let Some(revoked_at) = client.revoked_at {

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM kb_machine_clients WHERE profile_id = $1 AND revoked_at IS NULL\n           ) AS \"live!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "live!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "89af7db6522c7e47055e301fae3d189b0dd5fcbf2f36bd63c0a51ced61c7226f"
+}

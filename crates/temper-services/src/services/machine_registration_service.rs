@@ -152,7 +152,6 @@ pub async fn provision(
     authed: &HumanPrincipal,
     req: &ProvisionMachineRequest,
 ) -> ApiResult<MachineClient> {
-    refuse_minted_namespace(&req.client_id)?;
     let caller = ProfileId::from(authed.profile().id);
     // Auth before writes: a rejected registration must leave the DB completely unchanged —
     // no orphaned agent profile, no partial enrollment. Resolving before the transaction is
@@ -165,6 +164,7 @@ pub async fn provision(
         &req.grants,
     )
     .await?;
+    refuse_minted_namespace(&req.client_id)?;
 
     // Resolve the caller's emitter BEFORE the transaction — matching the auth-before-tx pattern above,
     // and avoiding a nested pool acquire while `tx` is open. Only when there is a grant to author: a
@@ -354,8 +354,10 @@ pub async fn rebind(
     // Auth before writes. Admin-only (see the fn doc): team ownership cannot bound the reach a rebind
     // inherits — which is why this takes a `&SystemAdmin` proof, NOT `machine_authz`. The proof itself
     // IS the check (admin-authz enclosure, spec §3); do not widen it back to a scoped gate.
-    refuse_minted_namespace(&req.client_id)?;
     let old = machine_client_service::get(pool, req.from_machine_client_id).await?;
+
+    // The new client id is the caller's choice, so it may not sit in a namespace temper mints.
+    refuse_minted_namespace(&req.client_id)?;
 
     // A revoked credential is dead; it must be re-created by a fresh `provision`, never
     // resurrected under a new `client_id`. Rebinding one would revive its surviving grants and
@@ -969,6 +971,64 @@ mod tests {
     /// Rebind is system-admin-only (B2). A team owner — who may provision/issue/revoke/rotate
     /// their own team's machines — must NOT be able to rebind, because rebind inherits the old
     /// profile's full reach, which the owner's authority cannot bound.
+    /// Standing belongs to the profile, and a rebind overlap window puts two live credentials on one.
+    /// An admin closing the window by revoking the old credential must not revoke standing, or the
+    /// new credential, the one being kept, stops being admitted. Revoking the last live credential
+    /// still revokes standing (D17).
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn closing_an_overlap_window_keeps_the_surviving_credential_admitted(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let profile = approved_machine(&pool, admin, "window-old").await;
+        let old: Uuid =
+            sqlx::query_scalar("SELECT id FROM kb_machine_clients WHERE client_id = 'window-old'")
+                .fetch_one(&pool)
+                .await
+                .expect("old row");
+
+        let proof = crate::test_support::system_admin_proof_for(&pool, *admin).await;
+        let new = svc::rebind(
+            &pool,
+            &proof,
+            &RebindMachineRequest {
+                client_id: "window-new".to_string(),
+                from_machine_client_id: old,
+                label: "steward".to_string(),
+                keep_old_active: true,
+            },
+        )
+        .await
+        .expect("rebind with an overlap window");
+
+        let human = crate::test_support::human_principal_for(&pool, admin.uuid()).await;
+        let standing = |pool: PgPool| async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT state FROM kb_principal_standing WHERE profile_id = $1",
+            )
+            .bind(profile)
+            .fetch_one(&pool)
+            .await
+            .expect("standing")
+        };
+
+        crate::services::machine_client_service::revoke(&pool, old, &human)
+            .await
+            .expect("an admin revokes the old credential");
+        assert_eq!(
+            standing(pool.clone()).await,
+            "approved",
+            "the surviving credential is still admitted"
+        );
+
+        crate::services::machine_client_service::revoke(&pool, new.id, &human)
+            .await
+            .expect("an admin revokes the last credential");
+        assert_eq!(
+            standing(pool.clone()).await,
+            "revoked",
+            "revoking the last live credential revokes standing"
+        );
+    }
+
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn rebind_is_refused_for_a_non_admin_team_owner(pool: PgPool) {
         let admin = seed_admin(&pool).await;
@@ -1179,6 +1239,66 @@ mod tests {
             source_row.revoked_at.is_none(),
             "a refused rebind left its source live"
         );
+    }
+
+    /// The schema keeps the namespaces apart whatever writes the row
+    /// (`20261029100000_machine_client_id_namespaces`): a DCR client id begins `conn_`, and a machine
+    /// row temper did not issue keeps out of `conn_` and `tmpr_`.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn the_database_keeps_machine_and_dcr_client_ids_apart(pool: PgPool) {
+        fn violates(err: &sqlx::Error, constraint: &str) -> bool {
+            err.as_database_error()
+                .and_then(|d| d.constraint())
+                .is_some_and(|c| c == constraint)
+        }
+
+        let err = sqlx::query(
+            "INSERT INTO kb_oauth_dcr_clients \
+               (client_id, client_secret_hash, grant_types, redirect_uris, token_endpoint_auth_method) \
+             VALUES ('tmpr_not_a_dcr_id', 'h', ARRAY['client_credentials'], ARRAY[]::text[], 'client_secret_basic')",
+        )
+        .execute(&pool)
+        .await
+        .expect_err("a DCR client id outside conn_ is refused");
+        assert!(
+            violates(&err, "kb_oauth_dcr_clients_client_id_namespace"),
+            "{err}"
+        );
+
+        let admin = seed_admin(&pool).await;
+        let source = svc::provision(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
+            &req("schema-source"),
+        )
+        .await
+        .expect("an ordinary client id provisions");
+        for (client_id, issuer, refused) in [
+            ("conn_squatted", "auth0-m2m", true),
+            ("tmpr_squatted", "auth0-m2m", true),
+            ("tmpr_issued_here", "temper", false),
+        ] {
+            let result = sqlx::query(
+                "INSERT INTO kb_machine_clients \
+                   (client_id, issuer, label, profile_id, registered_by_profile_id) \
+                 VALUES ($1, $2, 'probe', $3, $4)",
+            )
+            .bind(client_id)
+            .bind(issuer)
+            .bind(source.profile_id)
+            .bind(*admin)
+            .execute(&pool)
+            .await;
+            match (refused, result) {
+                (true, Err(err)) => assert!(
+                    violates(&err, "kb_machine_clients_client_id_namespace"),
+                    "{client_id} ({issuer}): {err}"
+                ),
+                (true, Ok(_)) => panic!("{client_id} ({issuer}) must be refused"),
+                (false, Err(err)) => panic!("{client_id} ({issuer}) must be admitted: {err}"),
+                (false, Ok(_)) => {}
+            }
+        }
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]

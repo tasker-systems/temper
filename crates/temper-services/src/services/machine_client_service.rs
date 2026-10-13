@@ -190,18 +190,23 @@ pub async fn list(
     Ok(rows)
 }
 
-/// Mark a client dead. Idempotent in effect but not in record: a second revoke of an
-/// already-revoked row is a no-op that returns the existing row (the first revoker and
-/// first timestamp are the truth). Grants and memberships are deliberately untouched (D11).
+/// Mark a client dead. Grants and memberships are deliberately untouched (D11). A second revoke
+/// of an already-revoked row leaves the row as it was (the first revoker and first timestamp are
+/// the truth), but an admin's second revoke still runs the standing arm below: an admin can finish
+/// what an owner's revoke left.
 ///
-/// **What it does to standing depends on who asks.** A system admin's revoke also revokes the
-/// machine's standing (D17: one revocation fact, not two that can drift). A team owner's revoke
-/// kills the login credential only (ruled 2026-10-09: "revoking a credential revokes the login
-/// credential only"). `Act::Revoke` on standing is an admin act, and an owner holds no
-/// [`SystemAdmin`](crate::auth::SystemAdmin) proof to perform it with. An admin admitted their
-/// machine, and a dead credential's leftover `Approved` standing admits nothing: a revoked row
-/// never authenticates. It also leaves alone any second live credential on the same profile (the
-/// overlap window `rebind` opens with `keep_old_active`).
+/// **What it does to standing depends on who asks.**
+///
+/// - A system admin's revoke of a profile's **last** live credential also revokes the machine's
+///   standing (D17: one revocation fact, not two that can drift). While another credential on the
+///   profile is still live (the overlap window `rebind` opens with `keep_old_active`), standing is
+///   left alone: the machine is still admitted through that one, and revoking standing would cut
+///   it off too.
+/// - A team owner's revoke kills the login credential only (ruled 2026-10-09: "revoking a
+///   credential revokes the login credential only"). `Act::Revoke` on standing is an admin act,
+///   and an owner holds no [`SystemAdmin`](crate::auth::SystemAdmin) proof to perform it with.
+///   Standing stays as an admin set it, and admits nothing once no live credential remains: a
+///   revoked row never authenticates.
 pub async fn revoke(pool: &PgPool, id: Uuid, authed: &HumanPrincipal) -> ApiResult<MachineClient> {
     let revoker = ProfileId::from(authed.profile().id);
     // Auth before writes, keyed on the existing row's owning team (B2 D5).
@@ -222,7 +227,8 @@ pub async fn revoke(pool: &PgPool, id: Uuid, authed: &HumanPrincipal) -> ApiResu
 
     // D17 — for an admin, one revocation fact, not two that can drift. `revoked_at` is an
     // AUTHENTICATION detail (a revoked credential is rejected at profile resolution and never
-    // reaches admission); standing is the ADMISSION fact.
+    // reaches admission); standing is the ADMISSION fact, and it belongs to the profile, which a
+    // second live credential may still be using.
     //
     // Load-first, not fire-and-swallow: Revoke is legal ONLY from `Approved` (transition.rs), and a
     // machine is born `Denied` (D11) and may never have been approved. Firing unconditionally would
@@ -234,7 +240,9 @@ pub async fn revoke(pool: &PgPool, id: Uuid, authed: &HumanPrincipal) -> ApiResu
     // resurrect them.
     if let Some(admin) = admin {
         let subject = ProfileId::from(existing.profile_id);
-        if standing_service::load(pool, subject).await? == Some(Standing::Approved) {
+        if !has_live_credential(pool, subject).await?
+            && standing_service::load(pool, subject).await? == Some(Standing::Approved)
+        {
             access_service::admin_revoke(
                 pool,
                 &admin,
@@ -246,6 +254,18 @@ pub async fn revoke(pool: &PgPool, id: Uuid, authed: &HumanPrincipal) -> ApiResu
     }
 
     get(pool, id).await
+}
+
+/// Whether any credential on this agent profile is still live.
+async fn has_live_credential(pool: &PgPool, profile: ProfileId) -> ApiResult<bool> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM kb_machine_clients WHERE profile_id = $1 AND revoked_at IS NULL
+           ) AS "live!""#,
+        *profile,
+    )
+    .fetch_one(pool)
+    .await?)
 }
 
 /// The longest a rotated-away secret may remain valid. A rotation window is meant to be brief
@@ -726,10 +746,11 @@ mod tests {
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn revoking_a_credential_also_revokes_standing_but_leaves_grants(pool: PgPool) {
+    async fn an_admins_revoke_also_revokes_standing_but_leaves_grants(pool: PgPool) {
         // D17 — one revocation fact, one place. `revoked_at` becomes purely an authentication
-        // detail; standing tells the admission story; the two cannot drift because a credential
-        // revocation drives both.
+        // detail; standing tells the admission story; the two cannot drift because an admin's
+        // revocation of a machine's last live credential drives both. A team owner's revoke drives
+        // only the credential (`a_team_owners_revoke_kills_the_credential_and_leaves_standing`).
         let f = seed_machine_with_reach(&pool).await;
         crate::test_support::approve(&pool, f.machine_profile).await;
 

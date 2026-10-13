@@ -40,7 +40,7 @@ use temper_core::types::query_params::MachineClientListQuery as ListQuery;
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "The registered machine client", body = MachineClient),
-        (status = 400, description = "Unknown team role in `teams`", body = ErrorBody),
+        (status = 400, description = "Unknown team role in `teams`, or a `client_id` beginning `conn_` or `tmpr_` (namespaces temper mints itself, which cannot be registered by hand)", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
         (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 409, description = "The `client_id` is already registered", body = ErrorBody),
@@ -70,7 +70,7 @@ pub async fn provision(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "The new machine client, bound to the inherited profile", body = MachineClient),
-        (status = 400, description = "The source client cannot be rebound (e.g. already revoked)", body = ErrorBody),
+        (status = 400, description = "The source client cannot be rebound (e.g. already revoked), or the new `client_id` begins `conn_` or `tmpr_` (namespaces temper mints itself)", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
         (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such machine client", body = ErrorBody),
@@ -147,7 +147,7 @@ pub async fn get(
     delete,
     operation_id = "revoke_machine_client",
     summary = "Revoke a machine client",
-    description = "Revokes a machine client so its credential no longer authenticates, and revokes the agent profile's standing if it was approved. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
+    description = "Revokes a machine client so its credential no longer authenticates. When a system admin revokes the agent profile's last live credential, its standing is revoked too if it was approved; while another credential on the profile is still live, or when a team owner revokes, standing is left as an admin set it. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
     path = "/api/machine-clients/{id}",
     tag = "Machine Clients",
     params(("id" = Uuid, Path, description = "Machine client ID")),

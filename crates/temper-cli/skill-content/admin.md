@@ -73,8 +73,9 @@ who signed in and never requested.
 - **Temper is the issuer** → `admin machine issue`. The secret is printed **once**; a lost one
   is rotated, not recovered: `admin machine rotate-secret` keeps the previous secret valid for
   a grace window so already-issued tokens keep verifying.
-- **Auth must stop** → `admin machine revoke`. It denies authentication **and nothing else** —
-  grants and memberships hang off the profile and survive.
+- **Auth must stop** → `admin machine revoke`. It denies authentication; grants and memberships
+  hang off the profile and survive. A system admin revoking the profile's **last** live credential
+  also revokes its standing; a team owner's revoke never touches standing.
 
 ## Connections — capability is derived, not flagged
 

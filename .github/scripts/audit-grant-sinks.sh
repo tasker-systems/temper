@@ -86,7 +86,7 @@ MIGRATIONS_DIR="${MIGRATIONS_DIR:-migrations}"
 # REVIEWED 2026-07-21 (Principal Admission Task 14) — machine_client_service.rs 0 → 1.
 #   The new hit is a TEST-ONLY seed inside `#[cfg(all(test, feature = "test-db"))] mod tests`
 #   (`seed_machine_with_reach`), which inserts one `can_read`-only grant so
-#   `revoking_a_credential_also_revokes_standing_but_leaves_grants` has reach to prove SURVIVES a
+#   `an_admins_revoke_also_revokes_standing_but_leaves_grants` has reach to prove SURVIVES a
 #   revoke. It is never compiled into the shipped binary, so it is not a production grant path.
 #   AUTHORITY / ATTENUATION: N/A — a fixed read-only fixture row, not reachable by any caller; there
 #   is no capability-bit pass-through and no self-escalation vector. `machine_client_service::revoke`

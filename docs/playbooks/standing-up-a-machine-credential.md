@@ -55,7 +55,10 @@ temper admin access approve <profile_id>
 > rotate to get a new one.
 
 A temper-minted `client_id` is prefixed **`tmpr_`** — you can tell the two
-kinds apart at a glance. The secret is 32 random bytes, base64url-encoded, and
+kinds apart at a glance. `provision` and `rebind` refuse a client id beginning
+`tmpr_` or `conn_` (the prefix temper gives dynamically registered OAuth
+clients): those namespaces are temper's own, and a machine registered under
+one would receive tokens issued to someone else. The secret is 32 random bytes, base64url-encoded, and
 only its SHA-256 hex ever reaches the database. `rotate-secret` is the only
 way to get a fresh plaintext; there is no "show secret".
 
@@ -278,6 +281,14 @@ profile's team memberships and capability grants in place** — so revoking one
 credential does not tear down an agent's reach. If you need to kill an agent's
 *reach*, that is a separate, explicit step: remove its team memberships and
 grants, or deactivate the profile.
+
+What it does to the agent's **standing** depends on who revokes. A system admin
+revoking the profile's last live credential also revokes its standing, so the
+agent is no longer admitted however it next authenticates. A team owner's
+revoke kills the credential only; standing stays as an admin set it, and admits
+nothing while no live credential remains. While a `rebind --no-revoke-old`
+overlap window leaves a second credential live, revoking the first never
+touches standing.
 
 ```bash
 temper admin machine revoke <machine-id>
