@@ -1117,7 +1117,7 @@ mod tests {
         assert_eq!(
             Claim::of_repeat(ATTESTATION_REPEAT_WINDOW_SECS + 1),
             Claim::Replay {
-                age_secs: ATTESTATION_REPEAT_WINDOW_SECS + 1
+                age_secs: Some(ATTESTATION_REPEAT_WINDOW_SECS + 1)
             }
         );
         // An instance whose clock runs behind the first acceptance's sees a negative age.
@@ -1125,7 +1125,7 @@ mod tests {
         assert_eq!(
             Claim::of_repeat(-ATTESTATION_REPEAT_WINDOW_SECS - 1),
             Claim::Replay {
-                age_secs: -ATTESTATION_REPEAT_WINDOW_SECS - 1
+                age_secs: Some(-ATTESTATION_REPEAT_WINDOW_SECS - 1)
             }
         );
     }
@@ -1138,8 +1138,9 @@ enum Claim {
     First,
     /// Seen `age_secs` ago, within [`ATTESTATION_REPEAT_WINDOW_SECS`]: the same burst.
     Burst { age_secs: i64 },
-    /// Seen `age_secs` ago, past the window: presented again.
-    Replay { age_secs: i64 },
+    /// Seen `age_secs` ago, past the window: presented again. `None` when the row the insert
+    /// conflicted on was pruned before it could be read, which only an expired attestation's is.
+    Replay { age_secs: Option<i64> },
 }
 
 impl Claim {
@@ -1150,7 +1151,9 @@ impl Claim {
         if age_secs.unsigned_abs() <= ATTESTATION_REPEAT_WINDOW_SECS as u64 {
             Self::Burst { age_secs }
         } else {
-            Self::Replay { age_secs }
+            Self::Replay {
+                age_secs: Some(age_secs),
+            }
         }
     }
 }
@@ -1196,10 +1199,13 @@ async fn claim_attestation(
         seen.replay_key,
     )
     .fetch_optional(&mut **tx)
-    .await?
-    // The insert conflicted on this row, and only an expired row is ever deleted.
-    .ok_or_else(|| {
-        ApiError::Internal("inbound attestation row vanished after a conflict".into())
-    })?;
-    Ok(Claim::of_repeat(seen.now - first_seen))
+    .await?;
+    // The insert conflicted on this row, and only an expired row is ever deleted: an instance
+    // whose clock runs ahead pruned it in between. Its first acceptance was long ago, so it fails
+    // closed as a replay, the same 401 as every refusal, rather than a 500 Connect would retry.
+    Ok(
+        first_seen.map_or(Claim::Replay { age_secs: None }, |first_seen| {
+            Claim::of_repeat(seen.now - first_seen)
+        }),
+    )
 }

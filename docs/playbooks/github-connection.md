@@ -832,7 +832,10 @@ again only within 10 seconds of its first acceptance (temper records a hash of i
 until it expires). The window exists because Connect sends one attestation for several deliveries
 sent close together: a merge-queue merge's `pull_request` `closed` and `dequeued` arrive under the
 same one, under a second apart. A repeat inside the window logs
-`inbound attestation: repeated within its burst window; recorded` and is never refused. With
+`inbound attestation: repeated within its burst window; recorded` and is never refused. The
+attestation does not cover the body, so inside the window a captured attestation still lands any
+body, as many times as it is presented; the window bounds that exposure to about ten seconds after
+first use, it does not remove it. With
 `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING` unset (the startup log says
 `inbound attestation binding: observing`), a failed check logs
 `inbound attestation: would refuse once binding is enforced` with `reason` = `project_mismatch` or

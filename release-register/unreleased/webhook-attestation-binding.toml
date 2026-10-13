@@ -1,4 +1,4 @@
-title    = "An inbound webhook attestation can be bound to this project and accepted once"
+title    = "An inbound webhook attestation can be bound to this project and to its first ten seconds"
 pr       = "self"
 classes  = ["additive", "behavioral"]
 surfaces = ["http", "schema"]
@@ -6,15 +6,20 @@ status   = "signal-only"
 body = '''
 `POST /api/intake/webhook` gains two checks on the Vercel Connect attestation, behind a new optional
 env var, `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING`: its `project_id` claim must equal
-`VERCEL_CONNECT_PROJECT_ID`, and the same attestation is accepted once (its SHA-256, never the
-token, is recorded in the new `kb_inbound_attestations_seen` until it expires). Unset, which is the
-default, a failed check is logged as a would-be refusal (`reason` = `project_mismatch` /
-`replayed`) and the webhook still lands; set to `true`, it is the same opaque 401 as every other
-intake refusal. Either way each receipt now records its attestation's hash, in the same transaction
-as its event, so a receipt that fails never spends its attestation and of two simultaneous copies
-exactly one is the first. The flag's effective value is logged at startup, and a value that is not
-a recognisable boolean enforces. Request and response shapes are unchanged. Who observes:
-operators reading the intake log; with the flag set, a sender replaying an attestation or presenting
-another project's. Release relevance: additive (the table, the env var), behavioral only once an
+`VERCEL_CONNECT_PROJECT_ID`, and the same attestation is accepted again only within ten seconds of
+its first acceptance (its SHA-256 and that time, never the token, are recorded in the new
+`kb_inbound_attestations_seen` until it expires; migrations 20261027100000 and 20261031100000).
+The window exists because Connect sends one attestation for several distinct deliveries sent close
+together, such as a merge-queue merge's `closed` and `dequeued`: a repeat inside it is logged
+(`repeated within its burst window`) and never refused. The attestation does not cover the body, so
+inside the window a captured attestation still lands any body; after it, a repeat is a replay.
+Unset, which is the default, a failed check is logged as a would-be refusal (`reason` =
+`project_mismatch` / `replayed`, the latter with `age_secs`) and the webhook still lands; set to
+`true`, it is the same opaque 401 as every other intake refusal. Either way each receipt records its
+attestation in the same transaction as its event, so a receipt that fails never records it. The
+flag's effective value is logged at startup, and a value that is not a recognisable boolean
+enforces. Request and response shapes are unchanged. Who observes: operators reading the intake log;
+with the flag set, a sender replaying an attestation after its window or presenting another
+project's. Release relevance: additive (the table, its column, the env var), behavioral only once an
 operator sets the flag.
 '''
