@@ -30,7 +30,8 @@
 //!
 //! The `v2` prefix and header name are kept from the cutover off an earlier `"{timestamp}.{body}"`
 //! construction sent as `X-Temper-Signature`. No signer sends that construction and no verifier
-//! reads it; the tests that prove it is refused build it themselves.
+//! reads it; the tests that prove it is refused build it themselves. Its public items remain below,
+//! deprecated, only so this crate's 0.6.x line keeps its API; they are removed in 0.7.0.
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -169,6 +170,54 @@ pub fn nonce_is_well_formed(nonce: &str) -> bool {
 /// a timestamp near `i64::MIN` away from now would wrap to a "difference" that passes.
 pub fn timestamp_is_fresh(timestamp: i64, now: i64) -> bool {
     now.abs_diff(timestamp) <= MAX_SKEW_SECS as u64
+}
+
+// The retired `"{timestamp}.{body}"` construction. Kept for the 0.6.x line only, so a patch release
+// removes no public item; nothing in temper calls these.
+
+/// Header that carried the retired `"{timestamp}.{body}"` signature.
+#[deprecated(
+    since = "0.6.1",
+    note = "no temper verifier reads X-Temper-Signature; sign with `v2_headers`. Removed in 0.7.0."
+)]
+pub const SIGNATURE_HEADER: &str = "X-Temper-Signature";
+
+/// Feed the retired `"{timestamp}.{body}"` message into a fresh MAC.
+fn mac_message_v1(secret: &[u8], timestamp: i64, body: &[u8]) -> HmacSha256 {
+    // HMAC accepts a key of any length, so this never errors.
+    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
+    mac.update(timestamp.to_string().as_bytes());
+    mac.update(b".");
+    mac.update(body);
+    mac
+}
+
+/// The retired `"{timestamp}.{body}"` signature, lowercase hex. No temper verifier accepts it.
+#[deprecated(
+    since = "0.6.1",
+    note = "no temper verifier accepts this construction; use `sign_v2`. Removed in 0.7.0."
+)]
+pub fn sign(secret: &[u8], timestamp: i64, body: &[u8]) -> String {
+    hex::encode(
+        mac_message_v1(secret, timestamp, body)
+            .finalize()
+            .into_bytes(),
+    )
+}
+
+/// Constant-time check of a retired `"{timestamp}.{body}"` signature. Returns `false` on any
+/// mismatch, including malformed hex. No temper verifier calls it.
+#[deprecated(
+    since = "0.6.1",
+    note = "no temper verifier accepts this construction; use `verify_v2`. Removed in 0.7.0."
+)]
+pub fn verify(secret: &[u8], timestamp: i64, body: &[u8], presented_hex: &str) -> bool {
+    let Ok(presented) = hex::decode(presented_hex) else {
+        return false;
+    };
+    mac_message_v1(secret, timestamp, body)
+        .verify_slice(&presented)
+        .is_ok()
 }
 
 #[cfg(test)]
