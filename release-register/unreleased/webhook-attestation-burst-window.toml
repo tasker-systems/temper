@@ -1,0 +1,19 @@
+title    = "A webhook attestation repeated within ten seconds of its first acceptance is a burst, not a replay"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "schema"]
+status   = "signal-only"
+body = '''
+With `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING=true`, the webhook intake refused any inbound
+attestation presented a second time. Connect sends one attestation for several distinct deliveries
+sent close together (a merge-queue merge's `pull_request` `closed` and `dequeued`, under a second
+apart), so enforcing would have dropped real events. A repeat within ten seconds of the
+attestation's first acceptance is now recorded and logged
+(`inbound attestation: repeated within its burst window`), never refused. A repeat after that is a
+replay: refused once the binding is enforced, and otherwise logged with `reason = replayed`, which now
+also carries `age_secs`. Migration 20261031100000 adds `first_seen_at` to
+`kb_inbound_attestations_seen`, with a default, so the window can be measured. Request and response
+shapes are unchanged, and nothing changes while the variable is unset (the default) except which log
+line a repeat writes. Who observes: an operator who sets the variable, or who counts `replayed` log
+lines before setting it. Release relevance: additive (the column), behavioral (the window).
+'''

@@ -43,26 +43,16 @@ const ED_PUB: &str = "-----BEGIN PUBLIC KEY-----\n\
 /// production RS256 + claim gate (issuer, audience, the anti-decoy `client_id`, the signed
 /// `trigger` claim), not a test-only relaxation of it.
 fn real_broker() -> Arc<VercelConnectBroker> {
-    broker_with(false, false)
+    broker_with_binding(false)
 }
 
-/// [`real_broker`] with both checks enforced: a repeated attestation, or one issued to another
-/// project, is refused rather than reported. A deployment cannot configure single use (see
-/// `VercelConnectConfig::enforce_single_use`); this broker keeps that mechanism witnessed.
+/// [`real_broker`] with the attestation binding enforced: a repeated attestation, or one issued to
+/// another project, is refused rather than reported.
 fn enforcing_broker() -> Arc<VercelConnectBroker> {
-    broker_with(true, true)
+    broker_with_binding(true)
 }
 
-/// [`real_broker`] as `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING=true` configures it: the project
-/// binding refuses, a repeat is only reported.
-fn deployed_enforcing_broker() -> Arc<VercelConnectBroker> {
-    broker_with(true, false)
-}
-
-fn broker_with(
-    enforce_project_binding: bool,
-    enforce_single_use: bool,
-) -> Arc<VercelConnectBroker> {
+fn broker_with_binding(enforce_attestation_binding: bool) -> Arc<VercelConnectBroker> {
     let dec = DecodingKey::from_ed_pem(ED_PUB.as_bytes()).expect("ed pub");
     Arc::new(VercelConnectBroker::with_jwks(
         JwksKeyStore::with_static_key(dec, Algorithm::EdDSA),
@@ -71,8 +61,7 @@ fn broker_with(
             project_id: PROJECT_ID.into(),
             team_id: "team_test".into(),
             team_slug: TEAM_SLUG.into(),
-            enforce_project_binding,
-            enforce_single_use,
+            enforce_attestation_binding,
         },
     ))
 }
@@ -368,9 +357,10 @@ async fn a_receipt_performs_no_egress(pool: PgPool) {
 /// unwitnessed `X-GitHub-Delivery` header to decide whether an event exists at all.
 ///
 /// This sends one attestation twice, under the default broker, which reports a repeat rather than
-/// refusing it. A deployment that enforces the binding still records the repeat
-/// (`the_deployed_binding_refuses_another_projects_attestation_and_records_a_repeat`): Connect sends
-/// one attestation for every delivery in a burst.
+/// refusing it. Enforced, a repeat inside its burst window still lands while one after it is
+/// refused (`an_enforced_binding_lands_a_burst_and_refuses_a_later_replay`), and a fresh
+/// attestation is always a second receipt
+/// (`an_enforced_binding_still_records_a_freshly_attested_redelivery`).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_redelivery_is_a_second_receipt(pool: PgPool) {
     let (_team, conn) = seed_world(&pool, Some(pr_selector())).await;
@@ -564,40 +554,7 @@ async fn curated_graph_counts(pool: &PgPool) -> (i64, i64, i64) {
     )
 }
 
-// ── the binding as a deployment enforces it ─────────────────────────────────
-
-/// What `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING=true` does: an attestation issued to another
-/// project is refused, and the same attestation presented again is recorded as a second receipt.
-/// Connect sends a merge-queue merge's `pull_request` `closed` and `dequeued` under one
-/// attestation — distinct events with distinct bodies — so refusing the repeat would drop every
-/// `dequeued` (task `01a12e27`).
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn the_deployed_binding_refuses_another_projects_attestation_and_records_a_repeat(
-    pool: PgPool,
-) {
-    let (_team, conn) = seed_world(&pool, Some(pr_selector())).await;
-    let app =
-        common::setup_test_app_with_state(pool.clone(), |s| s.broker = deployed_enforcing_broker())
-            .await;
-
-    let sibling = attestation_issued(CONNECTOR_UID, "prj_sibling", 1_750_000_000);
-    assert_eq!(
-        post_pr(&app, &sibling, true).await,
-        StatusCode::UNAUTHORIZED,
-        "another project's attestation is refused"
-    );
-
-    let authz = attestation(CONNECTOR_UID);
-    assert_eq!(post_pr(&app, &authz, true).await, StatusCode::ACCEPTED);
-    assert_eq!(
-        post_pr(&app, &authz, true).await,
-        StatusCode::ACCEPTED,
-        "a repeated attestation is reported, not refused"
-    );
-    assert_eq!(webhook_event_count(&pool, conn).await, 2);
-}
-
-// ── single use and the project binding (both enforced; single use is code-only) ──
+// ── single use and the project binding (enforced) ───────────────────────────
 
 /// Post one PR webhook under `authorization`, with or without the event-name header.
 async fn post_pr(app: &common::TestApp, authorization: &str, event_header: bool) -> StatusCode {
@@ -615,10 +572,23 @@ async fn post_pr(app: &common::TestApp, authorization: &str, event_header: bool)
         .status()
 }
 
-/// Enforced, an attestation is accepted once: the same attestation again — a capture replayed
-/// with any body — is refused with the uniform 401, and lands nothing.
+/// Move every recorded attestation's first acceptance a minute into the past, past the burst
+/// window, as if the receipts that recorded them had arrived then.
+async fn age_recorded_attestations(pool: &PgPool) {
+    sqlx::query(
+        "UPDATE kb_inbound_attestations_seen SET first_seen_at = first_seen_at - interval '1 minute'",
+    )
+    .execute(pool)
+    .await
+    .expect("age attestations");
+}
+
+/// Enforced, the same attestation again straight away is one of Connect's bursts (a queue merge's
+/// `closed` and `dequeued`, distinct events under one attestation) and lands. Presented after the
+/// burst window, it is a capture replayed with any body: refused with the uniform 401, landing
+/// nothing.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn an_enforced_binding_accepts_an_attestation_once(pool: PgPool) {
+async fn an_enforced_binding_lands_a_burst_and_refuses_a_later_replay(pool: PgPool) {
     let (_team, conn) = seed_world(&pool, Some(pr_selector())).await;
     let app =
         common::setup_test_app_with_state(pool.clone(), |s| s.broker = enforcing_broker()).await;
@@ -627,10 +597,16 @@ async fn an_enforced_binding_accepts_an_attestation_once(pool: PgPool) {
     assert_eq!(post_pr(&app, &authz, true).await, StatusCode::ACCEPTED);
     assert_eq!(
         post_pr(&app, &authz, true).await,
-        StatusCode::UNAUTHORIZED,
-        "the same attestation again must be refused"
+        StatusCode::ACCEPTED,
+        "a repeat inside the burst window lands"
     );
-    assert_eq!(webhook_event_count(&pool, conn).await, 1);
+    age_recorded_attestations(&pool).await;
+    assert_eq!(
+        post_pr(&app, &authz, true).await,
+        StatusCode::UNAUTHORIZED,
+        "the same attestation after the window must be refused"
+    );
+    assert_eq!(webhook_event_count(&pool, conn).await, 2);
 }
 
 /// Enforced, a redelivery that arrives under a fresh attestation is still a second receipt — the
@@ -707,7 +683,8 @@ async fn an_enforced_binding_refuses_another_projects_attestation(pool: PgPool) 
 
 /// An attestation still verifies for the verifier's clock-skew leeway past its `exp`, so it must be
 /// remembered at least that long. Here one already past `exp` — accepted on leeway — is presented,
-/// another receipt's claim runs the prune, and the first is presented again: still refused.
+/// another receipt's claim runs the prune, and the first is presented again after its burst
+/// window: still refused.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn an_enforced_binding_remembers_an_attestation_through_its_leeway(pool: PgPool) {
     let (_team, conn) = seed_world(&pool, Some(pr_selector())).await;
@@ -726,6 +703,7 @@ async fn an_enforced_binding_remembers_an_attestation_through_its_leeway(pool: P
     );
     let other = attestation_issued(CONNECTOR_UID, PROJECT_ID, now);
     assert_eq!(post_pr(&app, &other, true).await, StatusCode::ACCEPTED);
+    age_recorded_attestations(&pool).await;
     assert_eq!(
         post_pr(&app, &expired_on_leeway, true).await,
         StatusCode::UNAUTHORIZED,

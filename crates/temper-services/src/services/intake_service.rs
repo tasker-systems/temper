@@ -163,16 +163,28 @@ pub async fn receive_webhook(
     }
 }
 
-/// The inbound attestation a receipt arrived under, to be accepted once. See
-/// [`receive_attested_webhook`].
+/// How long after an attestation is first accepted (seconds) a repeat of it is still part of the
+/// same burst.
+///
+/// Connect sends one attestation for several distinct deliveries sent close together: a merge-queue
+/// merge's `pull_request` `closed` and `dequeued` arrive under the same one, with different bodies.
+/// Observed bursts span under a second (task `01a12e27`); the rest of the window covers instances
+/// whose clocks disagree. A repeat after the window is a captured attestation presented again, and
+/// is a replay. Inside the window a repeat is accepted whatever the binding says, so the window is
+/// the whole of what a capture used at once can still do.
+pub const ATTESTATION_REPEAT_WINDOW_SECS: i64 = 10;
+
+/// The inbound attestation a receipt arrived under. See [`receive_attested_webhook`].
 pub struct AttestationSeen<'a> {
     /// [`crate::broker::replay_key`] of the bearer.
     pub replay_key: &'a str,
     /// Until when a repeat must be recognised (Unix seconds), from the broker.
     pub expires_at: i64,
-    /// The caller's clock, which judged the attestation's freshness; expired rows are pruned on it.
+    /// The caller's clock, which judged the attestation's freshness. Expired rows are pruned on
+    /// it, a first acceptance is stamped with it, and a repeat's age is measured on it.
     pub now: i64,
-    /// Whether a repeat is refused, or only reported and recorded.
+    /// Whether a replay (a repeat after [`ATTESTATION_REPEAT_WINDOW_SECS`]) is refused, or only
+    /// reported. A repeat inside the window is never refused.
     pub enforced: bool,
 }
 
@@ -181,21 +193,22 @@ pub struct AttestationSeen<'a> {
 pub enum Receipt {
     /// The event was appended.
     Recorded(Uuid),
-    /// The attestation was already accepted, and [`AttestationSeen::enforced`] refuses repeats:
-    /// nothing was appended. Unreachable from a deployment, which never enforces single use.
+    /// The attestation was first accepted more than [`ATTESTATION_REPEAT_WINDOW_SECS`] ago, and
+    /// the binding is enforced: nothing was appended.
     RefusedAsReplay,
 }
 
-/// [`receive_webhook`] for a receipt that arrived under an inbound attestation, which is accepted
-/// once.
+/// [`receive_webhook`] for a receipt that arrived under an inbound attestation.
 ///
 /// The attestation is recorded in `kb_inbound_attestations_seen` **in the same transaction** as the
-/// event: it is spent exactly when a receipt lands, and a receipt that fails — or is cut off — never
-/// spends it, so its redelivery is not a replay. A concurrent presentation of the same attestation
-/// waits on the first's row and then sees it, so of two simultaneous copies exactly one lands.
+/// event: it is recorded exactly when a receipt lands, and a receipt that fails, or is cut off,
+/// never records it, so its redelivery is a first acceptance, not a repeat.
 ///
-/// A repeat is refused when [`AttestationSeen::enforced`]; otherwise it is logged as a would-be
-/// refusal and recorded as usual.
+/// A repeat within [`ATTESTATION_REPEAT_WINDOW_SECS`] of the first acceptance is one of Connect's
+/// bursts and is recorded as usual. A concurrent presentation of the same attestation waits on the
+/// first's row and then sees it, so simultaneous copies are a burst too. A repeat after the window
+/// is a replay: refused when [`AttestationSeen::enforced`], otherwise logged as a would-be refusal
+/// and recorded.
 pub async fn receive_attested_webhook(
     pool: &PgPool,
     connection_id: Uuid,
@@ -242,18 +255,32 @@ async fn receive(
     let mut tx = pool.begin().await?;
 
     if let Some(seen) = &attestation {
-        if !claim_attestation(&mut tx, seen).await? {
-            if seen.enforced {
-                tracing::warn!(reason = "replayed", "inbound webhook attestation refused");
-                return Ok(Receipt::RefusedAsReplay);
+        match claim_attestation(&mut tx, seen).await? {
+            Claim::First => {}
+            Claim::Burst { age_secs } => {
+                // Not a refusal in any mode, so not `reason`: log queries counting would-be
+                // refusals must not count Connect's bursts.
+                tracing::info!(
+                    age_secs,
+                    "inbound attestation: repeated within its burst window; recorded"
+                );
             }
-            // Reported, not refused: Connect sends one attestation for several distinct
-            // deliveries (`VercelConnectConfig::enforce_single_use`). `reason` stays the field log
-            // queries count on.
-            tracing::info!(
-                reason = "replayed",
-                "inbound attestation: presented again; recorded, not refused"
-            );
+            Claim::Replay { age_secs } => {
+                if seen.enforced {
+                    tracing::warn!(
+                        reason = "replayed",
+                        age_secs,
+                        "inbound webhook attestation refused"
+                    );
+                    return Ok(Receipt::RefusedAsReplay);
+                }
+                tracing::warn!(
+                    reason = "replayed",
+                    age_secs,
+                    would_refuse = true,
+                    "inbound attestation: would refuse once binding is enforced"
+                );
+            }
         }
     }
 
@@ -997,24 +1024,159 @@ mod tests {
             "provider event type rides metadata, not payload"
         );
     }
+
+    /// Present one PR webhook under the attestation keyed `replay_key`, at `now`.
+    async fn present(
+        pool: &PgPool,
+        conn: Uuid,
+        replay_key: &str,
+        now: i64,
+        enforced: bool,
+    ) -> Receipt {
+        receive_attested_webhook(
+            pool,
+            conn,
+            ProviderEvent::from_header("pull_request"),
+            &github_pr_payload(GITHUB_REPO),
+            AttestationSeen {
+                replay_key,
+                expires_at: now + 3_600,
+                now,
+                enforced,
+            },
+        )
+        .await
+        .expect("receive")
+    }
+
+    /// Enforced, a repeat up to [`ATTESTATION_REPEAT_WINDOW_SECS`] after the first acceptance is
+    /// one of Connect's bursts and lands; a repeat a second later is a replay and lands nothing.
+    /// The window is measured from the first acceptance, not the latest repeat, so a burst cannot
+    /// keep an attestation alive.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn an_enforced_receipt_accepts_a_repeat_within_the_window_and_refuses_one_after(
+        pool: PgPool,
+    ) {
+        let admin = seed_admin(&pool).await;
+        let team = seed_team(&pool, admin).await;
+        let conn = seed_connection(&pool, Some(team), admin).await;
+        grant_reach(&pool, admin, conn, team).await;
+        let t = 1_750_000_000;
+
+        for at in [t, t + 1, t + ATTESTATION_REPEAT_WINDOW_SECS] {
+            assert!(
+                matches!(
+                    present(&pool, conn, "k", at, true).await,
+                    Receipt::Recorded(_)
+                ),
+                "a repeat {}s after the first is the same burst",
+                at - t
+            );
+        }
+        assert_eq!(
+            present(
+                &pool,
+                conn,
+                "k",
+                t + ATTESTATION_REPEAT_WINDOW_SECS + 1,
+                true
+            )
+            .await,
+            Receipt::RefusedAsReplay,
+            "past the window, measured from the first acceptance"
+        );
+        assert_eq!(event_count_for_connection(&pool, conn).await, 3);
+    }
+
+    /// Observing, a replay past the window is reported and still lands.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn an_observing_receipt_records_a_replay_past_the_window(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let team = seed_team(&pool, admin).await;
+        let conn = seed_connection(&pool, Some(team), admin).await;
+        grant_reach(&pool, admin, conn, team).await;
+        let t = 1_750_000_000;
+
+        present(&pool, conn, "k", t, false).await;
+        assert!(matches!(
+            present(&pool, conn, "k", t + 3_000, false).await,
+            Receipt::Recorded(_)
+        ));
+        assert_eq!(event_count_for_connection(&pool, conn).await, 2);
+    }
+
+    #[test]
+    fn a_repeat_is_a_burst_up_to_the_window_and_a_replay_after() {
+        assert_eq!(Claim::of_repeat(0), Claim::Burst { age_secs: 0 });
+        assert_eq!(
+            Claim::of_repeat(ATTESTATION_REPEAT_WINDOW_SECS),
+            Claim::Burst {
+                age_secs: ATTESTATION_REPEAT_WINDOW_SECS
+            }
+        );
+        assert_eq!(
+            Claim::of_repeat(ATTESTATION_REPEAT_WINDOW_SECS + 1),
+            Claim::Replay {
+                age_secs: ATTESTATION_REPEAT_WINDOW_SECS + 1
+            }
+        );
+        // An instance whose clock runs behind the first acceptance's sees a negative age.
+        assert_eq!(Claim::of_repeat(-2), Claim::Burst { age_secs: -2 });
+        assert_eq!(
+            Claim::of_repeat(-ATTESTATION_REPEAT_WINDOW_SECS - 1),
+            Claim::Replay {
+                age_secs: -ATTESTATION_REPEAT_WINDOW_SECS - 1
+            }
+        );
+    }
 }
 
-/// Record an inbound attestation as seen, unless it already is. Returns `false` for a repeat.
+/// What [`claim_attestation`] found.
+#[derive(Debug, PartialEq, Eq)]
+enum Claim {
+    /// Not seen before; now recorded.
+    First,
+    /// Seen `age_secs` ago, within [`ATTESTATION_REPEAT_WINDOW_SECS`]: the same burst.
+    Burst { age_secs: i64 },
+    /// Seen `age_secs` ago, past the window: presented again.
+    Replay { age_secs: i64 },
+}
+
+impl Claim {
+    /// A repeat is a burst while its age is within the window either side of zero: an instance
+    /// whose clock runs behind the first acceptance's sees a negative age, and a clock far behind
+    /// must not stretch a burst indefinitely.
+    fn of_repeat(age_secs: i64) -> Self {
+        if age_secs.unsigned_abs() <= ATTESTATION_REPEAT_WINDOW_SECS as u64 {
+            Self::Burst { age_secs }
+        } else {
+            Self::Replay { age_secs }
+        }
+    }
+}
+
+/// Record an inbound attestation as seen, unless it already is, and say how long ago a repeat was
+/// first seen.
 ///
 /// Runs inside the receipt's transaction ([`receive_attested_webhook`]). The row is kept until
 /// [`AttestationSeen::expires_at`]; expired rows are deleted in the same statement, judged on
 /// [`AttestationSeen::now`] — the clock that judged the attestation's freshness — so the table holds
-/// about one attestation lifetime of traffic.
+/// about one attestation lifetime of traffic. A first acceptance is stamped with the same clock.
+///
+/// A repeat's age is read in a second statement, not the insert's: under READ COMMITTED a
+/// concurrent copy's insert waits for the first's transaction and then skips, and only a statement
+/// started after that sees the row it skipped on. The row is never updated, so a repeat leaves
+/// `first_seen_at` as the first acceptance wrote it.
 async fn claim_attestation(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     seen: &AttestationSeen<'_>,
-) -> ApiResult<bool> {
+) -> ApiResult<Claim> {
     let claimed = sqlx::query_scalar!(
         r#"WITH pruned AS (
                DELETE FROM kb_inbound_attestations_seen WHERE expires_at < to_timestamp($3)
            )
-           INSERT INTO kb_inbound_attestations_seen (replay_key, expires_at)
-           VALUES ($1, to_timestamp($2))
+           INSERT INTO kb_inbound_attestations_seen (replay_key, expires_at, first_seen_at)
+           VALUES ($1, to_timestamp($2), to_timestamp($3))
            ON CONFLICT (replay_key) DO NOTHING
            RETURNING replay_key"#,
         seen.replay_key,
@@ -1023,5 +1185,21 @@ async fn claim_attestation(
     )
     .fetch_optional(&mut **tx)
     .await?;
-    Ok(claimed.is_some())
+    if claimed.is_some() {
+        return Ok(Claim::First);
+    }
+
+    let first_seen = sqlx::query_scalar!(
+        r#"SELECT floor(extract(epoch FROM first_seen_at))::int8 AS "first_seen!"
+             FROM kb_inbound_attestations_seen
+            WHERE replay_key = $1"#,
+        seen.replay_key,
+    )
+    .fetch_optional(&mut **tx)
+    .await?
+    // The insert conflicted on this row, and only an expired row is ever deleted.
+    .ok_or_else(|| {
+        ApiError::Internal("inbound attestation row vanished after a conflict".into())
+    })?;
+    Ok(Claim::of_repeat(seen.now - first_seen))
 }

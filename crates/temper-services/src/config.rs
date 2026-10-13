@@ -573,12 +573,9 @@ fn parse_vercel_connect(lookup: impl Fn(&str) -> Option<String>) -> Option<Verce
         project_id: get("VERCEL_CONNECT_PROJECT_ID")?,
         team_id: get("VERCEL_CONNECT_TEAM_ID")?,
         team_slug: get("VERCEL_CONNECT_TEAM_SLUG")?,
-        enforce_project_binding: parse_enforce_flag(
+        enforce_attestation_binding: parse_enforce_flag(
             lookup("VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING").as_deref(),
         ),
-        // Deliberately not an env var: a repeated attestation is reported, never refused, in a
-        // deployment. See `VercelConnectConfig::enforce_single_use`.
-        enforce_single_use: false,
     })
 }
 
@@ -598,7 +595,7 @@ fn parse_enforce_flag(raw: Option<&str>) -> bool {
             tracing::error!(
                 value,
                 "VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING is not a recognised boolean; \
-                 enforcing the attestation's project binding"
+                 enforcing the attestation binding"
             );
             true
         }
@@ -798,30 +795,6 @@ mod tests {
             super::parse_enforce_flag(Some("ture")),
             "an unreadable security switch reads as on"
         );
-    }
-
-    /// The env flag enforces the project binding and nothing else: a repeated attestation is
-    /// reported, never refused, whatever the deployment sets (task `01a12e27`).
-    #[test]
-    fn the_binding_flag_enforces_the_project_binding_but_never_single_use() {
-        let lookup = |flag: &'static str| {
-            move |k: &str| {
-                match k {
-                    "VERCEL_CONNECT_ACCESS_TOKEN" => Some("tok"),
-                    "VERCEL_CONNECT_PROJECT_ID" => Some("prj_x"),
-                    "VERCEL_CONNECT_TEAM_ID" => Some("team_x"),
-                    "VERCEL_CONNECT_TEAM_SLUG" => Some("acme"),
-                    "VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING" => Some(flag),
-                    _ => None,
-                }
-                .map(str::to_string)
-            }
-        };
-        for (flag, project) in [("true", true), ("false", false), ("ture", true)] {
-            let cfg = super::parse_vercel_connect(lookup(flag)).expect("configured");
-            assert_eq!(cfg.enforce_project_binding, project, "{flag:?}");
-            assert!(!cfg.enforce_single_use, "{flag:?} never enables single use");
-        }
     }
     use super::*;
     use std::collections::HashMap;
