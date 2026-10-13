@@ -66,10 +66,10 @@ temperkb-telemetry = { workspace = true, features = ["test-support"] }
 # The pure chunker (`chunk_markdown`) — body-write fixtures must carry the REAL chunk hashes
 # now that the write path applies the blocking policy (a synthetic hash is a drift refusal).
 temper-ingest = { path = "../temper-ingest", default-features = false }
-opentelemetry_sdk = { version = "0.32", features = ["testing"] }
+opentelemetry_sdk = { version = "0.33", features = ["testing"] }
 # `SpanKind` — the flush test locates the request root span by its server kind rather than by its
 # (now per-route) exported name, so the assertion survives the route-dimension naming.
-opentelemetry = "0.32"
+opentelemetry = "0.33"
 tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "migrate", "json", "uuid"] }
 # `multipart` — the blob witnesses POST a multipart upload through the real reqwest client,
