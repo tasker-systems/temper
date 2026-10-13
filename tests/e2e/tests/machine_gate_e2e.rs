@@ -86,8 +86,7 @@ async fn registered_machine_reaches_the_data_plane(pool: sqlx::PgPool) {
 }
 
 /// Register a temper-ISSUED machine client (issuer='temper', with a secret hash), as Phase B1's
-/// `issue` path produces. The gate is issuer-agnostic, so this must authenticate exactly like an
-/// auth0-m2m row — proving B1 changed no verifier (D4).
+/// `issue` path produces.
 async fn register_temper_issued(pool: &sqlx::PgPool, client_id: &str) -> Uuid {
     let profile_id = Uuid::now_v7();
     sqlx::query!(
@@ -115,8 +114,12 @@ async fn register_temper_issued(pool: &sqlx::PgPool, client_id: &str) -> Uuid {
     profile_id
 }
 
+/// The gate binds a registration's issuer to the instance's mode (ruled 2026-10-13, overturning
+/// the issuer-agnostic D4). This harness is an external-IdP instance, whose tokens temper's own
+/// AS never mints, so a token naming a temper-issued registration is a capture: it is refused,
+/// and the 401 says why, even though the row is live and approved.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn temper_issued_machine_reaches_the_data_plane(pool: sqlx::PgPool) {
+async fn temper_issued_machine_is_refused_where_an_external_idp_mints_tokens(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
     register_temper_issued(&pool, "tmpr_live").await;
     let token = common::generate_machine_jwt("tmpr_live");
@@ -130,8 +133,13 @@ async fn temper_issued_machine_reaches_the_data_plane(pool: sqlx::PgPool) {
 
     assert_eq!(
         response.status(),
-        200,
-        "a temper-issued machine authenticates through the unchanged gate (D4)"
+        401,
+        "a temper-issued registration is unreachable under an external IdP"
+    );
+    let body = response.text().await.expect("body");
+    assert!(
+        body.contains("temper-issued"),
+        "the refusal says why: {body}"
     );
 }
 

@@ -141,7 +141,20 @@ pub async fn issue_remote(
     crate::output::warning(
         "client_secret is shown ONCE and never stored — capture it now; it cannot be retrieved later.",
     );
+    warn_if_dormant(&cred);
     Ok(())
+}
+
+/// A credential issued on an instance whose tokens an external IdP mints cannot authenticate
+/// there yet. Say so on stderr; the `dormant` field carries it for an agent reading stdout.
+fn warn_if_dormant(cred: &IssuedMachineCredential) {
+    if cred.dormant {
+        crate::output::warning(
+            "This credential is DORMANT: this instance's tokens are minted by an external identity \
+             provider, so it will not authenticate until the instance runs temper's own \
+             authorization server.",
+        );
+    }
 }
 
 /// Rotate a temper-issued secret. Prints the new one-time secret.
@@ -163,6 +176,7 @@ pub async fn rotate_secret_remote(
     crate::output::warning(
         "New client_secret is shown ONCE. The previous secret stays valid until the grace window expires.",
     );
+    warn_if_dormant(&cred);
     Ok(())
 }
 

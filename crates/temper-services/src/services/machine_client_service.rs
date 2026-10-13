@@ -277,11 +277,15 @@ const MAX_ROTATION_GRACE_SECONDS: i64 = 7 * 24 * 3_600;
 /// grace window, installs a fresh current, and returns the new plaintext once. Rejects a client
 /// that temper did not issue (its secret lives at its IdP), one already revoked, or a grace
 /// window outside `[0, MAX_ROTATION_GRACE_SECONDS]`.
+///
+/// Under an external IdP the rotated credential is still **dormant** (see
+/// `machine_registration_service::issue`), and the response says so.
 pub async fn rotate_secret(
     pool: &PgPool,
     authed: &HumanPrincipal,
     id: Uuid,
     grace_seconds: i64,
+    mode: crate::auth_config::AuthMode,
 ) -> ApiResult<temper_core::types::machine::IssuedMachineCredential> {
     // Auth before writes, keyed on the existing row's owning team (B2 D5). Ahead of the
     // transaction, so a rejected rotation never touches the row.
@@ -308,7 +312,7 @@ pub async fn rotate_secret(
     .await?
     .ok_or_else(|| ApiError::NotFound(MACHINE_CLIENT_REFUSAL.to_string()))?;
 
-    if row.issuer != "temper" {
+    if row.issuer != crate::auth::machine_door::TEMPER_ISSUER {
         return Err(ApiError::BadRequest(format!(
             "machine client '{}' was not issued by temper (issuer '{}'); its secret is managed by its IdP",
             row.client_id, row.issuer
@@ -344,6 +348,8 @@ pub async fn rotate_secret(
     Ok(temper_core::types::machine::IssuedMachineCredential {
         client,
         client_secret: secret.plaintext,
+        dormant: crate::auth::machine_door::reachable_issuer(mode)
+            != crate::auth::machine_door::TEMPER_ISSUER,
     })
 }
 
@@ -564,9 +570,14 @@ mod tests {
             &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             id,
             3600,
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("rotate");
+        assert!(
+            cred.dormant,
+            "under an external IdP a rotated temper credential is still dormant"
+        );
 
         // A fresh plaintext is returned and its hash is the new current.
         let row = sqlx::query!(
@@ -610,7 +621,8 @@ mod tests {
                     &pool,
                     &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                     id,
-                    -1
+                    -1,
+                    crate::auth_config::AuthMode::ExternalIdp
                 )
                 .await
                 .expect_err("negative grace"),
@@ -624,7 +636,8 @@ mod tests {
                     &pool,
                     &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
                     id,
-                    999_999_999
+                    999_999_999,
+                    crate::auth_config::AuthMode::ExternalIdp
                 )
                 .await
                 .expect_err("excessive grace"),
@@ -645,6 +658,7 @@ mod tests {
             &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             id,
             3600,
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect_err("must reject");
@@ -977,9 +991,15 @@ mod tests {
                     ),
                     (
                         "rotate",
-                        svc::rotate_secret(&pool, &prober, id, 0)
-                            .await
-                            .expect_err("rotate"),
+                        svc::rotate_secret(
+                            &pool,
+                            &prober,
+                            id,
+                            0,
+                            crate::auth_config::AuthMode::ExternalIdp,
+                        )
+                        .await
+                        .expect_err("rotate"),
                     ),
                 ];
                 for (act, err) in refusals {

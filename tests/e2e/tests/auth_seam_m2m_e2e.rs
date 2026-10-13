@@ -78,12 +78,14 @@ async fn registered_machine_token_is_admitted_by_the_mcp_gate(pool: sqlx::PgPool
     );
 }
 
+/// The MCP door shares the API's gate, so it binds the issuer to the mode too (ruled 2026-10-13,
+/// overturning D4): under this external-IdP harness a temper-issued registration is refused.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn temper_issued_machine_resolves_on_mcp(pool: sqlx::PgPool) {
+async fn temper_issued_machine_is_refused_on_mcp_under_an_external_idp(pool: sqlx::PgPool) {
     let app = common::setup_relay(pool.clone()).await;
 
     // A temper-ISSUED row (issuer='temper', with a secret hash), as Phase B1's `issue` path
-    // produces. The mcp gate is issuer-agnostic, so it resolves exactly like an auth0-m2m row.
+    // produces.
     let profile_id = uuid::Uuid::now_v7();
     sqlx::query!(
         "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) \
@@ -106,12 +108,17 @@ async fn temper_issued_machine_resolves_on_mcp(pool: sqlx::PgPool) {
     // D11: a machine is born Denied; approve so the mcp system gate admits it.
     common::approve(&pool, profile_id).await;
 
-    let created = common::mcp_act_as(&app, &common::generate_machine_jwt("tmpr_mcp"))
+    let err = common::mcp_act_as(&app, &common::generate_machine_jwt("tmpr_mcp"))
         .await
-        .expect("a temper-issued machine resolves on the MCP surface too (D4)");
-    assert_eq!(
-        common::created_context_owner(&pool, &created).await,
-        profile_id,
-        "it resolves to its own profile: {created}"
+        .expect_err("a temper-issued machine is unreachable on MCP under an external IdP");
+    assert!(
+        err.message.contains("temper-issued"),
+        "the refusal says why: {err:?}"
     );
+    let owned: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_contexts WHERE owner_id = $1")
+        .bind(profile_id)
+        .fetch_one(&pool)
+        .await
+        .expect("count contexts");
+    assert_eq!(owned, 0, "the refused machine created nothing");
 }

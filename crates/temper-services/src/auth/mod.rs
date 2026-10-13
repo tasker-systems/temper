@@ -49,6 +49,7 @@ use temper_core::types::ids::ProfileId;
 use temper_core::types::{AuthClaims, PrincipalKind, Profile};
 
 mod email;
+pub mod machine_door;
 mod normalize;
 pub mod secret;
 pub use normalize::{RawJwtClaims, MACHINE_PROVIDER_TAG};
@@ -123,7 +124,7 @@ pub(crate) async fn authenticate_token(
 ) -> Result<AuthenticatedProfile, AuthzError> {
     let claims = claims_from_token(state, raw, token).await?;
 
-    authenticate(&state.pool, &claims).await
+    authenticate(&state.pool, &claims, state.config.auth.mode).await
 }
 
 /// The classify + human-email-ladder block, shared by both token entry points.
@@ -241,7 +242,8 @@ pub async fn resolve_federated_human(
         iat: 0,
     };
 
-    profile_service::resolve_from_claims(pool, &claims).await
+    // Human by construction, so the machine gate's mode never applies.
+    profile_service::resolve_human_from_claims(pool, &claims).await
 }
 
 /// Level 1 — authentication. Verified+normalized claims → a resolved, active profile.
@@ -249,11 +251,15 @@ pub async fn resolve_federated_human(
 /// Runs on **every** authenticated request on **both** surfaces, reached only through
 /// [`authenticate_token`]. Crate-private: a surface cannot hand this function claims it
 /// built itself, which is what makes a forged `AuthClaims` inert (module doc).
+///
+/// `mode` is the instance's auth mode, which bounds the machine registrations a machine token can
+/// reach (`machine_door::reachable_issuer`).
 pub(crate) async fn authenticate(
     pool: &PgPool,
     claims: &AuthClaims,
+    mode: crate::auth_config::AuthMode,
 ) -> Result<AuthenticatedProfile, AuthzError> {
-    let profile = profile_service::resolve_from_claims(pool, claims)
+    let profile = profile_service::resolve_from_claims(pool, claims, mode)
         .await
         .map_err(AuthzError::ProfileResolution)?;
 
@@ -604,6 +610,7 @@ pub fn machine_principal_refused() -> ApiError {
 #[cfg(all(test, feature = "test-db"))]
 mod tests {
     use super::*;
+    use crate::auth_config::AuthMode;
 
     use crate::config::ApiConfig;
     use crate::state::{AppState, JwksKeyStore};
@@ -999,7 +1006,9 @@ mod tests {
         crate::test_support::approve(&pool, profile_id).await;
 
         let c = machine_claims("agent-rails");
-        let authed = authenticate(&pool, &c).await.expect("authenticate machine");
+        let authed = authenticate(&pool, &c, AuthMode::ExternalIdp)
+            .await
+            .expect("authenticate machine");
         // Level 1 passed ⇒ not `Deactivated` standing; the dedicated refuse-tests carry that contract.
         assert_eq!(
             authed.claims.principal_kind,
@@ -1014,9 +1023,13 @@ mod tests {
     /// `authenticate` — both surfaces — rather than one surface's middleware (D4).
     #[sqlx::test(migrations = "../../migrations")]
     async fn unregistered_machine_principal_never_reaches_the_gate_rails(pool: PgPool) {
-        let err = authenticate(&pool, &machine_claims("agent-unknown"))
-            .await
-            .expect_err("an unregistered machine must not authenticate");
+        let err = authenticate(
+            &pool,
+            &machine_claims("agent-unknown"),
+            AuthMode::ExternalIdp,
+        )
+        .await
+        .expect_err("an unregistered machine must not authenticate");
         assert!(
             format!("{err:?}").contains("not registered"),
             "rejection must say why: {err:?}"
@@ -1026,7 +1039,9 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn authenticate_returns_active_profile(pool: PgPool) {
         let c = claims("seam-active", "active@example.test");
-        let authed = authenticate(&pool, &c).await.expect("should authenticate");
+        let authed = authenticate(&pool, &c, AuthMode::ExternalIdp)
+            .await
+            .expect("should authenticate");
         // Level 1 passed ⇒ not `Deactivated` standing (the is_active proxy was dropped in Phase 2).
         assert_eq!(authed.claims.external_user_id, "seam-active");
     }
@@ -1035,7 +1050,9 @@ mod tests {
     async fn authenticate_refuses_deactivated_profile(pool: PgPool) {
         // First resolve creates the profile.
         let c = claims("seam-deactivated", "deact@example.test");
-        let authed = authenticate(&pool, &c).await.expect("first resolve");
+        let authed = authenticate(&pool, &c, AuthMode::ExternalIdp)
+            .await
+            .expect("first resolve");
         let id = authed.profile.id;
 
         // Deactivate via standing (runtime query — test fixture, no macro cache needed).
@@ -1048,7 +1065,9 @@ mod tests {
         .await
         .expect("deactivate via standing");
 
-        let err = authenticate(&pool, &c).await.expect_err("should refuse");
+        let err = authenticate(&pool, &c, AuthMode::ExternalIdp)
+            .await
+            .expect_err("should refuse");
         assert!(
             matches!(err, AuthzError::Deactivated { profile_id } if profile_id == id),
             "expected Deactivated, got {err:?}",
@@ -1061,7 +1080,9 @@ mod tests {
         // not an open-mode default. Approve the freshly authenticated profile (legal from Denied,
         // D14), then it is system-authorized.
         let c = claims("seam-approved", "approved@example.test");
-        let authed = authenticate(&pool, &c).await.expect("authenticate");
+        let authed = authenticate(&pool, &c, AuthMode::ExternalIdp)
+            .await
+            .expect("authenticate");
         crate::services::standing_service::apply(
             &pool,
             crate::services::standing_service::ApplyStandingParams {
@@ -1087,7 +1108,9 @@ mod tests {
         // directly: point kb_system_settings at a gating team the profile
         // does not belong to.
         let c = claims("seam-gated", "gated@example.test");
-        let authed = authenticate(&pool, &c).await.expect("authenticate");
+        let authed = authenticate(&pool, &c, AuthMode::ExternalIdp)
+            .await
+            .expect("authenticate");
         let id = authed.profile.id;
 
         sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'nonexistent-gating-team'")
@@ -1109,9 +1132,13 @@ mod tests {
         // The community edition has no paywall. An OAuth signup being born Denied — requiring an
         // admin to enable it — IS the access-control mechanism, deliberately (spec §8). Do not
         // "fix" this because new users are locked out. That is the feature.
-        let profile = authenticate(&pool, &claims("oauth|newcomer", "a@example.com"))
-            .await
-            .unwrap();
+        let profile = authenticate(
+            &pool,
+            &claims("oauth|newcomer", "a@example.com"),
+            AuthMode::ExternalIdp,
+        )
+        .await
+        .unwrap();
         let standing =
             crate::services::standing_service::load(&pool, ProfileId::from(profile.profile.id))
                 .await
@@ -1147,11 +1174,15 @@ mod tests {
         // create_new_profile_and_link. This third test guards UNIFORMITY where it used to guard
         // divergence. Distinct subjects AND distinct emails: same-email would reconcile the second
         // door onto the FIRST door's profile and the test would pass by resolving one profile twice.
-        let oauth = authenticate(&pool, &claims("oauth|d1", "d1@example.com"))
-            .await
-            .unwrap()
-            .profile
-            .id;
+        let oauth = authenticate(
+            &pool,
+            &claims("oauth|d1", "d1@example.com"),
+            AuthMode::ExternalIdp,
+        )
+        .await
+        .unwrap()
+        .profile
+        .id;
         let saml = resolve_federated_human(
             &pool,
             "test-provider",
@@ -1372,9 +1403,13 @@ mod tests {
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn human_claims_with_no_client_row_classify_human(pool: PgPool) {
-        let authed = authenticate(&pool, &claims("classify-human", "h@example.test"))
-            .await
-            .expect("authenticate");
+        let authed = authenticate(
+            &pool,
+            &claims("classify-human", "h@example.test"),
+            AuthMode::ExternalIdp,
+        )
+        .await
+        .expect("authenticate");
 
         let caller = classify_caller(&pool, authed).await.expect("classify");
 
@@ -1383,9 +1418,13 @@ mod tests {
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn human_claims_with_a_revoked_client_row_classify_machine(pool: PgPool) {
-        let authed = authenticate(&pool, &claims("classify-revoked", "r@example.test"))
-            .await
-            .expect("authenticate");
+        let authed = authenticate(
+            &pool,
+            &claims("classify-revoked", "r@example.test"),
+            AuthMode::ExternalIdp,
+        )
+        .await
+        .expect("authenticate");
         seed_client_row(&pool, authed.profile.id, true).await;
 
         let caller = classify_caller(&pool, authed).await.expect("classify");
@@ -1398,9 +1437,13 @@ mod tests {
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn human_claims_with_a_live_client_row_classify_machine_and_log_it(pool: PgPool) {
-        let authed = authenticate(&pool, &claims("classify-mismatch", "m@example.test"))
-            .await
-            .expect("authenticate");
+        let authed = authenticate(
+            &pool,
+            &claims("classify-mismatch", "m@example.test"),
+            AuthMode::ExternalIdp,
+        )
+        .await
+        .expect("authenticate");
         let profile_id = authed.profile.id;
         seed_client_row(&pool, profile_id, false).await;
 
@@ -1419,9 +1462,13 @@ mod tests {
     async fn machine_claims_classify_machine_without_reading_a_row(pool: PgPool) {
         // Machine claims over a profile with NO client row — a state G3 makes unreachable in
         // production — so the claims are the only thing that can make this a machine.
-        let authed = authenticate(&pool, &claims("classify-claims", "c@example.test"))
-            .await
-            .expect("authenticate");
+        let authed = authenticate(
+            &pool,
+            &claims("classify-claims", "c@example.test"),
+            AuthMode::ExternalIdp,
+        )
+        .await
+        .expect("authenticate");
         let machine =
             gate_resolved_profile(&pool, authed.into_profile(), &machine_claims("claims-only"))
                 .await
@@ -1434,9 +1481,13 @@ mod tests {
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_failed_machine_read_refuses_as_internal_never_human(pool: PgPool) {
-        let authed = authenticate(&pool, &claims("classify-fail", "f@example.test"))
-            .await
-            .expect("authenticate");
+        let authed = authenticate(
+            &pool,
+            &claims("classify-fail", "f@example.test"),
+            AuthMode::ExternalIdp,
+        )
+        .await
+        .expect("authenticate");
         pool.close().await;
 
         let err = classify_caller(&pool, authed)

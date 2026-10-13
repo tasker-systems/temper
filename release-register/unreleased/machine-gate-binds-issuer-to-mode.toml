@@ -1,0 +1,25 @@
+title    = "A machine token resolves only to a registration its instance's issuer could have minted, and the credential doors follow the instance's mode"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "clients", "cli-stdout"]
+status   = "signal-only"
+body = '''
+Each instance trusts one token issuer: an external identity provider (Auth0), or temper's own
+authorization server when `AS_ISSUER` is set. The machine gate now refuses a token whose
+`kb_machine_clients` row was recorded under the other issuer, with a 401 that says how to re-issue
+it, on the API and MCP alike. Before, the lookup keyed on the client id alone. An Auth0-fronted
+instance resolves only `auth0-m2m` registrations; an AS instance resolves only `temper` ones.
+
+The credential doors follow the same mode. Under an external IdP, `POST /api/machine-clients`
+(provision) requires a system admin, so a team owner gets a 403 (`FORBIDDEN_DETAIL`) where they
+used to succeed. `POST /api/machine-clients/issue` and `rotate-secret` still mint, but the
+credential cannot authenticate there, so the response carries a new `dormant: true` field and the
+CLI warns. On an AS instance, provision and `rebind` are refused with a 400 naming `issue` or
+`rotate-secret`. `rebind` also refuses a temper-issued source row in either mode.
+
+`dormant` is additive: older servers omit it, and the clients read its absence as `false`. Who
+observes: operators of an instance that moves between modes, whose registrations under the old
+issuer stop resolving; team owners on an Auth0-fronted instance who used `provision`; anyone
+reading `issue` responses. Release relevance: behavioral (the gate and door refusals), additive
+(the `dormant` field).
+'''

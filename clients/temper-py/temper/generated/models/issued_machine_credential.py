@@ -17,8 +17,8 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictStr
-from typing import Any, ClassVar, Dict, List
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
+from typing import Any, ClassVar, Dict, List, Optional
 from temper.generated.models.machine_client import MachineClient
 from typing import Optional, Set
 from typing_extensions import Self
@@ -30,7 +30,8 @@ class IssuedMachineCredential(BaseModel):
     """ # noqa: E501
     client: MachineClient
     client_secret: StrictStr
-    __properties: ClassVar[List[str]] = ["client", "client_secret"]
+    dormant: Optional[StrictBool] = Field(default=None, description="`true` when this instance cannot yet authenticate the credential: an external identity provider mints its tokens, so no token for a temper-issued client can be obtained here. The credential starts working once the instance runs temper's own authorization server. Absent from an older server's response, which reads as `false`.")
+    __properties: ClassVar[List[str]] = ["client", "client_secret", "dormant"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -87,7 +88,8 @@ class IssuedMachineCredential(BaseModel):
 
         _obj = cls.model_validate({
             "client": MachineClient.from_dict(obj["client"]) if obj.get("client") is not None else None,
-            "client_secret": obj.get("client_secret")
+            "client_secret": obj.get("client_secret"),
+            "dormant": obj.get("dormant")
         })
         return _obj
 

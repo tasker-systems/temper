@@ -7,6 +7,7 @@ use temper_core::types::{AuthClaims, PrincipalKind, Profile, ProfileAuthLink};
 use temper_workflow::operations::Surface;
 
 use crate::auth::HumanPrincipal;
+use crate::auth_config::AuthMode;
 use crate::error::{ApiError, ApiResult};
 
 /// Maximum serialized size for the preferences JSON field (64KB).
@@ -97,10 +98,17 @@ pub(crate) async fn generate_profile_handle_conn(
 /// 3. If not found, check whether any auth link shares the same email (reconciliation).
 /// 4. If email matches an existing link, create a new auth link pointing to that profile.
 /// 5. Otherwise, create a new profile and a new auth link.
-pub(crate) async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Profile> {
+///
+/// `mode` is the instance's auth mode. It decides which machine registrations a machine token can
+/// reach ([`crate::auth::machine_door::reachable_issuer`]); a human resolution ignores it.
+pub(crate) async fn resolve_from_claims(
+    pool: &PgPool,
+    claims: &AuthClaims,
+    mode: AuthMode,
+) -> ApiResult<Profile> {
     match claims.principal_kind {
         PrincipalKind::Human => resolve_human_from_claims(pool, claims).await,
-        PrincipalKind::Machine => resolve_machine_from_claims(pool, claims).await,
+        PrincipalKind::Machine => resolve_machine_from_claims(pool, claims, mode).await,
     }
 }
 
@@ -155,7 +163,10 @@ fn reject_machine_shaped(claims: &AuthClaims, door: &str) -> ApiResult<()> {
 /// registration gate by dressing it as a human. The machine path has a gate; the
 /// human path has auto-provisioning — so a mislabeled machine is exactly the identity
 /// that must never reach here.
-async fn resolve_human_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Profile> {
+pub(crate) async fn resolve_human_from_claims(
+    pool: &PgPool,
+    claims: &AuthClaims,
+) -> ApiResult<Profile> {
     // 0: the machine-shape guard.
     reject_machine_shaped(claims, "human path")?;
 
@@ -246,7 +257,17 @@ pub(crate) async fn resolve_existing_human_from_claims(
 /// temper-mcp does not share temper-api's middleware stack, so a middleware gate would
 /// drift. Rejections are specific (D7) — the caller has already proven it holds a valid,
 /// correctly-audienced token, so naming the client id and the reason leaks nothing.
-async fn resolve_machine_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Profile> {
+///
+/// **The registration must be one this instance's issuer could have minted.** Each deployment
+/// trusts one token issuer, and `mode` names it; a row recorded under the other issuer is
+/// reachable by no legitimate token here, so a token that matches one is refused
+/// ([`crate::auth::machine_door`]). The refusal names the way back, because the one honest way to
+/// meet it is an instance that changed modes under a machine that was registered before.
+async fn resolve_machine_from_claims(
+    pool: &PgPool,
+    claims: &AuthClaims,
+    mode: AuthMode,
+) -> ApiResult<Profile> {
     let client_id = claims.external_user_id.as_str();
 
     let Some(client) =
@@ -277,6 +298,24 @@ async fn resolve_machine_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiR
             "machine client '{client_id}' was revoked at {}",
             revoked_at.to_rfc3339()
         )));
+    }
+
+    let reachable = crate::auth::machine_door::reachable_issuer(mode);
+    if client.issuer != reachable {
+        tracing::warn!(
+            client_id,
+            issuer = %client.issuer,
+            %mode,
+            "machine gate: rejected (registered under an issuer this instance does not trust)"
+        );
+        return Err(ApiError::Unauthorized(match mode {
+            AuthMode::TemperAs => format!(
+                "machine client '{client_id}' was registered under an external identity provider,                  which this instance no longer trusts; it mints its own machine credentials now.                  An administrator must issue a new one: temper admin machine issue --label <label>"
+            ),
+            AuthMode::ExternalIdp => format!(
+                "machine client '{client_id}' is a temper-issued credential, which this instance                  cannot authenticate until it runs temper's own authorization server"
+            ),
+        }));
     }
 
     // Coarse liveness (D9). Failure to touch must not fail the request.
@@ -780,7 +819,9 @@ mod tests {
             exp: 9_999_999_999,
             iat: 1_000_000_000,
         };
-        let profile = resolve_from_claims(&pool, &claims).await.unwrap();
+        let profile = resolve_from_claims(&pool, &claims, AuthMode::ExternalIdp)
+            .await
+            .unwrap();
         assert_eq!(profile.slug, "collider");
 
         // Now generate a handle for the same display name — should get -2
@@ -799,7 +840,9 @@ mod tests {
             exp: 9_999_999_999,
             iat: 1_000_000_000,
         };
-        let profile_a = resolve_from_claims(&pool, &claims_a).await.unwrap();
+        let profile_a = resolve_from_claims(&pool, &claims_a, AuthMode::ExternalIdp)
+            .await
+            .unwrap();
 
         let claims_b = AuthClaims {
             principal_kind: PrincipalKind::Human,
@@ -810,7 +853,9 @@ mod tests {
             exp: 9_999_999_999,
             iat: 1_000_000_000,
         };
-        let profile_b = resolve_from_claims(&pool, &claims_b).await.unwrap();
+        let profile_b = resolve_from_claims(&pool, &claims_b, AuthMode::ExternalIdp)
+            .await
+            .unwrap();
 
         assert_eq!(
             profile_a.id, profile_b.id,
@@ -832,7 +877,9 @@ mod tests {
             exp: 9_999_999_999,
             iat: 1_000_000_000,
         };
-        let profile_a = resolve_from_claims(&pool, &claims_a).await.unwrap();
+        let profile_a = resolve_from_claims(&pool, &claims_a, AuthMode::ExternalIdp)
+            .await
+            .unwrap();
 
         let claims_b = AuthClaims {
             principal_kind: PrincipalKind::Human,
@@ -843,7 +890,9 @@ mod tests {
             exp: 9_999_999_999,
             iat: 1_000_000_000,
         };
-        let profile_b = resolve_from_claims(&pool, &claims_b).await.unwrap();
+        let profile_b = resolve_from_claims(&pool, &claims_b, AuthMode::ExternalIdp)
+            .await
+            .unwrap();
 
         assert_eq!(
             profile_a.id, profile_b.id,
@@ -862,7 +911,9 @@ mod tests {
             exp: 9_999_999_999,
             iat: 1_000_000_000,
         };
-        let profile_a = resolve_from_claims(&pool, &claims_a).await.unwrap();
+        let profile_a = resolve_from_claims(&pool, &claims_a, AuthMode::ExternalIdp)
+            .await
+            .unwrap();
 
         let claims_b = AuthClaims {
             principal_kind: PrincipalKind::Human,
@@ -873,7 +924,9 @@ mod tests {
             exp: 9_999_999_999,
             iat: 1_000_000_000,
         };
-        let profile_b = resolve_from_claims(&pool, &claims_b).await.unwrap();
+        let profile_b = resolve_from_claims(&pool, &claims_b, AuthMode::ExternalIdp)
+            .await
+            .unwrap();
 
         assert_ne!(
             profile_a.id, profile_b.id,
@@ -892,7 +945,9 @@ mod tests {
             exp: 9_999_999_999,
             iat: 1_000_000_000,
         };
-        let profile_a = resolve_from_claims(&pool, &claims_a).await.unwrap();
+        let profile_a = resolve_from_claims(&pool, &claims_a, AuthMode::ExternalIdp)
+            .await
+            .unwrap();
 
         let claims_b = AuthClaims {
             principal_kind: PrincipalKind::Human,
@@ -903,7 +958,9 @@ mod tests {
             exp: 9_999_999_999,
             iat: 1_000_000_000,
         };
-        let profile_b = resolve_from_claims(&pool, &claims_b).await.unwrap();
+        let profile_b = resolve_from_claims(&pool, &claims_b, AuthMode::ExternalIdp)
+            .await
+            .unwrap();
 
         assert_ne!(
             profile_a.id, profile_b.id,
@@ -926,7 +983,9 @@ mod tests {
             exp: 9_999_999_999,
             iat: 1_000_000_000,
         };
-        let profile_a = resolve_from_claims(&pool, &claims_a).await.unwrap();
+        let profile_a = resolve_from_claims(&pool, &claims_a, AuthMode::ExternalIdp)
+            .await
+            .unwrap();
 
         let claims_b = AuthClaims {
             principal_kind: PrincipalKind::Human,
@@ -937,7 +996,9 @@ mod tests {
             exp: 9_999_999_999,
             iat: 1_000_000_000,
         };
-        let profile_b = resolve_from_claims(&pool, &claims_b).await.unwrap();
+        let profile_b = resolve_from_claims(&pool, &claims_b, AuthMode::ExternalIdp)
+            .await
+            .unwrap();
 
         assert_ne!(
             profile_a.id, profile_b.id,
@@ -964,12 +1025,14 @@ mod tests {
         let a = resolve_from_claims(
             &pool,
             &human("provider_a", "cv-a", "Stored-CV@example.com", false),
+            AuthMode::ExternalIdp,
         )
         .await
         .unwrap();
         let b = resolve_from_claims(
             &pool,
             &human("provider_b", "cv-b", "stored-cv@example.com", true),
+            AuthMode::ExternalIdp,
         )
         .await
         .unwrap();
@@ -993,12 +1056,14 @@ mod tests {
         let a = resolve_from_claims(
             &pool,
             &human("provider_a", "la-a", "kate@example.com", true),
+            AuthMode::ExternalIdp,
         )
         .await
         .unwrap();
         let b = resolve_from_claims(
             &pool,
             &human("provider_b", "la-b", "\u{212A}ate@example.com", true),
+            AuthMode::ExternalIdp,
         )
         .await
         .unwrap();
@@ -1012,6 +1077,7 @@ mod tests {
         let older = resolve_from_claims(
             &pool,
             &human("provider_a", "dup-a", "Dup@example.com", true),
+            AuthMode::ExternalIdp,
         )
         .await
         .unwrap();
@@ -1039,6 +1105,7 @@ mod tests {
         let exact = resolve_from_claims(
             &pool,
             &human("provider_c", "dup-c", "dup@example.com", true),
+            AuthMode::ExternalIdp,
         )
         .await
         .unwrap();
@@ -1046,6 +1113,7 @@ mod tests {
         let other = resolve_from_claims(
             &pool,
             &human("provider_d", "dup-d", "DUP@example.com", true),
+            AuthMode::ExternalIdp,
         )
         .await
         .unwrap();
@@ -1068,7 +1136,9 @@ mod tests {
             exp: 9_999_999_999,
             iat: 1_000_000_000,
         };
-        let profile = resolve_from_claims(&pool, &claims).await.unwrap();
+        let profile = resolve_from_claims(&pool, &claims, AuthMode::ExternalIdp)
+            .await
+            .unwrap();
 
         let stored: bool = sqlx::query_scalar(
             "SELECT email_verified FROM kb_profile_auth_links \
@@ -1080,7 +1150,9 @@ mod tests {
         assert!(!stored, "first (unverified) sign-in stores unverified");
 
         claims.email_verified = Some(true);
-        let same = resolve_from_claims(&pool, &claims).await.unwrap();
+        let same = resolve_from_claims(&pool, &claims, AuthMode::ExternalIdp)
+            .await
+            .unwrap();
         assert_eq!(profile.id, same.id);
 
         let stored: bool = sqlx::query_scalar(
@@ -1132,7 +1204,9 @@ mod tests {
     async fn lookup_only_resolves_an_existing_linked_profile(pool: PgPool) {
         let claims = human_claims("auth0|existing", "someone@example.com");
         // The normal login path mints it once...
-        let created = resolve_from_claims(&pool, &claims).await.unwrap();
+        let created = resolve_from_claims(&pool, &claims, AuthMode::ExternalIdp)
+            .await
+            .unwrap();
 
         // ...and lookup-only then finds that same profile.
         let found = resolve_existing_human_from_claims(&pool, &claims)
@@ -1147,10 +1221,13 @@ mod tests {
     /// refused too, this resolves to None instead of the sibling profile.
     #[sqlx::test(migrations = "../../migrations")]
     async fn lookup_only_reconciles_a_verified_email_to_an_existing_profile(pool: PgPool) {
-        let existing =
-            resolve_from_claims(&pool, &human_claims("auth0|first", "shared@example.com"))
-                .await
-                .unwrap();
+        let existing = resolve_from_claims(
+            &pool,
+            &human_claims("auth0|first", "shared@example.com"),
+            AuthMode::ExternalIdp,
+        )
+        .await
+        .unwrap();
 
         let mut other_provider = human_claims("auth0|second", "shared@example.com");
         other_provider.provider = "other-provider".to_string();
@@ -1192,7 +1269,7 @@ mod tests {
             .expect("count before");
 
         let c = machine_claims("never-registered");
-        let err = resolve_from_claims(&pool, &c)
+        let err = resolve_from_claims(&pool, &c, AuthMode::ExternalIdp)
             .await
             .expect_err("an unregistered machine must be rejected");
 
@@ -1242,7 +1319,7 @@ mod tests {
         .await
         .expect("seed revoked client");
 
-        let err = resolve_from_claims(&pool, &machine_claims("dead-client"))
+        let err = resolve_from_claims(&pool, &machine_claims("dead-client"), AuthMode::ExternalIdp)
             .await
             .expect_err("a revoked machine must be rejected");
 
@@ -1281,9 +1358,10 @@ mod tests {
         .await
         .expect("seed client");
 
-        let profile = resolve_from_claims(&pool, &machine_claims("live-client"))
-            .await
-            .expect("registered machine resolves");
+        let profile =
+            resolve_from_claims(&pool, &machine_claims("live-client"), AuthMode::ExternalIdp)
+                .await
+                .expect("registered machine resolves");
         assert_eq!(profile.id, profile_id);
 
         // The gate touched last_seen_at.
@@ -1317,9 +1395,93 @@ mod tests {
         .expect("seed client");
 
         let c = machine_claims("agent-idem");
-        let first = resolve_from_claims(&pool, &c).await.expect("first");
-        let second = resolve_from_claims(&pool, &c).await.expect("second");
+        let first = resolve_from_claims(&pool, &c, AuthMode::ExternalIdp)
+            .await
+            .expect("first");
+        let second = resolve_from_claims(&pool, &c, AuthMode::ExternalIdp)
+            .await
+            .expect("second");
         assert_eq!(first.id, second.id, "resolution is stable across calls");
+    }
+
+    /// Seed a live machine registration for `client_id` under `issuer`.
+    async fn seed_machine_under(pool: &PgPool, client_id: &str, issuer: &str) -> Uuid {
+        let profile_id = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO kb_profiles (id, handle, display_name, email, preferences) \
+             VALUES ($1, $2, $2, NULL, '{}')",
+            profile_id,
+            format!("agent-{client_id}"),
+        )
+        .execute(pool)
+        .await
+        .expect("seed profile");
+        sqlx::query!(
+            "INSERT INTO kb_machine_clients (client_id, issuer, label, profile_id, registered_by_profile_id) \
+             VALUES ($1, $2, 'test', $3, $3)",
+            client_id,
+            issuer,
+            profile_id,
+        )
+        .execute(pool)
+        .await
+        .expect("seed client");
+        profile_id
+    }
+
+    /// A token resolves only to a registration its instance's issuer could have minted. Each
+    /// deployment trusts one issuer, so a token naming a client id registered under the other one
+    /// is a capture, and is refused with the way back named.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_machine_registered_under_the_other_issuer_is_refused(pool: PgPool) {
+        let external = seed_machine_under(&pool, "idp-client", "auth0-m2m").await;
+        let minted = seed_machine_under(&pool, "temper-client", "temper").await;
+
+        // Neither resolves under the other issuer's mode.
+        match resolve_from_claims(&pool, &machine_claims("idp-client"), AuthMode::TemperAs).await {
+            Err(ApiError::Unauthorized(msg)) => {
+                assert!(msg.contains("idp-client"), "names the client: {msg}");
+                assert!(
+                    msg.contains("temper admin machine issue"),
+                    "names the way back: {msg}"
+                );
+            }
+            other => panic!("an external registration must not resolve under an AS: {other:?}"),
+        }
+        match resolve_from_claims(
+            &pool,
+            &machine_claims("temper-client"),
+            AuthMode::ExternalIdp,
+        )
+        .await
+        {
+            Err(ApiError::Unauthorized(msg)) => {
+                assert!(msg.contains("temper-client"), "names the client: {msg}");
+                assert!(msg.contains("temper-issued"), "says why: {msg}");
+            }
+            other => {
+                panic!("a temper registration must not resolve under an external IdP: {other:?}")
+            }
+        }
+
+        // A refused resolution records no liveness: the gate refuses before it touches the row.
+        let touched = sqlx::query_scalar!(
+            "SELECT count(*) AS \"n!\" FROM kb_machine_clients WHERE last_seen_at IS NOT NULL"
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read last_seen");
+        assert_eq!(touched, 0, "a refused machine is not recorded as seen");
+
+        // Each resolves under the mode whose issuer minted it.
+        let p = resolve_from_claims(&pool, &machine_claims("idp-client"), AuthMode::ExternalIdp)
+            .await
+            .expect("an external registration resolves under an external IdP");
+        assert_eq!(p.id, external);
+        let p = resolve_from_claims(&pool, &machine_claims("temper-client"), AuthMode::TemperAs)
+            .await
+            .expect("a temper registration resolves under temper's own AS");
+        assert_eq!(p.id, minted);
     }
 
     /// Claims that *say* Human but carry a machine-shaped identity — the exact shape a
@@ -1353,6 +1515,7 @@ mod tests {
         let err = resolve_from_claims(
             &pool,
             &machine_shaped_human_claims("abc123@clients", "auth0"),
+            AuthMode::ExternalIdp,
         )
         .await
         .expect_err("a machine-shaped identity must never resolve to a human profile");
@@ -1384,6 +1547,7 @@ mod tests {
         let err = resolve_from_claims(
             &pool,
             &machine_shaped_human_claims("plain-client-id", crate::auth::MACHINE_PROVIDER_TAG),
+            AuthMode::ExternalIdp,
         )
         .await
         .expect_err("machine-provider claims must never resolve to a human profile");
@@ -1501,7 +1665,7 @@ mod tests {
     async fn a_first_sign_in_commits_profile_entities_and_standing_together(pool: PgPool) {
         let claims = human_claims("auth0|first-sign-in", "newcomer@example.com");
 
-        let profile = resolve_from_claims(&pool, &claims)
+        let profile = resolve_from_claims(&pool, &claims, AuthMode::ExternalIdp)
             .await
             .expect("first sign-in resolves a profile");
 
@@ -1517,7 +1681,7 @@ mod tests {
         );
 
         // Signing in again is the early-return path (step 1), which must create nothing further.
-        let again = resolve_from_claims(&pool, &claims)
+        let again = resolve_from_claims(&pool, &claims, AuthMode::ExternalIdp)
             .await
             .expect("second sign-in resolves the same profile");
         assert_eq!(

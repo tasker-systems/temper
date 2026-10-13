@@ -96,6 +96,12 @@ pub struct IssueMachineRequest {
 pub struct IssuedMachineCredential {
     pub client: MachineClient,
     pub client_secret: String,
+    /// `true` when this instance cannot yet authenticate the credential: an external identity
+    /// provider mints its tokens, so no token for a temper-issued client can be obtained here. The
+    /// credential starts working once the instance runs temper's own authorization server.
+    /// Absent from an older server's response, which reads as `false`.
+    #[serde(default)]
+    pub dormant: bool,
 }
 
 /// Rotate a temper-issued secret, leaving the previous secret valid for a grace window.

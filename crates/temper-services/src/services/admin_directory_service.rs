@@ -1017,6 +1017,7 @@ mod tests {
                 teams: vec![],
                 grants: vec![],
             },
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("provision machine");
@@ -1032,6 +1033,7 @@ mod tests {
                 teams: vec![],
                 grants: vec![],
             },
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("provision rebind source");
@@ -1044,6 +1046,7 @@ mod tests {
                 label: "rebound".to_owned(),
                 keep_old_active: false,
             },
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("rebind machine");
