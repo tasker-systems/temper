@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT floor(extract(epoch FROM first_seen_at))::int8 AS \"first_seen!\"\n             FROM kb_inbound_attestations_seen\n            WHERE replay_key = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "first_seen!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a3259acfc468614f5d94c12b602f0bfb9bd1176822182d3dfe1426cf478b63e7"
+}

@@ -37,8 +37,9 @@ pub struct VercelConnectConfig {
     /// The Vercel team slug — determines the OIDC issuer/audience/JWKS in
     /// team-issuer mode (`https://oidc.vercel.com/<slug>`).
     pub team_slug: String,
-    /// Whether an attestation issued to another project, or presented twice, is refused (`true`)
-    /// or only logged as a would-be refusal (`false`, the default). See [`VerifiedInbound`].
+    /// Whether an attestation issued to another project, or presented again after its burst
+    /// window, is refused (`true`) or only logged as a would-be refusal (`false`, the default). See
+    /// [`VerifiedInbound`] and `intake_service::ATTESTATION_REPEAT_WINDOW_SECS`.
     pub enforce_attestation_binding: bool,
 }
 

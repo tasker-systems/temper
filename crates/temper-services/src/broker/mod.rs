@@ -39,7 +39,7 @@ pub fn resolve_broker(vercel: Option<VercelConnectConfig>) -> Arc<dyn Credential
         Some(cfg) => {
             // Said once at startup, so an operator who set the flag can see whether it took.
             if cfg.enforce_attestation_binding {
-                tracing::info!("inbound attestation binding: enforced (repeats and other projects' attestations are refused)");
+                tracing::info!("inbound attestation binding: enforced (other projects' attestations, and repeats after their burst window, are refused)");
             } else {
                 tracing::info!("inbound attestation binding: observing (would-be refusals are logged; set VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING=true to enforce)");
             }
@@ -148,8 +148,9 @@ pub struct VerifiedInbound {
     /// instances whose clocks disagree. A replay key need not be remembered past this.
     pub expires_at: i64,
     /// Whether the broker's binding checks refuse, or only report. While `false`, a replayed
-    /// attestation or one issued to another project is logged as a would-be refusal and still
-    /// accepted (`VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING`).
+    /// attestation (a repeat after its burst window) or one issued to another project is logged as
+    /// a would-be refusal and still accepted (`VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING`). A
+    /// repeat inside the window is accepted either way.
     pub binding_enforced: bool,
 }
 
