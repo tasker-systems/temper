@@ -41,7 +41,7 @@ ALTER TABLE kb_machine_clients
     CHECK (issuer = 'temper' OR (client_id NOT LIKE 'conn\_%' AND client_id NOT LIKE 'tmpr\_%'));
 
 SELECT declare_migration(
-    20261029100000,
+    20261030100000,
     'additive',
     'Adds two CHECK constraints keeping machine and DCR client ids apart: kb_oauth_dcr_clients.client_id '
     'must begin conn_, and a kb_machine_clients row whose issuer is not temper may not begin conn_ or '

@@ -1242,7 +1242,7 @@ mod tests {
     }
 
     /// The schema keeps the namespaces apart whatever writes the row
-    /// (`20261029100000_machine_client_id_namespaces`): a DCR client id begins `conn_`, and a machine
+    /// (`20261030100000_machine_client_id_namespaces`): a DCR client id begins `conn_`, and a machine
     /// row temper did not issue keeps out of `conn_` and `tmpr_`.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn the_database_keeps_machine_and_dcr_client_ids_apart(pool: PgPool) {
