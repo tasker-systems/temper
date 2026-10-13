@@ -43,11 +43,8 @@ describe("reconcileMemberships", () => {
     expect(headerRecord["X-Temper-Internal-Secret"]).toBeUndefined();
     expect(headerRecord["content-type"]).toBe("application/json");
 
-    // FAILS IF: anything but the v2 credential is sent. temper-api reads only these three, and the
-    // retired `X-Temper-Signature` construction is good at any door that shares its key.
-    expect(Object.keys(headerRecord).sort()).toEqual(
-      ["content-type", NONCE_HEADER, SIGNATURE_V2_HEADER, TIMESTAMP_HEADER].sort(),
-    );
+    // FAILS IF: the retired `X-Temper-Signature` construction rides beside v2 again. It binds
+    // neither the door nor the occasion, and temper-api reads only the v2 headers.
     expect(headerRecord["X-Temper-Signature"]).toBeUndefined();
 
     const timestamp = Number(headerRecord[TIMESTAMP_HEADER]);

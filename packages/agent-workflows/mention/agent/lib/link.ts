@@ -30,11 +30,6 @@ export function signRequestV2(
 /**
  * The v2 headers for one signed POST to `door`: timestamp, a fresh nonce, and the signature.
  * These three are the whole credential; temper-api reads nothing else.
- *
- * The signature covers THIS server-to-server call, not the URL the user clicks. temper's
- * `internal_sig` skew window is 30 seconds and a human clicks a Slack link minutes later,
- * so signing the user-facing URL would force that gate open. What the user gets is the
- * IdP's own authorize URL with an opaque, single-use, DB-backed state.
  */
 export function signedHeaders(
   secret: string,
@@ -101,6 +96,10 @@ export async function requestLinkState(principalId: string): Promise<LinkState> 
   const baseUrl = requireEndpointEnv("TEMPER_API_URL");
   const secret = requireEnv("SLACK_LINK_SECRET");
 
+  // The signature covers THIS server-to-server call, not the URL the user clicks. temper's
+  // `internal_sig` skew window is 30 seconds and a human clicks a Slack link minutes later, so
+  // signing the user-facing URL would force that gate open. What the user gets is the IdP's own
+  // authorize URL with an opaque, single-use, DB-backed state.
   const body = JSON.stringify({ slack_principal_id: principalId });
   const res = await fetch(`${baseUrl.replace(/\/$/, "")}${LINK_STATE_DOOR}`, {
     method: "POST",

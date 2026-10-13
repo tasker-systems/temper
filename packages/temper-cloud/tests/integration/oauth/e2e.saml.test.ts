@@ -400,8 +400,16 @@ describe("e2e: full mock-IdP SAML login", () => {
       // The secret never travels the wire; a fresh signature over the body does.
       const timestamp = Number(call.timestamp);
       expect(Number.isInteger(timestamp)).toBe(true);
+      expect(call.nonce).toMatch(/^[0-9a-f]{32}$/);
       expect(call.signature).toBe(
-        signRequestV2("s3cr3t", "POST", RECONCILE_DOOR, timestamp, call.nonce ?? "", call.rawBody),
+        signRequestV2(
+          "s3cr3t",
+          "POST",
+          RECONCILE_DOOR,
+          timestamp,
+          call.nonce as string,
+          call.rawBody,
+        ),
       );
       expect(call.v1Signature).toBeNull();
       expect(call.body).toMatchObject({

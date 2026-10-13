@@ -53,9 +53,11 @@ deserializing). Because both operate on identical bytes, there is no cross-langu
 canonicalization to drift on — the same discipline every major webhook signature uses
 (GitHub `X-Hub-Signature-256`, Stripe). The signing scheme lives once in
 `temper_core::internal_sig` (shared home for the header names, the message format, and the
-skew window); the TS signer (`packages/temper-cloud/src/oauth/reconcile.ts`) and the Rust
-verifier are pinned together by a **shared known-answer test vector** (asserted in both
-`internal_sig.rs` and `tests/oauth/wire-contract.test.ts`), so they cannot drift on the HMAC
+skew window); the TS signers (`packages/temper-cloud/src/oauth/reconcile.ts`, the mention agent's
+`agent/lib/link.ts`) and the Rust verifier are pinned together by a **shared known-answer test
+vector** (asserted in `crates/temper-core/tests/internal_sig_v2.rs`,
+`packages/temper-cloud/tests/oauth/wire-contract.test.ts` and
+`packages/agent-workflows/mention/tests/link.test.ts`), so they cannot drift on the HMAC
 construction. Rejection is verified end-to-end for wrong-secret, stale-timestamp, tampered-body,
 replay, cross-door and the original construction in `crates/temper-api/tests/internal_saml_test.rs`.
 
