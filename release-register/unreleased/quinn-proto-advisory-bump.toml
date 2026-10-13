@@ -1,0 +1,13 @@
+title    = "quinn-proto 0.11.15 -> 0.11.19 in Cargo.lock, clearing five RustSec advisories"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+`cargo audit` fails every build on RUSTSEC-2026-0338, -0339, -0340, -0341 and -0342 against
+quinn-proto 0.11.15 (two rated high); 0.11.18 is the first fixed version. `cargo update -p
+quinn-proto` moves the lockfile to 0.11.19 and adds rand_pcg 0.10.2. No manifest changes.
+quinn-proto sits in Cargo.lock without any enabled feature compiling it (`cargo tree -i
+quinn-proto --target all` prints nothing), so no binary changes. Who observes: nobody at runtime.
+Release relevance: behavioral, dependency-only; it unblocks the audit gate.
+'''

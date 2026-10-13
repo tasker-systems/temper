@@ -99,6 +99,13 @@ fi
 
 echo "==> Running pre-commit checks (rust=${HAS_RUST}, temper-cloud-ts=${HAS_TS}, temper-ui=${HAS_UI})..."
 
+if staged_match '^migrations/'; then
+  # Against the local origin/main, which may be stale: the script warns and skips when it is
+  # missing, and CI checks against the real base regardless.
+  echo "  Checking migration numbering..."
+  bash "$(git rev-parse --show-toplevel)/.github/scripts/check-migration-order.sh"
+fi
+
 if [ "$HAS_RUST" = "true" ]; then
   echo "  Checking formatting..."
   cargo fmt --all -- --check

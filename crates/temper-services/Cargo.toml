@@ -56,6 +56,10 @@ base64 = "0.22"
 # random nonce per row, so nonce reuse is a non-issue). Pure Rust, no OpenSSL — matches the
 # rustls-only posture. `getrandom` backs the nonce/key RNG (`OsRng`).
 chacha20poly1305 = "0.10"
+# Derives the vault key's non-secret fingerprint (HMAC-SHA256 under the key, truncated), which
+# each vault row records so an open failure can say which key sealed it. Already in the graph via
+# temper-core's internal signatures.
+hmac = "0.12"
 # Path-segment encoding for the Connect mint URL — a connector uid is one
 # url-encoded path segment (`github/acme` → `github%2Facme`).
 percent-encoding = "2"
@@ -95,8 +99,8 @@ tracing-subscriber = "0.3"
 # rather than by a name that has changed before. Same three temper-api's telemetry tests carry, at
 # the same versions — these must move together or the two suites disagree about what a span is.
 temperkb-telemetry = { workspace = true, features = ["test-support"] }
-opentelemetry_sdk = { version = "0.32", features = ["testing"] }
-opentelemetry = "0.32"
+opentelemetry_sdk = { version = "0.33", features = ["testing"] }
+opentelemetry = "0.33"
 serde_yaml = "0.9"
 wiremock = "0.6"
 trybuild = "1"

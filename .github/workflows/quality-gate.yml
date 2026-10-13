@@ -412,6 +412,18 @@ jobs:
       - name: Guard test — audit-migration-declarations
         run: bash .github/scripts/test-audit-migration-declarations.sh
 
+      # A migration added below the base's newest applies after it on every deployed database and
+      # before it on a fresh one. Renumbering is free only before the merge, so the check is here.
+      # It needs the base revision fetched above; on a push there is no base and it no-ops, and an
+      # unresolvable base on a PR or queue run exits 2 rather than reading as clean.
+      - name: Every added migration is numbered above the base's newest
+        env:
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: bash .github/scripts/check-migration-order.sh
+
+      - name: Guard test — check-migration-order
+        run: bash .github/scripts/test-check-migration-order.sh
+
       # Spec §3's routing half depends on reading the SAME declaration the checker above reads,
       # from a SECOND parser in a different language: the awk one runs here over migrations/*.sql,
       # and a Rust twin runs inside the migration runner over the SQL the binary carries, because a

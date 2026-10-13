@@ -1,6 +1,7 @@
 use crate::auth_config::{parse_auth_config, AuthConfig, ConfigError};
 use crate::broker::VercelConnectConfig;
 use crate::services::grant_crypto::VaultKey;
+use crate::services::slack_grant_vault_service::RetiredKeys;
 use crate::transport::VERCEL_REQUEST_BODY_CAP_BYTES;
 use std::env;
 use temper_auth::config::shared_secret;
@@ -231,6 +232,10 @@ pub struct SlackLinkConfig {
     /// too. Parsed once from `SLACK_VAULT_ENC_KEY` (32 bytes, base64) — a malformed key disables
     /// the whole link flow rather than half-configuring it.
     pub vault_key: VaultKey,
+    /// Keys an operator has deliberately retired, named by fingerprint in
+    /// `SLACK_VAULT_RETIRED_KEY_FINGERPRINTS`. A vault row sealed under one of them that no longer
+    /// opens is a refusal with a re-link URL rather than a 500. Not secret. Empty unless set.
+    pub retired_vault_keys: RetiredKeys,
 }
 
 impl std::fmt::Debug for ApiConfig {
@@ -282,6 +287,7 @@ impl std::fmt::Debug for SlackLinkConfig {
             .field("hmac_secret", &"redacted")
             .field("public_base_url", &self.public_base_url)
             .field("vault_key", &self.vault_key)
+            .field("retired_vault_keys", &self.retired_vault_keys)
             .finish()
     }
 }
@@ -615,12 +621,50 @@ fn parse_slack_link(lookup: impl Fn(&str) -> Option<String>) -> Option<SlackLink
         }
     };
 
+    let client_id = get("SLACK_LINK_CLIENT_ID")?;
+    let hmac_secret = get("SLACK_LINK_SECRET")?;
+    let public_base_url = get("PUBLIC_BASE_URL")?;
+
+    let fingerprint = vault_key.fingerprint();
+    // The value an operator copies into SLACK_VAULT_RETIRED_KEY_FINGERPRINTS when this key is
+    // later rotated out, and compares against `kb_slack_grant_vault.key_fingerprint`. Not secret.
+    tracing::info!(
+        key_fingerprint = %fingerprint,
+        "slack vault key fingerprint: {fingerprint}"
+    );
+    let retired_vault_keys =
+        parse_retired_vault_keys(get("SLACK_VAULT_RETIRED_KEY_FINGERPRINTS"), &vault_key);
+
     Some(SlackLinkConfig {
-        client_id: get("SLACK_LINK_CLIENT_ID")?,
-        hmac_secret: get("SLACK_LINK_SECRET")?,
-        public_base_url: get("PUBLIC_BASE_URL")?,
+        client_id,
+        hmac_secret,
+        public_base_url,
         vault_key,
+        retired_vault_keys,
     })
+}
+
+/// Parse `SLACK_VAULT_RETIRED_KEY_FINGERPRINTS`, failing SAFE: any malformed entry discards the
+/// whole list with an error, rather than disabling the Slack flow or applying half of it.
+///
+/// A retirement is a remedy, not part of the key. Without it, a row sealed under a retired key is a
+/// 500, which is the failure the vault had before retirements existed. With a wrong one, users are
+/// offered a re-link that overwrites their grant. So the safe direction is to ignore the list.
+fn parse_retired_vault_keys(raw: Option<String>, current: &VaultKey) -> RetiredKeys {
+    let Some(raw) = raw else {
+        return RetiredKeys::default();
+    };
+    match RetiredKeys::parse(&raw, current.fingerprint()) {
+        Ok(retired) => retired,
+        Err(e) => {
+            tracing::error!(
+                "SLACK_VAULT_RETIRED_KEY_FINGERPRINTS is invalid ({e}); it is ignored, so rows \
+                 sealed under a retired key keep answering the mint with a 500. Expected a comma \
+                 separated list of 16-hex-character fingerprints, or `unstamped`."
+            );
+            RetiredKeys::default()
+        }
+    }
 }
 
 /// Every variable whose plaintext value is a standalone credential: hold the string, exercise the

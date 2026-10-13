@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_slack_grant_vault SET at_nonce = $2, at_ciphertext = $3 WHERE slack_principal_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bytea",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "37730da105dd4c2ea226ca7a3b546505cc2a7830e32b59d038374401a7f5f917"
+}

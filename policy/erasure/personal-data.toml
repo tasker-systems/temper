@@ -157,6 +157,7 @@
 "kb_slack_grant_vault.at_ciphertext"               = { class = "identifier", ceiling = "full", achieved = "deleted:8", note = "AEAD-sealed cached Slack access token" }
 "kb_slack_grant_vault.rt_nonce"                    = { class = "none", ceiling = "n-a", achieved = "-", note = "per-row random AEAD nonce — no personal data" }
 "kb_slack_grant_vault.at_nonce"                    = { class = "none", ceiling = "n-a", achieved = "-", note = "per-row random AEAD nonce — no personal data" }
+"kb_slack_grant_vault.key_fingerprint"             = { class = "none", ceiling = "n-a", achieved = "-", note = "truncated HMAC of the instance vault key, identical on every row that key sealed — names a key, not a person" }
 "kb_erasure_slack_revocations.rt_ciphertext"       = { class = "identifier", ceiling = "full", achieved = "remainder: not the act's to reach — the erasure drain (erasure_slack_revocation_service) NULLs it at revocation or at the retry cap, outside any act body", note = "a Slack refresh token whose revoke failed during an erasure, re-sealed under the row id; no Slack id or profile beside it" }
 "kb_erasure_slack_revocations.rt_nonce"            = { class = "none", ceiling = "n-a", achieved = "-", note = "per-row random AEAD nonce — no personal data" }
 "kb_erasure_retention_policies.set_by_profile_id"  = { class = "reference", ceiling = "pseudonym", achieved = "-", note = "the operator who set the policy" }

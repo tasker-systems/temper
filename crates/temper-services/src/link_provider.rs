@@ -79,6 +79,7 @@ mod tests {
                 &base64::engine::general_purpose::STANDARD.encode([0u8; 32]),
             )
             .unwrap(),
+            retired_vault_keys: Default::default(),
         }
     }
 
