@@ -38,8 +38,11 @@ pub fn resolve_broker(vercel: Option<VercelConnectConfig>) -> Arc<dyn Credential
     match vercel {
         Some(cfg) => {
             // Said once at startup, so an operator who set the flag can see whether it took.
-            if cfg.enforce_attestation_binding {
-                tracing::info!("inbound attestation binding: enforced (repeats and other projects' attestations are refused)");
+            // A repeated attestation is only ever logged in production (see
+            // `VercelConnectConfig::enforce_single_use`), so the line speaks for the project
+            // binding alone.
+            if cfg.enforce_project_binding {
+                tracing::info!("inbound attestation binding: enforced (attestations issued to another project are refused; repeats are logged, never refused)");
             } else {
                 tracing::info!("inbound attestation binding: observing (would-be refusals are logged; set VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING=true to enforce)");
             }
@@ -147,10 +150,10 @@ pub struct VerifiedInbound {
     /// clock-skew leeway (it accepts the token that long past `exp`), plus the leeway again for API
     /// instances whose clocks disagree. A replay key need not be remembered past this.
     pub expires_at: i64,
-    /// Whether the broker's binding checks refuse, or only report. While `false`, a replayed
-    /// attestation or one issued to another project is logged as a would-be refusal and still
-    /// accepted (`VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING`).
-    pub binding_enforced: bool,
+    /// Whether a repeat of this attestation is refused, or only reported and recorded. `false` in
+    /// production — see [`VercelConnectConfig::enforce_single_use`] for why. (The project binding
+    /// needs no flag here: the broker refuses a mismatch itself, before this value exists.)
+    pub single_use_enforced: bool,
 }
 
 /// The single-use key for an attestation bearer: its lowercase-hex SHA-256.

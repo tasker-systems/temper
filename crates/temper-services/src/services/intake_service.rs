@@ -181,7 +181,8 @@ pub struct AttestationSeen<'a> {
 pub enum Receipt {
     /// The event was appended.
     Recorded(Uuid),
-    /// The attestation was already accepted, and the binding is enforced: nothing was appended.
+    /// The attestation was already accepted, and [`AttestationSeen::enforced`] refuses repeats:
+    /// nothing was appended. Unreachable from a deployment, which never enforces single use.
     RefusedAsReplay,
 }
 
@@ -246,10 +247,12 @@ async fn receive(
                 tracing::warn!(reason = "replayed", "inbound webhook attestation refused");
                 return Ok(Receipt::RefusedAsReplay);
             }
-            tracing::warn!(
+            // Reported, not refused: Connect sends one attestation for several distinct
+            // deliveries (`VercelConnectConfig::enforce_single_use`). `reason` stays the field log
+            // queries count on.
+            tracing::info!(
                 reason = "replayed",
-                would_refuse = true,
-                "inbound attestation: would refuse once binding is enforced"
+                "inbound attestation: presented again; recorded, not refused"
             );
         }
     }

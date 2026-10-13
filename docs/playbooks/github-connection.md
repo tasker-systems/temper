@@ -231,7 +231,7 @@ run.
 | `VERCEL_CONNECT_PROJECT_ID` | The Vercel project ID the broker mints on behalf of | `prj_...` from `vercel project ls` or the project settings page |
 | `VERCEL_CONNECT_TEAM_ID` | Your Vercel team ID | `team_...` from `vercel teams ls` |
 | `VERCEL_CONNECT_TEAM_SLUG` | Your Vercel team slug | from `vercel teams ls` |
-| `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING` | Optional. `true` refuses an inbound attestation issued to another project, or presented a second time. Unset, both are logged as would-be refusals and the webhook still lands | Leave unset at first; see *Enforcing the attestation binding* below |
+| `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING` | Optional. `true` refuses an inbound attestation issued to another project. Unset, that is logged as a would-be refusal and the webhook still lands. An attestation presented a second time is always logged, never refused | Leave unset at first; see *Enforcing the attestation binding* below |
 
 **Set them on the temper-api Vercel project:**
 
@@ -826,23 +826,23 @@ carrying a header it previously did; it is not something to work around by
 guessing the event name from the payload.
 
 **Enforcing the attestation binding.** An inbound attestation is valid for twelve hours and
-names the whole Vercel team in `aud`, so two more checks bind it to one receipt for this project:
-its `project_id` must be `VERCEL_CONNECT_PROJECT_ID`, and the same attestation is accepted once
-(temper records a hash of it, never the token, until it expires). With
-`VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING` unset (the startup log says
-`inbound attestation binding: observing`), a failed check logs
-`inbound attestation: would refuse once binding is enforced` with `reason` = `project_mismatch` or
-`replayed`, and the webhook still lands. Let real traffic run for a day or so: if no such line
-appears, set the variable to `true` and redeploy; the startup log then says `enforced`. A value the
-API cannot read as a boolean also enforces, and logs an error saying so.
+names the whole Vercel team in `aud`, so its `project_id` must also be
+`VERCEL_CONNECT_PROJECT_ID`. With `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING` unset (the startup
+log says `inbound attestation binding: observing`), a mismatch logs
+`inbound attestation: would refuse once binding is enforced` with `reason` = `project_mismatch`,
+and the webhook still lands. Let real traffic run for a day or so: if no such line appears, set the
+variable to `true` and redeploy; the startup log then says `enforced`. A value the API cannot read
+as a boolean also enforces, and logs an error saying so. Once enforced, a mismatch is the same
+opaque `401` as any other refusal, with the reason in the log. A `project_mismatch` line means
+`VERCEL_CONNECT_PROJECT_ID` is not the project Connect forwards to.
 
-A `project_mismatch` line means `VERCEL_CONNECT_PROJECT_ID` is not the project Connect forwards
-to. A `replayed` line on ordinary traffic means Connect sent one attestation more than once, and
-enforcing would refuse those repeats; investigate before enforcing. Once enforced, both refusals
-are the same opaque `401` as any other, with the reason in the log. One more case then fails
-closed: a receipt cut off mid-flight (the function timed out or was killed after the attestation
-was recorded) keeps its record, so a redelivery under that same attestation is refused, while a
-redelivery under a fresh attestation lands.
+temper also records a hash of each attestation (never the token) until it expires, and logs
+`inbound attestation: presented again; recorded, not refused` with `reason` = `replayed` when one
+is presented again. That is reported, **never refused**, whatever the variable says. Connect can send one attestation for several deliveries
+sent close together — a merge through GitHub's merge queue sends `closed` and then `dequeued` —
+and those are distinct events. The attestation names the connector, not the content, so refusing a
+repeat would drop real events without making a captured attestation any less useful on its first
+use.
 
 **`401` on `/api/intake/webhook`** — the attestation verified but resolved to no
 live credentialed connection. Either Step 6 has not been completed for this

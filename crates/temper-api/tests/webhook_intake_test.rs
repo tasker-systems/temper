@@ -43,16 +43,26 @@ const ED_PUB: &str = "-----BEGIN PUBLIC KEY-----\n\
 /// production RS256 + claim gate (issuer, audience, the anti-decoy `client_id`, the signed
 /// `trigger` claim), not a test-only relaxation of it.
 fn real_broker() -> Arc<VercelConnectBroker> {
-    broker_with_binding(false)
+    broker_with(false, false)
 }
 
-/// [`real_broker`] with the attestation binding enforced: a repeated attestation, or one issued to
-/// another project, is refused rather than reported.
+/// [`real_broker`] with both checks enforced: a repeated attestation, or one issued to another
+/// project, is refused rather than reported. A deployment cannot configure single use (see
+/// `VercelConnectConfig::enforce_single_use`); this broker keeps that mechanism witnessed.
 fn enforcing_broker() -> Arc<VercelConnectBroker> {
-    broker_with_binding(true)
+    broker_with(true, true)
 }
 
-fn broker_with_binding(enforce_attestation_binding: bool) -> Arc<VercelConnectBroker> {
+/// [`real_broker`] as `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING=true` configures it: the project
+/// binding refuses, a repeat is only reported.
+fn deployed_enforcing_broker() -> Arc<VercelConnectBroker> {
+    broker_with(true, false)
+}
+
+fn broker_with(
+    enforce_project_binding: bool,
+    enforce_single_use: bool,
+) -> Arc<VercelConnectBroker> {
     let dec = DecodingKey::from_ed_pem(ED_PUB.as_bytes()).expect("ed pub");
     Arc::new(VercelConnectBroker::with_jwks(
         JwksKeyStore::with_static_key(dec, Algorithm::EdDSA),
@@ -61,7 +71,8 @@ fn broker_with_binding(enforce_attestation_binding: bool) -> Arc<VercelConnectBr
             project_id: PROJECT_ID.into(),
             team_id: "team_test".into(),
             team_slug: TEAM_SLUG.into(),
-            enforce_attestation_binding,
+            enforce_project_binding,
+            enforce_single_use,
         },
     ))
 }
@@ -357,10 +368,9 @@ async fn a_receipt_performs_no_egress(pool: PgPool) {
 /// unwitnessed `X-GitHub-Delivery` header to decide whether an event exists at all.
 ///
 /// This sends one attestation twice, under the default broker, which reports a repeat rather than
-/// refusing it. Whether Connect's own redeliveries carry a fresh attestation is what that report
-/// exists to find out; enforced, a repeat of the same attestation is refused
-/// (`an_enforced_binding_accepts_an_attestation_once`) while a fresh one is still a second receipt
-/// (`an_enforced_binding_still_records_a_freshly_attested_redelivery`).
+/// refusing it. A deployment that enforces the binding still records the repeat
+/// (`the_deployed_binding_refuses_another_projects_attestation_and_records_a_repeat`): Connect sends
+/// one attestation for every delivery in a burst.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_redelivery_is_a_second_receipt(pool: PgPool) {
     let (_team, conn) = seed_world(&pool, Some(pr_selector())).await;
@@ -554,7 +564,40 @@ async fn curated_graph_counts(pool: &PgPool) -> (i64, i64, i64) {
     )
 }
 
-// ── single use and the project binding (enforced) ───────────────────────────
+// ── the binding as a deployment enforces it ─────────────────────────────────
+
+/// What `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING=true` does: an attestation issued to another
+/// project is refused, and the same attestation presented again is recorded as a second receipt.
+/// Connect sends a merge-queue merge's `pull_request` `closed` and `dequeued` under one
+/// attestation — distinct events with distinct bodies — so refusing the repeat would drop every
+/// `dequeued` (task `01a12e27`).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_deployed_binding_refuses_another_projects_attestation_and_records_a_repeat(
+    pool: PgPool,
+) {
+    let (_team, conn) = seed_world(&pool, Some(pr_selector())).await;
+    let app =
+        common::setup_test_app_with_state(pool.clone(), |s| s.broker = deployed_enforcing_broker())
+            .await;
+
+    let sibling = attestation_issued(CONNECTOR_UID, "prj_sibling", 1_750_000_000);
+    assert_eq!(
+        post_pr(&app, &sibling, true).await,
+        StatusCode::UNAUTHORIZED,
+        "another project's attestation is refused"
+    );
+
+    let authz = attestation(CONNECTOR_UID);
+    assert_eq!(post_pr(&app, &authz, true).await, StatusCode::ACCEPTED);
+    assert_eq!(
+        post_pr(&app, &authz, true).await,
+        StatusCode::ACCEPTED,
+        "a repeated attestation is reported, not refused"
+    );
+    assert_eq!(webhook_event_count(&pool, conn).await, 2);
+}
+
+// ── single use and the project binding (both enforced; single use is code-only) ──
 
 /// Post one PR webhook under `authorization`, with or without the event-name header.
 async fn post_pr(app: &common::TestApp, authorization: &str, event_header: bool) -> StatusCode {

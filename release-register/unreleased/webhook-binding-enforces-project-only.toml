@@ -1,0 +1,16 @@
+title    = "The webhook attestation binding enforces the project, and reports repeats"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http"]
+status   = "signal-only"
+body = '''
+`VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING=true` now refuses only an inbound attestation whose
+`project_id` is not `VERCEL_CONNECT_PROJECT_ID`. An attestation presented a second time is recorded
+and logged (`reason = replayed`) but never refused, whatever the variable says: Connect can send one
+attestation for several distinct deliveries sent close together (a merge-queue merge's `closed` and
+`dequeued`), and the attestation does not cover the body, so refusing repeats would drop real
+events. Request and response shapes are unchanged, and nothing changes while the variable is unset
+(the default). Who observes: an operator who sets the variable; the startup log line now says
+repeats are logged, never refused. Release relevance: behavioral, and only for deployments that set
+the variable.
+'''

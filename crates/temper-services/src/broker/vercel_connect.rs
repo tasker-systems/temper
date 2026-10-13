@@ -37,9 +37,20 @@ pub struct VercelConnectConfig {
     /// The Vercel team slug — determines the OIDC issuer/audience/JWKS in
     /// team-issuer mode (`https://oidc.vercel.com/<slug>`).
     pub team_slug: String,
-    /// Whether an attestation issued to another project, or presented twice, is refused (`true`)
-    /// or only logged as a would-be refusal (`false`, the default). See [`VerifiedInbound`].
-    pub enforce_attestation_binding: bool,
+    /// Whether an attestation issued to another project is refused (`true`) or only logged as a
+    /// would-be refusal (`false`, the default). Read from
+    /// `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING`.
+    pub enforce_project_binding: bool,
+    /// Whether an attestation presented a second time is refused (`true`) or only logged (`false`).
+    ///
+    /// **Never read from the environment**: production always observes. The attestation names the
+    /// connector, not the content (its claims cover neither body nor headers), and Connect sends one
+    /// attestation for every delivery in a burst — a queue merge's `closed` and `dequeued` arrive
+    /// under the same one, distinct events with distinct bodies. Refusing repeats would drop those
+    /// events and stop nothing a captured attestation could do on its first use. The repeat is still
+    /// recorded and logged, and the switch is kept settable in code so the mechanism stays tested
+    /// for the day a body-binding signature makes it meaningful (task `01a12e27`).
+    pub enforce_single_use: bool,
 }
 
 impl std::fmt::Debug for VercelConnectConfig {
@@ -49,10 +60,8 @@ impl std::fmt::Debug for VercelConnectConfig {
             .field("project_id", &self.project_id)
             .field("team_id", &self.team_id)
             .field("team_slug", &self.team_slug)
-            .field(
-                "enforce_attestation_binding",
-                &self.enforce_attestation_binding,
-            )
+            .field("enforce_project_binding", &self.enforce_project_binding)
+            .field("enforce_single_use", &self.enforce_single_use)
             .finish_non_exhaustive()
     }
 }
@@ -157,7 +166,7 @@ async fn verify_inbound_impl(
     // 5. The project binding. `aud` is team-wide, so a token Connect issued to a sibling project
     //    in the same team passes everything above; its `project_id` claim is what names the
     //    receiving project (identical to this deployment's own ambient token, research
-    //    `019f62e6`). Reported until enforced: see `VerifiedInbound::binding_enforced`.
+    //    `019f62e6`). Reported until `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING` enforces it.
     let attested_project = data.claims.get("project_id").and_then(|v| v.as_str());
     if attested_project != Some(binding.project_id) {
         if binding.enforce {
@@ -190,15 +199,17 @@ async fn verify_inbound_impl(
         payload: req.body.to_vec(),
         replay_key: super::replay_key(token),
         expires_at,
-        binding_enforced: binding.enforce,
+        single_use_enforced: binding.single_use,
     })
 }
 
-/// The receiving project an attestation must name, and whether a mismatch refuses.
+/// The receiving project an attestation must name, whether a mismatch refuses, and whether a
+/// repeat will be refused downstream (see [`VercelConnectConfig::enforce_single_use`]).
 #[derive(Clone, Copy)]
 struct Binding<'a> {
     project_id: &'a str,
     enforce: bool,
+    single_use: bool,
 }
 
 /// Build the Connect mint URL. The connector uid is **one url-encoded path
@@ -329,7 +340,8 @@ impl CredentialBroker for VercelConnectBroker {
     ) -> Result<VerifiedInbound, BrokerError> {
         let binding = Binding {
             project_id: &self.config.project_id,
-            enforce: self.config.enforce_attestation_binding,
+            enforce: self.config.enforce_project_binding,
+            single_use: self.config.enforce_single_use,
         };
         verify_inbound_impl(
             &self.jwks,
@@ -427,12 +439,14 @@ mod verify_inbound_tests {
     const OBSERVE: Binding<'static> = Binding {
         project_id: PROJECT,
         enforce: false,
+        single_use: false,
     };
 
-    /// The receiving project, binding enforced.
+    /// The receiving project, both checks enforced.
     const ENFORCE: Binding<'static> = Binding {
         project_id: PROJECT,
         enforce: true,
+        single_use: true,
     };
 
     fn valid_attestation() -> serde_json::Value {
@@ -482,7 +496,7 @@ mod verify_inbound_tests {
         // Past `exp` by the verifier's leeway, and the leeway again.
         let leeway = JwksKeyStore::CLOCK_SKEW_LEEWAY_SECONDS as i64;
         assert_eq!(v.expires_at, 9_999_999_999 + 2 * leeway);
-        assert!(v.binding_enforced);
+        assert!(v.single_use_enforced);
     }
 
     /// A token Connect issued to a sibling project in the same team passes iss, aud and
@@ -505,7 +519,7 @@ mod verify_inbound_tests {
         let v = verify_inbound_impl(&store(), ISS, AUD, OBSERVE, req())
             .await
             .expect("reported, not refused");
-        assert!(!v.binding_enforced);
+        assert!(!v.single_use_enforced);
     }
 
     /// An attestation naming no project at all is no better than one naming another.
