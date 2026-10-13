@@ -99,8 +99,8 @@ tracing-subscriber = "0.3"
 # rather than by a name that has changed before. Same three temper-api's telemetry tests carry, at
 # the same versions — these must move together or the two suites disagree about what a span is.
 temperkb-telemetry = { workspace = true, features = ["test-support"] }
-opentelemetry_sdk = { version = "0.32", features = ["testing"] }
-opentelemetry = "0.32"
+opentelemetry_sdk = { version = "0.33", features = ["testing"] }
+opentelemetry = "0.33"
 serde_yaml = "0.9"
 wiremock = "0.6"
 trybuild = "1"
