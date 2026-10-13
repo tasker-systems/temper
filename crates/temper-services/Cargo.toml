@@ -104,3 +104,6 @@ opentelemetry = "0.33"
 serde_yaml = "0.9"
 wiremock = "0.6"
 trybuild = "1"
+# The internal-signature refusal tests build the retired v1 construction themselves, to show it is
+# refused; `hmac` and `sha2` are regular dependencies already.
+hex = "0.4"

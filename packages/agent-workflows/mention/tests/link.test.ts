@@ -1,4 +1,3 @@
-import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -6,7 +5,7 @@ import {
   requestLinkState,
   LINK_STATE_DOOR,
   MINT_DOOR,
-  signIntentRequest,
+  signedHeaders,
   signRequestV2,
 } from "../agent/lib/link.js";
 
@@ -59,18 +58,30 @@ describe("assertSlackSecretsDistinct", () => {
   });
 });
 
-describe("signIntentRequest", () => {
-  it("signs HMAC-SHA256 over `{timestamp}.{body}` as lowercase hex", () => {
+describe("signedHeaders", () => {
+  // FAILS IF: a signer sends anything but the v2 credential. temper-api reads only these three, and
+  // the retired `X-Temper-Signature` construction is good at any door that shares its key.
+  it("sends exactly the v2 headers, with the timestamp floored to whole seconds", () => {
     const body = JSON.stringify({ slack_principal_id: "slack:T1:U1" });
-    const { timestamp, signature } = signIntentRequest("s3cret", 1_700_000_000, body);
+    const headers = signedHeaders("s3cret", MINT_DOOR, 1_700_000_000.9, body);
 
-    expect(timestamp).toBe("1700000000");
-    // The known-answer check: this MUST match temper_core::internal_sig::sign.
-    const expected = createHmac("sha256", "s3cret")
-      .update(`1700000000.${body}`)
-      .digest("hex");
-    expect(signature).toBe(expected);
-    expect(signature).toMatch(/^[0-9a-f]{64}$/);
+    expect(Object.keys(headers).sort()).toEqual([
+      "X-Temper-Nonce",
+      "X-Temper-Signature-V2",
+      "X-Temper-Timestamp",
+    ]);
+    expect(headers).not.toHaveProperty("X-Temper-Signature");
+    expect(headers["X-Temper-Timestamp"]).toBe("1700000000");
+    expect(headers["X-Temper-Signature-V2"]).toBe(
+      signRequestV2(
+        "s3cret",
+        "POST",
+        MINT_DOOR,
+        "1700000000",
+        headers["X-Temper-Nonce"],
+        body,
+      ),
+    );
   });
 });
 
@@ -171,7 +182,7 @@ describe("requestLinkState", () => {
     expect(init.body).toBe(JSON.stringify({ slack_principal_id: PRINCIPAL }));
 
     const headers = init.headers as Record<string, string>;
-    expect(headers["X-Temper-Signature"]).toMatch(/^[0-9a-f]{64}$/);
+    expect(headers).not.toHaveProperty("X-Temper-Signature");
     expect(headers["X-Temper-Timestamp"]).toMatch(/^\d+$/);
 
     // FAILS IF: the v2 signature names a door other than link-state, or no fresh nonce. temper

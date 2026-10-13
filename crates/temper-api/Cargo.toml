@@ -92,3 +92,8 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 # `oneshot` drives the rate-limit middleware directly in the seam's witnesses, the same
 # way temper-mcp's transport layer tests drive theirs.
 tower = { version = "0.5", features = ["util"] }
+# `internal_saml_test` builds the retired v1 internal-signature construction itself, to show the
+# reconcile door refuses it; nothing in temper-core signs it any more.
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"

@@ -4,9 +4,7 @@ import {
   NONCE_HEADER,
   RECONCILE_DOOR,
   reconcileMemberships,
-  SIGNATURE_HEADER,
   SIGNATURE_V2_HEADER,
-  signReconcile,
   signRequestV2,
   TIMESTAMP_HEADER,
 } from "../../src/oauth/reconcile.js";
@@ -26,7 +24,7 @@ afterEach(() => {
 });
 
 describe("reconcileMemberships", () => {
-  it("POSTs to INTERNAL_RECONCILE_URL with a valid HMAC signature over the body", async () => {
+  it("POSTs to INTERNAL_RECONCILE_URL with a valid v2 signature over the body", async () => {
     vi.stubEnv("INTERNAL_RECONCILE_URL", "https://api.internal/internal/saml/reconcile");
     vi.stubEnv("INTERNAL_RECONCILE_SECRET", "s3cr3t");
     const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
@@ -45,10 +43,12 @@ describe("reconcileMemberships", () => {
     expect(headerRecord["X-Temper-Internal-Secret"]).toBeUndefined();
     expect(headerRecord["content-type"]).toBe("application/json");
 
-    // The signature must be valid for the exact body + timestamp that were sent.
+    // FAILS IF: the retired `X-Temper-Signature` construction rides beside v2 again. It binds
+    // neither the door nor the occasion, and temper-api reads only the v2 headers.
+    expect(headerRecord["X-Temper-Signature"]).toBeUndefined();
+
     const timestamp = Number(headerRecord[TIMESTAMP_HEADER]);
     expect(Number.isInteger(timestamp)).toBe(true);
-    expect(headerRecord[SIGNATURE_HEADER]).toBe(signReconcile("s3cr3t", timestamp, body as string));
     expect(JSON.parse(body as string)).toMatchObject({ idp_key: "acme" });
 
     // The v2 signature names this door and a fresh nonce, so the verifier can hold it to one

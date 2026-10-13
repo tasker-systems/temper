@@ -1,0 +1,16 @@
+title    = "Internal signers send only the v2 signature"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["internal", "clients"]
+status   = "signal-only"
+body = '''
+The SAML Authorization Server (reconcile, resolve) and the Slack mention agent (link-state, mint)
+now sign each internal request with `X-Temper-Timestamp`, `X-Temper-Nonce` and
+`X-Temper-Signature-V2` only. They no longer send `X-Temper-Signature`, the original
+`"{timestamp}.{body}"` construction, which temper-api has not read since the doors began requiring
+v2. Who observes: nothing on a current temper-api; a temper-api build that predates v2 would refuse
+these requests. Rust API change in a published crate: temperkb-core's `internal_sig::sign`,
+`internal_sig::verify` and `internal_sig::SIGNATURE_HEADER` are removed (`sign_v2`, `verify_v2`
+and `v2_headers` are the construction). Release relevance: the signers (temper-cloud and the
+mention agent) must not deploy against a temper-api that predates the v2 verifier.
+'''

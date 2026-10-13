@@ -34,10 +34,9 @@ front of the API changes nothing. Three properties:
 | `X-Temper-Nonce` | 32 lowercase hex characters of fresh randomness |
 | `X-Temper-Signature-V2` | lowercase-hex v2 signature (above) |
 
-The AS also still sends `X-Temper-Signature`, the original `"{timestamp}.{body}"` construction,
-which bound neither door nor occasion. The API ignores it: it is there only for a verifier that
-predates v2, and a verifier that accepted it would reopen both gaps to anyone who stripped the v2
-headers from a capture. Removing it from the signers is the last step of the cutover.
+These three are the whole credential. The original `"{timestamp}.{body}"` construction, sent as
+`X-Temper-Signature`, bound neither door nor occasion; no signer sends it and the API does not
+read it, so a request carrying only it is refused as `missing_headers`.
 
 Every refusal answers the same 401 on the wire; the log line carries a bounded `reason`
 (`stale`, `malformed_nonce`, `signature_mismatch`, `cross_door`, `replayed`, `missing_headers`,
@@ -54,9 +53,11 @@ deserializing). Because both operate on identical bytes, there is no cross-langu
 canonicalization to drift on — the same discipline every major webhook signature uses
 (GitHub `X-Hub-Signature-256`, Stripe). The signing scheme lives once in
 `temper_core::internal_sig` (shared home for the header names, the message format, and the
-skew window); the TS signer (`packages/temper-cloud/src/oauth/reconcile.ts`) and the Rust
-verifier are pinned together by a **shared known-answer test vector** (asserted in both
-`internal_sig.rs` and `tests/oauth/wire-contract.test.ts`), so they cannot drift on the HMAC
+skew window); the TS signers (`packages/temper-cloud/src/oauth/reconcile.ts`, the mention agent's
+`agent/lib/link.ts`) and the Rust verifier are pinned together by a **shared known-answer test
+vector** (asserted in `crates/temper-core/tests/internal_sig_v2.rs`,
+`packages/temper-cloud/tests/oauth/wire-contract.test.ts` and
+`packages/agent-workflows/mention/tests/link.test.ts`), so they cannot drift on the HMAC
 construction. Rejection is verified end-to-end for wrong-secret, stale-timestamp, tampered-body,
 replay, cross-door and the original construction in `crates/temper-api/tests/internal_saml_test.rs`.
 

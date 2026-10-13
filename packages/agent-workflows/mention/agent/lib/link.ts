@@ -2,29 +2,6 @@ import { createHmac, randomBytes } from "node:crypto";
 
 import { isLoopback, requireEndpoint } from "@tasker-systems/temper-ts";
 
-/**
- * The account-link state call: agent -> temper-api.
- *
- * The signature covers THIS server-to-server call, not the URL the user clicks. temper's
- * `internal_sig` skew window is 30 seconds and a human clicks a Slack link minutes later,
- * so signing the user-facing URL would force that gate open. What the user gets is the
- * IdP's own authorize URL with an opaque, single-use, DB-backed state.
- *
- * Scheme (must match `temper_core::internal_sig::sign` byte for byte):
- *   HMAC-SHA256(secret, "{unix_timestamp}.{raw_body}") -> lowercase hex
- */
-export function signIntentRequest(
-  secret: string,
-  timestampSecs: number,
-  body: string,
-): { timestamp: string; signature: string } {
-  const timestamp = String(Math.floor(timestampSecs));
-  const signature = createHmac("sha256", secret)
-    .update(`${timestamp}.${body}`)
-    .digest("hex");
-  return { timestamp, signature };
-}
-
 /** The link-state route as temper-api registers it (`internal_sig::DOOR_SLACK_LINK_STATE`). */
 export const LINK_STATE_DOOR = "/internal/slack/link-state";
 /** The mint route as temper-api registers it (`internal_sig::DOOR_SLACK_MINT`). */
@@ -51,10 +28,8 @@ export function signRequestV2(
 }
 
 /**
- * Both constructions' headers for one signed POST to `door`. Sent together until every temper-api
- * requires v2: an API that reads only the original construction keeps working, and one that
- * requires v2 never accepts the original, so the cutover never reopens what v2 closes. Drop the
- * original pair once no API reads it.
+ * The v2 headers for one signed POST to `door`: timestamp, a fresh nonce, and the signature.
+ * These three are the whole credential; temper-api reads nothing else.
  */
 export function signedHeaders(
   secret: string,
@@ -62,11 +37,10 @@ export function signedHeaders(
   timestampSecs: number,
   body: string,
 ): Record<string, string> {
-  const { timestamp, signature } = signIntentRequest(secret, timestampSecs, body);
+  const timestamp = String(Math.floor(timestampSecs));
   const nonce = randomBytes(16).toString("hex");
   return {
     "X-Temper-Timestamp": timestamp,
-    "X-Temper-Signature": signature,
     "X-Temper-Nonce": nonce,
     "X-Temper-Signature-V2": signRequestV2(secret, "POST", door, timestamp, nonce, body),
   };
@@ -122,6 +96,10 @@ export async function requestLinkState(principalId: string): Promise<LinkState> 
   const baseUrl = requireEndpointEnv("TEMPER_API_URL");
   const secret = requireEnv("SLACK_LINK_SECRET");
 
+  // The signature covers THIS server-to-server call, not the URL the user clicks. temper's
+  // `internal_sig` skew window is 30 seconds and a human clicks a Slack link minutes later, so
+  // signing the user-facing URL would force that gate open. What the user gets is the IdP's own
+  // authorize URL with an opaque, single-use, DB-backed state.
   const body = JSON.stringify({ slack_principal_id: principalId });
   const res = await fetch(`${baseUrl.replace(/\/$/, "")}${LINK_STATE_DOOR}`, {
     method: "POST",
@@ -156,7 +134,7 @@ export async function requestLinkState(principalId: string): Promise<LinkState> 
 }
 
 /**
- * Exported for `mint.ts`, which already imports `signIntentRequest` from here — sharing the
+ * Exported for `mint.ts`, which already imports `signedHeaders` from here — sharing the
  * existing dependency beats a third module holding four lines, and beats a copy that could
  * drift in its error text.
  */

@@ -8,20 +8,6 @@ const INTERNAL_CALL_TIMEOUT_MS = 5000;
 
 /** Header carrying the Unix-seconds timestamp the signature was computed over. */
 export const TIMESTAMP_HEADER = "X-Temper-Timestamp";
-/** Header carrying the lowercase-hex HMAC-SHA256 signature. */
-export const SIGNATURE_HEADER = "X-Temper-Signature";
-
-/**
- * HMAC-SHA256 over the message `{timestamp}.{body}`, lowercase hex. Mirrors the Rust
- * verifier `temper_core::internal_sig::sign` field-for-field; the two are pinned together
- * by the shared known-answer vector in tests/oauth/wire-contract.test.ts. We sign the RAW
- * body string exactly as it is sent (never a re-serialized form) so there is no
- * cross-language canonicalization to drift on.
- */
-export function signReconcile(secret: string, timestamp: number, body: string): string {
-  return createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex");
-}
-
 /** Header carrying the v2 construction's per-request nonce. */
 export const NONCE_HEADER = "X-Temper-Nonce";
 /** Header carrying the v2 construction's lowercase-hex signature. */
@@ -34,9 +20,11 @@ export const RESOLVE_DOOR = "/internal/principal/resolve";
 /**
  * The v2 construction: `"v2\n{METHOD}\n{door}\n{timestamp}\n{nonce}\n{body}"`, lowercase hex.
  * Mirrors `temper_core::internal_sig::sign_v2`; pinned by the v2 known-answer vector in
- * tests/oauth/wire-contract.test.ts. `door` is the route temper-api registers, never the URL we
- * post to, so a prefix or rewrite in front of the API does not break it. Binding the door and a
- * nonce is what lets the verifier accept a signature at one door, once.
+ * tests/oauth/wire-contract.test.ts. We sign the RAW body string exactly as it is sent (never a
+ * re-serialized form) so there is no cross-language canonicalization to drift on. `door` is the
+ * route temper-api registers, never the URL we post to, so a prefix or rewrite in front of the API
+ * does not break it. Binding the door and a nonce is what lets the verifier accept a signature at
+ * one door, once.
  */
 export function signRequestV2(
   secret: string,
@@ -52,10 +40,8 @@ export function signRequestV2(
 }
 
 /**
- * Both constructions' headers for one signed POST. Signers send both until every verifier
- * requires v2: a verifier that still reads only the original construction keeps working, and one
- * that requires v2 never has to accept the original, so the cutover never reopens the gaps v2
- * closes. Drop the original pair once no verifier reads it.
+ * The v2 headers for one signed POST: timestamp, a fresh nonce, and the signature. These three
+ * are the whole credential; temper-api reads nothing else.
  */
 export function signedHeaders(
   secret: string,
@@ -66,7 +52,6 @@ export function signedHeaders(
   const nonce = randomBytes(16).toString("hex");
   return {
     [TIMESTAMP_HEADER]: String(timestamp),
-    [SIGNATURE_HEADER]: signReconcile(secret, timestamp, body),
     [NONCE_HEADER]: nonce,
     [SIGNATURE_V2_HEADER]: signRequestV2(secret, "POST", door, timestamp, nonce, body),
   };

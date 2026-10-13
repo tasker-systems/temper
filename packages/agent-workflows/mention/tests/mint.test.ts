@@ -1,4 +1,3 @@
-import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LINK_STATE_DOOR, MINT_DOOR, signRequestV2 } from "../agent/lib/link.js";
@@ -62,13 +61,6 @@ describe("requestMintedToken", () => {
 
     const { init, headers } = sentInit(fetchMock);
     const timestamp = headers["X-Temper-Timestamp"];
-    const signed = `${timestamp}.${init.body as string}`;
-
-    const withMint = createHmac("sha256", MINT_SECRET).update(signed).digest("hex");
-    const withLink = createHmac("sha256", LINK_SECRET).update(signed).digest("hex");
-
-    expect(headers["X-Temper-Signature"]).toBe(withMint);
-    expect(headers["X-Temper-Signature"]).not.toBe(withLink);
 
     // The v2 signature: the mint key, the mint door, this request's nonce.
     const nonce = headers["X-Temper-Nonce"];
@@ -209,7 +201,9 @@ describe("requestMintedToken", () => {
     expect(url).toBe("https://temper.test/internal/slack/mint");
     expect(init.body).toBe(JSON.stringify({ slack_principal_id: PRINCIPAL }));
     expect(headers["X-Temper-Timestamp"]).toMatch(/^\d+$/);
-    expect(headers["X-Temper-Signature"]).toMatch(/^[0-9a-f]{64}$/);
+    // FAILS IF: the retired `"{timestamp}.{body}"` construction rides beside v2 again. On this door
+    // it is a request for a human's token, and it binds neither the door nor the occasion.
+    expect(headers).not.toHaveProperty("X-Temper-Signature");
   });
 
   // FAILS IF: a non-2xx is swallowed and returned as an outcome. A 401 here means the mint
