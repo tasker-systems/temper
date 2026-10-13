@@ -116,7 +116,11 @@ consume a `tmpr_` credential at all.
 > because an externally issued client id could never authenticate there. And
 > the gate resolves a machine only if its registration's issuer is the one the
 > instance trusts: an `auth0-m2m` registration stops authenticating once an
-> instance moves to its own AS, with a 401 that says to re-issue it.
+> instance moves to its own AS, with a 401 that says to re-issue it. The
+> reverse also happens at that moment: every unrevoked temper-issued
+> credential staged while the instance was Auth0-fronted starts
+> authenticating at once. Review them (`temper admin machine list`) and revoke
+> any you no longer want before you switch.
 
 ### The token request — form-encoded, not JSON
 

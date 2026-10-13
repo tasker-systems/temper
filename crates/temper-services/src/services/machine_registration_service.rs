@@ -163,17 +163,18 @@ pub async fn provision(
 ) -> ApiResult<MachineClient> {
     match machine_door::machine_door_policy(mode, MachineDoor::Provision) {
         DoorPolicy::Refused(why) => return Err(ApiError::BadRequest(why.to_string())),
-        DoorPolicy::AdminOnly => {
-            if crate::auth::require_system_admin(pool, authed)
-                .await
-                .is_err()
-            {
+        DoorPolicy::AdminOnly => match crate::auth::require_system_admin(pool, authed).await {
+            Ok(_) => {}
+            // Only a genuine non-admin is answered with the reason; a failed read stays a 5xx.
+            Err(ApiError::Forbidden) => {
                 return Err(ApiError::ForbiddenDetail(
-                    "registering an externally issued client id requires a system admin on this                      instance"
+                    "registering an externally issued client id requires a system admin on this \
+                     instance"
                         .to_string(),
                 ));
             }
-        }
+            Err(other) => return Err(other),
+        },
         DoorPolicy::Allowed | DoorPolicy::Dormant => {}
     }
 

@@ -310,10 +310,10 @@ async fn resolve_machine_from_claims(
         );
         return Err(ApiError::Unauthorized(match mode {
             AuthMode::TemperAs => format!(
-                "machine client '{client_id}' was registered under an external identity provider,                  which this instance no longer trusts; it mints its own machine credentials now.                  An administrator must issue a new one: temper admin machine issue --label <label>"
+                "machine client '{client_id}' was registered under an external identity provider, which this instance no longer trusts; it mints its own machine credentials now. An administrator must issue a new one: temper admin machine issue --label <label>"
             ),
             AuthMode::ExternalIdp => format!(
-                "machine client '{client_id}' is a temper-issued credential, which this instance                  cannot authenticate until it runs temper's own authorization server"
+                "machine client '{client_id}' is a temper-issued credential, which this instance cannot authenticate until it runs temper's own authorization server"
             ),
         }));
     }

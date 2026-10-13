@@ -17,7 +17,11 @@ credential cannot authenticate there, so the response carries a new `dormant: tr
 CLI warns. On an AS instance, provision and `rebind` are refused with a 400 naming `issue` or
 `rotate-secret`. `rebind` also refuses a temper-issued source row in either mode.
 
-`dormant` is additive: older servers omit it, and the clients read its absence as `false`. Who
+`dormant` is additive: older servers omit it, and the clients read its absence as `false`.
+The admin-only rule does not reach back: an `auth0-m2m` machine a team owner provisioned before
+this release stays registered, so an operator of an Auth0-fronted instance should review the live
+machines whose registrar is not a system admin. Moving an instance to its own AS also makes every
+unrevoked temper-issued credential live at once, so review those before switching. Who
 observes: operators of an instance that moves between modes, whose registrations under the old
 issuer stop resolving; team owners on an Auth0-fronted instance who used `provision`; anyone
 reading `issue` responses. Release relevance: behavioral (the gate and door refusals), additive
