@@ -16,16 +16,21 @@ what we look for in a pull request.
 
 ### Prerequisites
 
-- **Rust** stable, with `cargo-make` (`cargo install cargo-make`) and `cargo-nextest`
-  (`cargo install cargo-nextest`)
+- **Rust** stable, via [rustup](https://rustup.rs)
+- **[mise](https://mise.jdx.dev)** — `mise install` from the checkout root installs the pinned
+  tooling in [`mise.toml`](mise.toml): `cargo-make`, `cargo-nextest`, `sqlx-cli`, Python, Node,
+  Bun, and the lint binaries
 - **Docker** — for the local PostgreSQL instance
-- **Node** and **Bun** — for the TypeScript packages and the web UI
+
+On macOS, `bin/setup.sh` does all of this and the steps below. See
+[internal/development/development.md](internal/development/development.md).
 
 ### Setup
 
 ```bash
 git clone https://github.com/tasker-systems/temper.git
 cd temper
+mise trust && mise install
 
 # PostgreSQL on port 5437 — deliberately not 5432, to avoid colliding with other projects
 cargo make docker-up

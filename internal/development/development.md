@@ -27,16 +27,41 @@ cargo make test-db      # integration tests against the Docker Postgres
 ## What setup.sh does
 
 macOS-first (Homebrew). On Linux it prints the dependency pointers and exits without
-installing — the cargo + docker steps are identical; only the system-package step differs.
+installing — the mise + docker steps are identical; only the system-package step differs.
 
 | Step | What | Source |
 |------|------|--------|
-| 1 | Homebrew packages: `onnxruntime`, `actionlint`, `shellcheck`, `yq`, `libpq` | [`Brewfile`](../../Brewfile) |
-| 2 | Cargo tooling: `cargo-make`, `cargo-nextest`, `sqlx-cli` (not brew formulae) | `cargo install` |
+| 1 | Homebrew packages: `mise`, `onnxruntime`, `libpq` | [`Brewfile`](../../Brewfile) |
+| 2 | Pinned tooling: Python, uv, Node, Bun, `shellcheck`, `actionlint`, `yq`, `gitleaks`, `cargo-make`, `cargo-nextest`, `sqlx-cli`, `rust-analyzer`, `scip` | [`mise.toml`](../../mise.toml) via `mise install` |
 | 3 | Git hooks → `core.hooksPath = githooks/` | [`scripts/install-hooks.sh`](../../scripts/install-hooks.sh) |
 | 4 | Docker Postgres on port **5437**, waited until healthy | `docker compose up -d` |
 | 5 | Migrations applied to the dev database | `sqlx migrate run` |
-| 6 | *(opt-in `--with-cli`)* install `temper` from this checkout | `cargo install --path crates/temper-cli --locked` |
+| 6 | Checks that `rust-analyzer` and `scip` run (non-fatal) | — |
+| 7 | *(opt-in `--with-cli`)* install `temper` from this checkout | `cargo install --path crates/temper-cli --locked` |
+
+### Activating mise
+
+`mise install` puts the tools on disk. They win on your PATH only in a shell that activates mise,
+and `setup.sh` prints these lines if yours doesn't:
+
+```bash
+# ~/.zshrc — interactive shells; re-resolves on every prompt and cd
+eval "$(mise activate zsh)"
+
+# ~/.zprofile — non-interactive shells: coding agents, IDEs launched from the GUI, scripts
+eval "$(mise activate zsh --shims)"
+```
+
+The `--shims` line matters for agents. `mise activate` works through prompt and directory-change
+hooks, which a non-interactive shell may never run. Without the shims, `python3` in the repo can be
+macOS's `/usr/bin/python3` (3.9), and `cargo make check` then fails on the Python gates, which need
+3.11 or later. Shims resolve per directory: inside the checkout you get
+the `mise.toml` pins, and elsewhere your usual tools. `python3 --version` inside the repo should
+print 3.12.x.
+
+To bump a tool, edit its line in `mise.toml` and run `mise install`. Most lines pin a major or
+minor version rather than an exact one, and `minimum_release_age` keeps them from resolving to a
+release younger than a week.
 
 ### The `psql` (libpq) PATH note
 
@@ -92,4 +117,7 @@ Some operator tasks need tools `setup.sh` does not auto-install:
   `SQLX_OFFLINE=true`, so it is not a push blocker.
 - **Embed tests can't find ONNX Runtime** — `brew bundle` installs `onnxruntime`; the
   default `temper` build bundles the runtime via the `embed-download` feature.
+- **`python3` is 3.9 (or `cargo-make` / `sqlx` not found) in an agent or IDE** — mise is
+  installed but not activated for non-interactive shells. Add the `--shims` line above to
+  `~/.zprofile`. `mise doctor` reports what it sees.
 - **Homebrew not installed** — `setup.sh` stops with a pointer to https://brew.sh.

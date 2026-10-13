@@ -71,7 +71,7 @@ if command -v gitleaks >/dev/null 2>&1; then
   echo "  ✓ Secret scan OK"
 else
   echo "  ! gitleaks not on PATH — SKIPPING the secret scan." >&2
-  echo "    Install it (brew install gitleaks) so your commits are scanned locally; CI runs it regardless." >&2
+  echo "    Install it ('mise install' from the repo root, pinned in mise.toml) so your commits are scanned locally; CI runs it regardless." >&2
 fi
 
 # Rust-affecting: anything that can move a fmt / clippy / doc / OpenAPI result.

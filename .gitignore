@@ -49,3 +49,6 @@ __pycache__/
 # graphify as an on-demand analysis tool, not an artifact — temper itself is the durable map.
 graphify-out/
 **/graphify-out/
+
+# mise: personal tool overrides (the shared pins are mise.toml)
+mise.local.toml
