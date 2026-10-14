@@ -15,7 +15,9 @@
 //! Authorization happens HERE, not in the handler (B2 D3): `provision` and `issue` resolve the
 //! caller's authority through `machine_authz` before opening the transaction, so a rejected
 //! registration leaves the database completely unchanged. They record the authorized caller as
-//! `registered_by_profile_id`. `rebind` is the exception: it is **system-admin-only** (it
+//! `registered_by_profile_id`. Ahead of that, the instance's mode decides which doors are open at
+//! all (`crate::auth::machine_door`): under an external IdP `provision` is held to a system admin,
+//! and under temper's own AS it is refused. `rebind` is **system-admin-only** in every mode (it
 //! transplants an existing profile's reach, which team ownership cannot bound — see its doc).
 
 use sqlx::PgPool;
