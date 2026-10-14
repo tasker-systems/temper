@@ -1,23 +1,21 @@
-title    = "The admin ledger's reference `rel` vocabulary names `erasure`, and pages holding a person erasure that ran resource erasures read again"
+title    = "Admin-ledger pages holding a person erasure that ran resource erasures read again; the `erasure` reference is withheld from the wire"
 pr       = "self"
-classes  = ["behavioral", "spec-correction"]
-surfaces = ["http", "clients"]
+classes  = ["behavioral"]
+surfaces = ["http"]
 status   = "signal-only"
 body = '''
-What the server always did: since 20261021100000 the person-erasure writers have stored one
-`rel: "erasure"` reference per resource erasure on `principal_erased` (target: that erasure's
-`kb_events` event). `LedgerRefRel` (`GET /api/admin/ledger`, `references[].rel`) never named the
-value, and the service could not decode it either, so every ledger page holding such a row answered
-500 — on the subject axis for the erased profile and on the actor axis for the operator who ran it.
-The contract now names `erasure`; those pages answer 200. temper-rb, temper-ts and temper-py
-regenerate with the new member.
+Behind an unchanged shape (`GET /api/admin/ledger`): since 20261021100000 (unreleased) the
+person-erasure writers store one `rel: "erasure"` reference per resource erasure on
+`principal_erased`, and the service could not decode it, so every ledger page holding such a row
+answered 500 — on the subject axis for the erased profile and on the actor axis for the operator
+who ran it. The service now decodes it, and those pages answer 200.
 
-Why both skew directions hold, though the comparator reads an output-side enum member as moved:
-the only responses that carry `erasure` are responses the old server could not produce at all.
-New server, old client: every page the old client could read before carries no `erasure` and is
-byte-for-byte unchanged; a page that answered 500 now answers 200 with a member an exhaustive old
-parse rejects — the same page fails, in a different place, and no readable page becomes
-unreadable. Old server, new client: the new client's vocabulary is a superset, and the old server
-still answers those pages 500. Who observes: system admins reading the ledger, and SDK callers that
-switch exhaustively on `LedgerRefRel`. Release relevance: behavioral fix, spec-corrected enum.
+The `erasure` reference is withheld from the response's `references`: `LedgerRefRel` does not name
+it at the 0.6 pin, and a pinned client's exhaustive parse would reject a new member, so this is the
+deprecation path (D-C2), not an enum change. Nothing is lost — the entry's payload names each
+resource erasure's event in `resource_erasures[].event`. The `erasure` member joins `LedgerRefRel`
+on the retirement train. No released server shipped the 500: it existed only on main.
+
+Who observes: system admins reading the ledger, and operators reading their own history.
+Release relevance: behavioral fix of unreleased behavior; no wire shape moved.
 '''

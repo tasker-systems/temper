@@ -268,10 +268,6 @@ pub enum LedgerRefRel {
     // Mirrors `temper_substrate::payloads::RefRel::Request`.
     #[serde(rename = "request")]
     Request,
-    /// One resource erasure a person erasure ran; the target is that erasure's event.
-    // Mirrors `temper_substrate::payloads::RefRel::Erasure`.
-    #[serde(rename = "erasure")]
-    Erasure,
 }
 
 /// The kind of thing a ledger reference points at.

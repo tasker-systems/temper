@@ -16,6 +16,12 @@
 //! **What this actually guarantees, stated precisely** — an earlier version of this comment claimed
 //! "add a variant on either side and this stops compiling", which overclaims in two ways:
 //!
+//! 0. **One substrate rel has no mirror, on purpose.** `RefRel::Erasure` is stored but withheld from
+//!    the wire (`admin_ledger_service::reaches_the_wire`) until it can join `LedgerRefRel` without
+//!    breaking clients built at the 0.6 pin. `mirror_rel` answers `None` for it, and
+//!    `the_withheld_rel_does_not_decode_as_the_core_mirror` pins that the withholding is what keeps
+//!    the page decodable.
+//!
 //! 1. **The compile-time half is one-directional.** `mirror_rel`/`mirror_kind` match exhaustively on
 //!    the *substrate* enums, so a new **substrate** variant breaks the build until it is mirrored.
 //!    A new **core** variant does not. That asymmetry is correct rather than a gap: the core types
@@ -36,19 +42,26 @@ use temper_core::types::admin::{LedgerRef, LedgerRefKind, LedgerRefRel, LedgerRe
 use temper_substrate::payloads::{AnchorTable, EventRef, RefRel, RefTarget};
 use uuid::Uuid;
 
-/// Every `RefRel` variant, paired with its core mirror. Written as an exhaustive `match` on
-/// purpose: adding a substrate variant makes this stop compiling, which is a better failure than
-/// a list that silently omits the new one.
-fn mirror_rel(r: RefRel) -> LedgerRefRel {
+/// Every `RefRel` variant, paired with its core mirror — or `None` for a rel withheld from the wire.
+/// Written as an exhaustive `match` on purpose: adding a substrate variant makes this stop
+/// compiling, which is a better failure than a list that silently omits the new one.
+fn mirror_rel(r: RefRel) -> Option<LedgerRefRel> {
     match r {
-        RefRel::Supersedes => LedgerRefRel::Supersedes,
-        RefRel::DerivedFrom => LedgerRefRel::DerivedFrom,
-        RefRel::Touches => LedgerRefRel::Touches,
-        RefRel::Subject => LedgerRefRel::Subject,
-        RefRel::Principal => LedgerRefRel::Principal,
-        RefRel::Request => LedgerRefRel::Request,
-        RefRel::Erasure => LedgerRefRel::Erasure,
+        RefRel::Supersedes => Some(LedgerRefRel::Supersedes),
+        RefRel::DerivedFrom => Some(LedgerRefRel::DerivedFrom),
+        RefRel::Touches => Some(LedgerRefRel::Touches),
+        RefRel::Subject => Some(LedgerRefRel::Subject),
+        RefRel::Principal => Some(LedgerRefRel::Principal),
+        RefRel::Request => Some(LedgerRefRel::Request),
+        RefRel::Erasure => None,
     }
+}
+
+/// The rels that have a wire mirror — what the serialization assertions below range over.
+fn mirrored_rels() -> impl Iterator<Item = (RefRel, LedgerRefRel)> {
+    ALL_RELS
+        .iter()
+        .filter_map(|&r| mirror_rel(r).map(|m| (r, m)))
 }
 
 /// Same contract as `mirror_rel`, for the anchor vocabulary.
@@ -94,9 +107,9 @@ const ALL_KINDS: &[AnchorTable] = &[
 
 #[test]
 fn every_rel_serializes_identically_on_both_sides() {
-    for &rel in ALL_RELS {
+    for (rel, mirror) in mirrored_rels() {
         let substrate = serde_json::to_value(rel).expect("substrate rel");
-        let core = serde_json::to_value(mirror_rel(rel)).expect("core rel");
+        let core = serde_json::to_value(mirror).expect("core rel");
         assert_eq!(substrate, core, "rel {rel:?} differs across the mirror");
     }
 }
@@ -116,7 +129,7 @@ fn every_anchor_kind_serializes_identically_on_both_sides() {
 fn a_substrate_event_ref_deserializes_into_the_core_mirror() {
     let id = Uuid::now_v7();
 
-    for &rel in ALL_RELS {
+    for (rel, mirror) in mirrored_rels() {
         for &kind in ALL_KINDS {
             let written = EventRef {
                 rel,
@@ -130,7 +143,7 @@ fn a_substrate_event_ref_deserializes_into_the_core_mirror() {
             assert_eq!(
                 read,
                 LedgerRef {
-                    rel: mirror_rel(rel),
+                    rel: mirror,
                     target: LedgerRefTarget {
                         kind: mirror_kind(kind),
                         id,
@@ -147,5 +160,27 @@ fn a_substrate_event_ref_deserializes_into_the_core_mirror() {
                 "core re-encode diverged from the substrate wire form"
             );
         }
+    }
+}
+
+/// FAILS IF the withheld rel becomes decodable by the core mirror without `mirror_rel` and
+/// `admin_ledger_service::reaches_the_wire` being revisited. While it fails to decode, publishing
+/// it would break the page (and any client built at the 0.6 pin), which is why it is withheld;
+/// once `LedgerRefRel` gains it, this test goes red and both decisions are taken together.
+#[test]
+fn the_withheld_rel_does_not_decode_as_the_core_mirror() {
+    for &rel in ALL_RELS.iter().filter(|&&r| mirror_rel(r).is_none()) {
+        let written = EventRef {
+            rel,
+            target: RefTarget {
+                kind: AnchorTable::Events,
+                id: Uuid::now_v7(),
+            },
+        };
+        let json = serde_json::to_value(written).expect("encode");
+        assert!(
+            serde_json::from_value::<LedgerRef>(json.clone()).is_err(),
+            "{json} now decodes as LedgerRef: wire it through mirror_rel and reaches_the_wire"
+        );
     }
 }

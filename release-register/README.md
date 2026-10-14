@@ -84,10 +84,9 @@ made, and that the movement brings the contract to what the server always did.
   directions hold.
 - **What it never does.** It never rides with `shape-breaking`, and it does not answer growth, which
   is still `additive`'s.
-- **The pin's record.** The pin gate judges the tree rather than the PR, so each corrected operation,
-  or component schema (an enum a response reaches through `$ref`, say), is also recorded in
-  `corrections.json` beside the current pin (`schemas/versions/<M.m>/`), with its corrected shape
-  and this entry's **id** as `register_entry`. The pin gate resolves that id
+- **The pin's record.** The pin gate judges the tree rather than the PR, so each corrected operation
+  is also recorded in `corrections.json` beside the current pin (`schemas/versions/<M.m>/`), with
+  its corrected shape and this entry's **id** as `register_entry`. The pin gate resolves that id
   across every window and checks the entry declares `spec-correction`.
 
 ## Windows and the roll

@@ -21712,8 +21712,7 @@
           "touches",
           "subject",
           "principal",
-          "request",
-          "erasure"
+          "request"
         ]
       },
       "LedgerRefTarget": {

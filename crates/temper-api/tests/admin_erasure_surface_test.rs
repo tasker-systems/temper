@@ -578,6 +578,10 @@ async fn the_admin_ledger_lists_both_families_with_the_subject_only_as_a_pseudon
     );
 }
 
+/// The estate resource's text — what the ledger must never quote once the subject is erased.
+const NOTE_TITLE: &str = "a private note";
+const NOTE_BODY: &str = "something only the subject wrote";
+
 /// Give `subject` (an [`insert_profile`] profile) an `@me` context holding one resource written
 /// through the real create path, so the person act has an estate to run a resource erasure over.
 async fn an_estate_resource(pool: &PgPool, subject: Uuid) -> Uuid {
@@ -604,9 +608,9 @@ async fn an_estate_resource(pool: &PgPool, subject: Uuid) -> Uuid {
         pool,
         CreateParams {
             idempotency_key: None,
-            title: "a private note",
+            title: NOTE_TITLE,
             origin_uri: &format!("test://{}", Uuid::now_v7()),
-            body: "something only the subject wrote",
+            body: NOTE_BODY,
             doc_type: "research",
             home: AnchorRef::context(ContextId::from(me)),
             owner: ProfileId::from(subject),
@@ -623,16 +627,19 @@ async fn an_estate_resource(pool: &PgPool, subject: Uuid) -> Uuid {
     .uuid()
 }
 
-/// FAILS IF a `principal_erased` whose act ran a resource erasure breaks the ledger read. The
-/// completion carries one `rel: "erasure"` reference per resource erasure it ran; a ledger
-/// vocabulary that cannot decode that rel fails the WHOLE page with a 500, on both axes — the
-/// subject's ("what was done to this person") and the operator's ("what did this admin do").
+/// FAILS IF a `principal_erased` whose act ran a resource erasure breaks the ledger read, publishes
+/// a reference a client pinned at 0.6 cannot parse, or re-identifies the subject. The completion
+/// stores one `rel: "erasure"` reference per resource erasure it ran; a service that cannot decode
+/// that rel fails the WHOLE page with a 500 on both axes — the subject's ("what was done to this
+/// person") and the operator's ("what did this admin do"). The rel is withheld from the wire
+/// (`LedgerRefRel` has no member for it), and the payload's `resource_erasures` still names the
+/// erasure's event, so the audit read loses nothing.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_ledger_reads_a_completion_that_ran_resource_erasures(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
     let (token, operator) =
         provision_and_make_operator(&app, "erasure-estate-auditor", "estate@example.com").await;
-    let (subject, _, _) = insert_profile(&app.pool).await;
+    let (subject, subject_handle, subject_email) = insert_profile(&app.pool).await;
     let resource = an_estate_resource(&app.pool, subject).await;
 
     let completed = app
@@ -645,8 +652,8 @@ async fn the_ledger_reads_a_completion_that_ran_resource_erasures(pool: PgPool) 
         .expect("the operator's act lands");
     assert_eq!(completed.status().as_u16(), 200);
 
-    // The precondition the read depends on: the completion names the resource erasure it ran,
-    // as an `erasure` reference to that erasure's event. Without it this test proves nothing.
+    // The precondition the read depends on: the completion STORES the resource erasure it ran as
+    // an `erasure` reference to that erasure's event. Without it this test proves nothing.
     let (payload, references) = the_completion(&app).await;
     let erasure_events: Vec<&Value> = payload["resource_erasures"]
         .as_array()
@@ -698,9 +705,30 @@ async fn the_ledger_reads_a_completion_that_ran_resource_erasures(pool: PgPool) 
                 .as_array()
                 .expect("references")
                 .iter()
-                .any(|r| r["rel"] == "erasure" && &r["target"]["id"] == erasure_events[0]),
-            "the {axis} axis carries the erasure reference through to the wire: {completion}"
+                .all(|r| r["rel"] != "erasure"),
+            "the {axis} axis withholds the erasure reference from the wire: {completion}"
         );
+        assert!(
+            completion["payload"]["resource_erasures"]
+                .as_array()
+                .expect("resource_erasures on the wire")
+                .iter()
+                .any(|e| &e["event"] == erasure_events[0]),
+            "the {axis} axis still names the resource erasure's event, in the payload: {completion}"
+        );
+
+        // THE PSEUDONYM CEILING, on the pages this fix makes readable for the first time.
+        for (what, needle) in [
+            ("HANDLE", subject_handle.as_str()),
+            ("EMAIL", subject_email.as_str()),
+            ("resource TITLE", NOTE_TITLE),
+            ("resource BODY", NOTE_BODY),
+        ] {
+            assert!(
+                !body.contains(needle),
+                "the {axis} axis must not carry the subject's {what}"
+            );
+        }
     }
 }
 
