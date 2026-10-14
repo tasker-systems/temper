@@ -20504,7 +20504,7 @@ export interface operations {
                     "application/json": components["schemas"]["TeamRow"];
                 };
             };
-            /** @description The `personal-` slug prefix is reserved for personal teams, or the caller is a machine principal (a team's creator becomes its owner, and a machine never governs) */
+            /** @description The `personal-` slug prefix is reserved for personal teams; `auto_join_role` is above `member` (it may be `member` or `watcher`: a role that governs a team is granted by a person); or the caller is a machine principal (a team's creator becomes its owner, and a machine never governs) */
             400: {
                 headers: {
                     [name: string]: unknown;

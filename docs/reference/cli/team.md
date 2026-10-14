@@ -313,7 +313,7 @@ Options:
       --parent <PARENT>
           Parent team ref (`+slug` or bare slug); creates a child team
       --auto-join-role <AUTO_JOIN_ROLE>
-          Auto-join role for an "everyone" pool (admin-only): owner/maintainer/member/watcher
+          Auto-join role for an "everyone" pool (admin-only): member/watcher
       --embed-threads <N>
           ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
       --color <COLOR>

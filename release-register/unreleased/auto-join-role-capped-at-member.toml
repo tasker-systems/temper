@@ -1,0 +1,19 @@
+title    = "A team's `auto_join_role` may be `member` or `watcher`, never a role that governs the team"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "clients", "cli-stdout"]
+status   = "signal-only"
+body = '''
+`POST /api/teams` with `auto_join_role` set to `owner` or `maintainer` is now a 400 ("auto_join_role
+may be member or watcher; a role that governs a team is granted by a person"). Setting
+`auto_join_role` was already admin-only, and the 400 runs after that check, so a non-admin still
+gets the 403. A new database CHECK (`kb_teams_auto_join_role_at_most_member`) holds every write to
+the column to NULL, `member` or `watcher`. The migration lowers any existing `owner` or
+`maintainer` value to `member` first and logs a warning naming each team it changed. Memberships
+that auto-join already wrote above `member` are left as they are; they are an operator review. The
+`temper team create --auto-join-role` help now offers `member/watcher`, and the OpenAPI 400
+description names the cap. Who observes: system admins creating auto-join teams, and any operator
+whose instance had an auto-join team above `member` (one warning per team in the migration log).
+User-visible: yes, for those admins. Release relevance: behavioral (a request that succeeded is
+now refused), additive on the schema.
+'''

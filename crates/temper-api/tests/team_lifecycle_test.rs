@@ -227,6 +227,176 @@ async fn auto_join_role_admin_creates_and_backfills(pool: PgPool) {
     );
 }
 
+// ─── auto_join_role is capped at member (team-role rank spec C15) ───────────
+
+/// The shipped cap migration, executed verbatim (minus its `declare_migration`, which records the
+/// version once and would refuse a second run).
+const AUTO_JOIN_CAP_MIGRATION: &str =
+    include_str!("../../../migrations/20261101100000_auto_join_role_capped_at_member.sql");
+
+async fn team_exists(pool: &PgPool, slug: &str) -> bool {
+    sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM kb_teams WHERE slug = $1)")
+        .bind(slug)
+        .fetch_one(pool)
+        .await
+        .expect("look up team")
+}
+
+/// C15, bite: an admin asking for an auto-join role that governs the team is a 400, and no team is
+/// written — the refusal runs before the transaction, so the CHECK never surfaces as a 500.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn auto_join_role_above_member_is_a_bad_request(pool: PgPool) {
+    set_gating_team(&pool).await;
+    let admin = admin_profile(&pool, "admin@example.com").await;
+    let principal = temper_services::test_support::human_principal_for(&pool, admin).await;
+
+    for (slug, role) in [("gov-m", TeamRole::Maintainer), ("gov-o", TeamRole::Owner)] {
+        let refused =
+            team_service::create_team(&pool, &principal, &req(slug, None, Some(role))).await;
+        assert!(
+            matches!(&refused, Err(ApiError::BadRequest(m)) if m.contains("member or watcher")),
+            "auto_join_role = {role:?} must be a 400 naming member/watcher, got {refused:?}"
+        );
+        assert!(
+            !team_exists(&pool, slug).await,
+            "a refused create writes no team ({slug})"
+        );
+    }
+}
+
+/// C15, pin: `member` is still a valid auto-join role, and it backfills like `watcher` does
+/// (`auto_join_role_admin_creates_and_backfills` pins `watcher`).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn auto_join_role_member_creates_and_backfills(pool: PgPool) {
+    set_gating_team(&pool).await;
+    let admin = admin_profile(&pool, "admin@example.com").await;
+    let preexisting = common::fixtures::create_test_profile(&pool, "preexisting@example.com").await;
+
+    let team = team_service::create_team(
+        &pool,
+        &temper_services::test_support::human_principal_for(&pool, admin).await,
+        &req("everyone", None, Some(TeamRole::Member)),
+    )
+    .await
+    .expect("admin may set auto_join_role = member");
+
+    assert_eq!(team.auto_join_role, Some(TeamRole::Member));
+    assert_eq!(role_of(&pool, team.id, admin).await, Some(TeamRole::Owner));
+    assert_eq!(
+        role_of(&pool, team.id, preexisting).await,
+        Some(TeamRole::Member)
+    );
+}
+
+/// C15, bite: the database refuses a direct write above `member`, whoever makes it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_direct_auto_join_role_above_member_violates_the_check(pool: PgPool) {
+    let id: Uuid =
+        sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ('t', 't') RETURNING id")
+            .fetch_one(&pool)
+            .await
+            .expect("team");
+
+    for role in ["owner", "maintainer"] {
+        let err = sqlx::query("UPDATE kb_teams SET auto_join_role = $2::team_role WHERE id = $1")
+            .bind(id)
+            .bind(role)
+            .execute(&pool)
+            .await
+            .expect_err("a governing auto_join_role must violate the CHECK");
+        let db = err.as_database_error().expect("a database error");
+        assert_eq!(
+            db.code().as_deref(),
+            Some("23514"),
+            "check_violation for {role}"
+        );
+        assert_eq!(
+            db.constraint(),
+            Some("kb_teams_auto_join_role_at_most_member")
+        );
+    }
+    for role in ["member", "watcher"] {
+        sqlx::query("UPDATE kb_teams SET auto_join_role = $2::team_role WHERE id = $1")
+            .bind(id)
+            .bind(role)
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("{role} is a valid auto_join_role: {e}"));
+    }
+}
+
+/// C15, bite: the migration's data step lowers an existing governing value to `member` (and leaves
+/// the memberships auto-join already wrote alone).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_cap_migration_lowers_an_existing_value_and_keeps_memberships(pool: PgPool) {
+    // The pre-migration world: no CHECK, a team auto-joining at `maintainer`, and a row that
+    // auto-join already wrote at that role.
+    sqlx::query("ALTER TABLE kb_teams DROP CONSTRAINT kb_teams_auto_join_role_at_most_member")
+        .execute(&pool)
+        .await
+        .expect("drop the CHECK");
+    let team: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_teams (slug, name, auto_join_role) \
+         VALUES ('legacy', 'legacy', 'maintainer') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("legacy team");
+    let kept: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_teams (slug, name, auto_join_role) \
+         VALUES ('kept', 'kept', 'watcher') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("watcher team");
+    let enrolled = common::fixtures::create_test_profile(&pool, "enrolled@example.com").await;
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'maintainer')",
+    )
+    .bind(team)
+    .bind(enrolled)
+    .execute(&pool)
+    .await
+    .expect("auto-joined row");
+
+    let body = AUTO_JOIN_CAP_MIGRATION
+        .split("SELECT declare_migration(")
+        .next()
+        .expect("migration body");
+    sqlx::raw_sql(body)
+        .execute(&pool)
+        .await
+        .expect("re-run the cap migration");
+
+    let auto = |id: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Option<TeamRole>>(
+                "SELECT auto_join_role FROM kb_teams WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("auto_join_role")
+        }
+    };
+    assert_eq!(
+        auto(team).await,
+        Some(TeamRole::Member),
+        "maintainer is lowered to member"
+    );
+    assert_eq!(
+        auto(kept).await,
+        Some(TeamRole::Watcher),
+        "watcher is untouched"
+    );
+    assert_eq!(
+        role_of(&pool, team, enrolled).await,
+        Some(TeamRole::Maintainer),
+        "a membership auto-join already wrote is an operator review, not rewritten"
+    );
+}
+
 // ─── add_member gating ───────────────────────────────────────────────────────
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

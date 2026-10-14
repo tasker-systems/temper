@@ -62,6 +62,9 @@ pub async fn reset_schema(pool: &sqlx::PgPool) {
                 // Re-states those auto-join functions with machine principals excluded: same
                 // post-auto-join world, same missing column.
                 && !n.contains("machines_never_auto_join")
+                // Caps `kb_teams.auto_join_role` at `member` (a data step and a CHECK on the
+                // column): same post-auto-join world, same missing column.
+                && !n.contains("auto_join_role_capped_at_member")
         })
         .collect();
     migrations.sort();
