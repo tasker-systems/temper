@@ -138,7 +138,8 @@ pub enum TeamMemberSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MembershipVia {
-    /// An add, change or remove of another member, by a manager of the team or a system admin.
+    /// An add, change or remove by a manager of the team or a system admin, including a system admin
+    /// adding themselves or raising their own role.
     MemberAct,
     /// A member acting on themselves: leaving, or lowering their own role.
     #[serde(rename = "self")]

@@ -1825,6 +1825,32 @@ mod lifecycle_tests {
         assert!(event.get("left_ownerless").is_none(), "{event}");
     }
 
+    /// Wait until a backend in this test's database is blocked on a lock while taking a team row
+    /// (`team_membership::locked`'s `FOR NO KEY UPDATE`). A race test calls this before releasing
+    /// its holder, so a pass means the contender really passed the pool pre-check and waited on the
+    /// lock — not that it was merely slow to start and ran after the commit.
+    async fn await_team_lock_waiter(pool: &PgPool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+                  WHERE datname = current_database() AND wait_event_type = 'Lock' \
+                    AND query ILIKE '%FROM kb_teams%FOR NO KEY UPDATE%')",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            if waiting {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the contender never blocked on the team-row lock"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
     async fn role_of(pool: &PgPool, team: Uuid, profile: Uuid) -> Option<TeamRole> {
         sqlx::query_scalar(
             "SELECT role FROM kb_team_members WHERE team_id = $1 AND profile_id = $2",
@@ -2326,10 +2352,11 @@ mod lifecycle_tests {
     /// C13, pin: owning a parent team confers nothing on its child.
     #[sqlx::test(migrations = "../../migrations")]
     async fn parent_owner_has_no_authority_on_the_child(pool: PgPool) {
-        let (parent_owner, child_owner, member) = (
+        let (parent_owner, child_owner, member, newcomer) = (
             mk_profile(&pool, "po").await,
             mk_profile(&pool, "co").await,
             mk_profile(&pool, "m").await,
+            mk_profile(&pool, "new").await,
         );
         let parent = mk_team(&pool, "parent").await;
         let child = mk_team(&pool, "child").await;
@@ -2350,7 +2377,7 @@ mod lifecycle_tests {
                 &me,
                 child,
                 &AddMemberRequest {
-                    profile_id: parent_owner,
+                    profile_id: newcomer,
                     role: TeamRole::Member,
                 },
             )
@@ -2707,14 +2734,13 @@ mod lifecycle_tests {
 
         // Contender: B's leave.
         let contender_pool = pool.clone();
-        let mut contender =
+        let contender =
             tokio::spawn(
                 async move { remove_member(&contender_pool, &b_principal, team, b).await },
             );
+        await_team_lock_waiter(&pool).await;
         assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(750), &mut contender)
-                .await
-                .is_err(),
+            !contender.is_finished(),
             "B's leave must block on the team-row lock A holds, not run against a stale count"
         );
 
@@ -2774,13 +2800,12 @@ mod lifecycle_tests {
 
         // Contender: M, still a maintainer as the pool sees it, demotes X.
         let contender_pool = pool.clone();
-        let mut contender = tokio::spawn(async move {
+        let contender = tokio::spawn(async move {
             change_role(&contender_pool, &mt_principal, team, x, TeamRole::Watcher).await
         });
+        await_team_lock_waiter(&pool).await;
         assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(750), &mut contender)
-                .await
-                .is_err(),
+            !contender.is_finished(),
             "M's act must block on the team-row lock, not decide on the rank the pool saw"
         );
 

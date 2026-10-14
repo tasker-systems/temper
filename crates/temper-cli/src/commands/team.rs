@@ -337,7 +337,7 @@ fn print_residual_nudge(
     ));
 }
 
-/// Change a member's role (owner/maintainer).
+/// Change a member's role (a team owner or maintainer, or a system admin).
 pub async fn set_role_remote(
     client: &temper_client::TemperClient,
     team: &str,

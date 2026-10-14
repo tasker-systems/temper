@@ -18,7 +18,7 @@ Commands:
   show           Show a team's detail and member roster
   leave          Leave a team you are a member of (removes your membership)
   remove-member  Remove a member from a team (owner/maintainer)
-  set-role       Change a member's role (owner/maintainer)
+  set-role       Change a member's role (a team owner or maintainer, or a system admin)
   update         Update a team's metadata (owner/maintainer)
   delete         Soft-delete a team (owner only)
   reassign       Bulk-reassign a departing member's team-scoped resources (offboarding)
@@ -186,7 +186,7 @@ Options:
 ### `temper team set-role`
 
 ```text
-Change a member's role (owner/maintainer)
+Change a member's role (a team owner or maintainer, or a system admin)
 
 You can set roles up to your own and act on members up to your own rank; only a system admin changes an owner other than yourself. To hand a team over, grant `owner` to another member, then lower your own role.
 

@@ -14954,6 +14954,9 @@
               }
             }
           },
+          "404": {
+            "description": "Team not found (told only to a system admin; any other caller gets 403)"
+          },
           "409": {
             "description": "Already a member of this team; change the role with PATCH /api/teams/{id}/members/{profile_id}"
           }
@@ -15032,7 +15035,7 @@
             }
           },
           "404": {
-            "description": "Member not found (told only to a caller who may manage the team)"
+            "description": "Member not found, or (to a system admin) the team does not exist; told only to a caller who may manage the team"
           },
           "409": {
             "description": "Cannot remove the last owner (grant `owner` to another member first), a SAML-provisioned row, or a profile from its own personal team"
@@ -15108,7 +15111,7 @@
             }
           },
           "404": {
-            "description": "Member not found (told only to a caller who may manage the team)"
+            "description": "Member not found, or (to a system admin) the team does not exist; told only to a caller who may manage the team"
           },
           "409": {
             "description": "Cannot demote the last owner (grant `owner` to another member first), or a SAML-provisioned row; or the membership changed since it was read (retry)"

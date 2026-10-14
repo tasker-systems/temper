@@ -4,25 +4,25 @@ classes  = ["additive", "behavioral"]
 surfaces = ["http", "clients", "cli-stdout"]
 status   = "signal-only"
 body = '''
-`POST /api/teams/{id}/members`, `PATCH /api/teams/{id}/members/{profile_id}` and
-`DELETE /api/teams/{id}/members/{profile_id}` now apply one rank rule. An owner can grant `owner`
+`POST /api/teams/{id}/members`, `PATCH /api/teams/{id}/members/{profile_id}` and `DELETE
+/api/teams/{id}/members/{profile_id}` now apply one rank rule. An owner can grant `owner`
 (previously refused with a 400 pointing at an "ownership transfer" that never existed); a maintainer
 can grant up to `maintainer`. A maintainer can no longer change or remove an owner, and an owner can
 no longer change or remove a co-owner: only a system admin acts on an owner other than yourself (a
 `403 FORBIDDEN_DETAIL` naming the rule). An owner hands a team over by granting `owner`, then
-lowering their own role. On the instance's gating team these three routes are open only to a
-system admin; any member may still leave it. A system admin who is not a member of a team can now repair it
-(previously refused). Machine registration reach onto the gating team follows the same rule. A
-change to a member's current role is a 200 that records nothing. Two owners leaving at the same
-moment can no longer leave a team with no owner. A caller who cannot manage a team gets the same
-plain 403 whether or not the team, the member or a personal team exists. Each add, change and
-removal through these routes now writes a `team_membership_changed` admin event in the same
-transaction, readable through `GET /api/admin/ledger` by the team's owners and maintainers (on the
-gating team, system admins only) and by system admins; a member reads their own leave on the actor
-axis. Invitations, access approval, machine registration reach and SAML reconcile are not yet
-recorded; they are routed through the same writer in a follow-up. OpenAPI descriptions, the
-`temper team set-role` / `add-member` help and the teams concepts page describe the rule. Who
-observes: team owners and maintainers, system admins, and ledger readers. User-visible: yes.
-Release relevance: behavioral (acts that succeeded are refused and acts that were refused succeed),
-additive on the schema (a new event type and SQL function).
+lowering their own role. On the instance's gating team only a system admin adds, changes or removes
+another member through these routes; any member may still leave it. A system admin who is not a
+member of a team can now repair it (previously refused). Machine registration reach onto the gating
+team follows the same rule. A change to a member's current role is a 200 that records nothing. Two
+owners leaving at the same moment can no longer leave a team with no owner. A caller who cannot
+manage a team gets the same plain 403 whether or not the team, the member or a personal team exists.
+Each add, change and removal through these routes now writes a `team_membership_changed` admin event
+in the same transaction, readable through `GET /api/admin/ledger` by the team's owners and
+maintainers (on the gating team, system admins only) and by system admins; a member reads their own
+leave on the actor axis. Invitations, access approval, machine registration reach and SAML reconcile
+are not yet recorded; they are routed through the same writer in a follow-up. OpenAPI descriptions,
+the `temper team set-role` / `add-member` help and the teams concepts page describe the rule. Who
+observes: team owners and maintainers, system admins, and ledger readers. User-visible: yes. Release
+relevance: behavioral (acts that succeeded are refused and acts that were refused succeed), additive
+on the schema (a new event type and SQL function).
 '''

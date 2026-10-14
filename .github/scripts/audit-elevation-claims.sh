@@ -145,7 +145,7 @@ reconcile_regime|block:fn:authorize_reconcile:crates/temper-services/src/backend
 is_system_admin|block:fn:is_system_admin:crates/temper-services/src/services/access_service.rs
 require_manage_on_team|block:fn:require_manage_on_team:crates/temper-services/src/services/team_service.rs
 can_manage|block:fn:can_manage:crates/temper-services/src/services/team_service.rs
-team_membership|file:crates/temper-services/src/authz/team_membership.rs;block:fn:is_gating_team_on:crates/temper-services/src/services/access_service.rs;block:fn:role_on_team_on:crates/temper-services/src/services/team_service.rs;block:fn:require_system_admin_on:crates/temper-services/src/auth/mod.rs;block:fn:authorize_member_act:crates/temper-services/src/services/team_service.rs
+team_membership|file:crates/temper-services/src/authz/team_membership.rs;block:fn:is_gating_team_on:crates/temper-services/src/services/access_service.rs;block:fn:role_on_team_on:crates/temper-services/src/services/team_service.rs;block:fn:require_system_admin_on:crates/temper-services/src/auth/mod.rs;block:fn:authorize_member_act:crates/temper-services/src/services/team_service.rs;block:fn:rank:crates/temper-core/src/types/team.rs;block:fn:exceeds_machine_ceiling:crates/temper-services/src/services/machine_authz.rs;block:const:MAX_MACHINE_TEAM_ROLE:crates/temper-services/src/services/machine_authz.rs
 EOF
 
 # Extract one `fn`/`enum` block by brace counting from its declaration. Anchored on the declaring
@@ -258,18 +258,21 @@ current_gates() {
 # the gating team, and `contain_target_team` (connection reach grants) did not move. cli.rs is bound
 # to `team_membership` for its new `set-role` claim; its other 17 claims were unbound before and are
 # not re-read by this binding. No over-claim.
-# REVIEWED 2026-10-14 (team-role rank, PR B review round) — `team_membership` now also fingerprints
-# the four functions its decision reads besides the module: `is_gating_team_on` (the R11 arm),
-# `role_on_team_on`, `require_system_admin_on` (a production `SystemAdmin` mint) and
-# `authorize_member_act` (the pre-check → lock → re-resolve order), so an edit to any of them reds
-# the claims bound to the gate. The module itself moved too: the resolved authority now carries the
-# team and caller it was resolved for and refuses a target locked on another team, and an admin's own
-# add or raise is recorded as `member_act` — both narrow nothing and widen nothing. `machine`
-# 0d3b787aad17 -> 1dcae7eff1d9: `contain_reach` takes one connection for its team loop instead of one
-# per team; the same decision per team. New claims re-read: teams.rs's 404 descriptions (a missing
-# team is told only to a system admin — `locked` runs after the pre-check, which refuses everyone
-# else), cli.rs `set-role`'s summary ("a team owner or maintainer, or a system admin"), and
-# team_service.rs's test doc for an admin adding and raising themselves (P14 a). Each holds.
+# REVIEWED 2026-10-14 (team-role rank, PR B review round) — `team_membership` 9e08a21baa23 ->
+# d2d04ed228c7 now also fingerprints what its decision reads outside the module:
+# `is_gating_team_on` (the R11 arm), `role_on_team_on`, `require_system_admin_on` (a production
+# `SystemAdmin` mint), `authorize_member_act` (the pre-check → lock → re-resolve order),
+# `TeamRole::rank` (conferral, reach and the self rule, C1/C2/C3a) and `exceeds_machine_ceiling` with
+# `MAX_MACHINE_TEAM_ROLE` (the target-kind check, C5), so an edit to any of them reds the claims bound
+# to the gate. The module moved too: the resolved authority carries the team and caller it was
+# resolved for and refuses (500) a target locked on another team — a refusal no production path
+# reaches — and an admin's own add or raise is recorded as `member_act`; no admitted act changes.
+# `machine` 0d3b787aad17 -> 1dcae7eff1d9: `contain_reach` takes one connection for its team loop
+# instead of one per team; the same decision per team. New claims re-read: teams.rs's 404
+# descriptions (a missing team is told only to a system admin — `locked` runs after the pre-check,
+# which refuses everyone else), cli.rs `set-role`'s summary ("a team owner or maintainer, or a system
+# admin"), and team_service.rs's test doc for an admin adding and raising themselves (P14 a). Each
+# holds.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -336,7 +339,7 @@ gate two_sided 7822960e4ffa
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership d169206cba16
+gate team_membership d2d04ed228c7
 EOF
 
 CURRENT="$(current_claims; current_gates)"

@@ -20836,6 +20836,13 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description Team not found (told only to a system admin; any other caller gets 403) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Already a member of this team; change the role with PATCH /api/teams/{id}/members/{profile_id} */
             409: {
                 headers: {
@@ -20880,7 +20887,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Member not found (told only to a caller who may manage the team) */
+            /** @description Member not found, or (to a system admin) the team does not exist; told only to a caller who may manage the team */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -20942,7 +20949,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Member not found (told only to a caller who may manage the team) */
+            /** @description Member not found, or (to a system admin) the team does not exist; told only to a caller who may manage the team */
             404: {
                 headers: {
                     [name: string]: unknown;
