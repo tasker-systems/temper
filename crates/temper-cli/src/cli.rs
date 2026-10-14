@@ -1597,7 +1597,7 @@ pub enum TeamAction {
         /// Parent team ref (`+slug` or bare slug); creates a child team
         #[arg(long)]
         parent: Option<String>,
-        /// Auto-join role for an "everyone" pool (admin-only): owner/maintainer/member/watcher
+        /// Auto-join role for an "everyone" pool (admin-only): member/watcher
         #[arg(long = "auto-join-role")]
         auto_join_role: Option<String>,
     },
