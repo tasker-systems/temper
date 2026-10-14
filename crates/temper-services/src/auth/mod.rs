@@ -584,6 +584,26 @@ pub async fn require_system_admin(pool: &PgPool, human: &HumanPrincipal) -> ApiR
     }
 }
 
+/// [`require_system_admin`] on a connection rather than the pool — for a decision that must be made
+/// inside a write transaction, under its locks (team-role rank plan P1, P3: the membership authority
+/// is re-resolved after the team row is locked). Same predicate, same refusal, same seal: this and
+/// [`require_system_admin`] are the only two places a [`SystemAdmin`] is minted in a production build.
+pub async fn require_system_admin_on(
+    conn: &mut sqlx::PgConnection,
+    human: &HumanPrincipal,
+) -> ApiResult<SystemAdmin> {
+    let actor = human.profile_id();
+    let is_admin = sqlx::query_scalar!("SELECT is_system_admin($1)", *actor)
+        .fetch_one(&mut *conn)
+        .await?
+        .unwrap_or(false);
+    if is_admin {
+        Ok(SystemAdmin(actor))
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
 /// The bare-id spelling of [`require_system_admin`], **test-only**. It mints from a `ProfileId` with
 /// no classification behind it, so it exists only where `Principal::Bare` does — the test harness —
 /// and a production build cannot name it.

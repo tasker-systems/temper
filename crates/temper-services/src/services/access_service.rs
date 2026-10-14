@@ -270,6 +270,25 @@ pub(crate) async fn is_gating_team(pool: &PgPool, team_id: Uuid) -> ApiResult<bo
     Ok(ok)
 }
 
+/// [`is_gating_team`] on a connection — for a decision made inside a write transaction, under its
+/// locks (team-role rank plan P1). The same predicate; the pool spelling is left alone.
+pub(crate) async fn is_gating_team_on(
+    conn: &mut sqlx::PgConnection,
+    team_id: Uuid,
+) -> ApiResult<bool> {
+    let ok = sqlx::query_scalar!(
+        "SELECT EXISTS( \
+           SELECT 1 FROM kb_teams t \
+             JOIN kb_system_settings s ON t.slug = s.gating_team_slug \
+            WHERE t.id = $1 )",
+        team_id,
+    )
+    .fetch_one(&mut *conn)
+    .await?
+    .unwrap_or(false);
+    Ok(ok)
+}
+
 /// The columns of one `kb_access_grants` upsert **other than its subject**.
 ///
 /// The subject is deliberately absent: it comes from the `GrantWarrant`, which is the only thing

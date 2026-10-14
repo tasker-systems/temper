@@ -1761,6 +1761,39 @@ pub struct ResourceScrubbed {
     pub redacted_fields: Vec<RedactedEventFields>,
 }
 
+/// `team_membership_changed` — one recorded write to `kb_team_members` (team-role rank spec C8,
+/// "The event"). Written only by `_admin_team_membership_write`, in the same statement as the row.
+///
+/// ONE TYPE FOR ADD, CHANGE AND REMOVE, discriminated by which roles are present:
+/// `previous_role` absent means the member was added, `role` absent means they were removed, both
+/// present means the role changed. A change to the current role is not recorded at all.
+///
+/// The team is the event's `subject` reference and the member its `principal`. `actor` is absent
+/// when the system acted (SAML reconcile); the event is then emitted by the `system` entity, never
+/// by the member's, so the record does not reach the member through the actor axis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct TeamMembershipChanged {
+    pub team_id: Uuid,
+    pub profile_id: ProfileId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_role: Option<temper_core::types::team::TeamRole>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<temper_core::types::team::TeamRole>,
+    /// The row's source: before the act for a change or remove, as written for an add.
+    pub source: temper_core::types::team::TeamMemberSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<ProfileId>,
+    /// Who made the invitation, on `via = invitation` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invited_by: Option<ProfileId>,
+    pub via: temper_core::types::team::MembershipVia,
+    /// True only on an unguarded (SAML reconcile) write that left the team with no owner (spec C6,
+    /// R8). Absent otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub left_ownerless: bool,
+}
+
 /// `subscription_delivery_disposed` — a steward's judgment on one routed event (S2 chunk C).
 ///
 /// The disposition is an **act**, not a column write. `acted` cites what was authored; `declined`
@@ -1946,8 +1979,8 @@ impl FoldDisposition {
     }
 }
 
-/// The 30 typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 34] = [
+/// The typed event names — the registry-stamping and snapshot surfaces iterate this.
+pub const TYPED_EVENT_NAMES: [&str; 35] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -1982,6 +2015,7 @@ pub const TYPED_EVENT_NAMES: [&str; 34] = [
     "resource_erasure_refused",
     "block_history_scrubbed",
     "resource_scrubbed",
+    "team_membership_changed",
 ];
 
 /// FOREIGN event names — registered permissive (NULL `payload_schema`) because their body is a
@@ -2001,7 +2035,7 @@ pub const FOREIGN_EVENT_NAMES: [&str; 1] = ["webhook_received"];
 /// `20260718000020`). The migration stamps these on an existing registry; this const is what
 /// re-stamps them on a path that rebuilds the registry from scratch (`bootseed::seed_system` after
 /// a `reset_schema` truncate), so the classification cannot be lost to a reseed.
-pub const ADMIN_EVENT_NAMES: [&str; 12] = [
+pub const ADMIN_EVENT_NAMES: [&str; 13] = [
     "admin_ledger_opened",
     "grant_created",
     "grant_revoked",
@@ -2014,6 +2048,7 @@ pub const ADMIN_EVENT_NAMES: [&str; 12] = [
     "resource_erasure_refused",
     "block_history_scrubbed",
     "resource_scrubbed",
+    "team_membership_changed",
 ];
 
 /// The event names classified `kb_event_types.category = 'system'` — configuration acts, which are
@@ -2141,6 +2176,9 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 // `resource_field_scrub_execute`.
                 "resource_scrubbed" => {
                     serde_json::from_value::<ResourceScrubbed>(r.payload.clone())?;
+                }
+                "team_membership_changed" => {
+                    serde_json::from_value::<TeamMembershipChanged>(r.payload.clone())?;
                 }
                 // Unlisted types (e.g. taxonomy entries no write path emits yet) are intentionally
                 // not roundtripped here; add an arm when a write path begins emitting one.
@@ -2522,6 +2560,69 @@ mod tests {
             v.get("owner").is_none(),
             "resource_scrubbed carries no top-level `owner`"
         );
+    }
+
+    /// `team_membership_changed` (team-role rank spec C8): the three act shapes round-trip, the
+    /// absent fields stay absent on the wire, and no field is a trail join key.
+    #[test]
+    fn team_membership_changed_round_trips_each_act_shape() {
+        use temper_core::types::team::{MembershipVia, TeamMemberSource, TeamRole};
+        let team_id = Uuid::now_v7();
+        let member = ProfileId::from(Uuid::now_v7());
+        let actor = ProfileId::from(Uuid::now_v7());
+        let added = TeamMembershipChanged {
+            team_id,
+            profile_id: member,
+            previous_role: None,
+            role: Some(TeamRole::Maintainer),
+            source: TeamMemberSource::Native,
+            actor: Some(actor),
+            invited_by: None,
+            via: MembershipVia::MemberAct,
+            left_ownerless: false,
+        };
+        let changed = TeamMembershipChanged {
+            previous_role: Some(TeamRole::Owner),
+            role: Some(TeamRole::Maintainer),
+            via: MembershipVia::SelfAct,
+            actor: Some(member),
+            ..added.clone()
+        };
+        let removed = TeamMembershipChanged {
+            previous_role: Some(TeamRole::Owner),
+            role: None,
+            source: TeamMemberSource::Idp,
+            actor: None,
+            via: MembershipVia::IdpReconcile,
+            left_ownerless: true,
+            ..added.clone()
+        };
+        for event in [&added, &changed, &removed] {
+            let v = serde_json::to_value(event).unwrap();
+            no_trail_key(&v, "team_membership_changed");
+            assert_eq!(
+                &serde_json::from_value::<TeamMembershipChanged>(v).unwrap(),
+                event
+            );
+        }
+
+        let v = serde_json::to_value(&added).unwrap();
+        assert!(
+            v.get("previous_role").is_none(),
+            "an add carries no previous_role"
+        );
+        assert!(
+            v.get("left_ownerless").is_none(),
+            "false is absent on the wire"
+        );
+        assert!(v.get("invited_by").is_none());
+        assert_eq!(v["via"], "member_act");
+        assert_eq!(serde_json::to_value(&changed).unwrap()["via"], "self");
+
+        let v = serde_json::to_value(&removed).unwrap();
+        assert!(v.get("role").is_none(), "a removal carries no role");
+        assert!(v.get("actor").is_none(), "the system acted");
+        assert_eq!(v["left_ownerless"], true);
     }
 
     #[test]

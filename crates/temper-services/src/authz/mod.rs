@@ -32,6 +32,7 @@ mod grant;
 mod machine;
 mod read_gates;
 mod subscription;
+pub(crate) mod team_membership;
 mod two_sided;
 
 // Wired by Task 7: `DbBackend::record_citation_audit` derives the subject with `finding_of_block`

@@ -48,7 +48,8 @@ use crate::services::{access_service, team_service};
 /// **It bounds every `kb_team_members` row a machine holds, however the row came about** —
 /// registration reach, `team_service::add_member` / `change_role`, `access_service::promote_admin`,
 /// and its own personal team, which it holds as `member` like any other (ruled 2026-10-09). The
-/// services refuse through [`refuse_machine_above_ceiling`]; the database refuses the same rows
+/// member acts refuse through the rank rule's target-kind check (`authz::team_membership`, check 4,
+/// for every authority); registration refuses in [`authorize_registration`]; the database refuses the same rows
 /// underneath them (`20261019100000_machines_never_govern.sql`), and caps a profile's existing
 /// roles the moment it becomes a machine — which is how registration's personal-team `owner` row,
 /// written before the client row exists, comes out as `member`.
@@ -57,24 +58,6 @@ const MAX_MACHINE_TEAM_ROLE: TeamRole = TeamRole::Member;
 /// Whether `role` is above what any machine may hold.
 pub(crate) fn exceeds_machine_ceiling(role: TeamRole) -> bool {
     role.rank() > MAX_MACHINE_TEAM_ROLE.rank()
-}
-
-/// Refuse putting `target` at `role` when `target` is a machine principal and `role` is above the
-/// ceiling. The readable refusal for a human-facing act that names a target (adding a member,
-/// changing a role); the database trigger underneath is the floor, not the message.
-pub(crate) async fn refuse_machine_above_ceiling(
-    pool: &PgPool,
-    target: ProfileId,
-    role: TeamRole,
-) -> ApiResult<()> {
-    if exceeds_machine_ceiling(role)
-        && crate::services::machine_client_service::is_machine_profile(pool, target).await?
-    {
-        return Err(ApiError::BadRequest(
-            "a machine principal cannot hold a team role above 'member'".to_string(),
-        ));
-    }
-    Ok(())
 }
 
 /// The caller's authority over a machine registration.
@@ -302,13 +285,27 @@ async fn contain_reach(
     teams: &[TeamSpec],
     grants: &[GrantSpec],
 ) -> ApiResult<()> {
-    let caller = ProfileId::from(authed.profile().id);
     // The D4b role ceiling is NOT here: it asks a question about the role itself, not about
     // containment, so it runs for BOTH arms in `authorize_registration`. Do not restore a copy —
     // a second copy is what would let the two arms drift apart again.
     for spec in teams {
-        // D4 — the membership bar: exactly what `add_member` requires of a human.
-        team_service::require_manage_on_team(pool, spec.team_id, caller).await?;
+        // D4 — the membership bar: exactly what `add_member` requires of a human. That is the
+        // membership authority's managing arm (team-role rank plan P15), which also refuses a
+        // non-admin on the gating team (R11): a gating-team owner who is not a system admin can
+        // no more put a machine on that roster than add a person to it. (The admin arm returned
+        // before this function runs; the rank bound is moot, since D4b caps a machine at
+        // `member`.) `contain_target_team` keeps `require_manage_on_team`: a reach grant writes
+        // no membership.
+        let mut conn = pool.acquire().await?;
+        let resolved = crate::authz::team_membership::MembershipAuthority::resolve(
+            &mut conn,
+            authed,
+            spec.team_id,
+        )
+        .await?;
+        if !resolved.authority.manages() {
+            return Err(ApiError::Forbidden);
+        }
     }
 
     for grant in grants {

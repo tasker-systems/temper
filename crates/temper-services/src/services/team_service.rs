@@ -1,10 +1,11 @@
 //! Team lifecycle service over the substrate.
 //!
-//! Service-direct, NO Backend-trait command, NO event emission — teams are
-//! provisioning/infrastructure, not knowledge-graph content (org-provisioning
-//! spec §2.6, the same precedent as `context_service`). The only pre-existing
-//! team write (approval, `access_service::review_request`) is likewise
-//! service-local.
+//! Service-direct, NO Backend-trait command — teams are provisioning/infrastructure, not
+//! knowledge-graph content (org-provisioning spec §2.6, the same precedent as `context_service`).
+//! No cognition events. Membership acts are the exception that proves the rule: `add_member`,
+//! `change_role` and `remove_member` are authority acts, decided by the rank rule in
+//! `authz::team_membership` and recorded on the ADMIN ledger (`team_membership_changed`, NULL-
+//! anchored), atomically with the row (team-role rank spec C8).
 //!
 //! Role-gating is pure authz over `kb_team_members.role` + the `kb_teams_parents`
 //! DAG (spec §3 decision #1): anyone may create a **root** (parentless) team and
@@ -16,6 +17,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::{Caller, HumanPrincipal};
+use crate::authz::team_membership::{self, MembershipAct, MembershipAuthority};
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::{RemoveMemberOutcome, ResidualContext, ResidualOwnedReach};
@@ -77,6 +79,26 @@ pub(crate) async fn role_on_team(
     Ok(role)
 }
 
+/// [`role_on_team`] on a connection — for a decision made inside a write transaction, under its
+/// locks (team-role rank plan P1). The same query, equally `is_active`-blind; the pool spelling is
+/// left alone.
+pub(crate) async fn role_on_team_on(
+    conn: &mut sqlx::PgConnection,
+    team_id: Uuid,
+    profile_id: ProfileId,
+) -> ApiResult<Option<TeamRole>> {
+    let role = sqlx::query_scalar!(
+        r#"SELECT role AS "role: TeamRole"
+             FROM kb_team_members
+            WHERE team_id = $1 AND profile_id = $2"#,
+        team_id,
+        *profile_id,
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(role)
+}
+
 /// True if the role is `owner` or `maintainer` (may manage the team).
 ///
 /// `pub(crate)` so sibling services reuse the one definition (see `role_on_team`).
@@ -84,12 +106,15 @@ pub(crate) fn can_manage(role: TeamRole) -> bool {
     matches!(role, TeamRole::Owner | TeamRole::Maintainer)
 }
 
-/// The one statement of "this caller may confer something ON this team": a manage-capable role,
-/// exactly what `add_member` requires of a human.
+/// "This caller holds a manage-capable role on this team" — the bar for conferring connection
+/// reach on a target team (`machine_authz::contain_target_team`, for
+/// `connection_service::grant_reach`).
 ///
-/// It exists so the two *containment* sites — `machine_authz::contain_reach`'s team loop and
-/// `connection_service::grant_reach`'s target team — cannot drift apart. Tighten the bar here and
-/// both tighten with it.
+/// It is NOT what `add_member` requires: that is the rank rule in `authz::team_membership`, which
+/// also refuses a non-admin on the gating team (team-role rank spec R11). `machine_authz::contain_reach`
+/// writes membership rows, so its team loop asks `MembershipAuthority` instead (plan P15); a reach
+/// grant writes no membership, which is why this bar keeps no gating-team exclusion (see
+/// `contain_target_team`).
 ///
 /// A nonexistent team also lands here: `role_on_team` returns `None` for a `team_id` no row
 /// carries, so a bogus UUID is `Forbidden` and never reaches the write. That matters because
@@ -254,64 +279,92 @@ pub async fn create_team(
     Ok(row)
 }
 
-/// Add a member to a team. The caller must be `owner`/`maintainer`.
-/// Cannot grant `owner` (ownership is transferred, not granted) — see `change_role`.
+/// Add a member to a team at `req.role` — the rank rule (team-role rank spec C1, R11): a manager
+/// can grant a role up to their own (an owner can grant `owner`, a maintainer up to `maintainer`);
+/// only a system admin can add to the gating team, and a system admin can grant any role. A
+/// machine target is capped at `member` for everyone (C5). The add and its
+/// `team_membership_changed` record are one write.
 ///
-/// **Insert-only.** A profile already on the team is a `Conflict`, never a role update: an upsert
-/// here would change an existing member's role while skipping every guard `change_role` carries —
-/// it could demote a team's last owner (orphaning the team) or rewrite a SAML-provisioned row.
-/// Changing a role is `change_role`'s job, and only there are those guards enforced.
+/// **Insert-only.** A profile already on the team is a `Conflict` naming `change_role`, never a role
+/// update (#1070): changing a role is `change_role`'s act, under its own checks.
 pub async fn add_member(
     pool: &PgPool,
     caller: &HumanPrincipal,
     team_id: Uuid,
     req: &AddMemberRequest,
 ) -> ApiResult<TeamMemberRow> {
-    // Auth before writes.
-    match role_on_team(pool, team_id, caller.profile_id()).await? {
-        Some(role) if can_manage(role) => {}
-        _ => return Err(ApiError::Forbidden),
-    }
-
-    // Same rule as `change_role`: `owner` is conferred by ownership transfer, never by a
-    // role grant.
-    if matches!(req.role, TeamRole::Owner) {
-        return Err(ApiError::BadRequest(
-            "cannot grant owner via add_member; use ownership transfer".to_string(),
-        ));
-    }
-    crate::services::machine_authz::refuse_machine_above_ceiling(
+    let target = ProfileId::from(req.profile_id);
+    let (mut tx, change) = authorize_member_act(
         pool,
-        ProfileId::from(req.profile_id),
-        req.role,
-    )
-    .await?;
-
-    // `DO NOTHING` + `RETURNING` yields no row on conflict, so an existing membership is
-    // detected by the same statement that would have written it — no separate existence check
-    // to race against.
-    let row = sqlx::query_as!(
-        TeamMemberRow,
-        r#"
-        INSERT INTO kb_team_members (team_id, profile_id, role)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (team_id, profile_id) DO NOTHING
-        RETURNING team_id, profile_id, role AS "role: TeamRole", created
-        "#,
+        caller,
         team_id,
-        req.profile_id,
-        req.role as TeamRole,
+        target,
+        MembershipAct::Add { role: req.role },
     )
-    .fetch_optional(pool)
     .await?;
+    team_membership::membership_write(&mut tx, None, change).await?;
+    let row = member_row(&mut tx, team_id, target).await?;
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {e}")))?;
+    Ok(row)
+}
 
-    row.ok_or_else(|| {
-        ApiError::Conflict(
-            "already a member of this team; change their role with `temper team set-role` \
-             (PATCH /api/teams/{id}/members/{profile_id})"
-                .to_string(),
-        )
-    })
+/// Run one member act up to its sealed authorization, in plan P1's order, and hand back the open
+/// transaction that holds its locks:
+///
+/// 1. **Pre-check on the pool.** Resolve the caller's authority and apply the half of the rank rule
+///    that needs no target state. A caller with no authority — or a member acting on someone else —
+///    is refused here, before any lock, and learns nothing about the team or the target (S6).
+/// 2. **Lock** the team row, then the target's row ([`team_membership::locked`]).
+/// 3. **Re-resolve** the authority on the transaction, under the locks, so the decision reads
+///    current state: a caller demoted a moment ago acts on their new role, and two co-owners
+///    leaving at once are serialized (C6).
+/// 4. **Authorize** the act against the target as locked.
+///
+/// The caller writes with [`team_membership::membership_write`] and commits.
+async fn authorize_member_act(
+    pool: &PgPool,
+    caller: &HumanPrincipal,
+    team_id: Uuid,
+    target: ProfileId,
+    act: MembershipAct,
+) -> ApiResult<(
+    sqlx::Transaction<'static, sqlx::Postgres>,
+    team_membership::AuthorizedMembershipChange,
+)> {
+    {
+        let mut conn = pool.acquire().await?;
+        MembershipAuthority::resolve(&mut conn, caller, team_id)
+            .await?
+            .precheck(caller, act, target)?;
+    }
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
+    let locked = team_membership::locked(&mut tx, team_id, target).await?;
+    let resolved = MembershipAuthority::resolve(&mut tx, caller, team_id).await?;
+    let change = team_membership::authorize(resolved, caller, team_id, act, &locked)?;
+    Ok((tx, change))
+}
+
+/// The member's row as it stands on `conn`, for an act's response.
+async fn member_row(
+    conn: &mut sqlx::PgConnection,
+    team_id: Uuid,
+    profile: ProfileId,
+) -> ApiResult<TeamMemberRow> {
+    Ok(sqlx::query_as!(
+        TeamMemberRow,
+        r#"SELECT team_id, profile_id, role AS "role: TeamRole", created
+             FROM kb_team_members
+            WHERE team_id = $1 AND profile_id = $2"#,
+        team_id,
+        *profile,
+    )
+    .fetch_one(&mut *conn)
+    .await?)
 }
 
 /// List the teams the caller is a member of.
@@ -470,63 +523,38 @@ pub async fn delete_team(pool: &PgPool, caller: &HumanPrincipal, team_id: Uuid) 
     Ok(())
 }
 
-/// Load a member's role + provenance, if the row exists.
-async fn load_member(
-    pool: &PgPool,
-    team_id: Uuid,
-    profile: Uuid,
-) -> ApiResult<Option<(TeamRole, TeamMemberSource)>> {
-    let row = sqlx::query!(
-        r#"SELECT role AS "role: TeamRole", source AS "source: TeamMemberSource"
-             FROM kb_team_members WHERE team_id = $1 AND profile_id = $2"#,
-        team_id,
-        profile,
-    )
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.map(|r| (r.role, r.source)))
-}
-
-/// Remove a member from a team. Owner/maintainer may remove others; any member
-/// may remove themselves (self-leave). Refuses SAML-provisioned rows and refuses
-/// to remove the last owner.
+/// Remove a member from a team. A manager removes members up to their own rank who are not owners;
+/// anyone may leave (team-role rank spec C2, C3, R6). Only a system admin removes another owner, or
+/// anyone from the gating team other than themselves (R11). Refuses an identity-provider row (C7),
+/// a profile's own personal team, and the team's last owner (C6). The removal and its
+/// `team_membership_changed` record are one write.
 pub async fn remove_member(
     pool: &PgPool,
     caller: &HumanPrincipal,
     team_id: Uuid,
     target: Uuid,
 ) -> ApiResult<RemoveMemberOutcome> {
-    // Auth before writes: manager, or self-leave.
-    let is_self = *caller.profile_id() == target;
-    if !is_self {
-        match role_on_team(pool, team_id, caller.profile_id()).await? {
-            Some(role) if can_manage(role) => {}
-            _ => return Err(ApiError::Forbidden),
-        }
-    }
-
-    let (_target_role, source) = load_member(pool, team_id, target)
-        .await?
-        .ok_or_else(|| ApiError::NotFound("team member not found".to_string()))?;
-
-    if matches!(source, TeamMemberSource::Idp) {
-        return Err(ApiError::Conflict(
-            "this membership is provisioned by SAML; change it via the identity provider"
-                .to_string(),
-        ));
-    }
+    let (mut tx, change) = authorize_member_act(
+        pool,
+        caller,
+        team_id,
+        ProfileId::from(target),
+        MembershipAct::Remove,
+    )
+    .await?;
 
     // A profile's personal team is its own for as long as the profile exists. For a person the
-    // last-owner guard below already holds them there; a machine holds its personal team as
-    // `member` (20261019100000_machines_never_govern.sql), so without this anyone who manages that
-    // team could remove it, cutting its reach to the root. (The machine itself never reaches here:
-    // the caller is a person.)
+    // last-owner guard already holds them there; a machine holds its personal team as `member`
+    // (20261019100000_machines_never_govern.sql), so without this anyone who manages that team could
+    // remove it, cutting its reach to the root. (The machine itself never reaches here: the caller
+    // is a person.) Asked only AFTER the act is authorized, so a caller who could not act learns
+    // nothing about whose personal team this is (S6).
     let personal: bool = sqlx::query_scalar!(
         r#"SELECT EXISTS (SELECT 1 FROM kb_teams WHERE id = $1 AND personal_of = $2) AS "p!: bool""#,
         team_id,
         target,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
     if personal {
         return Err(ApiError::Conflict(
@@ -534,30 +562,10 @@ pub async fn remove_member(
         ));
     }
 
-    // Last-owner guard folded into the DELETE so the count and the delete are one
-    // atomic statement — two concurrent removals cannot both pass a separate count
-    // check and orphan the team. The row is known to exist and be non-idp (checked
-    // above), so `rows_affected() == 0` here means the guard blocked a last-owner
-    // removal.
-    let result = sqlx::query!(
-        r#"DELETE FROM kb_team_members
-            WHERE team_id = $1 AND profile_id = $2
-              AND NOT (
-                  role = 'owner'
-                  AND (SELECT COUNT(*) FROM kb_team_members
-                         WHERE team_id = $1 AND role = 'owner') = 1
-              )"#,
-        team_id,
-        target,
-    )
-    .execute(pool)
-    .await?;
-    if result.rows_affected() == 0 {
-        return Err(ApiError::Conflict(
-            "cannot remove the last owner; transfer ownership or promote another member first"
-                .to_string(),
-        ));
-    }
+    team_membership::membership_write(&mut tx, None, change).await?;
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {e}")))?;
 
     // Removal succeeded. Surface (read-only) the reach the removed member still
     // OWNS in this team's contexts (live resources only; a soft-deleted or erased one
@@ -592,9 +600,18 @@ pub async fn remove_member(
     })
 }
 
-/// Change an existing member's role. Owner/maintainer only. Cannot create a
-/// member (404 if absent), cannot grant `owner` (ownership is transferred, not
-/// granted), refuses SAML rows, and refuses to demote the last owner.
+/// Change an existing member's role — the rank rule (team-role rank spec C1–C3a, R6, R11):
+/// - a manager can set a member's role up to their own, on members up to their own rank who are
+///   not owners (a maintainer acts on a maintainer; only a system admin changes an owner other
+///   than yourself);
+/// - an owner or maintainer can lower their own role (to hand a team over, grant `owner` to another
+///   member, then lower yourself), but no one can raise their own;
+/// - on the gating team, only a system admin changes roles;
+/// - a system admin can make any change.
+///
+/// `404` if the profile is not a member, `409` on an identity-provider row (C7) or when the change
+/// would leave the team without an owner (C6). A change to the member's current role is a `200` and
+/// records nothing (C8). The change and its `team_membership_changed` record are one write.
 pub async fn change_role(
     pool: &PgPool,
     caller: &HumanPrincipal,
@@ -602,61 +619,21 @@ pub async fn change_role(
     target: Uuid,
     new_role: TeamRole,
 ) -> ApiResult<TeamMemberRow> {
-    // Auth before writes.
-    match role_on_team(pool, team_id, caller.profile_id()).await? {
-        Some(role) if can_manage(role) => {}
-        _ => return Err(ApiError::Forbidden),
-    }
-
-    if matches!(new_role, TeamRole::Owner) {
-        return Err(ApiError::BadRequest(
-            "cannot grant owner via role change; use ownership transfer".to_string(),
-        ));
-    }
-    crate::services::machine_authz::refuse_machine_above_ceiling(
+    let target = ProfileId::from(target);
+    let (mut tx, change) = authorize_member_act(
         pool,
-        ProfileId::from(target),
-        new_role,
-    )
-    .await?;
-
-    let (_current_role, source) = load_member(pool, team_id, target)
-        .await?
-        .ok_or_else(|| ApiError::NotFound("team member not found".to_string()))?;
-
-    if matches!(source, TeamMemberSource::Idp) {
-        return Err(ApiError::Conflict(
-            "this membership is provisioned by SAML; change it via the identity provider"
-                .to_string(),
-        ));
-    }
-
-    // Demote-last-owner guard folded into the UPDATE for the same atomicity reason as
-    // `remove_member`. `new_role` is already known to be non-owner (checked above), so
-    // any update to a sole owner is a demotion and the guard blocks it — a `None`
-    // result means the last-owner guard fired.
-    let row = sqlx::query_as!(
-        TeamMemberRow,
-        r#"UPDATE kb_team_members SET role = $3
-            WHERE team_id = $1 AND profile_id = $2
-              AND NOT (
-                  role = 'owner'
-                  AND (SELECT COUNT(*) FROM kb_team_members
-                         WHERE team_id = $1 AND role = 'owner') = 1
-              )
-        RETURNING team_id, profile_id, role AS "role: TeamRole", created"#,
+        caller,
         team_id,
         target,
-        new_role as TeamRole,
+        MembershipAct::Change { role: new_role },
     )
-    .fetch_optional(pool)
     .await?;
-    row.ok_or_else(|| {
-        ApiError::Conflict(
-            "cannot demote the last owner; transfer ownership or promote another member first"
-                .to_string(),
-        )
-    })
+    team_membership::membership_write(&mut tx, None, change).await?;
+    let row = member_row(&mut tx, team_id, target).await?;
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {e}")))?;
+    Ok(row)
 }
 
 #[cfg(all(test, feature = "test-db"))]

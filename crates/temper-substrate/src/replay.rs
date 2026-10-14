@@ -320,6 +320,9 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // NULL-anchored, content-free shape as the ledger events above.
             | EventKind::PrincipalStandingChanged
             | EventKind::PrincipalGovernanceChanged
+            // A team membership change (team-role rank spec C8): an authority act, NULL-anchored,
+            // content-free. No sidecar.
+            | EventKind::TeamMembershipChanged
             // The erasure act's admin pair (spec 2026-08-31): authority acts about a PERSON,
             // never knowledge. Same NULL-anchored, content-free shape. The snapshot side of the
             // replay redaction needs NOTHING more than this posture, and that is the point:
@@ -1004,6 +1007,11 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // kb_principal_governance input tables, not rebuilt from these events.
             | EventKind::PrincipalStandingChanged
             | EventKind::PrincipalGovernanceChanged
+            // A team membership change (team-role rank spec C8): the same posture. Membership
+            // STATE is replayed from the kb_team_members input table, not rebuilt from these
+            // events — which is also why the derived writers (personal-team genesis, auto-join)
+            // can stay un-evented (R13).
+            | EventKind::TeamMembershipChanged
             // The erasure act's refusal face (spec 2026-08-31, D6): NULL-anchored, mutates
             // NOTHING by design — one reason-code event, and the refusal set must not admit
             // it. The walk stays a no-op; `PrincipalErased` graduated above.

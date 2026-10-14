@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TeamMembershipChanged",
+  "description": "`team_membership_changed` — one recorded write to `kb_team_members` (team-role rank spec C8,\n\"The event\"). Written only by `_admin_team_membership_write`, in the same statement as the row.\n\nONE TYPE FOR ADD, CHANGE AND REMOVE, discriminated by which roles are present:\n`previous_role` absent means the member was added, `role` absent means they were removed, both\npresent means the role changed. A change to the current role is not recorded at all.\n\nThe team is the event's `subject` reference and the member its `principal`. `actor` is absent\nwhen the system acted (SAML reconcile); the event is then emitted by the `system` entity, never\nby the member's, so the record does not reach the member through the actor axis.",
+  "type": "object",
+  "properties": {
+    "actor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "invited_by": {
+      "description": "Who made the invitation, on `via = invitation` only.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "left_ownerless": {
+      "description": "True only on an unguarded (SAML reconcile) write that left the team with no owner (spec C6,\nR8). Absent otherwise.",
+      "type": "boolean"
+    },
+    "previous_role": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TeamRole"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "profile_id": {
+      "$ref": "#/$defs/ProfileId"
+    },
+    "role": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TeamRole"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source": {
+      "description": "The row's source: before the act for a change or remove, as written for an add.",
+      "$ref": "#/$defs/TeamMemberSource"
+    },
+    "team_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "via": {
+      "$ref": "#/$defs/MembershipVia"
+    }
+  },
+  "required": [
+    "team_id",
+    "profile_id",
+    "source",
+    "via"
+  ],
+  "$defs": {
+    "MembershipVia": {
+      "description": "The path a recorded team-membership change came through — the `via` of a\n`team_membership_changed` admin event (team-role rank spec, \"The event\").\n\nA closed set with a fixed SQL spelling: `_admin_team_membership_write` refuses any value not in\nit, and [`MembershipVia::as_str`] is the one Rust spelling of that set. The derived writers\n(personal-team genesis, auto-join materialization, the machine-cap trigger) have no `via`\nbecause they are not recorded (spec C8, R13).",
+      "oneOf": [
+        {
+          "description": "An add, change or remove of another member, by a manager of the team or a system admin.",
+          "type": "string",
+          "const": "member_act"
+        },
+        {
+          "description": "A member acting on themselves: leaving, or lowering their own role.",
+          "type": "string",
+          "const": "self"
+        },
+        {
+          "description": "An accepted invitation (the invitee is the actor; the payload names the inviter).",
+          "type": "string",
+          "const": "invitation"
+        },
+        {
+          "description": "`create_team`'s creator row.",
+          "type": "string",
+          "const": "team_genesis"
+        },
+        {
+          "description": "A system admin approving an access request (`access_service::review_request`).",
+          "type": "string",
+          "const": "access_approval"
+        },
+        {
+          "description": "A machine registration's team reach (`machine_registration_service::apply_reach`).",
+          "type": "string",
+          "const": "machine_reach"
+        },
+        {
+          "description": "SAML reconcile of identity-provider rows. The system is the actor.",
+          "type": "string",
+          "const": "idp_reconcile"
+        }
+      ]
+    },
+    "ProfileId": {
+      "description": "A `kb_profiles.id` value.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "TeamMemberSource": {
+      "description": "Provenance of a team membership row. Maps to the `team_member_source`\nPostgres enum (added by `20260702000001_saml_group_provisioning.sql`).\n`Idp` rows are owned by SAML reconcile and are not user-mutable.",
+      "type": "string",
+      "enum": [
+        "native",
+        "idp"
+      ]
+    },
+    "TeamRole": {
+      "description": "Team role — strict hierarchy: Owner > Maintainer > Member > Watcher.\n\nMaps directly to the `team_role` Postgres enum. Four roles is small enough\nthat explicit matching in SQL functions and Rust logic is clearer than a\njoin-table permission model.",
+      "type": "string",
+      "enum": [
+        "owner",
+        "maintainer",
+        "member",
+        "watcher"
+      ]
+    }
+  }
+}

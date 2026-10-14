@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT _admin_team_membership_write(\n               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL) AS \"outcome!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "outcome!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid",
+        "Uuid",
+        {
+          "Custom": {
+            "name": "team_role",
+            "kind": {
+              "Enum": [
+                "owner",
+                "maintainer",
+                "member",
+                "watcher"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "team_role",
+            "kind": {
+              "Enum": [
+                "owner",
+                "maintainer",
+                "member",
+                "watcher"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "team_member_source",
+            "kind": {
+              "Enum": [
+                "native",
+                "idp"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "team_member_source",
+            "kind": {
+              "Enum": [
+                "native",
+                "idp"
+              ]
+            }
+          }
+        },
+        "Bool",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "46e96a7ec37e1512cb6acba91db344a9241f124671705cc578c171a1715c4678"
+}

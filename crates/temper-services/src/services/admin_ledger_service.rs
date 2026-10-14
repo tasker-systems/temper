@@ -89,6 +89,10 @@ const ADMIN_EVENT_TYPES: &[&str] = &[
     "block_history_scrubbed",
     // The field scrub's record (field-grain scrub spec S4): the same admin-only posture.
     "resource_scrubbed",
+    // Team membership changes (team-role rank spec C8, C12): a membership change confers or
+    // removes team authority; managers of the team read it through the C12 arm in
+    // `readable_event_types`, which calls the membership gate rather than restating it.
+    "team_membership_changed",
 ];
 
 /// The §5 table, evaluated for one subject. Returns the event types `caller` may read about

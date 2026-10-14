@@ -11,7 +11,10 @@ use uuid::Uuid;
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    any(feature = "mcp", feature = "scenario-schema"),
+    derive(schemars::JsonSchema)
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "team_role", rename_all = "snake_case")]
@@ -109,13 +112,63 @@ pub struct AddMemberRequest {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    any(feature = "mcp", feature = "scenario-schema"),
+    derive(schemars::JsonSchema)
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "team_member_source", rename_all = "snake_case")]
 pub enum TeamMemberSource {
     Native,
     Idp,
+}
+
+/// The path a recorded team-membership change came through — the `via` of a
+/// `team_membership_changed` admin event (team-role rank spec, "The event").
+///
+/// A closed set with a fixed SQL spelling: `_admin_team_membership_write` refuses any value not in
+/// it, and [`MembershipVia::as_str`] is the one Rust spelling of that set. The derived writers
+/// (personal-team genesis, auto-join materialization, the machine-cap trigger) have no `via`
+/// because they are not recorded (spec C8, R13).
+#[cfg_attr(
+    any(feature = "mcp", feature = "scenario-schema"),
+    derive(schemars::JsonSchema)
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MembershipVia {
+    /// An add, change or remove of another member, by a manager of the team or a system admin.
+    MemberAct,
+    /// A member acting on themselves: leaving, or lowering their own role.
+    #[serde(rename = "self")]
+    SelfAct,
+    /// An accepted invitation (the invitee is the actor; the payload names the inviter).
+    Invitation,
+    /// `create_team`'s creator row.
+    TeamGenesis,
+    /// A system admin approving an access request (`access_service::review_request`).
+    AccessApproval,
+    /// A machine registration's team reach (`machine_registration_service::apply_reach`).
+    MachineReach,
+    /// SAML reconcile of identity-provider rows. The system is the actor.
+    IdpReconcile,
+}
+
+impl MembershipVia {
+    /// The wire and SQL spelling — what `_admin_team_membership_write`'s `p_via` accepts.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MembershipVia::MemberAct => "member_act",
+            MembershipVia::SelfAct => "self",
+            MembershipVia::Invitation => "invitation",
+            MembershipVia::TeamGenesis => "team_genesis",
+            MembershipVia::AccessApproval => "access_approval",
+            MembershipVia::MachineReach => "machine_reach",
+            MembershipVia::IdpReconcile => "idp_reconcile",
+        }
+    }
 }
 
 /// A team member enriched with the profile handle and provenance — the row
@@ -171,4 +224,29 @@ pub struct TeamUpdateRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangeRoleRequest {
     pub role: TeamRole,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `as_str` is the SQL spelling and serde is the payload spelling; the ledger reads one and
+    /// `_admin_team_membership_write` writes the other, so they must be the same string.
+    #[test]
+    fn membership_via_as_str_matches_its_serde_spelling() {
+        for via in [
+            MembershipVia::MemberAct,
+            MembershipVia::SelfAct,
+            MembershipVia::Invitation,
+            MembershipVia::TeamGenesis,
+            MembershipVia::AccessApproval,
+            MembershipVia::MachineReach,
+            MembershipVia::IdpReconcile,
+        ] {
+            assert_eq!(
+                serde_json::to_value(via).unwrap(),
+                serde_json::Value::String(via.as_str().to_string())
+            );
+        }
+    }
 }
