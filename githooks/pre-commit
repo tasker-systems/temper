@@ -18,6 +18,8 @@ set -euo pipefail
 #       packages/temper-cloud/ is staged.
 #   temper-ui battery (svelte-check, biome)         — only if a file under
 #       packages/temper-ui/ is staged.
+#   Shell battery (shellcheck -S error, harnesses)  — only if a *.sh or a
+#       githooks/ file is staged; runs the staged scripts' test-*.sh siblings.
 #
 # The temper-ui battery was added after this hook said "the UI and SDK trees are
 # covered in CI, not here" and a break proved covered-in-CI insufficient:
@@ -88,16 +90,20 @@ TS_RE='^packages/temper-cloud/'
 # regenerated" — the case that motivated the battery.
 UI_RE='^packages/temper-ui/'
 
+# Shell scripts and the hooks themselves (which carry no extension).
+SH_RE='\.sh$|^githooks/'
+
 HAS_RUST=false; staged_match "$RUST_RE" && HAS_RUST=true
 HAS_TS=false;   staged_match "$TS_RE"   && HAS_TS=true
 HAS_UI=false;   staged_match "$UI_RE"   && HAS_UI=true
+HAS_SH=false;   staged_match "$SH_RE"   && HAS_SH=true
 
-if [ "$HAS_RUST" = "false" ] && [ "$HAS_TS" = "false" ] && [ "$HAS_UI" = "false" ]; then
-  echo "==> pre-commit: no Rust, temper-cloud TypeScript or temper-ui staged — skipping (docs/other only)."
+if [ "$HAS_RUST" = "false" ] && [ "$HAS_TS" = "false" ] && [ "$HAS_UI" = "false" ] && [ "$HAS_SH" = "false" ]; then
+  echo "==> pre-commit: no Rust, temper-cloud TypeScript, temper-ui or shell staged — skipping (docs/other only)."
   exit 0
 fi
 
-echo "==> Running pre-commit checks (rust=${HAS_RUST}, temper-cloud-ts=${HAS_TS}, temper-ui=${HAS_UI})..."
+echo "==> Running pre-commit checks (rust=${HAS_RUST}, temper-cloud-ts=${HAS_TS}, temper-ui=${HAS_UI}, shell=${HAS_SH})..."
 
 if staged_match '^migrations/'; then
   # Against the local origin/main, which may be stale: the script warns and skips when it is
@@ -185,6 +191,73 @@ if [ "$HAS_UI" = "true" ]; then
     (cd packages/temper-ui && bun run biome --diagnostic-level=error)
     echo "  ✓ temper-ui lint OK"
   fi
+fi
+
+if [ "$HAS_SH" = "true" ]; then
+  # Two checks, both scoped to the staged scripts.
+  #
+  # The harness run is the one that earns its place. CI runs these harnesses on Linux only, so
+  # a GNU-ism in one passes CI and breaks on a Mac: `sed -i 's/…/' file` (BSD sed reads the
+  # script as the backup suffix) failed five probes in test-wire-class-crosscheck.sh and aborted
+  # test-check-release-chain-triggers.sh under set -e, unnoticed until someone ran them by hand.
+  # A staged X.sh runs its sibling test-X.sh; a staged test-*.sh runs itself.
+  #
+  # The lint gates at -S error only. CI does not run shellcheck at all, and the tracked
+  # scripts carry standing warning- and style-level findings; gating on those would fail the
+  # first commit that touches any such script — the noise that trains `--no-verify`. zsh
+  # scripts are skipped: shellcheck cannot parse them (SC1071), so a finding there is not one.
+  SH_STAGED="$(echo "$STAGED" | grep -E "$SH_RE")"
+
+  if command -v shellcheck >/dev/null 2>&1; then
+    lintable=()
+    while IFS= read -r f; do
+      case "$(head -n 1 "$f")" in
+        *zsh*) echo "  ! $f is a zsh script — shellcheck cannot parse it; skipping." ;;
+        *) lintable+=("$f") ;;
+      esac
+    done <<< "$SH_STAGED"
+    if [ "${#lintable[@]}" -gt 0 ]; then
+      echo "  shellcheck (-S error, staged)..."
+      shellcheck -S error "${lintable[@]}"
+      echo "  ✓ shellcheck OK"
+    fi
+  else
+    echo "  ! shellcheck not on PATH — SKIPPING the shell lint." >&2
+    echo "    Install it ('mise install' from the repo root, pinned in mise.toml)." >&2
+  fi
+
+  harnesses=""
+  while IFS= read -r f; do
+    case "${f##*/}" in
+      test-*.sh) h="$f" ;;
+      *.sh)      h="$(dirname "$f")/test-${f##*/}" ;;
+      *)         continue ;;
+    esac
+    [ -f "$h" ] || continue
+    printf '%s\n' "$harnesses" | grep -qxF "$h" || harnesses="${harnesses}${h}"$'\n'
+  done <<< "$SH_STAGED"
+
+  # Harnesses too slow for a commit hook, skipped LOUDLY. Every other harness ran in <=25s on a
+  # 2026-10-13 macOS measurement of all 52; this one took 355s. CI runs it regardless
+  # (quality-gate.yml).
+  SLOW_HARNESSES='^\.github/scripts/test-audit-route-auth\.sh$'
+
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    if echo "$h" | grep -qE "$SLOW_HARNESSES"; then
+      echo "  ! $h takes ~6 minutes — SKIPPING here; run it by hand, CI runs it regardless." >&2
+      continue
+    fi
+    echo "  Running $h..."
+    # Captured and replayed only on failure, as the OpenAPI gates are: a passing harness
+    # prints dozens of PASS lines nobody needs to read.
+    if ! harness_out=$(bash "$h" 2>&1 < /dev/null); then
+      echo "$harness_out" >&2
+      echo "  ✗ $h failed" >&2
+      exit 1
+    fi
+  done <<< "$harnesses"
+  [ -z "$harnesses" ] || echo "  ✓ Shell harnesses OK"
 fi
 
 echo "==> All applicable pre-commit checks passed."

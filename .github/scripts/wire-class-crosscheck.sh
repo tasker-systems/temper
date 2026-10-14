@@ -88,7 +88,8 @@
 # authored the PR — so a human bump passes the same way, and a bot PR that also edits code
 # does not:
 #   * a lockfile (package-lock.json, bun.lock, bun.lockb, yarn.lock, pnpm-lock.yaml,
-#     Cargo.lock) — never published, never a contract;
+#     Cargo.lock, mise.lock) — never published, never a contract. mise.lock pins dev tooling
+#     (clients/temper-rb/mise.lock pins the gem's Ruby), not anything a consumer installs;
 #   * a package.json whose base and head agree once dependencies, devDependencies,
 #     optionalDependencies, overrides, and resolutions are deleted (jq-compared).
 #     peerDependencies is deliberately NOT stripped: it is what a consumer of a published client
@@ -274,7 +275,7 @@ cargo_toml_dependency_only() { # $1 = path
 
 is_dependency_only() { # $1 = path
     case "${1##*/}" in
-        package-lock.json|bun.lock|bun.lockb|yarn.lock|pnpm-lock.yaml|Cargo.lock) return 0 ;;
+        package-lock.json|bun.lock|bun.lockb|yarn.lock|pnpm-lock.yaml|Cargo.lock|mise.lock) return 0 ;;
         package.json) package_json_dependency_only "$1" ;;
         Cargo.toml)   cargo_toml_dependency_only "$1" ;;
         *) return 1 ;;
