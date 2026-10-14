@@ -27,12 +27,14 @@ bun = "1.4"
 
 # Lint and secret-scan binaries the gates and githooks/pre-commit call.
 shellcheck = "0.11"
-actionlint = "1.7"
+jactionlint = "1.8.2"   # maintained fork of actionlint
 yq = "4"
 gitleaks = "8.30.1"   # == GITLEAKS_VERSION in .github/workflows/secret-scan.yml
 
 # Cargo tooling, from prebuilt release binaries rather than `cargo install`.
-cargo-make = "0.37"
+# github:, not the aqua registry entry: aqua's looks for the binary under a doubled-"v" path
+# (cargo-make-vv0.37.24-…), so it installs and then fails to run.
+"github:sagiegurari/cargo-make" = "0.37"
 "aqua:nextest-rs/nextest/cargo-nextest" = "0.9"
 # No prebuilt carries this feature set, so this one compiles from source. Keep the 0.x line equal
 # to the workspace's `sqlx` (Cargo.toml): an unpinned `cargo install sqlx-cli` resolves 0.9.
