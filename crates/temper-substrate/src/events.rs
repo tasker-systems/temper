@@ -165,6 +165,10 @@ pub enum EventKind {
     /// title, origin URI or property family redacted, and today's value too when cleared. Same
     /// `admin` / NULL-anchored posture.
     ResourceScrubbed,
+    /// One recorded write to `kb_team_members` — an add, a role change or a removal (team-role
+    /// rank spec C8). Category `admin`, NULL-anchored, written only by
+    /// `_admin_team_membership_write` in the same statement as the row.
+    TeamMembershipChanged,
     /// An auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.2).
     /// Append-only — fires `citation_audited`, projected by `_project_citation_audited` into
     /// `kb_citation_audits` with no supersession. Registered permissive (NULL `payload_schema`),
@@ -257,6 +261,7 @@ impl EventKind {
             EventKind::ResourceErasureRefused => "resource_erasure_refused",
             EventKind::BlockHistoryScrubbed => "block_history_scrubbed",
             EventKind::ResourceScrubbed => "resource_scrubbed",
+            EventKind::TeamMembershipChanged => "team_membership_changed",
             EventKind::CitationAudited => "citation_audited",
             EventKind::BlobCommitted => "blob_committed",
             EventKind::ResourceReblocked => "resource_reblocked",
@@ -318,6 +323,7 @@ impl EventKind {
             "resource_erasure_refused" => EventKind::ResourceErasureRefused,
             "block_history_scrubbed" => EventKind::BlockHistoryScrubbed,
             "resource_scrubbed" => EventKind::ResourceScrubbed,
+            "team_membership_changed" => EventKind::TeamMembershipChanged,
             "citation_audited" => EventKind::CitationAudited,
             "blob_committed" => EventKind::BlobCommitted,
             "resource_reblocked" => EventKind::ResourceReblocked,

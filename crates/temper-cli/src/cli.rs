@@ -1546,13 +1546,17 @@ pub enum TeamAction {
         /// Member profile UUID
         profile: String,
     },
-    /// Change a member's role (owner/maintainer)
+    /// Change a member's role (a team owner or maintainer, or a system admin)
+    ///
+    /// You can set roles up to your own and act on members up to your own rank; only a
+    /// system admin changes an owner other than yourself. To hand a team over, grant `owner` to
+    /// another member, then lower your own role.
     SetRole {
         /// Team slug or UUID
         team: String,
         /// Member profile UUID
         profile: String,
-        /// New role: maintainer | member | watcher
+        /// New role: owner | maintainer | member | watcher (up to your own role)
         #[arg(long)]
         role: String,
     },
@@ -1607,7 +1611,7 @@ pub enum TeamAction {
         team: String,
         /// Profile ID (UUID)
         profile: String,
-        /// Role to grant: owner/maintainer/member/watcher
+        /// Role to grant: owner/maintainer/member/watcher (up to your own role)
         #[arg(long)]
         role: String,
     },

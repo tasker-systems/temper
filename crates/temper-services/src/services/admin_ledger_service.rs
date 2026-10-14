@@ -89,6 +89,10 @@ const ADMIN_EVENT_TYPES: &[&str] = &[
     "block_history_scrubbed",
     // The field scrub's record (field-grain scrub spec S4): the same admin-only posture.
     "resource_scrubbed",
+    // Team membership changes (team-role rank spec C8, C12): a membership change confers or
+    // removes team authority; managers of the team read it through the C12 arm in
+    // `readable_event_types`, which calls the membership gate rather than restating it.
+    "team_membership_changed",
 ];
 
 /// The §5 table, evaluated for one subject. Returns the event types `caller` may read about
@@ -128,6 +132,26 @@ async fn readable_event_types(
     if access_service::can_administer_grant(pool, Principal::Human(authed), subject).await? {
         readable.push("grant_created");
         readable.push("grant_revoked");
+    }
+
+    // team_membership_changed → mirrors the membership WRITE gate (team-role rank spec C12, R5),
+    // by CALLING it: `MembershipAuthority::resolve` over this team, admitted when it manages the
+    // team. That is a manager of THIS team and never of its parent (C13), and on the gating team
+    // nobody but a system admin (R11) — who returned above. Being able to leave a team yourself
+    // (`SelfOnly`) does not make you a reader, and the member acted on gets no arm at all: a
+    // record names them only as the `principal` reference, which `list_by_subject` never matches
+    // (`rel` is pinned to `subject`). Their own self-acts (a leave, a self-lowering) reach them on
+    // the actor axis, which is emitted by them. The same actor ≠ subject line as the disconnect and
+    // standing decisions below.
+    if subject.kind == temper_substrate::payloads::AnchorTable::Teams {
+        let mut conn = pool.acquire().await?;
+        let resolved = crate::authz::team_membership::MembershipAuthority::resolve(
+            &mut conn, authed, subject.id,
+        )
+        .await?;
+        if resolved.manages() {
+            readable.push("team_membership_changed");
+        }
     }
 
     // admin_ledger_opened → the epoch marker. is_system_admin only; handled by the arm above.

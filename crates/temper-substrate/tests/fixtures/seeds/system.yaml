@@ -77,6 +77,10 @@ event_types:
   # NULL-anchored. A reset+seed_system system MUST register it or the act, and the replay of any
   # ledger that carries one, fails "event_type resource_scrubbed not seeded".
   - resource_scrubbed
+  # A team membership change (team-role rank spec C8) — the same posture: TYPED, `admin`,
+  # NULL-anchored. A reset+seed_system system MUST register it or every member act, and the
+  # replay of any ledger that carries one, fails "event_type team_membership_changed not seeded".
+  - team_membership_changed
   # The key-grain property delete verb (2026-09-21), added by migration 20260921000010 — a
   # later migration than the canonical seed, TYPED-struct but permissive (NULL payload_schema,
   # the property_set / property_retracted precedent, so no snapshot fixture); a

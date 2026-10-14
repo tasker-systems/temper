@@ -68,6 +68,7 @@ fn payload_schemas_match_snapshots() {
     check::<p::ResourceErasureRefused>("resource_erasure_refused");
     check::<p::BlockHistoryScrubbed>("block_history_scrubbed");
     check::<p::ResourceScrubbed>("resource_scrubbed");
+    check::<p::TeamMembershipChanged>("team_membership_changed");
 }
 
 /// `EventContext` serializes an act's authorship, and nothing else, into `kb_events.metadata`.
@@ -178,6 +179,10 @@ fn the_migration_literal_matches_the_committed_fixture() {
         (
             "20261023100000_person_erasure_identifiers_and_credentials.sql",
             &["principal_erased.v1.schema.json"],
+        ),
+        (
+            "20261101200000_team_membership_changed.sql",
+            &["team_membership_changed.v1.schema.json"],
         ),
     ] {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../migrations/");
