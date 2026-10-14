@@ -4,7 +4,8 @@
 //! `/api/teams/{id}/members/{profile_id}` endpoints (already implemented and committed in
 //! `temper-services::team_service`) behave correctly end-to-end: deny-as-absence for
 //! non-members, self-leave vs. removing-others authorization, the last-owner guard, the
-//! idp-sourced-row guard, and the owner-role-grant guard on the PATCH endpoint.
+//! idp-sourced-row guard, and the rank rule on the PATCH endpoint (an owner grants `owner`; no one
+//! raises their own role).
 //!
 //! Modeled on `context_share_e2e.rs` — same `provision` helper, same raw
 //! `app.reqwest_client` + Bearer-header idiom for endpoints not (yet) wrapped by
@@ -189,18 +190,21 @@ async fn team_member_lifecycle_matrix(pool: sqlx::PgPool) {
         "member's role updated to maintainer"
     );
 
-    // 6. Owner cannot grant "owner" via the role-change endpoint -> 400.
-    let status = patch_role(&app, &owner_token, team.id, member_id, "owner").await;
+    // 6. The rank rule on the role-change endpoint: the maintainer cannot raise themselves to
+    //    "owner" -> 403; the owner can grant "owner" -> 200 (a team may have several owners).
+    let status = patch_role(&app, &member_token, team.id, member_id, "owner").await;
     assert_eq!(
         status,
-        StatusCode::BAD_REQUEST,
-        "cannot grant owner via role change"
+        StatusCode::FORBIDDEN,
+        "a maintainer cannot raise their own role"
     );
+    let status = patch_role(&app, &owner_token, team.id, member_id, "owner").await;
+    assert_eq!(status, StatusCode::OK, "an owner can grant owner");
 
-    // 7. Member self-leaves -> 200 with the residual-owned-reach body. Re-add as a
-    //    plain member for the next steps.
+    // 7. The new co-owner self-leaves while another owner remains -> 200 with the
+    //    residual-owned-reach body. Re-add as a plain member for the next steps.
     let status = delete_member(&app, &member_token, team.id, member_id).await;
-    assert_eq!(status, StatusCode::OK, "member can self-leave");
+    assert_eq!(status, StatusCode::OK, "a co-owner can self-leave");
 
     app.client
         .teams()
