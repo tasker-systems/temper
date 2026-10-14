@@ -575,6 +575,39 @@ mod tests {
         }
     }
 
+    /// Plan P15, bite: machine reach's membership bar is `add_member`'s, so a gating-team owner
+    /// who is not a system admin cannot put a machine on the gating team even at `member` — any
+    /// more than they could add a person to it (R11). The same caller still reaches a team they
+    /// manage, so the refusal is the gating arm and not containment failing for another reason.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn non_admin_gating_owner_cannot_reach_the_gating_team_with_a_machine(pool: PgPool) {
+        let gating = configure_gating_team(&pool).await;
+        let alice = mk_profile(&pool, "gating-owner").await;
+        let owned = mk_team(&pool, "gating-owner-team").await;
+        join(&pool, owned, alice, "owner").await;
+        join(&pool, gating, alice, "owner").await;
+        let caller = crate::test_support::human_principal_for(&pool, alice).await;
+
+        for role in ["member", "watcher"] {
+            let teams = vec![TeamSpec {
+                team_id: gating,
+                role: role.to_string(),
+            }];
+            let err = authorize_registration(&pool, &caller, Some(owned), &teams, &[])
+                .await
+                .expect_err("the gating roster is admin-only, machine reach included");
+            assert!(matches!(err, ApiError::Forbidden), "{role} got {err:?}");
+        }
+
+        let teams = vec![TeamSpec {
+            team_id: owned,
+            role: "member".to_string(),
+        }];
+        authorize_registration(&pool, &caller, Some(owned), &teams, &[])
+            .await
+            .expect("reach into a team the caller manages is still allowed");
+    }
+
     /// The ceiling is not gating-team-specific — a governing role is refused on any team, and
     /// on a team the caller genuinely owns, so the denial comes from the ceiling and not from
     /// containment failing for an unrelated reason.

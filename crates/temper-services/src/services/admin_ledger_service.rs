@@ -134,6 +134,26 @@ async fn readable_event_types(
         readable.push("grant_revoked");
     }
 
+    // team_membership_changed → mirrors the membership WRITE gate (team-role rank spec C12, R5),
+    // by CALLING it: `MembershipAuthority::resolve` over this team, admitted when it manages the
+    // team. That is a manager of THIS team and never of its parent (C13), and on the gating team
+    // nobody but a system admin (R11) — who returned above. Being able to leave a team yourself
+    // (`SelfOnly`) does not make you a reader, and the member acted on gets no arm at all: a
+    // record names them only as the `principal` reference, which `list_by_subject` never matches
+    // (`rel` is pinned to `subject`). Their own self-acts (a leave, a self-lowering) reach them on
+    // the actor axis, which is emitted by them. The same actor ≠ subject line as the disconnect and
+    // standing decisions below.
+    if subject.kind == temper_substrate::payloads::AnchorTable::Teams {
+        let mut conn = pool.acquire().await?;
+        let resolved = crate::authz::team_membership::MembershipAuthority::resolve(
+            &mut conn, authed, subject.id,
+        )
+        .await?;
+        if resolved.authority.manages() {
+            readable.push("team_membership_changed");
+        }
+    }
+
     // admin_ledger_opened → the epoch marker. is_system_admin only; handled by the arm above.
     // Machine/connection acts → machine_authz::authorize(owner_team). NOT REACHED IN THIS TASK:
     //   no such event type exists until step 5 of the spec's §9, and ADMIN_EVENT_TYPES does not

@@ -74,7 +74,8 @@ pub async fn is_system_admin(pool: &PgPool, profile_id: ProfileId) -> ApiResult<
 /// after the fact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GrantAuthority {
-    /// Gating-team owner. Unrestricted: may confer capabilities they do not personally hold.
+    /// A system admin (a `kb_principal_governance` grant). Unrestricted: may confer capabilities
+    /// they do not personally hold.
     SystemAdmin,
     /// Holds `can_grant` on the subject (or owns it). Bound by attenuation.
     Delegated,

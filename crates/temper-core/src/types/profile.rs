@@ -78,8 +78,8 @@ pub struct ProfileWithEntitlements {
 /// Result of validating whether a profile can be deactivated.
 ///
 /// Deactivation is blocked if the profile is the sole owner of any active team
-/// (must transfer ownership first) or owns resources with no other access path
-/// (must transfer or share first).
+/// (another member must be granted `owner` first) or owns resources with no other
+/// access path (they must be reassigned or shared first).
 #[derive(Debug, Clone)]
 pub enum DeactivationCheck {
     /// Safe to deactivate

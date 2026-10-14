@@ -570,7 +570,7 @@ export interface paths {
         };
         /**
          * Read the admin ledger
-         * @description Returns a page of recorded administrative acts, newest first, on exactly one axis. `subject` (`<kind>:<uuid>`, e.g. `kb_resources:<uuid>`) returns the acts performed on that subject, limited to the act families the caller may read about it: a system admin reads all of them, and a caller who may administer grants on the subject reads its grant acts. `actor` returns the acts a profile performed: any caller may read their own, and only a system admin may read another's. A read the caller is not allowed is answered 404, not 403, so a refusal reveals nothing about the subject. `epoch` is when recording began; acts before it were not recorded. `limit` defaults to 50 and is capped at 200.
+         * @description Returns a page of recorded administrative acts, newest first, on exactly one axis. `subject` (`<kind>:<uuid>`, e.g. `kb_resources:<uuid>`) returns the acts performed on that subject, limited to the act families the caller may read about it: a system admin reads all of them, a caller who may administer grants on the subject reads its grant acts, and an owner or maintainer of a team (`kb_teams:<uuid>`) reads that team's membership changes (on the gating team, only a system admin does). `actor` returns the acts a profile performed: any caller may read their own, and only a system admin may read another's. A read the caller is not allowed is answered 404, not 403, so a refusal reveals nothing about the subject. `epoch` is when recording began; acts before it were not recorded. `limit` defaults to 50 and is capped at 200.
          */
         get: operations["list_admin_ledger"];
         put?: never;
@@ -20820,14 +20820,14 @@ export interface operations {
                     "application/json": components["schemas"]["TeamMemberRow"];
                 };
             };
-            /** @description Cannot grant owner via add_member (use ownership transfer), or the target is a machine principal and the role is above `member` */
+            /** @description The target is a machine principal and the role is above `member` */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller is not an owner or maintainer of this team (on the gating team, not a system admin); or (`FORBIDDEN_DETAIL`) the role is above the caller's own — a manager grants up to their own role, a system admin any; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -20871,7 +20871,7 @@ export interface operations {
                     "application/json": components["schemas"]["RemoveMemberOutcome"];
                 };
             };
-            /** @description Forbidden (not owner/maintainer and not self); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller is neither the member leaving nor an owner or maintainer of this team (on the gating team, not a system admin); or (`FORBIDDEN_DETAIL`) the member is an owner other than the caller, or ranks above the caller — only a system admin removes another owner; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -20880,14 +20880,14 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Member not found */
+            /** @description Member not found (told only to a caller who may manage the team) */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Cannot remove the last owner, a SAML-provisioned row, or a profile from its own personal team */
+            /** @description Cannot remove the last owner (grant `owner` to another member first), a SAML-provisioned row, or a profile from its own personal team */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -20926,14 +20926,14 @@ export interface operations {
                     "application/json": components["schemas"]["TeamMemberRow"];
                 };
             };
-            /** @description Cannot grant owner via role change, or the target is a machine principal and the role is above `member` */
+            /** @description The target is a machine principal and the role is above `member` */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Forbidden (not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller is not an owner or maintainer of this team (on the gating team, not a system admin); or (`FORBIDDEN_DETAIL`) the role is above the caller's own, the member is an owner other than the caller or ranks above the caller (only a system admin changes another owner), or the caller is raising their own role; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -20942,14 +20942,14 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Member not found */
+            /** @description Member not found (told only to a caller who may manage the team) */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Cannot demote last owner or SAML-provisioned row */
+            /** @description Cannot demote the last owner (grant `owner` to another member first), or a SAML-provisioned row; or the membership changed since it was read (retry) */
             409: {
                 headers: {
                     [name: string]: unknown;

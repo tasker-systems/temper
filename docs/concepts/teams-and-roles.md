@@ -18,13 +18,31 @@ A member holds one role per team, from most to least capable:
 
 | Role | Can do |
 |---|---|
-| `owner` | Everything, plus delete the team and transfer/reassign resources. Owners and maintainers invite. |
-| `maintainer` | Manage membership (invite, remove, change roles), update team metadata. |
+| `owner` | Everything a maintainer can, plus delete the team and grant `owner`. |
+| `maintainer` | Manage membership (invite, add, remove, change roles) up to their own role, update team metadata. |
 | `member` | Read and contribute to the team's shared work. |
 | `watcher` | Read-only visibility into the team's shared resources. |
 
-**Ownership is never invited** — it is held at creation and moved deliberately (through
-offboarding). Invitations top out at `maintainer`.
+### Who can change whose role
+
+Roles are a rank, and every membership change follows one rule:
+
+- **You can grant a role up to your own.** An owner can make another member an owner; a
+  maintainer can grant up to `maintainer`.
+- **You can act on members up to your own rank, except owners.** A maintainer can change or
+  remove another maintainer. No one but a system admin changes or removes an owner other than
+  themselves, so a team may have several owners and none of them can remove another.
+- **You can lower your own role or leave, but never raise it.** Members and watchers can leave a
+  team but change no one's role.
+- **A team keeps at least one owner.** The last owner cannot leave or step down until someone
+  else holds `owner`. To hand a team over, grant `owner` to another member, then lower your own
+  role.
+- **A system admin can make any change**, including repairing a team whose only owner has left.
+  On the instance's gating team, membership is changed only by a system admin (any member may
+  still leave it).
+
+Adding a member, changing a role and removing a member are recorded on the admin ledger, readable
+by the team's owners and maintainers and by system admins. Invitations top out at `maintainer`.
 
 ## Nested teams
 

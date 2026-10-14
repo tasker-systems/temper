@@ -636,21 +636,60 @@ pub async fn change_role(
     Ok(row)
 }
 
+#[cfg(test)]
+mod message_tests {
+    /// C11 (team-role rank spec): no refusal, doc or published description in the member acts'
+    /// files directs a caller to an "ownership transfer" — there is none; the hand-over is
+    /// `change_role`. PR C extends this to the invitation files.
+    #[test]
+    fn no_member_act_string_names_an_ownership_transfer() {
+        let banned = [
+            format!("ownership {}", "transfer"),
+            format!("{} ownership", "transfer"),
+            format!("ownership is {}", "transferred"),
+        ];
+        for (name, text) in [
+            ("team_service.rs", include_str!("team_service.rs")),
+            (
+                "handlers/teams.rs",
+                include_str!("../../../temper-api/src/handlers/teams.rs"),
+            ),
+            (
+                "types/profile.rs",
+                include_str!("../../../temper-core/src/types/profile.rs"),
+            ),
+        ] {
+            let lower = text.to_lowercase();
+            for phrase in &banned {
+                assert!(!lower.contains(phrase.as_str()), "{name} says {phrase:?}");
+            }
+        }
+    }
+}
+
 #[cfg(all(test, feature = "test-db"))]
 mod lifecycle_tests {
     use super::*;
     use sqlx::PgPool;
     use temper_core::types::team::{TeamMemberSource, TeamRole};
 
-    /// Insert a profile with the given handle, return its id.
+    /// Insert a profile with the given handle, return its id. It gets the `<handle>@web` emitter
+    /// entity the first authenticated request would provision, so its member acts can be recorded.
     async fn mk_profile(pool: &PgPool, handle: &str) -> Uuid {
-        sqlx::query_scalar(
+        let id: Uuid = sqlx::query_scalar(
             "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
         )
         .bind(handle)
         .fetch_one(pool)
         .await
-        .unwrap()
+        .unwrap();
+        sqlx::query("INSERT INTO kb_entities (profile_id, name) VALUES ($1, $2 || '@web')")
+            .bind(id)
+            .bind(handle)
+            .execute(pool)
+            .await
+            .unwrap();
+        id
     }
 
     /// Insert a root team with the given slug, return its id.
@@ -989,23 +1028,73 @@ mod lifecycle_tests {
         assert!(matches!(row.role, TeamRole::Maintainer));
     }
 
+    /// C1, bite: an owner grants `owner` through a role change.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn cannot_grant_owner_via_role_change(pool: PgPool) {
+    async fn owner_grants_owner_via_role_change(pool: PgPool) {
         let owner = mk_profile(&pool, "owner").await;
         let member = mk_profile(&pool, "member").await;
         let team = mk_team(&pool, "acme").await;
         add(&pool, team, owner, "owner", "native").await;
         add(&pool, team, member, "member", "native").await;
 
-        let denied = change_role(
+        let row = change_role(
             &pool,
             &crate::test_support::human_principal_for(&pool, owner).await,
             team,
             member,
             TeamRole::Owner,
         )
-        .await;
-        assert!(matches!(denied, Err(ApiError::BadRequest(_))));
+        .await
+        .expect("C1: an owner may grant owner");
+        assert!(matches!(row.role, TeamRole::Owner));
+        let events = membership_events(&pool, team).await;
+        assert_eq!(events.len(), 1);
+        assert_event(
+            &events[0],
+            member,
+            Some("member"),
+            Some("owner"),
+            owner,
+            "member_act",
+        );
+    }
+
+    /// C1, pin: a maintainer cannot grant `owner`, and can grant up to `maintainer`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn maintainer_grants_up_to_maintainer_and_not_owner(pool: PgPool) {
+        let maintainer = mk_profile(&pool, "maint").await;
+        let member = mk_profile(&pool, "member").await;
+        let newcomer = mk_profile(&pool, "newcomer").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, maintainer, "maintainer", "native").await;
+        add(&pool, team, member, "member", "native").await;
+        let me = crate::test_support::human_principal_for(&pool, maintainer).await;
+
+        let denied = change_role(&pool, &me, team, member, TeamRole::Owner).await;
+        assert!(
+            matches!(denied, Err(ApiError::ForbiddenDetail(_))),
+            "got {denied:?}"
+        );
+        assert!(
+            membership_events(&pool, team).await.is_empty(),
+            "a refusal records nothing"
+        );
+
+        change_role(&pool, &me, team, member, TeamRole::Maintainer)
+            .await
+            .expect("a maintainer may grant maintainer");
+        add_member(
+            &pool,
+            &me,
+            team,
+            &AddMemberRequest {
+                profile_id: newcomer,
+                role: TeamRole::Maintainer,
+            },
+        )
+        .await
+        .expect("a maintainer may add at maintainer");
+        assert_eq!(membership_events(&pool, team).await.len(), 2);
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -1311,16 +1400,18 @@ mod lifecycle_tests {
         assert!(is_visible(&pool, stranger, resource).await);
     }
 
-    // --- `add_member` owner-guard (G3 Phase B2, spec D7) ---
+    // --- `add_member` and the rank (team-role rank spec C1; was the G3 Phase B2 D7 owner guard) ---
 
+    /// C1, bite: an owner can grant `owner` — the refusal that pointed at a "transfer" that never
+    /// existed is gone.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn add_member_refuses_to_grant_owner(pool: PgPool) {
+    async fn owner_adds_a_member_at_owner(pool: PgPool) {
         let owner = mk_profile(&pool, "owner").await;
         let newcomer = mk_profile(&pool, "newcomer").await;
         let team = mk_team(&pool, "acme").await;
         add(&pool, team, owner, "owner", "native").await;
 
-        let denied = add_member(
+        let row = add_member(
             &pool,
             &crate::test_support::human_principal_for(&pool, owner).await,
             team,
@@ -1329,12 +1420,49 @@ mod lifecycle_tests {
                 role: TeamRole::Owner,
             },
         )
-        .await;
-        assert!(matches!(denied, Err(ApiError::BadRequest(_))));
+        .await
+        .expect("an owner may grant owner");
+        assert!(matches!(row.role, TeamRole::Owner));
+        let events = membership_events(&pool, team).await;
+        assert_eq!(events.len(), 1, "one add, one record");
+        assert_event(
+            &events[0],
+            newcomer,
+            None,
+            Some("owner"),
+            owner,
+            "member_act",
+        );
     }
 
-    /// The `ON CONFLICT DO UPDATE SET role` path is the sneaky one: it upgrades an
-    /// EXISTING member to owner, bypassing `change_role`'s guard entirely.
+    /// C1, pin: a maintainer cannot add anyone at `owner`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn maintainer_cannot_add_at_owner(pool: PgPool) {
+        let maintainer = mk_profile(&pool, "maint").await;
+        let newcomer = mk_profile(&pool, "newcomer").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, maintainer, "maintainer", "native").await;
+
+        let denied = add_member(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, maintainer).await,
+            team,
+            &AddMemberRequest {
+                profile_id: newcomer,
+                role: TeamRole::Owner,
+            },
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ApiError::ForbiddenDetail(_))),
+            "got {denied:?}"
+        );
+        assert_eq!(member_count(&pool, team).await, 1);
+        assert!(membership_events(&pool, team).await.is_empty());
+    }
+
+    /// An add over an existing member is never an upsert, even by an owner granting `owner`: the
+    /// role changes only through `change_role` (#1070, plan P13).
     #[sqlx::test(migrations = "../../migrations")]
     async fn add_member_cannot_upgrade_an_existing_member_to_owner(pool: PgPool) {
         let owner = mk_profile(&pool, "owner").await;
@@ -1353,9 +1481,13 @@ mod lifecycle_tests {
             },
         )
         .await;
-        assert!(matches!(denied, Err(ApiError::BadRequest(_))));
+        assert!(
+            matches!(&denied, Err(ApiError::Conflict(m)) if m.contains("set-role")),
+            "an add over an existing row is the #1070 409 naming change_role, got {denied:?}"
+        );
+        assert!(membership_events(&pool, team).await.is_empty());
 
-        // Auth before writes: the refusal leaves the existing row untouched.
+        // The refusal leaves the existing row untouched.
         let role: TeamRole = sqlx::query_scalar(
             "SELECT role FROM kb_team_members WHERE team_id = $1 AND profile_id = $2",
         )
@@ -1644,5 +1776,887 @@ mod lifecycle_tests {
                 .await
                 .unwrap();
         assert_eq!(teams, 1, "no second personal team is created");
+    }
+
+    // ─── The rank rule's witnesses (team-role rank spec witness table; plan B4) ─────────────────
+    //
+    // Each conjunct is its own test. Every success asserts exactly one `team_membership_changed`
+    // with its before/after, actor and `via`; every refusal and no-op asserts none (C8).
+
+    /// The `team_membership_changed` payloads whose subject is `team`, oldest first.
+    async fn membership_events(pool: &PgPool, team: Uuid) -> Vec<serde_json::Value> {
+        sqlx::query_scalar(
+            "SELECT e.payload FROM kb_events e \
+               JOIN kb_event_types t ON t.id = e.event_type_id \
+              WHERE t.name = 'team_membership_changed' \
+                AND e.\"references\" @> jsonb_build_array(jsonb_build_object( \
+                      'rel', 'subject', \
+                      'target', jsonb_build_object('kind', 'kb_teams', 'id', $1::uuid))) \
+              ORDER BY e.id",
+        )
+        .bind(team)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    /// Every `team_membership_changed`, whatever its team.
+    async fn all_membership_events(pool: &PgPool) -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+              WHERE t.name = 'team_membership_changed'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    fn assert_event(
+        event: &serde_json::Value,
+        member: Uuid,
+        previous: Option<&str>,
+        role: Option<&str>,
+        actor: Uuid,
+        via: &str,
+    ) {
+        assert_eq!(event["profile_id"], serde_json::json!(member), "{event}");
+        assert_eq!(
+            event.get("previous_role").and_then(|v| v.as_str()),
+            previous,
+            "{event}"
+        );
+        assert_eq!(event.get("role").and_then(|v| v.as_str()), role, "{event}");
+        assert_eq!(event["actor"], serde_json::json!(actor), "{event}");
+        assert_eq!(event["via"], via, "{event}");
+        assert!(event.get("left_ownerless").is_none(), "{event}");
+    }
+
+    async fn role_of(pool: &PgPool, team: Uuid, profile: Uuid) -> Option<TeamRole> {
+        sqlx::query_scalar(
+            "SELECT role FROM kb_team_members WHERE team_id = $1 AND profile_id = $2",
+        )
+        .bind(team)
+        .bind(profile)
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn owner_count(pool: &PgPool, team: Uuid) -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM kb_team_members WHERE team_id = $1 AND role = 'owner'",
+        )
+        .bind(team)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// A team made the gating team.
+    async fn mk_gating_team(pool: &PgPool) -> Uuid {
+        let team = mk_team(pool, "gate").await;
+        sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'gate'")
+            .execute(pool)
+            .await
+            .unwrap();
+        team
+    }
+
+    /// A system admin (approved standing + governance grant) with a `@web` emitter.
+    async fn mk_admin(pool: &PgPool, handle: &str) -> Uuid {
+        let id = mk_profile(pool, handle).await;
+        crate::test_support::approved_admin(pool, id).await;
+        id
+    }
+
+    /// A machine principal: a profile with a `kb_machine_clients` row.
+    async fn mk_machine(pool: &PgPool, handle: &str, registrar: Uuid) -> Uuid {
+        let id = mk_profile(pool, handle).await;
+        sqlx::query(
+            "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
+             VALUES ($1, 'test', $2, $3)",
+        )
+        .bind(format!("client-{handle}"))
+        .bind(id)
+        .bind(registrar)
+        .execute(pool)
+        .await
+        .unwrap();
+        id
+    }
+
+    async fn principal(pool: &PgPool, id: Uuid) -> HumanPrincipal {
+        crate::test_support::human_principal_for(pool, id).await
+    }
+
+    /// C2, bite: a maintainer cannot demote an owner (today only the last-owner guard stops it).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn maintainer_cannot_demote_an_owner(pool: PgPool) {
+        let (o1, o2, mt) = (
+            mk_profile(&pool, "o1").await,
+            mk_profile(&pool, "o2").await,
+            mk_profile(&pool, "mt").await,
+        );
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, o1, "owner", "native").await;
+        add(&pool, team, o2, "owner", "native").await;
+        add(&pool, team, mt, "maintainer", "native").await;
+
+        let denied = change_role(
+            &pool,
+            &principal(&pool, mt).await,
+            team,
+            o1,
+            TeamRole::Member,
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ApiError::ForbiddenDetail(_))),
+            "got {denied:?}"
+        );
+        assert_eq!(role_of(&pool, team, o1).await, Some(TeamRole::Owner));
+        assert!(membership_events(&pool, team).await.is_empty());
+    }
+
+    /// C2, bite: a maintainer cannot remove an owner.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn maintainer_cannot_remove_an_owner(pool: PgPool) {
+        let (o1, o2, mt) = (
+            mk_profile(&pool, "o1").await,
+            mk_profile(&pool, "o2").await,
+            mk_profile(&pool, "mt").await,
+        );
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, o1, "owner", "native").await;
+        add(&pool, team, o2, "owner", "native").await;
+        add(&pool, team, mt, "maintainer", "native").await;
+
+        let denied = remove_member(&pool, &principal(&pool, mt).await, team, o1).await;
+        assert!(
+            matches!(denied, Err(ApiError::ForbiddenDetail(_))),
+            "got {denied:?}"
+        );
+        assert_eq!(owner_count(&pool, team).await, 2);
+        assert!(membership_events(&pool, team).await.is_empty());
+    }
+
+    /// C2/R6, bite: an owner cannot demote a co-owner.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn owner_cannot_demote_a_co_owner(pool: PgPool) {
+        let (o1, o2) = (mk_profile(&pool, "o1").await, mk_profile(&pool, "o2").await);
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, o1, "owner", "native").await;
+        add(&pool, team, o2, "owner", "native").await;
+
+        let denied = change_role(
+            &pool,
+            &principal(&pool, o1).await,
+            team,
+            o2,
+            TeamRole::Maintainer,
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ApiError::ForbiddenDetail(_))),
+            "got {denied:?}"
+        );
+        assert_eq!(owner_count(&pool, team).await, 2);
+        assert!(membership_events(&pool, team).await.is_empty());
+    }
+
+    /// C2/R6, bite: an owner cannot remove a co-owner.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn owner_cannot_remove_a_co_owner(pool: PgPool) {
+        let (o1, o2) = (mk_profile(&pool, "o1").await, mk_profile(&pool, "o2").await);
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, o1, "owner", "native").await;
+        add(&pool, team, o2, "owner", "native").await;
+
+        let denied = remove_member(&pool, &principal(&pool, o1).await, team, o2).await;
+        assert!(
+            matches!(denied, Err(ApiError::ForbiddenDetail(_))),
+            "got {denied:?}"
+        );
+        assert_eq!(owner_count(&pool, team).await, 2);
+        assert!(membership_events(&pool, team).await.is_empty());
+    }
+
+    /// C2, pin — THE R6 TRAP: "strictly below" applies only to an owner target. A maintainer
+    /// demotes and removes another maintainer.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn maintainer_demotes_and_removes_a_maintainer(pool: PgPool) {
+        let (owner, m1, m2) = (
+            mk_profile(&pool, "owner").await,
+            mk_profile(&pool, "m1").await,
+            mk_profile(&pool, "m2").await,
+        );
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, m1, "maintainer", "native").await;
+        add(&pool, team, m2, "maintainer", "native").await;
+        let me = principal(&pool, m1).await;
+
+        change_role(&pool, &me, team, m2, TeamRole::Member)
+            .await
+            .expect("maintainer demotes a maintainer");
+        remove_member(&pool, &me, team, m2)
+            .await
+            .expect("and removes them");
+        assert_eq!(role_of(&pool, team, m2).await, None);
+        let events = membership_events(&pool, team).await;
+        assert_eq!(events.len(), 2);
+        assert_event(
+            &events[0],
+            m2,
+            Some("maintainer"),
+            Some("member"),
+            m1,
+            "member_act",
+        );
+        assert_event(&events[1], m2, Some("member"), None, m1, "member_act");
+    }
+
+    /// C3a, pin (must survive R6): the hand-over. An owner grants `owner`, then lowers themselves.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn owner_hands_over_by_lowering_themselves(pool: PgPool) {
+        let (owner, heir) = (
+            mk_profile(&pool, "owner").await,
+            mk_profile(&pool, "heir").await,
+        );
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, heir, "member", "native").await;
+        let me = principal(&pool, owner).await;
+
+        change_role(&pool, &me, team, heir, TeamRole::Owner)
+            .await
+            .expect("grant owner");
+        let row = change_role(&pool, &me, team, owner, TeamRole::Maintainer)
+            .await
+            .expect("an owner lowers themselves while another owner remains");
+        assert!(matches!(row.role, TeamRole::Maintainer));
+        assert_eq!(role_of(&pool, team, heir).await, Some(TeamRole::Owner));
+        let events = membership_events(&pool, team).await;
+        assert_eq!(events.len(), 2);
+        assert_event(
+            &events[1],
+            owner,
+            Some("owner"),
+            Some("maintainer"),
+            owner,
+            "self",
+        );
+    }
+
+    /// C3a, pin: no one raises their own role.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn maintainer_cannot_raise_themselves(pool: PgPool) {
+        let (owner, mt) = (
+            mk_profile(&pool, "owner").await,
+            mk_profile(&pool, "mt").await,
+        );
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, mt, "maintainer", "native").await;
+
+        let denied = change_role(
+            &pool,
+            &principal(&pool, mt).await,
+            team,
+            mt,
+            TeamRole::Owner,
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ApiError::ForbiddenDetail(_))),
+            "got {denied:?}"
+        );
+        assert!(membership_events(&pool, team).await.is_empty());
+    }
+
+    /// C3, pin: members and watchers change no one, and may leave.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn members_and_watchers_change_no_one_but_may_leave(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let (member, watcher, other) = (
+            mk_profile(&pool, "member").await,
+            mk_profile(&pool, "watcher").await,
+            mk_profile(&pool, "other").await,
+        );
+        let newcomer = mk_profile(&pool, "newcomer").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, member, "member", "native").await;
+        add(&pool, team, watcher, "watcher", "native").await;
+        add(&pool, team, other, "watcher", "native").await;
+
+        for actor in [member, watcher] {
+            let me = principal(&pool, actor).await;
+            let add_req = AddMemberRequest {
+                profile_id: newcomer,
+                role: TeamRole::Watcher,
+            };
+            assert!(matches!(
+                add_member(&pool, &me, team, &add_req).await,
+                Err(ApiError::Forbidden)
+            ));
+            assert!(matches!(
+                change_role(&pool, &me, team, other, TeamRole::Watcher).await,
+                Err(ApiError::Forbidden)
+            ));
+            assert!(matches!(
+                remove_member(&pool, &me, team, other).await,
+                Err(ApiError::Forbidden)
+            ));
+        }
+        assert!(membership_events(&pool, team).await.is_empty());
+
+        for actor in [member, watcher] {
+            remove_member(&pool, &principal(&pool, actor).await, team, actor)
+                .await
+                .expect("leave");
+        }
+        let events = membership_events(&pool, team).await;
+        assert_eq!(events.len(), 2);
+        assert_event(&events[0], member, Some("member"), None, member, "self");
+    }
+
+    /// P14 (c), C8: a self-change to your current role is a 200 and records nothing.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn self_change_to_current_role_is_a_noop(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+
+        let row = change_role(
+            &pool,
+            &principal(&pool, owner).await,
+            team,
+            owner,
+            TeamRole::Owner,
+        )
+        .await
+        .expect("a no-op is a 200");
+        assert!(matches!(row.role, TeamRole::Owner));
+        assert!(
+            membership_events(&pool, team).await.is_empty(),
+            "a change that did not happen is not recorded"
+        );
+    }
+
+    /// C8: a manager's change to the target's current role is a 200 and records nothing.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn change_to_the_current_role_records_nothing(pool: PgPool) {
+        let (owner, member) = (
+            mk_profile(&pool, "owner").await,
+            mk_profile(&pool, "member").await,
+        );
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, member, "member", "native").await;
+
+        change_role(
+            &pool,
+            &principal(&pool, owner).await,
+            team,
+            member,
+            TeamRole::Member,
+        )
+        .await
+        .expect("200");
+        assert!(membership_events(&pool, team).await.is_empty());
+    }
+
+    /// P14 (b), Q4: on the gating team a member may leave, but may not lower themselves.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn gating_team_member_may_leave_but_not_lower_themselves(pool: PgPool) {
+        let gate = mk_gating_team(&pool).await;
+        let (o1, o2, member) = (
+            mk_profile(&pool, "o1").await,
+            mk_profile(&pool, "o2").await,
+            mk_profile(&pool, "member").await,
+        );
+        add(&pool, gate, o1, "owner", "native").await;
+        add(&pool, gate, o2, "owner", "native").await;
+        add(&pool, gate, member, "member", "native").await;
+
+        let denied = change_role(
+            &pool,
+            &principal(&pool, o1).await,
+            gate,
+            o1,
+            TeamRole::Maintainer,
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ApiError::ForbiddenDetail(_))),
+            "got {denied:?}"
+        );
+        assert!(membership_events(&pool, gate).await.is_empty());
+
+        remove_member(&pool, &principal(&pool, o1).await, gate, o1)
+            .await
+            .expect("an owner may leave the gating team");
+        remove_member(&pool, &principal(&pool, member).await, gate, member)
+            .await
+            .expect("a member may leave it");
+        assert_eq!(membership_events(&pool, gate).await.len(), 2);
+    }
+
+    /// C14, bite: a gating-team owner who is not a system admin is refused on add, change and
+    /// remove of another.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn gating_team_owner_who_is_not_admin_is_refused(pool: PgPool) {
+        let gate = mk_gating_team(&pool).await;
+        let (owner, member, newcomer) = (
+            mk_profile(&pool, "owner").await,
+            mk_profile(&pool, "member").await,
+            mk_profile(&pool, "newcomer").await,
+        );
+        add(&pool, gate, owner, "owner", "native").await;
+        add(&pool, gate, member, "member", "native").await;
+        let me = principal(&pool, owner).await;
+
+        let add_req = AddMemberRequest {
+            profile_id: newcomer,
+            role: TeamRole::Watcher,
+        };
+        assert!(matches!(
+            add_member(&pool, &me, gate, &add_req).await,
+            Err(ApiError::Forbidden)
+        ));
+        assert!(matches!(
+            change_role(&pool, &me, gate, member, TeamRole::Watcher).await,
+            Err(ApiError::Forbidden)
+        ));
+        assert!(matches!(
+            remove_member(&pool, &me, gate, member).await,
+            Err(ApiError::Forbidden)
+        ));
+        assert_eq!(member_count(&pool, gate).await, 2);
+        assert!(membership_events(&pool, gate).await.is_empty());
+    }
+
+    /// C14, bite: a system admin — not a member of it — changes the gating roster, on the ledger.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn admin_changes_the_gating_roster(pool: PgPool) {
+        let gate = mk_gating_team(&pool).await;
+        let admin = mk_admin(&pool, "admin").await;
+        let (owner, newcomer) = (
+            mk_profile(&pool, "owner").await,
+            mk_profile(&pool, "newcomer").await,
+        );
+        add(&pool, gate, owner, "owner", "native").await;
+        let me = principal(&pool, admin).await;
+
+        add_member(
+            &pool,
+            &me,
+            gate,
+            &AddMemberRequest {
+                profile_id: newcomer,
+                role: TeamRole::Owner,
+            },
+        )
+        .await
+        .expect("admin adds");
+        change_role(&pool, &me, gate, owner, TeamRole::Member)
+            .await
+            .expect("admin changes an owner");
+        remove_member(&pool, &me, gate, owner)
+            .await
+            .expect("admin removes");
+        let events = membership_events(&pool, gate).await;
+        assert_eq!(events.len(), 3);
+        assert_event(
+            &events[0],
+            newcomer,
+            None,
+            Some("owner"),
+            admin,
+            "member_act",
+        );
+        assert_event(
+            &events[1],
+            owner,
+            Some("owner"),
+            Some("member"),
+            admin,
+            "member_act",
+        );
+        assert_event(&events[2], owner, Some("member"), None, admin, "member_act");
+    }
+
+    /// C9, bite: a system admin who is not a member repairs a team whose only owner is
+    /// deactivated, and the repair is recorded.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn system_admin_repairs_a_team_whose_only_owner_is_deactivated(pool: PgPool) {
+        let admin = mk_admin(&pool, "admin").await;
+        let (gone, heir) = (
+            mk_profile(&pool, "gone").await,
+            mk_profile(&pool, "heir").await,
+        );
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, gone, "owner", "native").await;
+        add(&pool, team, heir, "member", "native").await;
+        sqlx::query(
+            "INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1, 'deactivated')",
+        )
+        .bind(gone)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let me = principal(&pool, admin).await;
+
+        change_role(&pool, &me, team, heir, TeamRole::Owner)
+            .await
+            .expect("admin grants owner");
+        remove_member(&pool, &me, team, gone)
+            .await
+            .expect("admin removes the departed owner");
+        assert_eq!(role_of(&pool, team, heir).await, Some(TeamRole::Owner));
+        assert_eq!(owner_count(&pool, team).await, 1);
+        let events = membership_events(&pool, team).await;
+        assert_eq!(events.len(), 2);
+        assert_event(
+            &events[0],
+            heir,
+            Some("member"),
+            Some("owner"),
+            admin,
+            "member_act",
+        );
+        assert_event(&events[1], gone, Some("owner"), None, admin, "member_act");
+    }
+
+    /// C13, pin: owning a parent team confers nothing on its child.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn parent_owner_has_no_authority_on_the_child(pool: PgPool) {
+        let (parent_owner, child_owner, member) = (
+            mk_profile(&pool, "po").await,
+            mk_profile(&pool, "co").await,
+            mk_profile(&pool, "m").await,
+        );
+        let parent = mk_team(&pool, "parent").await;
+        let child = mk_team(&pool, "child").await;
+        sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
+            .bind(child)
+            .bind(parent)
+            .execute(&pool)
+            .await
+            .unwrap();
+        add(&pool, parent, parent_owner, "owner", "native").await;
+        add(&pool, child, child_owner, "owner", "native").await;
+        add(&pool, child, member, "member", "native").await;
+        let me = principal(&pool, parent_owner).await;
+
+        assert!(matches!(
+            change_role(&pool, &me, child, member, TeamRole::Watcher).await,
+            Err(ApiError::Forbidden)
+        ));
+        assert!(matches!(
+            remove_member(&pool, &me, child, member).await,
+            Err(ApiError::Forbidden)
+        ));
+        assert!(membership_events(&pool, child).await.is_empty());
+    }
+
+    /// C7, pin: a member cannot leave their own identity-provider row; it changes only by
+    /// reconcile.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn idp_member_cannot_leave_their_idp_row(pool: PgPool) {
+        let (owner, member) = (
+            mk_profile(&pool, "owner").await,
+            mk_profile(&pool, "member").await,
+        );
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, member, "member", "idp").await;
+
+        let denied = remove_member(&pool, &principal(&pool, member).await, team, member).await;
+        assert!(
+            matches!(denied, Err(ApiError::Conflict(_))),
+            "got {denied:?}"
+        );
+        assert!(membership_events(&pool, team).await.is_empty());
+    }
+
+    /// C5, pin: an admin granting a machine `maintainer` gets the readable 400, not the trigger's
+    /// 500 — check 4 runs for every authority, before the database floor.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn admin_granting_a_machine_maintainer_gets_400_not_500(pool: PgPool) {
+        let admin = mk_admin(&pool, "admin").await;
+        let machine = mk_machine(&pool, "bot", admin).await;
+        let team = mk_team(&pool, "acme").await;
+        let me = principal(&pool, admin).await;
+
+        let denied = add_member(
+            &pool,
+            &me,
+            team,
+            &AddMemberRequest {
+                profile_id: machine,
+                role: TeamRole::Maintainer,
+            },
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ApiError::BadRequest(_))),
+            "got {denied:?}"
+        );
+        add_member(
+            &pool,
+            &me,
+            team,
+            &AddMemberRequest {
+                profile_id: machine,
+                role: TeamRole::Member,
+            },
+        )
+        .await
+        .expect("member is within the ceiling");
+        let denied = change_role(&pool, &me, team, machine, TeamRole::Maintainer).await;
+        assert!(
+            matches!(denied, Err(ApiError::BadRequest(_))),
+            "got {denied:?}"
+        );
+        assert_eq!(membership_events(&pool, team).await.len(), 1);
+    }
+
+    /// C6 carve-out, pin: a machine's personal team holds no owner, and acting on it is no error.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn machine_personal_team_without_an_owner_is_not_an_error(pool: PgPool) {
+        let admin = mk_admin(&pool, "admin").await;
+        let machine = mk_machine(&pool, "bot", admin).await;
+        let human = mk_profile(&pool, "human").await;
+        let personal: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE personal_of = $1")
+            .bind(machine)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            owner_count(&pool, personal).await,
+            0,
+            "a machine personal team has no owner"
+        );
+        let me = principal(&pool, admin).await;
+
+        add_member(
+            &pool,
+            &me,
+            personal,
+            &AddMemberRequest {
+                profile_id: human,
+                role: TeamRole::Watcher,
+            },
+        )
+        .await
+        .expect("an ownerless team is no error");
+        change_role(&pool, &me, personal, machine, TeamRole::Watcher)
+            .await
+            .expect("the guard never fires without an owner");
+        assert_eq!(membership_events(&pool, personal).await.len(), 2);
+    }
+
+    /// #1070, pin: an add over any existing row is a 409 naming `change_role`, for every
+    /// authority — the admin's and an idp row's included.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn add_over_an_existing_member_is_409(pool: PgPool) {
+        let admin = mk_admin(&pool, "admin").await;
+        let (owner, member, provisioned) = (
+            mk_profile(&pool, "owner").await,
+            mk_profile(&pool, "member").await,
+            mk_profile(&pool, "idp").await,
+        );
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, member, "member", "native").await;
+        add(&pool, team, provisioned, "member", "idp").await;
+
+        for actor in [owner, admin] {
+            let me = principal(&pool, actor).await;
+            for target in [member, provisioned] {
+                let denied = add_member(
+                    &pool,
+                    &me,
+                    team,
+                    &AddMemberRequest {
+                        profile_id: target,
+                        role: TeamRole::Watcher,
+                    },
+                )
+                .await;
+                assert!(
+                    matches!(&denied, Err(ApiError::Conflict(m)) if m.contains("set-role")),
+                    "got {denied:?}"
+                );
+            }
+        }
+        assert_eq!(role_of(&pool, team, member).await, Some(TeamRole::Member));
+        assert!(membership_events(&pool, team).await.is_empty());
+    }
+
+    /// S6, pin: a caller with no authority learns nothing. A missing team, a missing member, a
+    /// present member, an idp row and a personal team all answer the same plain 403.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn non_manager_learns_nothing(pool: PgPool) {
+        let (owner, member, provisioned, outsider) = (
+            mk_profile(&pool, "owner").await,
+            mk_profile(&pool, "member").await,
+            mk_profile(&pool, "idp").await,
+            mk_profile(&pool, "outsider").await,
+        );
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, member, "member", "native").await;
+        add(&pool, team, provisioned, "member", "idp").await;
+        let personal: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE personal_of = $1")
+            .bind(owner)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let missing_team = Uuid::now_v7();
+        let missing = mk_profile(&pool, "nobody").await;
+
+        for caller in [outsider, member] {
+            let me = principal(&pool, caller).await;
+            for (t, target) in [
+                (missing_team, member),
+                (team, missing),
+                (team, owner),
+                (team, provisioned),
+                (personal, owner),
+            ] {
+                if target == caller {
+                    continue;
+                }
+                let r = remove_member(&pool, &me, t, target).await;
+                assert!(
+                    matches!(r, Err(ApiError::Forbidden)),
+                    "remove {t}/{target} by {caller}: {r:?}"
+                );
+                let r = change_role(&pool, &me, t, target, TeamRole::Watcher).await;
+                assert!(
+                    matches!(r, Err(ApiError::Forbidden)),
+                    "change {t}/{target} by {caller}: {r:?}"
+                );
+                let r = add_member(
+                    &pool,
+                    &me,
+                    t,
+                    &AddMemberRequest {
+                        profile_id: target,
+                        role: TeamRole::Watcher,
+                    },
+                )
+                .await;
+                assert!(
+                    matches!(r, Err(ApiError::Forbidden)),
+                    "add {t}/{target} by {caller}: {r:?}"
+                );
+            }
+        }
+        // ...while a manager is told the truth about each.
+        let me = principal(&pool, owner).await;
+        assert!(matches!(
+            remove_member(&pool, &me, team, missing).await,
+            Err(ApiError::NotFound(_))
+        ));
+        assert!(matches!(
+            remove_member(&pool, &me, team, provisioned).await,
+            Err(ApiError::Conflict(_))
+        ));
+        assert_eq!(all_membership_events(&pool).await, 0);
+    }
+
+    /// C6, pin: the last owner can be neither demoted nor removed, by themselves or an admin.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_last_owner_is_guarded_for_every_authority(pool: PgPool) {
+        let admin = mk_admin(&pool, "admin").await;
+        let owner = mk_profile(&pool, "owner").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+
+        for actor in [owner, admin] {
+            let me = principal(&pool, actor).await;
+            let r = change_role(&pool, &me, team, owner, TeamRole::Maintainer).await;
+            assert!(
+                matches!(&r, Err(ApiError::Conflict(m)) if m.contains("last owner")),
+                "{r:?}"
+            );
+            let r = remove_member(&pool, &me, team, owner).await;
+            assert!(
+                matches!(&r, Err(ApiError::Conflict(m)) if m.contains("last owner")),
+                "{r:?}"
+            );
+        }
+        assert_eq!(owner_count(&pool, team).await, 1);
+        assert!(membership_events(&pool, team).await.is_empty());
+    }
+
+    /// C6, BITE (finding 8): two co-owners leaving at the same moment leave exactly one owner.
+    ///
+    /// The `race_the_scrub` holder pattern. A holds the team lock with its leave written but not
+    /// committed; B's leave is spawned and is shown to BLOCK on the team-row lock rather than
+    /// count the uncommitted state; A commits; B, re-resolving under the lock, sees itself as the
+    /// last owner and is refused. Before this build, B's leave ran unblocked against a count that
+    /// still saw A, and both commits left the team with no owner.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn two_co_owners_leaving_at_once_leave_one_owner(pool: PgPool) {
+        let (a, b) = (mk_profile(&pool, "a").await, mk_profile(&pool, "b").await);
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, a, "owner", "native").await;
+        add(&pool, team, b, "owner", "native").await;
+        let a_principal = principal(&pool, a).await;
+        let b_principal = principal(&pool, b).await;
+
+        // Holder: A's leave, through the routed path, written and held open.
+        let mut holder = pool.begin().await.unwrap();
+        let target = team_membership::locked(&mut holder, team, ProfileId::from(a))
+            .await
+            .unwrap();
+        let resolved = MembershipAuthority::resolve(&mut holder, &a_principal, team)
+            .await
+            .unwrap();
+        let change = team_membership::authorize(
+            resolved,
+            &a_principal,
+            team,
+            MembershipAct::Remove,
+            &target,
+        )
+        .unwrap();
+        team_membership::membership_write(&mut holder, None, change)
+            .await
+            .unwrap();
+
+        // Contender: B's leave.
+        let contender_pool = pool.clone();
+        let mut contender =
+            tokio::spawn(
+                async move { remove_member(&contender_pool, &b_principal, team, b).await },
+            );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(750), &mut contender)
+                .await
+                .is_err(),
+            "B's leave must block on the team-row lock A holds, not run against a stale count"
+        );
+
+        holder.commit().await.unwrap();
+        let b_result = contender.await.unwrap();
+        assert!(
+            matches!(&b_result, Err(ApiError::Conflict(m)) if m.contains("last owner")),
+            "B, now the last owner, is refused: {b_result:?}"
+        );
+        assert_eq!(
+            owner_count(&pool, team).await,
+            1,
+            "exactly one owner remains"
+        );
+        assert_eq!(role_of(&pool, team, b).await, Some(TeamRole::Owner));
+        let events = membership_events(&pool, team).await;
+        assert_eq!(events.len(), 1, "one leave happened, one is recorded");
+        assert_event(&events[0], a, Some("owner"), None, a, "self");
     }
 }

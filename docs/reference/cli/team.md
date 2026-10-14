@@ -188,19 +188,35 @@ Options:
 ```text
 Change a member's role (owner/maintainer)
 
+You can set roles up to your own and act on members up to your own rank; only a system admin changes an owner other than yourself. To hand a team over, grant `owner` to another member, then lower your own role.
+
 Usage: temper team set-role [OPTIONS] --role <ROLE> <TEAM> <PROFILE>
 
 Arguments:
-  <TEAM>     Team slug or UUID
-  <PROFILE>  Member profile UUID
+  <TEAM>
+          Team slug or UUID
+
+  <PROFILE>
+          Member profile UUID
 
 Options:
-      --role <ROLE>        New role: maintainer | member | watcher
-      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
-      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
-      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
-      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
-  -h, --help               Print help
+      --role <ROLE>
+          New role: owner | maintainer | member | watcher (up to your own role)
+
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ### `temper team update`
@@ -318,7 +334,7 @@ Arguments:
   <PROFILE>  Profile ID (UUID)
 
 Options:
-      --role <ROLE>        Role to grant: owner/maintainer/member/watcher
+      --role <ROLE>        Role to grant: owner/maintainer/member/watcher (up to your own role)
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
       --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
