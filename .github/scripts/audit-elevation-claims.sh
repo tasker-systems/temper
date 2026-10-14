@@ -271,8 +271,8 @@ current_gates() {
 # instead of one per team; the same decision per team. New claims re-read: teams.rs's 404
 # descriptions (a missing team is told only to a system admin — `locked` runs after the pre-check,
 # which refuses everyone else), cli.rs `set-role`'s summary ("a team owner or maintainer, or a system
-# admin"), and team_service.rs's test doc for an admin adding and raising themselves (P14 a). Each
-# holds.
+# admin"), the same summary on commands/team.rs's `set_role`, and team_service.rs's test doc for an
+# admin adding and raising themselves (P14 a). Each holds.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -306,6 +306,7 @@ claim crates/temper-cli/src/commands/admin_slack.rs 1 -
 claim crates/temper-cli/src/commands/admin_subscription.rs 2 subscription
 claim crates/temper-cli/src/commands/cogmap.rs 3 two_sided,is_system_admin
 claim crates/temper-cli/src/commands/context_cmd.rs 2 context_admin
+claim crates/temper-cli/src/commands/team.rs 1 team_membership
 claim crates/temper-cli/src/commands/warmup.rs 1 is_system_admin
 claim crates/temper-mcp/src/service.rs 3 -
 claim crates/temper-mcp/src/tools/reblock.rs 3 -

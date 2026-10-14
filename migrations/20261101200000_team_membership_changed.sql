@@ -128,7 +128,7 @@ INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALU
       "description": "The path a recorded team-membership change came through — the `via` of a\n`team_membership_changed` admin event (team-role rank spec, \"The event\").\n\nA closed set with a fixed SQL spelling: `_admin_team_membership_write` refuses any value not in\nit, and [`MembershipVia::as_str`] is the one Rust spelling of that set. The derived writers\n(personal-team genesis, auto-join materialization, the machine-cap trigger) have no `via`\nbecause they are not recorded (spec C8, R13).",
       "oneOf": [
         {
-          "description": "An add, change or remove by a manager of the team or a system admin, including a system admin adding themselves or raising their own role.",
+          "description": "An add, change or remove by a manager of the team or a system admin, including a system admin\nadding themselves or raising their own role.",
           "type": "string",
           "const": "member_act"
         },
