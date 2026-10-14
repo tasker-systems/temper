@@ -1,5 +1,5 @@
 {
-  "$comment": "Recorded corrections to the 0.6 pin. check-openapi-pin.sh replaces each operation in the pin with `operation` before comparing; see its RECORDED CORRECTIONS header.",
+  "$comment": "Recorded corrections to the 0.6 pin. check-openapi-pin.sh replaces each named target in the pin before comparing — an operation with `operation`, a component schema with `definition`; see its RECORDED CORRECTIONS header.",
   "corrections": [
     {
       "method": "delete",
@@ -589,6 +589,24 @@
       "path": "/api/resources/{id}",
       "reason": "ActInput's query parameters lose the explicit null branch. A query parameter has no null to send; the server reads absent and null alike.",
       "register_entry": "actinput-authorship-query-params"
+    },
+    {
+      "definition": {
+        "description": "Why a ledger entry points at a thing, e.g. `subject` (what the act was performed on) or\n`principal` (whom it was performed for).",
+        "enum": [
+          "supersedes",
+          "derived_from",
+          "touches",
+          "subject",
+          "principal",
+          "request",
+          "erasure"
+        ],
+        "type": "string"
+      },
+      "reason": "The pin omitted `erasure`, a member the person-erasure writers have stored in kb_events.references since 20261021100000. Every ledger page carrying it answered 500, so no client ever decoded it; naming it makes no readable page unreadable for an old client.",
+      "register_entry": "ledger-ref-rel-erasure",
+      "schema": "LedgerRefRel"
     }
   ]
 }

@@ -1,0 +1,23 @@
+title    = "The admin ledger's reference `rel` vocabulary names `erasure`, and pages holding a person erasure that ran resource erasures read again"
+pr       = "self"
+classes  = ["behavioral", "spec-correction"]
+surfaces = ["http", "clients"]
+status   = "signal-only"
+body = '''
+What the server always did: since 20261021100000 the person-erasure writers have stored one
+`rel: "erasure"` reference per resource erasure on `principal_erased` (target: that erasure's
+`kb_events` event). `LedgerRefRel` (`GET /api/admin/ledger`, `references[].rel`) never named the
+value, and the service could not decode it either, so every ledger page holding such a row answered
+500 — on the subject axis for the erased profile and on the actor axis for the operator who ran it.
+The contract now names `erasure`; those pages answer 200. temper-rb, temper-ts and temper-py
+regenerate with the new member.
+
+Why both skew directions hold, though the comparator reads an output-side enum member as moved:
+the only responses that carry `erasure` are responses the old server could not produce at all.
+New server, old client: every page the old client could read before carries no `erasure` and is
+byte-for-byte unchanged; a page that answered 500 now answers 200 with a member an exhaustive old
+parse rejects — the same page fails, in a different place, and no readable page becomes
+unreadable. Old server, new client: the new client's vocabulary is a superset, and the old server
+still answers those pages 500. Who observes: system admins reading the ledger, and SDK callers that
+switch exhaustively on `LedgerRefRel`. Release relevance: behavioral fix, spec-corrected enum.
+'''

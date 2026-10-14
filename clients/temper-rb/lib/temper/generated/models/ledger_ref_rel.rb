@@ -21,9 +21,10 @@ module Temper::Generated
     SUBJECT = "subject".freeze
     PRINCIPAL = "principal".freeze
     REQUEST = "request".freeze
+    ERASURE = "erasure".freeze
 
     def self.all_vars
-      @all_vars ||= [SUPERSEDES, DERIVED_FROM, TOUCHES, SUBJECT, PRINCIPAL, REQUEST].freeze
+      @all_vars ||= [SUPERSEDES, DERIVED_FROM, TOUCHES, SUBJECT, PRINCIPAL, REQUEST, ERASURE].freeze
     end
 
     # Builds the enum from string

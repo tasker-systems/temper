@@ -44,16 +44,22 @@
 #
 # RECORDED CORRECTIONS
 # --------------------
-# A pin can carry `corrections.json` beside it: operations whose pinned shape described a
-# request or answer the server never made, each with the shape it is corrected to and the id of
-# the release-register entry that declares it `spec-correction` (`register_entry`; the
-# review-owned class, see release-register/README.md). The id is resolved through the register's
-# one reader, tools/manifest/manifest.py, across unreleased/ and every rolled v<x.y.z>/ — a
-# correction outlives its entry's roll. The gate replaces each named operation in the pin with its RECORDED corrected
-# shape before comparing, so the record is a corrected baseline, never a waiver: a later change to
-# a corrected operation is judged against the recorded shape like any other movement. A correction
-# that names an operation the pin does not have, names an operation twice, or names a register entry
-# that is missing or not declared `spec-correction` fails the gate.
+# A pin can carry `corrections.json` beside it: pinned shapes that described a request or answer
+# the server never made, each with the shape it is corrected to and the id of the release-register
+# entry that declares it `spec-correction` (`register_entry`; the review-owned class, see
+# release-register/README.md). The id is resolved through the register's one reader,
+# tools/manifest/manifest.py, across unreleased/ and every rolled v<x.y.z>/ — a correction outlives
+# its entry's roll. A correction names exactly one of two targets:
+#   * an OPERATION — `path` + `method`, corrected to `operation`;
+#   * a COMPONENT SCHEMA — `schema` (its name under components.schemas), corrected to `definition`.
+#     Operations reach most shapes through `$ref`, so a vocabulary a response carries (an enum
+#     the server always emitted but the pin never named) lives here and no operation record can
+#     reach it.
+# The gate replaces each named target in the pin with its RECORDED corrected shape before
+# comparing, so the record is a corrected baseline, never a waiver: a later change to a corrected
+# target is judged against the recorded shape like any other movement. A correction that names a
+# target the pin does not have, names one target twice, carries both target forms or neither, or
+# names a register entry that is missing or not declared `spec-correction` fails the gate.
 #
 # ACCEPTED RESIDUE
 # ----------------
@@ -161,15 +167,29 @@ PIN_NAME="$(basename "$(dirname "$CURRENT_PIN")")"
 CORRECTIONS="$(dirname "$CURRENT_PIN")/corrections.json"
 CORRECTED_NOTE=""
 if [ -f "$CORRECTIONS" ]; then
+    # One shape per entry: an operation correction carries exactly path/method/operation, a schema
+    # correction exactly schema/definition — never a mixture, so no entry can be read two ways.
     jq -e '.corrections | type == "array" and length > 0 and all(.[];
-            (.path | type) == "string" and (.method | type) == "string"
-            and (.register_entry | type) == "string" and (.reason | type) == "string"
-            and (.operation | type) == "object")' "$CORRECTIONS" >/dev/null 2>&1 \
-        || fail "${CORRECTIONS} is not a non-empty \`corrections\` array whose every entry carries path, method, register_entry, reason and operation."
-    DUPES="$(jq -r '[.corrections[] | "\(.method | ascii_upcase) \(.path)"] | group_by(.) | map(select(length > 1) | .[0]) | .[]' "$CORRECTIONS")"
-    [ -z "$DUPES" ] || fail "${CORRECTIONS} corrects the same operation more than once: ${DUPES}"
-    UNKNOWN="$(jq -r --slurpfile pin "$TMP_BASE" '.corrections[] | select($pin[0].paths[.path][.method] == null) | "\(.method | ascii_upcase) \(.path)"' "$CORRECTIONS")"
-    [ -z "$UNKNOWN" ] || fail "${CORRECTIONS} corrects an operation the ${PIN_NAME} pin does not have: ${UNKNOWN}. A correction amends a pinned shape; growth needs no record."
+            (.register_entry | type) == "string" and (.reason | type) == "string"
+            and ((keys - ["register_entry", "reason"]) as $k
+                 | if $k == ["method", "operation", "path"] then
+                       (.path | type) == "string" and (.method | type) == "string"
+                       and (.operation | type) == "object"
+                   elif $k == ["definition", "schema"] then
+                       (.schema | type) == "string" and (.definition | type) == "object"
+                   else false end))' "$CORRECTIONS" >/dev/null 2>&1 \
+        || fail "${CORRECTIONS} is not a non-empty \`corrections\` array whose every entry carries register_entry, reason and exactly one target: path + method + operation, or schema + definition."
+    # Every target named once, in one spelling — the dupe check, the pass note and the failure
+    # messages all read this one definition.
+    LABEL_JQ='def target_label: if has("schema") then "schema \(.schema)" else "\(.method | ascii_upcase) \(.path)" end;'
+    DUPES="$(jq -r "${LABEL_JQ}"' [.corrections[] | target_label] | group_by(.) | map(select(length > 1) | .[0]) | .[]' "$CORRECTIONS")" \
+        || fail "the duplicate check over ${CORRECTIONS} did not run — refusing to read that as no duplicates."
+    [ -z "$DUPES" ] || fail "${CORRECTIONS} corrects the same target more than once: ${DUPES}"
+    UNKNOWN="$(jq -r --slurpfile pin "$TMP_BASE" "${LABEL_JQ}"' .corrections[]
+        | select(if has("schema") then $pin[0].components.schemas[.schema] == null
+                 else $pin[0].paths[.path][.method] == null end) | target_label' "$CORRECTIONS")" \
+        || fail "the pin-membership check over ${CORRECTIONS} did not run — refusing to read that as every target known."
+    [ -z "$UNKNOWN" ] || fail "${CORRECTIONS} corrects a target the ${PIN_NAME} pin does not have: ${UNKNOWN}. A correction amends a pinned shape; growth needs no record."
     REGISTER="${REGISTER_ARG:-release-register}"
     [ -d "$REGISTER" ] || fail "${CORRECTIONS} names register entries, but there is no register at ${REGISTER} to check them against."
     while IFS= read -r ENTRY; do
@@ -182,10 +202,12 @@ if [ -f "$CORRECTIONS" ]; then
         esac
     done < <(jq -r '.corrections[].register_entry' "$CORRECTIONS" | LC_ALL=C sort -u)
     jq -S --slurpfile c "$CORRECTIONS" \
-        'reduce $c[0].corrections[] as $x (.; .paths[$x.path][$x.method] = $x.operation)' \
+        'reduce $c[0].corrections[] as $x (.;
+            if ($x | has("schema")) then .components.schemas[$x.schema] = $x.definition
+            else .paths[$x.path][$x.method] = $x.operation end)' \
         "$TMP_BASE" > "${TMP_BASE}.c" && mv "${TMP_BASE}.c" "$TMP_BASE" \
         || fail "the corrections in ${CORRECTIONS} could not be applied to the pin."
-    CORRECTED_NOTE=" (with $(jq '.corrections | length' "$CORRECTIONS") recorded correction(s) applied: $(jq -r '[.corrections[] | "\(.method | ascii_upcase) \(.path)"] | join(", ")' "$CORRECTIONS"))"
+    CORRECTED_NOTE=" (with $(jq '.corrections | length' "$CORRECTIONS") recorded correction(s) applied: $(jq -r "${LABEL_JQ}"' [.corrections[] | target_label] | join(", ")' "$CORRECTIONS"))"
 fi
 
 if cmp -s "$TMP_BASE" "$TMP_HEAD"; then

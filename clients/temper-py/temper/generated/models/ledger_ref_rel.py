@@ -32,6 +32,7 @@ class LedgerRefRel(str, Enum):
     SUBJECT = 'subject'
     PRINCIPAL = 'principal'
     REQUEST = 'request'
+    ERASURE = 'erasure'
 
     @classmethod
     def from_json(cls, json_str: str) -> Self:

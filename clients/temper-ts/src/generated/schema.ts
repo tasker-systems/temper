@@ -7476,7 +7476,7 @@ export interface components {
          *     `principal` (whom it was performed for).
          * @enum {string}
          */
-        LedgerRefRel: "supersedes" | "derived_from" | "touches" | "subject" | "principal" | "request";
+        LedgerRefRel: "supersedes" | "derived_from" | "touches" | "subject" | "principal" | "request" | "erasure";
         /** @description One typed pointer out of a ledger entry. */
         LedgerRefTarget: {
             /** Format: uuid */

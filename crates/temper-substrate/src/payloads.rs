@@ -171,6 +171,13 @@ pub enum RefRel {
     /// ON these events — match it, never resolve it.
     #[serde(rename = "request")]
     Request,
+    /// One resource erasure a person erasure ran: the target is that resource erasure's event
+    /// (`kb_events`), one reference per erasure, in the order the act ran them. Written only by
+    /// SQL — the person-erasure writers (20261021100000 onward) build it in `principal_erased`'s
+    /// references — so no Rust constructor exists; the variant is here so the ledger can DECODE
+    /// what those writers already store, and an undecodable rel fails the whole admin-ledger page.
+    #[serde(rename = "erasure")]
+    Erasure,
 }
 
 /// `AnchorRef`'s wire shape inside `references`: `{kind, id}` rather than `{table, id}`.
