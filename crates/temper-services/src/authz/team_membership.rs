@@ -403,7 +403,7 @@ fn decide(
 }
 
 /// A membership change someone was authorized to make. **Sealed**: private fields, no `Default`,
-/// `Clone` or public constructor. In this PR the only constructor is [`authorize`]; the writers PR C
+/// `Clone` or public constructor. Today the only constructor is [`authorize`]; the writers plan PR C
 /// routes (genesis, invitation, approval, machine reach, SAML reconcile) gain their own constructors
 /// here, each taking a token only its one caller can mint (plan P16).
 #[derive(Debug)]
@@ -417,10 +417,10 @@ pub(crate) struct AuthorizedMembershipChange {
     expected: Option<(TeamRole, TeamMemberSource)>,
     /// The source an add writes.
     new_source: TeamMemberSource,
-    /// `None` only for a system act (SAML reconcile, PR C).
+    /// `None` only for a system act (SAML reconcile, plan PR C).
     actor: Option<ProfileId>,
     invited_by: Option<ProfileId>,
-    /// `false` only for SAML reconcile (R8), which has its own constructor in PR C. Carried in the
+    /// `false` only for SAML reconcile (R8), which has its own constructor in plan PR C. Carried in the
     /// sealed value rather than passed beside it, so no call site can switch the guard off.
     guard_last_owner: bool,
 }
@@ -519,7 +519,7 @@ pub(crate) enum MembershipOutcome {
 
 /// Write one authorized membership change and its `team_membership_changed` record, atomically.
 ///
-/// **The only Rust call site of `_admin_team_membership_write`** (the PR C tripwire pins it). The
+/// **The only Rust call site of `_admin_team_membership_write`** (plan PR C's tripwire pins it). The
 /// caller holds [`locked`]'s locks on the same transaction. `emitter` is the acting person's entity
 /// when the caller already resolved it; otherwise it is resolved here from the change's actor
 /// (`<handle>@web`, the `access_service::grant_capability` precedent). A system act passes no

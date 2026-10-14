@@ -639,8 +639,9 @@ pub async fn change_role(
 #[cfg(test)]
 mod message_tests {
     /// C11 (team-role rank spec): no refusal, doc or published description in the member acts'
-    /// files directs a caller to an "ownership transfer" — there is none; the hand-over is
-    /// `change_role`. PR C extends this to the invitation files.
+    /// files directs a caller to a transfer operation for team ownership — there is none; the
+    /// hand-over is `change_role`. The invitation files join this list when invitations are routed
+    /// through the rank rule.
     #[test]
     fn no_member_act_string_names_an_ownership_transfer() {
         let banned = [
