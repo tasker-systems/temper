@@ -49,6 +49,7 @@ make_fixture() {
     cp -R "$REPO_ROOT"/crates/temper-services/src/services "$dest"/crates/temper-services/src/
     cp -R "$REPO_ROOT"/crates/temper-services/src/authz "$dest"/crates/temper-services/src/
     cp -R "$REPO_ROOT"/crates/temper-services/src/backend "$dest"/crates/temper-services/src/
+    cp -R "$REPO_ROOT"/crates/temper-services/src/auth "$dest"/crates/temper-services/src/
 }
 
 # run_case NAME ROOT EXPECTED_EXIT [EXPECTED_SUBSTRING…]
