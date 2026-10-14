@@ -27,7 +27,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use temper_core::types::ids::ProfileId;
-use temper_substrate::payloads::{EventRef, RefTarget};
+use temper_substrate::payloads::{EventRef, RefRel, RefTarget};
 use uuid::Uuid;
 
 use crate::auth::HumanPrincipal;
@@ -361,7 +361,8 @@ async fn fetch(
 ///
 /// `references` round-trips through JSON rather than being matched variant-by-variant — the
 /// vocabulary is a bounded set the parity test already pins, so a hand-written match here would be
-/// a third copy free to drift from both.
+/// a third copy free to drift from both. The one match here, `reaches_the_wire`, decides only
+/// which rels are published at all; the spelling of those that are stays the round-trip's.
 pub fn to_wire_page(
     entries: Vec<AdminLedgerEntry>,
     epoch: Option<DateTime<Utc>>,
@@ -369,7 +370,12 @@ pub fn to_wire_page(
     let entries = entries
         .into_iter()
         .map(|e| {
-            let references = serde_json::to_value(&e.references)
+            let published: Vec<&EventRef> = e
+                .references
+                .iter()
+                .filter(|r| reaches_the_wire(r.rel))
+                .collect();
+            let references = serde_json::to_value(published)
                 .and_then(serde_json::from_value)
                 .map_err(|err| ApiError::Internal(format!("ledger refs: {err}")))?;
 
@@ -387,6 +393,30 @@ pub fn to_wire_page(
         .collect::<ApiResult<Vec<_>>>()?;
 
     Ok(temper_core::types::admin::AdminLedgerResponse { entries, epoch })
+}
+
+/// Whether references with this `rel` are published on the admin-ledger wire.
+///
+/// `erasure` is withheld. The person-erasure writers store one per resource erasure the act ran
+/// (20261021100000 onward), but no released server has emitted it and the 0.6 pin's
+/// `LedgerRefRel` does not name it, so publishing it would hand a pinned client a member its
+/// exhaustive parse rejects — the output-side enum growth the pin gate exists to refuse. Nothing
+/// is lost by withholding it: `principal_erased`'s payload names every resource erasure's event in
+/// `resource_erasures[].event`. The `rel` joins `LedgerRefRel` on the retirement train, and this
+/// arm goes with it.
+///
+/// No `_ =>` arm: a new `RefRel` must be a compile error here — a decision about publishing,
+/// never a default.
+fn reaches_the_wire(rel: RefRel) -> bool {
+    match rel {
+        RefRel::Supersedes
+        | RefRel::DerivedFrom
+        | RefRel::Touches
+        | RefRel::Subject
+        | RefRel::Principal
+        | RefRel::Request => true,
+        RefRel::Erasure => false,
+    }
 }
 
 /// Parse a table name into `AnchorTable` via the enum's own serde renames, which already spell the
@@ -458,6 +488,88 @@ mod tests {
              believes it serves and the registry has never heard of. Take the decision: add it to \
              ADMIN_EVENT_TYPES with a read-gate arm in `readable_event_types`, or take it out of \
              ADMIN_EVENT_NAMES."
+        );
+    }
+
+    /// FAILS IF `reaches_the_wire` and the core mirror disagree about any rel: a published rel the
+    /// mirror cannot decode fails every page carrying it (and a pinned client's parse), and a rel
+    /// the mirror can decode but the wire withholds is contract the server never emits. This is
+    /// the one place both halves are in scope, so it is what makes the retirement-train change —
+    /// `erasure` joining `LedgerRefRel` — take both decisions together: adding the member alone
+    /// turns this red until `reaches_the_wire` publishes it.
+    ///
+    /// `ALL` is hand-maintained (no `strum` in this workspace); `reaches_the_wire`'s exhaustive
+    /// match is what forces a decision for a new rel, and this list must be extended with it.
+    #[test]
+    fn a_rel_reaches_the_wire_exactly_when_the_core_mirror_decodes_it() {
+        use temper_substrate::payloads::AnchorTable;
+
+        const ALL: [RefRel; 7] = [
+            RefRel::Supersedes,
+            RefRel::DerivedFrom,
+            RefRel::Touches,
+            RefRel::Subject,
+            RefRel::Principal,
+            RefRel::Request,
+            RefRel::Erasure,
+        ];
+        for rel in ALL {
+            let written = serde_json::to_value(EventRef {
+                rel,
+                target: RefTarget {
+                    kind: AnchorTable::Events,
+                    id: Uuid::now_v7(),
+                },
+            })
+            .expect("encode");
+            let decodes =
+                serde_json::from_value::<temper_core::types::admin::LedgerRef>(written).is_ok();
+            assert_eq!(
+                reaches_the_wire(rel),
+                decodes,
+                "{rel:?}: reaches_the_wire says {} but the core mirror {} decode it",
+                reaches_the_wire(rel),
+                if decodes { "does" } else { "does not" }
+            );
+        }
+    }
+
+    /// FAILS IF an `erasure` reference reaches the wire, or if withholding it takes any other
+    /// reference with it. The wire mirror cannot decode `erasure`, so publishing it would either
+    /// fail the page here or break a pinned client's parse downstream.
+    #[test]
+    fn the_wire_page_withholds_erasure_references_and_keeps_the_rest() {
+        use temper_substrate::payloads::AnchorTable;
+
+        let subject = RefTarget {
+            kind: AnchorTable::Profiles,
+            id: Uuid::now_v7(),
+        };
+        let erasure = EventRef {
+            rel: RefRel::Erasure,
+            target: RefTarget {
+                kind: AnchorTable::Events,
+                id: Uuid::now_v7(),
+            },
+        };
+        let entry = AdminLedgerEntry {
+            event_id: Uuid::now_v7(),
+            event_type: "principal_erased".to_string(),
+            actor_profile_id: Uuid::now_v7(),
+            actor_handle: "operator".to_string(),
+            occurred_at: Utc::now(),
+            payload: serde_json::json!({}),
+            references: vec![EventRef::subject(subject), erasure],
+            correlation_id: None,
+        };
+
+        let page = to_wire_page(vec![entry], None).expect("the page projects");
+        let refs = serde_json::to_value(&page.entries[0].references).expect("encode");
+
+        assert_eq!(
+            refs,
+            serde_json::json!([{ "rel": "subject", "target": { "kind": "kb_profiles", "id": subject.id } }]),
+            "only the subject reference is published"
         );
     }
 }

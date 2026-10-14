@@ -130,9 +130,9 @@ pub struct AnchorRef {
 }
 
 /// The `rel` vocabulary of `kb_events."references"`. The first three are the column's original
-/// documented set; `Subject`/`Principal` are the admin-ledger extension (spec 2026-07-16 §5). The
-/// vocabulary lives in a column COMMENT, not a CHECK, so this enum is the only enforcement — keep
-/// it exhaustive.
+/// documented set; `Subject`/`Principal` are the admin-ledger extension (spec 2026-07-16 §5);
+/// `Request` and `Erasure` belong to the erasure act. No CHECK constrains the column, so this enum
+/// is the only enforcement — keep it exhaustive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RefRel {
     /// **RESERVED AND UNCLAIMED — retired 2026-08-19, not activated.** Written by nothing, and
@@ -171,6 +171,16 @@ pub enum RefRel {
     /// ON these events — match it, never resolve it.
     #[serde(rename = "request")]
     Request,
+    /// One resource erasure a person erasure ran: the target is that resource erasure's event
+    /// (`kb_events`), one reference per erasure, in the order the act ran them. Written only by
+    /// SQL — the person-erasure writers (20261021100000 onward) build it in `principal_erased`'s
+    /// references — so no Rust constructor exists; the variant is here so the ledger can DECODE
+    /// what those writers already store, and an undecodable rel fails the whole admin-ledger page.
+    ///
+    /// **Not mirrored on the wire yet.** `temper_core`'s `LedgerRefRel` has no `erasure`, and
+    /// `admin_ledger_service::reaches_the_wire` withholds it — see that function for why.
+    #[serde(rename = "erasure")]
+    Erasure,
 }
 
 /// `AnchorRef`'s wire shape inside `references`: `{kind, id}` rather than `{table, id}`.

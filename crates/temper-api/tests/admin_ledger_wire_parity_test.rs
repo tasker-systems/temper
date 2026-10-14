@@ -16,6 +16,13 @@
 //! **What this actually guarantees, stated precisely** — an earlier version of this comment claimed
 //! "add a variant on either side and this stops compiling", which overclaims in two ways:
 //!
+//! 0. **One substrate rel has no mirror, on purpose.** `RefRel::Erasure` is stored but withheld from
+//!    the wire (`admin_ledger_service::reaches_the_wire`) until it can join `LedgerRefRel` without
+//!    breaking clients built at the 0.6 pin. `mirror_rel` answers `None` for it. That
+//!    `reaches_the_wire` and the core mirror agree — a rel is published exactly when `LedgerRef`
+//!    decodes it — is pinned beside `reaches_the_wire`, where both halves are in scope
+//!    (`a_rel_reaches_the_wire_exactly_when_the_core_mirror_decodes_it`).
+//!
 //! 1. **The compile-time half is one-directional.** `mirror_rel`/`mirror_kind` match exhaustively on
 //!    the *substrate* enums, so a new **substrate** variant breaks the build until it is mirrored.
 //!    A new **core** variant does not. That asymmetry is correct rather than a gap: the core types
@@ -24,7 +31,7 @@
 //! 2. **`ALL_RELS`/`ALL_KINDS` below are hand-maintained.** Nothing derives them from the enums (no
 //!    `strum` in this workspace), so a variant that is added to the exhaustive `match` but forgotten
 //!    here is mirrored yet never *serialized* by any assertion. Both lists are complete today
-//!    (6 rels, 11 kinds); if that stops being cheap to eyeball, derive them rather than trusting the
+//!    (7 rels, 11 kinds); if that stops being cheap to eyeball, derive them rather than trusting the
 //!    eyeball.
 //!
 //! The stakes for a rename specifically: renames are per-variant `#[serde(rename)]` on both sides,
@@ -36,18 +43,26 @@ use temper_core::types::admin::{LedgerRef, LedgerRefKind, LedgerRefRel, LedgerRe
 use temper_substrate::payloads::{AnchorTable, EventRef, RefRel, RefTarget};
 use uuid::Uuid;
 
-/// Every `RefRel` variant, paired with its core mirror. Written as an exhaustive `match` on
-/// purpose: adding a substrate variant makes this stop compiling, which is a better failure than
-/// a list that silently omits the new one.
-fn mirror_rel(r: RefRel) -> LedgerRefRel {
+/// Every `RefRel` variant, paired with its core mirror — or `None` for a rel withheld from the wire.
+/// Written as an exhaustive `match` on purpose: adding a substrate variant makes this stop
+/// compiling, which is a better failure than a list that silently omits the new one.
+fn mirror_rel(r: RefRel) -> Option<LedgerRefRel> {
     match r {
-        RefRel::Supersedes => LedgerRefRel::Supersedes,
-        RefRel::DerivedFrom => LedgerRefRel::DerivedFrom,
-        RefRel::Touches => LedgerRefRel::Touches,
-        RefRel::Subject => LedgerRefRel::Subject,
-        RefRel::Principal => LedgerRefRel::Principal,
-        RefRel::Request => LedgerRefRel::Request,
+        RefRel::Supersedes => Some(LedgerRefRel::Supersedes),
+        RefRel::DerivedFrom => Some(LedgerRefRel::DerivedFrom),
+        RefRel::Touches => Some(LedgerRefRel::Touches),
+        RefRel::Subject => Some(LedgerRefRel::Subject),
+        RefRel::Principal => Some(LedgerRefRel::Principal),
+        RefRel::Request => Some(LedgerRefRel::Request),
+        RefRel::Erasure => None,
     }
+}
+
+/// The rels that have a wire mirror — what the serialization assertions below range over.
+fn mirrored_rels() -> impl Iterator<Item = (RefRel, LedgerRefRel)> {
+    ALL_RELS
+        .iter()
+        .filter_map(|&r| mirror_rel(r).map(|m| (r, m)))
 }
 
 /// Same contract as `mirror_rel`, for the anchor vocabulary.
@@ -74,6 +89,7 @@ const ALL_RELS: &[RefRel] = &[
     RefRel::Subject,
     RefRel::Principal,
     RefRel::Request,
+    RefRel::Erasure,
 ];
 
 const ALL_KINDS: &[AnchorTable] = &[
@@ -92,9 +108,9 @@ const ALL_KINDS: &[AnchorTable] = &[
 
 #[test]
 fn every_rel_serializes_identically_on_both_sides() {
-    for &rel in ALL_RELS {
+    for (rel, mirror) in mirrored_rels() {
         let substrate = serde_json::to_value(rel).expect("substrate rel");
-        let core = serde_json::to_value(mirror_rel(rel)).expect("core rel");
+        let core = serde_json::to_value(mirror).expect("core rel");
         assert_eq!(substrate, core, "rel {rel:?} differs across the mirror");
     }
 }
@@ -114,7 +130,7 @@ fn every_anchor_kind_serializes_identically_on_both_sides() {
 fn a_substrate_event_ref_deserializes_into_the_core_mirror() {
     let id = Uuid::now_v7();
 
-    for &rel in ALL_RELS {
+    for (rel, mirror) in mirrored_rels() {
         for &kind in ALL_KINDS {
             let written = EventRef {
                 rel,
@@ -128,7 +144,7 @@ fn a_substrate_event_ref_deserializes_into_the_core_mirror() {
             assert_eq!(
                 read,
                 LedgerRef {
-                    rel: mirror_rel(rel),
+                    rel: mirror,
                     target: LedgerRefTarget {
                         kind: mirror_kind(kind),
                         id,
