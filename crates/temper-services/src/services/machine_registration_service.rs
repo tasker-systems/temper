@@ -405,16 +405,6 @@ pub async fn rebind(
     // The new client id is the caller's choice, so it may not sit in a namespace temper mints.
     refuse_minted_namespace(&req.client_id)?;
 
-    // A temper-issued machine has a secret to rotate. Rebinding it would move its profile onto an
-    // external client id, and on an instance running its own AS that machine stops authenticating.
-    if old.issuer == machine_door::TEMPER_ISSUER {
-        return Err(ApiError::BadRequest(format!(
-            "machine client '{}' was issued by temper; rotate its secret with \
-             `temper admin machine rotate-secret` instead",
-            old.client_id
-        )));
-    }
-
     // A revoked credential is dead; it must be re-created by a fresh `provision`, never
     // resurrected under a new `client_id`. Rebinding one would revive its surviving grants and
     // memberships (revoke leaves them, D11), silently undoing a deliberate revocation. Mirrors
@@ -422,6 +412,17 @@ pub async fn rebind(
     if old.revoked_at.is_some() {
         return Err(ApiError::BadRequest(format!(
             "machine client '{}' is revoked; issue a new credential instead",
+            old.client_id
+        )));
+    }
+
+    // A temper-issued machine has a secret to rotate. Rebinding it would move its profile onto an
+    // external client id, and on an instance running its own AS that machine stops authenticating.
+    // After the revoked check, so a revoked source is told to issue anew rather than to rotate.
+    if old.issuer == machine_door::TEMPER_ISSUER {
+        return Err(ApiError::BadRequest(format!(
+            "machine client '{}' was issued by temper; rotate its secret with \
+             `temper admin machine rotate-secret` instead",
             old.client_id
         )));
     }
@@ -1034,7 +1035,7 @@ mod tests {
         );
     }
 
-    /// Rebind is system-admin-only (B2). A team owner — who may provision/issue/revoke/rotate
+    /// Rebind is system-admin-only (B2). A team owner — who may issue/revoke/rotate
     /// their own team's machines — must NOT be able to rebind, because rebind inherits the old
     /// profile's full reach, which the owner's authority cannot bound.
     /// Standing belongs to the profile, and a rebind overlap window puts two live credentials on one.

@@ -145,7 +145,8 @@ fn reject_machine_shaped(claims: &AuthClaims, door: &str) -> ApiResult<()> {
         return Err(ApiError::Unauthorized(format!(
             "identity '{}' is machine-shaped and cannot resolve to a human profile. \
              A machine principal must be registered as a machine client: \
-             temper admin machine provision --client-id <client_id> --label <label>",
+             temper admin machine provision --client-id <client_id> --label <label>, or \
+             temper admin machine issue on an instance that runs its own authorization server",
             claims.external_user_id
         )));
     }
@@ -283,6 +284,13 @@ async fn resolve_machine_from_claims(
             format!(
                 "machine client '{client_id}' is not registered with this instance, and its id is \
                  in a namespace temper mints, so it cannot be registered by hand"
+            )
+        } else if matches!(mode, AuthMode::TemperAs) {
+            // An externally issued id can never authenticate here, so provision is no remedy.
+            format!(
+                "machine client '{client_id}' is not registered with this instance, which mints \
+                 its own machine credentials. An administrator must issue one: \
+                 temper admin machine issue --label <label>"
             )
         } else {
             format!(

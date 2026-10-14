@@ -256,8 +256,8 @@ A valid M2M token — one your issuer happily minted, correctly signed, correctl
 clean **401** until someone registers your `client_id` with the instance:
 
 ```
-machine client 'tmpr_abc123' is not registered with this instance.
-An administrator must run: temper admin machine provision --client-id tmpr_abc123 --label <label>
+machine client 'k3Fq9xZ' is not registered with this instance.
+An administrator must run: temper admin machine provision --client-id k3Fq9xZ --label <label>
 ```
 
 Temper keeps a registration allowlist and the gate is **lookup-or-reject** — there is no first-call

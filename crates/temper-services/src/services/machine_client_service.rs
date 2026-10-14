@@ -348,8 +348,10 @@ pub async fn rotate_secret(
     Ok(temper_core::types::machine::IssuedMachineCredential {
         client,
         client_secret: secret.plaintext,
-        dormant: crate::auth::machine_door::reachable_issuer(mode)
-            != crate::auth::machine_door::TEMPER_ISSUER,
+        dormant: crate::auth::machine_door::machine_door_policy(
+            mode,
+            crate::auth::machine_door::MachineDoor::Issue,
+        ) == crate::auth::machine_door::DoorPolicy::Dormant,
     })
 }
 
