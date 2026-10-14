@@ -580,6 +580,8 @@ classify_probe clients/temper-ts/package.json "$PJ_BASE" '{not json' \
   fail "classifier: an unparseable package.json stays on the wire (fail closed)"
 classify_probe clients/temper-ts/package-lock.json '{"lockfileVersion":3}' '{"lockfileVersion":3,"x":1}' \
   pass "classifier: a lockfile is dependency-only"
+classify_probe clients/temper-rb/mise.lock "" 'lockfile_version = 3' \
+  pass "classifier: a mise.lock is dependency-only, even new in this diff (dev tooling, never published)"
 
 CT_BASE='[package]
 name = "temper-api"
