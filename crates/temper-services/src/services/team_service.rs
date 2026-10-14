@@ -67,21 +67,12 @@ pub(crate) async fn role_on_team(
     team_id: Uuid,
     profile_id: ProfileId,
 ) -> ApiResult<Option<TeamRole>> {
-    let role = sqlx::query_scalar!(
-        r#"SELECT role AS "role: TeamRole"
-             FROM kb_team_members
-            WHERE team_id = $1 AND profile_id = $2"#,
-        team_id,
-        *profile_id,
-    )
-    .fetch_optional(pool)
-    .await?;
-    Ok(role)
+    let mut conn = pool.acquire().await?;
+    role_on_team_on(&mut conn, team_id, profile_id).await
 }
 
 /// [`role_on_team`] on a connection — for a decision made inside a write transaction, under its
-/// locks (team-role rank plan P1). The same query, equally `is_active`-blind; the pool spelling is
-/// left alone.
+/// locks (team-role rank plan P1). The one query both spellings run, equally `is_active`-blind.
 pub(crate) async fn role_on_team_on(
     conn: &mut sqlx::PgConnection,
     team_id: Uuid,
@@ -337,7 +328,7 @@ async fn authorize_member_act(
         let mut conn = pool.acquire().await?;
         MembershipAuthority::resolve(&mut conn, caller, team_id)
             .await?
-            .precheck(caller, act, target)?;
+            .precheck(act, target)?;
     }
     let mut tx = pool
         .begin()
@@ -345,7 +336,7 @@ async fn authorize_member_act(
         .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
     let locked = team_membership::locked(&mut tx, team_id, target).await?;
     let resolved = MembershipAuthority::resolve(&mut tx, caller, team_id).await?;
-    let change = team_membership::authorize(resolved, caller, team_id, act, &locked)?;
+    let change = team_membership::authorize(resolved, act, &locked)?;
     Ok((tx, change))
 }
 
@@ -1829,6 +1820,8 @@ mod lifecycle_tests {
         assert_eq!(event.get("role").and_then(|v| v.as_str()), role, "{event}");
         assert_eq!(event["actor"], serde_json::json!(actor), "{event}");
         assert_eq!(event["via"], via, "{event}");
+        // Every routed member act writes or acts on a native row; an idp row is refused (C7).
+        assert_eq!(event["source"], "native", "{event}");
         assert!(event.get("left_ownerless").is_none(), "{event}");
     }
 
@@ -2352,6 +2345,19 @@ mod lifecycle_tests {
         let me = principal(&pool, parent_owner).await;
 
         assert!(matches!(
+            add_member(
+                &pool,
+                &me,
+                child,
+                &AddMemberRequest {
+                    profile_id: parent_owner,
+                    role: TeamRole::Member,
+                },
+            )
+            .await,
+            Err(ApiError::Forbidden)
+        ));
+        assert!(matches!(
             change_role(&pool, &me, child, member, TeamRole::Watcher).await,
             Err(ApiError::Forbidden)
         ));
@@ -2380,6 +2386,81 @@ mod lifecycle_tests {
             "got {denied:?}"
         );
         assert!(membership_events(&pool, team).await.is_empty());
+    }
+
+    /// C7, pin: a manager cannot lower themselves on their own identity-provider row either.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn manager_cannot_lower_themselves_on_their_idp_row(pool: PgPool) {
+        let (owner, mt) = (
+            mk_profile(&pool, "owner").await,
+            mk_profile(&pool, "mt").await,
+        );
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, mt, "maintainer", "idp").await;
+
+        let denied = change_role(
+            &pool,
+            &principal(&pool, mt).await,
+            team,
+            mt,
+            TeamRole::Member,
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ApiError::Conflict(_))),
+            "got {denied:?}"
+        );
+        assert_eq!(role_of(&pool, team, mt).await, Some(TeamRole::Maintainer));
+        assert!(membership_events(&pool, team).await.is_empty());
+    }
+
+    /// P14 (a), pin: a system admin with no row adds themselves and raises their own role — on the
+    /// ledger as `member_act`, the admin arm — and a later lowering of their own role is `self`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_system_admin_adds_and_raises_themselves_on_the_ledger(pool: PgPool) {
+        let admin = mk_admin(&pool, "admin").await;
+        let owner = mk_profile(&pool, "owner").await;
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        let me = principal(&pool, admin).await;
+
+        add_member(
+            &pool,
+            &me,
+            team,
+            &AddMemberRequest {
+                profile_id: admin,
+                role: TeamRole::Member,
+            },
+        )
+        .await
+        .expect("an admin adds themselves");
+        change_role(&pool, &me, team, admin, TeamRole::Owner)
+            .await
+            .expect("an admin raises their own role");
+        change_role(&pool, &me, team, admin, TeamRole::Watcher)
+            .await
+            .expect("and lowers it");
+        let events = membership_events(&pool, team).await;
+        assert_eq!(events.len(), 3);
+        assert_event(&events[0], admin, None, Some("member"), admin, "member_act");
+        assert_event(
+            &events[1],
+            admin,
+            Some("member"),
+            Some("owner"),
+            admin,
+            "member_act",
+        );
+        assert_event(
+            &events[2],
+            admin,
+            Some("owner"),
+            Some("watcher"),
+            admin,
+            "self",
+        );
     }
 
     /// C5, pin: an admin granting a machine `maintainer` gets the readable 400, not the trigger's
@@ -2619,14 +2700,7 @@ mod lifecycle_tests {
         let resolved = MembershipAuthority::resolve(&mut holder, &a_principal, team)
             .await
             .unwrap();
-        let change = team_membership::authorize(
-            resolved,
-            &a_principal,
-            team,
-            MembershipAct::Remove,
-            &target,
-        )
-        .unwrap();
+        let change = team_membership::authorize(resolved, MembershipAct::Remove, &target).unwrap();
         team_membership::membership_write(&mut holder, None, change)
             .await
             .unwrap();
@@ -2659,5 +2733,73 @@ mod lifecycle_tests {
         let events = membership_events(&pool, team).await;
         assert_eq!(events.len(), 1, "one leave happened, one is recorded");
         assert_event(&events[0], a, Some("owner"), None, a, "self");
+    }
+
+    /// P1, pin: the caller's own rank is read again under the team lock. An owner's demotion of
+    /// maintainer M is written and held open; M's act on a member blocks on the team-row lock, and
+    /// once the demotion commits M acts as the member they now are — refused, and nothing recorded.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_caller_demoted_mid_act_acts_on_their_new_role(pool: PgPool) {
+        let (owner, mt, x) = (
+            mk_profile(&pool, "owner").await,
+            mk_profile(&pool, "mt").await,
+            mk_profile(&pool, "x").await,
+        );
+        let team = mk_team(&pool, "acme").await;
+        add(&pool, team, owner, "owner", "native").await;
+        add(&pool, team, mt, "maintainer", "native").await;
+        add(&pool, team, x, "member", "native").await;
+        let owner_principal = principal(&pool, owner).await;
+        let mt_principal = principal(&pool, mt).await;
+
+        // Holder: the owner demotes M, through the routed path, written and held open.
+        let mut holder = pool.begin().await.unwrap();
+        let target = team_membership::locked(&mut holder, team, ProfileId::from(mt))
+            .await
+            .unwrap();
+        let resolved = MembershipAuthority::resolve(&mut holder, &owner_principal, team)
+            .await
+            .unwrap();
+        let change = team_membership::authorize(
+            resolved,
+            MembershipAct::Change {
+                role: TeamRole::Member,
+            },
+            &target,
+        )
+        .unwrap();
+        team_membership::membership_write(&mut holder, None, change)
+            .await
+            .unwrap();
+
+        // Contender: M, still a maintainer as the pool sees it, demotes X.
+        let contender_pool = pool.clone();
+        let mut contender = tokio::spawn(async move {
+            change_role(&contender_pool, &mt_principal, team, x, TeamRole::Watcher).await
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(750), &mut contender)
+                .await
+                .is_err(),
+            "M's act must block on the team-row lock, not decide on the rank the pool saw"
+        );
+
+        holder.commit().await.unwrap();
+        let m_result = contender.await.unwrap();
+        assert!(
+            matches!(m_result, Err(ApiError::Forbidden)),
+            "M, now a member, changes no one: {m_result:?}"
+        );
+        assert_eq!(role_of(&pool, team, x).await, Some(TeamRole::Member));
+        let events = membership_events(&pool, team).await;
+        assert_eq!(events.len(), 1, "only the demotion is recorded");
+        assert_event(
+            &events[0],
+            mt,
+            Some("maintainer"),
+            Some("member"),
+            owner,
+            "member_act",
+        );
     }
 }

@@ -10,8 +10,8 @@ body = '''
 can grant up to `maintainer`. A maintainer can no longer change or remove an owner, and an owner can
 no longer change or remove a co-owner: only a system admin acts on an owner other than yourself (a
 `403 FORBIDDEN_DETAIL` naming the rule). An owner hands a team over by granting `owner`, then
-lowering their own role. On the instance's gating team only a system admin changes the roster;
-any member may still leave it. A system admin who is not a member of a team can now repair it
+lowering their own role. On the instance's gating team these three routes are open only to a
+system admin; any member may still leave it. A system admin who is not a member of a team can now repair it
 (previously refused). Machine registration reach onto the gating team follows the same rule. A
 change to a member's current role is a 200 that records nothing. Two owners leaving at the same
 moment can no longer leave a team with no owner. A caller who cannot manage a team gets the same

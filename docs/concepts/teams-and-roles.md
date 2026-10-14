@@ -38,8 +38,8 @@ Roles are a rank, and every membership change follows one rule:
   else holds `owner`. To hand a team over, grant `owner` to another member, then lower your own
   role.
 - **A system admin can make any change**, including repairing a team whose only owner has left.
-  On the instance's gating team, membership is changed only by a system admin (any member may
-  still leave it).
+  On the instance's gating team, only a system admin adds a member, changes a role or removes a
+  member directly (any member may still leave it).
 
 Adding a member, changing a role and removing a member are recorded on the admin ledger, readable
 by the team's owners and maintainers and by system admins. Invitations top out at `maintainer`.

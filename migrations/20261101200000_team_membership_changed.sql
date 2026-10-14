@@ -206,7 +206,9 @@ CREATE FUNCTION _admin_team_membership_write(
     p_invited_by       uuid DEFAULT NULL,
     p_correlation      uuid DEFAULT NULL
 ) RETURNS text
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
 DECLARE
     v_prev_role    team_role;
     v_prev_source  team_member_source;
@@ -249,6 +251,10 @@ BEGIN
         IF p_emitter IS NULL THEN
             RAISE EXCEPTION 'a team membership change by a person names that person''s emitter';
         END IF;
+        -- The record's two actor axes (the emitter and `payload.actor`) name one person.
+        IF NOT EXISTS (SELECT 1 FROM kb_entities WHERE id = p_emitter AND profile_id = p_actor) THEN
+            RAISE EXCEPTION 'team membership emitter % is not an entity of actor %', p_emitter, p_actor;
+        END IF;
         v_emitter := p_emitter;
     END IF;
 
@@ -277,7 +283,7 @@ BEGIN
         END IF;
     END IF;
 
-    v_lowers_owner := v_prev_role = 'owner'
+    v_lowers_owner := COALESCE(v_prev_role = 'owner', false)
                       AND (p_act = 'remove' OR (p_act = 'change' AND p_role <> 'owner'));
 
     IF p_guard_last_owner AND v_lowers_owner AND NOT EXISTS (

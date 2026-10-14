@@ -74,6 +74,7 @@ pub async fn create(
         (status = 201, description = "Member added", body = TeamMemberRow),
         (status = 403, description = "Forbidden: the caller is not an owner or maintainer of this team (on the gating team, not a system admin); or (`FORBIDDEN_DETAIL`) the role is above the caller's own — a manager grants up to their own role, a system admin any; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 400, description = "The target is a machine principal and the role is above `member`"),
+        (status = 404, description = "Team not found (told only to a system admin; any other caller gets 403)"),
         (status = 409, description = "Already a member of this team; change the role with PATCH /api/teams/{id}/members/{profile_id}"),
     )
 )]
@@ -172,7 +173,7 @@ pub async fn delete(
     responses(
         (status = 200, description = "Member removed; residual owned-resource reach reported", body = RemoveMemberOutcome),
         (status = 403, description = "Forbidden: the caller is neither the member leaving nor an owner or maintainer of this team (on the gating team, not a system admin); or (`FORBIDDEN_DETAIL`) the member is an owner other than the caller, or ranks above the caller — only a system admin removes another owner; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
-        (status = 404, description = "Member not found (told only to a caller who may manage the team)"),
+        (status = 404, description = "Member not found, or (to a system admin) the team does not exist; told only to a caller who may manage the team"),
         (status = 409, description = "Cannot remove the last owner (grant `owner` to another member first), a SAML-provisioned row, or a profile from its own personal team"),
     )
 )]
@@ -200,7 +201,7 @@ pub async fn remove_member(
         (status = 200, description = "Role changed", body = TeamMemberRow),
         (status = 400, description = "The target is a machine principal and the role is above `member`"),
         (status = 403, description = "Forbidden: the caller is not an owner or maintainer of this team (on the gating team, not a system admin); or (`FORBIDDEN_DETAIL`) the role is above the caller's own, the member is an owner other than the caller or ranks above the caller (only a system admin changes another owner), or the caller is raising their own role; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
-        (status = 404, description = "Member not found (told only to a caller who may manage the team)"),
+        (status = 404, description = "Member not found, or (to a system admin) the team does not exist; told only to a caller who may manage the team"),
         (status = 409, description = "Cannot demote the last owner (grant `owner` to another member first), or a SAML-provisioned row; or the membership changed since it was read (retry)"),
     )
 )]

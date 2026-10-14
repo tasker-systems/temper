@@ -75,13 +75,16 @@ pub(crate) enum MembershipAuthority {
     None,
 }
 
-/// A resolved [`MembershipAuthority`], with whether the team is the gating team — the one other
-/// fact the rank rule reads about the team. Private fields: only [`MembershipAuthority::resolve`]
-/// builds one, so [`authorize`] never decides on an authority someone wrote down by hand.
+/// A resolved [`MembershipAuthority`], bound to the team and the caller it was resolved for, with
+/// whether the team is the gating team — the one other fact the rank rule reads about the team.
+/// Private fields: only [`MembershipAuthority::resolve`] builds one, so [`authorize`] never decides
+/// on an authority someone wrote down by hand, nor on one resolved for another team or caller.
 #[derive(Debug)]
 pub(crate) struct ResolvedMembership {
     authority: MembershipAuthority,
     is_gating: bool,
+    team_id: Uuid,
+    caller: ProfileId,
 }
 
 impl ResolvedMembership {
@@ -99,15 +102,10 @@ impl ResolvedMembership {
     /// that runs before any lock (plan P1 step 1). A caller this refuses never takes the team-row
     /// lock, and learns nothing about the target (S6). The same checks run again, in full, under
     /// the locks.
-    pub(crate) fn precheck(
-        &self,
-        caller: &HumanPrincipal,
-        act: MembershipAct,
-        target: ProfileId,
-    ) -> ApiResult<()> {
+    pub(crate) fn precheck(&self, act: MembershipAct, target: ProfileId) -> ApiResult<()> {
         admits_caller(
             self.authority.kind(),
-            caller.profile_id(),
+            self.caller,
             self.is_gating,
             act,
             target,
@@ -138,11 +136,14 @@ impl MembershipAuthority {
             Err(other) => return Err(other),
         };
         let is_gating = crate::services::access_service::is_gating_team_on(conn, team_id).await?;
+        let bound = |authority| ResolvedMembership {
+            authority,
+            is_gating,
+            team_id,
+            caller: caller.profile_id(),
+        };
         if let Some(admin) = admin {
-            return Ok(ResolvedMembership {
-                authority: MembershipAuthority::SystemAdmin(admin),
-                is_gating,
-            });
+            return Ok(bound(MembershipAuthority::SystemAdmin(admin)));
         }
         let role =
             crate::services::team_service::role_on_team_on(conn, team_id, caller.profile_id())
@@ -161,10 +162,7 @@ impl MembershipAuthority {
                 None => MembershipAuthority::None,
             }
         };
-        Ok(ResolvedMembership {
-            authority,
-            is_gating,
-        })
+        Ok(bound(authority))
     }
 
     /// The proof-free shape of this authority, which [`decide`] reads.
@@ -201,13 +199,15 @@ pub(crate) enum MembershipAct {
     Remove,
 }
 
-/// The member an act is aimed at, as read under the row lock ([`locked`]).
+/// The member an act is aimed at, as read under the locks. Private fields: only [`locked`] builds
+/// one, so [`authorize`] decides on a target read under the team lock, on the team it names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MembershipTarget {
-    pub(crate) profile: ProfileId,
+    team_id: Uuid,
+    profile: ProfileId,
     /// The target's row on this team, if any.
-    pub(crate) current: Option<(TeamRole, TeamMemberSource)>,
-    pub(crate) is_machine: bool,
+    current: Option<(TeamRole, TeamMemberSource)>,
+    is_machine: bool,
 }
 
 /// The refusal for an add over an existing row (#1070), naming the operation that exists.
@@ -387,14 +387,25 @@ fn decide(
             if current == TeamRole::Owner {
                 return Err(ApiError::ForbiddenDetail(ANOTHER_OWNER.to_string()));
             }
+            // With today's four roles this cannot fire: the managing roles are owner and maintainer,
+            // and an owner target was refused just above. It states the rule (C2) rather than
+            // leaning on the role list, so a role added between maintainer and owner is covered.
             if current.rank() > own.rank() {
                 return Err(ApiError::ForbiddenDetail(ABOVE_YOUR_RANK.to_string()));
             }
         }
     }
 
+    // `self` is leaving or lowering your own role (the `MembershipVia::SelfAct` contract). A system
+    // admin who adds themselves or raises their own role acted through the admin arm (P14 a), so
+    // the record says `member_act`.
+    let leaves_or_lowers = match (act, target.current) {
+        (MembershipAct::Remove, _) => true,
+        (MembershipAct::Change { role }, Some((current, _))) => role.rank() <= current.rank(),
+        _ => false,
+    };
     Ok(Decision {
-        via: if is_self {
+        via: if is_self && leaves_or_lowers {
             MembershipVia::SelfAct
         } else {
             MembershipVia::MemberAct
@@ -426,17 +437,22 @@ pub(crate) struct AuthorizedMembershipChange {
 }
 
 /// Apply the rank rule ([`decide`]) for a resolved authority and seal the result. The resolution is
-/// consumed: it was made for one decision, under one set of locks.
+/// consumed: it was made for one decision, under one set of locks. The team and the caller come from
+/// the resolution itself, and a target locked on any other team is refused, so an authority
+/// resolved on one team cannot authorize a write on another.
 pub(crate) fn authorize(
     resolved: ResolvedMembership,
-    caller: &HumanPrincipal,
-    team_id: Uuid,
     act: MembershipAct,
     target: &MembershipTarget,
 ) -> Result<AuthorizedMembershipChange, ApiError> {
+    if target.team_id != resolved.team_id {
+        return Err(ApiError::Internal(
+            "membership authority resolved for one team, target locked on another".to_string(),
+        ));
+    }
     let decision = decide(
         resolved.authority.kind(),
-        caller.profile_id(),
+        resolved.caller,
         resolved.is_gating,
         act,
         target,
@@ -445,10 +461,10 @@ pub(crate) fn authorize(
     // governance check actually passed for — rather than from the caller beside it.
     let actor = match &resolved.authority {
         MembershipAuthority::SystemAdmin(admin) => admin.actor(),
-        _ => caller.profile_id(),
+        _ => resolved.caller,
     };
     Ok(AuthorizedMembershipChange {
-        team_id,
+        team_id: resolved.team_id,
         profile: target.profile,
         act,
         via: decision.via,
@@ -501,6 +517,7 @@ pub(crate) async fn locked(
             .fetch_one(&mut *conn)
             .await?;
     Ok(MembershipTarget {
+        team_id,
         profile,
         current,
         is_machine,
@@ -588,6 +605,7 @@ mod tests {
 
     const CALLER: Uuid = Uuid::from_u128(1);
     const OTHER: Uuid = Uuid::from_u128(2);
+    const TEAM: Uuid = Uuid::from_u128(10);
 
     /// What a row of the table expects, compared by shape rather than by message.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -614,6 +632,7 @@ mod tests {
 
     fn target(who: Uuid, current: Option<TeamRole>) -> MembershipTarget {
         MembershipTarget {
+            team_id: TEAM,
             profile: ProfileId::from(who),
             current: current.map(|r| (r, TeamMemberSource::Native)),
             is_machine: false,
@@ -712,7 +731,8 @@ mod tests {
             (K::SelfOnly(Member),  Member,     [ForbiddenDetail, ForbiddenDetail, ForbiddenDetail, ForbiddenDetail, Allow(SelfAct), Forbidden]),
             (K::SelfOnly(Watcher), Watcher,    [ForbiddenDetail, ForbiddenDetail, ForbiddenDetail, ForbiddenDetail, Allow(SelfAct), Forbidden]),
             // A system admin is not special on themselves (P14 a): the admin arm, checks 3–5 only.
-            (K::Admin,             Member,     [Allow(SelfAct), Allow(SelfAct), Allow(SelfAct), Allow(SelfAct), Allow(SelfAct), Conflict]),
+            // Raising their own role is recorded as `member_act`; lowering or leaving as `self`.
+            (K::Admin,             Member,     [Allow(MemberAct), Allow(MemberAct), Allow(SelfAct), Allow(SelfAct), Allow(SelfAct), Conflict]),
         ];
         for (authority, own, wants) in table {
             let me = target(CALLER, Some(*own));
@@ -925,5 +945,36 @@ mod tests {
             run(K::SelfOnly(Member), false, Act::Remove, idp(OTHER, Member)),
             Forbidden
         );
+    }
+
+    /// P14 (a): a system admin with no row may add themselves, at any role, on the ledger as
+    /// `member_act`; a manager or member may not add themselves.
+    #[test]
+    fn a_system_admin_may_add_themselves() {
+        for role in [Owner, Maintainer, Member, Watcher] {
+            assert_eq!(
+                run(K::Admin, false, Act::Add { role }, target(CALLER, None)),
+                Allow(MemberAct),
+                "admin adds themselves at {role:?}"
+            );
+            assert_eq!(
+                run(K::Admin, true, Act::Add { role }, target(CALLER, None)),
+                Allow(MemberAct),
+                "admin adds themselves to the gating team at {role:?}"
+            );
+        }
+    }
+
+    /// An authority resolved for one team cannot authorize a write on a target locked on another.
+    #[test]
+    fn an_authority_resolved_on_one_team_cannot_authorize_on_another() {
+        let resolved = ResolvedMembership {
+            authority: MembershipAuthority::Managing(ManagingRole::Owner),
+            is_gating: false,
+            team_id: Uuid::from_u128(11),
+            caller: ProfileId::from(CALLER),
+        };
+        let err = authorize(resolved, Act::Remove, &target(OTHER, Some(Member))).unwrap_err();
+        assert!(matches!(err, ApiError::Internal(_)), "{err:?}");
     }
 }

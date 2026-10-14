@@ -1546,7 +1546,7 @@ pub enum TeamAction {
         /// Member profile UUID
         profile: String,
     },
-    /// Change a member's role (owner/maintainer)
+    /// Change a member's role (a team owner or maintainer, or a system admin)
     ///
     /// You can set roles up to your own and act on members up to your own rank; only a
     /// system admin changes an owner other than yourself. To hand a team over, grant `owner` to

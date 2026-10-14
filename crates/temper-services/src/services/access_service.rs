@@ -258,21 +258,12 @@ pub(crate) async fn profile_can_grant(
 /// gating team flips it into the admin-only regime ([`cogmap_write_requires_admin`]), so it stays
 /// admin-only.
 pub(crate) async fn is_gating_team(pool: &PgPool, team_id: Uuid) -> ApiResult<bool> {
-    let ok = sqlx::query_scalar!(
-        "SELECT EXISTS( \
-           SELECT 1 FROM kb_teams t \
-             JOIN kb_system_settings s ON t.slug = s.gating_team_slug \
-            WHERE t.id = $1 )",
-        team_id,
-    )
-    .fetch_one(pool)
-    .await?
-    .unwrap_or(false);
-    Ok(ok)
+    let mut conn = pool.acquire().await?;
+    is_gating_team_on(&mut conn, team_id).await
 }
 
 /// [`is_gating_team`] on a connection — for a decision made inside a write transaction, under its
-/// locks (team-role rank plan P1). The same predicate; the pool spelling is left alone.
+/// locks (team-role rank plan P1). The one predicate both spellings run.
 pub(crate) async fn is_gating_team_on(
     conn: &mut sqlx::PgConnection,
     team_id: Uuid,

@@ -219,15 +219,20 @@ async fn a_member_reads_their_own_leave_as_actor(pool: PgPool) {
     );
 }
 
-/// C12, pin: the member acted on gets no subject arm — asking about themselves shows no
-/// membership record, because the record names them only as its `principal`.
+/// C12, pin: the member acted on gets no subject arm — the record names them only as its
+/// `principal`, never as a `subject`. Asked as a system admin, who can read every admin event type,
+/// so the answer comes from the reference match itself rather than from a refusal before any query.
 #[sqlx::test(migrations = "../../migrations")]
 async fn the_removed_member_finds_nothing_about_themselves_by_subject(pool: PgPool) {
     let s = scene(&pool).await;
-    let removed = test_support::human_principal_for(&pool, s.removed).await;
-    let about_me = admin_ledger_service::list_by_subject(
+    let admin = person(&pool, "admin").await;
+    test_support::grant_governance(&pool, admin).await;
+    // The records exist and this reader reads them — by the team, their subject.
+    assert_eq!(read_by_subject(&pool, admin, s.team).await, Some(2));
+    let caller = test_support::human_principal_for(&pool, admin).await;
+    let about_removed = admin_ledger_service::list_by_subject(
         &pool,
-        &removed,
+        &caller,
         RefTarget {
             kind: AnchorTable::Profiles,
             id: s.removed,
@@ -235,14 +240,14 @@ async fn the_removed_member_finds_nothing_about_themselves_by_subject(pool: PgPo
         50,
         0,
     )
-    .await;
-    match about_me {
-        Err(ApiError::NotFound(_)) => {}
-        Ok(entries) => assert!(entries
+    .await
+    .expect("a system admin reads by any subject");
+    assert!(
+        about_removed
             .iter()
-            .all(|e| e.event_type != "team_membership_changed")),
-        Err(other) => panic!("unexpected {other:?}"),
-    }
+            .all(|e| e.event_type != "team_membership_changed"),
+        "the member acted on is a principal of the record, not its subject"
+    );
 }
 
 async fn membership_events(pool: &PgPool) -> i64 {

@@ -49,10 +49,10 @@ use crate::services::{access_service, team_service};
 /// registration reach, `team_service::add_member` / `change_role`, `access_service::promote_admin`,
 /// and its own personal team, which it holds as `member` like any other (ruled 2026-10-09). The
 /// member acts refuse through the rank rule's target-kind check (`authz::team_membership`, check 4,
-/// for every authority); registration refuses in [`authorize_registration`]; the database refuses the same rows
-/// underneath them (`20261019100000_machines_never_govern.sql`), and caps a profile's existing
-/// roles the moment it becomes a machine — which is how registration's personal-team `owner` row,
-/// written before the client row exists, comes out as `member`.
+/// for every authority); registration refuses in [`authorize_registration`]; the database refuses
+/// the same rows underneath them (`20261019100000_machines_never_govern.sql`), and caps a
+/// profile's existing roles the moment it becomes a machine — which is how registration's
+/// personal-team `owner` row, written before the client row exists, comes out as `member`.
 const MAX_MACHINE_TEAM_ROLE: TeamRole = TeamRole::Member;
 
 /// Whether `role` is above what any machine may hold.
@@ -288,23 +288,24 @@ async fn contain_reach(
     // The D4b role ceiling is NOT here: it asks a question about the role itself, not about
     // containment, so it runs for BOTH arms in `authorize_registration`. Do not restore a copy —
     // a second copy is what would let the two arms drift apart again.
-    for spec in teams {
-        // D4 — the membership bar: exactly what `add_member` requires of a human. That is the
-        // membership authority's managing arm (team-role rank plan P15), which also refuses a
-        // non-admin on the gating team (R11): a gating-team owner who is not a system admin can
-        // no more put a machine on that roster than add a person to it. (The admin arm returned
-        // before this function runs; the rank bound is moot, since D4b caps a machine at
-        // `member`.) `contain_target_team` keeps `require_manage_on_team`: a reach grant writes
-        // no membership.
+    // D4 — the membership bar: exactly what `add_member` requires of a human. That is the
+    // membership authority's managing arm (team-role rank plan P15), which also refuses a
+    // non-admin on the gating team (R11): a gating-team owner who is not a system admin can no more
+    // put a machine on that roster than add a person to it. (The admin arm returned before this
+    // function runs; the rank bound is moot, since D4b caps a machine at `member`.)
+    // `contain_target_team` keeps `require_manage_on_team`: a reach grant writes no membership.
+    if !teams.is_empty() {
         let mut conn = pool.acquire().await?;
-        let resolved = crate::authz::team_membership::MembershipAuthority::resolve(
-            &mut conn,
-            authed,
-            spec.team_id,
-        )
-        .await?;
-        if !resolved.manages() {
-            return Err(ApiError::Forbidden);
+        for spec in teams {
+            let resolved = crate::authz::team_membership::MembershipAuthority::resolve(
+                &mut conn,
+                authed,
+                spec.team_id,
+            )
+            .await?;
+            if !resolved.manages() {
+                return Err(ApiError::Forbidden);
+            }
         }
     }
 

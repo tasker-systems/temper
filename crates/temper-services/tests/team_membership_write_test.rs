@@ -427,7 +427,8 @@ async fn the_guarded_path_never_flags_left_ownerless(pool: PgPool) {
     assert!(events(&pool).await[0].0.get("left_ownerless").is_none());
 }
 
-/// The writer refuses a via or act outside its vocabulary, and a person's act with no emitter.
+/// The writer refuses a via or act outside its vocabulary, and a person's act with no emitter or
+/// with an emitter that is not theirs.
 #[sqlx::test(migrations = "../../migrations")]
 async fn an_unknown_via_or_act_raises(pool: PgPool) {
     let w = world(&pool).await;
@@ -463,6 +464,21 @@ async fn an_unknown_via_or_act_raises(pool: PgPool) {
         .await
         .is_err(),
         "a person's act names that person's emitter"
+    );
+    // An emitter that belongs to someone else: the member acted on.
+    let members_entity = mk_entity(&pool, w.member, "member").await;
+    assert!(
+        write(
+            &pool,
+            Call {
+                emitter: Some(members_entity),
+                role: Some("watcher"),
+                ..by(&w)
+            }
+        )
+        .await
+        .is_err(),
+        "the emitter is an entity of the actor"
     );
     assert!(events(&pool).await.is_empty());
     assert_eq!(

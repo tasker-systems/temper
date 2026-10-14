@@ -145,7 +145,7 @@ reconcile_regime|block:fn:authorize_reconcile:crates/temper-services/src/backend
 is_system_admin|block:fn:is_system_admin:crates/temper-services/src/services/access_service.rs
 require_manage_on_team|block:fn:require_manage_on_team:crates/temper-services/src/services/team_service.rs
 can_manage|block:fn:can_manage:crates/temper-services/src/services/team_service.rs
-team_membership|file:crates/temper-services/src/authz/team_membership.rs
+team_membership|file:crates/temper-services/src/authz/team_membership.rs;block:fn:is_gating_team_on:crates/temper-services/src/services/access_service.rs;block:fn:role_on_team_on:crates/temper-services/src/services/team_service.rs;block:fn:require_system_admin_on:crates/temper-services/src/auth/mod.rs;block:fn:authorize_member_act:crates/temper-services/src/services/team_service.rs
 EOF
 
 # Extract one `fn`/`enum` block by brace counting from its declaration. Anchored on the declaring
@@ -258,6 +258,18 @@ current_gates() {
 # the gating team, and `contain_target_team` (connection reach grants) did not move. cli.rs is bound
 # to `team_membership` for its new `set-role` claim; its other 17 claims were unbound before and are
 # not re-read by this binding. No over-claim.
+# REVIEWED 2026-10-14 (team-role rank, PR B review round) — `team_membership` now also fingerprints
+# the four functions its decision reads besides the module: `is_gating_team_on` (the R11 arm),
+# `role_on_team_on`, `require_system_admin_on` (a production `SystemAdmin` mint) and
+# `authorize_member_act` (the pre-check → lock → re-resolve order), so an edit to any of them reds
+# the claims bound to the gate. The module itself moved too: the resolved authority now carries the
+# team and caller it was resolved for and refuses a target locked on another team, and an admin's own
+# add or raise is recorded as `member_act` — both narrow nothing and widen nothing. `machine`
+# 0d3b787aad17 -> 1dcae7eff1d9: `contain_reach` takes one connection for its team loop instead of one
+# per team; the same decision per team. New claims re-read: teams.rs's 404 descriptions (a missing
+# team is told only to a system admin — `locked` runs after the pre-check, which refuses everyone
+# else), cli.rs `set-role`'s summary ("a team owner or maintainer, or a system admin"), and
+# team_service.rs's test doc for an admin adding and raising themselves (P14 a). Each holds.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -274,14 +286,14 @@ claim crates/temper-api/src/openapi.rs 5 is_system_admin,machine,connection,subs
 claim crates/temper-api/src/handlers/resource_erasure.rs 5 is_system_admin
 claim crates/temper-api/src/handlers/slack_disconnect.rs 1 -
 claim crates/temper-api/src/handlers/subscriptions.rs 7 subscription
-claim crates/temper-api/src/handlers/teams.rs 4 team_membership,is_system_admin
+claim crates/temper-api/src/handlers/teams.rs 7 team_membership,is_system_admin
 claim crates/temper-core/src/types/admin.rs 5 is_system_admin,read_gates
 claim crates/temper-core/src/types/connection.rs 2 machine,connection
 claim crates/temper-core/src/types/erasure.rs 3 is_system_admin
 claim crates/temper-core/src/types/machine.rs 1 machine
 claim crates/temper-core/src/types/subscription.rs 1 subscription
 claim crates/temper-core/src/types/team.rs 3 team_membership,is_system_admin
-claim crates/temper-cli/src/cli.rs 18 team_membership
+claim crates/temper-cli/src/cli.rs 19 team_membership
 claim crates/temper-cli/src/commands/admin_erasure.rs 1 -
 claim crates/temper-cli/src/commands/admin.rs 4 -
 claim crates/temper-cli/src/commands/admin_connection.rs 2 connection
@@ -310,12 +322,12 @@ claim crates/temper-services/src/services/machine_registration_service.rs 7 mach
 claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
 claim crates/temper-services/src/services/subscription_service.rs 6 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
-claim crates/temper-services/src/services/team_service.rs 11 require_manage_on_team,can_manage,team_membership
+claim crates/temper-services/src/services/team_service.rs 12 require_manage_on_team,can_manage,team_membership
 gate audit_gate 05a9b61226c4
 gate connection 586029b73345
 gate context_admin bce45d31795d
 gate grant 2aa83e237c3e
-gate machine 0d3b787aad17
+gate machine 1dcae7eff1d9
 gate reconcile_regime 76ead78c03ac
 gate read_gates 7d576b5dacc8
 gate ledger_subject c6758faabe32
@@ -324,7 +336,7 @@ gate two_sided 7822960e4ffa
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership 9e08a21baa23
+gate team_membership d169206cba16
 EOF
 
 CURRENT="$(current_claims; current_gates)"
