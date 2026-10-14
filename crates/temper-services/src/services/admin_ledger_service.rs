@@ -149,7 +149,7 @@ async fn readable_event_types(
             &mut conn, authed, subject.id,
         )
         .await?;
-        if resolved.authority.manages() {
+        if resolved.manages() {
             readable.push("team_membership_changed");
         }
     }

@@ -303,7 +303,7 @@ async fn contain_reach(
             spec.team_id,
         )
         .await?;
-        if !resolved.authority.manages() {
+        if !resolved.manages() {
             return Err(ApiError::Forbidden);
         }
     }

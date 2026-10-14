@@ -76,14 +76,25 @@ pub(crate) enum MembershipAuthority {
 }
 
 /// A resolved [`MembershipAuthority`], with whether the team is the gating team — the one other
-/// fact the rank rule reads about the team.
+/// fact the rank rule reads about the team. Private fields: only [`MembershipAuthority::resolve`]
+/// builds one, so [`authorize`] never decides on an authority someone wrote down by hand.
 #[derive(Debug)]
 pub(crate) struct ResolvedMembership {
-    pub(crate) authority: MembershipAuthority,
-    pub(crate) is_gating: bool,
+    authority: MembershipAuthority,
+    is_gating: bool,
 }
 
 impl ResolvedMembership {
+    /// Whether the caller manages this team: a system admin, or an owner or maintainer of it (never
+    /// on the gating team, R11). "May confer something ON this team" — the admin ledger's C12 read
+    /// arm and `machine_authz`'s reach bar call this rather than restating it.
+    pub(crate) fn manages(&self) -> bool {
+        matches!(
+            self.authority,
+            MembershipAuthority::SystemAdmin(_) | MembershipAuthority::Managing(_)
+        )
+    }
+
     /// Checks 1 and 2 of [`decide`] — the half that needs no target state — for the pool pre-check
     /// that runs before any lock (plan P1 step 1). A caller this refuses never takes the team-row
     /// lock, and learns nothing about the target (S6). The same checks run again, in full, under
@@ -154,16 +165,6 @@ impl MembershipAuthority {
             authority,
             is_gating,
         })
-    }
-
-    /// Whether this authority is a managing one on the team — what "may confer something ON this
-    /// team" means for a non-admin. The admin ledger's C12 read arm and `machine_authz`'s reach
-    /// bar call this rather than restating it.
-    pub(crate) fn manages(&self) -> bool {
-        matches!(
-            self,
-            MembershipAuthority::SystemAdmin(_) | MembershipAuthority::Managing(_)
-        )
     }
 
     /// The proof-free shape of this authority, which [`decide`] reads.

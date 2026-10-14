@@ -240,9 +240,9 @@ current_gates() {
 # REVIEWED 2026-10-14 (team-role rank, PR B; temper-artifacts specs/2026-10-08-team-role-rank-design.md,
 # plans/2026-10-14-team-role-rank.md B7) — new gate `team_membership` (authz/team_membership.rs: the
 # membership authority, the rank rule and the sealed change). `ledger_subject` 0b4a1f659c60 ->
-# 35053520fc56: `readable_event_types` gained the C12 arm, which CALLS the membership gate and admits a
+# c6758faabe32: `readable_event_types` gained the C12 arm, which CALLS the membership gate and admits a
 # manager of THAT team only (on the gating team nobody but an admin, who short-circuits above it) —
-# the read set widened to exactly the writers of the record. `machine` 967fea32d269 -> f11af1f6d9de:
+# the read set widened to exactly the writers of the record. `machine` 967fea32d269 -> 0d3b787aad17:
 # `contain_reach`'s team loop now asks `MembershipAuthority` (plan P15), which NARROWS it by the
 # gating arm (R11); `contain_target_team` is unchanged. `require_manage_on_team` and `can_manage` did
 # not move (doc-only edits). Re-read every claim the change touched against the gate: teams.rs's 403
@@ -252,8 +252,12 @@ current_gates() {
 # arms), cli.rs `set-role` ("only a system admin changes an owner other than yourself"),
 # admin_ledger.rs (managers of a team read its membership changes; on the gating team only a system
 # admin), access_service.rs (`GrantAuthority::SystemAdmin`'s stale "Gating-team owner" corrected to
-# the governance grant), machine_authz.rs (a test doc). Each holds. cli.rs is bound to `team_membership` for its new
-# `set-role` claim; its other 17 claims were unbound and stay unread by this binding. No over-claim.
+# the governance grant), machine_authz.rs (a test doc). Each holds. The claims bound to `machine` in
+# connections.rs, machine_clients.rs, admin_machine.rs and the machine services were re-read too: "a
+# team owner can confer only reach they could grant themselves" is what the P15 bar now enforces on
+# the gating team, and `contain_target_team` (connection reach grants) did not move. cli.rs is bound
+# to `team_membership` for its new `set-role` claim; its other 17 claims were unbound before and are
+# not re-read by this binding. No over-claim.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -311,16 +315,16 @@ gate audit_gate 05a9b61226c4
 gate connection 586029b73345
 gate context_admin bce45d31795d
 gate grant 2aa83e237c3e
-gate machine f11af1f6d9de
+gate machine 0d3b787aad17
 gate reconcile_regime 76ead78c03ac
 gate read_gates 7d576b5dacc8
-gate ledger_subject 35053520fc56
+gate ledger_subject c6758faabe32
 gate subscription 81f65a7118cf
 gate two_sided 7822960e4ffa
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership 44e61539b005
+gate team_membership 9e08a21baa23
 EOF
 
 CURRENT="$(current_claims; current_gates)"
