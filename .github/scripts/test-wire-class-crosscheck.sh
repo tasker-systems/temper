@@ -30,6 +30,11 @@ trap 'rm -rf "$WORK"' EXIT
 
 ok()  { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 bad() { echo "  FAIL: $1"; shift; printf '    %s\n' "$@"; FAIL=$((FAIL + 1)); }
+# In-place sed without `-i`: GNU and BSD (macOS) sed disagree on its argument, and BSD reads the
+# script as a backup suffix — so a local run fails every probe whose fixture is edited this way.
+sed_inplace() { # $1 = sed script, $2 = file
+  sed "$1" "$2" > "$2.tmp" && mv "$2.tmp" "$2"
+}
 
 WIRE="${WORK}/wire.txt"
 ADDED="${WORK}/added"
@@ -134,7 +139,7 @@ else bad "--pr naming a different number than the row: still fails presence" "ex
 # ── 5. PARSE — an invalid classes token fails, naming the line ──────────────────────────────────
 reset_fixtures
 printf '%s\n' "crates/temper-mcp/src/lib.rs" > "$WIRE"
-sed -i 's/^classes  = \["behavioral"\]$/classes  = ["breaking"]/' "${REG}/unreleased/prior-row.toml"
+sed_inplace 's/^classes  = \["behavioral"\]$/classes  = ["breaking"]/' "${REG}/unreleased/prior-row.toml"
 out="$(run_check unchanged)"; rc=$?
 if [ "$rc" -ne 0 ] \
     && printf '%s' "$out" | grep -q "classes: 'breaking' is not one of" \
@@ -145,7 +150,7 @@ else bad "parse: 'breaking' fails, naming the file and key" "exit=$rc" "$out"; f
 # ── 5b. PARSE — retirement-train without shape-breaking fails (a routing is never a class) ──────
 reset_fixtures
 printf '%s\n' "crates/temper-mcp/src/lib.rs" > "$WIRE"
-sed -i 's/^classes  = \["behavioral"\]$/classes  = ["additive", "retirement-train"]/' "${REG}/unreleased/prior-row.toml"
+sed_inplace 's/^classes  = \["behavioral"\]$/classes  = ["additive", "retirement-train"]/' "${REG}/unreleased/prior-row.toml"
 out="$(run_check unchanged)"; rc=$?
 if [ "$rc" -ne 0 ] \
     && printf '%s' "$out" | grep -q "a routing, never a class on its own"; then
@@ -155,7 +160,7 @@ else bad "parse: 'retirement-train' without 'shape-breaking' fails the co-occurr
 # ── 5c. PARSE — spec-correction with shape-breaking contradicts ──────────────────────────────────
 reset_fixtures
 printf '%s\n' "crates/temper-mcp/src/lib.rs" > "$WIRE"
-sed -i 's/^classes  = \["behavioral"\]$/classes  = ["shape-breaking", "spec-correction"]/' "${REG}/unreleased/prior-row.toml"
+sed_inplace 's/^classes  = \["behavioral"\]$/classes  = ["shape-breaking", "spec-correction"]/' "${REG}/unreleased/prior-row.toml"
 out="$(run_check unchanged)"; rc=$?
 if [ "$rc" -ne 0 ] \
     && printf '%s' "$out" | grep -q "'spec-correction' and 'shape-breaking' contradict"; then
@@ -165,7 +170,7 @@ else bad "parse: 'spec-correction' with 'shape-breaking' fails the contradiction
 # ── 6. PARSE — a nameless blocker (empty after blocked:) fails ──────────────────────────────────
 reset_fixtures
 printf '%s\n' "crates/temper-mcp/src/lib.rs" > "$WIRE"
-sed -i 's/^status   = "open"$/status   = "blocked:"/' "${REG}/unreleased/prior-row.toml"
+sed_inplace 's/^status   = "open"$/status   = "blocked:"/' "${REG}/unreleased/prior-row.toml"
 out="$(run_check unchanged)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "names no release class"; then
   ok "parse: 'blocked:' with no class name fails"
@@ -174,7 +179,7 @@ else bad "parse: 'blocked:' with no class name fails" "exit=$rc" "$out"; fi
 # ── 7. PARSE — a non-numeric, non-sentinel pr: fails ────────────────────────────────────────────
 reset_fixtures
 printf '%s\n' "crates/temper-mcp/src/lib.rs" > "$WIRE"
-sed -i 's/^pr       = 867$/pr       = "867a"/' "${REG}/unreleased/prior-row.toml"
+sed_inplace 's/^pr       = 867$/pr       = "867a"/' "${REG}/unreleased/prior-row.toml"
 out="$(run_check unchanged)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "pr: '867a'"; then
   ok "parse: 'pr: 867a' fails the pr vocabulary"
@@ -419,8 +424,8 @@ if [ "$v" = "moved" ]; then
 else bad "derivation: a born required parameter on a surviving operation computes as moved" "verdict=$v"; fi
 
 # 15i — a REMOVED parameter: moved.
-jq -S '.paths["/api/things/{id}"].get.parameters = [.paths["/api/things/{id}"].get.parameters[0]] | .paths["/api/things/{id}"].get.parameters += [{"in":"query","name":"sections","required":false,"schema":{"type":"string"}}]' "${WORK}/side_base.json" > "${WORK}/side_head.json"
-jq -S 'del(.paths["/api/things/{id}"].get.parameters[0])' "${WORK}/side_head.json" > "${WORK}/side_head.json"
+jq -S '.paths["/api/things/{id}"].get.parameters = [.paths["/api/things/{id}"].get.parameters[0]] | .paths["/api/things/{id}"].get.parameters += [{"in":"query","name":"sections","required":false,"schema":{"type":"string"}}]' "${WORK}/side_base.json" \
+  | jq -S 'del(.paths["/api/things/{id}"].get.parameters[0])' > "${WORK}/side_head.json"
 v="$(derive_with "${WORK}/side_base.json" "${WORK}/side_head.json")"
 if [ "$v" = "moved" ]; then
   ok "derivation: a removed parameter computes as moved"
@@ -673,8 +678,8 @@ git_mode_check() { (cd "$GITBOX" && bash .github/scripts/wire-class-crosscheck.s
 
 gb checkout -q -b edits-another main
 echo "v2" > "${GITBOX}/clients/thing.txt"
-sed -i 's/^status   = "open"$/status   = "satisfied"/' "${GITBOX}/release-register/unreleased/prior-row.toml"
-sed -i 's/^pr       = 867$/pr       = "self"/' "${GITBOX}/release-register/unreleased/prior-row.toml"
+sed_inplace 's/^status   = "open"$/status   = "satisfied"/' "${GITBOX}/release-register/unreleased/prior-row.toml"
+sed_inplace 's/^pr       = 867$/pr       = "self"/' "${GITBOX}/release-register/unreleased/prior-row.toml"
 gb commit -q -am "edit someone else's entry into pr = self"
 out="$(git_mode_check)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'adds no register entry for this PR'; then
@@ -686,7 +691,7 @@ echo "v2" > "${GITBOX}/clients/thing.txt"
 # Renamed AND re-pointed at this PR: the masquerade `-M` exists to stop. Without rename
 # detection the move reads as an added file whose pr is "self", and it would count.
 gb mv release-register/unreleased/prior-row.toml release-register/unreleased/mine-now.toml
-sed -i 's/^pr       = 867$/pr       = "self"/' "${GITBOX}/release-register/unreleased/mine-now.toml"
+sed_inplace 's/^pr       = 867$/pr       = "self"/' "${GITBOX}/release-register/unreleased/mine-now.toml"
 gb commit -q -am "rename someone else's entry and re-point it at this PR"
 out="$(git_mode_check)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'adds no register entry for this PR'; then

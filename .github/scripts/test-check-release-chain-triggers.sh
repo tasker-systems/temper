@@ -36,6 +36,12 @@ insert_after() {
     awk -v pat="$2" -v txt="$3" '{ print } !done && $0 ~ pat { print txt; done = 1 }' "$1" > "$1.tmp" && mv "$1.tmp" "$1"
 }
 
+# sed_inplace SCRIPT FILE — in-place sed without `-i`, whose argument GNU and BSD (macOS) sed
+# disagree on: BSD reads the script as a backup suffix, and under set -e that aborts the harness.
+sed_inplace() {
+    sed "$1" "$2" > "$2.tmp" && mv "$2.tmp" "$2"
+}
+
 run_case() {
     local name="$1" expected="$2" needle="${3:-}"
     local out actual=0
@@ -78,16 +84,16 @@ insert_after "${TREE}/.github/workflows/release-tag.yml" '^      - main' '      
 run_case "a second push branch fails" 1 "expected [main] alone"
 
 make_tree flow-ok
-sed -i '/^    branches:$/{N;s/^    branches:\n      - main$/    branches: [main]/}' "${TREE}/.github/workflows/release-tag.yml"
+sed_inplace '/^    branches:$/{N;s/^    branches:\n      - main$/    branches: [main]/;}' "${TREE}/.github/workflows/release-tag.yml"
 run_case "flow-style [main] passes" 0
 
 make_tree flow-bad
-sed -i '/^    branches:$/{N;s/^    branches:\n      - main$/    branches: [main, dev]/}' "${TREE}/.github/workflows/release-tag.yml"
+sed_inplace '/^    branches:$/{N;s/^    branches:\n      - main$/    branches: [main, dev]/;}' "${TREE}/.github/workflows/release-tag.yml"
 run_case "flow-style [main, dev] fails" 1 "expected [main] alone"
 
 echo "-- a scan that sees nothing does not report clean"
 make_tree one-line
-sed -i 's/^on:$/on: workflow_dispatch/' "${TREE}/.github/workflows/build-cli-binaries.yml"
+sed_inplace 's/^on:$/on: workflow_dispatch/' "${TREE}/.github/workflows/build-cli-binaries.yml"
 run_case "an unparseable on: block fails" 1 "no events parsed"
 
 make_tree missing
