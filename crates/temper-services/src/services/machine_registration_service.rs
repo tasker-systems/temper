@@ -15,7 +15,9 @@
 //! Authorization happens HERE, not in the handler (B2 D3): `provision` and `issue` resolve the
 //! caller's authority through `machine_authz` before opening the transaction, so a rejected
 //! registration leaves the database completely unchanged. They record the authorized caller as
-//! `registered_by_profile_id`. `rebind` is the exception: it is **system-admin-only** (it
+//! `registered_by_profile_id`. Ahead of that, the instance's mode decides which doors are open at
+//! all (`crate::auth::machine_door`): under an external IdP `provision` is held to a system admin,
+//! and under temper's own AS it is refused. `rebind` is **system-admin-only** in every mode (it
 //! transplants an existing profile's reach, which team ownership cannot bound — see its doc).
 
 use sqlx::PgPool;
@@ -25,7 +27,9 @@ use uuid::Uuid;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::machine::{MachineClient, ProvisionMachineRequest, RebindMachineRequest};
 
+use crate::auth::machine_door::{self, DoorPolicy, MachineDoor};
 use crate::auth::{HumanPrincipal, SystemAdmin};
+use crate::auth_config::AuthMode;
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service::{insert_grant, InsertGrantParams};
 use crate::services::machine_authz::{self, AuthorizedReach};
@@ -147,11 +151,35 @@ fn refuse_minted_namespace(client_id: &str) -> ApiResult<()> {
 }
 
 /// Register a new machine principal, creating its agent profile. One transaction.
+///
+/// What `mode` permits comes first ([`machine_door::machine_door_policy`]). Under an external IdP
+/// only a system admin may register a client id: only the IdP's administrator can create a client
+/// worth registering, and a team owner who registered one they did not create would receive its
+/// tokens. On an instance that runs temper's own authorization server an externally issued client
+/// id could never authenticate, so the door is closed.
 pub async fn provision(
     pool: &PgPool,
     authed: &HumanPrincipal,
     req: &ProvisionMachineRequest,
+    mode: AuthMode,
 ) -> ApiResult<MachineClient> {
+    match machine_door::machine_door_policy(mode, MachineDoor::Provision) {
+        DoorPolicy::Refused(why) => return Err(ApiError::BadRequest(why.to_string())),
+        DoorPolicy::AdminOnly => match crate::auth::require_system_admin(pool, authed).await {
+            Ok(_) => {}
+            // Only a genuine non-admin is answered with the reason; a failed read stays a 5xx.
+            Err(ApiError::Forbidden) => {
+                return Err(ApiError::ForbiddenDetail(
+                    "registering an externally issued client id requires a system admin on this \
+                     instance"
+                        .to_string(),
+                ));
+            }
+            Err(other) => return Err(other),
+        },
+        DoorPolicy::Allowed | DoorPolicy::Dormant => {}
+    }
+
     let caller = ProfileId::from(authed.profile().id);
     // Auth before writes: a rejected registration must leave the DB completely unchanged —
     // no orphaned agent profile, no partial enrollment. Resolving before the transaction is
@@ -252,11 +280,21 @@ pub async fn provision(
 /// the secret; the SHA-256 hex of the secret is stored, the plaintext is returned once. Creates
 /// the agent profile, auth link, emitters, and reach — all in one
 /// transaction, exactly like `provision`, but with `issuer='temper'` and a `secret_hash`.
+///
+/// Under an external IdP the credential is minted **dormant**: no token for it can be issued
+/// until the instance runs temper's own authorization server, and the response says so. That is
+/// deliberate, so an operator can stage credentials before moving an instance to its own AS.
 pub async fn issue(
     pool: &PgPool,
     authed: &HumanPrincipal,
     req: &temper_core::types::machine::IssueMachineRequest,
+    mode: AuthMode,
 ) -> ApiResult<temper_core::types::machine::IssuedMachineCredential> {
+    let dormant = match machine_door::machine_door_policy(mode, MachineDoor::Issue) {
+        DoorPolicy::Refused(why) => return Err(ApiError::BadRequest(why.to_string())),
+        DoorPolicy::Dormant => true,
+        DoorPolicy::Allowed | DoorPolicy::AdminOnly => false,
+    };
     let caller = ProfileId::from(authed.profile().id);
     // Auth before writes — same reasoning as `provision`: nothing is minted, and no profile
     // is created, unless the caller may confer this reach.
@@ -332,6 +370,7 @@ pub async fn issue(
     Ok(temper_core::types::machine::IssuedMachineCredential {
         client,
         client_secret: secret.plaintext,
+        dormant,
     })
 }
 
@@ -346,11 +385,20 @@ pub async fn issue(
 /// machine's team is NOT a sufficient bar (it would let an owner inherit reach they could never
 /// confer themselves, defeating B2's containment). Rebind is also the external-IdP-app-rotation
 /// path (`auth0-m2m`); a team owner rotating a temper-issued credential uses `rotate_secret`.
+///
+/// It writes an externally issued client id, so it is refused where `mode` could never
+/// authenticate one ([`machine_door::machine_door_policy`]), and for a temper-issued source row in
+/// any mode: that machine's credential is rotated, not rebound to an external one.
 pub async fn rebind(
     pool: &PgPool,
     admin: &SystemAdmin,
     req: &RebindMachineRequest,
+    mode: AuthMode,
 ) -> ApiResult<MachineClient> {
+    if let DoorPolicy::Refused(why) = machine_door::machine_door_policy(mode, MachineDoor::Rebind) {
+        return Err(ApiError::BadRequest(why.to_string()));
+    }
+
     // Auth before writes. Admin-only (see the fn doc): team ownership cannot bound the reach a rebind
     // inherits — which is why this takes a `&SystemAdmin` proof, NOT `machine_authz`. The proof itself
     // IS the check (admin-authz enclosure, spec §3); do not widen it back to a scoped gate.
@@ -366,6 +414,17 @@ pub async fn rebind(
     if old.revoked_at.is_some() {
         return Err(ApiError::BadRequest(format!(
             "machine client '{}' is revoked; issue a new credential instead",
+            old.client_id
+        )));
+    }
+
+    // A temper-issued machine has a secret to rotate. Rebinding it would move its profile onto an
+    // external client id, and on an instance running its own AS that machine stops authenticating.
+    // After the revoked check, so a revoked source is told to issue anew rather than to rotate.
+    if old.issuer == machine_door::TEMPER_ISSUER {
+        return Err(ApiError::BadRequest(format!(
+            "machine client '{}' was issued by temper; rotate its secret with \
+             `temper admin machine rotate-secret` instead",
             old.client_id
         )));
     }
@@ -529,6 +588,7 @@ mod tests {
             &pool,
             &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("acme-agent"),
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("provision");
@@ -566,6 +626,7 @@ mod tests {
             &pool,
             &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("gated-agent"),
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("provision");
@@ -595,6 +656,7 @@ mod tests {
                 teams: vec![],
                 grants: vec![],
             },
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("issue");
@@ -609,6 +671,7 @@ mod tests {
             pool,
             &crate::test_support::human_principal_for(pool, admin.uuid()).await,
             &req(client_id),
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("provision");
@@ -742,6 +805,7 @@ mod tests {
             &pool,
             &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("requesting-agent"),
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("provision");
@@ -853,6 +917,7 @@ mod tests {
             &pool,
             &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &request,
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("provision");
@@ -902,6 +967,7 @@ mod tests {
             &pool,
             &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("old-client"),
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("provision");
@@ -916,6 +982,7 @@ mod tests {
                 label: "steward (rotated)".to_string(),
                 keep_old_active: false,
             },
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("rebind");
@@ -941,6 +1008,7 @@ mod tests {
             &pool,
             &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("overlap-old"),
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("provision");
@@ -955,6 +1023,7 @@ mod tests {
                 label: "steward".to_string(),
                 keep_old_active: true,
             },
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("rebind");
@@ -968,7 +1037,7 @@ mod tests {
         );
     }
 
-    /// Rebind is system-admin-only (B2). A team owner — who may provision/issue/revoke/rotate
+    /// Rebind is system-admin-only (B2). A team owner — who may issue/revoke/rotate
     /// their own team's machines — must NOT be able to rebind, because rebind inherits the old
     /// profile's full reach, which the owner's authority cannot bound.
     /// Standing belongs to the profile, and a rebind overlap window puts two live credentials on one.
@@ -995,6 +1064,7 @@ mod tests {
                 label: "steward".to_string(),
                 keep_old_active: true,
             },
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("rebind with an overlap window");
@@ -1064,6 +1134,7 @@ mod tests {
             &pool,
             &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &provision_req,
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("provision");
@@ -1100,6 +1171,7 @@ mod tests {
             &pool,
             &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("to-be-revoked"),
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("provision");
@@ -1122,6 +1194,7 @@ mod tests {
                 label: "back from the dead".to_string(),
                 keep_old_active: false,
             },
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect_err("a revoked source must not be rebindable");
@@ -1144,6 +1217,7 @@ mod tests {
                 teams: vec![],
                 grants: vec![],
             },
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("issue");
@@ -1182,6 +1256,183 @@ mod tests {
         assert_eq!(link, Some(1));
     }
 
+    /// Seed a non-admin profile that owns a fresh team. Returns (profile, team).
+    async fn seed_team_owner(pool: &PgPool, handle: &str) -> (Uuid, Uuid) {
+        let team: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id",
+            format!("{handle}-team"),
+        )
+        .fetch_one(pool)
+        .await
+        .expect("team");
+        let owner = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, $2, $2)",
+            owner,
+            handle,
+        )
+        .execute(pool)
+        .await
+        .expect("owner");
+        sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner'::team_role)",
+            team,
+            owner,
+        )
+        .execute(pool)
+        .await
+        .expect("owner owns the team");
+        (owner, team)
+    }
+
+    async fn machine_count(pool: &PgPool) -> i64 {
+        sqlx::query_scalar!(r#"SELECT count(*) AS "n!" FROM kb_machine_clients"#)
+            .fetch_one(pool)
+            .await
+            .expect("count machines")
+    }
+
+    /// Under an external IdP only a system admin registers a client id. A team owner who could
+    /// register one they did not create would receive its tokens, so the door refuses them before
+    /// it writes anything, even for a machine their own team would own (ruling 3).
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn under_an_external_idp_only_an_admin_provisions(pool: PgPool) {
+        let (owner, team) = seed_team_owner(&pool, "provisioner").await;
+        let mut request = req("someone-elses-client");
+        request.owner_team_id = Some(team);
+
+        let err = svc::provision(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            &request,
+            crate::auth_config::AuthMode::ExternalIdp,
+        )
+        .await
+        .expect_err("a team owner must not provision under an external IdP");
+        assert!(
+            matches!(&err, crate::error::ApiError::ForbiddenDetail(m) if m.contains("system admin")),
+            "got {err:?}"
+        );
+        assert_eq!(machine_count(&pool).await, 0, "the refusal wrote nothing");
+    }
+
+    /// An instance that runs temper's own AS can authenticate no externally issued client id, so
+    /// the doors that write one refuse even an admin, and say which door to use instead. `issue`
+    /// stays open there and mints a live credential.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn under_temper_as_the_external_doors_refuse_and_issue_is_live(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let human = crate::test_support::human_principal_for(&pool, admin.uuid()).await;
+        let as_mode = crate::auth_config::AuthMode::TemperAs;
+
+        let err = svc::provision(&pool, &human, &req("idp-client"), as_mode)
+            .await
+            .expect_err("provision is refused under temper's own AS");
+        assert!(
+            matches!(&err, crate::error::ApiError::BadRequest(m) if m.contains("temper admin machine issue")),
+            "got {err:?}"
+        );
+
+        let cred = svc::issue(
+            &pool,
+            &human,
+            &IssueMachineRequest {
+                label: "worker".to_string(),
+                owner_team_id: None,
+                teams: vec![],
+                grants: vec![],
+            },
+            as_mode,
+        )
+        .await
+        .expect("issue under temper's own AS");
+        assert!(
+            !cred.dormant,
+            "an AS-mode instance authenticates what it issues"
+        );
+
+        let proof = crate::test_support::system_admin_proof_for(&pool, *admin).await;
+        let err = svc::rebind(
+            &pool,
+            &proof,
+            &RebindMachineRequest {
+                client_id: "idp-client-2".to_string(),
+                from_machine_client_id: cred.client.id,
+                label: "rebind".to_string(),
+                keep_old_active: false,
+            },
+            as_mode,
+        )
+        .await
+        .expect_err("rebind is refused under temper's own AS");
+        assert!(
+            matches!(&err, crate::error::ApiError::BadRequest(m) if m.contains("rotate-secret")),
+            "got {err:?}"
+        );
+        assert_eq!(
+            machine_count(&pool).await,
+            1,
+            "only the issued credential exists"
+        );
+    }
+
+    /// Under an external IdP `issue` is allowed but dormant, so credentials can be staged before an
+    /// instance moves to its own AS. A temper-issued machine is never rebound onto an external
+    /// client id, in any mode: its secret is rotated instead.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn under_an_external_idp_issue_is_dormant_and_a_temper_machine_is_not_rebound(
+        pool: PgPool,
+    ) {
+        let admin = seed_admin(&pool).await;
+        let human = crate::test_support::human_principal_for(&pool, admin.uuid()).await;
+        let external = crate::auth_config::AuthMode::ExternalIdp;
+
+        let cred = svc::issue(
+            &pool,
+            &human,
+            &IssueMachineRequest {
+                label: "staged".to_string(),
+                owner_team_id: None,
+                teams: vec![],
+                grants: vec![],
+            },
+            external,
+        )
+        .await
+        .expect("issue is allowed under an external IdP");
+        assert!(
+            cred.dormant,
+            "the response says the credential cannot authenticate yet"
+        );
+
+        let proof = crate::test_support::system_admin_proof_for(&pool, *admin).await;
+        let err = svc::rebind(
+            &pool,
+            &proof,
+            &RebindMachineRequest {
+                client_id: "external-for-a-temper-machine".to_string(),
+                from_machine_client_id: cred.client.id,
+                label: "rebind".to_string(),
+                keep_old_active: false,
+            },
+            external,
+        )
+        .await
+        .expect_err("a temper-issued source is not rebound");
+        assert!(
+            matches!(&err, crate::error::ApiError::BadRequest(m) if m.contains("rotate-secret")),
+            "got {err:?}"
+        );
+        let still = crate::services::machine_client_service::get(&pool, cred.client.id)
+            .await
+            .expect("source row");
+        assert!(
+            still.revoked_at.is_none(),
+            "the refused rebind revoked nothing"
+        );
+        assert_eq!(machine_count(&pool).await, 1, "and wrote nothing");
+    }
+
     /// A machine is looked up by `client_id` alone, so registering one under an id temper's AS mints
     /// would hand it every token issued to that id: a DCR client's `conn_` tokens, or a future
     /// `tmpr_` credential's. Both caller-supplied doors refuse those namespaces, for an admin too,
@@ -1191,14 +1442,24 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let human = crate::test_support::human_principal_for(&pool, admin.uuid()).await;
         let proof = crate::test_support::system_admin_proof_for(&pool, *admin).await;
-        let source = svc::provision(&pool, &human, &req("rebind-source"))
-            .await
-            .expect("an ordinary client id provisions");
+        let source = svc::provision(
+            &pool,
+            &human,
+            &req("rebind-source"),
+            crate::auth_config::AuthMode::ExternalIdp,
+        )
+        .await
+        .expect("an ordinary client id provisions");
 
         for client_id in ["conn_a1b2c3d4e5f6g7h8", "tmpr_handpicked"] {
-            let err = svc::provision(&pool, &human, &req(client_id))
-                .await
-                .expect_err("provision must refuse a minted namespace");
+            let err = svc::provision(
+                &pool,
+                &human,
+                &req(client_id),
+                crate::auth_config::AuthMode::ExternalIdp,
+            )
+            .await
+            .expect_err("provision must refuse a minted namespace");
             assert!(
                 matches!(&err, crate::error::ApiError::BadRequest(m) if m.contains(client_id)),
                 "provision of {client_id}: expected a 400 naming the id, got {err:?}"
@@ -1213,6 +1474,7 @@ mod tests {
                     label: "rebound".to_string(),
                     keep_old_active: false,
                 },
+                crate::auth_config::AuthMode::ExternalIdp,
             )
             .await
             .expect_err("rebind must refuse a minted namespace");
@@ -1270,6 +1532,7 @@ mod tests {
             &pool,
             &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("schema-source"),
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("an ordinary client id provisions");
@@ -1308,6 +1571,7 @@ mod tests {
             &pool,
             &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("dupe"),
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("first");
@@ -1315,6 +1579,7 @@ mod tests {
             &pool,
             &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("dupe"),
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect_err("second must fail");
@@ -1350,6 +1615,7 @@ mod tests {
             &pool,
             &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
             &req("attributed-agent"),
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("provision");
@@ -1362,6 +1628,7 @@ mod tests {
                 teams: vec![],
                 grants: vec![],
             },
+            crate::auth_config::AuthMode::ExternalIdp,
         )
         .await
         .expect("issue");

@@ -90,7 +90,7 @@ module Temper::Generated
     end
 
     # Issue a machine credential
-    # Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. Reach rules are those of registration.
+    # Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`. Where an external identity provider mints this instance's tokens, the credential is returned with `dormant: true`: it authenticates once the instance runs temper's own authorization server.
     # @param issue_machine_request [IssueMachineRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -101,7 +101,7 @@ module Temper::Generated
     end
 
     # Issue a machine credential
-    # Mints a new machine principal with a temper-issued &#x60;client_id&#x60; and secret. The &#x60;client_secret&#x60; in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin or the owner of &#x60;owner_team_id&#x60;; a machine with no owning team can only be issued by a system admin. Reach rules are those of registration.
+    # Mints a new machine principal with a temper-issued &#x60;client_id&#x60; and secret. The &#x60;client_secret&#x60; in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin or the owner of &#x60;owner_team_id&#x60;; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above &#x60;member&#x60;. Where an external identity provider mints this instance&#39;s tokens, the credential is returned with &#x60;dormant: true&#x60;: it authenticates once the instance runs temper&#39;s own authorization server.
     # @param issue_machine_request [IssueMachineRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -232,7 +232,7 @@ module Temper::Generated
     end
 
     # Register a machine client
-    # Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin or the owner of `owner_team_id`; a machine with no owning team can only be registered by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`.
+    # Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.
     # @param provision_machine_request [ProvisionMachineRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -243,7 +243,7 @@ module Temper::Generated
     end
 
     # Register a machine client
-    # Registers an externally issued IdP &#x60;client_id&#x60; as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin or the owner of &#x60;owner_team_id&#x60;; a machine with no owning team can only be registered by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above &#x60;member&#x60;.
+    # Registers an externally issued IdP &#x60;client_id&#x60; as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin. An instance that runs temper&#39;s own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above &#x60;member&#x60;.
     # @param provision_machine_request [ProvisionMachineRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -377,7 +377,7 @@ module Temper::Generated
     end
 
     # Rotate a machine client secret
-    # Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+    # Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
     # @param id [String] Machine client ID
     # @param rotate_secret_request [RotateSecretRequest] 
     # @param [Hash] opts the optional parameters
@@ -389,7 +389,7 @@ module Temper::Generated
     end
 
     # Rotate a machine client secret
-    # Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for &#x60;grace_seconds&#x60; (0 to 604800). The new &#x60;client_secret&#x60; in the response is shown once and never stored. Requires a system admin or the owner of the machine&#39;s owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+    # Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for &#x60;grace_seconds&#x60; (0 to 604800). The new &#x60;client_secret&#x60; in the response is shown once and never stored. Requires a system admin or the owner of the machine&#39;s owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance&#39;s tokens, the credential is still &#x60;dormant: true&#x60;.
     # @param id [String] Machine client ID
     # @param rotate_secret_request [RotateSecretRequest] 
     # @param [Hash] opts the optional parameters

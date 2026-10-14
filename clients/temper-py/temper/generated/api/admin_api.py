@@ -4753,7 +4753,7 @@ class AdminApi:
     ) -> MachineClient:
         """Rebind a machine client to a new client ID
 
-        Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin.
+        Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.
 
         :param id: The machine client whose profile the new client id inherits (required)
         :type id: UUID
@@ -4833,7 +4833,7 @@ class AdminApi:
     ) -> ApiResponse[MachineClient]:
         """Rebind a machine client to a new client ID
 
-        Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin.
+        Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.
 
         :param id: The machine client whose profile the new client id inherits (required)
         :type id: UUID
@@ -4913,7 +4913,7 @@ class AdminApi:
     ) -> RESTResponseType:
         """Rebind a machine client to a new client ID
 
-        Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin.
+        Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.
 
         :param id: The machine client whose profile the new client id inherits (required)
         :type id: UUID

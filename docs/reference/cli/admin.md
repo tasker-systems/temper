@@ -788,21 +788,42 @@ Options:
 #### `temper admin machine provision`
 
 ```text
-Register a machine principal: creates its agent profile, emitters, and the reach you specify — no other team membership. Run this BEFORE the machine's first call
+Register a machine principal: creates its agent profile, emitters, and the reach you specify — no other team membership. Run this BEFORE the machine's first call.
+
+System admin only. Refused on an instance that runs temper's own authorization server, where an externally issued client id could never authenticate: use `issue` there.
 
 Usage: temper admin machine provision [OPTIONS] --client-id <CLIENT_ID> --label <LABEL>
 
 Options:
-      --client-id <CLIENT_ID>    The IdP client id (Auth0 M2M application client id)
-      --vault <VAULT>            Path to vault (overrides TEMPER_VAULT and auto-detection)
-      --format <FORMAT>          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
-      --label <LABEL>            Human-facing label
-      --embed-threads <N>        ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
-      --owner-team <OWNER_TEAM>  Team recorded as this machine's OWNER. Not its reach
-      --color <COLOR>            Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
-      --team <TEAMS>             Team to enroll in, as `<ref>` or `<ref>:<role>` (`member` by default, and the highest a machine may hold — `maintainer`/`owner` are refused). Repeatable. Reach is plural and never inferred from --owner-team
-      --cogmap <COGMAPS>         Cogmap to grant, as `<ref>` or `<ref>:ro` (defaults to read+write). Repeatable
-  -h, --help                     Print help
+      --client-id <CLIENT_ID>
+          The IdP client id (Auth0 M2M application client id)
+
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --label <LABEL>
+          Human-facing label
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --owner-team <OWNER_TEAM>
+          Team recorded as this machine's OWNER. Not its reach
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+      --team <TEAMS>
+          Team to enroll in, as `<ref>` or `<ref>:<role>` (`member` by default, and the highest a machine may hold — `maintainer`/`owner` are refused). Repeatable. Reach is plural and never inferred from --owner-team
+
+      --cogmap <COGMAPS>
+          Cogmap to grant, as `<ref>` or `<ref>:ro` (defaults to read+write). Repeatable
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 #### `temper admin machine rebind`

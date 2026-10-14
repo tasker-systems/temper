@@ -20,11 +20,15 @@ module Temper::Generated
 
     attr_accessor :client_secret
 
+    # `true` when this instance cannot yet authenticate the credential: an external identity provider mints its tokens, so no token for a temper-issued client can be obtained here. The credential starts working once the instance runs temper's own authorization server. Absent from an older server's response, which reads as `false`.
+    attr_accessor :dormant
+
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
         :'client' => :'client',
-        :'client_secret' => :'client_secret'
+        :'client_secret' => :'client_secret',
+        :'dormant' => :'dormant'
       }
     end
 
@@ -42,7 +46,8 @@ module Temper::Generated
     def self.openapi_types
       {
         :'client' => :'MachineClient',
-        :'client_secret' => :'String'
+        :'client_secret' => :'String',
+        :'dormant' => :'Boolean'
       }
     end
 
@@ -78,6 +83,10 @@ module Temper::Generated
         self.client_secret = attributes[:'client_secret']
       else
         self.client_secret = nil
+      end
+
+      if attributes.key?(:'dormant')
+        self.dormant = attributes[:'dormant']
       end
     end
 
@@ -132,7 +141,8 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           client == o.client &&
-          client_secret == o.client_secret
+          client_secret == o.client_secret &&
+          dormant == o.dormant
     end
 
     # @see the `==` method
@@ -144,7 +154,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [client, client_secret].hash
+      [client, client_secret, dormant].hash
     end
 
     # Builds the object from hash

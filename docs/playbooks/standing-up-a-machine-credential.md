@@ -107,6 +107,20 @@ consume a `tmpr_` credential at all.
 > machines with `provision` and let Auth0 mint. See
 > [self-hosting Temper](./self-host-temper.md) and
 > [token verification](../concepts/token-verification.md).
+>
+> The instance enforces this both ways. On an Auth0-fronted instance, `issue`
+> still mints a credential but marks it **`dormant: true`**, and the CLI warns:
+> it will not authenticate until the instance runs its own Authorization
+> Server. That lets you stage credentials ahead of moving an instance to its own
+> AS. On an instance that runs its own AS, `provision` and `rebind` are refused,
+> because an externally issued client id could never authenticate there. And
+> the gate resolves a machine only if its registration's issuer is the one the
+> instance trusts: an `auth0-m2m` registration stops authenticating once an
+> instance moves to its own AS, with a 401 that says to re-issue it. The
+> reverse also happens at that moment: every unrevoked temper-issued
+> credential staged while the instance was Auth0-fronted starts
+> authenticating at once. Review them (`temper admin machine list`) and revoke
+> any you no longer want before you switch.
 
 ### The token request — form-encoded, not JSON
 
@@ -158,13 +172,18 @@ issuer is an implementation detail below that line.
 
 ## Who may mint one
 
-Registration is authorized by **team ownership**:
+`issue` is authorized by **team ownership**:
 
 > `is_system_admin` **OR** owner of the team that will own the machine.
 
 A system admin — a profile with a governance grant — can mint any machine. A **team
 owner** can mint a machine owned by *their own* team, without an operator in
 the loop. That is the point of the model: a team runs its own agents.
+
+`provision` is **system-admin only**. It registers a client id your identity
+provider issued, and only the IdP's administrator can create a client worth
+registering; a team owner who registered a client id they did not create would
+receive that client's tokens.
 
 The owning team is set with `--owner-team`. It records **who owns the machine
 — not what the machine can reach** (see the next section). If you omit
@@ -213,15 +232,17 @@ temper admin machine issue --label "acme steward" \
 ## The lifecycle — who can do what
 
 Once a machine exists, its owning-team owner can operate it — with one
-deliberate exception.
+deliberate exception, `rebind`. (Registering an IdP-issued client id with
+`provision` is admin-only too, for the reason above.)
 
 | Command | Who | Notes |
 |---|---|---|
-| `provision` / `issue` | admin, or owner of the owning team | mint a credential |
+| `issue` | admin, or owner of the owning team | mint a credential |
+| `provision` | **system admin only** | register an IdP-issued client id; refused on an instance that runs its own AS |
 | `rotate-secret` | admin, or owner of the machine's team | roll a temper-issued secret |
 | `revoke` | admin, or owner of the machine's team | deny the credential |
 | `list` / `show` | admin sees all; a team owner sees only machines owned by their teams | |
-| `rebind` | **system admin only** | see below |
+| `rebind` | **system admin only** | see below; refused on an instance that runs its own AS |
 
 **`rebind` is admin-only, and it is the one exception on purpose.** Every
 other command merely *operates on* a machine's row. `rebind` is different in
@@ -233,7 +254,7 @@ the system-admin bar, and it refuses a **revoked** source outright (a dead
 credential is re-created with a fresh `provision`, never resurrected). A team
 owner rotating a *temper-issued* credential uses `rotate-secret`, not
 `rebind`; `rebind` is for rotating the external IdP application behind an
-`auth0-m2m` machine.
+`auth0-m2m` machine, and it refuses a temper-issued source.
 
 ### Rotation
 

@@ -1885,6 +1885,9 @@ pub enum AdminErasureAction {
 pub enum AdminMachineAction {
     /// Register a machine principal: creates its agent profile, emitters, and the reach you
     /// specify — no other team membership. Run this BEFORE the machine's first call.
+    ///
+    /// System admin only. Refused on an instance that runs temper's own authorization server,
+    /// where an externally issued client id could never authenticate: use `issue` there.
     Provision {
         /// The IdP client id (Auth0 M2M application client id)
         #[arg(long = "client-id")]

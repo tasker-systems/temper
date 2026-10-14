@@ -198,12 +198,14 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
         // `admin_ledger_service`, which gates per act family rather than with a prelude, and
         // denies with 404 so a refusal discloses nothing about the subject.
         .routes(routes!(handlers::admin_ledger::list))
-        // Machine-principal registration (G3 Phase A). NOT admin-only: the gate is
+        // Machine-principal registration (G3 Phase A). NOT admin-only as a group: the gate is
         // `is_system_admin OR owner of the machine's owning team` (`machine_authz::authorize` for
-        // provision/issue, `MachineClientControlAuthority` per row, which refuses as a missing id), so
-        // any authenticated profile that owns any team can reach `provision`, `issue`, and
-        // `apply_reach`. Only `rebind` is admin-only (`machine_registration_service::rebind`), and
-        // it is mounted by the admin group (`admin.rs`), not here.
+        // issue, `MachineClientControlAuthority` per row, which refuses as a missing id), so any
+        // authenticated profile that owns any team can reach `issue` and `apply_reach`. `provision`
+        // is mounted here but the service refuses a non-admin under an external IdP and every
+        // caller under temper's own AS (`auth::machine_door`). `rebind` is admin-only
+        // (`machine_registration_service::rebind`), and it is mounted by the admin group
+        // (`admin.rs`), not here.
         //
         // The gate lives in the SERVICES, not in these handlers — the handlers are gate-free by
         // design, as `handlers::machine_clients`' module doc explains. Treat it as load-bearing,

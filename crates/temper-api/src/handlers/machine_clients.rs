@@ -33,16 +33,16 @@ use temper_core::types::query_params::MachineClientListQuery as ListQuery;
     post,
     operation_id = "provision_machine_client",
     summary = "Register a machine client",
-    description = "Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin or the owner of `owner_team_id`; a machine with no owning team can only be registered by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`.",
+    description = "Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.",
     path = "/api/machine-clients",
     tag = "Machine Clients",
     request_body = ProvisionMachineRequest,
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "The registered machine client", body = MachineClient),
-        (status = 400, description = "Unknown team role in `teams`, or a `client_id` beginning `conn_` or `tmpr_` (namespaces temper mints itself, which cannot be registered by hand)", body = ErrorBody),
+        (status = 400, description = "Unknown team role in `teams`, a `client_id` beginning `conn_` or `tmpr_` (namespaces temper mints itself, which cannot be registered by hand), or this instance runs temper's own authorization server", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin (`FORBIDDEN_DETAIL`), a team role above `member` was requested (refused for every caller), or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 409, description = "The `client_id` is already registered", body = ErrorBody),
     )
 )]
@@ -51,7 +51,13 @@ pub async fn provision(
     auth: AuthUser,
     Json(body): Json<ProvisionMachineRequest>,
 ) -> ApiResult<Json<MachineClient>> {
-    let client = machine_registration_service::provision(&state.pool, &auth.0, &body).await?;
+    let client = machine_registration_service::provision(
+        &state.pool,
+        &auth.0,
+        &body,
+        state.config.auth.mode,
+    )
+    .await?;
     Ok(Json(client))
 }
 
@@ -62,7 +68,7 @@ pub async fn provision(
     post,
     operation_id = "admin_rebind_machine_client",
     summary = "Rebind a machine client to a new client ID",
-    description = "Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin.",
+    description = "Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.",
     path = "/api/machine-clients/{id}/rebind",
     tag = "Admin",
     params(("id" = Uuid, Path, description = "The machine client whose profile the new client id inherits")),
@@ -70,7 +76,7 @@ pub async fn provision(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "The new machine client, bound to the inherited profile", body = MachineClient),
-        (status = 400, description = "The source client cannot be rebound (e.g. already revoked), or the new `client_id` begins `conn_` or `tmpr_` (namespaces temper mints itself)", body = ErrorBody),
+        (status = 400, description = "The source client cannot be rebound (already revoked, or issued by temper), the new `client_id` begins `conn_` or `tmpr_` (namespaces temper mints itself), or this instance runs temper's own authorization server", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
         (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such machine client", body = ErrorBody),
@@ -88,7 +94,9 @@ pub async fn rebind(
     let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
     // The path segment is authoritative for which client is being rotated away from.
     body.from_machine_client_id = id;
-    let client = machine_registration_service::rebind(&state.pool, &admin, &body).await?;
+    let client =
+        machine_registration_service::rebind(&state.pool, &admin, &body, state.config.auth.mode)
+            .await?;
     Ok(Json(client))
 }
 
@@ -173,7 +181,7 @@ pub async fn revoke(
     post,
     operation_id = "issue_machine_credential",
     summary = "Issue a machine credential",
-    description = "Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. Reach rules are those of registration.",
+    description = "Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`. Where an external identity provider mints this instance's tokens, the credential is returned with `dormant: true`: it authenticates once the instance runs temper's own authorization server.",
     path = "/api/machine-clients/issue",
     tag = "Machine Clients",
     request_body = IssueMachineRequest,
@@ -190,7 +198,9 @@ pub async fn issue(
     auth: AuthUser,
     Json(body): Json<IssueMachineRequest>,
 ) -> ApiResult<Json<IssuedMachineCredential>> {
-    let cred = machine_registration_service::issue(&state.pool, &auth.0, &body).await?;
+    let cred =
+        machine_registration_service::issue(&state.pool, &auth.0, &body, state.config.auth.mode)
+            .await?;
     Ok(Json(cred))
 }
 
@@ -198,7 +208,7 @@ pub async fn issue(
     post,
     operation_id = "rotate_machine_client_secret",
     summary = "Rotate a machine client secret",
-    description = "Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
+    description = "Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.",
     path = "/api/machine-clients/{id}/rotate-secret",
     tag = "Machine Clients",
     params(("id" = Uuid, Path, description = "Machine client ID")),
@@ -218,7 +228,13 @@ pub async fn rotate_secret(
     Path(id): Path<Uuid>,
     Json(body): Json<RotateSecretRequest>,
 ) -> ApiResult<Json<IssuedMachineCredential>> {
-    let cred =
-        machine_client_service::rotate_secret(&state.pool, &auth.0, id, body.grace_seconds).await?;
+    let cred = machine_client_service::rotate_secret(
+        &state.pool,
+        &auth.0,
+        id,
+        body.grace_seconds,
+        state.config.auth.mode,
+    )
+    .await?;
     Ok(Json(cred))
 }

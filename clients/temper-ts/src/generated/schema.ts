@@ -2316,7 +2316,7 @@ export interface paths {
         put?: never;
         /**
          * Register a machine client
-         * @description Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin or the owner of `owner_team_id`; a machine with no owning team can only be registered by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`.
+         * @description Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.
          */
         post: operations["provision_machine_client"];
         delete?: never;
@@ -2339,7 +2339,7 @@ export interface paths {
         put?: never;
         /**
          * Issue a machine credential
-         * @description Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. Reach rules are those of registration.
+         * @description Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`. Where an external identity provider mints this instance's tokens, the credential is returned with `dormant: true`: it authenticates once the instance runs temper's own authorization server.
          */
         post: operations["issue_machine_credential"];
         delete?: never;
@@ -2389,7 +2389,7 @@ export interface paths {
         put?: never;
         /**
          * Rebind a machine client to a new client ID
-         * @description Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin.
+         * @description Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.
          */
         post: operations["admin_rebind_machine_client"];
         delete?: never;
@@ -2412,7 +2412,7 @@ export interface paths {
         put?: never;
         /**
          * Rotate a machine client secret
-         * @description Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+         * @description Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
          */
         post: operations["rotate_machine_client_secret"];
         delete?: never;
@@ -7385,6 +7385,13 @@ export interface components {
         IssuedMachineCredential: {
             client: components["schemas"]["MachineClient"];
             client_secret: string;
+            /**
+             * @description `true` when this instance cannot yet authenticate the credential: an external identity
+             *     provider mints its tokens, so no token for a temper-issued client can be obtained here. The
+             *     credential starts working once the instance runs temper's own authorization server.
+             *     Absent from an older server's response, which reads as `false`.
+             */
+            dormant?: boolean;
         };
         /** @description A user-initiated request to join a team (typically the gating team). */
         JoinRequest: {
@@ -17122,7 +17129,7 @@ export interface operations {
                     "application/json": components["schemas"]["MachineClient"];
                 };
             };
-            /** @description Unknown team role in `teams`, or a `client_id` beginning `conn_` or `tmpr_` (namespaces temper mints itself, which cannot be registered by hand) */
+            /** @description Unknown team role in `teams`, a `client_id` beginning `conn_` or `tmpr_` (namespaces temper mints itself, which cannot be registered by hand), or this instance runs temper's own authorization server */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -17140,7 +17147,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller is not a system admin (`FORBIDDEN_DETAIL`), a team role above `member` was requested (refused for every caller), or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -17348,7 +17355,7 @@ export interface operations {
                     "application/json": components["schemas"]["MachineClient"];
                 };
             };
-            /** @description The source client cannot be rebound (e.g. already revoked), or the new `client_id` begins `conn_` or `tmpr_` (namespaces temper mints itself) */
+            /** @description The source client cannot be rebound (already revoked, or issued by temper), the new `client_id` begins `conn_` or `tmpr_` (namespaces temper mints itself), or this instance runs temper's own authorization server */
             400: {
                 headers: {
                     [name: string]: unknown;

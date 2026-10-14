@@ -1152,7 +1152,7 @@ module Temper::Generated
     end
 
     # Rebind a machine client to a new client ID
-    # Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin.
+    # Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.
     # @param id [String] The machine client whose profile the new client id inherits
     # @param rebind_machine_request [RebindMachineRequest] 
     # @param [Hash] opts the optional parameters
@@ -1164,7 +1164,7 @@ module Temper::Generated
     end
 
     # Rebind a machine client to a new client ID
-    # Points a fresh IdP &#x60;client_id&#x60; at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path &#x60;{id}&#x60; names the source client. Requires a system admin.
+    # Points a fresh IdP &#x60;client_id&#x60; at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path &#x60;{id}&#x60; names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper&#39;s own authorization server.
     # @param id [String] The machine client whose profile the new client id inherits
     # @param rebind_machine_request [RebindMachineRequest] 
     # @param [Hash] opts the optional parameters

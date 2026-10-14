@@ -64,9 +64,12 @@ who signed in and never requested.
 
 ## Machine principals — which verb answers which failure
 
-- **First credential for a new machine** → `admin machine provision`. Run it *before* the
-  machine's first call: it creates the agent profile and the reach you name (`--team`,
-  `--cogmap`), and no other membership: a machine joins no team nobody chose for it. Reach is plural and never inferred from `--owner-team`.
+- **First credential for a new machine** → `admin machine provision` for a client id your external
+  IdP issued (system admin only; refused on an instance that runs temper's own authorization
+  server), or `admin machine issue` for a temper-minted one (team owners too; marked `dormant`
+  until the instance runs its own AS). Run it *before* the machine's first call: it creates the
+  agent profile and the reach you name (`--team`, `--cogmap`), and no other membership: a machine
+  joins no team nobody chose for it. Reach is plural and never inferred from `--owner-team`.
 - **IdP application rotated, profile must survive** → `admin machine rebind`. It binds the new
   client id to the existing profile, preserving authorship history; the old client is revoked
   unless `--no-revoke-old`. (Rotating only the IdP *secret* needs no temper action at all.)

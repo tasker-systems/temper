@@ -99,6 +99,47 @@ async fn team_owner_can_issue_for_their_own_team(pool: PgPool) {
             .is_some_and(|s| !s.is_empty()),
         "the plaintext secret is returned once"
     );
+    // This harness is an external-IdP instance, which cannot authenticate a temper-issued
+    // credential yet: the response says so.
+    assert_eq!(body["dormant"], json!(true), "issued dormant: {body:?}");
+}
+
+/// Under an external IdP only a system admin registers an IdP-issued client id. A team owner who
+/// could register one they did not create would receive its tokens, so the door refuses them with
+/// the reason, and writes nothing, even for a machine their own team would own.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_team_owner_cannot_provision_under_an_external_idp(pool: PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let token = common::generate_test_jwt("b2-prov", "b2-prov@example.com");
+    provision_profile(&app, &token).await;
+    let team = create_team(&app, &token, "b2-prov-team").await;
+    let before = machine_count(&pool).await;
+
+    let resp = app
+        .reqwest_client
+        .post(app.url("/api/machine-clients"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "client_id": "someone-elses-idp-client",
+            "label": "captured",
+            "owner_team_id": team,
+            "teams": [],
+            "grants": [],
+        }))
+        .send()
+        .await
+        .expect("POST /api/machine-clients");
+    assert_eq!(resp.status(), 403);
+    let body = resp.text().await.expect("body");
+    assert!(
+        body.contains("system admin"),
+        "the refusal says why: {body}"
+    );
+    assert_eq!(
+        machine_count(&pool).await,
+        before,
+        "the refusal wrote nothing"
+    );
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

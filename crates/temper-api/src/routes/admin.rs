@@ -91,9 +91,10 @@ pub(super) fn admin_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::field_scrub::execute))
         .routes(routes!(handlers::field_scrub::survey))
         .routes(routes!(handlers::field_scrub::families))
-        // Machine-client rebind (G3 B2). Its siblings under `/api/machine-clients` are gated on
-        // `is_system_admin OR owner of the owning team` and stay in `gated_routes`; rebind alone
-        // requires the proof, because team ownership cannot bound the reach a rebind inherits.
+        // Machine-client rebind (G3 B2). Its siblings under `/api/machine-clients` stay in
+        // `gated_routes`, gated on `is_system_admin OR owner of the owning team` (except provision,
+        // which the service holds to a system admin; `auth::machine_door`); rebind alone requires
+        // the proof, because team ownership cannot bound the reach a rebind inherits.
         .routes(routes!(handlers::machine_clients::rebind))
 }
 

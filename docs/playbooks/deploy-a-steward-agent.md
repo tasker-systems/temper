@@ -188,8 +188,9 @@ temper admin machine issue --label "citation-auditor" \
 ```
 
 - **`issue` requires an instance whose AS is Temper's own.** An instance has exactly one
-  issuer, so a temper-minted token will not validate on an Auth0-fronted instance. Use
-  `provision` there.
+  issuer, so a temper-minted token will not validate on an Auth0-fronted instance: `issue`
+  there returns the credential with `dormant: true`. Use `provision` there; it requires a
+  system admin.
 - **Reach is explicit and plural, never inferred from `--owner-team`**, which records the
   machine's *owner* and is never consulted for authorization. The steward needs **read** on
   the sources it distills (via `--team` membership) and **write** on the map(s) it tends. The

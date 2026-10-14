@@ -259,7 +259,7 @@ claim crates/temper-core/src/types/erasure.rs 3 is_system_admin
 claim crates/temper-core/src/types/machine.rs 1 machine
 claim crates/temper-core/src/types/subscription.rs 1 subscription
 claim crates/temper-core/src/types/team.rs 1 -
-claim crates/temper-cli/src/cli.rs 16 -
+claim crates/temper-cli/src/cli.rs 17 -
 claim crates/temper-cli/src/commands/admin_erasure.rs 1 -
 claim crates/temper-cli/src/commands/admin.rs 4 -
 claim crates/temper-cli/src/commands/admin_connection.rs 2 connection
@@ -284,7 +284,7 @@ claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
 claim crates/temper-services/src/services/machine_authz.rs 7 machine
 claim crates/temper-services/src/services/machine_client_service.rs 7 machine
-claim crates/temper-services/src/services/machine_registration_service.rs 4 machine
+claim crates/temper-services/src/services/machine_registration_service.rs 7 machine
 claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
 claim crates/temper-services/src/services/subscription_service.rs 6 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription

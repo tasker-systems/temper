@@ -101,12 +101,31 @@ provider-string compare):
 
 > **`auth0-m2m` is the link namespace, not the issuer.** Both issuers' machine tokens
 > normalize to the provider tag `auth0-m2m`, and the registration lookup
-> (`machine_client_service::lookup_by_client_id`) keys on the `client_id` **alone** — it is
-> issuer-agnostic on purpose, because the token shape is. Which issuer holds the secret is
-> recorded separately, in `kb_machine_clients.issuer` (`auth0-m2m` vs `temper`), and is
-> consulted only by the *minting* side (`verifyMachineSecret` matches temper-issued rows
-> only; an Auth0 row has a NULL `secret_hash` and verifies via JWKS). The tag's name is
-> historical — it predates temper being an issuer.
+> (`machine_client_service::lookup_by_client_id`) keys on the `client_id`. Which issuer holds
+> the secret is recorded in `kb_machine_clients.issuer` (`auth0-m2m` vs `temper`). The minting
+> side consults it (`verifyMachineSecret` matches temper-issued rows only; an Auth0 row has a
+> NULL `secret_hash` and verifies via JWKS). The tag's name is historical — it predates temper
+> being an issuer.
+
+> **The gate binds the issuer to the instance's mode (2026-10-13, overturning D4).** The
+> lookup used to be issuer-agnostic. But each deployment trusts exactly one token issuer
+> (`set_issuer(&[issuer])`), and `AuthMode` names it, so a row recorded under the other issuer
+> is reachable by no legitimate token and a token that matches one is a capture. The gate now
+> refuses it after the revoked check (`profile_service::resolve_machine_from_claims`): an
+> `ExternalIdp` instance resolves only `auth0-m2m` rows, a `TemperAs` instance only `temper`
+> rows. The refusal names the way back (re-issue under the instance's issuer). The doors
+> that write a credential are gated the same way, in one table
+> (`temper-services::auth::machine_door`):
+>
+> | act | `ExternalIdp` | `TemperAs` |
+> |---|---|---|
+> | gate resolves | `auth0-m2m` rows | `temper` rows |
+> | `provision` | system admin only | refused |
+> | `issue` / `rotate-secret` | allowed, `dormant: true` | allowed |
+> | `rebind` | `auth0-m2m` source rows | refused |
+>
+> A temper-issued source row is never rebound, in either mode: its secret is rotated. Task
+> `01a13297`; the fuller boot-resolved deployment mode is task `01a13664`.
 
 > **Decisions locked in Stage 4 (validated against a real token):**
 > - Detection keys on **`gty == "client-credentials"`**, *not* `azp` presence — a human Auth0
@@ -363,11 +382,12 @@ whose module doc carries the same finding at the point of use.
   → `touchMachineLastSeen` → `mintMachineAccessToken`, returning an access-token-only body
   (no refresh token — RFC 6749 §4.4.3). `buildAsMetadata` advertises the grant and the
   secret-bearing auth methods. The minted claims mirror an Auth0 M2M token exactly, so
-  `classify` handles AS-issued and Auth0-issued machine tokens **identically** — no
-  issuer-conditional branch anywhere in Rust.
+  `classify` handles AS-issued and Auth0-issued machine tokens **identically**. The one
+  issuer-conditional step is the gate's mode check on the *registration*, above.
 - **Registration gate (G3 Phase A) ✅, team-owner registration + reach containment
-  (Phase B2) ✅.** Lookup-or-reject on `kb_machine_clients`; a team owner may mint a machine
-  for their own team, bounded to reach they could confer on a human.
+  (Phase B2) ✅.** Lookup-or-reject on `kb_machine_clients`; a team owner may `issue` a machine
+  for their own team, bounded to reach they could confer on a human. `provision` is admin-only
+  since 2026-10-13 (see the door table above).
 
 **Not the destination:** `authorization_code + refresh_token` as a dedicated agent login
 still works with temper-mcp (one-time browser consent) and was the pre-Stage-4 bridge. It is
