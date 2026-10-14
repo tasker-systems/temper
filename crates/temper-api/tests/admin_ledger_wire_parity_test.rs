@@ -18,9 +18,10 @@
 //!
 //! 0. **One substrate rel has no mirror, on purpose.** `RefRel::Erasure` is stored but withheld from
 //!    the wire (`admin_ledger_service::reaches_the_wire`) until it can join `LedgerRefRel` without
-//!    breaking clients built at the 0.6 pin. `mirror_rel` answers `None` for it, and
-//!    `the_withheld_rel_does_not_decode_as_the_core_mirror` pins that the withholding is what keeps
-//!    the page decodable.
+//!    breaking clients built at the 0.6 pin. `mirror_rel` answers `None` for it. That
+//!    `reaches_the_wire` and the core mirror agree — a rel is published exactly when `LedgerRef`
+//!    decodes it — is pinned beside `reaches_the_wire`, where both halves are in scope
+//!    (`a_rel_reaches_the_wire_exactly_when_the_core_mirror_decodes_it`).
 //!
 //! 1. **The compile-time half is one-directional.** `mirror_rel`/`mirror_kind` match exhaustively on
 //!    the *substrate* enums, so a new **substrate** variant breaks the build until it is mirrored.
@@ -160,27 +161,5 @@ fn a_substrate_event_ref_deserializes_into_the_core_mirror() {
                 "core re-encode diverged from the substrate wire form"
             );
         }
-    }
-}
-
-/// FAILS IF the withheld rel becomes decodable by the core mirror without `mirror_rel` and
-/// `admin_ledger_service::reaches_the_wire` being revisited. While it fails to decode, publishing
-/// it would break the page (and any client built at the 0.6 pin), which is why it is withheld;
-/// once `LedgerRefRel` gains it, this test goes red and both decisions are taken together.
-#[test]
-fn the_withheld_rel_does_not_decode_as_the_core_mirror() {
-    for &rel in ALL_RELS.iter().filter(|&&r| mirror_rel(r).is_none()) {
-        let written = EventRef {
-            rel,
-            target: RefTarget {
-                kind: AnchorTable::Events,
-                id: Uuid::now_v7(),
-            },
-        };
-        let json = serde_json::to_value(written).expect("encode");
-        assert!(
-            serde_json::from_value::<LedgerRef>(json.clone()).is_err(),
-            "{json} now decodes as LedgerRef: wire it through mirror_rel and reaches_the_wire"
-        );
     }
 }

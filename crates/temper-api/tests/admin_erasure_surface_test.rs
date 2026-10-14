@@ -709,6 +709,16 @@ async fn the_ledger_reads_a_completion_that_ran_resource_erasures(pool: PgPool) 
             "the {axis} axis withholds the erasure reference from the wire: {completion}"
         );
         assert!(
+            completion["references"]
+                .as_array()
+                .expect("references")
+                .iter()
+                .any(|r| r["rel"] == "subject"
+                    && r["target"]["id"] == Value::String(subject.to_string())),
+            "the {axis} axis keeps the subject reference — withholding takes nothing else: \
+             {completion}"
+        );
+        assert!(
             completion["payload"]["resource_erasures"]
                 .as_array()
                 .expect("resource_erasures on the wire")

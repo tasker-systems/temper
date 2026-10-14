@@ -491,6 +491,49 @@ mod tests {
         );
     }
 
+    /// FAILS IF `reaches_the_wire` and the core mirror disagree about any rel: a published rel the
+    /// mirror cannot decode fails every page carrying it (and a pinned client's parse), and a rel
+    /// the mirror can decode but the wire withholds is contract the server never emits. This is
+    /// the one place both halves are in scope, so it is what makes the retirement-train change —
+    /// `erasure` joining `LedgerRefRel` — take both decisions together: adding the member alone
+    /// turns this red until `reaches_the_wire` publishes it.
+    ///
+    /// `ALL` is hand-maintained (no `strum` in this workspace); `reaches_the_wire`'s exhaustive
+    /// match is what forces a decision for a new rel, and this list must be extended with it.
+    #[test]
+    fn a_rel_reaches_the_wire_exactly_when_the_core_mirror_decodes_it() {
+        use temper_substrate::payloads::AnchorTable;
+
+        const ALL: [RefRel; 7] = [
+            RefRel::Supersedes,
+            RefRel::DerivedFrom,
+            RefRel::Touches,
+            RefRel::Subject,
+            RefRel::Principal,
+            RefRel::Request,
+            RefRel::Erasure,
+        ];
+        for rel in ALL {
+            let written = serde_json::to_value(EventRef {
+                rel,
+                target: RefTarget {
+                    kind: AnchorTable::Events,
+                    id: Uuid::now_v7(),
+                },
+            })
+            .expect("encode");
+            let decodes =
+                serde_json::from_value::<temper_core::types::admin::LedgerRef>(written).is_ok();
+            assert_eq!(
+                reaches_the_wire(rel),
+                decodes,
+                "{rel:?}: reaches_the_wire says {} but the core mirror {} decode it",
+                reaches_the_wire(rel),
+                if decodes { "does" } else { "does not" }
+            );
+        }
+    }
+
     /// FAILS IF an `erasure` reference reaches the wire, or if withholding it takes any other
     /// reference with it. The wire mirror cannot decode `erasure`, so publishing it would either
     /// fail the page here or break a pinned client's parse downstream.
