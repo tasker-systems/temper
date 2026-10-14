@@ -136,7 +136,8 @@ pub(crate) async fn require_team_exists(pool: &PgPool, team_id: Uuid) -> ApiResu
 /// Auth before writes:
 /// - **child** (`parent` set): caller must be `owner`/`maintainer` on the parent.
 /// - **root** (`parent` None): any authenticated profile may create.
-/// - `auto_join_role` set: caller must be `is_system_admin`.
+/// - `auto_join_role` set: caller must be `is_system_admin`, and the role must be `member` or
+///   `watcher` (400 otherwise; spec C15).
 ///
 /// All inserts run in one transaction: `kb_teams`, the optional
 /// `kb_teams_parents` link, and the creator's `owner` membership. After commit,
@@ -193,6 +194,19 @@ pub async fn create_team(
             .is_none()
     {
         return Err(ApiError::Forbidden);
+    }
+    // ...and is never a role that governs the team (spec C15): `owner`/`maintainer` is granted by
+    // a person. After the admin gate, so a non-admin learns nothing from it; before any write, so
+    // the `kb_teams_auto_join_role_at_most_member` CHECK never surfaces as a 500.
+    if req
+        .auto_join_role
+        .is_some_and(|role| role.rank() > TeamRole::Member.rank())
+    {
+        return Err(ApiError::BadRequest(
+            "auto_join_role may be member or watcher; a role that governs a team is granted by a \
+             person"
+                .to_string(),
+        ));
     }
 
     // --- Writes (one transaction) ---
