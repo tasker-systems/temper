@@ -2,9 +2,9 @@
 //!
 //! # Where this sits on the admin line
 //!
-//! The 64→28 consolidation removed invitations from MCP along with the instance-admin tools
-//! (grants, the admin ledger). That grouped two different kinds of "admin" together. Instance
-//! administration — governing who may use the deployment at all — stays off this surface.
+//! The 64→28 consolidation removed invitations from MCP along with grants and the admin ledger.
+//! That grouped two different kinds of "admin" together. Governing who may use the deployment
+//! at all stays off this surface.
 //! Team stewardship — an owner or maintainer running their own team — is ordinary work that an
 //! MCP-only principal (a claude.ai connector user, with no CLI) has no other way to do. Without
 //! these tools such a principal could not see an invitation addressed to them, let alone redeem
@@ -95,8 +95,8 @@ fn map_invitation_err(act: &str, err: ClientError) -> rmcp::ErrorData {
 
 /// Resolve a team ref to its id, the way the CLI's `resolve_team_id` does: a team UUID or a
 /// decorated `slug-<uuid>` ref carries the id itself; a bare slug (`+`-prefixed or not) is
-/// matched against the teams the caller is a member of. A system administrator acting on a
-/// team they do not belong to passes its UUID.
+/// matched against the teams the caller is a member of. A team the caller does not belong to
+/// can only be named by its UUID.
 async fn resolve_team(
     client: &TemperClient,
     act: &str,
