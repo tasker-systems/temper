@@ -403,9 +403,10 @@ pub async fn list_invitations(
 /// `kb_profile_auth_links` emails (Option A — an unverified link email is an
 /// attacker-controllable claim and must not resolve someone else's invite),
 /// still guarded so an email whose verified holders span more than one profile
-/// is discounted (never leaks another profile's invite; falls back to token
-/// hand-off). Restricting the ambiguity count to verified links also means an
-/// unverified squatter row cannot suppress the legitimate holder's invites.
+/// is discounted (never leaks another profile's invite, and since redemption reads the same
+/// predicate, nobody can redeem it either: the duplicate address must be resolved).
+/// Restricting the ambiguity count to verified links also means an unverified squatter row
+/// cannot suppress the legitimate holder's invites.
 /// Auth: any authenticated caller (their own invitations only).
 pub async fn list_for_profile(
     pool: &PgPool,

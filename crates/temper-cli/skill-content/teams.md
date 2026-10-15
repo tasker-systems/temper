@@ -69,9 +69,11 @@ does not help. Resolve the duplicate address first.
 
 **Over MCP, invitations are two tools.** `invitation_read` (views `mine`, `count`, `team`) and
 `invitation_manage` (actions `accept`, `decline`, `create`, `revoke`) carry the same loop as
-`temper invitations` / `team join` / `team decline` / `team invite` / `team uninvite`,
-through the same API routes and the same gates. Team *stewardship* — an owner or maintainer
-running their own team — belongs on both surfaces; instance administration stays off MCP.
+`temper invitations` (`mine`), `temper warmup`'s pending count (`count`), `team invitations`
+(`team`), `team join`, `team decline`, `team invite` and `team uninvite`, through the same API
+routes and the same checks. Team *stewardship* (an owner or maintainer running their own team)
+belongs on both surfaces; the instance-administration tools (grants, the admin ledger, access
+review) stay off MCP.
 
 `temper warmup` counts what is waiting on you, so an invitation surfaces at session start
 without anyone having to think to look:

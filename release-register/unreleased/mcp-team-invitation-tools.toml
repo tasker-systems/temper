@@ -4,8 +4,8 @@ classes  = ["additive"]
 surfaces = ["mcp"]
 status   = "signal-only"
 body = '''
-Two tools join the MCP surface, which grows from 40 advertised tools to 42 (20 reads and 20
-writes, plus the conditional blob pair). `invitation_read` has three views: `mine` (your pending
+Two tools join the MCP surface, which grows from 38 to 40 advertised tools (20 reads and 20
+writes), plus the conditional blob pair. `invitation_read` has three views: `mine` (your pending
 invitations, with tokens), `count` (how many, with no token sent) and `team` (a team's pending
 invitations, for its owners and maintainers). `invitation_manage` has four actions: `accept` and
 `decline` by token, and `create` and `revoke` for a team's owners and maintainers. Each one

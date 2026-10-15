@@ -22,10 +22,11 @@
 //!
 //! Every act forwards to its `/api/invitations` or `/api/teams/{id}/invit…` route on the
 //! caller's own bearer; this module adds no gate of its own. `mine`, `count`, `accept` and
-//! `decline` sit on the API's un-gated router, so a principal whose access to an invite-only
-//! instance is not yet approved can still see and answer invitations, exactly as through the
-//! CLI. Answering one does not approve that access: `has_system_access` reads the principal's
-//! standing alone, and team membership (the gating team's included) does not set it. A machine
+//! `decline` sit on the API's un-gated router, so a principal whose access is not yet approved
+//! (every new account starts unapproved) can still see and answer invitations, exactly as
+//! through the CLI. Answering one does not approve that access: `has_system_access` reads the
+//! principal's standing alone, and team membership (the gating team's included) does not set it.
+//! A machine
 //! principal is refused every one of them at the API (it holds no verified email, so it is
 //! never an invitee, and it does not steward teams); the refusal arrives as `ForbiddenDetail`
 //! and is carried through in the server's own words.
@@ -33,8 +34,19 @@
 //! # Tokens
 //!
 //! The redemption token rides in the tool arguments and on to the request **body**, never a
-//! path (see `InvitationTokenRequest`). `count` exists so that asking "is anything waiting?"
-//! moves no token at all; reach for `mine` only to act on one.
+//! path (see `InvitationTokenRequest`). Only the invitee's own view (`mine`) returns one; the
+//! team-side results (`team`, `create`) leave it out (`StewardInvitation`). `count` exists so
+//! that asking "is anything waiting?" moves no token at all.
+//!
+//! rmcp logs each request and response in full at `debug` (tool arguments and results
+//! included), so a deployment that raises the server's log level past its `info` default writes
+//! tokens to its logs. A token redeems only for its verified invitee, which bounds the exposure.
+//!
+//! # Team names are untrusted
+//!
+//! `mine` hands the invitee's agent text that someone else wrote: any approved person can name a
+//! team anything and invite any address. The tool descriptions tell agents to treat team names
+//! as data and to accept or decline only when the user asks.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
@@ -43,7 +55,7 @@ use uuid::Uuid;
 
 use temper_client::error::ClientError;
 use temper_client::TemperClient;
-use temper_core::types::invitation::CreateInvitationRequest;
+use temper_core::types::invitation::{CreateInvitationRequest, InvitationStatus, TeamInvitation};
 use temper_core::types::team::TeamRole;
 
 use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
@@ -58,6 +70,58 @@ fn text_result(text: String) -> CallToolResult {
 
 fn required<T>(value: Option<T>, act: &str, field: &str) -> Result<T, rmcp::ErrorData> {
     value.ok_or_else(|| rmcp::ErrorData::invalid_params(format!("{act} requires `{field}`"), None))
+}
+
+/// A team's view of one of its invitations — [`TeamInvitation`] without the redemption `token`.
+///
+/// The API hands the token to the inviting team too, but over MCP it would only land in a
+/// steward's model context for nothing: a token redeems solely for the account whose verified
+/// email the invitation names, so a steward can neither use it nor usefully pass it on. The
+/// invitee reads their own from `invitation_read` view `mine`.
+#[derive(Debug, serde::Serialize)]
+struct StewardInvitation {
+    id: Uuid,
+    team_id: Uuid,
+    invited_email: String,
+    invited_by_profile_id: Uuid,
+    role: TeamRole,
+    status: InvitationStatus,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    created: chrono::DateTime<chrono::Utc>,
+    revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<TeamInvitation> for StewardInvitation {
+    fn from(inv: TeamInvitation) -> Self {
+        Self {
+            id: inv.id,
+            team_id: inv.team_id,
+            invited_email: inv.invited_email,
+            invited_by_profile_id: inv.invited_by_profile_id,
+            role: inv.role,
+            status: inv.status,
+            expires_at: inv.expires_at,
+            created: inv.created,
+            revoked_at: inv.revoked_at,
+        }
+    }
+}
+
+/// What `decline` answers. The API answers `204` both when it declines a pending invitation and
+/// when the invitation had already expired (an expired one is spent, so declining it changes
+/// nothing), so the one thing the tool can truthfully report is that it is no longer pending.
+#[derive(Debug, serde::Serialize)]
+struct DeclineAck {
+    pending: bool,
+}
+
+/// What `revoke` answers: the API refuses anything but a pending invitation of this team, so a
+/// success means this one was withdrawn.
+#[derive(Debug, serde::Serialize)]
+struct RevokeAck {
+    revoked: bool,
+    team_id: Uuid,
+    invitation_id: Uuid,
 }
 
 /// The requirement clause for a team-side act's bare `403`. The wire's `403` carries no
@@ -110,11 +174,14 @@ async fn resolve_team(
     if let Ok(id) = temper_workflow::operations::parse_ref(team_ref) {
         return Ok(id.uuid());
     }
-    let teams = client
-        .teams()
-        .list()
-        .await
-        .across_auth(|e| map_invitation_err(act, e))?;
+    // The list is the caller's own memberships, which every principal may read; a failure here is
+    // not the steward gate, so it does not borrow that sentence.
+    let teams = client.teams().list().await.across_auth(|e| {
+        rmcp::ErrorData::internal_error(
+            format!("{act}: could not list your teams to resolve {team_ref:?}: {e}"),
+            None,
+        )
+    })?;
     teams
         .into_iter()
         .find(|t| t.slug == team_ref)
@@ -130,18 +197,19 @@ async fn resolve_team(
         })
 }
 
-/// `count`'s team filter is a slug — the API counts invitations to a team the caller is
-/// usually NOT yet a member of, so there is no listing to resolve a UUID against. A UUID would
-/// silently match nothing, so it is refused rather than answered with a misleading `0`.
+/// `count`'s team filter is a bare slug: the API matches `team_slug` exactly. Anything
+/// [`resolve_team`] would read as an id (a UUID in any form, or a decorated `slug-<uuid>` ref) is
+/// refused rather than answered with a misleading `matching: 0`. It is not resolved either: the
+/// caller is usually not a member of the team, and the one listing that names it (`mine`) is the
+/// one that carries tokens, which is what `count` exists to avoid.
 fn count_team_slug(team: Option<&str>) -> Result<Option<&str>, rmcp::ErrorData> {
     let Some(team) = team else {
         return Ok(None);
     };
     let slug = team.strip_prefix('+').unwrap_or(team);
-    if Uuid::parse_str(slug).is_ok() {
+    if temper_workflow::operations::parse_ref(slug).is_ok() {
         return Err(rmcp::ErrorData::invalid_params(
-            "count's `team` takes a team slug, not a UUID (an invitation is usually to a team you \
-             are not yet a member of, so a UUID cannot be resolved for you)"
+            "count's `team` takes a bare team slug, not a UUID or a decorated `slug-<uuid>` ref"
                 .to_string(),
             None,
         ));
@@ -212,6 +280,7 @@ pub async fn invitation_read(
                 .list_invitations(team_id)
                 .await
                 .across_auth(|e| map_invitation_err(ACT, e))?;
+            let rows: Vec<StewardInvitation> = rows.into_iter().map(Into::into).collect();
             Ok(text_result(to_text(&rows)))
         }
     }
@@ -219,17 +288,14 @@ pub async fn invitation_read(
 
 // ── Write ─────────────────────────────────────────────────────────────────────────────────
 
-/// The role an invitation confers, as the tool declares it.
-///
-/// A tool-local mirror of [`TeamRole`] because a tool's input schema must be self-contained (no
-/// `$ref`/`$defs` on the wire), and `TeamRole`'s schema is not inlined: marking it so in
-/// `temper-core` would also reshape the payload schemas the `scenario-schema` build stamps
-/// wherever the two features unify. Which of these the caller may confer is the API's rule.
+/// The roles an invitation can confer — [`TeamRole`] less `owner`, which `create_invitation`
+/// refuses for every caller ("ownership is transferred, not invited"). Declaring only the
+/// invitable roles keeps the tool's schema from offering an agent a choice that always fails.
+/// When the API starts admitting owner invitations, `Owner` joins this enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum InvitationRole {
-    Owner,
     Maintainer,
     Member,
     Watcher,
@@ -238,7 +304,6 @@ pub enum InvitationRole {
 impl From<InvitationRole> for TeamRole {
     fn from(role: InvitationRole) -> Self {
         match role {
-            InvitationRole::Owner => TeamRole::Owner,
             InvitationRole::Maintainer => TeamRole::Maintainer,
             InvitationRole::Member => TeamRole::Member,
             InvitationRole::Watcher => TeamRole::Watcher,
@@ -279,8 +344,8 @@ pub struct InvitationManageInput {
     /// the invitation themselves once they sign in with an account verified for this address.
     #[serde(default)]
     pub email: Option<String>,
-    /// The role the invitee joins with. Required for `create`. Which roles you may confer is the
-    /// API's rule; a refused role comes back with the server's reason.
+    /// The role the invitee joins with: maintainer, member or watcher. Required for `create`.
+    /// Ownership is transferred, not invited.
     #[serde(default)]
     pub role: Option<InvitationRole>,
     /// The invitation's id, from `invitation_read` view `team`. Required for `revoke`.
@@ -314,7 +379,7 @@ pub async fn invitation_manage(
                 .decline_invitation(&token)
                 .await
                 .across_auth(|e| map_invitation_err(ACT, e))?;
-            Ok(text_result("Invitation declined.".to_string()))
+            Ok(text_result(to_text(&DeclineAck { pending: false })))
         }
         InvitationManageAction::Create => {
             const ACT: &str = "invitation_manage create";
@@ -334,7 +399,7 @@ pub async fn invitation_manage(
                 )
                 .await
                 .across_auth(|e| map_invitation_err(ACT, e))?;
-            Ok(text_result(to_text(&invitation)))
+            Ok(text_result(to_text(&StewardInvitation::from(invitation))))
         }
         InvitationManageAction::Revoke => {
             const ACT: &str = "invitation_manage revoke";
@@ -347,7 +412,11 @@ pub async fn invitation_manage(
                 .revoke_invitation(team_id, invitation_id)
                 .await
                 .across_auth(|e| map_invitation_err(ACT, e))?;
-            Ok(text_result("Invitation revoked.".to_string()))
+            Ok(text_result(to_text(&RevokeAck {
+                revoked: true,
+                team_id,
+                invitation_id,
+            })))
         }
     }
 }
@@ -368,6 +437,12 @@ mod tests {
                 .unwrap();
         assert!(matches!(count.view, InvitationReadView::Count));
         assert_eq!(count.team.as_deref(), Some("+platform"));
+
+        let team: InvitationReadInput =
+            serde_json::from_value(serde_json::json!({ "view": "team", "team": "platform" }))
+                .unwrap();
+        assert!(matches!(team.view, InvitationReadView::Team));
+        assert_eq!(team.team.as_deref(), Some("platform"));
     }
 
     #[test]
@@ -384,32 +459,51 @@ mod tests {
         assert_eq!(input.email.as_deref(), Some("person@example.com"));
     }
 
-    /// The mirror reads exactly the wire names `TeamRole` writes, so a role string an agent saw
-    /// on any team row is one this tool accepts, and maps to the same role.
+    /// Every invitable role reads the wire name `TeamRole` writes and maps back to that role, and
+    /// `owner` is the one role the tool does not offer. The match is exhaustive over `TeamRole`, so
+    /// a role added there fails to compile here until someone decides whether it is invitable.
     #[test]
-    fn every_invitation_role_is_the_team_role_of_the_same_name() {
+    fn the_invitable_roles_are_every_team_role_but_owner() {
         for role in [
             TeamRole::Owner,
             TeamRole::Maintainer,
             TeamRole::Member,
             TeamRole::Watcher,
         ] {
+            let invitable = match role {
+                TeamRole::Owner => false,
+                TeamRole::Maintainer | TeamRole::Member | TeamRole::Watcher => true,
+            };
             let wire = serde_json::to_value(role).unwrap();
-            let mirrored: InvitationRole = serde_json::from_value(wire).unwrap();
-            assert_eq!(TeamRole::from(mirrored), role);
+            match serde_json::from_value::<InvitationRole>(wire) {
+                Ok(mirrored) => {
+                    assert!(invitable, "{role:?} is offered but not invitable");
+                    assert_eq!(TeamRole::from(mirrored), role);
+                }
+                Err(_) => assert!(!invitable, "{role:?} is invitable but not offered"),
+            }
         }
     }
 
     #[test]
-    fn count_takes_a_slug_and_refuses_a_uuid() {
+    fn count_takes_a_bare_slug_and_refuses_anything_read_as_an_id() {
         assert_eq!(count_team_slug(None).unwrap(), None);
         assert_eq!(
             count_team_slug(Some("+platform")).unwrap(),
             Some("platform")
         );
         assert_eq!(count_team_slug(Some("platform")).unwrap(), Some("platform"));
-        let err = count_team_slug(Some(&Uuid::now_v7().to_string())).unwrap_err();
-        assert!(err.message.contains("slug, not a UUID"), "{err}");
+        let id = Uuid::now_v7();
+        for refused in [
+            id.to_string(),
+            id.simple().to_string(),
+            id.to_string().to_uppercase(),
+            format!("platform-{id}"),
+            format!("+platform-{id}"),
+        ] {
+            let err = count_team_slug(Some(&refused)).unwrap_err();
+            assert!(err.message.contains("bare team slug"), "{refused}: {err}");
+        }
     }
 
     #[test]
@@ -451,8 +545,15 @@ mod tests {
                 rmcp::model::ErrorCode::INVALID_PARAMS,
                 "{mapped}"
             );
-            assert!(!mapped.message.starts_with("Conflict: "), "{mapped}");
-            assert!(!mapped.message.starts_with("Bad request: "), "{mapped}");
+            assert!(
+                [
+                    "invitation not found, already used, or expired",
+                    "a pending invitation already exists for this email",
+                    "invitation has expired",
+                ]
+                .contains(&mapped.message.as_ref()),
+                "the server's own sentence, label stripped: {mapped}"
+            );
         }
     }
 }
