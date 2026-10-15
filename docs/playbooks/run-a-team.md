@@ -127,8 +127,9 @@ maintainers. They go through the same API routes and the same checks as the comm
 > case where the same email is spread across more than one profile (which can
 > only happen with unverified sign-ins), the invitation is *not* auto-surfaced
 > — it stays safely invisible rather than risk showing up for the wrong
-> account. The fallback there is the old path: the inviter shares the printed
-> token directly.
+> account. Sharing the printed token does not get around this: an invitation
+> can be accepted or declined only from the one account that verifiably owns
+> its email address, so the duplicate address has to be resolved first.
 
 ## Manage membership
 

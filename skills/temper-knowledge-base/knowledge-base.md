@@ -521,9 +521,10 @@ Args: { "action": "decline", "token": "<token from mine>" }
 ```
 
 Prefer `count` for "is anything waiting?" — it moves no token. Only the invited account can
-accept or decline, so passing a token to someone else does not help them. Both work before
-you hold system access on an invite-only instance, which is how a new person joins the team
-that admits them.
+accept or decline, so passing a token to someone else does not help them. Both answer before
+your access to an invite-only instance is approved, but accepting does not approve it: access
+is an administrator's decision, and joining a team (even the instance's gating team) is not
+that decision.
 
 A team's owners and maintainers run the other side. `team` takes a slug (`+` optional), a
 `slug-<uuid>` ref, or a UUID:

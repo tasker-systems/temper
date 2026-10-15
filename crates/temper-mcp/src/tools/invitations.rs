@@ -22,8 +22,10 @@
 //!
 //! Every act forwards to its `/api/invitations` or `/api/teams/{id}/invit…` route on the
 //! caller's own bearer; this module adds no gate of its own. `mine`, `count`, `accept` and
-//! `decline` sit on the API's un-gated router, so an invitee to an invite-only instance's
-//! gating team can redeem before they hold system access, exactly as through the CLI. A machine
+//! `decline` sit on the API's un-gated router, so a principal whose access to an invite-only
+//! instance is not yet approved can still see and answer invitations, exactly as through the
+//! CLI. Answering one does not approve that access: `has_system_access` reads the principal's
+//! standing alone, and team membership (the gating team's included) does not set it. A machine
 //! principal is refused every one of them at the API (it holds no verified email, so it is
 //! never an invitee, and it does not steward teams); the refusal arrives as `ForbiddenDetail`
 //! and is carried through in the server's own words.
