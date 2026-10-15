@@ -7,6 +7,7 @@ pub mod data_artifacts;
 pub mod doc_types;
 pub mod facets;
 pub mod ingest;
+pub mod invitations;
 pub mod invocations;
 pub mod query;
 pub mod reblock;

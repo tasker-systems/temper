@@ -600,6 +600,34 @@ impl TemperMcpService {
         tools::cognitive_maps::context_materialize(self, &parts, input).await
     }
 
+    // ── Invitations (team stewardship, not instance administration) ────
+
+    #[tool(
+        description = "Read team invitations with a `view` discriminator. Views: `mine` (every pending invitation addressed to you, across all teams — each row carries the team's slug and name, the role, the expiry, and the `token` you pass to invitation_manage `accept`/`decline`), `count` (how many pending invitations are addressed to you — integers only, no tokens: the cheap check at the start of a session; an optional `team` SLUG adds `matching`, how many of them are to that team, null when no team was asked about), `team` (a team's pending invitations — requires `team` as a slug, `slug-<uuid>` ref or UUID; requires that you are an owner or maintainer of that team). Nothing is ever emailed: an invitee discovers an invitation by reading `mine` once signed in with the invited, verified email. `mine` and `count` work before you hold system access on an invite-only instance."
+    )]
+    async fn invitation_read(
+        &self,
+        Parameters(input): Parameters<tools::invitations::InvitationReadInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::invitations::invitation_read(self, &parts, input).await
+    }
+
+    #[tool(
+        description = "Manage team invitations with an `action` discriminator. Actions: `accept` (join the team an invitation addressed to you is for — requires `token` from invitation_read view `mine`; answers the team and the role you joined with), `decline` (refuse one — requires `token`), `create` (invite an email address to a team — requires `team` (slug, `slug-<uuid>` ref or UUID), `email`, `role`: owner, maintainer, member or watcher, of which the API admits only the roles you may confer and names why it refuses one; answers the invitation, valid 7 days), `revoke` (withdraw a team's pending invitation — requires `team` and `invitation_id` from invitation_read view `team`). `create`/`revoke` require that you are an owner or maintainer of the team. Only the account whose verified email an invitation names can accept or decline it, so handing someone a token does not help them. No email is sent on `create`: tell the invitee, who then reads invitation_read view `mine`. `accept`/`decline` work before you hold system access on an invite-only instance."
+    )]
+    async fn invitation_manage(
+        &self,
+        Parameters(input): Parameters<tools::invitations::InvitationManageInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::invitations::invitation_manage(self, &parts, input).await
+    }
+
     // ── Schema (consolidated 3→1 read) ─────────────────────────────────
 
     #[tool(

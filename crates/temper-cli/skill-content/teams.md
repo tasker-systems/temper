@@ -67,9 +67,11 @@ sign-ins) is discounted — not shown, never mis-delivered, and not redeemable e
 one verified owner of the address can accept or decline, so handing someone the printed token
 does not help. Resolve the duplicate address first.
 
-**Invitations are a CLI capability, not an MCP one.** The MCP surface deliberately carries
-no invitation tools — the absence is a declaration. An agent
-working purely over MCP has no invitation surface; reach for the CLI.
+**Over MCP, invitations are two tools.** `invitation_read` (views `mine`, `count`, `team`) and
+`invitation_manage` (actions `accept`, `decline`, `create`, `revoke`) carry the same loop as
+`temper invitations` / `team join` / `team decline` / `team invite` / `team uninvite`,
+through the same API routes and the same gates. Team *stewardship* — an owner or maintainer
+running their own team — belongs on both surfaces; instance administration stays off MCP.
 
 `temper warmup` counts what is waiting on you, so an invitation surfaces at session start
 without anyone having to think to look:

@@ -12,7 +12,7 @@ sessions, research, or wants to look up / store information across conversations
 
 ## The Tool Surface (read/write separable)
 
-The census: **38 advertised tools — 19 reads, 19 writes — plus a conditional
+The census: **40 advertised tools — 20 reads, 20 writes — plus a conditional
 blob pair (2)**. The authority is the server's own `tools/list` reply (the
 `tool_router()`); when this file and that list disagree, the list wins and this
 file is wrong.
@@ -23,19 +23,19 @@ with a discriminator (`action`, `view`, or `target`). Read and write are
 separable — a consumer gating on "read-only" can grant the read tools without
 drilling into action parameters.
 
-**Reads (19):** `search`, `run_query`, `get_resource`, `list_resources`,
+**Reads (20):** `search`, `run_query`, `get_resource`, `list_resources`,
 `resource_lineage`, `element_trail`, `get_block`, `get_block_provenance`,
 `cogmap_read`, `cogmap_list`, `context_read`, `describe_schema`,
 `invocation_read`, `facets_read`, `steward_ingest_delta`,
 `list_data_artifacts`, `get_data_artifact`, `list_data_artifact_shapes`,
-`get_data_artifact_shape`
+`get_data_artifact_shape`, `invitation_read`
 
-**Writes (19):** `create_resource`, `update_resource`, `update_resource_meta`,
+**Writes (20):** `create_resource`, `update_resource`, `update_resource_meta`,
 `delete_resource`, `annotate_resource`, `resource_reblock`, `relationship`, `facet_set`,
 `facet_retract`, `record_citation_audit`, `invocation_manage`, `segmented_ingest`,
 `cogmap_create`, `cogmap_materialize`, `context_materialize`, `context_manage`,
 `steward_advance_watermark`, `commit_data_artifact`,
-`declare_data_artifact_shape`
+`declare_data_artifact_shape`, `invitation_manage`
 
 **Conditional (2):** `blob_read`, `blob_manage` — registered on the router but
 advertised only while the blob door is open (a credential resolves and
@@ -59,9 +59,14 @@ refusal, never to silence.
 > (36 vs 38). The blob pair — registered but conditionally advertised — now has its own tier
 > instead of living in nobody's list, and the authority for the count is `tools/list`, not
 > this file.
+> `[2026-10-15]` `invitation_read` joined the reads and `invitation_manage` the writes (40
+> tools, 20 reads / 20 writes). Team invitations had been declared off-MCP alongside the
+> instance-admin tools; that grouped team stewardship (an owner or maintainer running their
+> own team) with instance administration, and left an MCP-only principal unable to see or
+> redeem an invitation addressed to them.
 
 **Declared off-MCP (CLI door):** grants (`resource_grant`/`revoke`,
-`cogmap_grant`/`revoke`), `admin_ledger`, cogmap bind/unbind, team invitations,
+`cogmap_grant`/`revoke`), `admin_ledger`, cogmap bind/unbind,
 `reassign`. Each capability stays at the CLI; its absence from MCP is a
 declaration, not a gap. `reassign` is the owner-moves: `temper resource reassign`
 and `temper team reassign` (offboarding), backed by the REST routes
@@ -497,6 +502,41 @@ cognitive map — returns the server-minted `invocation_id`. `invocation_manage`
 terminates it with a disposition (`completed`/`failed`/`abandoned`) and optional outcome.
 `invocation_read` (view: show) reads one envelope plus its acts; `invocation_read` (view: list)
 lists envelopes, optionally narrowed by cogmap and/or status.
+
+### `invitation_read` / `invitation_manage` — team invitations
+
+Nothing is ever emailed. An invitation is addressed to an email; once its owner signs in with
+that verified address, they find it themselves:
+
+```
+Tool: invitation_read
+Args: { "view": "count" }                       → { "count": 1, "matching": null }
+Args: { "view": "mine" }                        → rows with team_slug, role, expires_at, token
+```
+
+```
+Tool: invitation_manage
+Args: { "action": "accept", "token": "<token from mine>" }   → { team_id, team_slug, role }
+Args: { "action": "decline", "token": "<token from mine>" }
+```
+
+Prefer `count` for "is anything waiting?" — it moves no token. Only the invited account can
+accept or decline, so passing a token to someone else does not help them. Both work before
+you hold system access on an invite-only instance, which is how a new person joins the team
+that admits them.
+
+A team's owners and maintainers run the other side. `team` takes a slug (`+` optional), a
+`slug-<uuid>` ref, or a UUID:
+
+```
+Tool: invitation_manage
+Args: { "action": "create", "team": "+platform", "email": "person@example.com", "role": "member" }
+Args: { "action": "revoke", "team": "+platform", "invitation_id": "<id from view team>" }
+```
+
+`invitation_read` (view: team) lists a team's pending invitations. Which roles you may invite
+at is the API's rule, not the tool's; a refused role comes back with the reason. After
+`create`, tell the invitee to look: the invitation reaches them only when they read `mine`.
 
 ## Context Navigation
 
