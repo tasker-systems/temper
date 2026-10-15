@@ -14715,7 +14715,7 @@
             }
           },
           "403": {
-            "description": "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "description": "Forbidden (the caller does not manage the team); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14785,7 +14785,7 @@
             "description": "Only a pending invitation can be revoked"
           },
           "403": {
-            "description": "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "description": "Forbidden (the caller does not manage the team); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14861,11 +14861,8 @@
               }
             }
           },
-          "400": {
-            "description": "Owner role cannot be invited"
-          },
           "403": {
-            "description": "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "description": "Forbidden (the caller does not manage the team, or the offered role outranks the inviter; on the gating team only a system admin invites); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -18717,7 +18714,7 @@
       },
       "CreateInvitationRequest": {
         "type": "object",
-        "description": "Request body for `POST /api/teams/{id}/invite`.\n\n`role` cannot be `Owner` — the service rejects it (ownership is transferred,\nnot invited).",
+        "description": "Request body for `POST /api/teams/{id}/invite`.\n\n`role` may be anything up to the inviter's own rank on the team — an owner can invite at\n`owner` — and on the gating team only a system admin invites (the team-role rank rule,\nC16/R10).",
         "required": [
           "invited_email",
           "role"

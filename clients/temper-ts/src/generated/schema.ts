@@ -5646,8 +5646,9 @@ export interface components {
         /**
          * @description Request body for `POST /api/teams/{id}/invite`.
          *
-         *     `role` cannot be `Owner` — the service rejects it (ownership is transferred,
-         *     not invited).
+         *     `role` may be anything up to the inviter's own rank on the team — an owner can invite at
+         *     `owner` — and on the gating team only a system admin invites (the team-role rank rule,
+         *     C16/R10).
          */
         CreateInvitationRequest: {
             invited_email: string;
@@ -20679,7 +20680,7 @@ export interface operations {
                     "application/json": components["schemas"]["TeamInvitation"][];
                 };
             };
-            /** @description Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden (the caller does not manage the team); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -20721,7 +20722,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden (the caller does not manage the team); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -20767,14 +20768,7 @@ export interface operations {
                     "application/json": components["schemas"]["TeamInvitation"];
                 };
             };
-            /** @description Owner role cannot be invited */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden (the caller does not manage the team, or the offered role outranks the inviter; on the gating team only a system admin invites); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;

@@ -38,8 +38,7 @@ use temper_services::state::AppState;
     request_body = CreateInvitationRequest,
     responses(
         (status = 201, description = "Invitation created", body = TeamInvitation),
-        (status = 400, description = "Owner role cannot be invited"),
-        (status = 403, description = "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Forbidden (the caller does not manage the team, or the offered role outranks the inviter; on the gating team only a system admin invites); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 409, description = "A pending invitation already exists for this email"),
     )
 )]
@@ -71,7 +70,7 @@ pub async fn create(
     responses(
         (status = 204, description = "Invitation revoked"),
         (status = 400, description = "Only a pending invitation can be revoked"),
-        (status = 403, description = "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Forbidden (the caller does not manage the team); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Invitation not found for this team"),
     )
 )]
@@ -95,7 +94,7 @@ pub async fn revoke(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Pending invitations for the team", body = Vec<TeamInvitation>),
-        (status = 403, description = "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Forbidden (the caller does not manage the team); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
     )
 )]
 pub async fn list(

@@ -10,8 +10,9 @@ export type AcceptInvitationResponse = { team_id: string, team_slug: string, rol
 /**
  * Request body for `POST /api/teams/{id}/invite`.
  *
- * `role` cannot be `Owner` — the service rejects it (ownership is transferred,
- * not invited).
+ * `role` may be anything up to the inviter's own rank on the team — an owner can invite at
+ * `owner` — and on the gating team only a system admin invites (the team-role rank rule,
+ * C16/R10).
  */
 export type CreateInvitationRequest = { invited_email: string, role: TeamRole, };
 

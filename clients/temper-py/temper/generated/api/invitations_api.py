@@ -685,7 +685,6 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '201': "TeamInvitation",
-            '400': None,
             '403': "ErrorBody",
             '409': None,
         }
@@ -762,7 +761,6 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '201': "TeamInvitation",
-            '400': None,
             '403': "ErrorBody",
             '409': None,
         }
@@ -839,7 +837,6 @@ class InvitationsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '201': "TeamInvitation",
-            '400': None,
             '403': "ErrorBody",
             '409': None,
         }

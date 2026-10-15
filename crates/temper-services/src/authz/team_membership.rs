@@ -112,6 +112,38 @@ impl ResolvedMembership {
         )
         .map(|_| ())
     }
+
+    /// The invitation gate (C16, R10): an invitation may offer a role ranked at or below the
+    /// inviter's own (C1), and only a manager of the team — or a system admin — may invite. R11
+    /// makes that admin-only on the gating team, which [`MembershipAuthority::resolve`]'s arm
+    /// order already decides: a non-admin row on the gating team resolves to the self-only arm
+    /// or to none, and a non-manager inviting is refused before anything about the invitation is
+    /// learned (S6).
+    ///
+    /// Deliberately not [`authorize`] over `Add`: an invitation is email-keyed, so there is no
+    /// profile to [`locked`] or decide on, and inviting someone already on the team is allowed —
+    /// their acceptance is a no-op reporting their actual role (P12). What carries over is
+    /// exactly checks 1, 2 and 6 of [`decide`], reached by calling the same functions, so the
+    /// refusals and their order cannot drift from the rank rule.
+    pub(crate) fn authorize_invitation(&self, role: TeamRole) -> ApiResult<()> {
+        // Checks 1–2 against an inert stand-in target: `nil` is not a real profile id (they are
+        // UUIDv7s), so it can never equal the caller, and an `Add` reads nothing else about its
+        // target — existence, machine and source are invitation-specific absences.
+        let own = admits_caller(
+            self.authority.kind(),
+            self.caller,
+            self.is_gating,
+            MembershipAct::Add { role },
+            ProfileId::from(Uuid::nil()),
+        )?;
+        // Check 6 (conferral) — the half of `decide` that needs only the caller's own rank.
+        if let Some(own) = own {
+            if role.rank() > own.rank() {
+                return Err(ApiError::ForbiddenDetail(ABOVE_YOUR_OWN_ROLE.to_string()));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl MembershipAuthority {
@@ -500,6 +532,31 @@ impl AuthorizedMembershipChange {
             new_source: TeamMemberSource::Native,
             actor: Some(creator),
             invited_by: None,
+            guard_last_owner: true,
+        }
+    }
+
+    /// An accepted invitation's member row (plan P12): the invitee joins at the invited role, the
+    /// record says `invitation` and names the inviter. `claimed` is minted only by the claim
+    /// `UPDATE` in `invitation_service::accept_invitation` — a struct with private fields, so
+    /// this cannot run for an invitation nobody claimed — and the invitation's authority was
+    /// checked when it was created (C16), which is why no rank decision runs here. The caller
+    /// holds [`locked`]'s locks on the team, as P12 orders it.
+    pub(crate) fn from_claimed_invitation(
+        claimed: crate::services::invitation_service::ClaimedInvitation,
+        invitee: ProfileId,
+    ) -> Self {
+        Self {
+            team_id: claimed.team_id(),
+            profile: invitee,
+            act: MembershipAct::Add {
+                role: claimed.role(),
+            },
+            via: MembershipVia::Invitation,
+            expected: None,
+            new_source: TeamMemberSource::Native,
+            actor: Some(invitee),
+            invited_by: Some(claimed.invited_by()),
             guard_last_owner: true,
         }
     }
