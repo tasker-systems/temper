@@ -9,8 +9,8 @@
 //! 1. [`MembershipAuthority`] — who the caller is on THIS team: a system admin, a manager (owner or
 //!    maintainer), a member who may act only on themselves, or nobody.
 //! 2. [`authorize`] — the rank rule, applied to one act on one target. It returns the sealed
-//!    [`AuthorizedMembershipChange`], which has private fields and no other constructor in this PR,
-//!    so a write nobody authorized has nothing to pass to step 3.
+//!    [`AuthorizedMembershipChange`], which has private fields and no constructor outside this
+//!    module, so a write nobody authorized has nothing to pass to step 3.
 //! 3. [`membership_write`] — the only Rust caller of the SQL writer `_admin_team_membership_write`
 //!    (migration `20261101200000_team_membership_changed.sql`), which writes the row and appends
 //!    its `team_membership_changed` admin event in one statement.
@@ -414,9 +414,9 @@ fn decide(
 }
 
 /// A membership change someone was authorized to make. **Sealed**: private fields, no `Default`,
-/// `Clone` or public constructor. Today the only constructor is [`authorize`]; the writers plan PR C
-/// routes (genesis, invitation, approval, machine reach, SAML reconcile) gain their own constructors
-/// here, each taking a token only its one caller can mint (plan P16).
+/// `Clone` or public constructor. The constructors are [`authorize`] and the one-per-writer token
+/// constructors of plan PR C (genesis, invitation, approval, machine reach, SAML reconcile), each
+/// taking a token only its one caller can mint (plan P16).
 #[derive(Debug)]
 pub(crate) struct AuthorizedMembershipChange {
     team_id: Uuid,
@@ -474,6 +474,35 @@ pub(crate) fn authorize(
         invited_by: None,
         guard_last_owner: true,
     })
+}
+
+impl AuthorizedMembershipChange {
+    /// `create_team`'s creator row (plan P7): the creator is its `owner` by construction, recorded
+    /// as `team_genesis` with the creator as both actor and member. `token` is a struct with a
+    /// private field defined in `team_service`, constructed only inside `create_team` immediately
+    /// after its team insert, so this cannot run for a team the caller did not just create.
+    ///
+    /// The caller does not run [`locked`]: the team was born in the caller's own transaction, so no
+    /// concurrent writer can see it, and the SQL writer re-takes the team and member locks itself.
+    pub(crate) fn genesis(
+        _token: crate::services::team_service::GenesisToken,
+        team_id: Uuid,
+        creator: ProfileId,
+    ) -> Self {
+        Self {
+            team_id,
+            profile: creator,
+            act: MembershipAct::Add {
+                role: TeamRole::Owner,
+            },
+            via: MembershipVia::TeamGenesis,
+            expected: None,
+            new_source: TeamMemberSource::Native,
+            actor: Some(creator),
+            invited_by: None,
+            guard_last_owner: true,
+        }
+    }
 }
 
 /// Take plan P1's two locks — the team row (`FOR NO KEY UPDATE`), then the target's membership row
