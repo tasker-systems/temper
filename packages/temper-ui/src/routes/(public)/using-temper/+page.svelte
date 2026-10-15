@@ -289,7 +289,7 @@ cargo install --path crates/temper-cli --locked --features embed,extract</code><
         <tr><td><code>delete_resource</code></td><td>Soft-delete a resource by ID.</td></tr>
         <tr><td><code>relationship</code></td><td>Assert, retype, reweight, or fold typed edges between resources (action discriminator).</td></tr>
         <tr><td><code>context_read</code> / <code>context_manage</code></td><td>Read and manage contexts (workspaces).</td></tr>
-        <tr><td><code>invitation_read</code> / <code>invitation_manage</code></td><td>Find, accept, and decline your team invitations; invite to and revoke from teams you run.</td></tr>
+        <tr><td><code>invitation_read</code> / <code>invitation_manage</code></td><td>Find and decline your team invitations (accept with <code>temper team join</code>); invite to and revoke from teams you run.</td></tr>
         <tr><td><code>describe_schema</code></td><td>Describe doc types and their schemas.</td></tr>
         <tr><td><code>run_query</code></td><td>Run a composed query — a declared DAG of acts answered in one round trip.</td></tr>
         <tr><td><code>element_trail</code></td><td>Read a resource's or edge's append-only event trail.</td></tr>

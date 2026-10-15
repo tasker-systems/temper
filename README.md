@@ -258,7 +258,7 @@ The remote MCP server exposes knowledge-base operations as structured tools over
 | `delete_resource` | Soft-delete a resource by ID |
 | `relationship` | Assert, retype, reweight, or fold typed edges (action discriminator) |
 | `context_read` / `context_manage` | Read and manage contexts (workspaces) |
-| `invitation_read` / `invitation_manage` | Find, accept, and decline your team invitations; invite to and revoke from teams you run |
+| `invitation_read` / `invitation_manage` | Find and decline your team invitations (accept with `temper team join`); invite to and revoke from teams you run |
 | `describe_schema` | Describe doc types and their schemas |
 | `run_query` | Run a composed query — a declared DAG of acts answered in one round trip |
 | `element_trail` | Read a resource's or edge's append-only event trail |

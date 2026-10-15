@@ -68,12 +68,14 @@ one verified owner of the address can accept or decline, so handing someone the 
 does not help. Resolve the duplicate address first.
 
 **Over MCP, invitations are two tools.** `invitation_read` (views `mine`, `count`, `team`) and
-`invitation_manage` (actions `accept`, `decline`, `create`, `revoke`) carry the same loop as
+`invitation_manage` (actions `decline`, `create`, `revoke`) carry the same loop as
 `temper invitations` (`mine`), `temper warmup`'s pending count (`count`), `team invitations`
-(`team`), `team join`, `team decline`, `team invite` and `team uninvite`, through the same API
-routes and the same checks. Team *stewardship* (an owner or maintainer running their own team)
-belongs on both surfaces; the instance-administration tools (grants, the admin ledger, access
-review) stay off MCP.
+(`team`), `team decline`, `team invite` and `team uninvite`, through the same API routes and the
+same checks. Team *stewardship* (an owner or maintainer running their own team) belongs on both
+surfaces; the instance-administration tools (grants, the admin ledger, access review) stay off
+MCP. **Accepting is not on MCP:** joining a team is the user's own act, and most MCP clients
+cannot yet put a confirmation in front of the user, so an agent cannot be trusted to have asked.
+The user runs `temper team join <token>`.
 
 `temper warmup` counts what is waiting on you, so an invitation surfaces at session start
 without anyone having to think to look:
