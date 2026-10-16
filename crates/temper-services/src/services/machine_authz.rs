@@ -135,13 +135,24 @@ impl AuthorizedGrant {
 /// [`AuthorizedGrant`] at authorization time, which cannot be done through a borrow of the caller's
 /// `GrantSpec` slice. A reach carries a handful of grants on a path that runs once per machine
 /// registration, so the allocation is not worth contorting the type to avoid.
+///
+/// `registrar` is the person the reach was authorized FOR. It rides in the proof, not beside it, so
+/// `apply_reach` re-checks the membership bar under each team lock for exactly that person
+/// (task `01a14592-3f83`) and records exactly them as actor — there is no second spelling of the
+/// registrar a call site could get wrong.
 #[derive(Debug)]
 pub(crate) struct AuthorizedReach<'a> {
+    registrar: &'a HumanPrincipal,
     teams: &'a [TeamSpec],
     grants: Vec<AuthorizedGrant>,
 }
 
 impl<'a> AuthorizedReach<'a> {
+    /// The person this reach was authorized for.
+    pub(crate) fn registrar(&self) -> &'a HumanPrincipal {
+        self.registrar
+    }
+
     pub(crate) fn teams(&self) -> &'a [TeamSpec] {
         self.teams
     }
@@ -169,7 +180,7 @@ impl<'a> AuthorizedReach<'a> {
 /// call site instead of being implicit in the absence of a check.
 pub(crate) async fn authorize_registration<'a>(
     pool: &PgPool,
-    authed: &HumanPrincipal,
+    authed: &'a HumanPrincipal,
     team: Option<Uuid>,
     teams: &'a [TeamSpec],
     grants: &'a [GrantSpec],
@@ -210,12 +221,14 @@ pub(crate) async fn authorize_registration<'a>(
     match authority {
         // Phase A D5: a system admin may confer any reach on a machine.
         MachineRegistrationAuthority::SystemAdmin => Ok(AuthorizedReach {
+            registrar: authed,
             teams,
             grants: AuthorizedReach::seal(grants),
         }),
         MachineRegistrationAuthority::TeamOwner => {
             contain_reach(pool, authed, teams, grants).await?;
             Ok(AuthorizedReach {
+                registrar: authed,
                 teams,
                 grants: AuthorizedReach::seal(grants),
             })
@@ -295,6 +308,9 @@ async fn contain_reach(
     // put a machine on that roster than add a person to it. (The admin arm returned before this
     // function runs; the rank bound is moot, since D4b caps a machine at `member`.)
     // `contain_target_team` keeps `require_manage_on_team`: a reach grant writes no membership.
+    // This is the POOL pre-check (plan P1 step 1), so a non-manager never takes a team lock. The
+    // same bar runs again under each team lock in `from_reach`, which is the one that decides: a
+    // registrar demoted or removed between here and the write is refused there.
     if !teams.is_empty() {
         let mut conn = pool.acquire().await?;
         for spec in teams {
@@ -499,15 +515,10 @@ mod tests {
             team_id: managed,
             role: "member".to_string(),
         }];
-        let reach = authorize_registration(
-            &pool,
-            &crate::test_support::human_principal_for(&pool, alice).await,
-            Some(owned),
-            &teams,
-            &[],
-        )
-        .await
-        .expect("can_manage on the target team permits reach into it");
+        let principal = crate::test_support::human_principal_for(&pool, alice).await;
+        let reach = authorize_registration(&pool, &principal, Some(owned), &teams, &[])
+            .await
+            .expect("can_manage on the target team permits reach into it");
         assert_eq!(reach.teams().len(), 1);
     }
 
@@ -705,26 +716,16 @@ mod tests {
                 role: role.to_string(),
             }];
 
-            let reach = authorize_registration(
-                &pool,
-                &crate::test_support::human_principal_for(&pool, alice).await,
-                Some(owned),
-                &teams,
-                &[],
-            )
-            .await
-            .unwrap_or_else(|e| panic!("team owner must still confer {role}: {e:?}"));
+            let principal = crate::test_support::human_principal_for(&pool, alice).await;
+            let reach = authorize_registration(&pool, &principal, Some(owned), &teams, &[])
+                .await
+                .unwrap_or_else(|e| panic!("team owner must still confer {role}: {e:?}"));
             assert_eq!(reach.teams().len(), 1);
 
-            let reach = authorize_registration(
-                &pool,
-                &crate::test_support::human_principal_for(&pool, admin).await,
-                None,
-                &teams,
-                &[],
-            )
-            .await
-            .unwrap_or_else(|e| panic!("admin must still confer {role}: {e:?}"));
+            let principal = crate::test_support::human_principal_for(&pool, admin).await;
+            let reach = authorize_registration(&pool, &principal, None, &teams, &[])
+                .await
+                .unwrap_or_else(|e| panic!("admin must still confer {role}: {e:?}"));
             assert_eq!(reach.teams().len(), 1);
         }
     }
@@ -849,15 +850,10 @@ mod tests {
             cogmap_id: cogmap,
             can_write: true,
         }];
-        let reach = authorize_registration(
-            &pool,
-            &crate::test_support::human_principal_for(&pool, alice).await,
-            Some(owned),
-            &[],
-            &grants,
-        )
-        .await
-        .expect("a holder of write may delegate write to a machine");
+        let principal = crate::test_support::human_principal_for(&pool, alice).await;
+        let reach = authorize_registration(&pool, &principal, Some(owned), &[], &grants)
+            .await
+            .expect("a holder of write may delegate write to a machine");
         assert_eq!(reach.grants().len(), 1);
     }
 
@@ -931,15 +927,10 @@ mod tests {
             can_write: true,
         }];
 
-        let reach = authorize_registration(
-            &pool,
-            &crate::test_support::human_principal_for(&pool, admin).await,
-            None,
-            &teams,
-            &grants,
-        )
-        .await
-        .expect("a system admin may grant any reach (Phase A D5)");
+        let principal = crate::test_support::human_principal_for(&pool, admin).await;
+        let reach = authorize_registration(&pool, &principal, None, &teams, &grants)
+            .await
+            .expect("a system admin may grant any reach (Phase A D5)");
         assert_eq!(reach.teams().len(), 1);
         assert_eq!(reach.grants().len(), 1);
     }

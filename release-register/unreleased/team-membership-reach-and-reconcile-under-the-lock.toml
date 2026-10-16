@@ -1,0 +1,27 @@
+title    = "Machine registration re-checks its registrar under the team lock, and SAML reconcile takes its team locks strictly in order"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http"]
+status   = "signal-only"
+body = '''
+Machine registration (`provision` and `issue`) decided the registrar's team reach on the pool,
+before its transaction, and never again. It now resolves the registrar's membership authority a
+second time, under each team's lock, and writes the `machine_reach` row only if they still manage
+the team (a system admin always passes). A registrar who is demoted or removed while their
+registration waits on that lock is refused with the same 403 the earlier check gives. Nothing is
+registered, and no `machine_reach` event names them.
+
+SAML reconcile locks every team it will touch, in ascending order, before it writes anything. A
+row can appear on a team it has not locked before it re-reads under its locks: a concurrent
+reconcile's identity-provider row, or a derived writer's native row. Until now it locked that team
+afterwards, out of order, and could deadlock with another writer; Postgres then aborted one of
+them. Now it rolls back and starts again with the wider set. If a second pass meets the same race,
+it gives up with a 409 and leaves membership unchanged, the same fail-open as the deadlock abort,
+and the next login reconciles. It also no longer counts a refused write (`stale`, `absent`, or a
+last-owner refusal, none of which can happen under its locks) as a skipped native row. Each now
+fails the reconcile.
+
+Who observes: a team owner whose registration races their own demotion, and SAML operators, who
+see fewer reconcile failures under concurrent logins. User-visible: rarely, and only in races.
+Release relevance: behavioral. The wire does not change.
+'''

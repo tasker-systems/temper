@@ -11,9 +11,11 @@
 //! 2. [`authorize`] — the rank rule, applied to one act on one target. It returns the sealed
 //!    [`AuthorizedMembershipChange`], which has private fields and no constructor outside this
 //!    module, so a write nobody authorized has nothing to pass to step 3.
-//! 3. [`membership_write`] — the only Rust caller of the SQL writer `_admin_team_membership_write`
-//!    (migration `20261101200000_team_membership_changed.sql`), which writes the row and appends
-//!    its `team_membership_changed` admin event in one statement.
+//! 3. [`membership_write`] — the one way a sealed change reaches the SQL writer
+//!    `_admin_team_membership_write` (migration `20261101200000_team_membership_changed.sql`),
+//!    which writes the row and appends its `team_membership_changed` admin event in one statement.
+//!    Its typed twin [`try_membership_write`] holds the only call, and returns the writer's
+//!    refusals as values for the one caller that branches on them (SAML reconcile).
 //!
 //! # Locks and order (plan P1)
 //!
@@ -731,12 +733,33 @@ impl AuthorizedMembershipChange {
     /// `target` is a [`locked`] read, so the act is `add` or `change` per the row as it stood
     /// under the team lock; a change to the current role is the writer's `noop`. An
     /// identity-provider row is never rewritten by a reach.
+    ///
+    /// **The registrar's bar is re-checked here, under the team lock** (task `01a14592-3f83`).
+    /// `machine_authz` decided the reach on the pool, before the transaction; `resolved` is the
+    /// registrar's [`MembershipAuthority`] resolved again on the transaction after [`locked`], as
+    /// every member act re-resolves (plan P1). It must manage the team — the same bar the pool
+    /// check applied (`contain_reach`, P15), and the admin arm passes it — or the write is the
+    /// pool check's 403. A registrar demoted or removed in between is refused, and no
+    /// `machine_reach` event names them. `resolved` must be for this team and for the reach's own
+    /// registrar, and the recorded actor is read from it as [`authorize`] reads it.
     pub(crate) fn from_reach(
         reach: &crate::services::machine_authz::AuthorizedReach,
-        registrar: ProfileId,
+        resolved: ResolvedMembership,
         target: &MembershipTarget,
         role: TeamRole,
     ) -> ApiResult<Self> {
+        if resolved.team_id != target.team_id || resolved.caller != reach.registrar().profile_id() {
+            return Err(ApiError::Internal(
+                "machine reach authority resolved for another team or registrar".to_string(),
+            ));
+        }
+        if !resolved.manages() {
+            return Err(ApiError::Forbidden);
+        }
+        let registrar = match &resolved.authority {
+            MembershipAuthority::SystemAdmin(admin) => admin.actor(),
+            _ => resolved.caller,
+        };
         if exceeds_machine_ceiling(role) {
             return Err(ApiError::BadRequest(MACHINE_ROLE_CEILING.to_string()));
         }
@@ -905,16 +928,43 @@ pub(crate) enum MembershipOutcome {
     Noop,
 }
 
+/// Why the SQL writer wrote nothing, for a caller that branches on it rather than answering it
+/// ([`try_membership_write`]). Every other caller gets these as the refusals [`membership_write`]
+/// maps them to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NotWritten {
+    /// An add found a row already there.
+    Exists,
+    /// A change or a removal found no row.
+    Absent,
+    /// The row is not the one the change was authorized against.
+    Stale,
+    /// The last-owner guard refused.
+    LastOwner,
+}
+
+impl NotWritten {
+    /// The refusal a routed writer answers with: `last_owner` → 409, `exists` → 409 naming
+    /// `change_role`, `absent` → 404, `stale` → 409 "membership changed; retry".
+    fn refusal(self) -> ApiError {
+        match self {
+            NotWritten::LastOwner => ApiError::Conflict(LAST_OWNER.to_string()),
+            NotWritten::Exists => ApiError::Conflict(ALREADY_A_MEMBER.to_string()),
+            NotWritten::Absent => ApiError::NotFound("team member not found".to_string()),
+            NotWritten::Stale => ApiError::Conflict(MEMBERSHIP_CHANGED.to_string()),
+        }
+    }
+}
+
 /// Write one authorized membership change and its `team_membership_changed` record, atomically.
 ///
-/// **The only Rust call site of `_admin_team_membership_write`** (plan PR C's tripwire pins it). The
-/// caller holds [`locked`]'s locks on the same transaction. `emitter` is the acting person's entity
-/// when the caller already resolved it; otherwise it is resolved here from the change's actor
-/// (`<handle>@web`, the `access_service::grant_capability` precedent). A system act passes no
+/// The caller holds [`locked`]'s locks on the same transaction. `emitter` is the acting person's
+/// entity when the caller already resolved it; otherwise it is resolved here from the change's
+/// actor (`<handle>@web`, the `access_service::grant_capability` precedent). A system act passes no
 /// emitter and the SQL writer emits as the `system` entity — never as the member (plan P4).
 ///
-/// The writer's refusals map to: `last_owner` → 409, `exists` → 409 naming `change_role`,
-/// `absent` → 404, `stale` → 409 "membership changed; retry".
+/// The writer's refusals are answered as [`NotWritten::refusal`] maps them. A caller that must
+/// branch on one instead calls [`try_membership_write`].
 ///
 /// After a change or a removal it also revokes the member's pending invitations on the team that
 /// they could no longer issue ([`revoke_invitations_beyond_authority`]), in the same transaction.
@@ -923,6 +973,22 @@ pub(crate) async fn membership_write(
     emitter: Option<EntityId>,
     change: AuthorizedMembershipChange,
 ) -> ApiResult<MembershipOutcome> {
+    try_membership_write(conn, emitter, change)
+        .await?
+        .map_err(NotWritten::refusal)
+}
+
+/// [`membership_write`], with the writer's refusals returned as a [`NotWritten`] rather than an
+/// error, for the one caller that branches on them: SAML reconcile, which skips the native row a
+/// derived writer inserted after its locks (S1, C7) and must not mistake any other refusal for one
+/// (task `01a14592-708c`). The `Err` arm is a failure of the write itself.
+///
+/// **The only Rust call site of `_admin_team_membership_write`** (plan PR C's tripwire pins it).
+pub(crate) async fn try_membership_write(
+    conn: &mut PgConnection,
+    emitter: Option<EntityId>,
+    change: AuthorizedMembershipChange,
+) -> ApiResult<Result<MembershipOutcome, NotWritten>> {
     let emitter = match (emitter, change.actor) {
         (Some(emitter), _) => Some(emitter),
         (None, Some(actor)) => Some(
@@ -967,17 +1033,18 @@ pub(crate) async fn membership_write(
     if written != MembershipOutcome::Added {
         revoke_invitations_beyond_authority(conn, change.team_id, change.profile).await?;
     }
-    Ok(written)
+    Ok(Ok(written))
 }
 
-/// The SQL writer's non-writing outcomes, as the service answers them.
-fn not_written(outcome: &str) -> ApiResult<MembershipOutcome> {
+/// The SQL writer's non-writing outcomes. `noop` is not a refusal: nothing changed and nothing was
+/// recorded (C8).
+fn not_written(outcome: &str) -> ApiResult<Result<MembershipOutcome, NotWritten>> {
     match outcome {
-        "noop" => Ok(MembershipOutcome::Noop),
-        "last_owner" => Err(ApiError::Conflict(LAST_OWNER.to_string())),
-        "exists" => Err(ApiError::Conflict(ALREADY_A_MEMBER.to_string())),
-        "absent" => Err(ApiError::NotFound("team member not found".to_string())),
-        "stale" => Err(ApiError::Conflict(MEMBERSHIP_CHANGED.to_string())),
+        "noop" => Ok(Ok(MembershipOutcome::Noop)),
+        "last_owner" => Ok(Err(NotWritten::LastOwner)),
+        "exists" => Ok(Err(NotWritten::Exists)),
+        "absent" => Ok(Err(NotWritten::Absent)),
+        "stale" => Ok(Err(NotWritten::Stale)),
         other => Err(ApiError::Internal(format!(
             "unexpected team membership write outcome {other:?}"
         ))),

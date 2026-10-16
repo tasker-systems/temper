@@ -102,6 +102,9 @@ EOF
 # REVIEWED 2026-10-16 (team-role rank, PR C, task C6) — exactly one: the `sqlx::query_scalar!` in
 # `authz::team_membership::membership_write`, whose only argument is the sealed
 # `AuthorizedMembershipChange`. Any second line here is a write path that skips the seal.
+# REVIEWED 2026-10-16 (task 01a14592-708c) — still one, moved: the query now sits in
+# `try_membership_write`, which returns the writer's refusals typed for SAML reconcile;
+# `membership_write` calls it and maps them to errors. Same sealed argument, same single site.
 read -r -d '' CALLER_BASELINE <<'EOF' || true
 1 crates/temper-services/src/authz/team_membership.rs
 EOF
@@ -126,7 +129,7 @@ EOF
 #
 # REVIEWED 2026-10-16 (team-role rank, PR C, task C6, RG-1/RG-2) — none. The writer authorizes
 # nothing (its migration header says so); a SQL function calling it could write any act with any
-# `via`, the last-owner guard off. Rust's `membership_write` is its only caller, pinned above.
+# `via`, the last-owner guard off. Rust's `try_membership_write` is its only caller, pinned above.
 read -r -d '' SQL_CALLER_BASELINE <<'EOF' || true
 EOF
 
