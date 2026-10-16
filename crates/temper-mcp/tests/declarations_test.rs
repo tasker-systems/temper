@@ -69,3 +69,62 @@ async fn a_closed_blob_door_advertises_the_shipped_declarations_without_the_blob
     assert!(!names.contains(&"blob_read") && !names.contains(&"blob_manage"));
     assert_tools_list(&advertised, &closed);
 }
+
+/// Every tool says whether it writes. A tool with no annotations reads, by MCP's defaults, as a
+/// destructive write to an open world, so a client that asks the user by annotation could not
+/// tell a read from a write. The rules held here:
+///
+/// - every tool states `readOnlyHint`, and `openWorldHint: false` (each one works inside the
+///   caller's Temper instance);
+/// - a write also states `destructiveHint`;
+/// - a `*_read`, `get_*` or `list_*` tool is read-only, and nothing named `*_manage` is;
+/// - the destructive writes are exactly the pinned set, so moving a tool across that line is a
+///   reviewed change here as well as in the fixture.
+///
+/// FAILS IF a tool ships without annotations, or a write's classification changes unreviewed.
+#[tokio::test]
+async fn every_tool_says_whether_it_writes() {
+    const DESTRUCTIVE: [&str; 13] = [
+        "commit_data_artifact",
+        "context_manage",
+        "declare_data_artifact_shape",
+        "delete_resource",
+        "facet_retract",
+        "facet_set",
+        "invitation_manage",
+        "relationship",
+        "resource_reblock",
+        "steward_advance_watermark",
+        "team_manage",
+        "update_resource",
+        "update_resource_meta",
+    ];
+    let advertised = tools_list(&open()).await;
+    let mut destructive = Vec::new();
+    for tool in advertised["tools"].as_array().expect("tools") {
+        let name = tool["name"].as_str().expect("name");
+        let hints = &tool["annotations"];
+        let read_only = hints["readOnlyHint"]
+            .as_bool()
+            .unwrap_or_else(|| panic!("{name} states readOnlyHint"));
+        assert_eq!(hints["openWorldHint"], false, "{name}: openWorldHint");
+        let named_read =
+            name.ends_with("_read") || name.starts_with("get_") || name.starts_with("list_");
+        if named_read {
+            assert!(read_only, "{name} is named as a read");
+        }
+        if name.ends_with("_manage") {
+            assert!(!read_only, "{name} is named as a write");
+        }
+        if !read_only {
+            let is_destructive = hints["destructiveHint"]
+                .as_bool()
+                .unwrap_or_else(|| panic!("{name} is a write and states destructiveHint"));
+            if is_destructive {
+                destructive.push(name);
+            }
+        }
+    }
+    destructive.sort_unstable();
+    assert_eq!(destructive, DESTRUCTIVE);
+}
