@@ -292,7 +292,6 @@ mod tests {
             [
                 ("TEMPER_TOKEN", None::<&str>),
                 ("TEMPER_AUTH", None),
-                ("TEMPER_AMBIENT_TOKEN", None),
                 ("TEMPER_AUTH_PATH", Some(missing_auth.to_str().unwrap())),
             ],
             || {
@@ -340,7 +339,6 @@ mod tests {
         let mut pinned: Vec<(&str, Option<String>)> = vec![
             ("TEMPER_TOKEN", None),
             ("TEMPER_AUTH", None),
-            ("TEMPER_AMBIENT_TOKEN", None),
             ("TEMPER_DEVICE_ID", None),
             ("TEMPER_API_URL", Some("https://api.example.com".to_owned())),
             (
@@ -550,7 +548,6 @@ audience      = "https://api.example.com"
             [
                 ("TEMPER_TOKEN", None::<&str>),
                 ("TEMPER_AUTH", None),
-                ("TEMPER_AMBIENT_TOKEN", None),
                 ("TEMPER_API_URL", None),
                 ("TEMPER_AUTH_PATH", Some(auth_path.to_str().unwrap())),
                 ("TEMPER_GLOBAL_CONFIG", Some(config_path.to_str().unwrap())),

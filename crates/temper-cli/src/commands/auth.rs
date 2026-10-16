@@ -669,7 +669,6 @@ mod tests {
             [
                 ("TEMPER_AUTH", Some("ambient")),
                 ("TEMPER_TOKEN", None::<&str>),
-                ("TEMPER_AMBIENT_TOKEN", None),
                 ("TEMPER_AUTH_PATH", Some(auth_path.to_str().unwrap())),
             ],
             || {
@@ -745,13 +744,9 @@ mod tests {
 
     #[test]
     fn grant_commands_are_not_refused_by_default() {
-        temp_env::with_vars(
-            [
-                ("TEMPER_AUTH", None::<&str>),
-                ("TEMPER_AMBIENT_TOKEN", None),
-            ],
-            || refuse_when_ambient("login", "log in to").expect("default custody"),
-        );
+        temp_env::with_vars([("TEMPER_AUTH", None::<&str>)], || {
+            refuse_when_ambient("login", "log in to").expect("default custody")
+        });
     }
 
     #[test]

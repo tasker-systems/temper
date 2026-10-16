@@ -165,8 +165,8 @@ by setting environment variables:
 Some hosts keep the credential out of the session entirely: an egress proxy attaches it to
 requests bound for the API host, so no token is ever in the environment. For those, set
 `TEMPER_AUTH=ambient` instead of `TEMPER_TOKEN`. The CLI then sends requests without an
-`Authorization` header (or with `TEMPER_AMBIENT_TOKEN` verbatim, for hosts that substitute a
-placeholder), never reads or writes `auth.json`, and learns who it is from `GET /api/profile`.
+`Authorization` header for the proxy to add, never reads or writes `auth.json`, and learns who
+it is from `GET /api/profile`.
 The validation is unchanged: whatever the proxy attaches passes the same two gates. Setting
 both `TEMPER_AUTH=ambient` and `TEMPER_TOKEN` is refused as a configuration error, and so is
 any other `TEMPER_AUTH` value.

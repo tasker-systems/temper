@@ -39,7 +39,6 @@ pub fn init_isolated_auth() {
                 "TEMPER_PROVIDER",
                 "TEMPER_DEVICE_ID",
                 "TEMPER_AUTH",
-                "TEMPER_AMBIENT_TOKEN",
             ] {
                 std::env::remove_var(var);
             }

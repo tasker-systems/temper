@@ -31,7 +31,6 @@ Cloud and ephemeral sessions can bootstrap temper without running the browser OA
 | `TEMPER_DEVICE_ID` | Stable device id for this session | When unset, a fresh UUIDv7 is generated per session. Set explicitly if you want a stable device id across session restarts. |
 | `TEMPER_API_URL` | API base URL override | Existing variable; takes precedence over config. |
 | `TEMPER_AUTH` | `ambient`: the credential is held outside the process | For hosts whose egress proxy attaches the credential (e.g. a network secret for the API host). No `Authorization` header is sent, disk is never read or written, and identity comes from `GET /api/profile`. Refused beside `TEMPER_TOKEN`; any other value is refused. |
-| `TEMPER_AMBIENT_TOKEN` | Placeholder bearer, ambient mode only | Sent verbatim and never parsed, for hosts that substitute a placeholder in transit rather than add a header. Refused without `TEMPER_AUTH=ambient`. |
 
 In ambient mode `TEMPER_DEVICE_ID` is sent when set, and no device id is minted when it isn't. `temper auth status` reports `credential: "ambient"` and takes `authenticated` from the server's answer. `auth login` / `token` / `logout` / `export-token` refuse.
 

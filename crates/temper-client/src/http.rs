@@ -182,9 +182,9 @@ pub struct HttpClient {
     token_override: Option<String>,
     token_store: Option<Arc<dyn TokenStore>>,
     /// The credential is held outside this process and attached in transit
-    /// (`TEMPER_AUTH=ambient`; see [`crate::auth::AmbientAuth`]). With no placeholder in
-    /// `token_override`, requests go out with no `Authorization` header, and a `401` is
-    /// rewritten to [`ClientError::AmbientRefused`] — its remedy is not `temper auth login`.
+    /// (`TEMPER_AUTH=ambient`; see [`crate::auth::AmbientAuth`]). Requests go out with no
+    /// `Authorization` header, and a `401` is rewritten to [`ClientError::AmbientRefused`] —
+    /// its remedy is not `temper auth login`.
     ambient: bool,
     /// Constructor-level default headers, appended to every request this client
     /// sends — applied in `apply_identity_headers`, so they ride the retry loop's
@@ -392,16 +392,14 @@ impl HttpClient {
     }
 
     /// Construct an `HttpClient` whose credential is held outside this process — see
-    /// [`crate::auth::AmbientAuth`]. Requests carry the placeholder bearer when one is set,
-    /// otherwise no `Authorization` header; there is no store, so nothing is ever loaded,
-    /// refreshed or written.
+    /// [`crate::auth::AmbientAuth`]. Requests carry no `Authorization` header; there is no
+    /// store and no override, so nothing is ever loaded, refreshed, written or sent.
     pub fn ambient(
         base_url: &str,
         surface: Surface,
         auth: &crate::auth::AmbientAuth,
     ) -> Result<Self> {
         Ok(Self {
-            token_override: auth.placeholder().map(|p| p.expose_secret().to_owned()),
             ambient: true,
             ..Self::new(base_url, auth.device_id().map(str::to_owned), surface, None)?
         })
@@ -452,8 +450,8 @@ impl HttpClient {
     /// Return the bearer to put on an authenticated request.
     ///
     /// Returns the token override if one was set at construction time; `None` for an
-    /// ambient client without a placeholder — the request goes out with no
-    /// `Authorization` header and the credential is attached in transit; otherwise calls
+    /// ambient client — the request goes out with no `Authorization` header and the
+    /// credential is attached in transit; otherwise calls
     /// [`TokenStore::load`] on the configured store and returns the stored access token
     /// (or `TokenExpired` / `NotAuthenticated` as appropriate). Returns `NotAuthenticated`
     /// when there is no override, no store, and the client is not ambient: `None` means
@@ -647,8 +645,7 @@ impl HttpClient {
             let req = if let Some(tok) = token {
                 let mut value = HeaderValue::from_str(&format!("Bearer {tok}"))
                     .map_err(|e| ClientError::Other(format!("invalid token header: {e}")))?;
-                // Withheld from any `Debug` of the request or its header map. An ambient
-                // placeholder is the real secret on a host that does no substitution.
+                // Withheld from any `Debug` of the request or its header map.
                 value.set_sensitive(true);
                 req.header(AUTHORIZATION, value)
             } else {
@@ -1725,7 +1722,7 @@ mod tests {
     /// `None` means "attached in transit", and only an ambient client may say it: the same
     /// storeless, overrideless shape above is `NotAuthenticated`.
     #[test]
-    fn resolve_token_is_none_for_an_ambient_client_without_a_placeholder() {
+    fn resolve_token_is_none_for_an_ambient_client() {
         let client = HttpClient::ambient(
             "https://api.example.com",
             TEST_SURFACE,

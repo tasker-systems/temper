@@ -17,9 +17,6 @@ pub const TEMPER_DEVICE_ID_ENV: &str = "TEMPER_DEVICE_ID";
 /// Names where this process's credential lives. Unset means the default custody
 /// (`TEMPER_TOKEN`, then disk); [`AMBIENT_AUTH_MODE`] is the one other value.
 pub const TEMPER_AUTH_ENV: &str = "TEMPER_AUTH";
-/// A placeholder bearer sent verbatim in ambient mode, for hosts that substitute
-/// a placeholder in transit rather than add a header. Never parsed.
-pub const TEMPER_AMBIENT_TOKEN_ENV: &str = "TEMPER_AMBIENT_TOKEN";
 /// The `TEMPER_AUTH` value for a credential held outside this process.
 pub const AMBIENT_AUTH_MODE: &str = "ambient";
 
@@ -245,43 +242,21 @@ impl TokenStore for MemoryTokenStore {
 // ---------------------------------------------------------------------------
 
 /// A credential held outside this process and attached to requests in transit — by an
-/// egress proxy that adds the header for the API host, or that substitutes a placeholder
-/// this process sends. Selected with `TEMPER_AUTH=ambient`.
+/// egress proxy that adds the `Authorization` header for the API host. Selected with
+/// `TEMPER_AUTH=ambient`.
 ///
-/// There is no token here to parse, refresh, store or export: that is the point. Identity
-/// comes from the server (`GET /api/profile`), exactly as it already does under Auth0, whose
-/// tokens never carry a profile id.
-///
-/// Deliberately does NOT derive `Serialize`, and its `Debug` withholds the placeholder,
-/// for the same reason [`MemoryTokenStore`] does not: a placeholder can be the real secret
-/// on a host that does no substitution.
-#[derive(Clone, Default)]
+/// There is no token here to parse, refresh, store, export or send: that is the point. Requests
+/// leave this process with no `Authorization` header at all. Identity comes from the server
+/// (`GET /api/profile`), exactly as it already does under Auth0, whose tokens never carry a
+/// profile id.
+#[derive(Debug, Clone, Default)]
 pub struct AmbientAuth {
-    placeholder: Option<secrecy::SecretString>,
     device_id: Option<String>,
 }
 
-impl std::fmt::Debug for AmbientAuth {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AmbientAuth")
-            .field("has_placeholder", &self.placeholder.is_some())
-            .field("device_id", &self.device_id)
-            .finish()
-    }
-}
-
 impl AmbientAuth {
-    pub fn new(placeholder: Option<secrecy::SecretString>, device_id: Option<String>) -> Self {
-        Self {
-            placeholder,
-            device_id,
-        }
-    }
-
-    /// The bearer to send verbatim, when the host substitutes a placeholder. `None` sends
-    /// no `Authorization` header at all.
-    pub fn placeholder(&self) -> Option<&secrecy::SecretString> {
-        self.placeholder.as_ref()
+    pub fn new(device_id: Option<String>) -> Self {
+        Self { device_id }
     }
 
     /// `TEMPER_DEVICE_ID`, or none. Not a fresh id per process, as the `TEMPER_TOKEN` path
@@ -297,24 +272,15 @@ impl AmbientAuth {
     /// Fails closed on every ambiguity rather than picking a custody:
     /// - an unknown `TEMPER_AUTH` value — a typo must not fall back to disk;
     /// - `TEMPER_AUTH=ambient` beside a non-empty `TEMPER_TOKEN` — two custody claims;
-    /// - `TEMPER_AMBIENT_TOKEN` without `TEMPER_AUTH=ambient` — a placeholder nothing sends.
     /// - a value that is not UTF-8 — unreadable must not read as unset.
     ///
     /// An unknown mode is echoed only when it looks like a mode name: an operator who put a
-    /// token in `TEMPER_AUTH` instead of `TEMPER_AMBIENT_TOKEN` must not see it printed into
-    /// stderr, a JSON payload, or an agent transcript.
+    /// token in `TEMPER_AUTH` instead of `TEMPER_TOKEN` must not see it printed into stderr, a
+    /// JSON payload, or an agent transcript.
     pub fn from_env() -> Result<Option<Self>> {
         let mode = read_env_var(TEMPER_AUTH_ENV)?;
-        let placeholder = read_env_var(TEMPER_AMBIENT_TOKEN_ENV)?;
         match mode.as_deref() {
-            None => match placeholder {
-                Some(_) => Err(ClientError::NotConfigured(format!(
-                    "{TEMPER_AMBIENT_TOKEN_ENV} is set but {TEMPER_AUTH_ENV} is not \
-                     `{AMBIENT_AUTH_MODE}` — set {TEMPER_AUTH_ENV}={AMBIENT_AUTH_MODE}, or unset \
-                     {TEMPER_AMBIENT_TOKEN_ENV}"
-                ))),
-                None => Ok(None),
-            },
+            None => Ok(None),
             Some(AMBIENT_AUTH_MODE) => {
                 if read_env_var(TEMPER_TOKEN_ENV)?.is_some() {
                     return Err(ClientError::NotConfigured(format!(
@@ -322,10 +288,7 @@ impl AmbientAuth {
                          outside this process, but {TEMPER_TOKEN_ENV} is also set — unset one"
                     )));
                 }
-                Ok(Some(Self::new(
-                    placeholder.map(Into::into),
-                    read_env_var(TEMPER_DEVICE_ID_ENV)?,
-                )))
+                Ok(Some(Self::new(read_env_var(TEMPER_DEVICE_ID_ENV)?)))
             }
             Some(other) => {
                 let shown = if looks_like_a_mode_name(other) {
@@ -2082,12 +2045,7 @@ mod tests {
     /// Run `f` with exactly these ambient-relevant variables set; every other one unset, so a
     /// developer shell's `TEMPER_TOKEN` cannot leak into the assertion.
     fn with_ambient_env<R>(vars: &[(&str, &str)], f: impl FnOnce() -> R) -> R {
-        let names = [
-            TEMPER_AUTH_ENV,
-            TEMPER_AMBIENT_TOKEN_ENV,
-            TEMPER_TOKEN_ENV,
-            TEMPER_DEVICE_ID_ENV,
-        ];
+        let names = [TEMPER_AUTH_ENV, TEMPER_TOKEN_ENV, TEMPER_DEVICE_ID_ENV];
         let pinned: Vec<(&str, Option<&str>)> = names
             .iter()
             .map(|n| (*n, vars.iter().find(|(k, _)| k == n).map(|(_, v)| *v)))
@@ -2106,20 +2064,14 @@ mod tests {
     }
 
     #[test]
-    fn ambient_reads_placeholder_and_device_id() {
+    fn ambient_reads_device_id() {
         with_ambient_env(
             &[
                 (TEMPER_AUTH_ENV, "ambient"),
-                (TEMPER_AMBIENT_TOKEN_ENV, "not-a-jwt-placeholder"),
                 (TEMPER_DEVICE_ID_ENV, "dev-1"),
             ],
             || {
                 let auth = AmbientAuth::from_env().unwrap().expect("ambient selected");
-                assert_eq!(
-                    auth.placeholder().map(|p| p.expose_secret().to_owned()),
-                    Some("not-a-jwt-placeholder".to_owned()),
-                    "the placeholder is carried verbatim, never parsed"
-                );
                 assert_eq!(auth.device_id(), Some("dev-1"));
             },
         );
@@ -2128,10 +2080,9 @@ mod tests {
     /// No device id is minted: a fresh one per process would register every invocation of an
     /// ambient session as a new device.
     #[test]
-    fn ambient_without_extras_has_no_placeholder_and_no_device_id() {
+    fn ambient_without_a_device_id_mints_none() {
         with_ambient_env(&[(TEMPER_AUTH_ENV, "ambient")], || {
             let auth = AmbientAuth::from_env().unwrap().expect("ambient selected");
-            assert!(auth.placeholder().is_none());
             assert!(auth.device_id().is_none());
         });
     }
@@ -2188,24 +2139,5 @@ mod tests {
                 );
             });
         });
-    }
-
-    #[test]
-    fn a_placeholder_without_ambient_mode_is_refused() {
-        with_ambient_env(&[(TEMPER_AMBIENT_TOKEN_ENV, "placeholder")], || {
-            let err = AmbientAuth::from_env().expect_err("a placeholder nothing sends");
-            assert!(
-                matches!(&err, ClientError::NotConfigured(m) if m.contains(TEMPER_AUTH_ENV)),
-                "got {err:?}"
-            );
-        });
-    }
-
-    #[test]
-    fn ambient_debug_withholds_the_placeholder() {
-        let auth = AmbientAuth::new(Some("secret-placeholder".to_owned().into()), None);
-        let rendered = format!("{auth:?}");
-        assert!(!rendered.contains("secret-placeholder"), "{rendered}");
-        assert!(rendered.contains("has_placeholder: true"), "{rendered}");
     }
 }

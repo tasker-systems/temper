@@ -95,7 +95,6 @@ mod tests {
             [
                 ("TEMPER_TOKEN", None::<&str>),
                 ("TEMPER_AUTH", None),
-                ("TEMPER_AMBIENT_TOKEN", None),
                 ("TEMPER_AUTH_PATH", Some(auth_path.to_str().unwrap())),
                 (
                     "TEMPER_GLOBAL_CONFIG",

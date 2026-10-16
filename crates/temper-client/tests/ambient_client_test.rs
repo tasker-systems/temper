@@ -1,9 +1,8 @@
 //! An ambient client (`TEMPER_AUTH=ambient`) against a real HTTP server.
 //!
 //! The credential is held outside the process and attached in transit, so what these pin is what
-//! goes on the wire: no `Authorization` header unless a placeholder is configured, the placeholder
-//! verbatim when it is, and a `401` that names the ambient credential instead of `temper auth
-//! login`. Same `wiremock` pattern as `profile_entitlements_test.rs`.
+//! goes on the wire: no `Authorization` header, ever, and a `401` that names the ambient
+//! credential instead of `temper auth login`. Same `wiremock` pattern as `profile_entitlements_test.rs`.
 
 use serde_json::json;
 use wiremock::matchers::{method, path};
@@ -53,7 +52,7 @@ async fn only_request(server: &MockServer) -> wiremock::Request {
 }
 
 #[tokio::test]
-async fn without_a_placeholder_no_authorization_header_is_sent() {
+async fn no_authorization_header_is_sent() {
     let server = profile_server(200, profile_body()).await;
     let client = ambient_client(&server.uri(), &AmbientAuth::default());
 
@@ -73,23 +72,15 @@ async fn without_a_placeholder_no_authorization_header_is_sent() {
 }
 
 #[tokio::test]
-async fn a_placeholder_is_sent_verbatim_as_the_bearer() {
+async fn a_configured_device_id_is_sent_and_no_bearer_is() {
     let server = profile_server(200, profile_body()).await;
-    let auth = AmbientAuth::new(
-        Some("placeholder-not-a-jwt".to_owned().into()),
-        Some("dev-1".to_owned()),
-    );
+    let auth = AmbientAuth::new(Some("dev-1".to_owned()));
     let client = ambient_client(&server.uri(), &auth);
 
     client.profile().get().await.expect("the server answered");
 
     let req = only_request(&server).await;
-    assert_eq!(
-        req.headers
-            .get("authorization")
-            .map(|v| v.to_str().unwrap()),
-        Some("Bearer placeholder-not-a-jwt")
-    );
+    assert!(req.headers.get("authorization").is_none());
     assert_eq!(
         req.headers
             .get("x-temper-device-id")
