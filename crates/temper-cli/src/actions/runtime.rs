@@ -8,13 +8,19 @@
 //! unset → `DiskTokenStore` at the `TEMPER_AUTH_PATH` / `auth.path` path
 //! (`~/.config/temper/auth.json`). Cloud sessions cannot accidentally write
 //! to disk because the store itself has no disk knowledge.
+//!
+//! `TEMPER_AUTH=ambient` is the third custody, checked first: the credential is
+//! held outside the process and attached in transit (an egress proxy), so there
+//! is no store at all — see [`temper_client::auth::AmbientAuth`].
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use temper_client::auth::{DiskTokenStore, MemoryTokenStore, TokenStore};
-use temper_client::config::{auth_path, build_client_from, load_cloud_config, oauth_config};
+use temper_client::auth::{AmbientAuth, DiskTokenStore, MemoryTokenStore, TokenStore};
+use temper_client::config::{
+    auth_path, build_ambient_client_from, build_client_from, load_cloud_config, oauth_config,
+};
 use temper_client::error::ClientError;
 use temper_core::types::config::TemperConfig;
 
@@ -95,6 +101,12 @@ fn humanize_duration(d: chrono::Duration) -> String {
     }
 }
 
+/// The ambient credential contract from the environment (`TEMPER_AUTH=ambient`), or `None` for
+/// the default custody. A misconfigured contract is a [`TemperError::Config`], never a fallback.
+pub(crate) fn ambient_auth() -> Result<Option<AmbientAuth>> {
+    AmbientAuth::from_env().map_err(|e| TemperError::Config(e.to_string()))
+}
+
 /// Resolve the active [`TokenStore`] for this process.
 ///
 /// A cloud agent session is handed its token via the `TEMPER_TOKEN` env
@@ -156,12 +168,28 @@ fn refresh_if_due(config: &TemperConfig, store: &dyn TokenStore) {
 ///
 /// `pub(crate)` — shared across the crate so callers can inspect the resolved
 /// `TokenStore` alongside the client without rebuilding each independently.
+///
+/// Under `TEMPER_AUTH=ambient` the returned store is empty — the credential is not
+/// in this process — so a caller asking "is there a credential?" asks the client
+/// ([`temper_client::TemperClient::is_ambient`]) before the store.
 pub(crate) fn build_config_store_and_client() -> Result<(
     TemperConfig,
     Arc<dyn TokenStore>,
     temper_client::TemperClient,
 )> {
     let config = load_cloud_config().map_err(|e| TemperError::Api(e.to_string()))?;
+    // Ambient first, so its refusals (`TEMPER_AUTH=ambient` beside `TEMPER_TOKEN`, an unknown
+    // mode) surface before either other custody gets a chance to answer.
+    if let Some(ambient) = ambient_auth()? {
+        let client = build_ambient_client_from(
+            &config,
+            &ambient,
+            temper_workflow::operations::Surface::CliCloud,
+        )
+        .map_err(|e| TemperError::Api(e.to_string()))?;
+        let store: Arc<dyn TokenStore> = Arc::new(MemoryTokenStore::empty());
+        return Ok((config, store, client));
+    }
     let store = resolve_token_store(&config)?;
     refresh_if_due(&config, &*store);
     let client = build_client_from(
@@ -263,6 +291,7 @@ mod tests {
         temp_env::with_vars(
             [
                 ("TEMPER_TOKEN", None::<&str>),
+                ("TEMPER_AUTH", None),
                 ("TEMPER_AUTH_PATH", Some(missing_auth.to_str().unwrap())),
             ],
             || {
@@ -287,6 +316,93 @@ mod tests {
                 matches!(err, TemperError::Config(_)),
                 "expected Config error for malformed TEMPER_TOKEN: {err}"
             );
+        });
+    }
+
+    /// Pin the ambient-relevant environment for `f`: the API URL and an auth file that holds a
+    /// live-looking grant, so a test can tell "ambient ignored disk" from "there was nothing on
+    /// disk to read".
+    fn with_ambient_env<R>(vars: &[(&str, &str)], f: impl FnOnce() -> R) -> R {
+        let dir = tempfile::tempdir().unwrap();
+        let auth_path = dir.path().join("auth.json");
+        DiskTokenStore::at(auth_path.clone())
+            .save(&temper_client::auth::StoredAuth {
+                provider: temper_client::auth::Provider::auth0("test.auth0.com"),
+                access_token: "tok_on_disk".to_string().into(),
+                refresh_token: None,
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+                profile_id: None,
+                device_id: Some("disk-device".to_string()),
+            })
+            .unwrap();
+        let missing_config = dir.path().join("no-config.toml");
+        let mut pinned: Vec<(&str, Option<String>)> = vec![
+            ("TEMPER_TOKEN", None),
+            ("TEMPER_AUTH", None),
+            ("TEMPER_DEVICE_ID", None),
+            ("TEMPER_API_URL", Some("https://api.example.com".to_owned())),
+            (
+                "TEMPER_AUTH_PATH",
+                Some(auth_path.to_str().unwrap().to_owned()),
+            ),
+            (
+                "TEMPER_GLOBAL_CONFIG",
+                Some(missing_config.to_str().unwrap().to_owned()),
+            ),
+        ];
+        for (k, v) in vars {
+            pinned.retain(|(name, _)| name != k);
+            pinned.push((k, Some((*v).to_owned())));
+        }
+        temp_env::with_vars(pinned, f)
+    }
+
+    // FAILS IF: ambient selection falls through to disk custody — moved after
+    // `resolve_token_store`, the store returned would hold the seeded disk grant. What reaches the
+    // wire is pinned in temper-client's `ambient_client_test.rs`.
+    #[test]
+    fn ambient_builds_a_storeless_client_and_never_reads_disk() {
+        with_ambient_env(&[("TEMPER_AUTH", "ambient")], || {
+            let (_config, store, client) = build_config_store_and_client().expect("builds");
+            assert!(client.is_ambient());
+            assert!(
+                store.load().unwrap().is_none(),
+                "the disk grant must not be loaded under TEMPER_AUTH=ambient"
+            );
+        });
+    }
+
+    // FAILS IF: the default custody changes when TEMPER_AUTH is unset.
+    #[test]
+    fn without_temper_auth_the_disk_grant_is_used() {
+        with_ambient_env(&[], || {
+            let (_config, store, client) = build_config_store_and_client().expect("builds");
+            assert!(!client.is_ambient());
+            assert!(store.load().unwrap().is_some());
+        });
+    }
+
+    #[test]
+    fn ambient_beside_temper_token_is_a_config_error() {
+        with_ambient_env(
+            &[("TEMPER_AUTH", "ambient"), ("TEMPER_TOKEN", "a.b.c")],
+            || {
+                let Err(err) = build_config_store_and_client() else {
+                    panic!("two custody claims must be refused");
+                };
+                assert!(matches!(err, TemperError::Config(_)), "got {err:?}");
+            },
+        );
+    }
+
+    // FAILS IF: a mistyped TEMPER_AUTH falls back to the disk grant.
+    #[test]
+    fn an_unknown_temper_auth_is_a_config_error() {
+        with_ambient_env(&[("TEMPER_AUTH", "ambeint")], || {
+            let Err(err) = build_config_store_and_client() else {
+                panic!("an unknown mode must fail closed");
+            };
+            assert!(matches!(err, TemperError::Config(_)), "got {err:?}");
         });
     }
 
@@ -431,6 +547,7 @@ audience      = "https://api.example.com"
         temp_env::with_vars(
             [
                 ("TEMPER_TOKEN", None::<&str>),
+                ("TEMPER_AUTH", None),
                 ("TEMPER_API_URL", None),
                 ("TEMPER_AUTH_PATH", Some(auth_path.to_str().unwrap())),
                 ("TEMPER_GLOBAL_CONFIG", Some(config_path.to_str().unwrap())),

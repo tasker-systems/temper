@@ -32,7 +32,7 @@ impl<'a> EventClient<'a> {
         let req = self.http.request(op, &path);
         let resp: EventCursorResponse = self
             .http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await?;
         Ok(resp.latest_event_id)
     }
@@ -53,7 +53,7 @@ impl<'a> EventClient<'a> {
         let path = op.path(&[&kind_seg, &element_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 }

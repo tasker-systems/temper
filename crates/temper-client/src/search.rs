@@ -94,7 +94,7 @@ impl<'a> SearchClient<'a> {
         let req = self.http.request(op, &path).json(params);
         let resp = self
             .http
-            .send(&op.method(), &path, req, Some(&token))
+            .send(&op.method(), &path, req, token.as_deref())
             .await?;
         let bytes = resp.bytes().await?;
         Ok(serde_json::from_slice(&bytes)?)

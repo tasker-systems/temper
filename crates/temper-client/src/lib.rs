@@ -116,6 +116,28 @@ impl TemperClient {
         })
     }
 
+    /// Create a client whose credential is held outside this process and attached in transit
+    /// (`TEMPER_AUTH=ambient`; see [`auth::AmbientAuth`]).
+    ///
+    /// The facade's store is empty by construction, so refresh, logout and status have nothing
+    /// to act on — this mode never loads, writes or exports a credential.
+    pub fn ambient(
+        base_url: &str,
+        surface: temper_workflow::operations::Surface,
+        auth: &auth::AmbientAuth,
+    ) -> crate::error::Result<Self> {
+        Ok(Self {
+            http: http::HttpClient::ambient(base_url, surface, auth)?,
+            oauth_config: None,
+            store: Arc::new(auth::MemoryTokenStore::empty()),
+        })
+    }
+
+    /// Whether this client's credential is held outside the process.
+    pub fn is_ambient(&self) -> bool {
+        self.http.is_ambient()
+    }
+
     /// Create an in-process client with a pre-resolved token override.
     ///
     /// The wire-less counterpart of [`Self::with_token`]: every request is driven through

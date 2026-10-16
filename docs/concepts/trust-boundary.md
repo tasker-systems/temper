@@ -162,6 +162,15 @@ by setting environment variables:
 | `TEMPER_PROVIDER` | Auth provider name that issued the token | No — defaults to `auth0` |
 | `TEMPER_DEVICE_ID` | Stable device id for this session | No — a fresh UUIDv7 is generated if unset |
 
+Some hosts keep the credential out of the session entirely: an egress proxy attaches it to
+requests bound for the API host, so no token is ever in the environment. For those, set
+`TEMPER_AUTH=ambient` instead of `TEMPER_TOKEN`. The CLI then sends requests without an
+`Authorization` header for the proxy to add, never reads or writes `auth.json`, and learns who
+it is from `GET /api/profile`.
+The validation is unchanged: whatever the proxy attaches passes the same two gates. Setting
+both `TEMPER_AUTH=ambient` and `TEMPER_TOKEN` is refused as a configuration error, and so is
+any other `TEMPER_AUTH` value.
+
 A **human-driven agent** (Claude Code, an IDE plugin) authenticates as the human: the human
 runs `temper auth login`, the CLI caches the token, and the agent inherits it by driving the
 CLI. There is no separate "agent identity" — the agent is the human, through the CLI.

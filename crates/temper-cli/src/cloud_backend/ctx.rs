@@ -32,8 +32,9 @@ pub struct CloudBackendCtx {
 /// cloud-mode CLI invocation.
 ///
 /// **No offline path.** Cloud mode requires a resolved token. If no
-/// `TEMPER_TOKEN` env var is set and no token is cached on disk, this
-/// function returns an error directing the user to `temper auth login`.
+/// `TEMPER_TOKEN` env var is set, no token is cached on disk, and the
+/// credential is not ambient (`TEMPER_AUTH=ambient`, attached in transit),
+/// this function returns an error directing the user to `temper auth login`.
 pub fn assemble_cloud_backend(
     config: &Config,
     context: &str,
@@ -44,8 +45,9 @@ pub fn assemble_cloud_backend(
     let (_cfg, store, client) = crate::actions::runtime::build_config_store_and_client()?;
 
     // Cloud mode has no offline path. Require a token or fail with a clear
-    // auth error directing the user to authenticate first.
-    if store.load().ok().flatten().is_none() {
+    // auth error directing the user to authenticate first. An ambient client has
+    // no token by design — the server's answer is its check.
+    if !client.is_ambient() && store.load().ok().flatten().is_none() {
         return Err(TemperError::Config(
             "not authenticated — run `temper auth login` first".into(),
         ));
@@ -92,6 +94,7 @@ mod tests {
         temp_env::with_vars(
             [
                 ("TEMPER_TOKEN", None::<&str>),
+                ("TEMPER_AUTH", None),
                 ("TEMPER_AUTH_PATH", Some(auth_path.to_str().unwrap())),
                 (
                     "TEMPER_GLOBAL_CONFIG",

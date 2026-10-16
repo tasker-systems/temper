@@ -49,7 +49,7 @@ impl<'a> AdminClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -60,7 +60,7 @@ impl<'a> AdminClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -74,7 +74,7 @@ impl<'a> AdminClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).query(query);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -92,7 +92,7 @@ impl<'a> AdminClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).query(query);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -115,7 +115,7 @@ impl<'a> AdminClient<'a> {
             ..Default::default()
         });
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -126,7 +126,7 @@ impl<'a> AdminClient<'a> {
         let path = op.path(&[&profile_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -137,7 +137,7 @@ impl<'a> AdminClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -154,7 +154,7 @@ impl<'a> AdminClient<'a> {
             .request(op, &path)
             .json(&DemoteAdminRequest { profile_id });
         self.http
-            .send(&op.method(), &path, req, Some(&token))
+            .send(&op.method(), &path, req, token.as_deref())
             .await?;
         Ok(())
     }
@@ -166,7 +166,7 @@ impl<'a> AdminClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -177,7 +177,7 @@ impl<'a> AdminClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -193,7 +193,7 @@ impl<'a> AdminClient<'a> {
         let req = self.http.request(op, &path);
         let body: QueueCount = self
             .http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await?;
         Ok(body.count)
     }
@@ -208,7 +208,7 @@ impl<'a> AdminClient<'a> {
         let req = self.http.request(op, &path);
         let body: QueueCount = self
             .http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await?;
         Ok(body.count)
     }
@@ -231,7 +231,7 @@ impl<'a> AdminClient<'a> {
             .request(op, &path)
             .json(&CloseReviewBody { decision_note });
         self.http
-            .send(&op.method(), &path, req, Some(&token))
+            .send(&op.method(), &path, req, token.as_deref())
             .await?;
         Ok(())
     }
@@ -247,7 +247,7 @@ impl<'a> AdminClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -265,7 +265,7 @@ impl<'a> AdminClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -285,7 +285,7 @@ impl<'a> AdminClient<'a> {
         };
         let req = self.http.request(op, &path).json(&body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -328,7 +328,7 @@ impl<'a> AdminClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(&serde_json::json!({}));
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -433,7 +433,7 @@ impl<'a> AdminClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -448,7 +448,7 @@ impl<'a> AdminClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -462,7 +462,7 @@ impl<'a> AdminClient<'a> {
         let path = op.path(&[&category.as_str()])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -476,7 +476,7 @@ impl<'a> AdminClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -494,7 +494,7 @@ impl<'a> AdminClient<'a> {
             req = req.json(&body);
         }
         self.http
-            .send(&op.method(), &path, req, Some(&token))
+            .send(&op.method(), &path, req, token.as_deref())
             .await?;
         Ok(())
     }

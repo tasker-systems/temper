@@ -41,7 +41,7 @@ impl<'a> TeamsClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -52,7 +52,7 @@ impl<'a> TeamsClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -68,7 +68,7 @@ impl<'a> TeamsClient<'a> {
         let path = op.path(&[&team_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -79,7 +79,7 @@ impl<'a> TeamsClient<'a> {
         let path = op.path(&[&team_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -90,7 +90,7 @@ impl<'a> TeamsClient<'a> {
         let path = op.path(&[&team_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -104,7 +104,7 @@ impl<'a> TeamsClient<'a> {
         let path = op.path(&[&team_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send(&op.method(), &path, req, Some(&token))
+            .send(&op.method(), &path, req, token.as_deref())
             .await?;
         Ok(())
     }
@@ -121,7 +121,7 @@ impl<'a> TeamsClient<'a> {
         let path = op.path(&[&team_id, &profile_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -147,7 +147,7 @@ impl<'a> TeamsClient<'a> {
         let req = self.http.request(op, &path);
         let resp = self
             .http
-            .send(&op.method(), &path, req, Some(&token))
+            .send(&op.method(), &path, req, token.as_deref())
             .await?;
         let bytes = resp.bytes().await?;
         if bytes.is_empty() {
@@ -172,7 +172,7 @@ impl<'a> TeamsClient<'a> {
         let path = op.path(&[&team_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -187,7 +187,7 @@ impl<'a> TeamsClient<'a> {
         let path = op.path(&[&team_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -198,7 +198,7 @@ impl<'a> TeamsClient<'a> {
         let path = op.path(&[&team_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -210,7 +210,7 @@ impl<'a> TeamsClient<'a> {
         let path = op.path(&[&team_id, &invitation_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send(&op.method(), &path, req, Some(&token))
+            .send(&op.method(), &path, req, token.as_deref())
             .await?;
         Ok(())
     }
@@ -222,7 +222,7 @@ impl<'a> TeamsClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -246,7 +246,7 @@ impl<'a> TeamsClient<'a> {
             req = req.query(&[("team_slug", slug)]);
         }
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -265,7 +265,7 @@ impl<'a> TeamsClient<'a> {
         };
         let req = self.http.request(op, &path).json(&body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -282,7 +282,7 @@ impl<'a> TeamsClient<'a> {
         };
         let req = self.http.request(op, &path).json(&body);
         self.http
-            .send(&op.method(), &path, req, Some(&token))
+            .send(&op.method(), &path, req, token.as_deref())
             .await?;
         Ok(())
     }

@@ -50,7 +50,7 @@ impl<'a> CognitiveMapClient<'a> {
         // serializes to nothing and appends no query string.
         let req = self.http.request(op, &path).json(payload).query(act);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -66,7 +66,7 @@ impl<'a> CognitiveMapClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(payload);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -79,7 +79,7 @@ impl<'a> CognitiveMapClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -92,7 +92,7 @@ impl<'a> CognitiveMapClient<'a> {
         let path = op.path(&[&cogmap_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -113,7 +113,7 @@ impl<'a> CognitiveMapClient<'a> {
         let path = shape_path(cogmap_id, lens_id)?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -130,7 +130,7 @@ impl<'a> CognitiveMapClient<'a> {
         let path = materialize_delta_path(cogmap_id, threshold)?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -147,7 +147,7 @@ impl<'a> CognitiveMapClient<'a> {
         let body = MaterializeRequest { threshold };
         let req = self.http.request(op, &path).json(&body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -163,7 +163,7 @@ impl<'a> CognitiveMapClient<'a> {
         let path = region_metrics_path(cogmap_id, lens_id)?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -175,7 +175,7 @@ impl<'a> CognitiveMapClient<'a> {
         let path = analytics_path(cogmap_id)?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -191,7 +191,7 @@ impl<'a> CognitiveMapClient<'a> {
         let path = op.path(&[&cogmap_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -203,7 +203,7 @@ impl<'a> CognitiveMapClient<'a> {
         let path = op.path(&[&cogmap_id, &team_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -215,7 +215,7 @@ impl<'a> CognitiveMapClient<'a> {
         let path = op.path(&[&cogmap_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -227,7 +227,7 @@ impl<'a> CognitiveMapClient<'a> {
         let path = op.path(&[&cogmap_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 }

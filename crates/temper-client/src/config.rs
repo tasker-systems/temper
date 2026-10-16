@@ -93,16 +93,7 @@ pub fn build_client_from(
     store: std::sync::Arc<dyn crate::auth::TokenStore>,
     surface: temper_workflow::operations::Surface,
 ) -> crate::error::Result<crate::TemperClient> {
-    let url = api_url(config);
-    // Validated here under the operator-facing name — `TEMPER_API_URL` /
-    // `cloud.api_url` — so a refusal names the variable the caller can fix.
-    // The empty case is deliberately left to `HttpClient::new`, whose message
-    // names the fix ("run `temper init`") rather than the parse failure.
-    // `TemperClient::new` re-validates as `base_url` for direct constructors;
-    // a URL that passes here passes there.
-    if !url.is_empty() {
-        crate::endpoint::validate_endpoint(&url, "api_url")?;
-    }
+    let url = validated_api_url(config)?;
     let auth = store.load()?;
     let device_id = auth.as_ref().and_then(|a| a.device_id.clone());
 
@@ -127,6 +118,35 @@ pub fn build_client_from(
     };
 
     Ok(client)
+}
+
+/// Build an ambient [`TemperClient`](crate::TemperClient) — the credential is held outside
+/// this process — against the configured API URL.
+///
+/// The [`build_client_from`] counterpart for `TEMPER_AUTH=ambient`, with the same URL
+/// validation under the operator-facing name. No OAuth config is attached: there is no grant
+/// here to log in to or refresh.
+pub fn build_ambient_client_from(
+    config: &TemperConfig,
+    auth: &crate::auth::AmbientAuth,
+    surface: temper_workflow::operations::Surface,
+) -> crate::error::Result<crate::TemperClient> {
+    let url = validated_api_url(config)?;
+    crate::TemperClient::ambient(&url, surface, auth)
+}
+
+/// The configured API URL, validated under the operator-facing name — `TEMPER_API_URL` /
+/// `cloud.api_url` — so a refusal names the variable the caller can fix.
+///
+/// The empty case is deliberately left to `HttpClient::new`, whose message names the fix
+/// ("run `temper init`") rather than the parse failure. `TemperClient::new` re-validates as
+/// `base_url` for direct constructors; a URL that passes here passes there.
+fn validated_api_url(config: &TemperConfig) -> crate::error::Result<String> {
+    let url = api_url(config);
+    if !url.is_empty() {
+        crate::endpoint::validate_endpoint(&url, "api_url")?;
+    }
+    Ok(url)
 }
 
 /// Convenience: load config and build a fully-configured [`TemperClient`](crate::TemperClient)

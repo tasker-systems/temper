@@ -14,6 +14,11 @@ use crate::error::{ClientError, Result};
 pub const TEMPER_TOKEN_ENV: &str = "TEMPER_TOKEN";
 pub const TEMPER_PROVIDER_ENV: &str = "TEMPER_PROVIDER";
 pub const TEMPER_DEVICE_ID_ENV: &str = "TEMPER_DEVICE_ID";
+/// Names where this process's credential lives. Unset means the default custody
+/// (`TEMPER_TOKEN`, then disk); [`AMBIENT_AUTH_MODE`] is the one other value.
+pub const TEMPER_AUTH_ENV: &str = "TEMPER_AUTH";
+/// The `TEMPER_AUTH` value for a credential held outside this process.
+pub const AMBIENT_AUTH_MODE: &str = "ambient";
 
 // ---------------------------------------------------------------------------
 // TokenStore — abstracts over "where does the auth state live"
@@ -230,6 +235,97 @@ impl TokenStore for MemoryTokenStore {
         *guard = None;
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Ambient auth — the credential is held outside this process
+// ---------------------------------------------------------------------------
+
+/// A credential held outside this process and attached to requests in transit — by an
+/// egress proxy that adds the `Authorization` header for the API host. Selected with
+/// `TEMPER_AUTH=ambient`.
+///
+/// There is no token here to parse, refresh, store, export or send: that is the point. Requests
+/// leave this process with no `Authorization` header at all. Identity comes from the server
+/// (`GET /api/profile`), exactly as it already does under Auth0, whose tokens never carry a
+/// profile id.
+#[derive(Debug, Clone, Default)]
+pub struct AmbientAuth {
+    device_id: Option<String>,
+}
+
+impl AmbientAuth {
+    pub fn new(device_id: Option<String>) -> Self {
+        Self { device_id }
+    }
+
+    /// `TEMPER_DEVICE_ID`, or none. Not a fresh id per process, as the `TEMPER_TOKEN` path
+    /// mints: every invocation in an ambient session would register as a new device, and
+    /// the server treats the header as optional.
+    pub fn device_id(&self) -> Option<&str> {
+        self.device_id.as_deref()
+    }
+
+    /// Read the ambient contract from the environment: `Ok(None)` when `TEMPER_AUTH` is
+    /// unset or empty.
+    ///
+    /// Fails closed on every ambiguity rather than picking a custody:
+    /// - an unknown `TEMPER_AUTH` value — a typo must not fall back to disk;
+    /// - `TEMPER_AUTH=ambient` beside a non-empty `TEMPER_TOKEN` — two custody claims;
+    /// - a value that is not UTF-8 — unreadable must not read as unset.
+    ///
+    /// An unknown mode is echoed only when it looks like a mode name: an operator who put a
+    /// token in `TEMPER_AUTH` instead of `TEMPER_TOKEN` must not see it printed into stderr, a
+    /// JSON payload, or an agent transcript.
+    pub fn from_env() -> Result<Option<Self>> {
+        let mode = read_env_var(TEMPER_AUTH_ENV)?;
+        match mode.as_deref() {
+            None => Ok(None),
+            Some(AMBIENT_AUTH_MODE) => {
+                if read_env_var(TEMPER_TOKEN_ENV)?.is_some() {
+                    return Err(ClientError::NotConfigured(format!(
+                        "{TEMPER_AUTH_ENV}={AMBIENT_AUTH_MODE} says the credential is held \
+                         outside this process, but {TEMPER_TOKEN_ENV} is also set — unset one"
+                    )));
+                }
+                Ok(Some(Self::new(read_env_var(TEMPER_DEVICE_ID_ENV)?)))
+            }
+            Some(other) => {
+                let shown = if looks_like_a_mode_name(other) {
+                    format!("{other:?}")
+                } else {
+                    "<withheld: not a mode name>".to_owned()
+                };
+                Err(ClientError::NotConfigured(format!(
+                    "{TEMPER_AUTH_ENV}={shown} is not a credential mode — the one value is \
+                     `{AMBIENT_AUTH_MODE}`; unset it for the default (TEMPER_TOKEN, then disk)"
+                )))
+            }
+        }
+    }
+}
+
+/// A variable of the ambient contract: `None` when unset or empty, refused when it is not
+/// UTF-8. `std::env::var(..).ok()` would read an unreadable value as unset, and unset means
+/// "fall back to the default custody" — the one outcome a misconfiguration must not reach.
+fn read_env_var(name: &str) -> Result<Option<String>> {
+    match std::env::var(name) {
+        Ok(v) if v.is_empty() => Ok(None),
+        Ok(v) => Ok(Some(v)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(ClientError::NotConfigured(format!(
+            "{name} is set but is not valid UTF-8 — fix or unset it"
+        ))),
+    }
+}
+
+/// Short and shaped like an identifier: safe to echo back in an error. Anything else may be a
+/// secret pasted into the wrong variable.
+fn looks_like_a_mode_name(value: &str) -> bool {
+    value.len() <= 32
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
 }
 
 /// Fallback Auth0 tenant domain for the `Provider::Auth0` metadata tag when no
@@ -1942,5 +2038,106 @@ mod tests {
                 .with_timezone(&chrono::Utc),
         );
         assert!(time_until_expiry(&auth, now).num_seconds() < 0);
+    }
+
+    // ---- AmbientAuth::from_env — the ambient contract fails closed on every ambiguity ----
+
+    /// Run `f` with exactly these ambient-relevant variables set; every other one unset, so a
+    /// developer shell's `TEMPER_TOKEN` cannot leak into the assertion.
+    fn with_ambient_env<R>(vars: &[(&str, &str)], f: impl FnOnce() -> R) -> R {
+        let names = [TEMPER_AUTH_ENV, TEMPER_TOKEN_ENV, TEMPER_DEVICE_ID_ENV];
+        let pinned: Vec<(&str, Option<&str>)> = names
+            .iter()
+            .map(|n| (*n, vars.iter().find(|(k, _)| k == n).map(|(_, v)| *v)))
+            .collect();
+        temp_env::with_vars(pinned, f)
+    }
+
+    #[test]
+    fn ambient_is_off_when_temper_auth_is_unset_or_empty() {
+        with_ambient_env(&[], || {
+            assert!(AmbientAuth::from_env().unwrap().is_none());
+        });
+        with_ambient_env(&[(TEMPER_AUTH_ENV, "")], || {
+            assert!(AmbientAuth::from_env().unwrap().is_none());
+        });
+    }
+
+    #[test]
+    fn ambient_reads_device_id() {
+        with_ambient_env(
+            &[
+                (TEMPER_AUTH_ENV, "ambient"),
+                (TEMPER_DEVICE_ID_ENV, "dev-1"),
+            ],
+            || {
+                let auth = AmbientAuth::from_env().unwrap().expect("ambient selected");
+                assert_eq!(auth.device_id(), Some("dev-1"));
+            },
+        );
+    }
+
+    /// No device id is minted: a fresh one per process would register every invocation of an
+    /// ambient session as a new device.
+    #[test]
+    fn ambient_without_a_device_id_mints_none() {
+        with_ambient_env(&[(TEMPER_AUTH_ENV, "ambient")], || {
+            let auth = AmbientAuth::from_env().unwrap().expect("ambient selected");
+            assert!(auth.device_id().is_none());
+        });
+    }
+
+    #[test]
+    fn ambient_beside_temper_token_is_refused() {
+        with_ambient_env(
+            &[(TEMPER_AUTH_ENV, "ambient"), (TEMPER_TOKEN_ENV, "a.b.c")],
+            || {
+                let err = AmbientAuth::from_env().expect_err("two custody claims");
+                assert!(
+                    matches!(&err, ClientError::NotConfigured(m) if m.contains(TEMPER_TOKEN_ENV)),
+                    "got {err:?}"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn an_unknown_temper_auth_value_is_refused() {
+        with_ambient_env(&[(TEMPER_AUTH_ENV, "ambeint")], || {
+            let err = AmbientAuth::from_env().expect_err("a typo must not fall back to disk");
+            assert!(
+                matches!(&err, ClientError::NotConfigured(m) if m.contains("ambeint")),
+                "got {err:?}"
+            );
+        });
+    }
+
+    // FAILS IF: a token pasted into TEMPER_AUTH is echoed into the error.
+    #[test]
+    fn an_unknown_mode_that_could_be_a_secret_is_not_echoed() {
+        let secret = "eyJhbGciOiJSUzI1NiJ9.payload.signature";
+        with_ambient_env(&[(TEMPER_AUTH_ENV, secret)], || {
+            let err = AmbientAuth::from_env().expect_err("not a mode");
+            let msg = err.to_string();
+            assert!(!msg.contains("payload"), "{msg}");
+            assert!(msg.contains("withheld"), "{msg}");
+        });
+    }
+
+    // FAILS IF: an unreadable TEMPER_AUTH reads as unset and falls back to disk.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_temper_auth_is_refused() {
+        use std::os::unix::ffi::OsStrExt;
+        let bad = std::ffi::OsStr::from_bytes(b"amb\xffient");
+        with_ambient_env(&[], || {
+            temp_env::with_var(TEMPER_AUTH_ENV, Some(bad), || {
+                let err = AmbientAuth::from_env().expect_err("unreadable is not unset");
+                assert!(
+                    matches!(&err, ClientError::NotConfigured(m) if m.contains("UTF-8")),
+                    "got {err:?}"
+                );
+            });
+        });
     }
 }
