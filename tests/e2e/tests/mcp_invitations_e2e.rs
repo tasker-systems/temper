@@ -332,7 +332,7 @@ async fn a_member_is_refused_stewardship_and_someone_elses_invitation(pool: sqlx
     assert_eq!(create.code, ErrorCode::INVALID_PARAMS, "{create:?}");
     assert_eq!(
         create.message,
-        "invitation_manage create requires that you manage the team (owner or maintainer)"
+        "invitation_manage create requires that you manage the team (an owner or maintainer of it; on the gating team, a system admin)"
     );
 
     let list = invitation_read(
@@ -448,8 +448,9 @@ async fn a_machine_is_refused_every_invitation_act(pool: sqlx::PgPool) {
     assert_eq!(invitations, 0, "no invitation was created");
 }
 
-/// The steward's edges, each answered in the caller's own voice: `owner` is not an invitable role
-/// (the schema does not offer it), a missing field and a duplicate invite are invalid params, a
+/// The steward's edges, each answered in the caller's own voice: `owner` is an invitable role up
+/// to the caller's own (the schema offers it, and an owner's offer at `owner` lands — the team-role
+/// rank rule), a missing field and a duplicate invite are invalid params, a
 /// UUID names the team in the `team` view as a slug does, a slug the caller is not a member of is
 /// "not a team", an unknown invitation id does not revoke, and `count` takes only a bare slug and
 /// answers `matching: 0` for a team holding nothing for the caller.
@@ -460,7 +461,10 @@ async fn steward_and_count_edges_answer_in_the_callers_voice(pool: sqlx::PgPool)
     let owner_role = serde_json::from_value::<InvitationManageInput>(json!({
         "action": "create", "team": TEAM_SLUG, "email": INVITEE_EMAIL, "role": "owner",
     }));
-    assert!(owner_role.is_err(), "owner is not an invitable role");
+    assert!(
+        owner_role.is_ok(),
+        "owner is an invitable role: {owner_role:?}"
+    );
 
     let missing = invitation_manage(
         &w.svc,
@@ -526,6 +530,22 @@ async fn steward_and_count_edges_answer_in_the_callers_voice(pool: sqlx::PgPool)
     .await
     .expect_err("count takes only a bare slug");
     assert_eq!(decorated.code, ErrorCode::INVALID_PARAMS, "{decorated:?}");
+
+    // Last, because it adds a pending invitation the `team` view above would count: an owner's
+    // offer at `owner` lands, at the role offered.
+    let co_owner = one_json(
+        &invitation_manage(
+            &w.svc,
+            &w.owner,
+            input(json!({
+                "action": "create", "team": TEAM_SLUG, "email": "co-owner@test.example.com",
+                "role": "owner",
+            })),
+        )
+        .await
+        .expect("an owner may invite at owner"),
+    );
+    assert_eq!(co_owner["role"], "owner", "{co_owner}");
 }
 
 /// A team's slug reaches the invitee's agent only when it is a plain slug: `create_team` does not
