@@ -58,6 +58,10 @@ impl ClaimedInvitation {
     }
 }
 
+/// The answer for a revoked invitation, whoever revoked it: a manager, a change to the inviter's
+/// membership, or the accept-time check that the inviter could still issue it.
+const INVITATION_REVOKED: &str = "invitation was revoked";
+
 /// Parameters for creating an invitation.
 pub struct CreateInvitationParams {
     pub invited_email: String,
@@ -175,7 +179,17 @@ pub async fn create_invitation(
 /// decline or a second accept racing this one cannot land between the check and the write — the
 /// invitation row's own lock serializes them, and the claim, the team lock, the member write and
 /// the actual-role read are one transaction, so a crash leaves either an unclaimed invitation or
-/// a joined member, never a claimed one with no row. When nothing is claimed, the answer is read
+/// a joined member, never a claimed one with no row.
+///
+/// The invitation also redeems only while its **inviter could still issue it** (task
+/// `01a14591`): the invitation gate is re-applied to the inviter under the team lock, before the
+/// claim. An owner who has since been demoted, removed or lost their standing cannot have an
+/// owner-level invitation redeemed after them; an invitation that fails the check is revoked and
+/// answered as revoked. The check runs only for the invitee, so a token holder who is not the
+/// invitee can neither set it off nor learn its answer. The team lock is taken before the
+/// invitation's row lock, the order `membership_write` holds when it revokes invitations.
+///
+/// When nothing is claimed, the answer is read
 /// from the row as it now stands: revoked, declined, expired (by the database clock, and flipped
 /// to `expired`), a team that no longer exists, or — for a live pending invitation — not the
 /// caller's (403, naming no address). An already-accepted invitation answers 200 to a caller
@@ -188,24 +202,103 @@ pub async fn accept_invitation(
     let caller = caller.profile_id();
     let mut tx = pool.begin().await?;
 
-    // The claim: flip the invitation to `accepted` and read what it offered (team, role, inviter).
-    let claimed = sqlx::query!(
+    // Which team to lock, read unlocked: `membership_write` revokes invitation rows while
+    // holding the team lock, so this path must take the team lock before any invitation row
+    // lock, or the two deadlock. The read admits only a live invitation addressed to the caller,
+    // so a token holder who is not the invitee (or a spent token) never takes the team lock and
+    // goes straight to the refusal. Everything it assumes is read again under the locks.
+    let team_id = sqlx::query_scalar!(
         r#"
-        UPDATE kb_team_invitations i
-           SET status = 'accepted'
+        SELECT i.team_id
+          FROM kb_team_invitations i
          WHERE i.token = $1
            AND i.status = 'pending'
            AND i.revoked_at IS NULL
            AND i.expires_at > now()
            AND EXISTS (SELECT 1 FROM vw_invitee_invitations v
                         WHERE v.id = i.id AND v.invitee_profile_id = $2)
-        RETURNING i.team_id, i.role AS "role: TeamRole", i.invited_by_profile_id
         "#,
         token,
         *caller,
     )
     .fetch_optional(&mut *tx)
     .await?;
+
+    let claimed = match team_id {
+        None => None,
+        Some(team_id) => {
+            team_membership::lock_team(&mut tx, team_id).await?;
+            // The invitation under its own lock, and only if it is live and the caller's: a
+            // token holder who is not the invitee goes no further, so cannot set off the check
+            // below or learn its answer (they get the "addressed to someone else" refusal). A
+            // team that is gone or soft-deleted reads as no row here (`vw_invitee_invitations`
+            // reads live teams only) and is answered from the row as it stands.
+            let live = sqlx::query!(
+                r#"
+                SELECT i.id, i.role AS "role: TeamRole", i.invited_by_profile_id
+                  FROM kb_team_invitations i
+                 WHERE i.token = $1
+                   AND i.team_id = $2
+                   AND i.status = 'pending'
+                   AND i.revoked_at IS NULL
+                   AND i.expires_at > now()
+                   AND EXISTS (SELECT 1 FROM vw_invitee_invitations v
+                                WHERE v.id = i.id AND v.invitee_profile_id = $3)
+                   FOR UPDATE OF i
+                "#,
+                token,
+                team_id,
+                *caller,
+            )
+            .fetch_optional(&mut *tx)
+            .await?;
+            match live {
+                None => None,
+                Some(live) => {
+                    // An invitation redeems only while its inviter could still issue it (task
+                    // `01a14591`): the invitation gate, re-applied to the inviter as they now
+                    // stand. A routed demotion or removal already revoked what it lowered
+                    // (`membership_write`); this also covers what is not a routed membership
+                    // write — the inviter's standing or governance, the derived writers, and an
+                    // invitation created in a race with its inviter's demotion. One that fails it
+                    // is revoked, and answered as any revoked invitation is.
+                    let ceiling = team_membership::inviter_ceiling(
+                        &mut tx,
+                        team_id,
+                        ProfileId::from(live.invited_by_profile_id),
+                    )
+                    .await?;
+                    if !team_membership::may_offer(ceiling, live.role) {
+                        sqlx::query!(
+                            "UPDATE kb_team_invitations SET revoked_at = now() WHERE id = $1",
+                            live.id,
+                        )
+                        .execute(&mut *tx)
+                        .await?;
+                        tx.commit().await?;
+                        return Err(ApiError::BadRequest(INVITATION_REVOKED.to_string()));
+                    }
+
+                    // The claim: flip the invitation to `accepted` and read what it offered
+                    // (team, role, inviter). The row is locked and was just read live and the
+                    // caller's, so this cannot miss.
+                    Some(
+                        sqlx::query!(
+                            r#"
+                            UPDATE kb_team_invitations
+                               SET status = 'accepted'
+                             WHERE id = $1
+                            RETURNING team_id, role AS "role: TeamRole", invited_by_profile_id
+                            "#,
+                            live.id,
+                        )
+                        .fetch_one(&mut *tx)
+                        .await?,
+                    )
+                }
+            }
+        }
+    };
 
     let joined = if let Some(row) = claimed {
         let claimed = ClaimedInvitation {
@@ -350,7 +443,7 @@ async fn unclaimed(pool: &PgPool, token: &str) -> ApiResult<Unclaimed> {
         ApiError::NotFound("invitation not found, already used, or expired".to_string())
     })?;
     if row.revoked {
-        return Err(ApiError::BadRequest("invitation was revoked".to_string()));
+        return Err(ApiError::BadRequest(INVITATION_REVOKED.to_string()));
     }
     Ok(Unclaimed {
         id: row.id,
@@ -589,6 +682,9 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
+        // Approved, as every caller who reaches a service is: an invitation redeems only while
+        // its inviter could still issue it, and a profile without standing can issue nothing.
+        crate::test_support::approve(pool, id).await;
         sqlx::query("INSERT INTO kb_entities (profile_id, name) VALUES ($1, $2 || '@web')")
             .bind(id)
             .bind(handle)
@@ -1055,27 +1151,65 @@ mod tests {
         assert!(matches!(err, ApiError::NotFound(_)), "got {err:?}");
     }
 
-    /// C16, pin: an invitation stands when its inviter is later demoted — the offer was the
-    /// authority's act at creation, not a live check against the inviter's standing.
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn acceptance_after_the_inviters_demotion_still_redeems(pool: PgPool) {
-        let (team_id, owner) = seed_team_with_owner(&pool).await;
-        let invitee = mk_profile(&pool, "invitee").await;
-        add_auth_email(&pool, invitee, "invitee-uid", Some("i@e.com")).await;
-        let inv = create_invitation(
-            &pool,
-            &crate::test_support::human_principal_for(&pool, *owner).await,
-            team_id,
+    /// Create an invitation from `by` at `role`, through the real gate.
+    async fn invite_at(
+        pool: &PgPool,
+        team: Uuid,
+        by: ProfileId,
+        email: &str,
+        role: TeamRole,
+    ) -> TeamInvitation {
+        create_invitation(
+            pool,
+            &crate::test_support::human_principal_for(pool, *by).await,
+            team,
             CreateInvitationParams {
-                invited_email: "i@e.com".into(),
-                role: TeamRole::Owner,
+                invited_email: email.into(),
+                role,
             },
         )
         .await
-        .unwrap();
+        .expect("the inviter may offer this role")
+    }
 
-        // A co-owner takes the last-owner guard off the inviter, who then lowers their own role
-        // (the hand-over, R6's complement).
+    async fn is_revoked(pool: &PgPool, id: Uuid) -> bool {
+        sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM kb_team_invitations WHERE id = $1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// A profile with a verified address, ready to accept what is sent to it.
+    async fn invitee(pool: &PgPool, handle: &str, email: &str) -> ProfileId {
+        let p = mk_profile(pool, handle).await;
+        add_auth_email(pool, p, &format!("{handle}-uid"), Some(email)).await;
+        p
+    }
+
+    async fn accept_as(
+        pool: &PgPool,
+        who: ProfileId,
+        token: &str,
+    ) -> ApiResult<AcceptInvitationResponse> {
+        accept_invitation(
+            pool,
+            &crate::test_support::human_principal_for(pool, *who).await,
+            token,
+        )
+        .await
+    }
+
+    /// Task 01a14591, bite: an owner offers `owner`, then hands the team over and lowers
+    /// themselves to `maintainer`. The offer is above what they can now make, so the lowering
+    /// revokes it, and it no longer redeems. Before, it redeemed: a co-owner minted by someone who
+    /// had stopped being one, removable afterwards only by a system admin (R6).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_owner_invitation_is_revoked_when_its_inviter_steps_down(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let joiner = invitee(&pool, "invitee", "i@e.com").await;
+        let inv = invite_at(&pool, team_id, owner, "i@e.com", TeamRole::Owner).await;
+
         let co = mk_profile(&pool, "co").await;
         add_member(&pool, team_id, co, "owner").await;
         crate::services::team_service::change_role(
@@ -1083,19 +1217,324 @@ mod tests {
             &crate::test_support::human_principal_for(&pool, *owner).await,
             team_id,
             *owner,
-            TeamRole::Member,
+            TeamRole::Maintainer,
         )
         .await
         .expect("an owner lowers their own role");
 
-        let resp = accept_invitation(
+        assert!(
+            is_revoked(&pool, inv.id).await,
+            "the lowering revokes the offer"
+        );
+        let err = accept_as(&pool, joiner, &inv.token).await.unwrap_err();
+        assert!(
+            matches!(&err, ApiError::BadRequest(m) if m == INVITATION_REVOKED),
+            "got {err:?}"
+        );
+        assert_eq!(role_on_team(&pool, team_id, joiner).await.unwrap(), None);
+    }
+
+    /// Task 01a14591, pin: an offer the inviter can still make stands. The owner offered
+    /// `maintainer` and is now a maintainer; the invitation redeems at `maintainer`. (This is what
+    /// `acceptance_after_the_inviters_demotion_still_redeems` pinned, narrowed to the offers
+    /// within the inviter's new authority.)
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_invitation_within_the_inviters_new_role_still_redeems(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let joiner = invitee(&pool, "invitee", "i@e.com").await;
+        let inv = invite_at(&pool, team_id, owner, "i@e.com", TeamRole::Maintainer).await;
+
+        let co = mk_profile(&pool, "co").await;
+        add_member(&pool, team_id, co, "owner").await;
+        crate::services::team_service::change_role(
             &pool,
-            &crate::test_support::human_principal_for(&pool, *invitee).await,
-            &inv.token,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
+            team_id,
+            *owner,
+            TeamRole::Maintainer,
         )
         .await
-        .expect("the offer stands");
+        .expect("an owner lowers their own role");
+
+        assert!(!is_revoked(&pool, inv.id).await);
+        let resp = accept_as(&pool, joiner, &inv.token)
+            .await
+            .expect("an offer at the inviter's own role stands");
+        assert_eq!(resp.role, TeamRole::Maintainer);
+    }
+
+    /// Task 01a14591, bite: a maintainer demoted to `member` can invite no one, so every offer
+    /// they have pending goes — the invitation gate re-applied, not just "above their new role".
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_maintainer_demoted_to_member_keeps_no_pending_invitation(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let maint = mk_profile(&pool, "maint").await;
+        add_member(&pool, team_id, maint, "maintainer").await;
+        let at_member = invite_at(&pool, team_id, maint, "a@e.com", TeamRole::Member).await;
+        let at_watcher = invite_at(&pool, team_id, maint, "b@e.com", TeamRole::Watcher).await;
+
+        crate::services::team_service::change_role(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
+            team_id,
+            *maint,
+            TeamRole::Member,
+        )
+        .await
+        .expect("an owner demotes a maintainer");
+
+        assert!(is_revoked(&pool, at_member.id).await);
+        assert!(is_revoked(&pool, at_watcher.id).await);
+    }
+
+    /// Task 01a14591, bite: an owner who leaves takes every pending invitation they issued on the
+    /// team with them; another member's invitations stay.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn leaving_a_team_revokes_every_invitation_you_sent_it(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let co = mk_profile(&pool, "co").await;
+        add_member(&pool, team_id, co, "owner").await;
+        let mine_owner = invite_at(&pool, team_id, owner, "a@e.com", TeamRole::Owner).await;
+        let mine_member = invite_at(&pool, team_id, owner, "b@e.com", TeamRole::Member).await;
+        let theirs = invite_at(&pool, team_id, co, "c@e.com", TeamRole::Owner).await;
+
+        crate::services::team_service::remove_member(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
+            team_id,
+            *owner,
+        )
+        .await
+        .expect("an owner with a co-owner may leave");
+
+        assert!(is_revoked(&pool, mine_owner.id).await);
+        assert!(is_revoked(&pool, mine_member.id).await);
+        assert!(
+            !is_revoked(&pool, theirs.id).await,
+            "only the leaver's invitations go"
+        );
+    }
+
+    /// Task 01a14591, pin: a system admin's invitation rests on their governance, not on any
+    /// team row, so nothing done to the team's members touches it — not even a change to the
+    /// admin's own row there.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_admins_invitation_is_untouched_by_membership_changes(pool: PgPool) {
+        let (team_id, _owner) = seed_team_with_owner(&pool).await;
+        let admin = mk_profile(&pool, "admin").await;
+        crate::test_support::approved_admin(&pool, *admin).await;
+        add_member(&pool, team_id, admin, "owner").await;
+        let joiner = invitee(&pool, "invitee", "i@e.com").await;
+        let inv = invite_at(&pool, team_id, admin, "i@e.com", TeamRole::Owner).await;
+
+        // Another member is demoted, and the admin lowers their own row.
+        let maint = mk_profile(&pool, "maint").await;
+        add_member(&pool, team_id, maint, "maintainer").await;
+        let admin_p = crate::test_support::human_principal_for(&pool, *admin).await;
+        crate::services::team_service::change_role(
+            &pool,
+            &admin_p,
+            team_id,
+            *maint,
+            TeamRole::Member,
+        )
+        .await
+        .expect("an admin demotes a maintainer");
+        crate::services::team_service::change_role(
+            &pool,
+            &admin_p,
+            team_id,
+            *admin,
+            TeamRole::Member,
+        )
+        .await
+        .expect("an admin lowers their own row");
+        assert!(!is_revoked(&pool, inv.id).await);
+        let resp = accept_as(&pool, joiner, &inv.token)
+            .await
+            .expect("an admin's offer stands");
         assert_eq!(resp.role, TeamRole::Owner);
+    }
+
+    /// Task 01a14591, bite at redemption: losing governance is not a membership write, so no
+    /// revocation runs when it happens. The accept-time check catches it: the former admin can
+    /// no longer offer `owner` on a team they are not on, so the invitation is revoked and
+    /// refused.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_invitation_does_not_redeem_once_its_inviter_is_no_longer_an_admin(pool: PgPool) {
+        let (team_id, _owner) = seed_team_with_owner(&pool).await;
+        let admin = mk_profile(&pool, "admin").await;
+        crate::test_support::approved_admin(&pool, *admin).await;
+        let joiner = invitee(&pool, "invitee", "i@e.com").await;
+        let inv = invite_at(&pool, team_id, admin, "i@e.com", TeamRole::Owner).await;
+
+        sqlx::query("DELETE FROM kb_principal_governance WHERE profile_id = $1")
+            .bind(*admin)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            !is_revoked(&pool, inv.id).await,
+            "nothing ran at the demotion"
+        );
+
+        let err = accept_as(&pool, joiner, &inv.token).await.unwrap_err();
+        assert!(
+            matches!(&err, ApiError::BadRequest(m) if m == INVITATION_REVOKED),
+            "got {err:?}"
+        );
+        assert!(is_revoked(&pool, inv.id).await, "the refusal revokes it");
+        assert_eq!(role_on_team(&pool, team_id, joiner).await.unwrap(), None);
+        // And it stays refused, as any revoked invitation is.
+        let again = accept_as(&pool, joiner, &inv.token).await.unwrap_err();
+        assert!(matches!(&again, ApiError::BadRequest(m) if m == INVITATION_REVOKED));
+    }
+
+    /// Task 01a14591, bite at redemption: an inviter whose standing is revoked can act on
+    /// nothing, so their pending invitations — at any role — no longer redeem, though their team
+    /// row is untouched.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_invitation_does_not_redeem_once_its_inviter_has_lost_standing(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let joiner = invitee(&pool, "invitee", "i@e.com").await;
+        let inv = invite_at(&pool, team_id, owner, "i@e.com", TeamRole::Watcher).await;
+
+        sqlx::query("UPDATE kb_principal_standing SET state = 'revoked' WHERE profile_id = $1")
+            .bind(*owner)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let err = accept_as(&pool, joiner, &inv.token).await.unwrap_err();
+        assert!(
+            matches!(&err, ApiError::BadRequest(m) if m == INVITATION_REVOKED),
+            "got {err:?}"
+        );
+        assert!(is_revoked(&pool, inv.id).await, "the refusal revokes it");
+        assert_eq!(role_on_team(&pool, team_id, joiner).await.unwrap(), None);
+    }
+
+    /// Task 01a14591, bite at redemption on the ROLE half of the check: a demotion that did
+    /// not go through `membership_write` (a derived writer, such as the machine-cap trigger,
+    /// writes the row directly) revoked nothing, so the accept-time check alone refuses the
+    /// owner-level offer of someone who is now a maintainer.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn accept_refuses_an_offer_above_an_inviter_demoted_outside_the_writer(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let joiner = invitee(&pool, "invitee", "i@e.com").await;
+        let at_owner = invite_at(&pool, team_id, owner, "i@e.com", TeamRole::Owner).await;
+        let at_maint = invite_at(&pool, team_id, owner, "j@e.com", TeamRole::Maintainer).await;
+        let other = invitee(&pool, "other", "j@e.com").await;
+
+        sqlx::query(
+            "UPDATE kb_team_members SET role = 'maintainer' WHERE team_id = $1 AND profile_id = $2",
+        )
+        .bind(team_id)
+        .bind(*owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            !is_revoked(&pool, at_owner.id).await,
+            "nothing ran at the demotion"
+        );
+
+        let err = accept_as(&pool, joiner, &at_owner.token).await.unwrap_err();
+        assert!(
+            matches!(&err, ApiError::BadRequest(m) if m == INVITATION_REVOKED),
+            "got {err:?}"
+        );
+        assert!(is_revoked(&pool, at_owner.id).await);
+        let resp = accept_as(&pool, other, &at_maint.token)
+            .await
+            .expect("an offer at the inviter's new role still redeems");
+        assert_eq!(resp.role, TeamRole::Maintainer);
+    }
+
+    /// Task 01a14591, bite: a manager removing a member revokes the removed member's invitations,
+    /// as a self-leave does.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn removing_a_maintainer_revokes_their_invitations(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let maint = mk_profile(&pool, "maint").await;
+        add_member(&pool, team_id, maint, "maintainer").await;
+        let theirs = invite_at(&pool, team_id, maint, "a@e.com", TeamRole::Member).await;
+        let mine = invite_at(&pool, team_id, owner, "b@e.com", TeamRole::Member).await;
+
+        crate::services::team_service::remove_member(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
+            team_id,
+            *maint,
+        )
+        .await
+        .expect("an owner removes a maintainer");
+
+        assert!(is_revoked(&pool, theirs.id).await);
+        assert!(
+            !is_revoked(&pool, mine.id).await,
+            "the remover's own are untouched"
+        );
+    }
+
+    /// A token holder who is not the invitee never takes the team lock: with the team row held
+    /// by another transaction (a membership write in flight), their accept still returns its
+    /// refusal at once instead of queueing behind it. Before the lookup was bound to the
+    /// invitee, any holder of a forwarded token could make the accept path wait on, and then
+    /// hold, the team lock that every membership writer takes.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_stranger_holding_the_token_never_waits_on_the_team_lock(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let _joiner = invitee(&pool, "invitee", "i@e.com").await;
+        let stranger = invitee(&pool, "stranger", "s@e.com").await;
+        let inv = invite_at(&pool, team_id, owner, "i@e.com", TeamRole::Member).await;
+
+        let mut holder = pool.begin().await.unwrap();
+        sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE")
+            .bind(team_id)
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+
+        let answered = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            accept_as(&pool, stranger, &inv.token),
+        )
+        .await
+        .expect("a stranger's accept must not wait on the team lock");
+        let err = answered.unwrap_err();
+        assert!(matches!(err, ApiError::ForbiddenDetail(_)), "got {err:?}");
+        holder.rollback().await.unwrap();
+    }
+
+    /// Task 01a14591, pin: the accept-time check runs only for the invitee. A token holder who is
+    /// not the invitee gets the "addressed to someone else" refusal, learns nothing about the
+    /// inviter, and leaves the invitation as it was; the invitee's own attempt is what revokes it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_stranger_holding_the_token_cannot_set_off_the_inviter_check(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let joiner = invitee(&pool, "invitee", "i@e.com").await;
+        let stranger = invitee(&pool, "stranger", "s@e.com").await;
+        let inv = invite_at(&pool, team_id, owner, "i@e.com", TeamRole::Member).await;
+        sqlx::query("UPDATE kb_principal_standing SET state = 'revoked' WHERE profile_id = $1")
+            .bind(*owner)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let err = accept_as(&pool, stranger, &inv.token).await.unwrap_err();
+        assert!(matches!(err, ApiError::ForbiddenDetail(_)), "got {err:?}");
+        assert!(
+            !is_revoked(&pool, inv.id).await,
+            "a stranger's attempt changes nothing"
+        );
+
+        let err = accept_as(&pool, joiner, &inv.token).await.unwrap_err();
+        assert!(
+            matches!(&err, ApiError::BadRequest(m) if m == INVITATION_REVOKED),
+            "got {err:?}"
+        );
+        assert!(is_revoked(&pool, inv.id).await);
     }
 
     /// P12, bite: a profile already on the team who accepts an owner invitation joins nothing

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT has_system_access($1) AS \"access!\", is_system_admin($1) AS \"admin!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "access!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "admin!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "e933f9ed6197ae5fb599145e6975194dc7b491c5f429b72311608f565360fe28"
+}

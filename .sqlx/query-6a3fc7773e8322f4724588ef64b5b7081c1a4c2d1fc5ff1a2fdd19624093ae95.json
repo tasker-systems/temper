@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT i.id, i.role AS \"role: TeamRole\", i.invited_by_profile_id\n                  FROM kb_team_invitations i\n                 WHERE i.token = $1\n                   AND i.team_id = $2\n                   AND i.status = 'pending'\n                   AND i.revoked_at IS NULL\n                   AND i.expires_at > now()\n                   AND EXISTS (SELECT 1 FROM vw_invitee_invitations v\n                                WHERE v.id = i.id AND v.invitee_profile_id = $3)\n                   FOR UPDATE OF i\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "role: TeamRole",
+        "type_info": {
+          "Custom": {
+            "name": "team_role",
+            "kind": {
+              "Enum": [
+                "owner",
+                "maintainer",
+                "member",
+                "watcher"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "invited_by_profile_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6a3fc7773e8322f4724588ef64b5b7081c1a4c2d1fc5ff1a2fdd19624093ae95"
+}

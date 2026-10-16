@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        UPDATE kb_team_invitations i\n           SET status = 'accepted'\n         WHERE i.token = $1\n           AND i.status = 'pending'\n           AND i.revoked_at IS NULL\n           AND i.expires_at > now()\n           AND EXISTS (SELECT 1 FROM vw_invitee_invitations v\n                        WHERE v.id = i.id AND v.invitee_profile_id = $2)\n        RETURNING i.team_id, i.role AS \"role: TeamRole\", i.invited_by_profile_id\n        ",
+  "query": "\n                            UPDATE kb_team_invitations\n                               SET status = 'accepted'\n                             WHERE id = $1\n                            RETURNING team_id, role AS \"role: TeamRole\", invited_by_profile_id\n                            ",
   "describe": {
     "columns": [
       {
@@ -33,7 +33,6 @@
     ],
     "parameters": {
       "Left": [
-        "Text",
         "Uuid"
       ]
     },
@@ -43,5 +42,5 @@
       false
     ]
   },
-  "hash": "b21f7cf28913f9dd9c654839f28e482f2dd33b4db3231f9d171a3d6429b46775"
+  "hash": "c4536a7f0f8b755122dd9389fdddc9f68e2aaf2c7b6f5fdb6dbf77b6424ffb65"
 }

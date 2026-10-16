@@ -559,3 +559,57 @@ async fn demoting_a_teams_only_idp_owner_records_left_ownerless(pool: PgPool) {
     assert_eq!(payload["role"], "member", "{payload}");
     assert_eq!(payload["left_ownerless"], true, "{payload}");
 }
+
+/// Task 01a14591: an identity-provider demotion revokes the member's pending invitations that
+/// they could no longer issue, as every routed membership change does. The IdP lowers a
+/// maintainer to `member`; a member invites no one, so their pending `member` invitation goes.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_idp_demotion_revokes_the_invitations_the_member_can_no_longer_issue(pool: PgPool) {
+    let (profile, team_a, _team_b) = seed(&pool).await;
+    sqlx::query("INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1, 'approved')")
+        .bind(profile)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role, source) \
+         VALUES ($1, $2, 'maintainer', 'idp')",
+    )
+    .bind(team_a)
+    .bind(profile)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let invitation: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_team_invitations \
+           (id, team_id, invited_email, invited_by_profile_id, role, token, status) \
+         VALUES (gen_random_uuid(), $1, 'new@e.com', $2, 'member', $3, 'pending') RETURNING id",
+    )
+    .bind(team_a)
+    .bind(profile)
+    .bind(format!("tok-{}", Uuid::now_v7()))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let c = counts(
+        reconcile_idp_memberships(&pool, profile, "acme", Some(&["engineering".into()]))
+            .await
+            .expect("reconcile"),
+    );
+    assert_eq!(c.updated, 1, "{c:?}");
+    assert_eq!(
+        membership(&pool, team_a, profile).await,
+        Some(("Member".into(), "idp".into()))
+    );
+    let revoked: bool =
+        sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM kb_team_invitations WHERE id = $1")
+            .bind(invitation)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        revoked,
+        "a member can invite no one, so the demotion revokes the invitation"
+    );
+}
