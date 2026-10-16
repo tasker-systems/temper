@@ -47,7 +47,8 @@ use crate::services::profile_service;
 /// Team memberships are recorded acts (plan C3): each team is locked in ascending id order
 /// (the multi-writer lock order) and the row goes through `from_reach` +
 /// `membership_write`, so a reach lands as a `machine_reach` event naming the registrar as
-/// actor. The role ceiling was enforced at mint (D4b) and is re-held by the database trigger.
+/// actor. The role ceiling was enforced at mint (D4b) and again by `from_reach`; the machine row
+/// is inserted after the reach, and the database's machine-cap trigger holds the ceiling then.
 /// The grant half keeps `insert_grant` — its own sealed `GrantWarrant` authority, authored by
 /// the caller's resolved emitter.
 async fn apply_reach(

@@ -383,10 +383,10 @@ jobs:
       - name: Guard test — audit-grant-sinks (SQL half)
         run: bash .github/scripts/test-audit-grant-sinks.sh
 
-      # Twenty-three probes: the structural test-module skip in both directions (a sink inside a
+      # Twenty-nine probes: the structural test-module skip in both directions (a sink inside a
       # test module is ignored; one after it, under a doc-comment mention, a non-mod cfg, a
       # feature-only or `any(test, …)` cfg is not; an unterminated one fails closed), split and
-      # quoted statements, the writer's one-caller pins in Rust and SQL, the token-mint pin, every
+      # quoted statements, ONLY/TRUNCATE/COPY, the writer's one-caller pins in Rust and SQL, the token-mint pin, every
       # dollar-tag close and file boundary, and the empty-scan canary.
       - name: Guard test — audit-team-membership-sinks
         run: bash .github/scripts/test-audit-team-membership-sinks.sh

@@ -17,6 +17,11 @@
 --
 -- An unconfigured instance (`gating_team_slug` NULL) has no gating team, and the join matches
 -- nothing.
+--
+-- The window this leaves: the migration runs before the new binary serves, so a gating-team
+-- invitation the OLD binary creates between the two is not withdrawn, and would redeem later.
+-- That window is the deploy's cutover; an operator who wants it closed re-runs this DO block once
+-- the new binary is serving — the step is idempotent (`revoked_at IS NULL`).
 
 DO $$
 DECLARE

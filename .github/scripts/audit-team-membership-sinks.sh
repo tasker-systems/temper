@@ -23,7 +23,7 @@
 #   computes from something already recorded elsewhere (auto-join from standing, a personal team
 #   from a profile), which no person chose and which therefore records no act.
 #
-# THE THREE HALVES
+# THE FIVE SETS
 # ----------------
 #   1. Rust writes  — raw `INSERT INTO` / `UPDATE` / `DELETE FROM` / `MERGE INTO kb_team_members`
 #                     in `crates/*/src/**.rs`, per file — the table bare, schema-qualified or
@@ -112,9 +112,12 @@ EOF
 # each in the one function plan P16 names: `GenesisToken` in `team_service::create_team` (after its
 # team insert), `ClaimedInvitation` in `invitation_service::accept_invitation` (from the claim
 # `UPDATE`'s row), `IdpReconcileToken` in `saml_provisioning_service::reconcile_idp_memberships`.
-# Private fields stop other modules; this pins the defining module to its one mint.
+# Private fields stop other modules; this pins the defining module to its one mint. `#impl` keys
+# pin the token's `impl` blocks, since one could mint through `Self { … }`: the one today is
+# `ClaimedInvitation`'s three getters (fix-pass review, 2026-10-16), which build nothing.
 read -r -d '' TOKEN_BASELINE <<'EOF' || true
 1 crates/temper-services/src/services/invitation_service.rs
+1 crates/temper-services/src/services/invitation_service.rs#impl
 1 crates/temper-services/src/services/saml_provisioning_service.rs
 1 crates/temper-services/src/services/team_service.rs
 EOF
@@ -201,7 +204,10 @@ rust_hits() {
           if (ch == "/" && nx == "/") break
           if (ch == "/" && nx == "*") { lx = "block"; i += 2; continue }
           if (ch == "\"") { lx = "str"; i++; continue }
-          if (ch == "r" && (nx == "#" || nx == "\"") && (i == 1 || substr(s, i - 1, 1) !~ /[A-Za-z0-9_]/)) {
+          # `r"…"` / `r#"…"#`, and the byte and C forms `br…` / `cr…`.
+          if (ch == "r" && (nx == "#" || nx == "\"") &&
+              (i == 1 || substr(s, i - 1, 1) !~ /[A-Za-z0-9_]/ ||
+               (substr(s, i - 1, 1) ~ /[bc]/ && (i == 2 || substr(s, i - 2, 1) !~ /[A-Za-z0-9_]/)))) {
             k = i + 1; hashes = 0
             while (substr(s, k, 1) == "#") { hashes++; k++ }
             if (substr(s, k, 1) == "\"") {
@@ -269,7 +275,7 @@ count_by_path() {
 # The table, bare or schema-qualified, quoted or not (`\"kb_team_members\"` inside a Rust string).
 # No backslash inside a bracket expression: mawk (CI's awk on Ubuntu) rejects it.
 TABLE_RE='(\\|")*(public(\\|")*[.](\\|")*)?kb_team_members([^a-z0-9_]|$)'
-VERB_RE='(insert[[:space:]]+into|update|delete[[:space:]]+from|merge[[:space:]]+into)'
+VERB_RE='(insert[[:space:]]+into|update([[:space:]]+only)?|delete[[:space:]]+from([[:space:]]+only)?|merge[[:space:]]+into|truncate([[:space:]]+table)?([[:space:]]+only)?|copy)'
 
 rust_writes() {
   rust_hits "${VERB_RE}[[:space:]]+${TABLE_RE}" \
@@ -285,9 +291,14 @@ rust_callers() {
 # compiler would allow, so it is pinned here. Type definitions, impls and return types are not
 # mints.
 rust_token_mints() {
-  rust_hits '(genesistoken|idpreconciletoken|claimedinvitation)[[:space:]]*\{' '' '' \
-    '(struct|impl|->)[[:space:]]*[a-z_:]*(genesistoken|idpreconciletoken|claimedinvitation)' \
-    | count_by_path
+  {
+    rust_hits '(genesistoken|idpreconciletoken|claimedinvitation)[[:space:]]*\{' '' '' \
+      '(struct|impl|->)[[:space:]]*[a-z_:]*(genesistoken|idpreconciletoken|claimedinvitation)'
+    # An `impl` block on a token can mint through `Self { … }`, which the literal pattern cannot
+    # see; pin the blocks themselves, keyed `<file>#impl`.
+    rust_hits '^[[:space:]]*impl[^{]*[^a-z0-9_](genesistoken|idpreconciletoken|claimedinvitation)([^a-z0-9_]|$)' \
+      | sed 's/$/#impl/'
+  } | count_by_path
 }
 
 # The SQL half. Function-keyed: prints `W<TAB><key>` for a function (or `<top-level>:<file>`)
@@ -301,11 +312,17 @@ rust_token_mints() {
 # rest of the body as top-level — the noisy direction, never the silent one.
 sql_scan() {
   awk '
-    FNR == 1 { fn = ""; tags = 0; closing = 0 }
+    # A function still open when its file ends fails CLOSED (a body this scan cannot see the end
+    # of — a single-quoted `AS '…'` body, or a tag it does not parse), under a key no baseline
+    # carries, rather than adopting the rest of the file.
+    FNR == 1 {
+      if (fn != "" && prevfile != "") { b = prevfile; sub(/.*\//, "", b); print "W\t<unclosed-function>:" b }
+      fn = ""; tags = 0; closing = 0; prevfile = FILENAME
+    }
     { low = tolower($0) }
     low ~ /^[[:space:]]*create([[:space:]]+or[[:space:]]+replace)?[[:space:]]+function/ {
-      line = $0
-      sub(/.*[Ff][Uu][Nn][Cc][Tt][Ii][Oo][Nn][[:space:]]+/, "", line)
+      # The name follows the FIRST `function` on the line, so a trailing comment cannot rename it.
+      line = substr($0, match(low, /function[[:space:]]+/) + RLENGTH)
       sub(/[[:space:]]*\(.*/, "", line)
       sub(/^public\./, "", line)
       fn = line; tags = 0; closing = 0
@@ -313,10 +330,10 @@ sql_scan() {
     low !~ /^[[:space:]]*--/ {
       key = fn
       if (key == "") { base = FILENAME; sub(/.*\//, "", base); key = "<top-level>:" base }
-      if (low ~ /(insert[[:space:]]+into|update|delete[[:space:]]+from|merge[[:space:]]+into)[[:space:]]+"?(public"?\.)?"?kb_team_members([^a-z0-9_]|$)/) {
+      if (low ~ /(insert[[:space:]]+into|update([[:space:]]+only)?|delete[[:space:]]+from([[:space:]]+only)?|merge[[:space:]]+into|truncate([[:space:]]+table)?([[:space:]]+only)?|copy)[[:space:]]+"?(public"?\.)?"?kb_team_members([^a-z0-9_]|$)/) {
         print "W\t" key
       }
-      if (low ~ /_admin_team_membership_write[[:space:]]*\(/ &&
+      if (low ~ /_admin_team_membership_write"?[[:space:]]*\(/ &&
           low !~ /^[[:space:]]*(create|comment|drop|grant|revoke|alter)[[:space:]]/ &&
           fn != "_admin_team_membership_write") {
         print "C\t" key
@@ -324,10 +341,11 @@ sql_scan() {
     }
     fn != "" {
       t = $0
-      tags += gsub(/\$[A-Za-z_]*\$/, "", t)
+      tags += gsub(/\$([A-Za-z_][A-Za-z0-9_]*)?\$/, "", t)
       if (tags >= 2) closing = 1
       if (closing && $0 ~ /;[[:space:]]*(--.*)?$/) { fn = ""; tags = 0; closing = 0 }
     }
+    END { if (fn != "") { b = FILENAME; sub(/.*\//, "", b); print "W\t<unclosed-function>:" b } }
   ' "$MIGRATIONS_DIR"/*.sql 2>/dev/null || true
 }
 

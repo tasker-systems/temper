@@ -20,6 +20,8 @@
 #     multi-line (raw) strings do not move a skip's end; an unterminated test module fails closed;
 #     a statement split across lines, MERGE INTO and a quoted table name are caught; a second
 #     writer-token mint and a SQL caller of the writer are caught;
+#   - (fix pass) an impl block on a token, UPDATE ONLY / TRUNCATE / COPY, a digit dollar tag, and
+#     a body the scan cannot close (fails closed) are caught; a byte raw string lexes as a string;
 #   - an empty migrations dir fails.
 #
 #   bash .github/scripts/test-audit-team-membership-sinks.sh
@@ -429,6 +431,62 @@ END;
 $fn$;
 EOF
 expect_red "a SQL caller of _admin_team_membership_write: caught" "$R" "_mass_promote"
+
+# --- BITE (fix pass): a token minted through `Self { … }` in a new impl block ---
+R="$(fresh self-mint)"
+cat >> "$R/crates/temper-services/src/services/team_service.rs" <<'EOF'
+impl GenesisToken {
+    fn mint() -> Self { Self { _private: () } }
+}
+EOF
+expect_red "an impl block on a writer token: caught" "$R" "team_service.rs#impl"
+
+# --- BITE (fix pass): UPDATE ONLY, TRUNCATE and COPY are writes ---
+R="$(fresh only-verbs)"
+cat > "$R/crates/temper-services/src/services/only_service.rs" <<'EOF'
+pub async fn a() { sqlx::query!("UPDATE ONLY kb_team_members SET role = 'owner'"); }
+pub async fn b() { sqlx::query!("TRUNCATE TABLE kb_team_members"); }
+EOF
+expect_red "UPDATE ONLY / TRUNCATE in Rust: caught" "$R" "2 crates/temper-services/src/services/only_service.rs"
+R="$(fresh sql-copy)"
+cat > "$R/migrations/20261201000007_copy.sql" <<'EOF'
+COPY kb_team_members FROM '/tmp/x.csv';
+EOF
+expect_red "COPY in SQL: caught" "$R" "<top-level>:20261201000007_copy.sql"
+
+# --- BITE (fix pass): a dollar tag with a digit still closes the body ---
+R="$(fresh sql-digit-tag)"
+cat > "$R/migrations/20261201000008_digit.sql" <<'EOF'
+CREATE FUNCTION sync_personal_team(p uuid) RETURNS void AS $body1$
+BEGIN
+    PERFORM 1;
+END;
+$body1$;
+INSERT INTO kb_team_members (team_id) VALUES (gen_random_uuid());
+EOF
+expect_red "top-level DML after a \$body1\$ close: its own key" "$R" \
+    "<top-level>:20261201000008_digit.sql"
+
+# --- BITE (fix pass): a body the scan cannot close fails closed at end of file ---
+R="$(fresh sql-quoted-body)"
+cat > "$R/migrations/20261201000009_quoted.sql" <<'EOF'
+CREATE FUNCTION sync_personal_team(p uuid) RETURNS void LANGUAGE sql AS '
+    SELECT 1;
+';
+UPDATE kb_team_members SET role = 'owner';
+EOF
+expect_red "a single-quoted body: fails closed" "$R" "<unclosed-function>:20261201000009_quoted.sql"
+
+# --- PIN (fix pass): a byte raw string in a test module does not end the skip early ---
+R="$(fresh byte-raw)"
+cat > "$R/crates/temper-services/src/services/byte_service.rs" <<'EOF'
+#[cfg(test)]
+mod tests {
+    const B: &[u8] = br#"a"b{"#;
+    fn seed() { sqlx::query!("DELETE FROM kb_team_members"); }
+}
+EOF
+expect_green "br#\"…\"# in a test module: lexed as a string" "$R"
 
 # --- an empty migrations dir fails ---
 R="$(fresh sql-empty)"
