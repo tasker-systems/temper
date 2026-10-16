@@ -50,15 +50,29 @@ pub async fn reconcile(
             idp_key = %req.idp_key,
             "saml reconcile skipped: assertion carried no group signal",
         ),
-        ReconcileOutcome::Reconciled(counts) => tracing::info!(
-            profile_id = %profile.id,
-            idp_key = %req.idp_key,
-            added = counts.added,
-            updated = counts.updated,
-            revoked = counts.revoked,
-            skipped_native = counts.skipped_native,
-            "saml reconcile complete",
-        ),
+        ReconcileOutcome::Reconciled(counts) => {
+            tracing::info!(
+                profile_id = %profile.id,
+                idp_key = %req.idp_key,
+                added = counts.added,
+                updated = counts.updated,
+                revoked = counts.revoked,
+                skipped_native = counts.skipped_native,
+                left_ownerless = counts.left_ownerless,
+                "saml reconcile complete",
+            );
+            // The identity provider wins over the last-owner guard (R8), so a reconcile can leave
+            // a team with no owner. The ledger records it (`left_ownerless`); this is the operator
+            // signal that a system admin has a team to repair.
+            if counts.left_ownerless > 0 {
+                tracing::warn!(
+                    profile_id = %profile.id,
+                    idp_key = %req.idp_key,
+                    left_ownerless = counts.left_ownerless,
+                    "saml reconcile left a team with no owner",
+                );
+            }
+        }
     }
 
     Ok(StatusCode::NO_CONTENT)

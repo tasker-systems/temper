@@ -571,7 +571,7 @@ Args: { "action": "revoke", "team": "+platform", "invitation_id": "<id from view
 ```
 
 `invitation_read` (view: team) lists a team's pending invitations, without tokens. You can invite
-at `maintainer`, `member` or `watcher`; ownership is transferred, not invited. After `create`,
+at any role up to your own on the team (an owner can invite at `owner`). After `create`,
 tell the invitee to look: the invitation reaches them only when they read `mine` (or run
 `temper invitations`). `revoke` answers `{ "revoked": true, … }`.
 

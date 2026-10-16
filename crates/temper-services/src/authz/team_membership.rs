@@ -250,6 +250,13 @@ impl MembershipTarget {
     pub(crate) fn is_machine(&self) -> bool {
         self.is_machine
     }
+
+    /// The target's row on this team as read under the locks — its role and source — or `None`
+    /// when it has none. SAML reconcile reads this to skip a native row that appeared after its
+    /// unlocked pre-read (S1, C7), and to tell whether a write lowered an owner (R8).
+    pub(crate) fn current(&self) -> Option<(TeamRole, TeamMemberSource)> {
+        self.current
+    }
 }
 
 /// The refusal for an add over an existing row (#1070), naming the operation that exists.

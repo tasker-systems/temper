@@ -482,3 +482,39 @@ async fn a_native_row_inserted_mid_reconcile_is_skipped(pool: PgPool) {
     .unwrap();
     assert_eq!(events, 0, "a skip records nothing");
 }
+
+/// C4/R8, pin: `left_ownerless` counts the teams THIS reconcile left without an owner, not the
+/// teams it touched that already had none. `seed`'s teams have no owner from the start; adding
+/// and re-ranking idp members on them lowers no owner, so the count stays zero and no event says
+/// `left_ownerless`. Counting every touched ownerless team would page an operator on every login
+/// of every member of such a team.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_add_to_an_already_ownerless_team_is_not_counted_as_leaving_it_ownerless(pool: PgPool) {
+    let (profile, _team_a, _team_b) = seed(&pool).await;
+
+    let added = counts(
+        reconcile_idp_memberships(&pool, profile, "acme", Some(&["engineering".into()]))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(added.added, 1, "{added:?}");
+    assert_eq!(added.left_ownerless, 0, "{added:?}");
+
+    let raised = counts(
+        reconcile_idp_memberships(&pool, profile, "acme", Some(&["eng-leads".into()]))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(raised.updated, 1, "{raised:?}");
+    assert_eq!(raised.left_ownerless, 0, "{raised:?}");
+
+    let flagged: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e \
+           JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'team_membership_changed' AND e.payload ? 'left_ownerless'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(flagged, 0, "no write here lowered an owner");
+}

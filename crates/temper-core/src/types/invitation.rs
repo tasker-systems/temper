@@ -37,7 +37,8 @@ pub enum InvitationStatus {
 /// invitation URLs sitting in inboxes — and there are none.
 ///
 /// Constraints:
-/// - `role` cannot be `Owner` — ownership is only transferred, never invited
+/// - `role` is at most the inviter's own role on the team — an owner can invite at `owner` —
+///   and on the gating team only a system admin invites (the team-role rank rule)
 /// - One *live pending* invite per email per team (declined/expired/revoked history coexists)
 /// - 7-day default expiry, checked lazily at acceptance time; a lapsed-but-unswept pending
 ///   row is swept to `expired` when the same email is re-invited, so re-invite is never blocked

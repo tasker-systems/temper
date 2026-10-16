@@ -315,6 +315,17 @@ current_gates() {
 # REVIEWED 2026-10-15 (team-role rank, PR C, task C4, fmt only) — `team_membership`
 # 3b225ef14142 -> f6e2e9db8946: `cargo fmt` rewrapped the new `idp` constructor bodies. The
 # ordering lesson this repeat teaches: format BEFORE computing a baseline, never after.
+# REVIEWED 2026-10-16 (team-role rank, PR C, tasks C4 fix and C5) — `team_membership`
+# f6e2e9db8946 -> 76f865b5e456: `MembershipTarget` grew a `current()` getter (role and source as
+# read under the locks). SAML reconcile reads it to skip a native row a derived writer inserted
+# after its unlocked re-read (C7: native wins — previously the `idp` constructor's internal error
+# failed the whole reconcile), and to count `left_ownerless` only for a write that lowered an
+# owner. No decision moved; the getter exposes what `locked` already read. Claim moved:
+# `types/invitation.rs` 1 -> 2 — `TeamInvitation`'s constraints list said "`role` cannot be
+# `Owner` — ownership is only transferred, never invited" (C11, missed by C2); it now states the
+# cap and that "on the gating team only a system admin invites", which is
+# `authorize_invitation` over `MembershipAuthority::resolve`'s arm order, the `team_membership`
+# gate it binds to.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -336,7 +347,7 @@ claim crates/temper-api/src/handlers/teams.rs 7 team_membership,is_system_admin
 claim crates/temper-core/src/types/admin.rs 5 is_system_admin,read_gates
 claim crates/temper-core/src/types/connection.rs 2 machine,connection
 claim crates/temper-core/src/types/erasure.rs 3 is_system_admin
-claim crates/temper-core/src/types/invitation.rs 1 team_membership
+claim crates/temper-core/src/types/invitation.rs 2 team_membership
 claim crates/temper-core/src/types/machine.rs 1 machine
 claim crates/temper-core/src/types/subscription.rs 1 subscription
 claim crates/temper-core/src/types/team.rs 3 team_membership,is_system_admin
@@ -386,7 +397,7 @@ gate two_sided 7822960e4ffa
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership f6e2e9db8946
+gate team_membership 76f865b5e456
 EOF
 
 CURRENT="$(current_claims; current_gates)"

@@ -659,7 +659,8 @@ mod message_tests {
     /// C11 (team-role rank spec): no refusal, doc or published description in the member acts'
     /// files directs a caller to a transfer operation for team ownership — there is none; the
     /// hand-over is `change_role`. The invitation files joined when C2 routed invitations
-    /// through the rank rule (plan C5).
+    /// through the rank rule, and the MCP team tools, the CLI's teams skill and the public
+    /// teams concept page joined when C5 closed the inventory (plan C5).
     #[test]
     fn no_member_act_string_names_an_ownership_transfer() {
         let banned = [
@@ -688,6 +689,22 @@ mod message_tests {
             (
                 "types/profile.rs",
                 include_str!("../../../temper-core/src/types/profile.rs"),
+            ),
+            (
+                "temper-mcp tools/invitations.rs",
+                include_str!("../../../temper-mcp/src/tools/invitations.rs"),
+            ),
+            (
+                "temper-mcp tools/teams.rs",
+                include_str!("../../../temper-mcp/src/tools/teams.rs"),
+            ),
+            (
+                "skill-content/teams.md",
+                include_str!("../../../temper-cli/skill-content/teams.md"),
+            ),
+            (
+                "docs/concepts/teams-and-roles.md",
+                include_str!("../../../../docs/concepts/teams-and-roles.md"),
             ),
         ] {
             let lower = text.to_lowercase();

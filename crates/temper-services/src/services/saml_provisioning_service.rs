@@ -8,6 +8,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::types::ids::ProfileId;
+use temper_core::types::team::TeamMemberSource;
 use temper_core::types::TeamRole;
 
 use crate::authz::team_membership;
@@ -213,17 +214,27 @@ pub async fn reconcile_idp_memberships(
                 let target =
                     team_membership::locked(&mut tx, m.team_id, ProfileId::from(profile_id))
                         .await?;
+                // The team lock serializes every routed writer, but not the derived ones (R13:
+                // auto-join, personal-team sync), which can still insert a native row between
+                // the re-read above and this row lock. Native wins (C7): skip, never write.
+                if let Some((_, TeamMemberSource::Native)) = target.current() {
+                    out.skipped_native += 1;
+                    continue;
+                }
+                let lowers_owner = matches!(target.current(), Some((TeamRole::Owner, _)));
                 let change =
                     team_membership::AuthorizedMembershipChange::idp(token, &target, m.role)?;
                 match team_membership::membership_write(&mut tx, None, change).await {
-                    Ok(outcome) => {
-                        match outcome {
-                            team_membership::MembershipOutcome::Added => out.added += 1,
-                            team_membership::MembershipOutcome::Changed => out.updated += 1,
-                            _ => {}
+                    Ok(outcome) => match outcome {
+                        team_membership::MembershipOutcome::Added => out.added += 1,
+                        team_membership::MembershipOutcome::Changed => {
+                            out.updated += 1;
+                            if lowers_owner {
+                                count_ownerless(&mut tx, m.team_id, &mut out).await?;
+                            }
                         }
-                        count_ownerless(&mut tx, m.team_id, &mut out).await?;
-                    }
+                        _ => {}
+                    },
                     // A native row appeared for this (team, profile) and the writer's own
                     // re-check refused the write (C7): count it as skipped, never as an update.
                     Err(crate::error::ApiError::Conflict(msg))
@@ -247,13 +258,16 @@ pub async fn reconcile_idp_memberships(
         .filter(|(t, _)| !desired.contains_key(*t))
     {
         let target = team_membership::locked(&mut tx, team_id, ProfileId::from(profile_id)).await?;
+        let lowers_owner = matches!(target.current(), Some((TeamRole::Owner, _)));
         let change = team_membership::AuthorizedMembershipChange::idp_removal(token, &target)?;
         match team_membership::membership_write(&mut tx, None, change).await {
             Ok(outcome) => {
                 if outcome == team_membership::MembershipOutcome::Removed {
                     out.revoked += 1;
+                    if lowers_owner {
+                        count_ownerless(&mut tx, team_id, &mut out).await?;
+                    }
                 }
-                count_ownerless(&mut tx, team_id, &mut out).await?;
             }
             Err(crate::error::ApiError::Conflict(msg))
                 if msg == team_membership::ALREADY_A_MEMBER
@@ -299,9 +313,10 @@ async fn record_signal_missing(pool: &PgPool, profile_id: Uuid, idp_key: &str) -
     Ok(())
 }
 
-/// After a real reconcile write, under the team lock the write holds: was the team left with no
-/// owner? R8 lets the identity provider remove or demote the last owner; the event carries
-/// `left_ownerless` and this count surfaces it to the operator log.
+/// After a reconcile write that removed or demoted an owner, under the team lock the write holds:
+/// was the team left with no owner? R8 lets the identity provider remove or demote the last owner;
+/// the event carries `left_ownerless` and this count surfaces it to the operator log. Called only
+/// for a write that lowered an owner, so a team that was already ownerless is not counted.
 async fn count_ownerless(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     team_id: Uuid,
