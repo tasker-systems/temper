@@ -61,7 +61,7 @@ temper team decline <token>
 Inviter-side view of a team's outstanding invites:
 
 ```
-temper team invitations <team>    # owner/maintainer
+temper team invitations <team>    # a manager of the team (owner/maintainer)
 ```
 
 `temper invitations` resolves an invite to you only when your email maps to exactly

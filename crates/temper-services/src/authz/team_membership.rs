@@ -560,23 +560,23 @@ impl AuthorizedMembershipChange {
     /// An accepted invitation's member row (plan P12): the invitee joins at the invited role, the
     /// record says `invitation` and names the inviter. `claimed` is minted only by the claim
     /// `UPDATE` in `invitation_service::accept_invitation` — a struct with private fields, so
-    /// this cannot run for an invitation nobody claimed — and the invitation's authority was
+    /// this cannot run for an invitation nobody claimed — and it carries the invitee the claim
+    /// was bound to, so the join cannot land on anyone else. The invitation's authority was
     /// checked when it was created (C16), which is why no rank decision runs here. The caller
     /// holds [`locked`]'s locks on the team, as P12 orders it.
     pub(crate) fn from_claimed_invitation(
         claimed: crate::services::invitation_service::ClaimedInvitation,
-        invitee: ProfileId,
     ) -> Self {
         Self {
             team_id: claimed.team_id(),
-            profile: invitee,
+            profile: claimed.invitee(),
             act: MembershipAct::Add {
                 role: claimed.role(),
             },
             via: MembershipVia::Invitation,
             expected: None,
             new_source: TeamMemberSource::Native,
-            actor: Some(invitee),
+            actor: Some(claimed.invitee()),
             invited_by: Some(claimed.invited_by()),
             guard_last_owner: true,
         }
@@ -606,21 +606,42 @@ impl AuthorizedMembershipChange {
 
     /// A machine registration's team reach (plan C3): the registrar's authorized reach lands the
     /// machine on `target`'s team, recorded as `machine_reach` with the registrar as actor. The
-    /// proof is the `AuthorizedReach` itself — only `machine_authz` can construct one — and it
-    /// carries the D4b ceiling already enforced at mint, which is why no rank decision runs
-    /// here. `target` is a [`locked`] read, so the act is `add` or `change` per the row as it
-    /// stood under the team lock; a change to the current role is the writer's `noop`.
+    /// proof is the `AuthorizedReach` itself — only `machine_authz` can construct one — and the
+    /// write is bound to it: the `(team, role)` must be one of the reach's own specs, and the role
+    /// at or below the machine ceiling (D4b, enforced at mint and again here, because the machine
+    /// is registered after its reach is applied, so check 4's `is_machine` does not see it yet).
+    /// `target` is a [`locked`] read, so the act is `add` or `change` per the row as it stood
+    /// under the team lock; a change to the current role is the writer's `noop`. An
+    /// identity-provider row is never rewritten by a reach.
     pub(crate) fn from_reach(
-        _reach: &crate::services::machine_authz::AuthorizedReach,
+        reach: &crate::services::machine_authz::AuthorizedReach,
         registrar: ProfileId,
         target: &MembershipTarget,
         role: TeamRole,
-    ) -> Self {
+    ) -> ApiResult<Self> {
+        if exceeds_machine_ceiling(role) {
+            return Err(ApiError::BadRequest(MACHINE_ROLE_CEILING.to_string()));
+        }
+        let authorized = reach.teams().iter().any(|spec| {
+            spec.team_id == target.team_id
+                && crate::services::machine_authz::parse_team_role(&spec.role).ok() == Some(role)
+        });
+        if !authorized {
+            return Err(ApiError::Internal(
+                "machine reach write outside the authorized reach".to_string(),
+            ));
+        }
         let (act, expected) = match target.current {
             None => (MembershipAct::Add { role }, None),
-            Some((current, source)) => (MembershipAct::Change { role }, Some((current, source))),
+            Some((current, TeamMemberSource::Native)) => (
+                MembershipAct::Change { role },
+                Some((current, TeamMemberSource::Native)),
+            ),
+            Some((_, TeamMemberSource::Idp)) => {
+                return Err(ApiError::Conflict(PROVISIONED_BY_SAML.to_string()))
+            }
         };
-        Self {
+        Ok(Self {
             team_id: target.team_id,
             profile: target.profile,
             act,
@@ -630,7 +651,7 @@ impl AuthorizedMembershipChange {
             actor: Some(registrar),
             invited_by: None,
             guard_last_owner: true,
-        }
+        })
     }
 
     /// An identity-provider reconcile write (plan C4, R8): the IdP wins over the last-owner

@@ -205,11 +205,12 @@ fn plain_slug(slug: &str) -> bool {
 
 /// The requirement clause for a team-side act's bare `403`. The wire's `403` carries no
 /// sentence, so the tool names the gate: the rank rule's manager check on the team.
-const TEAM_STEWARD_REQUIREMENT: &str = "you manage the team (owner or maintainer)";
+const TEAM_STEWARD_REQUIREMENT: &str =
+    "you manage the team (an owner or maintainer of it; on the gating team, a system admin)";
 
 /// Map an invitation act's error onto an MCP error.
 ///
-/// The caller-actionable faces — the bare `403` (team-side acts: not an owner or maintainer),
+/// The caller-actionable faces — the bare `403` (team-side acts: the caller does not manage the team),
 /// `ForbiddenDetail` (a machine principal, or an invitation addressed to someone else — the
 /// server's sentence names which), `404` (unknown token, or no such pending invitation), `409`
 /// (a duplicate pending invite; an invitation already redeemed by someone else) and `400`
@@ -307,7 +308,7 @@ pub enum InvitationReadView {
     Mine,
     /// How many pending invitations are addressed to you — integers only, no tokens.
     Count,
-    /// A team's pending invitations (owner or maintainer of that team).
+    /// A team's pending invitations (a manager of that team).
     Team,
 }
 
@@ -403,9 +404,9 @@ pub enum InvitationManageAction {
     Accept,
     /// Decline an invitation addressed to you.
     Decline,
-    /// Invite an email address to a team (owner or maintainer).
+    /// Invite an email address to a team (a manager of the team), at a role up to your own.
     Create,
-    /// Withdraw a team's pending invitation (owner or maintainer).
+    /// Withdraw a team's pending invitation (a manager of the team).
     Revoke,
 }
 
@@ -646,7 +647,7 @@ mod tests {
         assert_eq!(bare.code, rmcp::model::ErrorCode::INVALID_PARAMS);
         assert_eq!(
             bare.message,
-            "invitation_manage create requires that you manage the team (owner or maintainer)"
+            "invitation_manage create requires that you manage the team (an owner or maintainer of it; on the gating team, a system admin)"
         );
 
         let detailed = map_invitation_err(

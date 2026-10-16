@@ -518,3 +518,44 @@ async fn an_add_to_an_already_ownerless_team_is_not_counted_as_leaving_it_ownerl
     .unwrap();
     assert_eq!(flagged, 0, "no write here lowered an owner");
 }
+
+/// C4/R8, bite: the CHANGE path of the same rule — the identity provider demotes a team's only
+/// owner (an idp `owner` row, now asserted only as `engineering` → `member`). The demotion lands,
+/// is counted as an update, and the record and the counts both say the team was left ownerless.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn demoting_a_teams_only_idp_owner_records_left_ownerless(pool: PgPool) {
+    let (profile, team_a, _team_b) = seed(&pool).await;
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role, source) \
+         VALUES ($1, $2, 'owner', 'idp')",
+    )
+    .bind(team_a)
+    .bind(profile)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let c = counts(
+        reconcile_idp_memberships(&pool, profile, "acme", Some(&["engineering".into()]))
+            .await
+            .expect("the IdP wins over the last-owner guard"),
+    );
+    assert_eq!(c.updated, 1, "{c:?}");
+    assert_eq!(c.left_ownerless, 1, "{c:?}");
+    assert_eq!(
+        membership(&pool, team_a, profile).await,
+        Some(("Member".into(), "idp".into()))
+    );
+
+    let payload: serde_json::Value = sqlx::query_scalar(
+        "SELECT e.payload FROM kb_events e \
+           JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'team_membership_changed'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(payload["previous_role"], "owner", "{payload}");
+    assert_eq!(payload["role"], "member", "{payload}");
+    assert_eq!(payload["left_ownerless"], true, "{payload}");
+}

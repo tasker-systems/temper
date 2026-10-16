@@ -55,10 +55,10 @@ async fn apply_reach(
     caller: ProfileId,
     profile_id: Uuid,
     reach: AuthorizedReach<'_>,
-    // `Some` iff `reach` carries at least one grant — a pure team-membership reach fires no
-    // grant_created event and so needs no emitter (the caller resolves one only when there is a
-    // grant to author). The membership events emit from it too; the SQL writer ties the emitter
-    // to the recorded actor, which is this registrar.
+    // `Some` iff `reach` carries at least one grant (the caller resolves one only when there is a
+    // grant to author). The membership events emit from it when present; when absent,
+    // `membership_write` resolves the registrar's own `<handle>@web` entity. Either way the SQL
+    // writer ties the emitter to the recorded actor, which is this registrar.
     emitter: Option<EntityId>,
 ) -> ApiResult<()> {
     let mut teams: Vec<_> = reach.teams().iter().collect();
@@ -68,7 +68,7 @@ async fn apply_reach(
         let target =
             team_membership::locked(&mut *conn, team.team_id, ProfileId::from(profile_id)).await?;
         let change =
-            team_membership::AuthorizedMembershipChange::from_reach(&reach, caller, &target, role);
+            team_membership::AuthorizedMembershipChange::from_reach(&reach, caller, &target, role)?;
         team_membership::membership_write(&mut *conn, emitter, change).await?;
     }
 
@@ -197,9 +197,10 @@ pub async fn provision(
     refuse_minted_namespace(&req.client_id)?;
 
     // Resolve the caller's emitter BEFORE the transaction — matching the auth-before-tx pattern above,
-    // and avoiding a nested pool acquire while `tx` is open. Only when there is a grant to author: a
-    // pure team-membership reach fires no grant_created event, so it must not require the minter to
-    // carry a `<handle>@web` entity (a mere gating-team watcher does not).
+    // and avoiding a nested pool acquire while `tx` is open — when there is a grant to author. A
+    // pure team-membership reach skips this; its `machine_reach` events resolve the registrar's
+    // `<handle>@web` entity inside the transaction instead (`membership_write`), so either way every
+    // recorded act emits as the registrar.
     let emitter = if reach.grants().is_empty() {
         None
     } else {
@@ -309,8 +310,8 @@ pub async fn issue(
     )
     .await?;
 
-    // Resolve the caller's emitter BEFORE the transaction (see `provision`) — only when a grant is to
-    // be authored, so a pure team-membership reach needs no `<handle>@web` entity on the minter.
+    // Resolve the caller's emitter BEFORE the transaction (see `provision`) when a grant is to be
+    // authored; a pure team-membership reach resolves it inside the transaction (`membership_write`).
     let emitter = if reach.grants().is_empty() {
         None
     } else {

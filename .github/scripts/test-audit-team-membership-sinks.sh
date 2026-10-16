@@ -14,7 +14,12 @@
 #   - a second caller of `_admin_team_membership_write` is caught;
 #   - a new SQL function writing the table is caught, including one closed with `$function$;`;
 #   - a redefinition of an allowlisted function stays green;
-#   - DML after a `$$ LANGUAGE plpgsql;` close is top-level, not the function above it;
+#   - DML after a `$$ LANGUAGE plpgsql;` close, or after `$$` and `LANGUAGE plpgsql;` on two lines,
+#     or in the next migration file, is top-level, not the function above it;
+#   - (review round) an `any(test, …)` module is scanned; braces in comments, char literals and
+#     multi-line (raw) strings do not move a skip's end; an unterminated test module fails closed;
+#     a statement split across lines, MERGE INTO and a quoted table name are caught; a second
+#     writer-token mint and a SQL caller of the writer are caught;
 #   - an empty migrations dir fails.
 #
 #   bash .github/scripts/test-audit-team-membership-sinks.sh
@@ -62,6 +67,28 @@ fn seed() {
 EOF
     cat > "$d/crates/temper-substrate/src/scenario/access/loader.rs" <<'EOF'
 fn load() { let q = "insert into kb_team_members (team_id) values ($1)"; }
+EOF
+    cat > "$d/crates/temper-services/src/services/team_service.rs" <<'EOF'
+pub(crate) struct GenesisToken {
+    _private: (),
+}
+pub async fn create_team() -> GenesisToken {
+    GenesisToken { _private: () }
+}
+EOF
+    cat > "$d/crates/temper-services/src/services/invitation_service.rs" <<'EOF'
+pub(crate) struct ClaimedInvitation { team_id: u32 }
+impl ClaimedInvitation {
+    pub(crate) fn team_id(&self) -> u32 { self.team_id }
+}
+fn accept() { let c = ClaimedInvitation { team_id: 1 }; }
+EOF
+    cat > "$d/crates/temper-services/src/services/saml_provisioning_service.rs" <<'EOF'
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct IdpReconcileToken {
+    _private: (),
+}
+fn reconcile() { let token = IdpReconcileToken { _private: () }; }
 EOF
     cat > "$d/crates/temper-services/src/authz/team_membership.rs" <<'EOF'
 //! `membership_write` is the only caller of `_admin_team_membership_write`.
@@ -294,6 +321,114 @@ END;
 $fn$;
 EOF
 expect_green "a redefinition of an allowlisted function: green" "$R"
+
+# --- BITE (RG-1/RG-2): `any(test, …)` compiles into production when its other arm holds ---
+R="$(fresh any-test)"
+cat > "$R/crates/temper-services/src/services/any_service.rs" <<'EOF'
+#[cfg(any(test, feature = "x"))]
+mod sometimes {
+    fn write() { sqlx::query!("INSERT INTO kb_team_members (team_id) VALUES ($1)"); }
+}
+EOF
+expect_red "#[cfg(any(test, …))] mod: scanned, not skipped" "$R" "any_service.rs"
+
+# --- BITE: braces in comments, strings and multi-line raw strings do not move the skip's end ---
+R="$(fresh lexer)"
+cat > "$R/crates/temper-services/src/services/lexed_service.rs" <<'EOF'
+#[cfg(test)]
+mod tests {
+    // returns {
+    /* a block comment { spanning
+       two lines { */
+    const FIXTURE: &str = r#"
+{"a": {"b":
+"#;
+    const CONT: &str = "first line {\n\
+        continued } } line\n";
+    fn f() { let _ = '{'; let _ = '\''; }
+}
+
+pub async fn after_the_tests() {
+    sqlx::query!("DELETE FROM kb_team_members WHERE team_id = $1");
+}
+EOF
+expect_red "braces in comments and multi-line strings: the skip still ends at the module's close" \
+    "$R" "lexed_service.rs"
+
+# --- BITE: a test module that never closes fails CLOSED, naming the file ---
+R="$(fresh unclosed)"
+cat > "$R/crates/temper-services/src/services/unclosed_service.rs" <<'EOF'
+#[cfg(test)]
+mod tests {
+    fn f() {
+EOF
+expect_red "an unterminated test module: fails closed" "$R" "unclosed_service.rs#unclosed-test-module"
+
+# --- BITE: a statement split across two lines, MERGE, and a quoted table name ---
+R="$(fresh split)"
+cat > "$R/crates/temper-services/src/services/split_service.rs" <<'EOF'
+pub async fn split() {
+    sqlx::query!(
+        "INSERT INTO
+           kb_team_members (team_id) VALUES ($1)"
+    );
+}
+EOF
+expect_red "INSERT INTO / kb_team_members on two lines: caught" "$R" "split_service.rs"
+R="$(fresh merge)"
+cat > "$R/crates/temper-services/src/services/merge_service.rs" <<'EOF'
+pub async fn merge() { sqlx::query!("MERGE INTO kb_team_members m USING x ON true"); }
+EOF
+expect_red "MERGE INTO kb_team_members: caught" "$R" "merge_service.rs"
+R="$(fresh quoted)"
+cat > "$R/crates/temper-services/src/services/quoted_service.rs" <<'EOF'
+pub async fn quoted() { sqlx::query!("UPDATE public.\"kb_team_members\" SET role = 'owner'"); }
+EOF
+expect_red "a quoted, schema-qualified table name: caught" "$R" "quoted_service.rs"
+
+# --- BITE (RG-2 L3): a second mint of a writer token in its own module ---
+R="$(fresh second-mint)"
+cat >> "$R/crates/temper-services/src/services/team_service.rs" <<'EOF'
+pub async fn another_door() { let _ = GenesisToken { _private: () }; }
+EOF
+expect_red "a second GenesisToken mint: caught" "$R" "team_service.rs"
+
+# --- BITE (RG-1/RG-2): `$$` then `LANGUAGE plpgsql;` on the next line still closes the body ---
+R="$(fresh sql-split-close)"
+cat > "$R/migrations/20261201000003_split_close.sql" <<'EOF'
+CREATE FUNCTION sync_personal_team(p uuid) RETURNS void AS $$
+BEGIN
+    PERFORM 1;
+END;
+$$
+LANGUAGE plpgsql;
+UPDATE kb_team_members SET role = 'owner';
+EOF
+expect_red "top-level DML after a split \$\$ / LANGUAGE close: its own key" "$R" \
+    "<top-level>:20261201000003_split_close.sql"
+
+# --- BITE: a function left open at end of file cannot adopt the next migration's DML ---
+R="$(fresh sql-file-boundary)"
+cat > "$R/migrations/20261201000004_open.sql" <<'EOF'
+CREATE FUNCTION ensure_auto_join_memberships(p uuid) RETURNS void AS $$
+BEGIN
+    INSERT INTO kb_team_members (team_id) VALUES (p);
+EOF
+cat > "$R/migrations/20261201000005_next.sql" <<'EOF'
+INSERT INTO kb_team_members (team_id, profile_id, role) SELECT id, id, 'owner' FROM kb_teams;
+EOF
+expect_red "scope resets at a file boundary" "$R" "<top-level>:20261201000005_next.sql"
+
+# --- BITE (RG-1/RG-2): a SQL function calling the recorded writer ---
+R="$(fresh sql-caller)"
+cat > "$R/migrations/20261201000006_caller.sql" <<'EOF'
+CREATE FUNCTION _mass_promote(p uuid) RETURNS void AS $fn$
+BEGIN
+    PERFORM _admin_team_membership_write(NULL, NULL, 'idp_reconcile', 'change', p);
+END;
+$fn$;
+EOF
+expect_red "a SQL caller of _admin_team_membership_write: caught" "$R" "_mass_promote"
 
 # --- an empty migrations dir fails ---
 R="$(fresh sql-empty)"

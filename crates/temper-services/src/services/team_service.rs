@@ -145,6 +145,7 @@ pub(crate) async fn require_team_exists(pool: &PgPool, team_id: Uuid) -> ApiResu
 /// Proof that `create_team` has just inserted the team row it is about to write the creator's
 /// `owner` row for. Defined here with a private field and constructed only in this module, so the
 /// genesis constructor in `authz::team_membership` cannot be called from anywhere else (plan P16).
+#[derive(Debug)]
 pub(crate) struct GenesisToken {
     _private: (),
 }
@@ -659,8 +660,9 @@ mod message_tests {
     /// C11 (team-role rank spec): no refusal, doc or published description in the member acts'
     /// files directs a caller to a transfer operation for team ownership — there is none; the
     /// hand-over is `change_role`. The invitation files joined when C2 routed invitations
-    /// through the rank rule, and the MCP team tools, the CLI's teams skill and the public
-    /// teams concept page joined when C5 closed the inventory (plan C5).
+    /// through the rank rule, and the MCP team tools and the CLI's teams skill joined when C5
+    /// closed the inventory (plan C5). Files outside `crates/` stay out: a docs-only change does
+    /// not run the Rust tests (`detect-ci-scope.sh`), so a test reading one would gate nothing.
     #[test]
     fn no_member_act_string_names_an_ownership_transfer() {
         let banned = [
@@ -701,10 +703,6 @@ mod message_tests {
             (
                 "skill-content/teams.md",
                 include_str!("../../../temper-cli/skill-content/teams.md"),
-            ),
-            (
-                "docs/concepts/teams-and-roles.md",
-                include_str!("../../../../docs/concepts/teams-and-roles.md"),
             ),
         ] {
             let lower = text.to_lowercase();

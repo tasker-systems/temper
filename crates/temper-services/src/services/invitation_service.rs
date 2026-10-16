@@ -29,11 +29,15 @@ use temper_core::types::team::TeamRole;
 
 /// What the accept path's claim `UPDATE` returned: the invitation was live, pending and the
 /// caller's, and it is now `accepted`. Private fields: only that claim builds one, so the
-/// member write it authorizes cannot run for an invitation nobody claimed (plan P12/P16).
+/// member write it authorizes cannot run for an invitation nobody claimed (plan P12/P16). It
+/// carries the invitee the claim was bound to (`vw_invitee_invitations`), so the write cannot be
+/// pointed at anyone else.
+#[derive(Debug)]
 pub(crate) struct ClaimedInvitation {
     team_id: Uuid,
     role: TeamRole,
     invited_by: ProfileId,
+    invitee: ProfileId,
 }
 
 impl ClaimedInvitation {
@@ -47,6 +51,10 @@ impl ClaimedInvitation {
 
     pub(crate) fn invited_by(&self) -> ProfileId {
         self.invited_by
+    }
+
+    pub(crate) fn invitee(&self) -> ProfileId {
+        self.invitee
     }
 }
 
@@ -82,6 +90,20 @@ pub async fn create_invitation(
         MembershipAuthority::resolve(&mut conn, caller, team_id)
             .await?
             .authorize_invitation(params.role)?;
+        // The team must exist and be live. Asked only AFTER the caller is known to manage it (S6),
+        // so only a manager or a system admin learns the answer; without it a system admin's
+        // invite to an unknown id surfaced as the insert's foreign-key failure (a 500).
+        let live = sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM kb_teams WHERE id = $1 AND is_active) AS "live!: bool""#,
+            team_id
+        )
+        .fetch_one(&mut *conn)
+        .await?;
+        if !live {
+            return Err(ApiError::NotFound(
+                "team not found or not readable".to_string(),
+            ));
+        }
     }
     let caller = caller.profile_id();
 
@@ -190,13 +212,13 @@ pub async fn accept_invitation(
             team_id: row.team_id,
             role: row.role,
             invited_by: ProfileId::from(row.invited_by_profile_id),
+            invitee: caller,
         };
         let team_id = claimed.team_id();
         // The member row under the team lock (P12), the same locks a member act holds, so the
         // join serializes with the roster's other recorded acts and is itself recorded.
         team_membership::locked(&mut tx, team_id, caller).await?;
-        let change =
-            team_membership::AuthorizedMembershipChange::from_claimed_invitation(claimed, caller);
+        let change = team_membership::AuthorizedMembershipChange::from_claimed_invitation(claimed);
         team_membership::membership_write(&mut tx, None, change).await?;
 
         // The member's ACTUAL role: a fresh join lands at the invited role, but a profile already
@@ -976,7 +998,61 @@ mod tests {
         )
         .await
         .expect("a maintainer revokes an owner-level invitation");
-        assert_eq!(status_of(&pool, inv.id).await, InvitationStatus::Pending);
+        // Revocation is `revoked_at`, not a status: the status stays `pending`.
+        let revoked: bool = sqlx::query_scalar(
+            "SELECT revoked_at IS NOT NULL FROM kb_team_invitations WHERE id = $1",
+        )
+        .bind(inv.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(revoked, "the owner-level invitation is withdrawn");
+    }
+
+    /// C16/R10/R11, bite: a system admin who is not a member manages any team's invitations,
+    /// the gating team's included — creates one at `owner`, lists it, revokes it — and is the
+    /// one caller told a team does not exist (a 404 rather than the insert's foreign-key 500).
+    /// On the pre-rank code a non-member admin was refused all three with a 403.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_non_member_system_admin_manages_any_teams_invitations(pool: PgPool) {
+        let gate = mk_gating_team(&pool).await;
+        let admin = mk_profile(&pool, "admin").await;
+        crate::test_support::approved_admin(&pool, *admin).await;
+        let caller = crate::test_support::human_principal_for(&pool, *admin).await;
+
+        for team in [gate, mk_team(&pool, "plain").await] {
+            let inv = create_invitation(
+                &pool,
+                &caller,
+                team,
+                CreateInvitationParams {
+                    invited_email: "new@e.com".into(),
+                    role: TeamRole::Owner,
+                },
+            )
+            .await
+            .expect("an admin may offer any role on any team");
+            let listed = list_invitations(&pool, &caller, team)
+                .await
+                .expect("an admin lists");
+            assert!(listed.iter().any(|i| i.id == inv.id), "{listed:?}");
+            revoke_invitation(&pool, &caller, team, inv.id)
+                .await
+                .expect("an admin revokes");
+        }
+
+        let err = create_invitation(
+            &pool,
+            &caller,
+            Uuid::now_v7(),
+            CreateInvitationParams {
+                invited_email: "nobody@e.com".into(),
+                role: TeamRole::Member,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ApiError::NotFound(_)), "got {err:?}");
     }
 
     /// C16, pin: an invitation stands when its inviter is later demoted — the offer was the

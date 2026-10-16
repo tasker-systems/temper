@@ -25,36 +25,43 @@
 #
 # THE THREE HALVES
 # ----------------
-#   1. Rust writes  — raw `INSERT INTO` / `UPDATE` / `DELETE FROM kb_team_members` in
-#                     `crates/*/src/**.rs`, per file. Test modules are skipped BY STRUCTURE: a
-#                     `#[cfg(...)]` attribute whose predicate names the bare `test` cfg, followed
-#                     (after any other attributes) by a `mod NAME {` line, opens a region that runs
-#                     to its matching close brace. A `#[cfg(test)]` on any other item (a fn, an
-#                     impl) skips nothing, a `#[cfg(feature = "test-db")]` is not a test cfg, and a
-#                     doc comment mentioning `#[cfg(test)]` cannot start a skip (the attribute must
-#                     open its line). A module gated only at its `mod x;` declaration elsewhere
+#   1. Rust writes  — raw `INSERT INTO` / `UPDATE` / `DELETE FROM` / `MERGE INTO kb_team_members`
+#                     in `crates/*/src/**.rs`, per file — the table bare, schema-qualified or
+#                     quoted, and the verb and the table on one line or split across two. Test
+#                     modules are skipped BY STRUCTURE: `#[cfg(test)]` or `#[cfg(all(test, …))]`,
+#                     followed (after any other attributes) by a `mod NAME {` line, opens a region
+#                     that runs to its matching close brace, counted by a small lexer that ignores
+#                     braces in comments, char literals and (raw) strings across lines. A skip still
+#                     open at end of file fails CLOSED. `any(test, …)` and `not(test)` compile into
+#                     some production build, so they skip nothing; neither does a `#[cfg(test)]` on
+#                     a non-mod item, a `#[cfg(feature = "test-db")]`, or a doc comment mentioning
+#                     `#[cfg(test)]`. A module gated only at its `mod x;` declaration elsewhere
 #                     (`subscription_test_support.rs`) is invisible to a per-file pass, so it is
 #                     named in the baseline instead.
 #   2. Rust callers — calls of `_admin_team_membership_write` in `crates/*/src/**.rs`, outside
 #                     comments and test modules. The baseline is EXACTLY ONE: `membership_write`.
 #                     That is the seal's pin (plan P16): a second caller could hand the writer
 #                     anything it liked.
-#   3. SQL writes   — function-keyed, exactly as `audit-grant-sinks.sh`: the NAME of the function
+#   3. Token mints  — struct literals of the three writer tokens (`GenesisToken`,
+#                     `ClaimedInvitation`, `IdpReconcileToken`). Private fields keep other modules
+#                     out; this pins each defining module to its one mint.
+#   4. SQL writes   — function-keyed, exactly as `audit-grant-sinks.sh`: the NAME of the function
 #                     whose body writes the table, or `<top-level>:<file>` for DML outside any
 #                     function. A redefinition of an allowlisted function in a later migration does
-#                     not move the set; a new writer does. Case-insensitive. A function body ends at
-#                     ANY closing dollar tag followed by `;` (`$$;`, `$fn$;`, `$function$;`, and
-#                     `$$ LANGUAGE plpgsql;`) — the grant script's `$$;`-only reset predates the
-#                     other tags.
+#                     not move the set; a new writer does. Case-insensitive. A body closes once its
+#                     two dollar tags (any tag) are seen and a statement end follows, on that line
+#                     or a later one; scope also resets at every file boundary.
+#   5. SQL callers  — functions (or top-level statements) that call `_admin_team_membership_write`.
+#                     The baseline is EMPTY: the writer authorizes nothing, so a SQL caller could
+#                     write any act with the last-owner guard off.
 #
 # NAMED BLIND SPOT
 # ----------------
 # `temper-substrate`'s `replay::restore_table` restores `kb_team_members` verbatim through dynamic
 # SQL built from `INPUT_TABLES`, so no grep sees it. It is not a membership act (spec "Not routed":
 # a replay re-materializes rows already decided), and this script's green says NOTHING about it.
-# Multi-line raw strings with unbalanced braces inside a test module could also end the structural
-# skip early (which counts more, the safe direction) — string and char literals on one line are
-# stripped before braces are counted.
+# The same holds for any write whose table name is assembled at runtime (`format!`, a `const`), and
+# for production Rust outside `crates/*/src` (the repo-root `api/` shims write nothing today).
 #
 # USAGE
 #   .github/scripts/audit-team-membership-sinks.sh            # verify (CI mode)
@@ -99,6 +106,27 @@ read -r -d '' CALLER_BASELINE <<'EOF' || true
 1 crates/temper-services/src/authz/team_membership.rs
 EOF
 
+# ── Writer-token mints: <count> <path> ──────────────────────────────────────────────────────────
+#
+# REVIEWED 2026-10-16 (team-role rank, PR C, task C6, RG-2 L3) — one struct literal per token,
+# each in the one function plan P16 names: `GenesisToken` in `team_service::create_team` (after its
+# team insert), `ClaimedInvitation` in `invitation_service::accept_invitation` (from the claim
+# `UPDATE`'s row), `IdpReconcileToken` in `saml_provisioning_service::reconcile_idp_memberships`.
+# Private fields stop other modules; this pins the defining module to its one mint.
+read -r -d '' TOKEN_BASELINE <<'EOF' || true
+1 crates/temper-services/src/services/invitation_service.rs
+1 crates/temper-services/src/services/saml_provisioning_service.rs
+1 crates/temper-services/src/services/team_service.rs
+EOF
+
+# ── SQL callers of the recorded writer ──────────────────────────────────────────────────────────
+#
+# REVIEWED 2026-10-16 (team-role rank, PR C, task C6, RG-1/RG-2) — none. The writer authorizes
+# nothing (its migration header says so); a SQL function calling it could write any act with any
+# `via`, the last-owner guard off. Rust's `membership_write` is its only caller, pinned above.
+read -r -d '' SQL_CALLER_BASELINE <<'EOF' || true
+EOF
+
 # ── SQL writes: function names, and <top-level>:<file> ──────────────────────────────────────────
 #
 # REVIEWED 2026-10-16 (team-role rank, PR C, task C6) — the spec's writer table plus plan P6:
@@ -126,29 +154,79 @@ sync_personal_team
 sync_system_membership
 EOF
 
-# The structural test-module skip, shared by both Rust halves. It walks each file itself, because
+# The structural test-module skip, shared by every Rust half. It walks each file itself, because
 # the skip needs every line in order, not just the hits. Prints `<path>` once per matching,
 # non-comment, non-test line.
+#
+#   $1  a pattern a single (lowercased) line must match;
+#   $2  optional: a statement-verb pattern a line may END with, completed by $3 on the next code
+#       line (`INSERT INTO` / `kb_team_members` split across two lines);
+#   $4  optional: a pattern that excludes an otherwise matching line (a type definition).
+#
+# Only `#[cfg(test)]` and `#[cfg(all(test, …))]` open a skip. Any other predicate naming `test` —
+# `any(test, feature = "x")`, `any(test, unix)`, `not(test)` — compiles into some production
+# build, so a module under it is scanned. A skip that is still open at end of file fails CLOSED:
+# the file is reported under a `#unclosed-test-module` key, which no baseline carries.
 rust_hits() {
-  local pattern="$1"
+  local pattern="$1" verb="${2:-}" table="${3:-}" exclude="${4:-}"
   local f
   # `find` rather than `grep -r --include`, so the walk sees every file once, in order.
   # Paths print as `crates/<rest>` whatever CRATES_DIR is, so a fixture tree is read against the
   # same baseline keys as the real one.
   find "$CRATES_DIR" -type f -name '*.rs' -path '*/src/*' 2>/dev/null | sort | while read -r f; do
-    awk -v pat="$pattern" -v path="crates/${f#"$CRATES_DIR"/}" '
-      # Strip single-line string and char literals, so their braces do not count.
-      function code_only(s) {
-        gsub(/"([^"\\]|\\.)*"/, "\"\"", s)
-        gsub(/'\''([^'\''\\]|\\.)'\''/, "''", s)
-        return s
+    # Patterns travel through the environment: `awk -v` would process their backslashes.
+    PAT="$pattern" VERB="$verb" TABLE="$table" EXCL="$exclude" \
+    awk -v path="crates/${f#"$CRATES_DIR"/}" '
+      # The net brace count of one line, as Rust code: a small lexer whose state (inside a
+      # string, a raw string with N hashes, or a block comment) carries ACROSS lines, so a brace
+      # inside a multi-line string, a raw-string fixture or a comment never counts. Char literals
+      # (an open brace in single quotes, an escaped quote) are skipped; a lifetime is not one.
+      function braces(s,   i, n, ch, nx, k, d) {
+        n = length(s); d = 0; i = 1
+        while (i <= n) {
+          ch = substr(s, i, 1); nx = substr(s, i + 1, 1)
+          if (lx == "block") {
+            if (ch == "*" && nx == "/") { lx = ""; i += 2; continue }
+            i++; continue
+          }
+          if (lx == "str") {
+            if (ch == "\\") { i += 2; continue }
+            if (ch == "\"") lx = ""
+            i++; continue
+          }
+          if (lx == "raw") {
+            if (ch == "\"" && substr(s, i + 1, hashes) == rawclose) { lx = ""; i += 1 + hashes; continue }
+            i++; continue
+          }
+          if (ch == "/" && nx == "/") break
+          if (ch == "/" && nx == "*") { lx = "block"; i += 2; continue }
+          if (ch == "\"") { lx = "str"; i++; continue }
+          if (ch == "r" && (nx == "#" || nx == "\"") && (i == 1 || substr(s, i - 1, 1) !~ /[A-Za-z0-9_]/)) {
+            k = i + 1; hashes = 0
+            while (substr(s, k, 1) == "#") { hashes++; k++ }
+            if (substr(s, k, 1) == "\"") {
+              rawclose = ""; for (j = 0; j < hashes; j++) rawclose = rawclose "#"
+              lx = "raw"; i = k + 1; continue
+            }
+          }
+          if (ch == "'\''") {
+            if (nx == "\\") { k = index(substr(s, i + 2), "'\''"); i = (k ? i + 2 + k : n + 1); continue }
+            if (substr(s, i + 2, 1) == "'\''") { i += 3; continue }
+          }
+          if (ch == "{") d++
+          else if (ch == "}") d--
+          i++
+        }
+        return d
       }
-      BEGIN { skip = 0; depth = 0; pending = 0 }
+      BEGIN {
+        skip = 0; depth = 0; pending = 0; prev = ""; lx = ""
+        pat = ENVIRON["PAT"]; verb = ENVIRON["VERB"]; table = ENVIRON["TABLE"]; excl = ENVIRON["EXCL"]
+      }
       {
         line = $0
         if (skip) {
-          c = code_only(line)
-          depth += gsub(/\{/, "{", c) - gsub(/\}/, "}", c)
+          depth += braces(line)
           if (depth <= 0) { skip = 0; depth = 0 }
           next
         }
@@ -156,8 +234,7 @@ rust_hits() {
           if (line ~ /^[[:space:]]*#\[/ || line ~ /^[[:space:]]*$/ || line ~ /^[[:space:]]*\/\//) {
             # Another attribute, a blank, or a comment between the cfg and its item.
           } else if (line ~ /^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?mod[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\{/) {
-            c = code_only(line)
-            depth = gsub(/\{/, "{", c) - gsub(/\}/, "}", c)
+            depth = braces(line)
             pending = 0
             if (depth > 0) { skip = 1 }
             next
@@ -165,15 +242,22 @@ rust_hits() {
             pending = 0
           }
         }
-        # A cfg attribute OPENING its line whose predicate names the bare `test` cfg (not
-        # `feature = "test-db"`, not `not(test)`).
-        if (line ~ /^[[:space:]]*#\[cfg\(/ && line ~ /[(,[:space:]]test[),[:space:]]/ && line !~ /not\([[:space:]]*test/) {
+        # `#[cfg(test)]`, or `#[cfg(all(…))]` naming the bare `test` cfg with no `any(` or `not(`
+        # inside it — a predicate that is false in every production build.
+        if (line ~ /^[[:space:]]*#\[cfg\(test\)\]/ ||
+            (line ~ /^[[:space:]]*#\[cfg\(all\(/ && line ~ /[(,[:space:]]test[),[:space:]]/ &&
+             line !~ /any\(/ && line !~ /not\(/)) {
           pending = 1
           next
         }
         if (line ~ /^[[:space:]]*\/\//) next
-        if (tolower(line) ~ pat) print path
+        low = tolower(line)
+        if (excl != "" && low ~ excl) { prev = low; next }
+        if (low ~ pat) print path
+        else if (verb != "" && prev ~ verb && low ~ table) print path
+        if (low !~ /^[[:space:]]*$/) prev = low
       }
+      END { if (skip) print path "#unclosed-test-module" }
     ' "$f"
   done
 }
@@ -182,53 +266,98 @@ count_by_path() {
   sort | uniq -c | awk '{printf "%s %s\n", $1, $2}' | sort -k2 || true
 }
 
+# The table, bare or schema-qualified, quoted or not (`\"kb_team_members\"` inside a Rust string).
+# No backslash inside a bracket expression: mawk (CI's awk on Ubuntu) rejects it.
+TABLE_RE='(\\|")*(public(\\|")*[.](\\|")*)?kb_team_members([^a-z0-9_]|$)'
+VERB_RE='(insert[[:space:]]+into|update|delete[[:space:]]+from|merge[[:space:]]+into)'
+
 rust_writes() {
-  rust_hits '(insert[[:space:]]+into|update|delete[[:space:]]+from)[[:space:]]+(public\.)?kb_team_members([^a-z0-9_]|$)' | count_by_path
+  rust_hits "${VERB_RE}[[:space:]]+${TABLE_RE}" \
+    "${VERB_RE}[[:space:]]*(\\\\)?\$" "^([[:space:]]|\")*${TABLE_RE}" | count_by_path
 }
 
 rust_callers() {
   rust_hits '_admin_team_membership_write' | count_by_path
 }
 
-sql_writes() {
+# Struct-literal mints of the three writer tokens (plan P16): each type has a private field and is
+# built in exactly one place. A second literal in the defining module is a second mint the
+# compiler would allow, so it is pinned here. Type definitions, impls and return types are not
+# mints.
+rust_token_mints() {
+  rust_hits '(genesistoken|idpreconciletoken|claimedinvitation)[[:space:]]*\{' '' '' \
+    '(struct|impl|->)[[:space:]]*[a-z_:]*(genesistoken|idpreconciletoken|claimedinvitation)' \
+    | count_by_path
+}
+
+# The SQL half. Function-keyed: prints `W<TAB><key>` for a function (or `<top-level>:<file>`)
+# whose body writes the table, and `C<TAB><key>` for one that CALLS the recorded writer.
+#
+# Scope: a `CREATE FUNCTION` opens a function; its body closes once two dollar tags (the open and
+# the close, any tag name) have been seen and a statement end follows — on the same line
+# (`$$;`, `$fn$ LANGUAGE plpgsql;`) or a later one (`$$` then `LANGUAGE plpgsql;`). Scope also
+# resets at every file boundary, so a function a migration leaves open cannot adopt the next
+# migration's DML. A nested dollar quote inside a body closes the scope early, which reports the
+# rest of the body as top-level — the noisy direction, never the silent one.
+sql_scan() {
   awk '
-    {
-      low = tolower($0)
-    }
+    FNR == 1 { fn = ""; tags = 0; closing = 0 }
+    { low = tolower($0) }
     low ~ /^[[:space:]]*create([[:space:]]+or[[:space:]]+replace)?[[:space:]]+function/ {
       line = $0
       sub(/.*[Ff][Uu][Nn][Cc][Tt][Ii][Oo][Nn][[:space:]]+/, "", line)
       sub(/[[:space:]]*\(.*/, "", line)
       sub(/^public\./, "", line)
-      fn = line
+      fn = line; tags = 0; closing = 0
     }
-    low ~ /(insert[[:space:]]+into|update|delete[[:space:]]+from)[[:space:]]+(public\.)?kb_team_members([^a-z0-9_]|$)/ {
-      if (low ~ /^[[:space:]]*--/) { }
-      else if (fn != "") { print fn }
-      else { base = FILENAME; sub(/.*\//, "", base); print "<top-level>:" base }
+    low !~ /^[[:space:]]*--/ {
+      key = fn
+      if (key == "") { base = FILENAME; sub(/.*\//, "", base); key = "<top-level>:" base }
+      if (low ~ /(insert[[:space:]]+into|update|delete[[:space:]]+from|merge[[:space:]]+into)[[:space:]]+"?(public"?\.)?"?kb_team_members([^a-z0-9_]|$)/) {
+        print "W\t" key
+      }
+      if (low ~ /_admin_team_membership_write[[:space:]]*\(/ &&
+          low !~ /^[[:space:]]*(create|comment|drop|grant|revoke|alter)[[:space:]]/ &&
+          fn != "_admin_team_membership_write") {
+        print "C\t" key
+      }
     }
-    # A closing dollar tag followed by a statement end closes the function body: one tag on a body
-    # line (`$$;`, `$fn$;`, `$$ LANGUAGE plpgsql;`), or an open AND a close on a one-line CREATE.
-    $0 ~ /;[[:space:]]*$/ {
-      tags = $0
-      n = gsub(/\$[A-Za-z_]*\$/, "", tags)
-      if (low ~ /^[[:space:]]*create/ ? n >= 2 : n >= 1) { fn = "" }
+    fn != "" {
+      t = $0
+      tags += gsub(/\$[A-Za-z_]*\$/, "", t)
+      if (tags >= 2) closing = 1
+      if (closing && $0 ~ /;[[:space:]]*(--.*)?$/) { fn = ""; tags = 0; closing = 0 }
     }
-  ' "$MIGRATIONS_DIR"/*.sql 2>/dev/null | sort -u || true
+  ' "$MIGRATIONS_DIR"/*.sql 2>/dev/null || true
+}
+
+sql_writes() {
+  sql_scan | awk -F'\t' '$1 == "W" { print $2 }' | sort -u || true
+}
+
+sql_callers() {
+  sql_scan | awk -F'\t' '$1 == "C" { print $2 }' | sort -u || true
 }
 
 CURRENT="$(rust_writes)"
 CALLERS="$(rust_callers)"
+TOKEN_MINTS="$(rust_token_mints)"
 SQL_CURRENT="$(sql_writes)"
+SQL_CALLERS="$(sql_callers)"
 
 if [[ "${1:-}" == "--list" || "${UPDATE_BASELINE:-}" == "1" ]]; then
   echo "$CURRENT"
   echo "--- callers:"
   echo "$CALLERS"
+  echo "--- token mints:"
+  echo "$TOKEN_MINTS"
   echo "--- SQL:"
   echo "$SQL_CURRENT"
+  echo "--- SQL callers:"
+  echo "$SQL_CALLERS"
   if [[ "${UPDATE_BASELINE:-}" == "1" ]]; then
-    echo "^^^ copy the three blocks above into BASELINE / CALLER_BASELINE / SQL_BASELINE in this" >&2
+    echo "^^^ copy the blocks above into BASELINE / CALLER_BASELINE / TOKEN_BASELINE /" >&2
+    echo "    SQL_BASELINE / SQL_CALLER_BASELINE in this" >&2
     echo "    script — only after classifying each changed site as RECORDED or DERIVED (R13)," >&2
     echo "    with a dated REVIEWED note saying which and why." >&2
   fi
@@ -253,6 +382,8 @@ compare() {
 
 compare "Rust kb_team_members write-sites" "$BASELINE" "$CURRENT"
 compare "Rust callers of _admin_team_membership_write" "$CALLER_BASELINE" "$CALLERS"
+compare "writer-token mints" "$TOKEN_BASELINE" "$TOKEN_MINTS"
+compare "SQL callers of _admin_team_membership_write" "$SQL_CALLER_BASELINE" "$SQL_CALLERS"
 
 # An empty scan must fail, not pass: the recorded writer lives in SQL, so finding nothing means the
 # scan stopped matching (a renamed directory, a changed quoting), not that the writers are gone.
@@ -278,7 +409,7 @@ if [[ -z "$CALLERS" ]]; then
 fi
 
 if [[ "$fail" == "0" ]]; then
-  echo "audit-team-membership-sinks: OK — $(printf '%s\n' "$CURRENT" | grep -c .) Rust write files, $(printf '%s\n' "$CALLERS" | grep -c .) writer caller file, $(printf '%s\n' "$SQL_CURRENT" | grep -c .) SQL writers."
+  echo "audit-team-membership-sinks: OK — $(printf '%s\n' "$CURRENT" | grep -c .) Rust write files, $(printf '%s\n' "$CALLERS" | grep -c .) writer caller file, $(printf '%s\n' "$TOKEN_MINTS" | grep -c .) token-mint files, $(printf '%s\n' "$SQL_CURRENT" | grep -c .) SQL writers, $(printf '%s\n' "$SQL_CALLERS" | grep -c .) SQL callers."
   exit 0
 fi
 

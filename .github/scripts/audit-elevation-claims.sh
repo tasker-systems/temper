@@ -326,12 +326,29 @@ current_gates() {
 # cap and that "on the gating team only a system admin invites", which is
 # `authorize_invitation` over `MembershipAuthority::resolve`'s arm order, the `team_membership`
 # gate it binds to.
+# REVIEWED 2026-10-16 (team-role rank, PR C review round, RG-1/RG-2) — `team_membership`
+# 76f865b5e456 -> c0b58f39d934: `from_reach` is now bound to its proof — the `(team, role)` must be
+# one of the `AuthorizedReach`'s own specs, the role at or below the machine ceiling, and an idp
+# row is refused — and returns a result; `from_claimed_invitation` takes the invitee from the
+# claim (`ClaimedInvitation::invitee`) rather than beside it. Both only narrow what a constructor
+# admits; no member-act decision moved. Claims moved, each re-read against `authorize_invitation` /
+# `manages()` over `MembershipAuthority::resolve`:
+#   handlers/invitations.rs 2 -> 3 — the create route's new 404 ("told only to a caller who
+#     manages it, or a system admin"): the existence check runs after `authorize_invitation`. The
+#     403 description no longer claims an over-rank offer is a 403 (it is the 400).
+#   types/invitation.rs 2 -> 3 — "A manager of the team (or a system admin) may revoke": the
+#     `manages()` gate.
+#   services/invitation_service.rs 2 -> 3 — the same existence-check comment as the 404.
+#   temper-mcp service.rs 3 -> 4, still unbound as a file (its other claims describe other
+#     tools) — `invitation_manage`'s "(on the instance's gating team, only a system admin)" and
+#     "only a system admin can change or remove another owner": the gating arm of `resolve` and
+#     the rank rule's check 7, both the `team_membership` gate, reached through the HTTP route.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
 claim crates/temper-api/src/handlers/admin_ledger.rs 2 is_system_admin,read_gates,grant,ledger_subject,team_membership
 claim crates/temper-api/src/handlers/block_history_scrub.rs 5 is_system_admin
-claim crates/temper-api/src/handlers/invitations.rs 2 team_membership
+claim crates/temper-api/src/handlers/invitations.rs 3 team_membership
 claim crates/temper-api/src/handlers/reblock.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/cognitive_maps.rs 4 reconcile_regime,two_sided
 claim crates/temper-api/src/handlers/connections.rs 13 connection,machine,require_manage_on_team,can_manage
@@ -347,7 +364,7 @@ claim crates/temper-api/src/handlers/teams.rs 7 team_membership,is_system_admin
 claim crates/temper-core/src/types/admin.rs 5 is_system_admin,read_gates
 claim crates/temper-core/src/types/connection.rs 2 machine,connection
 claim crates/temper-core/src/types/erasure.rs 3 is_system_admin
-claim crates/temper-core/src/types/invitation.rs 2 team_membership
+claim crates/temper-core/src/types/invitation.rs 3 team_membership
 claim crates/temper-core/src/types/machine.rs 1 machine
 claim crates/temper-core/src/types/subscription.rs 1 subscription
 claim crates/temper-core/src/types/team.rs 3 team_membership,is_system_admin
@@ -363,7 +380,7 @@ claim crates/temper-cli/src/commands/cogmap.rs 3 two_sided,is_system_admin
 claim crates/temper-cli/src/commands/context_cmd.rs 2 context_admin
 claim crates/temper-cli/src/commands/team.rs 6 team_membership
 claim crates/temper-cli/src/commands/warmup.rs 1 is_system_admin
-claim crates/temper-mcp/src/service.rs 3 -
+claim crates/temper-mcp/src/service.rs 4 -
 claim crates/temper-mcp/src/tools/reblock.rs 3 -
 claim crates/temper-mcp/src/tools/cognitive_maps.rs 1 is_system_admin
 claim crates/temper-mcp/src/tools/contexts.rs 2 context_admin,two_sided
@@ -375,7 +392,7 @@ claim crates/temper-services/src/services/context_service.rs 14 context_admin
 claim crates/temper-services/src/services/erasure_retention_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
-claim crates/temper-services/src/services/invitation_service.rs 2 team_membership
+claim crates/temper-services/src/services/invitation_service.rs 3 team_membership
 claim crates/temper-services/src/services/machine_authz.rs 8 machine,team_membership
 claim crates/temper-services/src/services/machine_client_service.rs 7 machine
 claim crates/temper-services/src/services/machine_registration_service.rs 7 machine
@@ -397,7 +414,7 @@ gate two_sided 7822960e4ffa
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership 76f865b5e456
+gate team_membership c0b58f39d934
 EOF
 
 CURRENT="$(current_claims; current_gates)"
