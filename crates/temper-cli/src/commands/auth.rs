@@ -440,31 +440,7 @@ fn remedy_for(standing: Standing) -> Option<&'static str> {
 pub fn status(fmt: OutputFormat) -> Result<()> {
     runtime::with_client(move |client| {
         Box::pin(async move {
-            let mut auth = client
-                .auth_status()
-                .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
-            let ambient = client.is_ambient();
-            // Identity and entitlements both require the server; only consult it when the local
-            // credential is usable. An expired token would answer `unauthenticated` on axis 1, but
-            // spending a round trip to learn what `authenticated: false` already said is waste.
-            // An ambient credential has no local state to check, so the round trip IS the check.
-            let (identity, system_access) = if ambient || auth.authenticated {
-                let (id, access) = resolve_access(client).await;
-                (id, Some(access))
-            } else {
-                (None, None)
-            };
-            if ambient {
-                // Authenticated means the server named us. Unreachable is not authenticated:
-                // nothing here can vouch for a credential the server did not see.
-                auth.authenticated = identity.is_some();
-            }
-            let report = AuthStatusReport {
-                auth,
-                credential: ambient.then_some("ambient"),
-                identity,
-                system_access,
-            };
+            let report = status_report(client).await?;
             let rendered = crate::format::render(&report, fmt)?;
             println!("{rendered}");
             // Stderr only — stdout is the payload. Emitted after the render so a caller piping
@@ -480,6 +456,37 @@ pub fn status(fmt: OutputFormat) -> Result<()> {
             }
             Ok(())
         })
+    })
+}
+
+/// Assemble the `auth status` payload: the local auth state, plus — when there is a credential to
+/// ask about — who the server says we are and what we are entitled to.
+async fn status_report(client: &TemperClient) -> Result<AuthStatusReport> {
+    let mut auth = client
+        .auth_status()
+        .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
+    let ambient = client.is_ambient();
+    // Identity and entitlements both require the server; only consult it when the local
+    // credential is usable. An expired token would answer `unauthenticated` on axis 1, but
+    // spending a round trip to learn what `authenticated: false` already said is waste.
+    // An ambient credential has no local state to check, so the round trip IS the check.
+    let (identity, system_access) = if ambient || auth.authenticated {
+        let (id, access) = resolve_access(client).await;
+        (id, Some(access))
+    } else {
+        (None, None)
+    };
+    if ambient {
+        // Authenticated means the server named us. Any other answer — unreachable, refused, a
+        // server error — leaves the credential unproven, and nothing in this process can vouch
+        // for one it never held. `system_access.query` says which it was.
+        auth.authenticated = identity.is_some();
+    }
+    Ok(AuthStatusReport {
+        auth,
+        credential: ambient.then_some("ambient"),
+        identity,
+        system_access,
     })
 }
 
@@ -640,13 +647,30 @@ mod tests {
     }
 
     // FAILS IF: an auth subcommand that manages an in-process grant runs under ambient mode.
+    //
+    // The auth path is pinned to a seeded grant in a tempdir: if the logout refusal regressed,
+    // `clear_grant` would otherwise delete the developer's real `auth.json`. The grant surviving
+    // is the assertion that nothing touched disk.
     #[test]
     fn grant_commands_refuse_under_ambient_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let auth_path = dir.path().join("auth.json");
+        DiskTokenStore::at(auth_path.clone())
+            .save(&temper_client::auth::StoredAuth {
+                provider: temper_client::auth::Provider::auth0("test.auth0.com"),
+                access_token: "tok_on_disk".to_string().into(),
+                refresh_token: None,
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+                profile_id: None,
+                device_id: None,
+            })
+            .unwrap();
         temp_env::with_vars(
             [
                 ("TEMPER_AUTH", Some("ambient")),
                 ("TEMPER_TOKEN", None::<&str>),
                 ("TEMPER_AMBIENT_TOKEN", None),
+                ("TEMPER_AUTH_PATH", Some(auth_path.to_str().unwrap())),
             ],
             || {
                 for result in [
@@ -662,6 +686,61 @@ mod tests {
                 assert!(err.to_string().contains("nothing here to store"), "{err}");
             },
         );
+        assert!(
+            DiskTokenStore::at(auth_path).load().unwrap().is_some(),
+            "the disk grant must survive every refused command"
+        );
+    }
+
+    /// An ambient client against a real server answering `GET /api/profile` with `status`.
+    async fn ambient_status_against(status: u16, body: serde_json::Value) -> AuthStatusReport {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/profile"))
+            .respond_with(wiremock::ResponseTemplate::new(status).set_body_json(body))
+            .mount(&server)
+            .await;
+        let client = TemperClient::ambient(
+            &server.uri(),
+            temper_workflow::operations::Surface::CliCloud,
+            &temper_client::auth::AmbientAuth::default(),
+        )
+        .expect("loopback validates");
+        status_report(&client).await.expect("status assembles")
+    }
+
+    // FAILS IF: ambient status skips the round trip (the local store is empty, so without it the
+    // report would say `authenticated: false` for a credential the server accepts).
+    #[tokio::test]
+    async fn ambient_status_is_authenticated_when_the_server_names_us() {
+        let mut body: serde_json::Value = serde_json::from_str(&profile_body()).unwrap();
+        // `auth status` reads the profile with its entitlements, the shape the server sends.
+        body["entitlements"] = serde_json::json!({
+            "system_access": true,
+            "is_admin": false,
+            "join_request_status": null,
+            "standing": "approved"
+        });
+        let report = ambient_status_against(200, body).await;
+        assert!(report.auth.authenticated);
+        assert_eq!(report.credential, Some("ambient"));
+        assert_eq!(
+            report.identity.as_ref().map(|i| i.handle.as_str()),
+            Some("@test-person")
+        );
+    }
+
+    #[tokio::test]
+    async fn ambient_status_is_unauthenticated_when_the_server_refuses() {
+        let body = serde_json::json!({"error": {"code": "UNAUTHORIZED", "message": "Missing Authorization header"}});
+        let report = ambient_status_against(401, body).await;
+        assert!(!report.auth.authenticated);
+        assert_eq!(report.credential, Some("ambient"));
+        assert!(report.identity.is_none());
+        assert!(matches!(
+            report.system_access.as_ref().map(|a| &a.query),
+            Some(AccessQuery::Unauthenticated)
+        ));
     }
 
     #[test]

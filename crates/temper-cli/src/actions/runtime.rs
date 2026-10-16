@@ -291,6 +291,8 @@ mod tests {
         temp_env::with_vars(
             [
                 ("TEMPER_TOKEN", None::<&str>),
+                ("TEMPER_AUTH", None),
+                ("TEMPER_AMBIENT_TOKEN", None),
                 ("TEMPER_AUTH_PATH", Some(missing_auth.to_str().unwrap())),
             ],
             || {
@@ -357,7 +359,9 @@ mod tests {
         temp_env::with_vars(pinned, f)
     }
 
-    // FAILS IF: ambient mode reads the disk grant, or builds a client that would put it on the wire.
+    // FAILS IF: ambient selection falls through to disk custody — moved after
+    // `resolve_token_store`, the store returned would hold the seeded disk grant. What reaches the
+    // wire is pinned in temper-client's `ambient_client_test.rs`.
     #[test]
     fn ambient_builds_a_storeless_client_and_never_reads_disk() {
         with_ambient_env(&[("TEMPER_AUTH", "ambient")], || {
@@ -545,6 +549,8 @@ audience      = "https://api.example.com"
         temp_env::with_vars(
             [
                 ("TEMPER_TOKEN", None::<&str>),
+                ("TEMPER_AUTH", None),
+                ("TEMPER_AMBIENT_TOKEN", None),
                 ("TEMPER_API_URL", None),
                 ("TEMPER_AUTH_PATH", Some(auth_path.to_str().unwrap())),
                 ("TEMPER_GLOBAL_CONFIG", Some(config_path.to_str().unwrap())),

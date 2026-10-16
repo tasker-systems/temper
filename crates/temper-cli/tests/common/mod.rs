@@ -34,7 +34,13 @@ pub fn init_isolated_auth() {
                 "TEMPER_AUTH_PATH",
                 "/tmp/temper-cli-tests-no-such-auth-path/auth.json",
             );
-            for var in ["TEMPER_TOKEN", "TEMPER_PROVIDER", "TEMPER_DEVICE_ID"] {
+            for var in [
+                "TEMPER_TOKEN",
+                "TEMPER_PROVIDER",
+                "TEMPER_DEVICE_ID",
+                "TEMPER_AUTH",
+                "TEMPER_AMBIENT_TOKEN",
+            ] {
                 std::env::remove_var(var);
             }
         }

@@ -298,10 +298,14 @@ impl AmbientAuth {
     /// - an unknown `TEMPER_AUTH` value — a typo must not fall back to disk;
     /// - `TEMPER_AUTH=ambient` beside a non-empty `TEMPER_TOKEN` — two custody claims;
     /// - `TEMPER_AMBIENT_TOKEN` without `TEMPER_AUTH=ambient` — a placeholder nothing sends.
+    /// - a value that is not UTF-8 — unreadable must not read as unset.
+    ///
+    /// An unknown mode is echoed only when it looks like a mode name: an operator who put a
+    /// token in `TEMPER_AUTH` instead of `TEMPER_AMBIENT_TOKEN` must not see it printed into
+    /// stderr, a JSON payload, or an agent transcript.
     pub fn from_env() -> Result<Option<Self>> {
-        let non_empty = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
-        let mode = non_empty(TEMPER_AUTH_ENV);
-        let placeholder = non_empty(TEMPER_AMBIENT_TOKEN_ENV);
+        let mode = read_env_var(TEMPER_AUTH_ENV)?;
+        let placeholder = read_env_var(TEMPER_AMBIENT_TOKEN_ENV)?;
         match mode.as_deref() {
             None => match placeholder {
                 Some(_) => Err(ClientError::NotConfigured(format!(
@@ -312,7 +316,7 @@ impl AmbientAuth {
                 None => Ok(None),
             },
             Some(AMBIENT_AUTH_MODE) => {
-                if non_empty(TEMPER_TOKEN_ENV).is_some() {
+                if read_env_var(TEMPER_TOKEN_ENV)?.is_some() {
                     return Err(ClientError::NotConfigured(format!(
                         "{TEMPER_AUTH_ENV}={AMBIENT_AUTH_MODE} says the credential is held \
                          outside this process, but {TEMPER_TOKEN_ENV} is also set — unset one"
@@ -320,15 +324,45 @@ impl AmbientAuth {
                 }
                 Ok(Some(Self::new(
                     placeholder.map(Into::into),
-                    non_empty(TEMPER_DEVICE_ID_ENV),
+                    read_env_var(TEMPER_DEVICE_ID_ENV)?,
                 )))
             }
-            Some(other) => Err(ClientError::NotConfigured(format!(
-                "{TEMPER_AUTH_ENV}={other:?} is not a credential mode — the one value is \
-                 `{AMBIENT_AUTH_MODE}`; unset it for the default (TEMPER_TOKEN, then disk)"
-            ))),
+            Some(other) => {
+                let shown = if looks_like_a_mode_name(other) {
+                    format!("{other:?}")
+                } else {
+                    "<withheld: not a mode name>".to_owned()
+                };
+                Err(ClientError::NotConfigured(format!(
+                    "{TEMPER_AUTH_ENV}={shown} is not a credential mode — the one value is \
+                     `{AMBIENT_AUTH_MODE}`; unset it for the default (TEMPER_TOKEN, then disk)"
+                )))
+            }
         }
     }
+}
+
+/// A variable of the ambient contract: `None` when unset or empty, refused when it is not
+/// UTF-8. `std::env::var(..).ok()` would read an unreadable value as unset, and unset means
+/// "fall back to the default custody" — the one outcome a misconfiguration must not reach.
+fn read_env_var(name: &str) -> Result<Option<String>> {
+    match std::env::var(name) {
+        Ok(v) if v.is_empty() => Ok(None),
+        Ok(v) => Ok(Some(v)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(ClientError::NotConfigured(format!(
+            "{name} is set but is not valid UTF-8 — fix or unset it"
+        ))),
+    }
+}
+
+/// Short and shaped like an identifier: safe to echo back in an error. Anything else may be a
+/// secret pasted into the wrong variable.
+fn looks_like_a_mode_name(value: &str) -> bool {
+    value.len() <= 32
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
 }
 
 /// Fallback Auth0 tenant domain for the `Provider::Auth0` metadata tag when no
@@ -2124,6 +2158,35 @@ mod tests {
                 matches!(&err, ClientError::NotConfigured(m) if m.contains("ambeint")),
                 "got {err:?}"
             );
+        });
+    }
+
+    // FAILS IF: a token pasted into TEMPER_AUTH is echoed into the error.
+    #[test]
+    fn an_unknown_mode_that_could_be_a_secret_is_not_echoed() {
+        let secret = "eyJhbGciOiJSUzI1NiJ9.payload.signature";
+        with_ambient_env(&[(TEMPER_AUTH_ENV, secret)], || {
+            let err = AmbientAuth::from_env().expect_err("not a mode");
+            let msg = err.to_string();
+            assert!(!msg.contains("payload"), "{msg}");
+            assert!(msg.contains("withheld"), "{msg}");
+        });
+    }
+
+    // FAILS IF: an unreadable TEMPER_AUTH reads as unset and falls back to disk.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_temper_auth_is_refused() {
+        use std::os::unix::ffi::OsStrExt;
+        let bad = std::ffi::OsStr::from_bytes(b"amb\xffient");
+        with_ambient_env(&[], || {
+            temp_env::with_var(TEMPER_AUTH_ENV, Some(bad), || {
+                let err = AmbientAuth::from_env().expect_err("unreadable is not unset");
+                assert!(
+                    matches!(&err, ClientError::NotConfigured(m) if m.contains("UTF-8")),
+                    "got {err:?}"
+                );
+            });
         });
     }
 

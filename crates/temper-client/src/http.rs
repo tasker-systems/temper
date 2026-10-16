@@ -645,8 +645,11 @@ impl HttpClient {
             // Inject bearer auth once; the resulting builder is cloned per
             // attempt so retries replay an identical request.
             let req = if let Some(tok) = token {
-                let value = HeaderValue::from_str(&format!("Bearer {tok}"))
+                let mut value = HeaderValue::from_str(&format!("Bearer {tok}"))
                     .map_err(|e| ClientError::Other(format!("invalid token header: {e}")))?;
+                // Withheld from any `Debug` of the request or its header map. An ambient
+                // placeholder is the real secret on a host that does no substitution.
+                value.set_sensitive(true);
                 req.header(AUTHORIZATION, value)
             } else {
                 req
