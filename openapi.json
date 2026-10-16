@@ -14715,7 +14715,7 @@
             }
           },
           "403": {
-            "description": "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "description": "Forbidden (the caller does not manage the team); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14785,7 +14785,7 @@
             "description": "Only a pending invitation can be revoked"
           },
           "403": {
-            "description": "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "description": "Forbidden (the caller does not manage the team); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14862,10 +14862,10 @@
             }
           },
           "400": {
-            "description": "Owner role cannot be invited"
+            "description": "The offered role outranks the inviter (`OFFER_ABOVE_YOUR_OWN_ROLE`: an invitation can offer a role up to the inviter's own on the team; only a system admin can offer more)"
           },
           "403": {
-            "description": "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "description": "Forbidden (the caller does not manage the team; on the gating team only a system admin invites); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14873,6 +14873,9 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "The team does not exist or has been deleted (told only to a caller who manages it, or a system admin)"
           },
           "409": {
             "description": "A pending invitation already exists for this email"
@@ -18717,7 +18720,7 @@
       },
       "CreateInvitationRequest": {
         "type": "object",
-        "description": "Request body for `POST /api/teams/{id}/invite`.\n\n`role` cannot be `Owner` — the service rejects it (ownership is transferred,\nnot invited).",
+        "description": "Request body for `POST /api/teams/{id}/invite`.\n\n`role` may be anything up to the inviter's own rank on the team — an owner can invite at\n`owner` — and on the gating team only a system admin invites (the team-role rank rule,\nC16/R10).",
         "required": [
           "invited_email",
           "role"
@@ -27252,7 +27255,7 @@
       },
       "TeamInvitation": {
         "type": "object",
-        "description": "A pending or resolved invitation to join a team.\n\n**The flow is not link-based, and never has been.** `invited_email` is matched\nagainst the invitee's verified email, and only that account may redeem the\ntoken — nothing mails a token-bearing URL, and no\nUI route redeems one. The invitee authenticates, reads their own pending\ninvitations from `GET /api/invitations/mine` (which returns `token`, since it\nis legitimately theirs), and redeems it through `POST /api/invitations/accept`\nwith the token in the **request body**. CLI: `temper team invite`,\n`temper team join`, `temper team request-join`.\n\nThis comment previously described the link-based flow as the primary one. It\nwas aspirational, it was load-bearing in the wrong direction — it is what made\na reviewer believe retiring the old token-in-path route had to account for\ninvitation URLs sitting in inboxes — and there are none.\n\nConstraints:\n- `role` cannot be `Owner` — ownership is only transferred, never invited\n- One *live pending* invite per email per team (declined/expired/revoked history coexists)\n- 7-day default expiry, checked lazily at acceptance time; a lapsed-but-unswept pending\n  row is swept to `expired` when the same email is re-invited, so re-invite is never blocked\n  by a dead invite\n- Acceptance is idempotent\n- An owner/maintainer may *revoke* a pending invite (withdraw it) — the counterpart to the\n  invitee's `decline`. Revocation is modelled additively as `revoked_at` (a nullable\n  timestamp) rather than an `InvitationStatus` variant: adding an enum value would move the\n  wire contract for every query decoding `InvitationStatus` and force an operator cutover,\n  whereas a new nullable column stays additive and rides auto-deploy. A revoked invite has\n  `revoked_at IS NOT NULL`; it is excluded from the pending uniqueness index and from every\n  listing, and can no longer be accepted or declined.",
+        "description": "A pending or resolved invitation to join a team.\n\n**The flow is not link-based, and never has been.** `invited_email` is matched\nagainst the invitee's verified email, and only that account may redeem the\ntoken — nothing mails a token-bearing URL, and no\nUI route redeems one. The invitee authenticates, reads their own pending\ninvitations from `GET /api/invitations/mine` (which returns `token`, since it\nis legitimately theirs), and redeems it through `POST /api/invitations/accept`\nwith the token in the **request body**. CLI: `temper team invite`,\n`temper team join`, `temper team request-join`.\n\nThis comment previously described the link-based flow as the primary one. It\nwas aspirational, it was load-bearing in the wrong direction — it is what made\na reviewer believe retiring the old token-in-path route had to account for\ninvitation URLs sitting in inboxes — and there are none.\n\nConstraints:\n- `role` is at most the inviter's own role on the team — an owner can invite at `owner` —\n  and on the gating team only a system admin invites (the team-role rank rule)\n- One *live pending* invite per email per team (declined/expired/revoked history coexists)\n- 7-day default expiry, checked lazily at acceptance time; a lapsed-but-unswept pending\n  row is swept to `expired` when the same email is re-invited, so re-invite is never blocked\n  by a dead invite\n- Acceptance is idempotent\n- A manager of the team (or a system admin) may *revoke* a pending invite (withdraw it) — the\n  counterpart to the invitee's `decline`. Revocation is modelled additively as `revoked_at` (a nullable\n  timestamp) rather than an `InvitationStatus` variant: adding an enum value would move the\n  wire contract for every query decoding `InvitationStatus` and force an operator cutover,\n  whereas a new nullable column stays additive and rides auto-deploy. A revoked invite has\n  `revoked_at IS NOT NULL`; it is excluded from the pending uniqueness index and from every\n  listing, and can no longer be accepted or declined.",
         "required": [
           "id",
           "team_id",

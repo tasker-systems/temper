@@ -9,8 +9,8 @@
 //! 1. [`MembershipAuthority`] — who the caller is on THIS team: a system admin, a manager (owner or
 //!    maintainer), a member who may act only on themselves, or nobody.
 //! 2. [`authorize`] — the rank rule, applied to one act on one target. It returns the sealed
-//!    [`AuthorizedMembershipChange`], which has private fields and no other constructor in this PR,
-//!    so a write nobody authorized has nothing to pass to step 3.
+//!    [`AuthorizedMembershipChange`], which has private fields and no constructor outside this
+//!    module, so a write nobody authorized has nothing to pass to step 3.
 //! 3. [`membership_write`] — the only Rust caller of the SQL writer `_admin_team_membership_write`
 //!    (migration `20261101200000_team_membership_changed.sql`), which writes the row and appends
 //!    its `team_membership_changed` admin event in one statement.
@@ -112,6 +112,40 @@ impl ResolvedMembership {
         )
         .map(|_| ())
     }
+
+    /// The invitation gate (C16, R10): an invitation may offer a role ranked at or below the
+    /// inviter's own (C1), and only a manager of the team — or a system admin — may invite. R11
+    /// makes that admin-only on the gating team, which [`MembershipAuthority::resolve`]'s arm
+    /// order already decides: a non-admin row on the gating team resolves to the self-only arm
+    /// or to none, and a non-manager inviting is refused before anything about the invitation is
+    /// learned (S6).
+    ///
+    /// Deliberately not [`authorize`] over `Add`: an invitation is email-keyed, so there is no
+    /// profile to [`locked`] or decide on, and inviting someone already on the team is allowed —
+    /// their acceptance is a no-op reporting their actual role (P12). What carries over is
+    /// exactly checks 1, 2 and 6 of [`decide`], reached by calling the same functions, so the
+    /// refusals and their order cannot drift from the rank rule.
+    pub(crate) fn authorize_invitation(&self, role: TeamRole) -> ApiResult<()> {
+        // Checks 1–2 against an inert stand-in target: `nil` is not a real profile id (they are
+        // UUIDv7s), so it can never equal the caller, and an `Add` reads nothing else about its
+        // target — existence, machine and source are invitation-specific absences.
+        let own = admits_caller(
+            self.authority.kind(),
+            self.caller,
+            self.is_gating,
+            MembershipAct::Add { role },
+            ProfileId::from(Uuid::nil()),
+        )?;
+        // Check 6 (conferral) — the half of `decide` that needs only the caller's own rank. A
+        // `BadRequest`, like the owner refusal this gate replaces (C16): the offer names a role
+        // this caller cannot confer here.
+        if let Some(own) = own {
+            if role.rank() > own.rank() {
+                return Err(ApiError::BadRequest(OFFER_ABOVE_YOUR_OWN_ROLE.to_string()));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl MembershipAuthority {
@@ -210,6 +244,21 @@ pub(crate) struct MembershipTarget {
     is_machine: bool,
 }
 
+impl MembershipTarget {
+    /// Whether the target is a machine principal, as read under the locks. The approval flow's
+    /// machine skip reads this (plan C3): a machine joins no team nobody chose for it.
+    pub(crate) fn is_machine(&self) -> bool {
+        self.is_machine
+    }
+
+    /// The target's row on this team as read under the locks — its role and source — or `None`
+    /// when it has none. SAML reconcile reads this to skip a native row that appeared after its
+    /// unlocked pre-read (S1, C7), and to tell whether a write lowered an owner (R8).
+    pub(crate) fn current(&self) -> Option<(TeamRole, TeamMemberSource)> {
+        self.current
+    }
+}
+
 /// The refusal for an add over an existing row (#1070), naming the operation that exists.
 pub(crate) const ALREADY_A_MEMBER: &str = "already a member of this team; change their role with \
      `temper team set-role` (PATCH /api/teams/{id}/members/{profile_id})";
@@ -222,6 +271,10 @@ pub(crate) const MACHINE_ROLE_CEILING: &str =
 /// The refusal for granting a role above your own (C1).
 pub(crate) const ABOVE_YOUR_OWN_ROLE: &str =
     "you can grant a role up to your own on this team; only a system admin can grant more";
+/// The refusal for offering a role above the inviter's own (C16, R10). A `BadRequest`, like the
+/// owner refusal it replaces: the requested role is not grantable by this caller on this team.
+pub(crate) const OFFER_ABOVE_YOUR_OWN_ROLE: &str =
+    "an invitation can offer a role up to your own on this team; only a system admin can offer more";
 /// The refusal for acting on an owner other than yourself (C2, R6).
 pub(crate) const ANOTHER_OWNER: &str = "only a system admin can change or remove an owner other \
      than yourself; an owner hands a team over by granting `owner`, then lowering their own role";
@@ -414,9 +467,9 @@ fn decide(
 }
 
 /// A membership change someone was authorized to make. **Sealed**: private fields, no `Default`,
-/// `Clone` or public constructor. Today the only constructor is [`authorize`]; the writers plan PR C
-/// routes (genesis, invitation, approval, machine reach, SAML reconcile) gain their own constructors
-/// here, each taking a token only its one caller can mint (plan P16).
+/// `Clone` or public constructor. The constructors are [`authorize`] and the one-per-writer token
+/// constructors of plan PR C (genesis, invitation, approval, machine reach, SAML reconcile), each
+/// taking a token only its one caller can mint (plan P16).
 #[derive(Debug)]
 pub(crate) struct AuthorizedMembershipChange {
     team_id: Uuid,
@@ -474,6 +527,197 @@ pub(crate) fn authorize(
         invited_by: None,
         guard_last_owner: true,
     })
+}
+
+impl AuthorizedMembershipChange {
+    /// `create_team`'s creator row (plan P7): the creator is its `owner` by construction, recorded
+    /// as `team_genesis` with the creator as both actor and member. `token` is a struct with a
+    /// private field defined in `team_service`, constructed only inside `create_team` immediately
+    /// after its team insert, so this cannot run for a team the caller did not just create.
+    ///
+    /// The caller does not run [`locked`]: the team was born in the caller's own transaction, so no
+    /// concurrent writer can see it, and the SQL writer re-takes the team and member locks itself.
+    pub(crate) fn genesis(
+        _token: crate::services::team_service::GenesisToken,
+        team_id: Uuid,
+        creator: ProfileId,
+    ) -> Self {
+        Self {
+            team_id,
+            profile: creator,
+            act: MembershipAct::Add {
+                role: TeamRole::Owner,
+            },
+            via: MembershipVia::TeamGenesis,
+            expected: None,
+            new_source: TeamMemberSource::Native,
+            actor: Some(creator),
+            invited_by: None,
+            guard_last_owner: true,
+        }
+    }
+
+    /// An accepted invitation's member row (plan P12): the invitee joins at the invited role, the
+    /// record says `invitation` and names the inviter. `claimed` is minted only by the claim
+    /// `UPDATE` in `invitation_service::accept_invitation` — a struct with private fields, so
+    /// this cannot run for an invitation nobody claimed — and it carries the invitee the claim
+    /// was bound to, so the join cannot land on anyone else. The invitation's authority was
+    /// checked when it was created (C16), which is why no rank decision runs here. The caller
+    /// holds [`locked`]'s locks on the team, as P12 orders it.
+    pub(crate) fn from_claimed_invitation(
+        claimed: crate::services::invitation_service::ClaimedInvitation,
+    ) -> Self {
+        Self {
+            team_id: claimed.team_id(),
+            profile: claimed.invitee(),
+            act: MembershipAct::Add {
+                role: claimed.role(),
+            },
+            via: MembershipVia::Invitation,
+            expected: None,
+            new_source: TeamMemberSource::Native,
+            actor: Some(claimed.invitee()),
+            invited_by: Some(claimed.invited_by()),
+            guard_last_owner: true,
+        }
+    }
+
+    /// The approval flow's watcher row (plan C3): `access_service::review_request` acting as a
+    /// system admin writes the requester onto the request's team as `watcher`, recorded as
+    /// `access_approval` with the admin as actor. `admin` is the sealed proof, so nothing else
+    /// can call this. No rank decision runs — the admin arm is unrestricted (R3) — and
+    /// idempotency is the writer's: an add over an existing row via `access_approval` is a
+    /// silent `noop`, never the 409 a rank decision would raise.
+    pub(crate) fn from_system_admin(admin: &SystemAdmin, team_id: Uuid, member: ProfileId) -> Self {
+        Self {
+            team_id,
+            profile: member,
+            act: MembershipAct::Add {
+                role: TeamRole::Watcher,
+            },
+            via: MembershipVia::AccessApproval,
+            expected: None,
+            new_source: TeamMemberSource::Native,
+            actor: Some(admin.actor()),
+            invited_by: None,
+            guard_last_owner: true,
+        }
+    }
+
+    /// A machine registration's team reach (plan C3): the registrar's authorized reach lands the
+    /// machine on `target`'s team, recorded as `machine_reach` with the registrar as actor. The
+    /// proof is the `AuthorizedReach` itself — only `machine_authz` can construct one — and the
+    /// write is bound to it: the `(team, role)` must be one of the reach's own specs, and the role
+    /// at or below the machine ceiling (D4b, enforced at mint and again here, because the machine
+    /// is registered after its reach is applied, so check 4's `is_machine` does not see it yet).
+    /// `target` is a [`locked`] read, so the act is `add` or `change` per the row as it stood
+    /// under the team lock; a change to the current role is the writer's `noop`. An
+    /// identity-provider row is never rewritten by a reach.
+    pub(crate) fn from_reach(
+        reach: &crate::services::machine_authz::AuthorizedReach,
+        registrar: ProfileId,
+        target: &MembershipTarget,
+        role: TeamRole,
+    ) -> ApiResult<Self> {
+        if exceeds_machine_ceiling(role) {
+            return Err(ApiError::BadRequest(MACHINE_ROLE_CEILING.to_string()));
+        }
+        let authorized = reach.teams().iter().any(|spec| {
+            spec.team_id == target.team_id
+                && crate::services::machine_authz::parse_team_role(&spec.role).ok() == Some(role)
+        });
+        if !authorized {
+            return Err(ApiError::Internal(
+                "machine reach write outside the authorized reach".to_string(),
+            ));
+        }
+        let (act, expected) = match target.current {
+            None => (MembershipAct::Add { role }, None),
+            Some((current, TeamMemberSource::Native)) => (
+                MembershipAct::Change { role },
+                Some((current, TeamMemberSource::Native)),
+            ),
+            Some((_, TeamMemberSource::Idp)) => {
+                return Err(ApiError::Conflict(PROVISIONED_BY_SAML.to_string()))
+            }
+        };
+        Ok(Self {
+            team_id: target.team_id,
+            profile: target.profile,
+            act,
+            via: MembershipVia::MachineReach,
+            expected,
+            new_source: TeamMemberSource::Native,
+            actor: Some(registrar),
+            invited_by: None,
+            guard_last_owner: true,
+        })
+    }
+
+    /// An identity-provider reconcile write (plan C4, R8): the IdP wins over the last-owner
+    /// guard, the system is the actor, and the row's source stays (or becomes) `idp`. `token` is
+    /// minted only inside `saml_provisioning_service::reconcile_idp_memberships`. `target` is a
+    /// [`locked`] read under the team lock; an add or a change per the row as it stood.
+    ///
+    /// A native row is REFUSED: reconcile skips native rows on its locked re-read (S1, C7), so a
+    /// native `current` here is a caller bug, and the internal error says so rather than
+    /// silently writing a native row's role.
+    pub(crate) fn idp(
+        _token: crate::services::saml_provisioning_service::IdpReconcileToken,
+        target: &MembershipTarget,
+        role: TeamRole,
+    ) -> ApiResult<Self> {
+        let (act, expected) = match target.current {
+            None => (MembershipAct::Add { role }, None),
+            Some((current, TeamMemberSource::Idp)) => (
+                MembershipAct::Change { role },
+                Some((current, TeamMemberSource::Idp)),
+            ),
+            Some((_, TeamMemberSource::Native)) => {
+                return Err(ApiError::Internal(
+                    "idp reconcile was handed a native membership row".to_string(),
+                ))
+            }
+        };
+        Ok(Self {
+            team_id: target.team_id,
+            profile: target.profile,
+            act,
+            via: MembershipVia::IdpReconcile,
+            expected,
+            new_source: TeamMemberSource::Idp,
+            actor: None,
+            invited_by: None,
+            guard_last_owner: false,
+        })
+    }
+
+    /// An identity-provider reconcile revocation (plan C4, R8): the row leaves. The same proof
+    /// and the same refusals as `idp` above; the target must hold an `idp` row.
+    pub(crate) fn idp_removal(
+        _token: crate::services::saml_provisioning_service::IdpReconcileToken,
+        target: &MembershipTarget,
+    ) -> ApiResult<Self> {
+        match target.current {
+            Some((_, TeamMemberSource::Idp)) => Ok(Self {
+                team_id: target.team_id,
+                profile: target.profile,
+                act: MembershipAct::Remove,
+                via: MembershipVia::IdpReconcile,
+                expected: target.current,
+                new_source: TeamMemberSource::Idp,
+                actor: None,
+                invited_by: None,
+                guard_last_owner: false,
+            }),
+            Some((_, TeamMemberSource::Native)) => Err(ApiError::Internal(
+                "idp reconcile was handed a native membership row".to_string(),
+            )),
+            None => Err(ApiError::Internal(
+                "idp reconcile was handed an absent membership row".to_string(),
+            )),
+        }
+    }
 }
 
 /// Take plan P1's two locks — the team row (`FOR NO KEY UPDATE`), then the target's membership row

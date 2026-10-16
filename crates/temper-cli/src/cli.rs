@@ -1502,13 +1502,14 @@ pub enum TeamAction {
         /// Invitation token (from `temper invitations`).
         token: String,
     },
-    /// Invite an email to a team (owner/maintainer).
+    /// Invite an email to a team (a manager of the team, or a system admin).
     Invite {
         /// Team slug (optionally `+`-prefixed) or UUID.
         team: String,
         /// Email address to invite.
         email: String,
-        /// Role to grant on acceptance: maintainer | member | watcher.
+        /// Role to grant on acceptance: owner | maintainer | member | watcher, up to the
+        /// inviter's own rank on the team.
         #[arg(long)]
         role: String,
     },
@@ -1517,12 +1518,12 @@ pub enum TeamAction {
         /// Invitation token.
         token: String,
     },
-    /// List pending invitations for a team (owner/maintainer).
+    /// List pending invitations for a team (a manager of the team, or a system admin).
     Invitations {
         /// Team slug (optionally `+`-prefixed) or UUID.
         team: String,
     },
-    /// Revoke (withdraw) a pending invitation (owner/maintainer).
+    /// Revoke (withdraw) a pending invitation (a manager of the team, or a system admin).
     Uninvite {
         /// Team slug (optionally `+`-prefixed) or UUID.
         team: String,

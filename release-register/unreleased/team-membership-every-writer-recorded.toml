@@ -1,0 +1,34 @@
+title    = "Every team-membership writer is rank-bounded and recorded: invitations, access approval, machine reach, SAML reconcile, and create_team genesis"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "clients", "cli-stdout", "mcp"]
+status   = "signal-only"
+body = '''
+`create_team`'s creator row is now a recorded `team_genesis` act. Invitations follow the rank
+rule: an owner can invite at `owner` (previously refused outright), a maintainer up to
+`maintainer`, and on the gating team only a system admin invites. The route's 400 stays the cap's
+refusal, with its wording moved from "ownership is transferred, not invited" to the rank cap ("an
+invitation can offer a role up to your own on this team"); a caller who does not manage the team
+gets a plain 403, and a system admin who is not a member can now invite, see and revoke any
+pending invitation, an owner-level one included. An accepted invitation joins the
+invitee under the team lock and is recorded as a `team_membership_changed` event with `via =
+invitation` naming the inviter; the response reports the member's actual role, so a profile
+already on the team is told their own rank rather than the one offered. `POST
+/api/teams/{id}/members`, `PATCH /api/teams/{id}/members/{profile_id}` and `DELETE
+/api/teams/{id}/members/{profile_id}` keep PR #1137's rank rule. Access approval, machine
+registration reach and SAML reconcile are routed through the same writer and recorded on the
+admin ledger: an approval writes the requester's `watcher` row as `access_approval` with the
+admin as actor, machine reach writes as `machine_reach` with the registrar as actor under the
+team lock in ascending team order, and SAML reconcile writes as `idp_reconcile` under the team
+lock, where the identity provider wins over the last-owner guard (a reconcile that leaves a team
+ownerless records `left_ownerless`, and the internal SAML reconcile route logs it at `warn`).
+Every one of these writes is readable through `GET /api/admin/ledger` by the team's managers (on
+the gating team, system admins only) and by system admins; a member reads their own acts on the
+actor axis. OpenAPI descriptions, the `temper team invite` / `invitations` / `uninvite` help and
+the invitation type docs describe the rule. Over MCP, `invitation_manage` action `create` now
+offers `owner` among its roles, under the same cap the route applies. Who observes: team owners
+and maintainers, system admins, and ledger readers. User-visible: yes. Release relevance:
+behavioral (acts that succeeded are refused and acts that were refused succeed, and invitations
+now record joins); additive on the wire — the OpenAPI descriptions move with the rule and the MCP
+tool's `role` enum grows by one value, and no shape is removed or narrowed.
+'''

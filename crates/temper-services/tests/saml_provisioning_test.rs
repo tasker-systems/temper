@@ -358,3 +358,204 @@ async fn the_view_shows_reach_held_with_no_recorded_reconcile(pool: PgPool) {
     assert!(row.1.is_none(), "and no agreement is recorded for it");
     assert!(!row.2);
 }
+
+/// C4/R8, bite: the identity provider wins over the last-owner guard — revoking a team's only
+/// owner succeeds, and the record says so: one `idp_reconcile` event carrying `left_ownerless`,
+/// emitted by the `system` entity with no actor (P4: never the member's own entity, so the
+/// record does not reach the member through the actor axis). The pre-rank code succeeded too,
+/// but silently: no event existed, so an ownerless team left no trace for a system admin.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn revoking_a_teams_only_idp_owner_succeeds_and_records_left_ownerless(pool: PgPool) {
+    let (profile, team_a, _team_b) = seed(&pool).await;
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role, source) \
+         VALUES ($1, $2, 'owner', 'idp')",
+    )
+    .bind(team_a)
+    .bind(profile)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let outcome = reconcile_idp_memberships(&pool, profile, "acme", Some(&[]))
+        .await
+        .expect("the IdP wins over the last-owner guard");
+    let c = counts(outcome);
+    assert_eq!(c.revoked, 1);
+    assert_eq!(c.left_ownerless, 1, "{c:?}");
+    assert_eq!(membership(&pool, team_a, profile).await, None);
+
+    let rows: Vec<(serde_json::Value, bool)> = sqlx::query_as(
+        "SELECT e.payload, (pr.handle = 'system') AS emitter_is_system \
+           FROM kb_events e \
+           JOIN kb_event_types t ON t.id = e.event_type_id \
+           JOIN kb_entities en ON en.id = e.emitter_entity_id \
+           JOIN kb_profiles pr ON pr.id = en.profile_id \
+          WHERE t.name = 'team_membership_changed' ORDER BY e.id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let (payload, emitter_is_system) = &rows[0];
+    assert_eq!(payload["via"], "idp_reconcile", "{payload}");
+    assert_eq!(payload["previous_role"], "owner", "{payload}");
+    assert!(payload.get("role").is_none(), "{payload}");
+    assert!(payload["actor"].is_null(), "{payload}");
+    assert_eq!(payload["left_ownerless"], true, "{payload}");
+    assert!(
+        emitter_is_system,
+        "the system entity emits, never the member"
+    );
+}
+
+/// C4/S1: a native row inserted between the pre-read and the write is skipped, not written
+/// over. The holder keeps the team row locked while the reconcile starts: its pre-read completes
+/// (the lock-take follows it), the holder inserts the native row, and the locked re-read — the
+/// step that decides — sees it. Before the lock existed, the decision read the pre-read and the
+/// write landed over the native row.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_native_row_inserted_mid_reconcile_is_skipped(pool: PgPool) {
+    let (profile, team_a, _team_b) = seed(&pool).await;
+
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(team_a)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+
+    let pool2 = pool.clone();
+    let task = tokio::spawn(async move {
+        reconcile_idp_memberships(&pool2, profile, "acme", Some(&["engineering".into()])).await
+    });
+
+    // The contender is blocked on the team-row lock (its pre-read already ran) before the
+    // holder writes — a timeout alone would pass on a slow runner.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+              WHERE datname = current_database() AND wait_event_type = 'Lock' \
+                AND query ILIKE '%FROM kb_teams WHERE id = ANY%')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        if waiting {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the reconcile never blocked on the team-row lock"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role, source) \
+         VALUES ($1, $2, 'member', 'native')",
+    )
+    .bind(team_a)
+    .bind(profile)
+    .execute(&mut *holder)
+    .await
+    .unwrap();
+    holder.commit().await.unwrap();
+
+    let outcome = task.await.unwrap().expect("reconcile completes");
+    let c = counts(outcome);
+    assert_eq!(c.skipped_native, 1, "{c:?}");
+    assert_eq!(c.added, 0, "{c:?}");
+    assert_eq!(
+        membership(&pool, team_a, profile).await,
+        Some(("Member".to_string(), "native".to_string())),
+        "the native row stands untouched"
+    );
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e \
+           JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'team_membership_changed'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(events, 0, "a skip records nothing");
+}
+
+/// C4/R8, pin: `left_ownerless` counts the teams THIS reconcile left without an owner, not the
+/// teams it touched that already had none. `seed`'s teams have no owner from the start; adding
+/// and re-ranking idp members on them lowers no owner, so the count stays zero and no event says
+/// `left_ownerless`. Counting every touched ownerless team would page an operator on every login
+/// of every member of such a team.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_add_to_an_already_ownerless_team_is_not_counted_as_leaving_it_ownerless(pool: PgPool) {
+    let (profile, _team_a, _team_b) = seed(&pool).await;
+
+    let added = counts(
+        reconcile_idp_memberships(&pool, profile, "acme", Some(&["engineering".into()]))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(added.added, 1, "{added:?}");
+    assert_eq!(added.left_ownerless, 0, "{added:?}");
+
+    let raised = counts(
+        reconcile_idp_memberships(&pool, profile, "acme", Some(&["eng-leads".into()]))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(raised.updated, 1, "{raised:?}");
+    assert_eq!(raised.left_ownerless, 0, "{raised:?}");
+
+    let flagged: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e \
+           JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'team_membership_changed' AND e.payload ? 'left_ownerless'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(flagged, 0, "no write here lowered an owner");
+}
+
+/// C4/R8, bite: the CHANGE path of the same rule — the identity provider demotes a team's only
+/// owner (an idp `owner` row, now asserted only as `engineering` → `member`). The demotion lands,
+/// is counted as an update, and the record and the counts both say the team was left ownerless.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn demoting_a_teams_only_idp_owner_records_left_ownerless(pool: PgPool) {
+    let (profile, team_a, _team_b) = seed(&pool).await;
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role, source) \
+         VALUES ($1, $2, 'owner', 'idp')",
+    )
+    .bind(team_a)
+    .bind(profile)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let c = counts(
+        reconcile_idp_memberships(&pool, profile, "acme", Some(&["engineering".into()]))
+            .await
+            .expect("the IdP wins over the last-owner guard"),
+    );
+    assert_eq!(c.updated, 1, "{c:?}");
+    assert_eq!(c.left_ownerless, 1, "{c:?}");
+    assert_eq!(
+        membership(&pool, team_a, profile).await,
+        Some(("Member".into(), "idp".into()))
+    );
+
+    let payload: serde_json::Value = sqlx::query_scalar(
+        "SELECT e.payload FROM kb_events e \
+           JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'team_membership_changed'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(payload["previous_role"], "owner", "{payload}");
+    assert_eq!(payload["role"], "member", "{payload}");
+    assert_eq!(payload["left_ownerless"], true, "{payload}");
+}

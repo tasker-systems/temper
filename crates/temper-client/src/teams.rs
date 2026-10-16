@@ -203,7 +203,7 @@ impl<'a> TeamsClient<'a> {
     }
 
     /// DELETE /api/teams/{id}/invitations/{invitation_id} — revoke a pending invite
-    /// (owner/maintainer). The invitation id is the one returned by `list_invitations`.
+    /// (a manager of the team, or a system admin). The invitation id is the one returned by `list_invitations`.
     pub async fn revoke_invitation(&self, team_id: Uuid, invitation_id: Uuid) -> Result<()> {
         let token = self.http.resolve_token()?;
         let op = &ops::REVOKE_TEAM_INVITATION;

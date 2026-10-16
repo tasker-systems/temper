@@ -21,7 +21,7 @@ fn parse_role(s: &str) -> Result<TeamRole> {
     }
 }
 
-/// Invite an email to a team (owner/maintainer).
+/// Invite an email to a team (a manager of the team, or a system admin).
 pub async fn invite_remote(
     client: &temper_client::TemperClient,
     team: &str,
@@ -73,7 +73,7 @@ pub async fn decline_invitation(
     Ok(())
 }
 
-/// Revoke (withdraw) a pending invitation by its id (owner/maintainer).
+/// Revoke (withdraw) a pending invitation by its id (a manager of the team, or a system admin).
 /// The invitation id is shown by `temper team invitations`.
 pub async fn revoke_invitation_remote(
     client: &temper_client::TemperClient,
@@ -93,7 +93,7 @@ pub async fn revoke_invitation_remote(
     Ok(())
 }
 
-/// List pending invitations for a team (owner/maintainer).
+/// List pending invitations for a team (a manager of the team, or a system admin).
 pub async fn list_invitations_remote(
     client: &temper_client::TemperClient,
     team: &str,
@@ -208,7 +208,7 @@ pub async fn delete_remote(
     Ok(())
 }
 
-/// Bulk-reassign a departing member's team-scoped resources (owner/maintainer).
+/// Bulk-reassign a departing member's team-scoped resources (a manager of the team, or a system admin).
 /// Reassigns every resource owned by `from` and homed in a context shared to the
 /// team, over to `to` (who must be a team member). `from`/`to` are profile UUIDs.
 pub async fn reassign_remote(
@@ -290,7 +290,7 @@ pub async fn leave_remote(
     Ok(())
 }
 
-/// Remove a member from a team (owner/maintainer).
+/// Remove a member from a team (a manager of the team, or a system admin).
 pub async fn remove_member_remote(
     client: &temper_client::TemperClient,
     team: &str,

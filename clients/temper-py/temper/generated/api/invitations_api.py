@@ -687,6 +687,7 @@ class InvitationsApi:
             '201': "TeamInvitation",
             '400': None,
             '403': "ErrorBody",
+            '404': None,
             '409': None,
         }
         response_data = self.api_client.call_api(
@@ -764,6 +765,7 @@ class InvitationsApi:
             '201': "TeamInvitation",
             '400': None,
             '403': "ErrorBody",
+            '404': None,
             '409': None,
         }
         response_data = self.api_client.call_api(
@@ -841,6 +843,7 @@ class InvitationsApi:
             '201': "TeamInvitation",
             '400': None,
             '403': "ErrorBody",
+            '404': None,
             '409': None,
         }
         response_data = self.api_client.call_api(

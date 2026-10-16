@@ -7,9 +7,20 @@ use std::collections::HashMap;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use temper_core::types::ids::ProfileId;
+use temper_core::types::team::TeamMemberSource;
 use temper_core::types::TeamRole;
 
+use crate::authz::team_membership;
 use crate::error::ApiResult;
+
+/// Proof that a reconcile transaction is writing: defined here with a private field and
+/// constructed only in this module's reconcile flow, so the `idp` constructors in
+/// `authz::team_membership` cannot be called from anywhere else (plan P16).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct IdpReconcileToken {
+    _private: (),
+}
 
 /// The stronger of two roles (used when two asserted groups map to the same team).
 fn max_role(a: TeamRole, b: TeamRole) -> TeamRole {
@@ -27,6 +38,10 @@ pub struct ReconcileCounts {
     pub updated: usize,
     pub revoked: usize,
     pub skipped_native: usize,
+    /// Teams whose last owner the reconcile removed or demoted (R8: the identity provider
+    /// wins over the last-owner guard). The event carries `left_ownerless`; a system admin
+    /// repairs the team.
+    pub left_ownerless: usize,
 }
 
 /// What a call to [`reconcile_idp_memberships`] did — an enum, so that "declined to try" cannot be
@@ -55,8 +70,13 @@ struct DesiredMembership {
 /// Reconcile the profile's `source='idp'` team memberships to match the asserted groups.
 ///
 /// Native memberships (`source='native'`) are sacred: if one exists for a `(team, profile)`
-/// pair, that team is skipped entirely (native-wins-skip). Runs in one transaction so a
-/// failure leaves membership state unchanged (fail-open at the caller).
+/// pair, that team is skipped entirely (native-wins-skip). Every write is a recorded act through
+/// the membership writer (`via = idp_reconcile`, plan C4): the touched teams are locked in
+/// ascending id order FIRST and `current` is re-read under the locks, so a native row inserted
+/// mid-reconcile is skipped rather than written over (S1), and the identity provider wins over
+/// the last-owner guard (R8) — a reconcile that leaves a team ownerless records
+/// `left_ownerless` on the event and in the counts. Runs in one transaction so a failure
+/// leaves membership state unchanged (fail-open at the caller).
 ///
 /// # `groups` is an `Option`, and that is the guard
 ///
@@ -130,7 +150,34 @@ pub async fn reconcile_idp_memberships(
 
     let mut tx = pool.begin().await?;
 
-    // 2. Current state for this profile: role + source per team.
+    // 2. The pre-read: the team set to lock. It is not trusted for DECISIONS — that is the
+    //    locked re-read below (S1). Today's hole was deciding on this read: a native row
+    //    inserted between it and the write was invisible, and reconcile updated or revoked a
+    //    row that was no longer there.
+    let pre = sqlx::query!(
+        r#"SELECT team_id, role AS "role: TeamRole", source::text AS "source: String"
+           FROM kb_team_members WHERE profile_id = $1"#,
+        profile_id,
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    // 2a. LOCK FIRST (plan C4/S1): every recorded membership writer takes the team row lock, so
+    //     taking it for every touched team — single-row writes included — serializes reconcile
+    //     with them and makes the re-read below current state. Ascending id, the multi-team
+    //     lock order; one statement locks in output order.
+    let mut to_lock: Vec<Uuid> = desired.keys().copied().collect();
+    to_lock.extend(pre.iter().map(|c| c.team_id));
+    to_lock.sort();
+    to_lock.dedup();
+    let _locked: Vec<Uuid> = sqlx::query_scalar!(
+        r#"SELECT id AS "id!" FROM kb_teams WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE"#,
+        &to_lock,
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    // 2b. Current state under the locks: role + source per team, as it NOW stands.
     let current = sqlx::query!(
         r#"SELECT team_id, role AS "role: TeamRole", source::text AS "source: String"
            FROM kb_team_members WHERE profile_id = $1"#,
@@ -141,7 +188,7 @@ pub async fn reconcile_idp_memberships(
 
     let mut native_teams: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
     let mut idp_current: HashMap<Uuid, TeamRole> = HashMap::new();
-    for c in current {
+    for c in &current {
         if c.source.as_deref() == Some("native") {
             native_teams.insert(c.team_id);
         } else {
@@ -149,9 +196,10 @@ pub async fn reconcile_idp_memberships(
         }
     }
 
+    let token = IdpReconcileToken { _private: () };
     let mut out = ReconcileCounts::default();
 
-    // 3. Add / update desired teams (skipping any team the user is native in).
+    // 3. Add / update desired teams (skipping any team the profile is native in).
     for m in desired
         .iter()
         .map(|(&team_id, &role)| DesiredMembership { team_id, role })
@@ -162,27 +210,41 @@ pub async fn reconcile_idp_memberships(
         }
         match idp_current.get(&m.team_id) {
             Some(&existing) if existing == m.role => {}
-            Some(_) => {
-                sqlx::query!(
-                    "UPDATE kb_team_members SET role = $3 WHERE team_id = $1 AND profile_id = $2 AND source = 'idp'",
-                    m.team_id,
-                    profile_id,
-                    m.role as TeamRole,
-                )
-                .execute(&mut *tx)
-                .await?;
-                out.updated += 1;
-            }
-            None => {
-                sqlx::query!(
-                    "INSERT INTO kb_team_members (team_id, profile_id, role, source) VALUES ($1, $2, $3, 'idp')",
-                    m.team_id,
-                    profile_id,
-                    m.role as TeamRole,
-                )
-                .execute(&mut *tx)
-                .await?;
-                out.added += 1;
+            _ => {
+                let target =
+                    team_membership::locked(&mut tx, m.team_id, ProfileId::from(profile_id))
+                        .await?;
+                // The team lock serializes every routed writer, but not the derived ones (R13:
+                // auto-join, personal-team sync), which can still insert a native row between
+                // the re-read above and this row lock. Native wins (C7): skip, never write.
+                if let Some((_, TeamMemberSource::Native)) = target.current() {
+                    out.skipped_native += 1;
+                    continue;
+                }
+                let lowers_owner = matches!(target.current(), Some((TeamRole::Owner, _)));
+                let change =
+                    team_membership::AuthorizedMembershipChange::idp(token, &target, m.role)?;
+                match team_membership::membership_write(&mut tx, None, change).await {
+                    Ok(outcome) => match outcome {
+                        team_membership::MembershipOutcome::Added => out.added += 1,
+                        team_membership::MembershipOutcome::Changed => {
+                            out.updated += 1;
+                            if lowers_owner {
+                                count_ownerless(&mut tx, m.team_id, &mut out).await?;
+                            }
+                        }
+                        _ => {}
+                    },
+                    // A native row appeared for this (team, profile) and the writer's own
+                    // re-check refused the write (C7): count it as skipped, never as an update.
+                    Err(crate::error::ApiError::Conflict(msg))
+                        if msg == team_membership::ALREADY_A_MEMBER
+                            || msg == team_membership::MEMBERSHIP_CHANGED =>
+                    {
+                        out.skipped_native += 1;
+                    }
+                    Err(other) => return Err(other),
+                }
             }
         }
     }
@@ -195,14 +257,26 @@ pub async fn reconcile_idp_memberships(
         .iter()
         .filter(|(t, _)| !desired.contains_key(*t))
     {
-        sqlx::query!(
-            "DELETE FROM kb_team_members WHERE team_id = $1 AND profile_id = $2 AND source = 'idp'",
-            team_id,
-            profile_id,
-        )
-        .execute(&mut *tx)
-        .await?;
-        out.revoked += 1;
+        let target = team_membership::locked(&mut tx, team_id, ProfileId::from(profile_id)).await?;
+        let lowers_owner = matches!(target.current(), Some((TeamRole::Owner, _)));
+        let change = team_membership::AuthorizedMembershipChange::idp_removal(token, &target)?;
+        match team_membership::membership_write(&mut tx, None, change).await {
+            Ok(outcome) => {
+                if outcome == team_membership::MembershipOutcome::Removed {
+                    out.revoked += 1;
+                    if lowers_owner {
+                        count_ownerless(&mut tx, team_id, &mut out).await?;
+                    }
+                }
+            }
+            Err(crate::error::ApiError::Conflict(msg))
+                if msg == team_membership::ALREADY_A_MEMBER
+                    || msg == team_membership::MEMBERSHIP_CHANGED =>
+            {
+                out.skipped_native += 1;
+            }
+            Err(other) => return Err(other),
+        }
     }
 
     // 5. The agreement is now a fact, so record when it was reached — INSIDE the transaction.
@@ -236,6 +310,28 @@ async fn record_signal_missing(pool: &PgPool, profile_id: Uuid, idp_key: &str) -
     )
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+/// After a reconcile write that removed or demoted an owner, under the team lock the write holds:
+/// was the team left with no owner? R8 lets the identity provider remove or demote the last owner;
+/// the event carries `left_ownerless` and this count surfaces it to the operator log. Called only
+/// for a write that lowered an owner, so a team that was already ownerless is not counted.
+async fn count_ownerless(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    team_id: Uuid,
+    out: &mut ReconcileCounts,
+) -> ApiResult<()> {
+    let owners: i64 = sqlx::query_scalar!(
+        "SELECT count(*) FROM kb_team_members WHERE team_id = $1 AND role = 'owner'",
+        team_id,
+    )
+    .fetch_one(&mut **tx)
+    .await?
+    .unwrap_or(0);
+    if owners == 0 {
+        out.left_ownerless += 1;
+    }
     Ok(())
 }
 

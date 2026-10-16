@@ -204,12 +204,13 @@ fn plain_slug(slug: &str) -> bool {
 }
 
 /// The requirement clause for a team-side act's bare `403`. The wire's `403` carries no
-/// sentence, so the tool names the gate: `invitation_service`'s `can_manage` on the team.
-const TEAM_STEWARD_REQUIREMENT: &str = "you manage the team (owner or maintainer)";
+/// sentence, so the tool names the gate: the rank rule's manager check on the team.
+const TEAM_STEWARD_REQUIREMENT: &str =
+    "you manage the team (an owner or maintainer of it; on the gating team, a system admin)";
 
 /// Map an invitation act's error onto an MCP error.
 ///
-/// The caller-actionable faces — the bare `403` (team-side acts: not an owner or maintainer),
+/// The caller-actionable faces — the bare `403` (team-side acts: the caller does not manage the team),
 /// `ForbiddenDetail` (a machine principal, or an invitation addressed to someone else — the
 /// server's sentence names which), `404` (unknown token, or no such pending invitation), `409`
 /// (a duplicate pending invite; an invitation already redeemed by someone else) and `400`
@@ -307,7 +308,7 @@ pub enum InvitationReadView {
     Mine,
     /// How many pending invitations are addressed to you — integers only, no tokens.
     Count,
-    /// A team's pending invitations (owner or maintainer of that team).
+    /// A team's pending invitations (a manager of that team).
     Team,
 }
 
@@ -368,14 +369,16 @@ pub async fn invitation_read(
 
 // ── Write ─────────────────────────────────────────────────────────────────────────────────
 
-/// The roles an invitation can confer — [`TeamRole`] less `owner`, which `create_invitation`
-/// refuses for every caller ("ownership is transferred, not invited"). Declaring only the
-/// invitable roles keeps the tool's schema from offering an agent a choice that always fails.
-/// When the API starts admitting owner invitations, `Owner` joins this enum.
+/// The roles an invitation can confer — every [`TeamRole`]. `create_invitation` applies the
+/// team-role rank rule to the offer: an inviter may offer a role up to their own on the team, so an
+/// owner may invite at `owner` and a maintainer at most at `maintainer` (the server's `400` names
+/// the cap). A mirror of `TeamRole` rather than `TeamRole` itself, so the tool's schema stays the
+/// tool's: a role added there is not offered here until someone decides it is invitable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum InvitationRole {
+    Owner,
     Maintainer,
     Member,
     Watcher,
@@ -384,6 +387,7 @@ pub enum InvitationRole {
 impl From<InvitationRole> for TeamRole {
     fn from(role: InvitationRole) -> Self {
         match role {
+            InvitationRole::Owner => TeamRole::Owner,
             InvitationRole::Maintainer => TeamRole::Maintainer,
             InvitationRole::Member => TeamRole::Member,
             InvitationRole::Watcher => TeamRole::Watcher,
@@ -400,9 +404,9 @@ pub enum InvitationManageAction {
     Accept,
     /// Decline an invitation addressed to you.
     Decline,
-    /// Invite an email address to a team (owner or maintainer).
+    /// Invite an email address to a team (a manager of the team), at a role up to your own.
     Create,
-    /// Withdraw a team's pending invitation (owner or maintainer).
+    /// Withdraw a team's pending invitation (a manager of the team).
     Revoke,
 }
 
@@ -423,8 +427,8 @@ pub struct InvitationManageInput {
     /// the invitation themselves once they sign in with an account verified for this address.
     #[serde(default)]
     pub email: Option<String>,
-    /// The role the invitee joins with: maintainer, member or watcher. Required for `create`.
-    /// Ownership is transferred, not invited.
+    /// The role the invitee joins with: owner, maintainer, member or watcher, up to your own role
+    /// on the team. Required for `create`.
     #[serde(default)]
     pub role: Option<InvitationRole>,
     /// The invitation's id, from `invitation_read` view `team`. Required for `revoke`.
@@ -556,10 +560,12 @@ mod tests {
     }
 
     /// Every invitable role reads the wire name `TeamRole` writes and maps back to that role, and
-    /// `owner` is the one role the tool does not offer. The match is exhaustive over `TeamRole`, so
-    /// a role added there fails to compile here until someone decides whether it is invitable.
+    /// every role is invitable — `owner` included, since the rank rule caps the offer at the
+    /// inviter's own role rather than refusing it outright. The match is exhaustive over
+    /// `TeamRole`, so a role added there fails to compile here until someone decides whether it is
+    /// invitable.
     #[test]
-    fn the_invitable_roles_are_every_team_role_but_owner() {
+    fn the_invitable_roles_are_every_team_role() {
         for role in [
             TeamRole::Owner,
             TeamRole::Maintainer,
@@ -567,8 +573,9 @@ mod tests {
             TeamRole::Watcher,
         ] {
             let invitable = match role {
-                TeamRole::Owner => false,
-                TeamRole::Maintainer | TeamRole::Member | TeamRole::Watcher => true,
+                TeamRole::Owner | TeamRole::Maintainer | TeamRole::Member | TeamRole::Watcher => {
+                    true
+                }
             };
             let wire = serde_json::to_value(role).unwrap();
             match serde_json::from_value::<InvitationRole>(wire) {
@@ -640,7 +647,7 @@ mod tests {
         assert_eq!(bare.code, rmcp::model::ErrorCode::INVALID_PARAMS);
         assert_eq!(
             bare.message,
-            "invitation_manage create requires that you manage the team (owner or maintainer)"
+            "invitation_manage create requires that you manage the team (an owner or maintainer of it; on the gating team, a system admin)"
         );
 
         let detailed = map_invitation_err(

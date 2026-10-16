@@ -13,8 +13,11 @@ to invite/onboard/offboard someone or manage who can see a context.
 
 `owner` > `maintainer` > `member` > `watcher`. Owner does everything (incl. delete,
 reassign); maintainer manages membership + metadata; member contributes; watcher is
-read-only. Ownership is held at creation, never invited. Invitations cap at
-`maintainer`.
+read-only. Roles are a rank: you can add, invite or grant a role up to your own, so an
+owner can make another owner and a maintainer at most a maintainer. Only a system admin
+changes or removes an owner other than yourself; an owner hands a team over by granting
+`owner` to someone, then lowering their own role. On the gating team, only a system admin
+changes the roster. Every membership change is recorded on the admin ledger.
 
 ## Create / inspect
 
@@ -58,7 +61,7 @@ temper team decline <token>
 Inviter-side view of a team's outstanding invites:
 
 ```
-temper team invitations <team>    # owner/maintainer
+temper team invitations <team>    # a manager of the team (owner/maintainer)
 ```
 
 `temper invitations` resolves an invite to you only when your email maps to exactly

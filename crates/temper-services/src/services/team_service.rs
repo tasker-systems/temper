@@ -142,6 +142,14 @@ pub(crate) async fn require_team_exists(pool: &PgPool, team_id: Uuid) -> ApiResu
     }
 }
 
+/// Proof that `create_team` has just inserted the team row it is about to write the creator's
+/// `owner` row for. Defined here with a private field and constructed only in this module, so the
+/// genesis constructor in `authz::team_membership` cannot be called from anywhere else (plan P16).
+#[derive(Debug)]
+pub(crate) struct GenesisToken {
+    _private: (),
+}
+
 /// Create a team. The caller becomes its `owner`.
 ///
 /// The [`PERSONAL_TEAM_SLUG_PREFIX`] is refused for every caller, admins included: only the
@@ -261,13 +269,19 @@ pub async fn create_team(
         .await?;
     }
 
-    sqlx::query!(
-        r#"INSERT INTO kb_team_members (team_id, profile_id, role)
-           VALUES ($1, $2, 'owner')"#,
-        team_id,
-        *creator,
+    // The creator's `owner` row is a recorded act (plan P7): it goes through the one membership
+    // writer with `via = team_genesis`, in the same transaction as the team insert. `locked` is not
+    // run first — the team was born in this transaction, so no concurrent writer can see it, and
+    // the SQL writer re-takes both locks itself.
+    team_membership::membership_write(
+        &mut tx,
+        None,
+        team_membership::AuthorizedMembershipChange::genesis(
+            GenesisToken { _private: () },
+            team_id,
+            creator,
+        ),
     )
-    .execute(&mut *tx)
     .await?;
 
     tx.commit()
@@ -645,8 +659,10 @@ pub async fn change_role(
 mod message_tests {
     /// C11 (team-role rank spec): no refusal, doc or published description in the member acts'
     /// files directs a caller to a transfer operation for team ownership — there is none; the
-    /// hand-over is `change_role`. The invitation files join this list when invitations are routed
-    /// through the rank rule.
+    /// hand-over is `change_role`. The invitation files joined when C2 routed invitations
+    /// through the rank rule, and the MCP team tools and the CLI's teams skill joined when C5
+    /// closed the inventory (plan C5). Files outside `crates/` stay out: a docs-only change does
+    /// not run the Rust tests (`detect-ci-scope.sh`), so a test reading one would gate nothing.
     #[test]
     fn no_member_act_string_names_an_ownership_transfer() {
         let banned = [
@@ -657,12 +673,36 @@ mod message_tests {
         for (name, text) in [
             ("team_service.rs", include_str!("team_service.rs")),
             (
+                "invitation_service.rs",
+                include_str!("invitation_service.rs"),
+            ),
+            (
                 "handlers/teams.rs",
                 include_str!("../../../temper-api/src/handlers/teams.rs"),
             ),
             (
+                "handlers/invitations.rs",
+                include_str!("../../../temper-api/src/handlers/invitations.rs"),
+            ),
+            (
+                "types/invitation.rs",
+                include_str!("../../../temper-core/src/types/invitation.rs"),
+            ),
+            (
                 "types/profile.rs",
                 include_str!("../../../temper-core/src/types/profile.rs"),
+            ),
+            (
+                "temper-mcp tools/invitations.rs",
+                include_str!("../../../temper-mcp/src/tools/invitations.rs"),
+            ),
+            (
+                "temper-mcp tools/teams.rs",
+                include_str!("../../../temper-mcp/src/tools/teams.rs"),
+            ),
+            (
+                "skill-content/teams.md",
+                include_str!("../../../temper-cli/skill-content/teams.md"),
             ),
         ] {
             let lower = text.to_lowercase();
@@ -1921,6 +1961,55 @@ mod lifecycle_tests {
 
     async fn principal(pool: &PgPool, id: Uuid) -> HumanPrincipal {
         crate::test_support::human_principal_for(pool, id).await
+    }
+
+    /// P7, bite: `create_team`'s creator row is a recorded act — one `team_genesis` event per
+    /// team, for a root team and for a child team (R9), each naming the creator as both actor and
+    /// member.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn create_team_records_one_team_genesis_event_for_a_root_and_a_child(pool: PgPool) {
+        let creator = mk_profile(&pool, "creator").await;
+        let req = TeamCreateRequest {
+            slug: "root".to_string(),
+            name: None,
+            parent: None,
+            auto_join_role: None,
+        };
+        let root = create_team(&pool, &principal(&pool, creator).await, &req)
+            .await
+            .unwrap();
+        let events = membership_events(&pool, root.id).await;
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_event(
+            &events[0],
+            creator,
+            None,
+            Some("owner"),
+            creator,
+            "team_genesis",
+        );
+
+        // A child team (R9): the same shape, one event.
+        let child_req = TeamCreateRequest {
+            slug: "child".to_string(),
+            name: None,
+            parent: Some("root".to_string()),
+            auto_join_role: None,
+        };
+        let child = create_team(&pool, &principal(&pool, creator).await, &child_req)
+            .await
+            .unwrap();
+        let events = membership_events(&pool, child.id).await;
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_event(
+            &events[0],
+            creator,
+            None,
+            Some("owner"),
+            creator,
+            "team_genesis",
+        );
+        assert_eq!(owner_count(&pool, child.id).await, 1);
     }
 
     /// C2, bite: a maintainer cannot demote an owner (today only the last-owner guard stops it).

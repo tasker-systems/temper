@@ -18,6 +18,7 @@ use crate::backend::substrate_read::husk_held_by;
 use crate::backend::write_floor;
 // In scope so `GrantAuthority::resolve` — the grant-administration gate, which lives as this
 // enum's `ScopedAuthority` impl in `authz/grant.rs` — is callable here.
+use crate::authz::team_membership;
 use crate::authz::{Principal, ScopedAuthority};
 use crate::services::standing_service::{self, ApplyStandingParams};
 use temper_principal::{Act, ActorAuthority};
@@ -1594,6 +1595,20 @@ pub async fn review_request(
     .await?
     .ok_or_else(|| ApiError::NotFound("join request not found".to_string()))?;
 
+    // THE TEAM LOCK BEFORE ANY STANDING WRITE (plan C3): both branches call
+    // `principal_standing_apply`, whose `ensure_auto_join_memberships` inserts member rows.
+    // Taking the team row lock first — the same lock a member act holds — means this transaction
+    // cannot deadlock with a concurrent `add_member` holding the team lock and waiting on those
+    // uncommitted rows. The join-request row was already this transaction's, so the lock order is
+    // request row → team row → member row, the same shape the accept path holds. `locked` also
+    // reads the requester's row and machine-ness: the act's target, and the machine skip.
+    let target = team_membership::locked(
+        &mut tx,
+        row.team_id,
+        ProfileId::from(row.requesting_profile_id),
+    )
+    .await?;
+
     // On approval, grant the requester access. Under D11 access IS an `approved`
     // `kb_principal_standing` row (`has_system_access` reads nothing else), so the decision and the
     // standing it confers must be one transaction. `Approve` is legal from the requester's born
@@ -1614,18 +1629,16 @@ pub async fn review_request(
         // Retain the gating-team membership the pre-D11 model wrote (harmless team-role churn now
         // that access rides standing, not this row) so team-scoped visibility is unchanged. Never
         // for a machine principal: a machine joins no team nobody chose for it (ruled 2026-10-09).
-        sqlx::query!(
-            r#"
-            INSERT INTO kb_team_members (team_id, profile_id, role)
-            SELECT $1, $2, 'watcher'
-             WHERE NOT EXISTS (SELECT 1 FROM kb_machine_clients mc WHERE mc.profile_id = $2)
-            ON CONFLICT (team_id, profile_id) DO NOTHING
-            "#,
-            row.team_id,
-            row.requesting_profile_id,
-        )
-        .execute(&mut *tx)
-        .await?;
+        // The human's `watcher` row is a recorded act (plan C3): `access_approval`, admin as
+        // actor, idempotent through the writer's noop.
+        if !target.is_machine() {
+            let change = team_membership::AuthorizedMembershipChange::from_system_admin(
+                admin,
+                row.team_id,
+                ProfileId::from(row.requesting_profile_id),
+            );
+            team_membership::membership_write(&mut tx, None, change).await?;
+        }
         // No separate auto-join enrollment here: `principal_standing_apply` above materializes
         // the mirror in this same transaction (`20260923000010`), for every door alike.
     } else {

@@ -30,6 +30,7 @@ use temper_core::types::machine::{MachineClient, ProvisionMachineRequest, Rebind
 use crate::auth::machine_door::{self, DoorPolicy, MachineDoor};
 use crate::auth::{HumanPrincipal, SystemAdmin};
 use crate::auth_config::AuthMode;
+use crate::authz::team_membership;
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service::{insert_grant, InsertGrantParams};
 use crate::services::machine_authz::{self, AuthorizedReach};
@@ -43,31 +44,33 @@ use crate::services::profile_service;
 /// never be applied without having been authorized against the caller's own authority
 /// (spec D3).
 ///
-/// The raw `insert_grant` / raw team INSERT below remain deliberately unchecked: for a system
-/// admin that is Phase A's D5 bypass, and for a team owner `machine_authz::contain_reach` has
-/// already proven the reach is a subset of what the caller could confer on a human. The
-/// authorization is in the TYPE now, not in a comment asking you not to widen this.
+/// Team memberships are recorded acts (plan C3): each team is locked in ascending id order
+/// (the multi-writer lock order) and the row goes through `from_reach` +
+/// `membership_write`, so a reach lands as a `machine_reach` event naming the registrar as
+/// actor. The role ceiling was enforced at mint (D4b) and again by `from_reach`; the machine row
+/// is inserted after the reach, and the database's machine-cap trigger holds the ceiling then.
+/// The grant half keeps `insert_grant` — its own sealed `GrantWarrant` authority, authored by
+/// the caller's resolved emitter.
 async fn apply_reach(
     conn: &mut sqlx::PgConnection,
     caller: ProfileId,
     profile_id: Uuid,
     reach: AuthorizedReach<'_>,
-    // `Some` iff `reach` carries at least one grant — a pure team-membership reach fires no
-    // grant_created event and so needs no emitter (the caller resolves one only when there is a
-    // grant to author).
+    // `Some` iff `reach` carries at least one grant (the caller resolves one only when there is a
+    // grant to author). The membership events emit from it when present; when absent,
+    // `membership_write` resolves the registrar's own `<handle>@web` entity. Either way the SQL
+    // writer ties the emitter to the recorded actor, which is this registrar.
     emitter: Option<EntityId>,
 ) -> ApiResult<()> {
-    for team in reach.teams() {
-        sqlx::query!(
-            r#"INSERT INTO kb_team_members (team_id, profile_id, role)
-               VALUES ($1, $2, $3::text::team_role)
-               ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role"#,
-            team.team_id,
-            profile_id,
-            team.role,
-        )
-        .execute(&mut *conn)
-        .await?;
+    let mut teams: Vec<_> = reach.teams().iter().collect();
+    teams.sort_by_key(|team| team.team_id);
+    for team in teams {
+        let role = machine_authz::parse_team_role(&team.role)?;
+        let target =
+            team_membership::locked(&mut *conn, team.team_id, ProfileId::from(profile_id)).await?;
+        let change =
+            team_membership::AuthorizedMembershipChange::from_reach(&reach, caller, &target, role)?;
+        team_membership::membership_write(&mut *conn, emitter, change).await?;
     }
 
     for grant in reach.grants() {
@@ -195,9 +198,10 @@ pub async fn provision(
     refuse_minted_namespace(&req.client_id)?;
 
     // Resolve the caller's emitter BEFORE the transaction — matching the auth-before-tx pattern above,
-    // and avoiding a nested pool acquire while `tx` is open. Only when there is a grant to author: a
-    // pure team-membership reach fires no grant_created event, so it must not require the minter to
-    // carry a `<handle>@web` entity (a mere gating-team watcher does not).
+    // and avoiding a nested pool acquire while `tx` is open — when there is a grant to author. A
+    // pure team-membership reach skips this; its `machine_reach` events resolve the registrar's
+    // `<handle>@web` entity inside the transaction instead (`membership_write`), so either way every
+    // recorded act emits as the registrar.
     let emitter = if reach.grants().is_empty() {
         None
     } else {
@@ -307,8 +311,8 @@ pub async fn issue(
     )
     .await?;
 
-    // Resolve the caller's emitter BEFORE the transaction (see `provision`) — only when a grant is to
-    // be authored, so a pure team-membership reach needs no `<handle>@web` entity on the minter.
+    // Resolve the caller's emitter BEFORE the transaction (see `provision`) when a grant is to be
+    // authored; a pure team-membership reach resolves it inside the transaction (`membership_write`).
     let emitter = if reach.grants().is_empty() {
         None
     } else {
@@ -847,6 +851,64 @@ mod tests {
         .expect("approve");
 
         assert_eq!(gating_memberships(&pool, client.profile_id).await, 0);
+        // The skip records nothing (C8): the machine skip is not a silent membership write.
+        let events: i64 = sqlx::query_scalar!(
+            "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+              WHERE t.name = 'team_membership_changed'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count membership events")
+        .unwrap_or(0);
+        assert_eq!(events, 0, "a machine approval records no membership change");
+    }
+
+    /// C3: a provisioned team reach is a recorded act — exactly one `machine_reach` event with
+    /// the registrar as actor, the offered role as written, no previous role (an add).
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn provision_records_one_machine_reach_event(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let team: Uuid =
+            sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = 'temper-system'")
+                .fetch_one(&pool)
+                .await
+                .expect("gating team");
+        let request = ProvisionMachineRequest {
+            client_id: "reach-event-agent".to_string(),
+            label: "steward".to_string(),
+            owner_team_id: Some(team),
+            teams: vec![TeamSpec {
+                team_id: team,
+                role: "member".to_string(),
+            }],
+            grants: vec![],
+        };
+        let client = svc::provision(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
+            &request,
+            crate::auth_config::AuthMode::ExternalIdp,
+        )
+        .await
+        .expect("provision");
+
+        let events: Vec<serde_json::Value> = sqlx::query_scalar(
+            "SELECT e.payload FROM kb_events e \
+               JOIN kb_event_types t ON t.id = e.event_type_id \
+              WHERE t.name = 'team_membership_changed' ORDER BY e.id",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("membership events");
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0]["via"], "machine_reach", "{events:?}");
+        assert_eq!(events[0]["actor"], serde_json::json!(admin.uuid()));
+        assert_eq!(
+            events[0]["profile_id"],
+            serde_json::json!(client.profile_id)
+        );
+        assert_eq!(events[0]["role"], "member", "{events:?}");
+        assert!(events[0].get("previous_role").is_none(), "{events:?}");
     }
 
     /// Pin, not a bite: without a direct row, a machine still reaches the root through its

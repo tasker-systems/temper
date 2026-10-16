@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_entities (profile_id, name) SELECT id, handle || '@web' FROM kb_profiles WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cf7fb7b963dfa8856a95b33c5a31317cea7a7c2d8063537e7d4be4a664631535"
+}

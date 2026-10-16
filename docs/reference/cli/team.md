@@ -11,10 +11,10 @@ Usage: temper team [OPTIONS] <COMMAND>
 
 Commands:
   join           Accept a team invitation by its token. Only the account whose verified email the invitation names can accept it
-  invite         Invite an email to a team (owner/maintainer)
+  invite         Invite an email to a team (a manager of the team, or a system admin)
   decline        Decline a team invitation by its token
-  invitations    List pending invitations for a team (owner/maintainer)
-  uninvite       Revoke (withdraw) a pending invitation (owner/maintainer)
+  invitations    List pending invitations for a team (a manager of the team, or a system admin)
+  uninvite       Revoke (withdraw) a pending invitation (a manager of the team, or a system admin)
   show           Show a team's detail and member roster
   leave          Leave a team you are a member of (removes your membership)
   remove-member  Remove a member from a team (owner/maintainer)
@@ -56,7 +56,7 @@ Options:
 ### `temper team invite`
 
 ```text
-Invite an email to a team (owner/maintainer)
+Invite an email to a team (a manager of the team, or a system admin)
 
 Usage: temper team invite [OPTIONS] --role <ROLE> <TEAM> <EMAIL>
 
@@ -65,7 +65,7 @@ Arguments:
   <EMAIL>  Email address to invite
 
 Options:
-      --role <ROLE>        Role to grant on acceptance: maintainer | member | watcher
+      --role <ROLE>        Role to grant on acceptance: owner | maintainer | member | watcher, up to the inviter's own rank on the team
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
       --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
@@ -94,7 +94,7 @@ Options:
 ### `temper team invitations`
 
 ```text
-List pending invitations for a team (owner/maintainer)
+List pending invitations for a team (a manager of the team, or a system admin)
 
 Usage: temper team invitations [OPTIONS] <TEAM>
 
@@ -112,7 +112,7 @@ Options:
 ### `temper team uninvite`
 
 ```text
-Revoke (withdraw) a pending invitation (owner/maintainer)
+Revoke (withdraw) a pending invitation (a manager of the team, or a system admin)
 
 Usage: temper team uninvite [OPTIONS] <TEAM> <INVITATION_ID>
 

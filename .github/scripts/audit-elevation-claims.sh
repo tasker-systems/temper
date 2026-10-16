@@ -273,11 +273,82 @@ current_gates() {
 # which refuses everyone else), cli.rs `set-role`'s summary ("a team owner or maintainer, or a system
 # admin"), the same summary on commands/team.rs's `set_role`, and team_service.rs's test doc for an
 # admin adding and raising themselves (P14 a). Each holds.
+# REVIEWED 2026-10-15 (team-role rank, PR C; temper-artifacts plans/2026-10-14-team-role-rank.md C2)
+# — `team_membership` d2d04ed228c7 -> eb1d91e766fa: the module gained `authorize_invitation` (the
+# C16 invitation gate, which reuses checks 1–2 via `admits_caller` against an inert stand-in target
+# and check 6's conferral comparison) and `from_claimed_invitation` (the P12 accept constructor,
+# proof-carried, no rank decision). No member-act decision moved. New claims re-read against the
+# gate: handlers/invitations.rs's create 403 (does not manage the team, or the offer outranks the
+# inviter; the gating team admits a system admin only), cli.rs's `invite` / `invitations` /
+# `uninvite` summaries plus the `invite --role` doc ("up to the inviter's own rank"),
+# commands/team.rs's five doc comments (same wording), types/invitation.rs's
+# `CreateInvitationRequest` doc, and invitation_service.rs's module and `create_invitation` docs.
+# Each states what the authority enforces; no over-claim.
+# REVIEWED 2026-10-15 (team-role rank, PR C fix round) — `team_membership` eb1d91e766fa ->
+# 83575cc25479: `authorize_invitation`'s conferral refusal moved from the 403 `ABOVE_YOUR_OWN_ROLE`
+# to a 400 `OFFER_ABOVE_YOUR_OWN_ROLE` ("an invitation can offer a role up to your own on this
+# team; only a system admin can offer more"), keeping the documented 400 the route always had (the
+# plan's pin: a maintainer inviting at `owner` is refused in the class it was refused in). The
+# claim's wording was re-read against the gate: it states the conferral cap the gate enforces, and
+# names the admin exemption it carries. handlers/invitations.rs now carries two claims: the 400
+# description (the cap, same wording as the constant) and the 403 (does not manage the team, or
+# the gating rule). Each holds.
+# REVIEWED 2026-10-15 (team-role rank, PR C fix round, fmt only) — `team_membership`
+# 83575cc25479 -> 23d8140fce5d: `cargo fmt` rewrapped the new `BadRequest(OFFER_ABOVE_YOUR_OWN_ROLE)`
+# return in `authorize_invitation`. Formatting only; no decision moved.
+# REVIEWED 2026-10-15 (team-role rank, PR C, task C3) — `team_membership` 23d8140fce5d ->
+# af37c6b9fcbd: the module gained `from_system_admin` (the approval flow's watcher row: admin
+# proof, no rank decision, idempotency via the writer's noop) and `from_reach` (the machine
+# reach: `AuthorizedReach` as proof, ceiling enforced at mint, add/change per the locked read),
+# and `MembershipTarget` grew an `is_machine()` getter for the approval flow's machine skip. No
+# member-act decision moved; the unit decision table is unchanged. The claims bound to the gate
+# were re-read: the approval and reach docs state what these constructors enforce. The `machine`
+# gate did not move — `machine_authz`'s D4b comment now names the routed writer (`from_reach`)
+# and the test `BARRED_ROLES` doc points at check 4, and neither is fingerprinted prose.
+# REVIEWED 2026-10-15 (team-role rank, PR C, task C4) — `team_membership` af37c6b9fcbd ->
+# 3b225ef14142: the module gained `idp` and `idp_removal` (the SAML reconcile constructors: the
+# IdP wins over the last-owner guard, the system is the actor, an `idp` source is the only row
+# they will write, and a native current is refused). No member-act decision moved. New claim
+# re-read against its gate: `saml_provisioning_service.rs`'s `ReconcileCounts` doc ("a system
+# admin repairs the team") states the C9 repair arm the record serves; it binds to
+# `team_membership`, the gate whose writer produced the record it describes.
+# REVIEWED 2026-10-15 (team-role rank, PR C, task C4, fmt only) — `team_membership`
+# 3b225ef14142 -> f6e2e9db8946: `cargo fmt` rewrapped the new `idp` constructor bodies. The
+# ordering lesson this repeat teaches: format BEFORE computing a baseline, never after.
+# REVIEWED 2026-10-16 (team-role rank, PR C, tasks C4 fix and C5) — `team_membership`
+# f6e2e9db8946 -> 76f865b5e456: `MembershipTarget` grew a `current()` getter (role and source as
+# read under the locks). SAML reconcile reads it to skip a native row a derived writer inserted
+# after its unlocked re-read (C7: native wins — previously the `idp` constructor's internal error
+# failed the whole reconcile), and to count `left_ownerless` only for a write that lowered an
+# owner. No decision moved; the getter exposes what `locked` already read. Claim moved:
+# `types/invitation.rs` 1 -> 2 — `TeamInvitation`'s constraints list said "`role` cannot be
+# `Owner` — ownership is only transferred, never invited" (C11, missed by C2); it now states the
+# cap and that "on the gating team only a system admin invites", which is
+# `authorize_invitation` over `MembershipAuthority::resolve`'s arm order, the `team_membership`
+# gate it binds to.
+# REVIEWED 2026-10-16 (team-role rank, PR C review round, RG-1/RG-2) — `team_membership`
+# 76f865b5e456 -> c0b58f39d934: `from_reach` is now bound to its proof — the `(team, role)` must be
+# one of the `AuthorizedReach`'s own specs, the role at or below the machine ceiling, and an idp
+# row is refused — and returns a result; `from_claimed_invitation` takes the invitee from the
+# claim (`ClaimedInvitation::invitee`) rather than beside it. Both only narrow what a constructor
+# admits; no member-act decision moved. Claims moved, each re-read against `authorize_invitation` /
+# `manages()` over `MembershipAuthority::resolve`:
+#   handlers/invitations.rs 2 -> 3 — the create route's new 404 ("told only to a caller who
+#     manages it, or a system admin"): the existence check runs after `authorize_invitation`. The
+#     403 description no longer claims an over-rank offer is a 403 (it is the 400).
+#   types/invitation.rs 2 -> 3 — "A manager of the team (or a system admin) may revoke": the
+#     `manages()` gate.
+#   services/invitation_service.rs 2 -> 3 — the same existence-check comment as the 404.
+#   temper-mcp service.rs 3 -> 4, still unbound as a file (its other claims describe other
+#     tools) — `invitation_manage`'s "(on the instance's gating team, only a system admin)" and
+#     "only a system admin can change or remove another owner": the gating arm of `resolve` and
+#     the rank rule's check 7, both the `team_membership` gate, reached through the HTTP route.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
 claim crates/temper-api/src/handlers/admin_ledger.rs 2 is_system_admin,read_gates,grant,ledger_subject,team_membership
 claim crates/temper-api/src/handlers/block_history_scrub.rs 5 is_system_admin
+claim crates/temper-api/src/handlers/invitations.rs 3 team_membership
 claim crates/temper-api/src/handlers/reblock.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/cognitive_maps.rs 4 reconcile_regime,two_sided
 claim crates/temper-api/src/handlers/connections.rs 13 connection,machine,require_manage_on_team,can_manage
@@ -293,10 +364,11 @@ claim crates/temper-api/src/handlers/teams.rs 7 team_membership,is_system_admin
 claim crates/temper-core/src/types/admin.rs 5 is_system_admin,read_gates
 claim crates/temper-core/src/types/connection.rs 2 machine,connection
 claim crates/temper-core/src/types/erasure.rs 3 is_system_admin
+claim crates/temper-core/src/types/invitation.rs 3 team_membership
 claim crates/temper-core/src/types/machine.rs 1 machine
 claim crates/temper-core/src/types/subscription.rs 1 subscription
 claim crates/temper-core/src/types/team.rs 3 team_membership,is_system_admin
-claim crates/temper-cli/src/cli.rs 19 team_membership
+claim crates/temper-cli/src/cli.rs 22 team_membership
 claim crates/temper-cli/src/commands/admin_erasure.rs 1 -
 claim crates/temper-cli/src/commands/admin.rs 4 -
 claim crates/temper-cli/src/commands/admin_connection.rs 2 connection
@@ -306,9 +378,9 @@ claim crates/temper-cli/src/commands/admin_slack.rs 1 -
 claim crates/temper-cli/src/commands/admin_subscription.rs 2 subscription
 claim crates/temper-cli/src/commands/cogmap.rs 3 two_sided,is_system_admin
 claim crates/temper-cli/src/commands/context_cmd.rs 2 context_admin
-claim crates/temper-cli/src/commands/team.rs 1 team_membership
+claim crates/temper-cli/src/commands/team.rs 6 team_membership
 claim crates/temper-cli/src/commands/warmup.rs 1 is_system_admin
-claim crates/temper-mcp/src/service.rs 3 -
+claim crates/temper-mcp/src/service.rs 4 -
 claim crates/temper-mcp/src/tools/reblock.rs 3 -
 claim crates/temper-mcp/src/tools/cognitive_maps.rs 1 is_system_admin
 claim crates/temper-mcp/src/tools/contexts.rs 2 context_admin,two_sided
@@ -320,10 +392,12 @@ claim crates/temper-services/src/services/context_service.rs 14 context_admin
 claim crates/temper-services/src/services/erasure_retention_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
+claim crates/temper-services/src/services/invitation_service.rs 3 team_membership
 claim crates/temper-services/src/services/machine_authz.rs 8 machine,team_membership
 claim crates/temper-services/src/services/machine_client_service.rs 7 machine
 claim crates/temper-services/src/services/machine_registration_service.rs 7 machine
 claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
+claim crates/temper-services/src/services/saml_provisioning_service.rs 1 team_membership
 claim crates/temper-services/src/services/subscription_service.rs 6 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
 claim crates/temper-services/src/services/team_service.rs 12 require_manage_on_team,can_manage,team_membership
@@ -340,7 +414,7 @@ gate two_sided 7822960e4ffa
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership d2d04ed228c7
+gate team_membership c0b58f39d934
 EOF
 
 CURRENT="$(current_claims; current_gates)"

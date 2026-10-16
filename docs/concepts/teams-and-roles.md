@@ -38,11 +38,18 @@ Roles are a rank, and every membership change follows one rule:
   else holds `owner`. To hand a team over, grant `owner` to another member, then lower your own
   role.
 - **A system admin can make any change**, including repairing a team whose only owner has left.
-  On the instance's gating team, only a system admin adds, changes or removes another member
-  directly (any member may still leave it).
+  On the instance's gating team, only a system admin adds, invites, changes or removes another
+  member (any member may still leave it).
 
-Adding a member, changing a role and removing a member are recorded on the admin ledger, readable
-by the team's owners and maintainers and by system admins. Invitations top out at `maintainer`.
+Invitations follow the same rank: you can invite at any role up to your own, so an owner can
+invite a new owner.
+
+Every membership change is recorded on the admin ledger — a member added, a role changed, a
+member removed, an invitation accepted, an access request approved, a machine registered onto a
+team, and a change made by your identity provider's group sync — readable by the team's owners
+and maintainers and by system admins. Identity-provider sync is the one writer that can leave a
+team without an owner (the identity provider is authoritative over the roles it assigns); the
+ledger records when that happens, for a system admin to repair.
 
 ## Nested teams
 

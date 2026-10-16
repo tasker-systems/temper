@@ -444,3 +444,86 @@ async fn approval_enrolls_into_other_auto_join_teams(pool: sqlx::PgPool) {
         "approval should enroll the profile into auto-join teams"
     );
 }
+
+/// C3: approving a human's request records the watcher row as exactly one `access_approval`
+/// event with the admin as actor; a rejection records nothing.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn approval_records_one_access_approval_event_and_a_rejection_records_none(
+    pool: sqlx::PgPool,
+) {
+    let team_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_teams (slug, name) VALUES ('gated','Gated') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("team");
+    let admin = admin_proof(&pool).await;
+
+    let joiner = common::fixtures::create_test_profile(&pool, "watcher@test.example.com").await;
+    let request_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_join_requests (id, team_id, requesting_profile_id, status, source) \
+         VALUES (gen_random_uuid(), $1, $2, 'pending', 'test') RETURNING id",
+    )
+    .bind(team_id)
+    .bind(joiner)
+    .fetch_one(&pool)
+    .await
+    .expect("join request");
+    access_service::review_request(
+        &pool,
+        &admin,
+        access_service::ReviewRequestParams {
+            request_id,
+            decision: temper_core::types::access_gate::JoinRequestStatus::Approved,
+            decision_note: None,
+        },
+    )
+    .await
+    .expect("approve");
+
+    let events: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT e.payload FROM kb_events e \
+           JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'team_membership_changed' ORDER BY e.id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("membership events");
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["via"], "access_approval", "{events:?}");
+    assert_eq!(events[0]["actor"], serde_json::json!(admin.actor()));
+    assert_eq!(events[0]["profile_id"], serde_json::json!(joiner));
+    assert_eq!(events[0]["role"], "watcher", "{events:?}");
+
+    // A rejection moves standing only — no membership row, no event.
+    let second = common::fixtures::create_test_profile(&pool, "denied@test.example.com").await;
+    let rejected_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_join_requests (id, team_id, requesting_profile_id, status, source) \
+         VALUES (gen_random_uuid(), $1, $2, 'pending', 'test') RETURNING id",
+    )
+    .bind(team_id)
+    .bind(second)
+    .fetch_one(&pool)
+    .await
+    .expect("second join request");
+    access_service::review_request(
+        &pool,
+        &admin,
+        access_service::ReviewRequestParams {
+            request_id: rejected_id,
+            decision: temper_core::types::access_gate::JoinRequestStatus::Rejected,
+            decision_note: None,
+        },
+    )
+    .await
+    .expect("reject");
+    let after: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT e.payload FROM kb_events e \
+           JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'team_membership_changed' ORDER BY e.id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("membership events after reject");
+    assert_eq!(after.len(), 1, "a rejection records nothing: {after:?}");
+}

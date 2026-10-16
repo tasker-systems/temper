@@ -227,6 +227,17 @@ pub async fn system_admin_proof(pool: &PgPool) -> crate::auth::SystemAdmin {
     .fetch_one(pool)
     .await
     .expect("seed operator profile");
+    // The `<handle>@web` emitter the first authenticated request would provision: recorded
+    // membership acts (plan C3's `access_approval`) resolve their emitter from the acting
+    // admin, and a fixture without it fails exactly as an unprovisioned principal would.
+    sqlx::query!(
+        "INSERT INTO kb_entities (profile_id, name) \
+         SELECT id, handle || '@web' FROM kb_profiles WHERE id = $1",
+        id,
+    )
+    .execute(pool)
+    .await
+    .expect("seed operator emitter");
     approved_admin(pool, id).await;
     system_admin_proof_for(pool, id).await
 }
