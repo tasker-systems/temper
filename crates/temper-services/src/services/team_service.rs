@@ -658,8 +658,8 @@ pub async fn change_role(
 mod message_tests {
     /// C11 (team-role rank spec): no refusal, doc or published description in the member acts'
     /// files directs a caller to a transfer operation for team ownership — there is none; the
-    /// hand-over is `change_role`. The invitation files join this list when invitations are routed
-    /// through the rank rule.
+    /// hand-over is `change_role`. The invitation files joined when C2 routed invitations
+    /// through the rank rule (plan C5).
     #[test]
     fn no_member_act_string_names_an_ownership_transfer() {
         let banned = [
@@ -670,8 +670,20 @@ mod message_tests {
         for (name, text) in [
             ("team_service.rs", include_str!("team_service.rs")),
             (
+                "invitation_service.rs",
+                include_str!("invitation_service.rs"),
+            ),
+            (
                 "handlers/teams.rs",
                 include_str!("../../../temper-api/src/handlers/teams.rs"),
+            ),
+            (
+                "handlers/invitations.rs",
+                include_str!("../../../temper-api/src/handlers/invitations.rs"),
+            ),
+            (
+                "types/invitation.rs",
+                include_str!("../../../temper-core/src/types/invitation.rs"),
             ),
             (
                 "types/profile.rs",
