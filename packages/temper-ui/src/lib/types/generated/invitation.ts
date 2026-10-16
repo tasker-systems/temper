@@ -106,14 +106,15 @@ matching: number | null, };
  * invitation URLs sitting in inboxes — and there are none.
  *
  * Constraints:
- * - `role` cannot be `Owner` — ownership is only transferred, never invited
+ * - `role` is at most the inviter's own role on the team — an owner can invite at `owner` —
+ *   and on the gating team only a system admin invites (the team-role rank rule)
  * - One *live pending* invite per email per team (declined/expired/revoked history coexists)
  * - 7-day default expiry, checked lazily at acceptance time; a lapsed-but-unswept pending
  *   row is swept to `expired` when the same email is re-invited, so re-invite is never blocked
  *   by a dead invite
  * - Acceptance is idempotent
- * - An owner/maintainer may *revoke* a pending invite (withdraw it) — the counterpart to the
- *   invitee's `decline`. Revocation is modelled additively as `revoked_at` (a nullable
+ * - A manager of the team (or a system admin) may *revoke* a pending invite (withdraw it) — the
+ *   counterpart to the invitee's `decline`. Revocation is modelled additively as `revoked_at` (a nullable
  *   timestamp) rather than an `InvitationStatus` variant: adding an enum value would move the
  *   wire contract for every query decoding `InvitationStatus` and force an operator cutover,
  *   whereas a new nullable column stays additive and rides auto-deploy. A revoked invite has
