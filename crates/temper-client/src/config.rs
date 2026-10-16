@@ -129,6 +129,24 @@ pub fn build_client_from(
     Ok(client)
 }
 
+/// Build an ambient [`TemperClient`](crate::TemperClient) — the credential is held outside
+/// this process — against the configured API URL.
+///
+/// The [`build_client_from`] counterpart for `TEMPER_AUTH=ambient`, with the same URL
+/// validation under the operator-facing name. No OAuth config is attached: there is no grant
+/// here to log in to or refresh.
+pub fn build_ambient_client_from(
+    config: &TemperConfig,
+    auth: &crate::auth::AmbientAuth,
+    surface: temper_workflow::operations::Surface,
+) -> crate::error::Result<crate::TemperClient> {
+    let url = api_url(config);
+    if !url.is_empty() {
+        crate::endpoint::validate_endpoint(&url, "api_url")?;
+    }
+    crate::TemperClient::ambient(&url, surface, auth)
+}
+
 /// Convenience: load config and build a fully-configured [`TemperClient`](crate::TemperClient)
 /// with an explicit [`crate::auth::TokenStore`].
 ///

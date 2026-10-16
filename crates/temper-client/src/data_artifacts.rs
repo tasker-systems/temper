@@ -42,7 +42,7 @@ impl<'a> DataArtifactsClient<'a> {
         let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path).query(params);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -53,7 +53,7 @@ impl<'a> DataArtifactsClient<'a> {
         let path = op.path(&[&resource_id, &artifact_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -68,7 +68,7 @@ impl<'a> DataArtifactsClient<'a> {
         let path = op.path(&[&artifact_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -83,7 +83,7 @@ impl<'a> DataArtifactsClient<'a> {
         let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -94,7 +94,7 @@ impl<'a> DataArtifactsClient<'a> {
         let path = op.path(&[&context_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -105,7 +105,7 @@ impl<'a> DataArtifactsClient<'a> {
         let path = op.path(&[&shape_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -120,7 +120,7 @@ impl<'a> DataArtifactsClient<'a> {
         let path = op.path(&[&context_id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -132,7 +132,7 @@ impl<'a> DataArtifactsClient<'a> {
         let path = op.path(&[&cogmap_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -148,7 +148,7 @@ impl<'a> DataArtifactsClient<'a> {
         let path = op.path(&[&cogmap_id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 

@@ -41,7 +41,7 @@ impl<'a> StewardClient<'a> {
         let path = delta_path(cogmap, threshold)?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -64,7 +64,7 @@ impl<'a> StewardClient<'a> {
         };
         let req = self.http.request(op, &path).json(&body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -76,7 +76,7 @@ impl<'a> StewardClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).query(query);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -87,7 +87,7 @@ impl<'a> StewardClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -107,7 +107,7 @@ impl<'a> StewardClient<'a> {
             req = req.header(STEWARD_CORRELATION_HEADER, id.to_string());
         }
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 }

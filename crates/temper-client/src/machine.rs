@@ -34,7 +34,7 @@ impl<'a> MachineClientsClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -45,7 +45,7 @@ impl<'a> MachineClientsClient<'a> {
         let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -56,7 +56,7 @@ impl<'a> MachineClientsClient<'a> {
         let path = format!("{}?include_revoked={include_revoked}", op.path(&[])?);
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -67,7 +67,7 @@ impl<'a> MachineClientsClient<'a> {
         let path = op.path(&[&id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -78,7 +78,7 @@ impl<'a> MachineClientsClient<'a> {
         let path = op.path(&[&id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -89,7 +89,7 @@ impl<'a> MachineClientsClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -104,7 +104,7 @@ impl<'a> MachineClientsClient<'a> {
         let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 }

@@ -47,7 +47,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).query(params);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -65,7 +65,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).query(&params);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -88,7 +88,7 @@ impl<'a> ResourceClient<'a> {
         };
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -99,7 +99,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -110,7 +110,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -128,7 +128,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -146,7 +146,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).query(act);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -159,7 +159,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -171,7 +171,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -182,7 +182,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -193,7 +193,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -209,7 +209,7 @@ impl<'a> ResourceClient<'a> {
         };
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -220,7 +220,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -244,7 +244,7 @@ impl<'a> ResourceClient<'a> {
         let req = self.http.request(op, &path);
         match self
             .http
-            .send_admitting(&op.method(), &path, req, Some(&token), StatusCode::GONE)
+            .send_admitting(&op.method(), &path, req, token.as_deref(), StatusCode::GONE)
             .await
         {
             Ok(resp) => {
@@ -285,7 +285,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -301,7 +301,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path).query(query);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -313,7 +313,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -334,7 +334,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -355,7 +355,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -366,7 +366,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[&id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -381,7 +381,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[&id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -397,7 +397,7 @@ impl<'a> ResourceClient<'a> {
         let path = op.path(&[&id])?;
         let req = self.http.request(op, &path).json(payload);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 }

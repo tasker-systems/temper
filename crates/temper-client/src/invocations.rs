@@ -39,7 +39,7 @@ impl<'a> InvocationsClient<'a> {
         let path = op.path(&[])?;
         let req_builder = self.http.request(op, &path).json(req);
         self.http
-            .send_json(&op.method(), &path, req_builder, Some(&token))
+            .send_json(&op.method(), &path, req_builder, token.as_deref())
             .await
     }
 
@@ -51,7 +51,7 @@ impl<'a> InvocationsClient<'a> {
         let path = op.path(&[&invocation_id])?;
         let req_builder = self.http.request(op, &path).json(req);
         self.http
-            .send(&op.method(), &path, req_builder, Some(&token))
+            .send(&op.method(), &path, req_builder, token.as_deref())
             .await?;
         Ok(())
     }
@@ -63,7 +63,7 @@ impl<'a> InvocationsClient<'a> {
         let path = op.path(&[&invocation_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -82,7 +82,7 @@ impl<'a> InvocationsClient<'a> {
             .request(op, &path)
             .query(&InvocationListQuery { cogmap, status });
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 }

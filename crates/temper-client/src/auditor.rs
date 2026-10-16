@@ -49,7 +49,7 @@ impl<'a> AuditorClient<'a> {
             req = req.header(AUDITOR_CORRELATION_HEADER, id.to_string());
         }
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -61,7 +61,7 @@ impl<'a> AuditorClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).query(query);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -74,7 +74,7 @@ impl<'a> AuditorClient<'a> {
         let path = op.path(&[&cogmap])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 }

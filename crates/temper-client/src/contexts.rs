@@ -38,7 +38,7 @@ impl<'a> ContextClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -52,7 +52,7 @@ impl<'a> ContextClient<'a> {
         let path = format!("{}?retired=true", op.path(&[])?);
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -69,7 +69,7 @@ impl<'a> ContextClient<'a> {
         let path = op.path(&[])?;
         let req = resolve_request(self.http, &path, context_ref);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -80,7 +80,7 @@ impl<'a> ContextClient<'a> {
         let path = op.path(&[&id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -97,7 +97,7 @@ impl<'a> ContextClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(&body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -113,7 +113,7 @@ impl<'a> ContextClient<'a> {
         let path = op.path(&[&context_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -126,7 +126,7 @@ impl<'a> ContextClient<'a> {
         let path = op.path(&[&context_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -141,7 +141,7 @@ impl<'a> ContextClient<'a> {
         let path = op.path(&[&context_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -156,7 +156,7 @@ impl<'a> ContextClient<'a> {
         let path = op.path(&[&context_id, &team_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -171,7 +171,7 @@ impl<'a> ContextClient<'a> {
         let path = op.path(&[&context_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -189,7 +189,7 @@ impl<'a> ContextClient<'a> {
         let path = op.path(&[&context_id])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 }
@@ -218,7 +218,7 @@ impl ContextClient<'_> {
         let path = context_shape_path(context_id, lens)?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -233,7 +233,7 @@ impl ContextClient<'_> {
         let path = context_region_metrics_path(context_id, lens)?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -253,7 +253,7 @@ impl ContextClient<'_> {
         let path = op.path(&[&context_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -275,7 +275,7 @@ impl ContextClient<'_> {
         let path = context_materialize_delta_path(context_id, threshold)?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -293,7 +293,7 @@ impl ContextClient<'_> {
         let body = MaterializeRequest { threshold };
         let req = self.http.request(op, &path).json(&body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 }

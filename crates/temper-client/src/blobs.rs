@@ -66,7 +66,7 @@ impl<'a> BlobClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).multipart(form);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -78,7 +78,9 @@ impl<'a> BlobClient<'a> {
         let op = &ops::GET_BLOB;
         let path = op.path(&[&blob_id])?;
         let req = self.http.request(op, &path);
-        self.http.send(&op.method(), &path, req, Some(&token)).await
+        self.http
+            .send(&op.method(), &path, req, token.as_deref())
+            .await
     }
 
     /// POST /api/blobs/uploads — begin a segmented upload (declare home + media type).
@@ -88,7 +90,7 @@ impl<'a> BlobClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -107,7 +109,7 @@ impl<'a> BlobClient<'a> {
         let path = format!("{}?seq={seq}", op.path(&[&upload_id])?);
         let req = self.http.request(op, &path).body(bytes);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -118,7 +120,7 @@ impl<'a> BlobClient<'a> {
         let path = op.path(&[&upload_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -135,7 +137,7 @@ impl<'a> BlobClient<'a> {
         let path = op.path(&[&upload_id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -150,7 +152,7 @@ impl<'a> BlobClient<'a> {
         }
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -165,7 +167,7 @@ impl<'a> BlobClient<'a> {
         let path = op.path(&[&blob_id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -178,7 +180,7 @@ impl<'a> BlobClient<'a> {
         let path = op.path(&[&blob_id])?;
         let req = self.http.request(op, &path).query(act);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -189,7 +191,7 @@ impl<'a> BlobClient<'a> {
         let path = op.path(&[&blob_id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 }

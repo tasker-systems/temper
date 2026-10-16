@@ -43,6 +43,19 @@ pub enum ClientError {
     #[error("not authenticated — run `temper auth login`")]
     UnauthorizedDetails { message: String },
 
+    /// A `401` to a client whose credential is held outside the process (`TEMPER_AUTH=ambient`).
+    ///
+    /// Distinct from [`Self::NotAuthenticated`] because the remedy is: logging in writes a disk
+    /// grant this mode never reads, so "run `temper auth login`" would send the caller the wrong
+    /// way. The fix lives in whatever attaches the credential in transit. `message` is the API's
+    /// envelope message when it sent one.
+    #[error(
+        "the credential attached outside this process was refused (TEMPER_AUTH=ambient) — check \
+         the secret this environment attaches for the temper API host{}",
+        .message.as_deref().map(|m| format!(": {m}")).unwrap_or_default()
+    )]
+    AmbientRefused { message: Option<String> },
+
     #[error("token expired")]
     TokenExpired,
 

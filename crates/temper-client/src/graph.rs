@@ -85,7 +85,7 @@ impl<'a> GraphClient<'a> {
         let path = entry_path(anchors, k)?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -99,7 +99,7 @@ impl<'a> GraphClient<'a> {
         let path = traverse_path(seeds, depth)?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -111,7 +111,7 @@ impl<'a> GraphClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -160,7 +160,7 @@ impl<'a> GraphClient<'a> {
         let path = op.path(&[&cogmap_id])?;
         let req = self.http.request(op, &path).json(request);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -179,7 +179,7 @@ impl<'a> GraphClient<'a> {
         let path = op.path(args)?;
         let req = self.http.request(op, &path).query(query);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 }

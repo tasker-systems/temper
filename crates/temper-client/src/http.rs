@@ -181,6 +181,11 @@ pub struct HttpClient {
     surface: Surface,
     token_override: Option<String>,
     token_store: Option<Arc<dyn TokenStore>>,
+    /// The credential is held outside this process and attached in transit
+    /// (`TEMPER_AUTH=ambient`; see [`crate::auth::AmbientAuth`]). With no placeholder in
+    /// `token_override`, requests go out with no `Authorization` header, and a `401` is
+    /// rewritten to [`ClientError::AmbientRefused`] — its remedy is not `temper auth login`.
+    ambient: bool,
     /// Constructor-level default headers, appended to every request this client
     /// sends — applied in `apply_identity_headers`, so they ride the retry loop's
     /// `try_clone` in one place rather than per attempt. The relay's service
@@ -219,6 +224,7 @@ impl fmt::Debug for HttpClient {
             .field("surface", &self.surface)
             .field("has_token_override", &self.token_override.is_some())
             .field("has_token_store", &self.token_store.is_some())
+            .field("ambient", &self.ambient)
             .field("default_headers", &self.default_headers.len())
             .field("non_idempotent_attempts", &self.non_idempotent_attempts)
             .finish()
@@ -306,6 +312,7 @@ impl HttpClient {
             surface,
             token_override: None,
             token_store,
+            ambient: false,
             default_headers: reqwest::header::HeaderMap::new(),
             non_idempotent_attempts: 1,
         })
@@ -342,6 +349,7 @@ impl HttpClient {
             surface,
             token_override: None,
             token_store,
+            ambient: false,
             default_headers: reqwest::header::HeaderMap::new(),
             non_idempotent_attempts: 1,
         })
@@ -383,6 +391,27 @@ impl HttpClient {
         })
     }
 
+    /// Construct an `HttpClient` whose credential is held outside this process — see
+    /// [`crate::auth::AmbientAuth`]. Requests carry the placeholder bearer when one is set,
+    /// otherwise no `Authorization` header; there is no store, so nothing is ever loaded,
+    /// refreshed or written.
+    pub fn ambient(
+        base_url: &str,
+        surface: Surface,
+        auth: &crate::auth::AmbientAuth,
+    ) -> Result<Self> {
+        Ok(Self {
+            token_override: auth.placeholder().map(|p| p.expose_secret().to_owned()),
+            ambient: true,
+            ..Self::new(base_url, auth.device_id().map(str::to_owned), surface, None)?
+        })
+    }
+
+    /// Whether this client's credential is held outside the process.
+    pub fn is_ambient(&self) -> bool {
+        self.ambient
+    }
+
     /// Attach constructor-level default headers — appended to every request this
     /// client sends, both transports, riding retries in one place (see the field's
     /// doc). Consuming-builder style over an already-constructed client, so the
@@ -420,16 +449,21 @@ impl HttpClient {
         self
     }
 
-    /// Return the token to use for authenticated requests.
+    /// Return the bearer to put on an authenticated request.
     ///
-    /// Returns the token override if one was set at construction time;
-    /// otherwise calls [`TokenStore::load`] on the configured store and
-    /// returns the stored access token (or `TokenExpired` / `NotAuthenticated`
-    /// as appropriate). Returns `NotAuthenticated` when neither an override
-    /// nor a store is configured.
-    pub fn resolve_token(&self) -> Result<String> {
+    /// Returns the token override if one was set at construction time; `None` for an
+    /// ambient client without a placeholder — the request goes out with no
+    /// `Authorization` header and the credential is attached in transit; otherwise calls
+    /// [`TokenStore::load`] on the configured store and returns the stored access token
+    /// (or `TokenExpired` / `NotAuthenticated` as appropriate). Returns `NotAuthenticated`
+    /// when there is no override, no store, and the client is not ambient: `None` means
+    /// "attached elsewhere", never "missing".
+    pub fn resolve_token(&self) -> Result<Option<String>> {
         if let Some(tok) = &self.token_override {
-            return Ok(tok.clone());
+            return Ok(Some(tok.clone()));
+        }
+        if self.ambient {
+            return Ok(None);
         }
         let store = self
             .token_store
@@ -439,7 +473,7 @@ impl HttpClient {
         if auth.is_expired() {
             return Err(ClientError::TokenExpired);
         }
-        Ok(auth.access_token.expose_secret().to_string())
+        Ok(Some(auth.access_token.expose_secret().to_string()))
     }
 
     fn url(&self, path: &str) -> String {
@@ -725,11 +759,29 @@ async fn send_attempt(
     req: RequestBuilder,
     admitted: Option<StatusCode>,
 ) -> Result<Response> {
-    match &client.transport {
+    let result = match &client.transport {
         Transport::Http { .. } => send_once(req, admitted).await,
         Transport::InProcess(router) => {
             send_in_process(router, client.surface, req, admitted).await
         }
+    };
+    if client.ambient {
+        result.map_err(ambient_refusal)
+    } else {
+        result
+    }
+}
+
+/// Rewrite a `401` for an ambient client: the credential was attached outside this process,
+/// so the stock "run `temper auth login`" names a remedy that cannot help. Every other error
+/// passes through unchanged.
+fn ambient_refusal(err: ClientError) -> ClientError {
+    match err {
+        ClientError::NotAuthenticated => ClientError::AmbientRefused { message: None },
+        ClientError::UnauthorizedDetails { message } => ClientError::AmbientRefused {
+            message: Some(message),
+        },
+        other => other,
     }
 }
 
@@ -1345,7 +1397,7 @@ mod tests {
         .expect("https validates");
         let result = client.resolve_token();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), token);
+        assert_eq!(result.unwrap(), Some(token));
     }
 
     /// A `PLAN_REFUSED` 400 body, as `ApiError::PlanRefused` renders it.
@@ -1667,6 +1719,19 @@ mod tests {
         assert!(matches!(err, ClientError::NotAuthenticated));
     }
 
+    /// `None` means "attached in transit", and only an ambient client may say it: the same
+    /// storeless, overrideless shape above is `NotAuthenticated`.
+    #[test]
+    fn resolve_token_is_none_for_an_ambient_client_without_a_placeholder() {
+        let client = HttpClient::ambient(
+            "https://api.example.com",
+            TEST_SURFACE,
+            &crate::auth::AmbientAuth::default(),
+        )
+        .expect("https validates");
+        assert_eq!(client.resolve_token().unwrap(), None);
+    }
+
     fn server_err(status: u16) -> ClientError {
         ClientError::Server {
             status,
@@ -1825,7 +1890,10 @@ mod tests {
             Some(Arc::new(store)),
         )
         .expect("https validates");
-        assert_eq!(client.resolve_token().unwrap(), "at_from_store");
+        assert_eq!(
+            client.resolve_token().unwrap().as_deref(),
+            Some("at_from_store")
+        );
     }
 
     // --- the in-process door: one send attempt, driven through a router, no socket ---

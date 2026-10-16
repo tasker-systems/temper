@@ -32,7 +32,7 @@ impl<'a> SubscriptionsClient<'a> {
         let path = op.path(&[])?;
         let req = self.http.request(op, &path).json(body);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -50,7 +50,7 @@ impl<'a> SubscriptionsClient<'a> {
         }
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -61,7 +61,7 @@ impl<'a> SubscriptionsClient<'a> {
         let path = op.path(&[&id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 
@@ -73,7 +73,7 @@ impl<'a> SubscriptionsClient<'a> {
         let path = op.path(&[&id])?;
         let req = self.http.request(op, &path);
         self.http
-            .send_json(&op.method(), &path, req, Some(&token))
+            .send_json(&op.method(), &path, req, token.as_deref())
             .await
     }
 }

@@ -5,6 +5,9 @@
 //! when omitted). `login`, `logout`, and `token` are inherently disk-mode
 //! operations — they persist credentials to `~/.config/temper/auth.json`.
 //! Cloud sessions receive tokens via `TEMPER_TOKEN` and don't invoke these.
+//! Under `TEMPER_AUTH=ambient` (the credential is held outside the process) all
+//! four refuse: there is no grant here to log in to, store, clear or export, and
+//! a disk grant written anyway would never be read.
 //!
 //! The system access gate lives here (not under `temper team`) because it is an
 //! entitlement concern — "am I let into the system at all?" — not a
@@ -60,8 +63,24 @@ async fn resolve_login_profile(
     carried.map(|id| id.to_string())
 }
 
+/// Refuse a command that manages an in-process grant when the credential is ambient.
+///
+/// `act` completes "there is nothing here to …". A misconfigured ambient contract refuses too
+/// (via [`runtime::ambient_auth`]) rather than letting the command touch disk.
+fn refuse_when_ambient(command: &str, act: &str) -> Result<()> {
+    if runtime::ambient_auth()?.is_none() {
+        return Ok(());
+    }
+    Err(crate::error::TemperError::Config(format!(
+        "`temper auth {command}` manages a credential held by this process, but \
+         TEMPER_AUTH=ambient says it is held outside the process and attached in transit — \
+         there is nothing here to {act}. Unset TEMPER_AUTH to use a local grant."
+    )))
+}
+
 /// Run the OAuth2 PKCE login flow, persist the token, and print auth status.
 pub fn login(fmt: OutputFormat) -> Result<()> {
+    refuse_when_ambient("login", "log in to")?;
     runtime::with_client(move |client| {
         Box::pin(async move {
             let stored = client
@@ -85,6 +104,7 @@ pub fn login(fmt: OutputFormat) -> Result<()> {
 
 /// Clear stored credentials and print confirmation.
 pub fn logout(fmt: OutputFormat) -> Result<()> {
+    refuse_when_ambient("logout", "clear")?;
     temper_client::auth::clear_grant(&DiskTokenStore::default_path())
         .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
     let action = AuthAction {
@@ -110,6 +130,7 @@ pub fn logout(fmt: OutputFormat) -> Result<()> {
 /// Writes to disk unconditionally — cloud sessions receive tokens via
 /// `TEMPER_TOKEN` and don't invoke this command.
 pub fn token(provider: &str, fmt: OutputFormat) -> Result<()> {
+    refuse_when_ambient("token", "store")?;
     let stdin_content = crate::vault::read_stdin_if_piped();
     if stdin_content.is_none() && std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         return Err(crate::error::TemperError::Config(
@@ -176,6 +197,7 @@ fn token_from_stdin(stdin_content: Option<&str>, provider: &str, fmt: OutputForm
 /// `DiskTokenStore`; a cloud-mode invocation would have nothing to export
 /// (cloud sessions receive their token via `TEMPER_TOKEN`).
 pub fn export_token() -> Result<()> {
+    refuse_when_ambient("export-token", "export")?;
     // `export-token` reads from the on-disk `DiskTokenStore` grant. A
     // cloud agent session (`TEMPER_TOKEN` set) has no disk grant to
     // export — refuse with a directive to run this on the laptop.
@@ -345,7 +367,13 @@ async fn resolve_access(client: &TemperClient) -> (Option<Identity>, SystemAcces
                 (AccessQuery::Unreachable, Some(err.to_string()))
             } else {
                 match &err {
-                    ClientError::NotAuthenticated | ClientError::TokenExpired => {
+                    // Every 401 shape: the stock one, the one carrying the API's envelope, and
+                    // the ambient rewrite. An enveloped 401 classified as `error` would report a
+                    // refused credential as a server fault.
+                    ClientError::NotAuthenticated
+                    | ClientError::TokenExpired
+                    | ClientError::UnauthorizedDetails { .. }
+                    | ClientError::AmbientRefused { .. } => {
                         (AccessQuery::Unauthenticated, Some(err.to_string()))
                     }
                     _ => (AccessQuery::Error, Some(err.to_string())),
@@ -370,6 +398,10 @@ async fn resolve_access(client: &TemperClient) -> (Option<Identity>, SystemAcces
 struct AuthStatusReport {
     #[serde(flatten)]
     auth: AuthStatus,
+    /// `"ambient"` when the credential is held outside the process (`TEMPER_AUTH=ambient`);
+    /// absent otherwise, so the default shape is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credential: Option<&'static str>,
     /// Absent when not logged in, or when the server could not be asked.
     #[serde(skip_serializing_if = "Option::is_none")]
     identity: Option<Identity>,
@@ -408,20 +440,28 @@ fn remedy_for(standing: Standing) -> Option<&'static str> {
 pub fn status(fmt: OutputFormat) -> Result<()> {
     runtime::with_client(move |client| {
         Box::pin(async move {
-            let auth = client
+            let mut auth = client
                 .auth_status()
                 .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
+            let ambient = client.is_ambient();
             // Identity and entitlements both require the server; only consult it when the local
             // credential is usable. An expired token would answer `unauthenticated` on axis 1, but
             // spending a round trip to learn what `authenticated: false` already said is waste.
-            let (identity, system_access) = if auth.authenticated {
+            // An ambient credential has no local state to check, so the round trip IS the check.
+            let (identity, system_access) = if ambient || auth.authenticated {
                 let (id, access) = resolve_access(client).await;
                 (id, Some(access))
             } else {
                 (None, None)
             };
+            if ambient {
+                // Authenticated means the server named us. Unreachable is not authenticated:
+                // nothing here can vouch for a credential the server did not see.
+                auth.authenticated = identity.is_some();
+            }
             let report = AuthStatusReport {
                 auth,
+                credential: ambient.then_some("ambient"),
                 identity,
                 system_access,
             };
@@ -578,6 +618,83 @@ mod tests {
             "updated": "2026-01-01T00:00:00Z"
         })
         .to_string()
+    }
+
+    // FAILS IF: a 401 carrying the API's envelope is reported as a server fault. Under ambient
+    // mode `auth status` derives `authenticated` from this round trip, so the arm matters.
+    #[tokio::test]
+    async fn an_enveloped_401_is_unauthenticated_not_an_error() {
+        let client = client_answering(
+            axum::http::StatusCode::UNAUTHORIZED,
+            r#"{"error":{"code":"UNAUTHORIZED","message":"Missing Authorization header"}}"#
+                .to_string(),
+            std::time::Duration::ZERO,
+        );
+        let (identity, report) = resolve_access(&client).await;
+        assert!(identity.is_none());
+        assert!(
+            matches!(report.query, AccessQuery::Unauthenticated),
+            "got {:?}",
+            report.query
+        );
+    }
+
+    // FAILS IF: an auth subcommand that manages an in-process grant runs under ambient mode.
+    #[test]
+    fn grant_commands_refuse_under_ambient_mode() {
+        temp_env::with_vars(
+            [
+                ("TEMPER_AUTH", Some("ambient")),
+                ("TEMPER_TOKEN", None::<&str>),
+                ("TEMPER_AMBIENT_TOKEN", None),
+            ],
+            || {
+                for result in [
+                    login(OutputFormat::Json),
+                    logout(OutputFormat::Json),
+                    export_token(),
+                ] {
+                    let err = result.expect_err("refused under ambient");
+                    let msg = err.to_string();
+                    assert!(msg.contains("TEMPER_AUTH=ambient"), "{msg}");
+                }
+                let err = refuse_when_ambient("token", "store").expect_err("refused");
+                assert!(err.to_string().contains("nothing here to store"), "{err}");
+            },
+        );
+    }
+
+    #[test]
+    fn grant_commands_are_not_refused_by_default() {
+        temp_env::with_vars(
+            [
+                ("TEMPER_AUTH", None::<&str>),
+                ("TEMPER_AMBIENT_TOKEN", None),
+            ],
+            || refuse_when_ambient("login", "log in to").expect("default custody"),
+        );
+    }
+
+    #[test]
+    fn the_ambient_credential_is_named_in_the_status_payload() {
+        let report = AuthStatusReport {
+            auth: make_auth_status(false),
+            credential: Some("ambient"),
+            identity: None,
+            system_access: None,
+        };
+        let out = crate::format::render(&report, OutputFormat::Json).expect("json render");
+        assert!(out.contains("\"credential\": \"ambient\""), "json: {out}");
+
+        let default = AuthStatusReport {
+            credential: None,
+            ..report
+        };
+        let out = crate::format::render(&default, OutputFormat::Json).expect("json render");
+        assert!(
+            !out.contains("credential"),
+            "default shape unchanged: {out}"
+        );
     }
 
     // FAILS IF: login prints the credential's own id (always absent under Auth0) when the server
