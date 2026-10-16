@@ -284,12 +284,24 @@ current_gates() {
 # commands/team.rs's five doc comments (same wording), types/invitation.rs's
 # `CreateInvitationRequest` doc, and invitation_service.rs's module and `create_invitation` docs.
 # Each states what the authority enforces; no over-claim.
+# REVIEWED 2026-10-15 (team-role rank, PR C fix round) — `team_membership` eb1d91e766fa ->
+# 83575cc25479: `authorize_invitation`'s conferral refusal moved from the 403 `ABOVE_YOUR_OWN_ROLE`
+# to a 400 `OFFER_ABOVE_YOUR_OWN_ROLE` ("an invitation can offer a role up to your own on this
+# team; only a system admin can offer more"), keeping the documented 400 the route always had (the
+# plan's pin: a maintainer inviting at `owner` is refused in the class it was refused in). The
+# claim's wording was re-read against the gate: it states the conferral cap the gate enforces, and
+# names the admin exemption it carries. handlers/invitations.rs now carries two claims: the 400
+# description (the cap, same wording as the constant) and the 403 (does not manage the team, or
+# the gating rule). Each holds.
+# REVIEWED 2026-10-15 (team-role rank, PR C fix round, fmt only) — `team_membership`
+# 83575cc25479 -> 23d8140fce5d: `cargo fmt` rewrapped the new `BadRequest(OFFER_ABOVE_YOUR_OWN_ROLE)`
+# return in `authorize_invitation`. Formatting only; no decision moved.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
 claim crates/temper-api/src/handlers/admin_ledger.rs 2 is_system_admin,read_gates,grant,ledger_subject,team_membership
 claim crates/temper-api/src/handlers/block_history_scrub.rs 5 is_system_admin
-claim crates/temper-api/src/handlers/invitations.rs 1 team_membership
+claim crates/temper-api/src/handlers/invitations.rs 2 team_membership
 claim crates/temper-api/src/handlers/reblock.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/cognitive_maps.rs 4 reconcile_regime,two_sided
 claim crates/temper-api/src/handlers/connections.rs 13 connection,machine,require_manage_on_team,can_manage
@@ -354,7 +366,7 @@ gate two_sided 7822960e4ffa
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership eb1d91e766fa
+gate team_membership 23d8140fce5d
 EOF
 
 CURRENT="$(current_claims; current_gates)"

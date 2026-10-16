@@ -136,10 +136,12 @@ impl ResolvedMembership {
             MembershipAct::Add { role },
             ProfileId::from(Uuid::nil()),
         )?;
-        // Check 6 (conferral) — the half of `decide` that needs only the caller's own rank.
+        // Check 6 (conferral) — the half of `decide` that needs only the caller's own rank. A
+        // `BadRequest`, like the owner refusal this gate replaces (C16): the offer names a role
+        // this caller cannot confer here.
         if let Some(own) = own {
             if role.rank() > own.rank() {
-                return Err(ApiError::ForbiddenDetail(ABOVE_YOUR_OWN_ROLE.to_string()));
+                return Err(ApiError::BadRequest(OFFER_ABOVE_YOUR_OWN_ROLE.to_string()));
             }
         }
         Ok(())
@@ -254,6 +256,10 @@ pub(crate) const MACHINE_ROLE_CEILING: &str =
 /// The refusal for granting a role above your own (C1).
 pub(crate) const ABOVE_YOUR_OWN_ROLE: &str =
     "you can grant a role up to your own on this team; only a system admin can grant more";
+/// The refusal for offering a role above the inviter's own (C16, R10). A `BadRequest`, like the
+/// owner refusal it replaces: the requested role is not grantable by this caller on this team.
+pub(crate) const OFFER_ABOVE_YOUR_OWN_ROLE: &str =
+    "an invitation can offer a role up to your own on this team; only a system admin can offer more";
 /// The refusal for acting on an owner other than yourself (C2, R6).
 pub(crate) const ANOTHER_OWNER: &str = "only a system admin can change or remove an owner other \
      than yourself; an owner hands a team over by granting `owner`, then lowering their own role";

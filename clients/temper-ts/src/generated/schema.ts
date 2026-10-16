@@ -20768,6 +20768,13 @@ export interface operations {
                     "application/json": components["schemas"]["TeamInvitation"];
                 };
             };
+            /** @description The offered role outranks the inviter (`OFFER_ABOVE_YOUR_OWN_ROLE`: an invitation can offer a role up to the inviter's own on the team; only a system admin can offer more) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Forbidden (the caller does not manage the team, or the offered role outranks the inviter; on the gating team only a system admin invites); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {

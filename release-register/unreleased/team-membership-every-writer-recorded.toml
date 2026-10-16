@@ -5,10 +5,12 @@ surfaces = ["http", "clients", "cli-stdout"]
 status   = "signal-only"
 body = '''
 `create_team`'s creator row is now a recorded `team_genesis` act. Invitations follow the rank
-rule: an owner can invite at `owner` (previously refused with a 400 pointing at an "ownership
-transfer" that never existed), a maintainer up to `maintainer`, and on the gating team only a
-system admin invites; any manager of the team — or a system admin who is not a member — can see
-and revoke any pending invitation, an owner-level one included. An accepted invitation joins the
+rule: an owner can invite at `owner` (previously refused outright), a maintainer up to
+`maintainer`, and on the gating team only a system admin invites. The route's 400 stays the cap's
+refusal, with its wording moved from "ownership is transferred, not invited" to the rank cap ("an
+invitation can offer a role up to your own on this team"); a caller who does not manage the team
+gets a plain 403, and a system admin who is not a member can now invite, see and revoke any
+pending invitation, an owner-level one included. An accepted invitation joins the
 invitee under the team lock and is recorded as a `team_membership_changed` event with `via =
 invitation` naming the inviter; the response reports the member's actual role, so a profile
 already on the team is told their own rank rather than the one offered. `POST

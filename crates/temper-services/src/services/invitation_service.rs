@@ -937,7 +937,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, ApiError::ForbiddenDetail(_)), "got {err:?}");
+        assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
         let pending: i64 =
             sqlx::query_scalar("SELECT count(*) FROM kb_team_invitations WHERE team_id = $1")
                 .bind(team_id)
