@@ -15,29 +15,32 @@
 //! - `invitation_read` — `mine` (your own pending invitations, tokens included), `count` (how
 //!   many, with no token crossing the wire), `team` (a team's pending invitations, for its
 //!   owners and maintainers).
-//! - `invitation_manage` — `decline` (yours, by token), `create` / `revoke` (a team's, as its
-//!   owner or maintainer).
+//! - `invitation_manage` — `accept` / `decline` (yours, by token), `create` / `revoke` (a team's,
+//!   as its owner or maintainer).
 //!
-//! # Accepting is deliberately not here
+//! # Accepting needs no confirmation step here
 //!
-//! Joining a team is the act a stranger most wants an invitee's agent to perform (see "Team text
-//! is untrusted" below), and the only boundary that would stop an injected `accept` is the
-//! server asking the user directly. Over this server's stateless transport that means a
-//! protocol-`2026-07-28` input-required round trip, and as of 2026-10 the major clients cannot be
-//! relied on to render one: claude.ai surfaces it as a tool error and never retries
-//! (anthropics/claude-ai-mcp#1027), and Claude Desktop/Cowork drops it and hangs the call
-//! (anthropics/claude-ai-mcp#1046). So accepting stays a human act on another surface
-//! (`temper team join <token>`); MCP finds invitations and can decline one, which an injected
-//! call can only make a nuisance of (the inviter can invite again). Add `accept` back once the
-//! clients that matter handle the confirmation.
+//! Joining a team over MCP is the same act as `temper team join <token>`: both reach the same
+//! route on the caller's own bearer, and an agent in a local session runs the CLI as readily as it
+//! calls this tool. A confirmation gate on this door alone would add friction without making
+//! anything safer across the surfaces that exist (ruled 2026-10-16, reversing the 2026-10-15 call
+//! that kept `accept` off MCP). The human check on an agent's write is the client's approval of
+//! the call, which the tool's annotations (`readOnlyHint: false`) let a client apply; this tool's
+//! part is to say plainly what the call did — which team, at what role, on whose invitation — so
+//! a join the user did not mean is visible and undone with `team_manage` action `leave` (once the
+//! user's access is approved: leaving rides the gated router, accepting does not).
+//!
+//! `role` in the answer is what the API returns, which today is the invitation's role even when
+//! the caller was already on the team (the insert is a no-op and their real role is unchanged).
+//! Role-rank PR C, task C2, makes the API return the role actually held.
 //!
 //! # Authorization is the API's
 //!
 //! Every act forwards to its `/api/invitations` or `/api/teams/{id}/invit…` route on the
-//! caller's own bearer; this module adds no gate of its own. `mine`, `count` and `decline` sit
-//! on the API's un-gated router, so a principal whose access is not yet approved (every new
-//! account starts unapproved) can still see invitations and decline one, exactly as through the
-//! CLI. Joining a team, on whatever surface, does not approve that access: `has_system_access` reads the
+//! caller's own bearer; this module adds no gate of its own. `mine`, `count`, `accept` and
+//! `decline` sit on the API's un-gated router, so a principal whose access is not yet approved
+//! (every new account starts unapproved) can still see, accept and decline invitations, exactly
+//! as through the CLI. Joining a team, on whatever surface, does not approve that access: `has_system_access` reads the
 //! principal's standing alone, and team membership (the gating team's included) does not set it.
 //! A machine
 //! principal is refused every one of them at the API (it holds no verified email, so it is
@@ -64,7 +67,7 @@
 //! API does not constrain team slugs, so one can carry prose. A withheld slug reads `null`; the
 //! team is still identified by `team_id`. What survives is short, lowercase and hyphenated,
 //! which narrows the channel without closing it, so the tool descriptions also tell agents to
-//! treat the slug as data and to decline only when the user asks.
+//! treat the slug as data and to accept or decline only when the user asks.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
@@ -135,6 +138,17 @@ struct DeclineAck {
     pending: bool,
 }
 
+/// What `accept` answers: the team joined, at what role, and — when the invitation was found in
+/// the caller's pending list first — who sent it. `team_slug` is guarded as `mine` guards it.
+#[derive(Debug, serde::Serialize)]
+struct AcceptAck {
+    joined: bool,
+    team_id: Uuid,
+    team_slug: Option<String>,
+    role: TeamRole,
+    invited_by_profile_id: Option<Uuid>,
+}
+
 /// What `revoke` answers: the API refuses anything but a pending invitation of this team, so a
 /// success means this one was withdrawn.
 #[derive(Debug, serde::Serialize)]
@@ -201,7 +215,7 @@ const TEAM_STEWARD_REQUIREMENT: &str = "you manage the team (owner or maintainer
 /// (a duplicate pending invite; an invitation already redeemed by someone else) and `400`
 /// (expired, declined, revoked, an uninvitable role) — become invalid-params or invalid-request
 /// carrying the server's own sentence. Everything else is the tool's internal fault voice.
-fn map_invitation_err(act: &str, err: ClientError) -> rmcp::ErrorData {
+pub(crate) fn map_invitation_err(act: &str, err: ClientError) -> rmcp::ErrorData {
     match err {
         ClientError::Forbidden => rmcp::ErrorData::invalid_params(
             format!("{act} requires that {TEAM_STEWARD_REQUIREMENT}"),
@@ -228,7 +242,7 @@ fn map_invitation_err(act: &str, err: ClientError) -> rmcp::ErrorData {
 /// decorated `slug-<uuid>` ref carries the id itself; a bare slug (`+`-prefixed or not) is
 /// matched against the teams the caller is a member of. A team the caller does not belong to
 /// can only be named by its UUID.
-async fn resolve_team(
+pub(crate) async fn resolve_team(
     client: &TemperClient,
     act: &str,
     team: &str,
@@ -382,6 +396,8 @@ impl From<InvitationRole> for TeamRole {
 #[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum InvitationManageAction {
+    /// Accept an invitation addressed to you, joining its team at its role.
+    Accept,
     /// Decline an invitation addressed to you.
     Decline,
     /// Invite an email address to a team (owner or maintainer).
@@ -396,7 +412,7 @@ pub struct InvitationManageInput {
     /// Which invitation action to perform.
     pub action: InvitationManageAction,
     /// The invitation's redemption token, from `invitation_read` view `mine`. Required for
-    /// `decline`. Only the account whose verified email the invitation names can use it.
+    /// `accept` and `decline`. Only the account whose verified email the invitation names can use it.
     #[serde(default)]
     pub token: Option<String>,
     /// The team, as a slug (`+`-prefix optional), a decorated `slug-<uuid>` ref, or a UUID.
@@ -423,6 +439,34 @@ pub async fn invitation_manage(
     input: InvitationManageInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.action {
+        InvitationManageAction::Accept => {
+            const ACT: &str = "invitation_manage accept";
+            let token = required(input.token, ACT, "token")?;
+            let client = svc.relay_client(parts)?;
+            // Read the pending list first so the answer can name the inviter. A token not found
+            // there is still sent: the API's own refusal (unknown, expired, someone else's) is
+            // the truthful answer, not a guess made here.
+            let invited_by_profile_id = client
+                .teams()
+                .list_my_invitations()
+                .await
+                .across_auth(|e| map_invitation_err(ACT, e))?
+                .into_iter()
+                .find(|inv| inv.token == token)
+                .map(|inv| inv.invited_by_profile_id);
+            let joined = client
+                .teams()
+                .accept_invitation(&token)
+                .await
+                .across_auth(|e| map_invitation_err(ACT, e))?;
+            Ok(text_result(to_text(&AcceptAck {
+                joined: true,
+                team_id: joined.team_id,
+                team_slug: plain_slug(&joined.team_slug).then_some(joined.team_slug),
+                role: joined.role,
+                invited_by_profile_id,
+            })))
+        }
         InvitationManageAction::Decline => {
             const ACT: &str = "invitation_manage decline";
             let token = required(input.token, ACT, "token")?;
@@ -537,14 +581,16 @@ mod tests {
         }
     }
 
-    /// `accept` is not an action this tool offers: an agent cannot join a team through it.
+    /// `accept` is an action again (ruled 2026-10-16), taking the token like `decline`.
     #[test]
-    fn accept_is_not_an_action() {
-        let refused = serde_json::from_value::<InvitationManageInput>(serde_json::json!({
+    fn manage_input_deserializes_accept() {
+        let input = serde_json::from_value::<InvitationManageInput>(serde_json::json!({
             "action": "accept",
             "token": "abc",
-        }));
-        assert!(refused.is_err(), "accept must not deserialize");
+        }))
+        .expect("accept deserializes");
+        assert!(matches!(input.action, InvitationManageAction::Accept));
+        assert_eq!(input.token.as_deref(), Some("abc"));
     }
 
     /// Plain slugs pass; anything that could carry prose is withheld from the invitee's agent.

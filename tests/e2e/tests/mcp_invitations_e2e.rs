@@ -1,19 +1,17 @@
 #![cfg(feature = "test-db")]
-//! Team invitations through MCP: `invitation_read` and `invitation_manage`, end to end.
+//! Team invitations and leaving a team through MCP: `invitation_read`, `invitation_manage` and
+//! `team_manage`, end to end.
 //!
 //! Both tools relay to the existing invitation routes on the caller's own bearer, so what is owed
 //! here is the loop as an MCP-only principal walks it: a team's owner invites by email and reviews
-//! the team's pending invitations, the invitee counts and lists their own and declines, and the
-//! refusals reach the agent in the caller's own voice rather than as internal faults.
-//!
-//! Accepting is not an MCP act (see the `invitations` module doc): the invitee accepts off MCP,
-//! here through `temper_client` as `temper team join` does, and the MCP side is witnessed finding
-//! the invitation before and seeing nothing waiting after.
+//! the team's pending invitations, the invitee counts and lists their own and accepts or declines,
+//! a member leaves, and the refusals reach the agent in the caller's own voice rather than as
+//! internal faults.
 //!
 //! Three principals: the harness principal (owner of the team), the second user (the invitee,
-//! `second@test.example.com`, never approved — `mine`, `count` and `decline` sit on the un-gated
-//! router, which is the point), and the third user (an approved plain `member`, who may neither
-//! invite nor act on someone else's invitation).
+//! `second@test.example.com`, never approved — `mine`, `count`, `accept` and `decline` sit on the
+//! un-gated router, which is the point), and the third user (an approved plain `member`, who may
+//! neither invite nor act on someone else's invitation).
 
 mod common;
 
@@ -26,6 +24,7 @@ use uuid::Uuid;
 use temper_core::types::team::{AddMemberRequest, TeamCreateRequest, TeamRole};
 use temper_mcp::service::TemperMcpService;
 use temper_mcp::tools::invitations::{invitation_manage, invitation_read, InvitationManageInput};
+use temper_mcp::tools::teams::team_manage;
 
 const TEAM_SLUG: &str = "mcp-invite-team";
 const INVITEE_EMAIL: &str = "second@test.example.com";
@@ -65,7 +64,7 @@ struct World {
     owner: axum::http::request::Parts,
     invitee: axum::http::request::Parts,
     member: axum::http::request::Parts,
-    invitee_token: String,
+    owner_id: Uuid,
     invitee_id: Uuid,
     team: Uuid,
 }
@@ -77,7 +76,7 @@ async fn world(pool: sqlx::PgPool) -> World {
     let svc = app.mcp_relay_service().await;
 
     let owner_token = app.token.clone();
-    provision(&app, &owner_token).await;
+    let owner_id = provision(&app, &owner_token).await;
     let invitee_token = common::generate_second_user_jwt();
     let invitee_id = provision(&app, &invitee_token).await;
     let member_token = common::generate_third_user_jwt();
@@ -114,7 +113,7 @@ async fn world(pool: sqlx::PgPool) -> World {
         member: app.relay_parts_for(&member_token),
         app,
         svc,
-        invitee_token,
+        owner_id,
         invitee_id,
         team,
     }
@@ -164,13 +163,13 @@ async fn role_on_team(pool: &sqlx::PgPool, team: Uuid, profile: Uuid) -> Option<
     .expect("membership read")
 }
 
-/// The loop: the owner invites by slug over MCP and sees it in the team's pending list; the
-/// invitee, never approved for system access, counts it without a token and lists it with one
-/// over MCP, then accepts off MCP (as `temper team join` does) — and is a `member` of the team
+/// The whole loop over MCP: the owner invites by slug and sees it in the team's pending list; the
+/// invitee, never approved for system access, counts it without a token, lists it with one, and
+/// accepts — told the team, the role and who invited them — and is a `member` of the team
 /// afterwards, with nothing left waiting, and still without system access: joining a team is not
 /// the access decision.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn an_invitation_made_over_mcp_is_found_there_and_accepted_off_it(pool: sqlx::PgPool) {
+async fn an_invitation_is_created_found_and_accepted_over_mcp(pool: sqlx::PgPool) {
     let w = world(pool).await;
     assert!(
         !has_system_access(&w.app.pool, w.invitee_id).await,
@@ -217,15 +216,25 @@ async fn an_invitation_made_over_mcp_is_found_there_and_accepted_off_it(pool: sq
         "count carries no token"
     );
 
-    let joined = w
-        .app
-        .client_for(&w.invitee_token)
-        .teams()
-        .accept_invitation(&token)
+    let joined = one_json(
+        &invitation_manage(
+            &w.svc,
+            &w.invitee,
+            input(json!({ "action": "accept", "token": token })),
+        )
         .await
-        .expect("the invitee accepts off MCP");
-    assert_eq!(joined.team_slug, TEAM_SLUG);
-    assert_eq!(joined.role, TeamRole::Member);
+        .expect("the invitee accepts over MCP"),
+    );
+    assert_eq!(
+        joined,
+        json!({
+            "joined": true,
+            "team_id": w.team,
+            "team_slug": TEAM_SLUG,
+            "role": "member",
+            "invited_by_profile_id": w.owner_id,
+        })
+    );
     assert_eq!(
         role_on_team(&w.app.pool, w.team, w.invitee_id)
             .await
@@ -235,6 +244,20 @@ async fn an_invitation_made_over_mcp_is_found_there_and_accepted_off_it(pool: sq
 
     let after = read(&w, &w.invitee, json!({ "view": "count" })).await;
     assert_eq!(after, json!({ "count": 0, "matching": null }));
+
+    // Accepting again is idempotent at the API (the caller is already on the team). The token is
+    // spent, so it is no longer in `mine` and the answer names no inviter.
+    let again = one_json(
+        &invitation_manage(
+            &w.svc,
+            &w.invitee,
+            input(json!({ "action": "accept", "token": token })),
+        )
+        .await
+        .expect("a re-accept answers"),
+    );
+    assert_eq!(again["team_id"], json!(w.team), "{again}");
+    assert_eq!(again["invited_by_profile_id"], Value::Null, "{again}");
     assert!(
         !has_system_access(&w.app.pool, w.invitee_id).await,
         "accepting an invitation does not grant system access"
@@ -287,8 +310,8 @@ async fn decline_and_revoke_each_withdraw_an_invitation(pool: sqlx::PgPool) {
 
 /// The refusals an agent meets, each in the caller's own voice and none an internal fault:
 /// a plain member may neither invite nor list the team's invitations (the steward gate, named),
-/// may not decline an invitation addressed to someone else (the server's sentence), and an unknown
-/// token is the server's not-found sentence.
+/// may neither accept nor decline an invitation addressed to someone else (the server's sentence),
+/// and an unknown token is the server's not-found sentence on either act.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_member_is_refused_stewardship_and_someone_elses_invitation(pool: sqlx::PgPool) {
     let w = world(pool).await;
@@ -324,28 +347,42 @@ async fn a_member_is_refused_stewardship_and_someone_elses_invitation(pool: sqlx
 
     let mine = read(&w, &w.invitee, json!({ "view": "mine" })).await;
     let token = mine[0]["token"].as_str().unwrap().to_owned();
-    let stolen = invitation_manage(
-        &w.svc,
-        &w.member,
-        input(json!({ "action": "decline", "token": token })),
-    )
-    .await
-    .expect_err("someone else's invitation does not decline");
-    assert_eq!(stolen.code, ErrorCode::INVALID_REQUEST, "{stolen:?}");
-    assert!(
-        stolen.message.contains("addressed to someone else"),
-        "{stolen:?}"
-    );
+    for action in ["accept", "decline"] {
+        let stolen = invitation_manage(
+            &w.svc,
+            &w.member,
+            input(json!({ "action": action, "token": token })),
+        )
+        .await
+        .expect_err("someone else's invitation is not the member's to use");
+        assert_eq!(
+            stolen.code,
+            ErrorCode::INVALID_REQUEST,
+            "{action}: {stolen:?}"
+        );
+        assert!(
+            stolen.message.contains("addressed to someone else"),
+            "{action}: {stolen:?}"
+        );
 
-    let unknown = invitation_manage(
-        &w.svc,
-        &w.invitee,
-        input(json!({ "action": "decline", "token": "0".repeat(32) })),
-    )
-    .await
-    .expect_err("an unknown token does not decline");
-    assert_eq!(unknown.code, ErrorCode::INVALID_PARAMS, "{unknown:?}");
-    assert!(unknown.message.contains("not found"), "{unknown:?}");
+        let unknown = invitation_manage(
+            &w.svc,
+            &w.invitee,
+            input(json!({ "action": action, "token": "0".repeat(32) })),
+        )
+        .await
+        .expect_err("an unknown token does nothing");
+        assert_eq!(
+            unknown.code,
+            ErrorCode::INVALID_PARAMS,
+            "{action}: {unknown:?}"
+        );
+        assert!(
+            unknown.message.contains("not found"),
+            "{action}: {unknown:?}"
+        );
+    }
+    assert_eq!(role_on_team(&w.app.pool, w.team, w.invitee_id).await, None);
 }
 
 /// A machine principal neither answers nor issues invitations: it holds no verified email, so it is
@@ -376,6 +413,7 @@ async fn a_machine_is_refused_every_invitation_act(pool: sqlx::PgPool) {
     }
 
     let writes = [
+        json!({ "action": "accept", "token": "0".repeat(32) }),
         json!({ "action": "decline", "token": "0".repeat(32) }),
         json!({
             "action": "create",
@@ -392,6 +430,16 @@ async fn a_machine_is_refused_every_invitation_act(pool: sqlx::PgPool) {
         assert_eq!(err.code, ErrorCode::INVALID_REQUEST, "{args}: {err:?}");
         assert!(err.message.ends_with(refusal), "{args}: {err:?}");
     }
+
+    let err = team_manage(
+        &svc,
+        &parts,
+        input(json!({ "action": "leave", "team": m.team })),
+    )
+    .await
+    .expect_err("a machine does not leave a team over MCP");
+    assert_eq!(err.code, ErrorCode::INVALID_REQUEST, "leave: {err:?}");
+    assert!(err.message.ends_with(refusal), "leave: {err:?}");
 
     let invitations: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_team_invitations")
         .fetch_one(&app.pool)
@@ -524,4 +572,95 @@ async fn mine_withholds_a_slug_that_is_not_plain(pool: sqlx::PgPool) {
     let shown = mine.to_string();
     assert!(!shown.contains("Ignore prior"), "{shown}");
     assert!(!shown.contains("SYSTEM:"), "{shown}");
+}
+
+/// Leaving over MCP is `temper team leave`: the caller is off the team and told what they still
+/// own under it. The API keeps the cases a re-invite cannot undo: the team's last owner is refused
+/// in the server's sentence. Leaving rides the gated router, so an invitee who joined before their
+/// access was approved is refused in the system-access sentence until it is, never as an internal
+/// fault; once approved, they leave, and a second leave of the same team is the caller's own
+/// error.
+///
+/// FAILS IF `leave` stops forwarding the caller's own id, loses `residual_owned`, or a refusal
+/// arrives as an internal fault.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_member_leaves_over_mcp_and_the_last_owner_cannot(pool: sqlx::PgPool) {
+    let w = world(pool).await;
+    invite(&w).await;
+    let mine = read(&w, &w.invitee, json!({ "view": "mine" })).await;
+    let token = mine[0]["token"].as_str().unwrap().to_owned();
+    invitation_manage(
+        &w.svc,
+        &w.invitee,
+        input(json!({ "action": "accept", "token": token })),
+    )
+    .await
+    .expect("the invitee joins");
+
+    let unapproved = team_manage(
+        &w.svc,
+        &w.invitee,
+        input(json!({ "action": "leave", "team": w.team })),
+    )
+    .await
+    .expect_err("an unapproved member cannot leave yet");
+    assert_eq!(
+        unapproved.code,
+        ErrorCode::INVALID_REQUEST,
+        "{unapproved:?}"
+    );
+    assert!(
+        unapproved.message.contains("requires approval"),
+        "the system-access sentence: {unapproved:?}"
+    );
+    assert_eq!(
+        role_on_team(&w.app.pool, w.team, w.invitee_id)
+            .await
+            .as_deref(),
+        Some("member")
+    );
+
+    common::approve(&w.app.pool, w.invitee_id).await;
+    let left = one_json(
+        &team_manage(
+            &w.svc,
+            &w.invitee,
+            input(json!({ "action": "leave", "team": format!("+{TEAM_SLUG}") })),
+        )
+        .await
+        .expect("the member leaves over MCP"),
+    );
+    assert_eq!(left["left"], true, "{left}");
+    assert_eq!(left["team_id"], json!(w.team), "{left}");
+    assert_eq!(left["residual_owned"]["count"], 0, "{left}");
+    assert_eq!(role_on_team(&w.app.pool, w.team, w.invitee_id).await, None);
+
+    let again = team_manage(
+        &w.svc,
+        &w.invitee,
+        input(json!({ "action": "leave", "team": w.team })),
+    )
+    .await
+    .expect_err("a team you are not on cannot be left");
+    assert_eq!(again.code, ErrorCode::INVALID_PARAMS, "{again:?}");
+    assert!(
+        again.message.contains("only a team you are a member of"),
+        "the bare-403 arm: {again:?}"
+    );
+
+    let last_owner = team_manage(
+        &w.svc,
+        &w.owner,
+        input(json!({ "action": "leave", "team": TEAM_SLUG })),
+    )
+    .await
+    .expect_err("the last owner cannot leave");
+    assert_eq!(last_owner.code, ErrorCode::INVALID_PARAMS, "{last_owner:?}");
+    assert!(last_owner.message.contains("last owner"), "{last_owner:?}");
+    assert_eq!(
+        role_on_team(&w.app.pool, w.team, w.owner_id)
+            .await
+            .as_deref(),
+        Some("owner")
+    );
 }

@@ -200,8 +200,8 @@ Stated rather than left to be discovered, because coverage is never inferred fro
   orientation trio), but the *authoring discipline* — the authored-4 under an invocation envelope,
   provenance, fold-then-recreate supersession, cross-map linking — ships only in the CLI packaging.
   Read from a map freely; before **authoring** into one, say so and ask.
-- **Teams.** Creating teams, roles and offboarding have no guide here. Invitations do: see
-  `invitation_read` / `invitation_manage` in `knowledge-base.md`.
+- **Teams.** Creating teams, roles and offboarding have no guide here. Invitations and leaving
+  a team do: see `invitation_read` / `invitation_manage` / `team_manage` in `knowledge-base.md`.
 - **Project setup.** `/temper init` — fundamentals authoring and the onboarding flow — ships
   only in the CLI packaging; this surface has no slash command, skill directory, or wizard.
 - **Per-cell workflow files.** The CLI packaging carries a file per `mode × effort` cell. They are
