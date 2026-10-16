@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id WHERE t.name = 'team_membership_changed'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "eeae696cb7130fa436222c8b18a432f1df2417f06b09df53fc188dcf8e96ed32"
+}

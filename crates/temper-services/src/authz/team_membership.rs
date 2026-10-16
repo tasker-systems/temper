@@ -244,6 +244,14 @@ pub(crate) struct MembershipTarget {
     is_machine: bool,
 }
 
+impl MembershipTarget {
+    /// Whether the target is a machine principal, as read under the locks. The approval flow's
+    /// machine skip reads this (plan C3): a machine joins no team nobody chose for it.
+    pub(crate) fn is_machine(&self) -> bool {
+        self.is_machine
+    }
+}
+
 /// The refusal for an add over an existing row (#1070), naming the operation that exists.
 pub(crate) const ALREADY_A_MEMBER: &str = "already a member of this team; change their role with \
      `temper team set-role` (PATCH /api/teams/{id}/members/{profile_id})";
@@ -563,6 +571,57 @@ impl AuthorizedMembershipChange {
             new_source: TeamMemberSource::Native,
             actor: Some(invitee),
             invited_by: Some(claimed.invited_by()),
+            guard_last_owner: true,
+        }
+    }
+
+    /// The approval flow's watcher row (plan C3): `access_service::review_request` acting as a
+    /// system admin writes the requester onto the request's team as `watcher`, recorded as
+    /// `access_approval` with the admin as actor. `admin` is the sealed proof, so nothing else
+    /// can call this. No rank decision runs — the admin arm is unrestricted (R3) — and
+    /// idempotency is the writer's: an add over an existing row via `access_approval` is a
+    /// silent `noop`, never the 409 a rank decision would raise.
+    pub(crate) fn from_system_admin(admin: &SystemAdmin, team_id: Uuid, member: ProfileId) -> Self {
+        Self {
+            team_id,
+            profile: member,
+            act: MembershipAct::Add {
+                role: TeamRole::Watcher,
+            },
+            via: MembershipVia::AccessApproval,
+            expected: None,
+            new_source: TeamMemberSource::Native,
+            actor: Some(admin.actor()),
+            invited_by: None,
+            guard_last_owner: true,
+        }
+    }
+
+    /// A machine registration's team reach (plan C3): the registrar's authorized reach lands the
+    /// machine on `target`'s team, recorded as `machine_reach` with the registrar as actor. The
+    /// proof is the `AuthorizedReach` itself — only `machine_authz` can construct one — and it
+    /// carries the D4b ceiling already enforced at mint, which is why no rank decision runs
+    /// here. `target` is a [`locked`] read, so the act is `add` or `change` per the row as it
+    /// stood under the team lock; a change to the current role is the writer's `noop`.
+    pub(crate) fn from_reach(
+        _reach: &crate::services::machine_authz::AuthorizedReach,
+        registrar: ProfileId,
+        target: &MembershipTarget,
+        role: TeamRole,
+    ) -> Self {
+        let (act, expected) = match target.current {
+            None => (MembershipAct::Add { role }, None),
+            Some((current, source)) => (MembershipAct::Change { role }, Some((current, source))),
+        };
+        Self {
+            team_id: target.team_id,
+            profile: target.profile,
+            act,
+            via: MembershipVia::MachineReach,
+            expected,
+            new_source: TeamMemberSource::Native,
+            actor: Some(registrar),
+            invited_by: None,
             guard_last_owner: true,
         }
     }

@@ -296,6 +296,15 @@ current_gates() {
 # REVIEWED 2026-10-15 (team-role rank, PR C fix round, fmt only) — `team_membership`
 # 83575cc25479 -> 23d8140fce5d: `cargo fmt` rewrapped the new `BadRequest(OFFER_ABOVE_YOUR_OWN_ROLE)`
 # return in `authorize_invitation`. Formatting only; no decision moved.
+# REVIEWED 2026-10-15 (team-role rank, PR C, task C3) — `team_membership` 23d8140fce5d ->
+# af37c6b9fcbd: the module gained `from_system_admin` (the approval flow's watcher row: admin
+# proof, no rank decision, idempotency via the writer's noop) and `from_reach` (the machine
+# reach: `AuthorizedReach` as proof, ceiling enforced at mint, add/change per the locked read),
+# and `MembershipTarget` grew an `is_machine()` getter for the approval flow's machine skip. No
+# member-act decision moved; the unit decision table is unchanged. The claims bound to the gate
+# were re-read: the approval and reach docs state what these constructors enforce. The `machine`
+# gate did not move — `machine_authz`'s D4b comment now names the routed writer (`from_reach`)
+# and the test `BARRED_ROLES` doc points at check 4, and neither is fingerprinted prose.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -366,7 +375,7 @@ gate two_sided 7822960e4ffa
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership 23d8140fce5d
+gate team_membership af37c6b9fcbd
 EOF
 
 CURRENT="$(current_claims; current_gates)"

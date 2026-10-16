@@ -195,9 +195,10 @@ pub(crate) async fn authorize_registration<'a>(
         // membership, bind cogmaps, and reassign contexts. Under D11 gating-team
         // `owner` no longer mints an `is_system_admin` principal (governance grant
         // is separate), but the role ceiling is still enforced because a governing
-        // role on any team is too much authority for an unattended credential.
-        // `apply_reach` writes with a raw `ON CONFLICT DO UPDATE SET role`, so this check is
-        // what keeps a registration from conferring such a role; the database refuses it too.
+        // role on any team is too much authority for an unattended credential. This check is
+        // what keeps a registration from conferring such a role at MINT; `apply_reach` routes
+        // the write through the membership writer (plan C3, `from_reach`), and the database
+        // trigger refuses it too.
         //
         // Reach stays unchecked for admins (D3 preserved) — an admin may still put a machine on
         // any team it likes, at any role up to the ceiling.
@@ -227,7 +228,7 @@ pub(crate) async fn authorize_registration<'a>(
 
 /// Parse a wire role string into a `TeamRole`, the enum's own serde as the single source of
 /// truth. Unknown roles are a 400 here rather than a 500 from the downstream enum cast.
-fn parse_team_role(role: &str) -> ApiResult<TeamRole> {
+pub(crate) fn parse_team_role(role: &str) -> ApiResult<TeamRole> {
     serde_json::from_value::<TeamRole>(serde_json::Value::String(role.to_string()))
         .map_err(|_| ApiError::BadRequest(format!("unknown team role '{role}'")))
 }
@@ -536,7 +537,9 @@ mod tests {
 
     /// Every role above the ceiling. Named here rather than written out per test so the two
     /// arms below can never end up testing different sets, and so a role added above `member`
-    /// fails these tests until it is added here too.
+    /// fails these tests until it is added here too. This is the same bar the rank rule's
+    /// check 4 holds at every membership act (`team_membership::decide`, C5): a machine target
+    /// above `member` is refused for every authority, admin included.
     const BARRED_ROLES: [&str; 2] = ["owner", "maintainer"];
 
     /// Spec D4a — the escalation. A gating-team MAINTAINER clears `can_manage` on the
