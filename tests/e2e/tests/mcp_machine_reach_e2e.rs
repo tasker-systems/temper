@@ -6,8 +6,10 @@
 //! tools reach acts a machine may not take — `context_manage`'s `share`/`unshare`/`transfer` (a
 //! person's act on the context tier) and `resource_reblock`'s deployment-wide `all` (system-admin
 //! standing, which a machine never holds). Those are refused here through the relayed 403, each
-//! in its own voice. Every other tool family is witnessed admitting the same machine, so the
-//! refusals are the line and not a machine that reaches nothing.
+//! in its own voice. The invitation family (`invitation_read` / `invitation_manage`) is refused to
+//! a machine outright; that is witnessed in `mcp_invitations_e2e.rs`. Every other tool family is
+//! witnessed admitting the same machine, so the refusals are the line and not a machine that
+//! reaches nothing.
 //!
 //! The machine is provisioned through the real registration door — agent profile, emitters, and a
 //! `member` seat on the team that owns the context it works in — then standing-approved, and drives

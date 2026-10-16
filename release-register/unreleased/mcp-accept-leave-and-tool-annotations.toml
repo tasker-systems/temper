@@ -1,0 +1,21 @@
+title    = "MCP: accept an invitation, leave a team, and every tool says whether it writes"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["mcp"]
+status   = "signal-only"
+body = '''
+`invitation_manage` gains `accept` (by token), and a new write tool, `team_manage`, carries
+`leave`. The surface grows from 40 to 41 advertised tools (20 reads and 21 writes), plus the
+conditional blob pair. Accept answers the team joined, the role, the inviter's profile id and the
+team's slug when it is a plain slug. Leave answers `residual_owned`, the content the caller still
+owns under the team. Both forward to the existing routes on the caller's own bearer, exactly as
+`temper team join` and `temper team leave` do. No route, gate or API shape changes.
+
+Every tool now advertises MCP annotations. Reads carry `readOnlyHint: true`. Writes carry
+`readOnlyHint: false` with `destructiveHint` stated. Every tool carries `openWorldHint: false`.
+Before this no tool carried any, so by MCP's defaults every tool read as a destructive write to
+an open world. That is the behavioral half: a client that decides by annotation when to ask its
+user may now stop asking before a read, and keep asking before a write. Who observes it: MCP
+clients, in `tools/list`, and any host that asserts the shipped `tools_list.json` fixture, which
+must take the new one.
+'''

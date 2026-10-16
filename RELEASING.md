@@ -132,7 +132,10 @@ first release claims it — no local bootstrap upload.
 4. **Verify the GitHub Release.** The Actions run should be green and the
    Release should list the three CLI binaries and the skill bundle; the npm,
    Ruby, Python, and crates.io publish lanes report in the run's summary
-   table. That's the whole release.
+   table. The Release's notes are generated (`gh release create
+   --generate-notes`), so edit them by hand to add the Rust-API breaks each
+   `temperkb-*` crate's `cargo semver-checks` report found
+   ([why](#a-crates-rust-api-is-not-the-contract-yet)). That's the whole release.
 
    The crates.io lane publishes the seven `temperkb-*` crates, the client
    closure and then the MCP tool layer `temperkb-mcp` (see
@@ -197,6 +200,37 @@ What shares the number, what releases independently (spec §3):
   is stale**, so releasing it is a deliberate, signaled act: the release notes name
   the contract delta it closes. Staleness between releases is the steady state, not
   a blocker; the obligation tightens only when the lag crosses an **M** boundary.
+
+### A crate's Rust API is not the contract (yet)
+
+The contract above is the wire. What a P release must never do is leave something already deployed
+broken: a `temper` CLI in someone's fleet, or a client package already published, keeps working
+against every later release of its era.
+
+A published crate's **Rust API** carries no Cargo semver promise during 0.x (ruled 2026-10-14). To
+Cargo, `0.M.P` → `0.M.P+1` is a compatible upgrade, so a dependent on `temperkb-* = "0.M"` picks a
+P release up at its next `cargo update`. That release can still break the dependent's build in
+the ways an additive wire change implies:
+
+- a new field on a pub struct breaks a struct literal, or an exhaustive pattern, that names the
+  struct;
+- a new variant on an exhaustive enum breaks an exhaustive `match` over it;
+- a removed or re-signatured pub item breaks its callers.
+
+Code that deserializes responses, and matches with a `_` arm, is not touched by the first two. A
+removal may keep a `#[deprecated]` shim through the rest of the era when that is cheap, as
+`internal_sig`'s v1 items do for 0.6.x, but no rule requires one.
+
+Two rules keep a dependent's breakage small and visible (ruled 2026-10-14):
+
+- **A new public enum that is an open vocabulary is `#[non_exhaustive]`.** An open vocabulary is
+  one expected to grow, such as error kinds and refusal reasons. A variant added later is then
+  additive in Rust as well as on the wire. Structs are exempt, because the server crates build the
+  wire types with struct literals from outside the crate that defines them.
+- **The release notes list the Rust-API breaks**, per crate, as
+  `cargo semver-checks --release-type patch -p <crate>` reports them against the version on
+  crates.io. It is a report, not a gate. From 1.0 the crates take on Cargo semver, and that report
+  becomes a gate.
 
 Every PR that touches a wire surface (`crates/temper-api/`, `crates/temper-mcp/`,
 `crates/temper-client/`, `openapi.json`, `clients/`, `packages/`) declares its compat

@@ -1,0 +1,18 @@
+title    = "MCP carries team invitations: `invitation_read` and `invitation_manage`"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["mcp"]
+status   = "signal-only"
+body = '''
+Two tools join the MCP surface, which grows from 38 to 40 advertised tools (20 reads and 20
+writes), plus the conditional blob pair. `invitation_read` has three views: `mine` (your pending
+invitations, with tokens), `count` (how many, with no token sent) and `team` (a team's pending
+invitations, for its owners and maintainers). `invitation_manage` has three actions: `decline`
+by token, and `create` and `revoke` for a team's owners and maintainers. (`accept` joins in the
+same release; see `mcp-accept-leave-and-tool-annotations`.) `mine` shows a team's slug only when it is a plain slug and never its name,
+since both are text a stranger chose. Each action forwards to the existing `/api/invitations` and
+`/api/teams/{id}/invit…` routes on the caller's own bearer. No route, gate or shape changes. Who
+observes it: MCP clients, which see two more tools in `tools/list`. Before this, a principal
+working only over MCP had no way to see an invitation addressed to them. Nothing that exists
+changes, so the release impact is purely additive.
+'''

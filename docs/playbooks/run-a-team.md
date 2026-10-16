@@ -116,13 +116,21 @@ As the inviter, you can review a team's outstanding invitations any time:
 temper team invitations acme-eng
 ```
 
+**Over MCP**, the same loop is three tools, for anyone working through an agent without the
+CLI. `invitation_read` answers `count` (the warmup-style number, with no tokens), `mine` (your
+invitations and their tokens) and `team` (a team's pending invitations). `invitation_manage`
+takes `accept` / `decline` with a token, and `create` / `revoke` for a team's owners and
+maintainers; `team_manage` takes `leave`. They go through the same API routes and the same
+checks as the commands above, and an agent should use them only when the person asks.
+
 > **One edge to know about.** `temper invitations` resolves an invitation to
 > you only when your email maps unambiguously to a single profile. In the rare
 > case where the same email is spread across more than one profile (which can
 > only happen with unverified sign-ins), the invitation is *not* auto-surfaced
 > — it stays safely invisible rather than risk showing up for the wrong
-> account. The fallback there is the old path: the inviter shares the printed
-> token directly.
+> account. Sharing the printed token does not get around this: an invitation
+> can be accepted or declined only from the one account that verifiably owns
+> its email address, so the duplicate address has to be resolved first.
 
 ## Manage membership
 
