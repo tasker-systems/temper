@@ -244,6 +244,20 @@ async fn an_invitation_is_created_found_and_accepted_over_mcp(pool: sqlx::PgPool
 
     let after = read(&w, &w.invitee, json!({ "view": "count" })).await;
     assert_eq!(after, json!({ "count": 0, "matching": null }));
+
+    // Accepting again is idempotent at the API (the caller is already on the team). The token is
+    // spent, so it is no longer in `mine` and the answer names no inviter.
+    let again = one_json(
+        &invitation_manage(
+            &w.svc,
+            &w.invitee,
+            input(json!({ "action": "accept", "token": token })),
+        )
+        .await
+        .expect("a re-accept answers"),
+    );
+    assert_eq!(again["team_id"], json!(w.team), "{again}");
+    assert_eq!(again["invited_by_profile_id"], Value::Null, "{again}");
     assert!(
         !has_system_access(&w.app.pool, w.invitee_id).await,
         "accepting an invitation does not grant system access"
@@ -590,7 +604,15 @@ async fn a_member_leaves_over_mcp_and_the_last_owner_cannot(pool: sqlx::PgPool) 
     )
     .await
     .expect_err("an unapproved member cannot leave yet");
-    assert_ne!(unapproved.code, ErrorCode::INTERNAL_ERROR, "{unapproved:?}");
+    assert_eq!(
+        unapproved.code,
+        ErrorCode::INVALID_REQUEST,
+        "{unapproved:?}"
+    );
+    assert!(
+        unapproved.message.contains("requires approval"),
+        "the system-access sentence: {unapproved:?}"
+    );
     assert_eq!(
         role_on_team(&w.app.pool, w.team, w.invitee_id)
             .await
@@ -621,6 +643,10 @@ async fn a_member_leaves_over_mcp_and_the_last_owner_cannot(pool: sqlx::PgPool) 
     .await
     .expect_err("a team you are not on cannot be left");
     assert_eq!(again.code, ErrorCode::INVALID_PARAMS, "{again:?}");
+    assert!(
+        again.message.contains("only a team you are a member of"),
+        "the bare-403 arm: {again:?}"
+    );
 
     let last_owner = team_manage(
         &w.svc,
@@ -630,7 +656,7 @@ async fn a_member_leaves_over_mcp_and_the_last_owner_cannot(pool: sqlx::PgPool) 
     .await
     .expect_err("the last owner cannot leave");
     assert_eq!(last_owner.code, ErrorCode::INVALID_PARAMS, "{last_owner:?}");
-    assert!(last_owner.message.contains("owner"), "{last_owner:?}");
+    assert!(last_owner.message.contains("last owner"), "{last_owner:?}");
     assert_eq!(
         role_on_team(&w.app.pool, w.team, w.owner_id)
             .await

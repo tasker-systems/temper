@@ -78,8 +78,8 @@ async fn a_closed_blob_door_advertises_the_shipped_declarations_without_the_blob
 ///   caller's Temper instance);
 /// - a write also states `destructiveHint`;
 /// - a `*_read`, `get_*` or `list_*` tool is read-only, and nothing named `*_manage` is;
-/// - the destructive writes are exactly the pinned set, so moving a tool across that line is a
-///   reviewed change here as well as in the fixture.
+/// - the reads and the destructive writes are each exactly a pinned set, so moving a tool across
+///   either line is a reviewed change here as well as in the fixture.
 ///
 /// FAILS IF a tool ships without annotations, or a write's classification changes unreviewed.
 #[tokio::test]
@@ -99,7 +99,31 @@ async fn every_tool_says_whether_it_writes() {
         "update_resource",
         "update_resource_meta",
     ];
+    const READ_ONLY: [&str; 21] = [
+        "blob_read",
+        "cogmap_list",
+        "cogmap_read",
+        "context_read",
+        "describe_schema",
+        "element_trail",
+        "facets_read",
+        "get_block",
+        "get_block_provenance",
+        "get_data_artifact",
+        "get_data_artifact_shape",
+        "get_resource",
+        "invitation_read",
+        "invocation_read",
+        "list_data_artifact_shapes",
+        "list_data_artifacts",
+        "list_resources",
+        "resource_lineage",
+        "run_query",
+        "search",
+        "steward_ingest_delta",
+    ];
     let advertised = tools_list(&open()).await;
+    let mut read_only_tools = Vec::new();
     let mut destructive = Vec::new();
     for tool in advertised["tools"].as_array().expect("tools") {
         let name = tool["name"].as_str().expect("name");
@@ -113,6 +137,9 @@ async fn every_tool_says_whether_it_writes() {
         if named_read {
             assert!(read_only, "{name} is named as a read");
         }
+        if read_only {
+            read_only_tools.push(name);
+        }
         if name.ends_with("_manage") {
             assert!(!read_only, "{name} is named as a write");
         }
@@ -125,6 +152,8 @@ async fn every_tool_says_whether_it_writes() {
             }
         }
     }
+    read_only_tools.sort_unstable();
+    assert_eq!(read_only_tools, READ_ONLY);
     destructive.sort_unstable();
     assert_eq!(destructive, DESTRUCTIVE);
 }

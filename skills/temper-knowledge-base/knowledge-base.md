@@ -39,7 +39,8 @@ drilling into action parameters.
 
 Every tool advertises MCP annotations: the reads `readOnlyHint: true`, the writes
 `readOnlyHint: false` with `destructiveHint` stated (true for the ones that remove, overwrite,
-retract or fold something), and every tool `openWorldHint: false`. A client that asks its user
+retract or fold something an author made; recomputing derived state, such as re-materializing
+regions, is not destructive), and every tool `openWorldHint: false`. A client that asks its user
 before a write reads these; nothing in a tool's description substitutes for that approval.
 
 **Conditional (2):** `blob_read`, `blob_manage` — registered on the router but
@@ -539,9 +540,10 @@ Args: { "action": "accept", "token": "<token from mine>" }
 Args: { "action": "decline", "token": "<token from mine>" }   → { "pending": false }
 ```
 
-Tell the user which team they joined, at what role and on whose invitation. Joining gives read
+Tell the user which team they joined and at what role. If they were already on the team, their
+role there is unchanged. Joining gives read
 reach into everything the team owns, and a `member` or `maintainer` writes into its contexts.
-The undo is `leave`:
+The undo is `leave`, once the user's access is approved:
 
 ```
 Tool: team_manage

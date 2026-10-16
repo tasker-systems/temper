@@ -27,7 +27,12 @@
 //! that kept `accept` off MCP). The human check on an agent's write is the client's approval of
 //! the call, which the tool's annotations (`readOnlyHint: false`) let a client apply; this tool's
 //! part is to say plainly what the call did — which team, at what role, on whose invitation — so
-//! a join the user did not mean is visible and undone with `team_manage` action `leave`.
+//! a join the user did not mean is visible and undone with `team_manage` action `leave` (once the
+//! user's access is approved: leaving rides the gated router, accepting does not).
+//!
+//! `role` in the answer is what the API returns, which today is the invitation's role even when
+//! the caller was already on the team (the insert is a no-op and their real role is unchanged).
+//! Role-rank PR C, task C2, makes the API return the role actually held.
 //!
 //! # Authorization is the API's
 //!

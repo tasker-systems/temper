@@ -21,6 +21,13 @@
 //! membership rule; this module adds no gate. The route sits on the gated router, so a caller
 //! whose access is not yet approved cannot leave on any surface; the system-access refusal
 //! arrives in its own sentence.
+//!
+//! # Text in the answer
+//!
+//! `residual_owned.contexts[].context_ref` is `+<team-slug>/<context-slug>`, and team slugs are not
+//! constrained at creation, so a ref can carry text the team's creator chose. It is passed through
+//! unguarded on purpose: the caller authored content in those contexts, `context_read` already
+//! shows the same refs, and the ref is what the caller needs to act on that content.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
@@ -179,11 +186,19 @@ mod tests {
         let last_owner = map_team_err(
             "team_manage leave",
             ClientError::Conflict {
-                message: "Conflict: a team keeps at least one owner".to_string(),
+                message:
+                    "Conflict: cannot remove or demote the team's last owner; grant `owner` to \
+                          another member first"
+                        .to_string(),
             },
         );
         assert_eq!(last_owner.code, rmcp::model::ErrorCode::INVALID_PARAMS);
-        assert_eq!(last_owner.message, "a team keeps at least one owner");
+        assert!(
+            last_owner
+                .message
+                .starts_with("cannot remove or demote the team's last owner"),
+            "{last_owner:?}"
+        );
 
         let machine = map_team_err(
             "team_manage leave",
