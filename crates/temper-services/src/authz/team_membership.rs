@@ -625,6 +625,71 @@ impl AuthorizedMembershipChange {
             guard_last_owner: true,
         }
     }
+
+    /// An identity-provider reconcile write (plan C4, R8): the IdP wins over the last-owner
+    /// guard, the system is the actor, and the row's source stays (or becomes) `idp`. `token` is
+    /// minted only inside `saml_provisioning_service::reconcile_idp_memberships`. `target` is a
+    /// [`locked`] read under the team lock; an add or a change per the row as it stood.
+    ///
+    /// A native row is REFUSED: reconcile skips native rows on its locked re-read (S1, C7), so a
+    /// native `current` here is a caller bug, and the internal error says so rather than
+    /// silently writing a native row's role.
+    pub(crate) fn idp(
+        _token: crate::services::saml_provisioning_service::IdpReconcileToken,
+        target: &MembershipTarget,
+        role: TeamRole,
+    ) -> ApiResult<Self> {
+        let (act, expected) = match target.current {
+            None => (MembershipAct::Add { role }, None),
+            Some((current, TeamMemberSource::Idp)) => (
+                MembershipAct::Change { role },
+                Some((current, TeamMemberSource::Idp)),
+            ),
+            Some((_, TeamMemberSource::Native)) => {
+                return Err(ApiError::Internal(
+                    "idp reconcile was handed a native membership row".to_string(),
+                ))
+            }
+        };
+        Ok(Self {
+            team_id: target.team_id,
+            profile: target.profile,
+            act,
+            via: MembershipVia::IdpReconcile,
+            expected,
+            new_source: TeamMemberSource::Idp,
+            actor: None,
+            invited_by: None,
+            guard_last_owner: false,
+        })
+    }
+
+    /// An identity-provider reconcile revocation (plan C4, R8): the row leaves. The same proof
+    /// and the same refusals as `idp` above; the target must hold an `idp` row.
+    pub(crate) fn idp_removal(
+        _token: crate::services::saml_provisioning_service::IdpReconcileToken,
+        target: &MembershipTarget,
+    ) -> ApiResult<Self> {
+        match target.current {
+            Some((_, TeamMemberSource::Idp)) => Ok(Self {
+                team_id: target.team_id,
+                profile: target.profile,
+                act: MembershipAct::Remove,
+                via: MembershipVia::IdpReconcile,
+                expected: target.current,
+                new_source: TeamMemberSource::Idp,
+                actor: None,
+                invited_by: None,
+                guard_last_owner: false,
+            }),
+            Some((_, TeamMemberSource::Native)) => Err(ApiError::Internal(
+                "idp reconcile was handed a native membership row".to_string(),
+            )),
+            None => Err(ApiError::Internal(
+                "idp reconcile was handed an absent membership row".to_string(),
+            )),
+        }
+    }
 }
 
 /// Take plan P1's two locks — the team row (`FOR NO KEY UPDATE`), then the target's membership row

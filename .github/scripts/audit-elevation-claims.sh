@@ -305,6 +305,16 @@ current_gates() {
 # were re-read: the approval and reach docs state what these constructors enforce. The `machine`
 # gate did not move — `machine_authz`'s D4b comment now names the routed writer (`from_reach`)
 # and the test `BARRED_ROLES` doc points at check 4, and neither is fingerprinted prose.
+# REVIEWED 2026-10-15 (team-role rank, PR C, task C4) — `team_membership` af37c6b9fcbd ->
+# 3b225ef14142: the module gained `idp` and `idp_removal` (the SAML reconcile constructors: the
+# IdP wins over the last-owner guard, the system is the actor, an `idp` source is the only row
+# they will write, and a native current is refused). No member-act decision moved. New claim
+# re-read against its gate: `saml_provisioning_service.rs`'s `ReconcileCounts` doc ("a system
+# admin repairs the team") states the C9 repair arm the record serves; it binds to
+# `team_membership`, the gate whose writer produced the record it describes.
+# REVIEWED 2026-10-15 (team-role rank, PR C, task C4, fmt only) — `team_membership`
+# 3b225ef14142 -> f6e2e9db8946: `cargo fmt` rewrapped the new `idp` constructor bodies. The
+# ordering lesson this repeat teaches: format BEFORE computing a baseline, never after.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -359,6 +369,7 @@ claim crates/temper-services/src/services/machine_authz.rs 8 machine,team_member
 claim crates/temper-services/src/services/machine_client_service.rs 7 machine
 claim crates/temper-services/src/services/machine_registration_service.rs 7 machine
 claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
+claim crates/temper-services/src/services/saml_provisioning_service.rs 1 team_membership
 claim crates/temper-services/src/services/subscription_service.rs 6 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
 claim crates/temper-services/src/services/team_service.rs 12 require_manage_on_team,can_manage,team_membership
@@ -375,7 +386,7 @@ gate two_sided 7822960e4ffa
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership af37c6b9fcbd
+gate team_membership f6e2e9db8946
 EOF
 
 CURRENT="$(current_claims; current_gates)"
