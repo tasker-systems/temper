@@ -1,0 +1,28 @@
+title    = "An invitation redeems only while its inviter could still issue it"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "clients", "cli-stdout"]
+status   = "signal-only"
+body = '''
+A pending team invitation now redeems only while the person who sent it could still send it: the
+invitation gate (a manager offers up to their own role, a system admin any role, and only a system
+admin on the gating team) is re-applied to the inviter as they stand at acceptance. An owner who
+steps down to `maintainer` keeps invitations up to `maintainer`. A member, someone removed or who
+left, and anyone without approved standing keeps none. Two places enforce it. A membership change
+or removal (`PATCH` / `DELETE /api/teams/{id}/members/{profile_id}`, a self-leave, and SAML
+reconcile) revokes the member's pending invitations on that team that they could no longer issue,
+in the same transaction. `POST /api/invitations/accept` re-checks the inviter under the team lock.
+This check runs only for the invitee, so another holder of the token can neither trigger it nor
+learn its result. An invitation that fails the check is revoked and refused with the existing 400
+"invitation was revoked". This covers changes that are not routed membership writes: losing
+governance or standing, the derived writers, and an invitation created in a race with its
+inviter's demotion. Those invitations stay listed until someone tries to accept them.
+Revocations set `revoked_at`, exactly as a manager's withdrawal does, and are not recorded on the
+ledger. They follow from the membership change, which is. Who observes:
+invitees, whose invitation from a since-demoted inviter is refused where it used to redeem, and
+team managers, who stop seeing the invitations a membership change revoked in `GET
+/api/teams/{id}/invitations`.
+User-visible: yes. Release relevance: behavioral (an acceptance that used to succeed is
+refused); additive on the wire. The refusal is the existing 400, and only that 400's OpenAPI
+description grows, to name revocation. No shape is removed or narrowed.
+'''

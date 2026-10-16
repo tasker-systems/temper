@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, role AS \"role: TeamRole\"\n             FROM kb_team_invitations\n            WHERE team_id = $1\n              AND invited_by_profile_id = $2\n              AND status = 'pending'\n              AND revoked_at IS NULL\n              FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "role: TeamRole",
+        "type_info": {
+          "Custom": {
+            "name": "team_role",
+            "kind": {
+              "Enum": [
+                "owner",
+                "maintainer",
+                "member",
+                "watcher"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "943fb854501e2a6a8c3e337cbfc939af368a5437b980189dfb515ca84f42089a"
+}

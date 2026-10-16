@@ -182,21 +182,24 @@ impl MembershipAuthority {
         let role =
             crate::services::team_service::role_on_team_on(conn, team_id, caller.profile_id())
                 .await?;
-        let authority = if is_gating {
-            role.map_or(MembershipAuthority::None, MembershipAuthority::SelfOnly)
-        } else {
-            match role {
-                Some(TeamRole::Owner) => MembershipAuthority::Managing(ManagingRole::Owner),
-                Some(TeamRole::Maintainer) => {
-                    MembershipAuthority::Managing(ManagingRole::Maintainer)
-                }
-                Some(role @ (TeamRole::Member | TeamRole::Watcher)) => {
-                    MembershipAuthority::SelfOnly(role)
-                }
-                None => MembershipAuthority::None,
+        Ok(bound(Self::non_admin(is_gating, role)))
+    }
+
+    /// Arms 2 and 3 of [`Self::resolve`]: the authority a person who is not a system admin holds,
+    /// from whether the team is the gating team and their role on it. Shared with
+    /// [`inviter_ceiling`], so an inviter is judged by exactly the arms a caller is.
+    fn non_admin(is_gating: bool, role: Option<TeamRole>) -> Self {
+        if is_gating {
+            return role.map_or(MembershipAuthority::None, MembershipAuthority::SelfOnly);
+        }
+        match role {
+            Some(TeamRole::Owner) => MembershipAuthority::Managing(ManagingRole::Owner),
+            Some(TeamRole::Maintainer) => MembershipAuthority::Managing(ManagingRole::Maintainer),
+            Some(role @ (TeamRole::Member | TeamRole::Watcher)) => {
+                MembershipAuthority::SelfOnly(role)
             }
-        };
-        Ok(bound(authority))
+            None => MembershipAuthority::None,
+        }
     }
 
     /// The proof-free shape of this authority, which [`decide`] reads.
@@ -337,6 +340,121 @@ fn admits_caller(
         return Err(ApiError::Forbidden);
     }
     Ok(Some(caller_role))
+}
+
+/// The highest role `authority` may offer in an invitation, or `None` when it may not invite at
+/// all. Read off [`admits_caller`] — the function [`ResolvedMembership::authorize_invitation`]
+/// gates on — with an `Add` at the top rank, so the two cannot disagree: whoever it admits may
+/// offer up to their own role, and a system admin anything.
+fn invitation_ceiling(authority: AuthorityKind, is_gating: bool) -> Option<TeamRole> {
+    let top = MembershipAct::Add {
+        role: TeamRole::Owner,
+    };
+    // The stand-in target is the one `authorize_invitation` uses: `nil` is never a real profile.
+    // The stand-in caller only has to differ from it, so the act is on another member; the
+    // authority's own role is what is read back.
+    match admits_caller(
+        authority,
+        ProfileId::from(Uuid::from_u128(1)),
+        is_gating,
+        top,
+        ProfileId::from(Uuid::nil()),
+    ) {
+        Ok(None) => Some(TeamRole::Owner),
+        Ok(Some(own)) => Some(own),
+        Err(_) => None,
+    }
+}
+
+/// Whether an invitation at `role` is within `ceiling` (see [`inviter_ceiling`]).
+pub(crate) fn may_offer(ceiling: Option<TeamRole>, role: TeamRole) -> bool {
+    ceiling.is_some_and(|ceiling| role.rank() <= ceiling.rank())
+}
+
+/// The highest role `inviter` could offer on `team_id` NOW, or `None` if they could not invite
+/// there at all: the invitation gate re-applied to the inviter as they stand. An invitation
+/// redeems only while its inviter could still issue it (task `01a14591`), so an owner who is
+/// demoted, removed or leaves cannot leave behind invitations above what they hold.
+///
+/// Judged exactly as a caller is ([`MembershipAuthority::resolve`]'s arms, then
+/// [`invitation_ceiling`]), with one step first that a caller passes at the door: an inviter
+/// without approved standing (`has_system_access`) can act on nothing, so offers nothing. No
+/// [`SystemAdmin`] is minted — the inviter is not the caller, so this reads the proof-free
+/// [`AuthorityKind`] only.
+///
+/// Read on the caller's transaction. Under the team lock the inviter's role cannot move through
+/// a routed write (every one takes that lock). The derived writers (the machine-cap trigger,
+/// auto-join) and the inviter's standing and governance are not team-locked, and are read as of
+/// this statement.
+pub(crate) async fn inviter_ceiling(
+    conn: &mut PgConnection,
+    team_id: Uuid,
+    inviter: ProfileId,
+) -> ApiResult<Option<TeamRole>> {
+    let standing = sqlx::query!(
+        r#"SELECT has_system_access($1) AS "access!", is_system_admin($1) AS "admin!""#,
+        *inviter
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if !standing.access {
+        return Ok(None);
+    }
+    let is_gating = crate::services::access_service::is_gating_team_on(conn, team_id).await?;
+    let kind = if standing.admin {
+        AuthorityKind::Admin
+    } else {
+        let role = crate::services::team_service::role_on_team_on(conn, team_id, inviter).await?;
+        MembershipAuthority::non_admin(is_gating, role).kind()
+    };
+    Ok(invitation_ceiling(kind, is_gating))
+}
+
+/// Revoke `inviter`'s pending invitations on `team_id` that they could no longer issue
+/// ([`inviter_ceiling`]), and return how many. Run by [`membership_write`] after every change or
+/// removal, on the same transaction and under the same team lock, so a demotion, a removal or a
+/// leave takes the invitations above the member's new standing with it — and the team's and the
+/// invitee's lists stop offering them. `accept_invitation` re-checks the same rule at redemption,
+/// which covers what this cannot see: a change of standing or governance, which is not a
+/// membership write.
+///
+/// A revocation is `revoked_at`, as a manager's is, and like a manager's it is not recorded on the
+/// ledger: it follows from the membership change, which is.
+async fn revoke_invitations_beyond_authority(
+    conn: &mut PgConnection,
+    team_id: Uuid,
+    inviter: ProfileId,
+) -> ApiResult<u64> {
+    let ceiling = inviter_ceiling(conn, team_id, inviter).await?;
+    let pending = sqlx::query!(
+        r#"SELECT id, role AS "role: TeamRole"
+             FROM kb_team_invitations
+            WHERE team_id = $1
+              AND invited_by_profile_id = $2
+              AND status = 'pending'
+              AND revoked_at IS NULL
+              FOR UPDATE"#,
+        team_id,
+        *inviter,
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    let beyond: Vec<Uuid> = pending
+        .into_iter()
+        .filter(|inv| !may_offer(ceiling, inv.role))
+        .map(|inv| inv.id)
+        .collect();
+    if beyond.is_empty() {
+        return Ok(0);
+    }
+    let revoked = sqlx::query!(
+        "UPDATE kb_team_invitations SET revoked_at = now() WHERE id = ANY($1)",
+        &beyond,
+    )
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    Ok(revoked)
 }
 
 /// The rank rule (spec "The authority type", plan B3 and P13/P14), applied to one act. Pure: no
@@ -734,13 +852,7 @@ pub(crate) async fn locked(
     team_id: Uuid,
     profile: ProfileId,
 ) -> ApiResult<MembershipTarget> {
-    let team = sqlx::query_scalar!(
-        "SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE",
-        team_id
-    )
-    .fetch_optional(&mut *conn)
-    .await?;
-    if team.is_none() {
+    if !lock_team(conn, team_id).await? {
         return Err(ApiError::NotFound(
             "team not found or not readable".to_string(),
         ));
@@ -768,6 +880,21 @@ pub(crate) async fn locked(
     })
 }
 
+/// Take the first of [`locked`]'s locks alone — the team row, `FOR NO KEY UPDATE` — and say
+/// whether the row exists. For a path that must hold the team lock before it touches anything
+/// else: `accept_invitation` takes it before it claims the invitation row, because
+/// [`membership_write`] revokes invitation rows while holding it, and the reverse order would
+/// deadlock against it.
+pub(crate) async fn lock_team(conn: &mut PgConnection, team_id: Uuid) -> ApiResult<bool> {
+    let team = sqlx::query_scalar!(
+        "SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE",
+        team_id
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(team.is_some())
+}
+
 /// What a recorded membership write did. Every other outcome of the SQL writer is an error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MembershipOutcome {
@@ -788,6 +915,9 @@ pub(crate) enum MembershipOutcome {
 ///
 /// The writer's refusals map to: `last_owner` → 409, `exists` → 409 naming `change_role`,
 /// `absent` → 404, `stale` → 409 "membership changed; retry".
+///
+/// After a change or a removal it also revokes the member's pending invitations on the team that
+/// they could no longer issue ([`revoke_invitations_beyond_authority`]), in the same transaction.
 pub(crate) async fn membership_write(
     conn: &mut PgConnection,
     emitter: Option<EntityId>,
@@ -825,10 +955,24 @@ pub(crate) async fn membership_write(
     )
     .fetch_one(&mut *conn)
     .await?;
-    match outcome.as_str() {
-        "added" => Ok(MembershipOutcome::Added),
-        "changed" => Ok(MembershipOutcome::Changed),
-        "removed" => Ok(MembershipOutcome::Removed),
+    let written = match outcome.as_str() {
+        "added" => MembershipOutcome::Added,
+        "changed" => MembershipOutcome::Changed,
+        "removed" => MembershipOutcome::Removed,
+        _ => return not_written(&outcome),
+    };
+    // A member whose role changed or who left may no longer be able to issue every invitation
+    // they have pending on this team; those go with the change, in its transaction (task
+    // `01a14591`). An add lowers no one, so it is skipped.
+    if written != MembershipOutcome::Added {
+        revoke_invitations_beyond_authority(conn, change.team_id, change.profile).await?;
+    }
+    Ok(written)
+}
+
+/// The SQL writer's non-writing outcomes, as the service answers them.
+fn not_written(outcome: &str) -> ApiResult<MembershipOutcome> {
+    match outcome {
         "noop" => Ok(MembershipOutcome::Noop),
         "last_owner" => Err(ApiError::Conflict(LAST_OWNER.to_string())),
         "exists" => Err(ApiError::Conflict(ALREADY_A_MEMBER.to_string())),
@@ -1220,5 +1364,32 @@ mod tests {
         };
         let err = authorize(resolved, Act::Remove, &target(OTHER, Some(Member))).unwrap_err();
         assert!(matches!(err, ApiError::Internal(_)), "{err:?}");
+    }
+
+    /// Task 01a14591: the role each authority may offer, by hand — the ceiling an inviter is held
+    /// to at redemption must be the gate they passed at creation. The gating team changes nothing
+    /// here because `resolve` never yields a managing arm on it.
+    #[test]
+    fn the_invitation_ceiling_by_authority() {
+        use AuthorityKind as K;
+        use ManagingRole as M;
+        let table = [
+            (K::Admin, Some(TeamRole::Owner)),
+            (K::Managing(M::Owner), Some(TeamRole::Owner)),
+            (K::Managing(M::Maintainer), Some(TeamRole::Maintainer)),
+            (K::SelfOnly(TeamRole::Owner), None),
+            (K::SelfOnly(TeamRole::Member), None),
+            (K::SelfOnly(TeamRole::Watcher), None),
+            (K::None, None),
+        ];
+        for (kind, want) in table {
+            for is_gating in [false, true] {
+                assert_eq!(invitation_ceiling(kind, is_gating), want, "{kind:?}");
+            }
+        }
+        assert!(may_offer(Some(TeamRole::Maintainer), TeamRole::Maintainer));
+        assert!(may_offer(Some(TeamRole::Maintainer), TeamRole::Watcher));
+        assert!(!may_offer(Some(TeamRole::Maintainer), TeamRole::Owner));
+        assert!(!may_offer(None, TeamRole::Watcher));
     }
 }

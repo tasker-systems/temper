@@ -168,7 +168,7 @@ pub async fn count_mine(
     request_body = InvitationTokenRequest,
     responses(
         (status = 200, description = "Invitation redeemed; caller joined the team", body = AcceptInvitationResponse),
-        (status = 400, description = "Invitation expired or already declined"),
+        (status = 400, description = "Invitation expired, already declined, or revoked: withdrawn by a manager of the team, or because whoever sent it can no longer offer its role (an invitation redeems only while its inviter could still issue it)"),
         (status = 403, description = "The invitation is addressed to someone else: only the account whose verified email it names may redeem it; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Unknown token"),
         (status = 409, description = "Invitation already redeemed by another profile"),

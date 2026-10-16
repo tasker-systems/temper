@@ -16778,7 +16778,7 @@ export interface operations {
                     "application/json": components["schemas"]["AcceptInvitationResponse"];
                 };
             };
-            /** @description Invitation expired or already declined */
+            /** @description Invitation expired, already declined, or revoked: withdrawn by a manager of the team, or because whoever sent it can no longer offer its role (an invitation redeems only while its inviter could still issue it) */
             400: {
                 headers: {
                     [name: string]: unknown;

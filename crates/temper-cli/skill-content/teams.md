@@ -49,6 +49,12 @@ Key facts about invites:
   address can accept or decline. A token handed to anyone else does nothing for them.
 - **Sign-in is self-serve** (OAuth/SAML auto-provisions a profile). The invitee does
   not need the token handed to them.
+- **An invite lasts only as long as its sender could still send it.** If the inviter
+  steps down, is removed or leaves, their pending invites above what they can now offer
+  are withdrawn at once. If they lose access to the instance, those invites are refused
+  (and withdrawn) when someone tries to accept them. A maintainer keeps invites up to
+  `maintainer`; someone who can no longer invite keeps none. If an invite reads as revoked,
+  ask a current manager of the team to send a new one.
 
 Once the invitee has signed in, THEY discover and redeem their own invitation:
 

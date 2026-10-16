@@ -8687,7 +8687,7 @@
             }
           },
           "400": {
-            "description": "Invitation expired or already declined"
+            "description": "Invitation expired, already declined, or revoked: withdrawn by a manager of the team, or because whoever sent it can no longer offer its role (an invitation redeems only while its inviter could still issue it)"
           },
           "403": {
             "description": "The invitation is addressed to someone else: only the account whose verified email it names may redeem it; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",

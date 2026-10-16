@@ -42,7 +42,11 @@ Roles are a rank, and every membership change follows one rule:
   member (any member may still leave it).
 
 Invitations follow the same rank: you can invite at any role up to your own, so an owner can
-invite a new owner.
+invite a new owner. An invitation lasts only as long as whoever sent it could still send it. If
+they step down, are removed or leave, their pending invitations above what they can now offer are
+withdrawn at once. If they lose access to the instance, those invitations are refused, and
+withdrawn, when someone tries to accept them. Either way, a departing owner cannot leave
+co-owners behind.
 
 Every membership change is recorded on the admin ledger — a member added, a role changed, a
 member removed, an invitation accepted, an access request approved, a machine registered onto a

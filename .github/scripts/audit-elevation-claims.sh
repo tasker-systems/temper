@@ -343,6 +343,18 @@ current_gates() {
 #     tools) — `invitation_manage`'s "(on the instance's gating team, only a system admin)" and
 #     "only a system admin can change or remove another owner": the gating arm of `resolve` and
 #     the rank rule's check 7, both the `team_membership` gate, reached through the HTTP route.
+# REVIEWED 2026-10-16 (task 01a14591, invitations redeem only while the inviter could issue them)
+# — `team_membership` c0b58f39d934 -> afbb42768b4e: the module gained `invitation_ceiling` (read off
+# `admits_caller` with an `Add` at the top rank, the function `authorize_invitation` gates on, so
+# the two cannot disagree), `inviter_ceiling` (the inviter's authority as they now stand: no
+# approved standing offers nothing, then `resolve`'s own arms via the shared `non_admin`, without
+# minting a `SystemAdmin`), `lock_team` (split out of `locked`), and a revocation step in
+# `membership_write` after a change or removal. Each only narrows what redeems; no member-act
+# decision moved, and `authorize_invitation` is unchanged. Claims moved:
+#   services/invitation_service.rs 3 -> 5 — two test docs: "removable afterwards only by a system
+#     admin (R6)" (check 7 of the rank rule) and "a system admin's invitation rests on their
+#     governance" (`inviter_ceiling`'s admin arm reads `is_system_admin`, i.e. governance). Each
+#     holds.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -392,7 +404,7 @@ claim crates/temper-services/src/services/context_service.rs 14 context_admin
 claim crates/temper-services/src/services/erasure_retention_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
-claim crates/temper-services/src/services/invitation_service.rs 3 team_membership
+claim crates/temper-services/src/services/invitation_service.rs 5 team_membership
 claim crates/temper-services/src/services/machine_authz.rs 8 machine,team_membership
 claim crates/temper-services/src/services/machine_client_service.rs 7 machine
 claim crates/temper-services/src/services/machine_registration_service.rs 7 machine
@@ -414,7 +426,7 @@ gate two_sided 7822960e4ffa
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership c0b58f39d934
+gate team_membership afbb42768b4e
 EOF
 
 CURRENT="$(current_claims; current_gates)"
