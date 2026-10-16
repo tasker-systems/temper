@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT i.team_id\n          FROM kb_team_invitations i\n         WHERE i.token = $1\n           AND i.status = 'pending'\n           AND i.revoked_at IS NULL\n           AND i.expires_at > now()\n           AND EXISTS (SELECT 1 FROM vw_invitee_invitations v\n                        WHERE v.id = i.id AND v.invitee_profile_id = $2)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6b010909b1ba212719798d0ff761734b5b0501356f5caf2979a1fe621fdc7ea9"
+}

@@ -204,10 +204,22 @@ pub async fn accept_invitation(
 
     // Which team to lock, read unlocked: `membership_write` revokes invitation rows while
     // holding the team lock, so this path must take the team lock before any invitation row
-    // lock, or the two deadlock. Everything this read assumes is read again under the locks.
+    // lock, or the two deadlock. The read admits only a live invitation addressed to the caller,
+    // so a token holder who is not the invitee (or a spent token) never takes the team lock and
+    // goes straight to the refusal. Everything it assumes is read again under the locks.
     let team_id = sqlx::query_scalar!(
-        "SELECT team_id FROM kb_team_invitations WHERE token = $1",
+        r#"
+        SELECT i.team_id
+          FROM kb_team_invitations i
+         WHERE i.token = $1
+           AND i.status = 'pending'
+           AND i.revoked_at IS NULL
+           AND i.expires_at > now()
+           AND EXISTS (SELECT 1 FROM vw_invitee_invitations v
+                        WHERE v.id = i.id AND v.invitee_profile_id = $2)
+        "#,
         token,
+        *caller,
     )
     .fetch_optional(&mut *tx)
     .await?;
@@ -1463,6 +1475,36 @@ mod tests {
             !is_revoked(&pool, mine.id).await,
             "the remover's own are untouched"
         );
+    }
+
+    /// A token holder who is not the invitee never takes the team lock: with the team row held
+    /// by another transaction (a membership write in flight), their accept still returns its
+    /// refusal at once instead of queueing behind it. Before the lookup was bound to the
+    /// invitee, any holder of a forwarded token could make the accept path wait on, and then
+    /// hold, the team lock that every membership writer takes.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_stranger_holding_the_token_never_waits_on_the_team_lock(pool: PgPool) {
+        let (team_id, owner) = seed_team_with_owner(&pool).await;
+        let _joiner = invitee(&pool, "invitee", "i@e.com").await;
+        let stranger = invitee(&pool, "stranger", "s@e.com").await;
+        let inv = invite_at(&pool, team_id, owner, "i@e.com", TeamRole::Member).await;
+
+        let mut holder = pool.begin().await.unwrap();
+        sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE")
+            .bind(team_id)
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+
+        let answered = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            accept_as(&pool, stranger, &inv.token),
+        )
+        .await
+        .expect("a stranger's accept must not wait on the team lock");
+        let err = answered.unwrap_err();
+        assert!(matches!(err, ApiError::ForbiddenDetail(_)), "got {err:?}");
+        holder.rollback().await.unwrap();
     }
 
     /// Task 01a14591, pin: the accept-time check runs only for the invitee. A token holder who is
