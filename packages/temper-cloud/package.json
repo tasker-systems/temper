@@ -16,7 +16,7 @@
     "check:fix": "biome check --fix"
   },
   "dependencies": {
-    "@huggingface/hub": "^2.17.5",
+    "@huggingface/hub": "^2.17.6",
     "@huggingface/transformers": "^3.8.1",
     "@kreuzberg/node": "latest",
     "@neondatabase/serverless": "^1",
@@ -27,7 +27,7 @@
     "onnxruntime-node": "1.21.0",
     "pino": "^10.4.0",
     "uuidv7": "^1.2.1",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "overrides": {
     "onnxruntime-node": "1.21.0",
@@ -38,7 +38,7 @@
     "@biomejs/biome": "^2.5.15",
     "@types/node": "^22",
     "@xmldom/xmldom": "^0.9.10",
-    "docx": "^9.9.0",
+    "docx": "^9.11.0",
     "pdf-lib": "^1.17.1",
     "postgres": "^3.4.9",
     "sharp": "^0.35.5",
