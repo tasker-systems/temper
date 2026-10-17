@@ -257,3 +257,45 @@ pub async fn system_admin_proof_for(pool: &PgPool, profile_id: Uuid) -> crate::a
         .await
         .expect("the seeded profile must satisfy is_system_admin to mint a proof")
 }
+
+/// Wait until a backend in this test's database is blocked on a lock while taking a team row — the
+/// `FOR NO KEY UPDATE` of `team_membership::locked`, or of SAML reconcile's multi-team lock. A race
+/// test calls this before releasing its holder, so a pass means the contender really passed its
+/// pool pre-check and waited on the lock — not that it was merely slow to start and ran after the
+/// commit.
+pub async fn await_team_lock_waiter(pool: &PgPool) {
+    await_team_lock(pool, None).await;
+}
+
+/// [`await_team_lock_waiter`], for a waiter blocked by ONE holder: the backend whose
+/// `pg_backend_pid()` is `holder`. For a race with several holders in turn, where a waiter still
+/// listed against an earlier holder must not count as waiting on this one.
+pub async fn await_team_lock_waiter_on(pool: &PgPool, holder: i32) {
+    await_team_lock(pool, Some(holder)).await;
+}
+
+async fn await_team_lock(pool: &PgPool, holder: Option<i32>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting = sqlx::query_scalar!(
+            r#"SELECT EXISTS (
+                 SELECT 1 FROM pg_stat_activity
+                  WHERE datname = current_database() AND wait_event_type = 'Lock'
+                    AND query ILIKE '%FROM kb_teams%FOR NO KEY UPDATE%'
+                    AND ($1::int IS NULL OR $1 = ANY (pg_blocking_pids(pid)))
+               ) AS "waiting!""#,
+            holder,
+        )
+        .fetch_one(pool)
+        .await
+        .expect("read lock waiters");
+        if waiting {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the contender never blocked on the team-row lock"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}

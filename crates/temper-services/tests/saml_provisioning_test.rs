@@ -8,6 +8,7 @@ use temper_core::types::TeamRole;
 use temper_services::services::saml_provisioning_service::{
     reconcile_idp_memberships, ReconcileCounts, ReconcileOutcome,
 };
+use temper_services::test_support::await_team_lock_waiter_on;
 use uuid::Uuid;
 
 /// Minimal fixtures: a profile, two teams, one IdP, and mappings. Returns (profile, team_a, team_b).
@@ -481,6 +482,166 @@ async fn a_native_row_inserted_mid_reconcile_is_skipped(pool: PgPool) {
     .await
     .unwrap();
     assert_eq!(events, 0, "a skip records nothing");
+}
+
+/// Three fresh teams, in ascending id order — the lock order.
+async fn three_teams_in_lock_order(pool: &PgPool) -> [Uuid; 3] {
+    let mut teams = [Uuid::nil(); 3];
+    for team in &mut teams {
+        *team = sqlx::query_scalar(
+            "INSERT INTO kb_teams (id, slug, name) VALUES (uuid_generate_v7(), $1, $1) RETURNING id",
+        )
+        .bind(format!("t-{}", Uuid::now_v7()))
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    }
+    teams.sort();
+    teams
+}
+
+async fn idp_row(conn: &mut sqlx::PgConnection, team: Uuid, profile: Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role, source) \
+         VALUES ($1, $2, 'member', 'idp')",
+    )
+    .bind(team)
+    .bind(profile)
+    .execute(conn)
+    .await
+    .unwrap();
+}
+
+async fn lock_team(conn: &mut sqlx::PgConnection, team: Uuid) {
+    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(team)
+        .execute(conn)
+        .await
+        .unwrap();
+}
+
+async fn backend_pid(conn: &mut sqlx::PgConnection) -> i32 {
+    sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(conn)
+        .await
+        .unwrap()
+}
+
+/// Task `01a14592-708c`, BITE: a row on a team the pre-read did not see is handled by starting
+/// over with the widened lock set, never by locking that team late.
+///
+/// Teams `lo < mid < hi`. The profile holds idp rows on `lo` and `hi`, so the reconcile pre-reads
+/// and locks `{lo, hi}`. Holder B locks `lo` and adds an idp row on `mid`; the reconcile blocks on
+/// `lo`. Writer W then locks `mid` — a well-ordered writer that will want `hi` next. B commits: the
+/// reconcile takes `{lo, hi}` and its locked re-read finds the row on `mid`, a team it holds no
+/// lock on, and it is shown to wait on W's `mid`. W now takes `hi`.
+///
+/// Before the fix the reconcile locked `mid` late while holding `hi`, so W's `hi` closed a cycle
+/// and Postgres aborted one of the two. Now the reconcile has rolled back and re-locks
+/// `lo, mid, hi` in order: it waits on `mid` holding only `lo`, W takes `hi` and commits, and the
+/// reconcile completes, revoking all three rows (the assertion carries no groups).
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_row_on_an_unlocked_team_restarts_the_reconcile_in_lock_order(pool: PgPool) {
+    let (profile, _, _) = seed(&pool).await;
+    let [lo, mid, hi] = three_teams_in_lock_order(&pool).await;
+    let mut conn = pool.acquire().await.unwrap();
+    idp_row(&mut conn, lo, profile).await;
+    idp_row(&mut conn, hi, profile).await;
+    drop(conn);
+
+    let mut b = pool.begin().await.unwrap();
+    let b_pid = backend_pid(&mut b).await;
+    lock_team(&mut b, lo).await;
+    idp_row(&mut b, mid, profile).await;
+
+    let pool2 = pool.clone();
+    let reconcile =
+        tokio::spawn(
+            async move { reconcile_idp_memberships(&pool2, profile, "acme", Some(&[])).await },
+        );
+    // The reconcile pre-read without `mid` and is blocked on `lo`.
+    await_team_lock_waiter_on(&pool, b_pid).await;
+
+    let mut w = pool.begin().await.unwrap();
+    let w_pid = backend_pid(&mut w).await;
+    lock_team(&mut w, mid).await;
+    b.commit().await.unwrap();
+
+    // The reconcile has seen `mid` and waits on W for it.
+    await_team_lock_waiter_on(&pool, w_pid).await;
+    lock_team(&mut w, hi).await;
+    w.commit().await.expect("W commits: nothing deadlocked");
+
+    let c = counts(
+        reconcile
+            .await
+            .unwrap()
+            .expect("the reconcile completes: nothing deadlocked"),
+    );
+    assert_eq!(c.revoked, 3, "{c:?}");
+    for team in [lo, mid, hi] {
+        assert_eq!(membership(&pool, team, profile).await, None, "{team}");
+    }
+}
+
+/// Task `01a14592-708c`, BITE: a native row on a team outside the lock set never restarts a pass.
+/// Reconcile never writes it (step 3 writes only `desired` teams, step 4 only idp rows), so it
+/// needs no lock. A restart on it would let a user who creates teams during their own login run
+/// the passes out, take the 409, and keep idp rows the login should have revoked.
+///
+/// The same shape as the race above, but holder B adds a NATIVE row on `mid`. W then holds `mid`
+/// for the rest of the test. The reconcile must complete without waiting on it, revoking `lo` and
+/// `hi` and leaving the native row alone. Restarting on the native row would have it block on W's
+/// `mid` until the timeout.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_native_row_on_an_unlocked_team_does_not_restart_the_reconcile(pool: PgPool) {
+    let (profile, _, _) = seed(&pool).await;
+    let [lo, mid, hi] = three_teams_in_lock_order(&pool).await;
+    let mut conn = pool.acquire().await.unwrap();
+    idp_row(&mut conn, lo, profile).await;
+    idp_row(&mut conn, hi, profile).await;
+    drop(conn);
+
+    let mut b = pool.begin().await.unwrap();
+    let b_pid = backend_pid(&mut b).await;
+    lock_team(&mut b, lo).await;
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role, source) \
+         VALUES ($1, $2, 'owner', 'native')",
+    )
+    .bind(mid)
+    .bind(profile)
+    .execute(&mut *b)
+    .await
+    .unwrap();
+
+    let pool2 = pool.clone();
+    let reconcile =
+        tokio::spawn(
+            async move { reconcile_idp_memberships(&pool2, profile, "acme", Some(&[])).await },
+        );
+    await_team_lock_waiter_on(&pool, b_pid).await;
+
+    let mut w = pool.begin().await.unwrap();
+    lock_team(&mut w, mid).await;
+    b.commit().await.unwrap();
+
+    let c = counts(
+        tokio::time::timeout(std::time::Duration::from_secs(10), reconcile)
+            .await
+            .expect("the reconcile never waits on the native row's team")
+            .unwrap()
+            .expect("the reconcile completes"),
+    );
+    w.commit().await.unwrap();
+    assert_eq!(c.revoked, 2, "{c:?}");
+    assert_eq!(membership(&pool, lo, profile).await, None);
+    assert_eq!(membership(&pool, hi, profile).await, None);
+    assert_eq!(
+        membership(&pool, mid, profile).await,
+        Some(("Owner".to_string(), "native".to_string())),
+        "the native row stands untouched"
+    );
 }
 
 /// C4/R8, pin: `left_ownerless` counts the teams THIS reconcile left without an owner, not the

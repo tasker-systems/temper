@@ -10,7 +10,8 @@
 # task C6) routed every recorded membership act through ONE SQL writer,
 # `_admin_team_membership_write` (migration `20261101200000_team_membership_changed.sql`), which
 # writes the row and appends its `team_membership_changed` admin event in one statement. Rust
-# reaches that writer through ONE function, `authz::team_membership::membership_write`, which takes
+# reaches that writer through ONE function, `authz::team_membership::try_membership_write` (wrapped
+# by `membership_write` for every writer but SAML reconcile), which takes
 # a sealed `AuthorizedMembershipChange` — a value only the rank rule or a writer-specific token can
 # build.
 #
@@ -39,7 +40,7 @@
 #                     (`subscription_test_support.rs`) is invisible to a per-file pass, so it is
 #                     named in the baseline instead.
 #   2. Rust callers — calls of `_admin_team_membership_write` in `crates/*/src/**.rs`, outside
-#                     comments and test modules. The baseline is EXACTLY ONE: `membership_write`.
+#                     comments and test modules. The baseline is EXACTLY ONE: `try_membership_write`.
 #                     That is the seal's pin (plan P16): a second caller could hand the writer
 #                     anything it liked.
 #   3. Token mints  — struct literals of the three writer tokens (`GenesisToken`,
@@ -102,6 +103,9 @@ EOF
 # REVIEWED 2026-10-16 (team-role rank, PR C, task C6) — exactly one: the `sqlx::query_scalar!` in
 # `authz::team_membership::membership_write`, whose only argument is the sealed
 # `AuthorizedMembershipChange`. Any second line here is a write path that skips the seal.
+# REVIEWED 2026-10-16 (task 01a14592-708c) — still one, moved: the query now sits in
+# `try_membership_write`, which returns the writer's refusals typed for SAML reconcile;
+# `membership_write` calls it and maps them to errors. Same sealed argument, same single site.
 read -r -d '' CALLER_BASELINE <<'EOF' || true
 1 crates/temper-services/src/authz/team_membership.rs
 EOF
@@ -111,7 +115,7 @@ EOF
 # REVIEWED 2026-10-16 (team-role rank, PR C, task C6, RG-2 L3) — one struct literal per token,
 # each in the one function plan P16 names: `GenesisToken` in `team_service::create_team` (after its
 # team insert), `ClaimedInvitation` in `invitation_service::accept_invitation` (from the claim
-# `UPDATE`'s row), `IdpReconcileToken` in `saml_provisioning_service::reconcile_idp_memberships`.
+# `UPDATE`'s row), `IdpReconcileToken` in `saml_provisioning_service::reconcile_pass` (once per pass).
 # Private fields stop other modules; this pins the defining module to its one mint. `#impl` keys
 # pin the token's `impl` blocks, since one could mint through `Self { … }`: the one today is
 # `ClaimedInvitation`'s three getters (fix-pass review, 2026-10-16), which build nothing.
@@ -126,7 +130,7 @@ EOF
 #
 # REVIEWED 2026-10-16 (team-role rank, PR C, task C6, RG-1/RG-2) — none. The writer authorizes
 # nothing (its migration header says so); a SQL function calling it could write any act with any
-# `via`, the last-owner guard off. Rust's `membership_write` is its only caller, pinned above.
+# `via`, the last-owner guard off. Rust's `try_membership_write` is its only caller, pinned above.
 read -r -d '' SQL_CALLER_BASELINE <<'EOF' || true
 EOF
 

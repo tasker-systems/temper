@@ -38,6 +38,20 @@ ignore = [
     # it", and the ignore is exactly what keeps the gate from blocking on it.
     "RUSTSEC-2023-0071",
 
+    # ── UNFIXABLE, and BUILD-TIME ONLY — never linked ────────────────────────
+    # zip 3.0.0: extraction applies SUID/SGID bits (RUSTSEC-2026-0367), creates
+    # symlinks pointing outside the destination (RUSTSEC-2026-0368), and applies
+    # Unix permissions through symlinks (RUSTSEC-2026-0369). Each is fixed in
+    # zip >= 9.0.0. `zip` is only a [build-dependency] of `utoipa-swagger-ui`
+    # (`cargo tree -i zip`); its build script unpacks the Swagger UI archive
+    # bundled by the `vendored` feature. That archive is fixed bytes from a
+    # pinned crate, not untrusted input, and zip is not linked into any binary.
+    # There is no fix to adopt: utoipa-swagger-ui 10.0.1, the latest, still
+    # requires zip ^8.6. Drop all three ids once a release moves to zip >= 9.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+
     # ── FIX-PENDING — a patched version exists; adopting it is a tracked bump ─
     # crossbeam-epoch 0.9.18 → >=0.9.20 (invalid-pointer deref in Debug impl).
     "RUSTSEC-2026-0204",
