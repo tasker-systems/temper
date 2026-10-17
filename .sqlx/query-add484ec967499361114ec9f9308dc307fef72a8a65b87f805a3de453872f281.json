@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH vis AS MATERIALIZED (SELECT resource_id FROM resources_visible_to($2))\n           SELECT e.id, et.name, e.emitter_entity_id, e.occurred_at, e.invocation_id, e.metadata\n             FROM kb_events e\n             JOIN kb_event_types et ON et.id = e.event_type_id\n            WHERE e.invocation_id = $1\n              AND e.producing_anchor_table IS NOT NULL\n              AND anchor_readable_by_profile($2, e.producing_anchor_table, e.producing_anchor_id) IS TRUE\n              AND NOT EXISTS (\n                    SELECT 1\n                      FROM (SELECT (e.payload ->> 'resource_id')::uuid AS id\n                            UNION ALL\n                            SELECT (e.payload -> 'owner' ->> 'id')::uuid\n                             WHERE e.payload -> 'owner' ->> 'table' = 'kb_resources'\n                            UNION ALL\n                            SELECT (e.payload -> 'source' ->> 'id')::uuid\n                             WHERE e.payload -> 'source' ->> 'table' = 'kb_resources'\n                            UNION ALL\n                            SELECT (e.payload -> 'target' ->> 'id')::uuid\n                             WHERE e.payload -> 'target' ->> 'table' = 'kb_resources'\n                            UNION ALL\n                            SELECT b.resource_id\n                              FROM kb_content_blocks b\n                             WHERE b.id = (e.payload ->> 'block_id')::uuid\n                            UNION ALL\n                            SELECT b.resource_id\n                              FROM kb_content_blocks b\n                             WHERE e.payload -> 'owner' ->> 'table' = 'kb_content_blocks'\n                               AND b.id = (e.payload -> 'owner' ->> 'id')::uuid) named\n                     WHERE named.id IS NOT NULL\n                       AND NOT EXISTS (SELECT 1 FROM vis WHERE vis.resource_id = named.id)\n                       AND NOT EXISTS (\n                             SELECT 1\n                               FROM kb_resources r\n                               JOIN kb_resource_homes h ON h.resource_id = r.id\n                              WHERE r.id = named.id\n                                AND NOT r.is_active\n                                AND r.erased_at IS NULL\n                                AND anchor_readable_by_profile($2, h.anchor_table, h.anchor_id) IS TRUE))\n              AND NOT EXISTS (\n                    SELECT 1\n                      FROM (VALUES (e.payload -> 'source'), (e.payload -> 'target')) AS ends(ref)\n                     WHERE ends.ref ->> 'table' IN ('kb_cogmaps', 'kb_blobs')\n                       AND endpoint_readable_by_profile($2, ends.ref ->> 'table', (ends.ref ->> 'id')::uuid)\n                           IS NOT TRUE)\n              AND NOT EXISTS (\n                    SELECT 1\n                      FROM kb_edges edg\n                     WHERE (edg.id = (e.payload ->> 'edge_id')::uuid\n                            OR (e.payload -> 'owner' ->> 'table' = 'kb_edges'\n                                AND edg.id = (e.payload -> 'owner' ->> 'id')::uuid))\n                       AND (anchor_readable_by_profile($2, edg.home_anchor_table, edg.home_anchor_id)\n                            AND CASE WHEN edg.source_table = 'kb_resources'\n                                     THEN EXISTS (SELECT 1 FROM vis WHERE vis.resource_id = edg.source_id)\n                                     ELSE endpoint_readable_by_profile($2, edg.source_table, edg.source_id)\n                                END\n                            AND CASE WHEN edg.target_table = 'kb_resources'\n                                     THEN EXISTS (SELECT 1 FROM vis WHERE vis.resource_id = edg.target_id)\n                                     ELSE endpoint_readable_by_profile($2, edg.target_table, edg.target_id)\n                                END) IS NOT TRUE)\n            ORDER BY e.occurred_at, e.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "emitter_entity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "occurred_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "invocation_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "metadata",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "add484ec967499361114ec9f9308dc307fef72a8a65b87f805a3de453872f281"
+}

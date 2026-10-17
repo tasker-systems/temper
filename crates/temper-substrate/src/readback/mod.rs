@@ -1687,6 +1687,35 @@ pub struct InvocationListRow {
 /// invocation yields `Ok(None)` — never an error (leak-safe, like [`anchor_shape`]). Acts are fetched
 /// ONLY after the envelope passes the gate, so an unreadable invocation never leaks its acts.
 ///
+/// **Each act is gated again, on what it touched.** Reading the cogmap an invocation started from
+/// says nothing about the elements its acts reached, and an act's `metadata` is the reasoning an
+/// agent wrote about that element. An act is returned only when the principal can read the anchor
+/// it was produced in AND every element its payload names:
+///
+/// - **Resources**, named by `resource_id`, a `kb_resources` `owner`, a `block_id` or a
+///   `kb_content_blocks` `owner` (the block's resource), or a `kb_resources` `source`/`target`.
+///   Readable means in `resources_visible_to`, with one exception: a soft-deleted resource counts as
+///   readable to whoever can read its home, so the delete act itself, and every earlier act that
+///   names the resource, stays visible to the readers it was visible to. This departs from the
+///   soft-delete read floor on purpose; an erased resource gets no such exception, because erasure
+///   owns what its husk discloses.
+/// - **Other endpoints** an edge act names in its payload — a `kb_cogmaps` or `kb_blobs` `source` or
+///   `target` — through `endpoint_readable_by_profile`. The payload's endpoints are gated, not only
+///   the edge row's: a re-asserted edge mints a fresh `edge_id` that conflicts into the existing row
+///   and never reaches `kb_edges`, so the row cannot be the only check.
+/// - **Edges**, named by `edge_id` or a `kb_edges` `owner`, by the edge's home and both endpoints (a
+///   folded edge still counts, as on the element trail). An edge endpoint gets no soft-delete
+///   exception, so an act on an edge that touches a deleted resource is dropped.
+///
+/// The resource and edge predicates are the element trail's; the anchor check is in addition to
+/// them, so this door is stricter than the trail for a principal who reads a resource only through a
+/// direct grant or ownership, without its home. The visible-resource set is computed once per call.
+///
+/// An act that fails is dropped, not returned with its metadata withheld — the row carries no target
+/// id, so dropping it leaks nothing, where a withheld row would still say an act of that kind
+/// happened. An act with no producing anchor (an admin-ledger act) is dropped because there is no
+/// anchor to gate it on. Every predicate is tested `IS TRUE`, so a NULL from one drops the act.
+///
 /// Unqualified, self-gating SQL; see the module-level note. Read-only.
 pub async fn invocation_show(
     pool: &PgPool,
@@ -1710,12 +1739,68 @@ pub async fn invocation_show(
     };
 
     let acts = sqlx::query!(
-        r#"SELECT e.id, et.name, e.emitter_entity_id, e.occurred_at, e.invocation_id, e.metadata
+        r#"WITH vis AS MATERIALIZED (SELECT resource_id FROM resources_visible_to($2))
+           SELECT e.id, et.name, e.emitter_entity_id, e.occurred_at, e.invocation_id, e.metadata
              FROM kb_events e
              JOIN kb_event_types et ON et.id = e.event_type_id
             WHERE e.invocation_id = $1
+              AND e.producing_anchor_table IS NOT NULL
+              AND anchor_readable_by_profile($2, e.producing_anchor_table, e.producing_anchor_id) IS TRUE
+              AND NOT EXISTS (
+                    SELECT 1
+                      FROM (SELECT (e.payload ->> 'resource_id')::uuid AS id
+                            UNION ALL
+                            SELECT (e.payload -> 'owner' ->> 'id')::uuid
+                             WHERE e.payload -> 'owner' ->> 'table' = 'kb_resources'
+                            UNION ALL
+                            SELECT (e.payload -> 'source' ->> 'id')::uuid
+                             WHERE e.payload -> 'source' ->> 'table' = 'kb_resources'
+                            UNION ALL
+                            SELECT (e.payload -> 'target' ->> 'id')::uuid
+                             WHERE e.payload -> 'target' ->> 'table' = 'kb_resources'
+                            UNION ALL
+                            SELECT b.resource_id
+                              FROM kb_content_blocks b
+                             WHERE b.id = (e.payload ->> 'block_id')::uuid
+                            UNION ALL
+                            SELECT b.resource_id
+                              FROM kb_content_blocks b
+                             WHERE e.payload -> 'owner' ->> 'table' = 'kb_content_blocks'
+                               AND b.id = (e.payload -> 'owner' ->> 'id')::uuid) named
+                     WHERE named.id IS NOT NULL
+                       AND NOT EXISTS (SELECT 1 FROM vis WHERE vis.resource_id = named.id)
+                       AND NOT EXISTS (
+                             SELECT 1
+                               FROM kb_resources r
+                               JOIN kb_resource_homes h ON h.resource_id = r.id
+                              WHERE r.id = named.id
+                                AND NOT r.is_active
+                                AND r.erased_at IS NULL
+                                AND anchor_readable_by_profile($2, h.anchor_table, h.anchor_id) IS TRUE))
+              AND NOT EXISTS (
+                    SELECT 1
+                      FROM (VALUES (e.payload -> 'source'), (e.payload -> 'target')) AS ends(ref)
+                     WHERE ends.ref ->> 'table' IN ('kb_cogmaps', 'kb_blobs')
+                       AND endpoint_readable_by_profile($2, ends.ref ->> 'table', (ends.ref ->> 'id')::uuid)
+                           IS NOT TRUE)
+              AND NOT EXISTS (
+                    SELECT 1
+                      FROM kb_edges edg
+                     WHERE (edg.id = (e.payload ->> 'edge_id')::uuid
+                            OR (e.payload -> 'owner' ->> 'table' = 'kb_edges'
+                                AND edg.id = (e.payload -> 'owner' ->> 'id')::uuid))
+                       AND (anchor_readable_by_profile($2, edg.home_anchor_table, edg.home_anchor_id)
+                            AND CASE WHEN edg.source_table = 'kb_resources'
+                                     THEN EXISTS (SELECT 1 FROM vis WHERE vis.resource_id = edg.source_id)
+                                     ELSE endpoint_readable_by_profile($2, edg.source_table, edg.source_id)
+                                END
+                            AND CASE WHEN edg.target_table = 'kb_resources'
+                                     THEN EXISTS (SELECT 1 FROM vis WHERE vis.resource_id = edg.target_id)
+                                     ELSE endpoint_readable_by_profile($2, edg.target_table, edg.target_id)
+                                END) IS NOT TRUE)
             ORDER BY e.occurred_at, e.id"#,
         invocation_id,
+        principal.uuid(),
     )
     .fetch_all(pool)
     .await?

@@ -1,0 +1,41 @@
+title    = "Invocation show returns only the acts the caller can read, so agent reasoning about an element never crosses that element's read gate"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+`GET /api/invocations/{id}`, the `invocation_show` MCP tool and `temper invocation show` keep the
+same shape, but `acts` now holds only the acts the caller can read. The envelope stays gated on the
+originating cogmap, as before. Each act is gated again on the anchor it was produced in and on
+every element its payload names: resources (`resource_id`, a `kb_resources` or `kb_content_blocks`
+owner, a `block_id`, an edge act's `source`/`target`), other edge endpoints (cogmaps, blobs), and
+edges (`edge_id` or a `kb_edges` owner, by home and both endpoints). An act that fails is omitted
+rather than returned with its metadata withheld, because the row carries no target id; an act with
+no producing anchor (an admin-ledger act) is omitted too.
+
+Before this, a caller who could read the cogmap but not a resource an act touched received the
+reasoning and rationale the agent wrote about that resource.
+
+Who observes:
+- Readers of a cogmap without read on everything its invocations touched see fewer acts.
+- A reader who holds a resource only through a direct grant or ownership, without read on its home,
+  no longer sees acts produced in that home (stricter than the element trail, which skips the
+  anchor check).
+- Steward delivery dispositions are anchored on the connection's home context, so cogmap readers
+  who cannot read that context no longer see them (they carry no reasoning).
+- A soft-deleted resource stays readable to its home's readers, so a delete act and the acts that
+  name the resource stay visible to them; an erased one does not. An act on an edge that touches a
+  deleted resource is omitted.
+- Operators wanting the complete trail read as a principal with full reach, or over psql (the
+  steward playbook says so).
+
+Named remainders: the envelope's `outcome`, free JSON the agent writes at close, has no element to
+gate against and stays visible to the cogmap's readers. A citation audit's cited source and a
+block's provenance sources are not gated here, matching the citation trail's existing posture.
+`invocation_list` returns no acts and is unchanged.
+
+Wire shape unchanged; the `acts` field description changed (openapi.json and the three SDKs
+regenerated, description text only). `additive` is declared because the gate computes any
+openapi.json movement as `grew` and requires a shape class for it; nothing actually grew. Release
+relevance: signal-only; rides 0.6.1.
+'''

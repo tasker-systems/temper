@@ -401,7 +401,11 @@ was *dispatched*). The temper database is the source of truth — the **invocati
 (`kb_invocations`: status / outcome / `closed_at` / `correlation_id`) and its **acts**
 (`kb_events` joined on `invocation_id`). Read them with the MCP tools `invocation_show <id>`
 (envelope + acts + outcome payload) and `invocation_list --status open` (any orphaned
-envelopes), or over psql.
+envelopes), or over psql. `invocation_show` returns only the acts the caller can read: an act
+produced in a context or cogmap the caller cannot read, or naming a resource or edge outside the
+caller's reach, is omitted. That includes the steward's delivery dispositions, which are recorded
+in the connection's home context. Read as a principal who can see everything the steward touches,
+or use psql, when you need the complete trail.
 
 To connect to your instance's database, print a connection string from your Neon project:
 
