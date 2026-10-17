@@ -25,7 +25,7 @@ ignored = ["async-trait", "tokio"]
 [dependencies]
 temperkb-principal.workspace = true
 async-trait = "0.1"
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 hex = "0.4"

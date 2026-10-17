@@ -6220,7 +6220,7 @@ dependencies = [
  "askama",
  "async-trait",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "clap",
  "dialoguer",
@@ -6280,7 +6280,7 @@ name = "temper-e2e"
 version = "0.0.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "clap",
  "filetime",
@@ -6399,7 +6399,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "chacha20poly1305",
  "chrono",
@@ -6467,7 +6467,7 @@ dependencies = [
 name = "temperkb-auth"
 version = "0.6.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "rand 0.10.3",
  "serde",
  "sha2 0.10.9",
@@ -6480,7 +6480,7 @@ name = "temperkb-client"
 version = "0.6.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "dirs 5.0.1",
  "open",
@@ -6511,7 +6511,7 @@ name = "temperkb-core"
 version = "0.6.0"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "dirs 5.0.1",
  "hex",
@@ -6540,7 +6540,7 @@ name = "temperkb-mcp"
 version = "0.6.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "futures",
  "http",

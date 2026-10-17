@@ -22,7 +22,7 @@ test-embed = ["temper-cli/test-embed"]
 
 [dev-dependencies]
 axum = "0.8"
-base64 = "0.22"
+base64 = "0.23"
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 filetime = "0.2"
