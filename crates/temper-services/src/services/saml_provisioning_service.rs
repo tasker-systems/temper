@@ -12,7 +12,7 @@ use temper_core::types::team::TeamMemberSource;
 use temper_core::types::TeamRole;
 
 use crate::authz::team_membership;
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 
 /// Proof that a reconcile transaction is writing: defined here with a private field and
 /// constructed only in this module's reconcile flow, so the `idp` constructors in
@@ -75,8 +75,12 @@ struct DesiredMembership {
 /// ascending id order FIRST and `current` is re-read under the locks, so a native row inserted
 /// mid-reconcile is skipped rather than written over (S1), and the identity provider wins over
 /// the last-owner guard (R8) — a reconcile that leaves a team ownerless records
-/// `left_ownerless` on the event and in the counts. Runs in one transaction so a failure
-/// leaves membership state unchanged (fail-open at the caller).
+/// `left_ownerless` on the event and in the counts. Each pass runs in one transaction, so a
+/// failure leaves membership state unchanged (fail-open at the caller).
+///
+/// The set to lock comes from an unlocked pre-read, so an idp row on a team outside it can commit
+/// before the locked re-read. The pass then rolls back and the next one locks the widened set from
+/// the start, rather than lock that team late and out of order. After two passes it gives up.
 ///
 /// # `groups` is an `Option`, and that is the guard
 ///
@@ -148,6 +152,43 @@ pub async fn reconcile_idp_memberships(
         }
     }
 
+    // 2–5, in passes (task `01a14592-708c`). A pass locks every team it will touch, in ascending
+    // id order, BEFORE any write. If its locked re-read finds a row on a team it did not lock, it
+    // rolls back and the next pass locks the widened set from the start, so no team lock is ever
+    // taken out of order — and none after `try_membership_write` has locked and revoked invitation
+    // rows on an earlier team (task `01a14591`). `to_lock` only grows across passes.
+    let mut to_lock: Vec<Uuid> = desired.keys().copied().collect();
+    for _ in 0..RECONCILE_PASSES {
+        if let Some(counts) =
+            reconcile_pass(pool, profile_id, idp_key, &desired, &mut to_lock).await?
+        {
+            return Ok(ReconcileOutcome::Reconciled(counts));
+        }
+    }
+    // A row appeared on an unlocked team in every pass. Membership is left as it was — the same
+    // fail-open a deadlock abort gave before the passes — and the next login reconciles again.
+    Err(ApiError::Conflict(RECONCILE_RACED.to_string()))
+}
+
+/// How many passes [`reconcile_idp_memberships`] makes before it gives up. The second pass locks
+/// every team the first one found, so only a row appearing on yet another team, in the gap
+/// between the passes, makes it fail.
+const RECONCILE_PASSES: usize = 2;
+
+/// The refusal when a row kept appearing on a team the reconcile had not locked.
+const RECONCILE_RACED: &str =
+    "team membership changed during the identity-provider reconcile; retry";
+
+/// One pass of [`reconcile_idp_memberships`]' steps 2–5, in its own transaction. `None` means the
+/// pass found a row on a team outside `to_lock`, widened `to_lock` with it and rolled back, having
+/// written nothing; `Some` is a committed reconcile.
+async fn reconcile_pass(
+    pool: &PgPool,
+    profile_id: Uuid,
+    idp_key: &str,
+    desired: &HashMap<Uuid, TeamRole>,
+    to_lock: &mut Vec<Uuid>,
+) -> ApiResult<Option<ReconcileCounts>> {
     let mut tx = pool.begin().await?;
 
     // 2. The pre-read: the team set to lock. It is not trusted for DECISIONS — that is the
@@ -166,13 +207,12 @@ pub async fn reconcile_idp_memberships(
     //     taking it for every touched team — single-row writes included — serializes reconcile
     //     with them and makes the re-read below current state. Ascending id, the multi-team
     //     lock order; one statement locks in output order.
-    let mut to_lock: Vec<Uuid> = desired.keys().copied().collect();
     to_lock.extend(pre.iter().map(|c| c.team_id));
     to_lock.sort();
     to_lock.dedup();
     let _locked: Vec<Uuid> = sqlx::query_scalar!(
         r#"SELECT id AS "id!" FROM kb_teams WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE"#,
-        &to_lock,
+        &to_lock[..],
     )
     .fetch_all(&mut *tx)
     .await?;
@@ -185,6 +225,24 @@ pub async fn reconcile_idp_memberships(
     )
     .fetch_all(&mut *tx)
     .await?;
+
+    // 2c. An idp row on a team the pre-read did not see — a concurrent reconcile's — committed
+    //     before the re-read. Step 3 writes only `desired` teams, all locked, and step 4 only idp
+    //     rows, so this is the only way a write could need a lock taken after the others. Widen
+    //     and start again instead. A native row on an unlocked team is never written, so it never
+    //     restarts a pass: a user creating teams mid-login cannot run the passes out and keep
+    //     their idp rows past a revocation.
+    let unlocked: Vec<Uuid> = current
+        .iter()
+        .filter(|c| c.source.as_deref() != Some("native"))
+        .map(|c| c.team_id)
+        .filter(|t| to_lock.binary_search(t).is_err())
+        .collect();
+    if !unlocked.is_empty() {
+        to_lock.extend(unlocked);
+        tx.rollback().await?;
+        return Ok(None);
+    }
 
     let mut native_teams: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
     let mut idp_current: HashMap<Uuid, TeamRole> = HashMap::new();
@@ -224,26 +282,19 @@ pub async fn reconcile_idp_memberships(
                 let lowers_owner = matches!(target.current(), Some((TeamRole::Owner, _)));
                 let change =
                     team_membership::AuthorizedMembershipChange::idp(token, &target, m.role)?;
-                match team_membership::membership_write(&mut tx, None, change).await {
-                    Ok(outcome) => match outcome {
-                        team_membership::MembershipOutcome::Added => out.added += 1,
-                        team_membership::MembershipOutcome::Changed => {
-                            out.updated += 1;
-                            if lowers_owner {
-                                count_ownerless(&mut tx, m.team_id, &mut out).await?;
-                            }
+                match team_membership::try_membership_write(&mut tx, None, change).await? {
+                    Ok(team_membership::MembershipOutcome::Added) => out.added += 1,
+                    Ok(team_membership::MembershipOutcome::Changed) => {
+                        out.updated += 1;
+                        if lowers_owner {
+                            count_ownerless(&mut tx, m.team_id, &mut out).await?;
                         }
-                        _ => {}
-                    },
-                    // A native row appeared for this (team, profile) and the writer's own
-                    // re-check refused the write (C7): count it as skipped, never as an update.
-                    Err(crate::error::ApiError::Conflict(msg))
-                        if msg == team_membership::ALREADY_A_MEMBER
-                            || msg == team_membership::MEMBERSHIP_CHANGED =>
-                    {
-                        out.skipped_native += 1;
                     }
-                    Err(other) => return Err(other),
+                    Ok(_) => {}
+                    // An add found a row: a derived writer inserted a native one after the
+                    // member-row lock above, which locks no row that does not exist yet (C7).
+                    Err(team_membership::NotWritten::Exists) => out.skipped_native += 1,
+                    Err(other) => return Err(idp_write_refused(other)),
                 }
             }
         }
@@ -260,22 +311,15 @@ pub async fn reconcile_idp_memberships(
         let target = team_membership::locked(&mut tx, team_id, ProfileId::from(profile_id)).await?;
         let lowers_owner = matches!(target.current(), Some((TeamRole::Owner, _)));
         let change = team_membership::AuthorizedMembershipChange::idp_removal(token, &target)?;
-        match team_membership::membership_write(&mut tx, None, change).await {
-            Ok(outcome) => {
-                if outcome == team_membership::MembershipOutcome::Removed {
-                    out.revoked += 1;
-                    if lowers_owner {
-                        count_ownerless(&mut tx, team_id, &mut out).await?;
-                    }
+        match team_membership::try_membership_write(&mut tx, None, change).await? {
+            Ok(team_membership::MembershipOutcome::Removed) => {
+                out.revoked += 1;
+                if lowers_owner {
+                    count_ownerless(&mut tx, team_id, &mut out).await?;
                 }
             }
-            Err(crate::error::ApiError::Conflict(msg))
-                if msg == team_membership::ALREADY_A_MEMBER
-                    || msg == team_membership::MEMBERSHIP_CHANGED =>
-            {
-                out.skipped_native += 1;
-            }
-            Err(other) => return Err(other),
+            Ok(_) => {}
+            Err(other) => return Err(idp_write_refused(other)),
         }
     }
 
@@ -290,7 +334,18 @@ pub async fn reconcile_idp_memberships(
     record_reconciled(&mut tx, profile_id, idp_key).await?;
 
     tx.commit().await?;
-    Ok(ReconcileOutcome::Reconciled(out))
+    Ok(Some(out))
+}
+
+/// A refusal the writer cannot give a reconcile write, answered as an error rather than counted.
+/// The write holds the team lock and, for a change or a removal, the row's lock (`locked`), so the
+/// row cannot be absent or move from what was read (`absent`, `stale`), and the last-owner guard
+/// is off (R8). One of these means the invariant broke; the reconcile fails open — membership
+/// unchanged, the caller logs — rather than misreport it as a native skip.
+fn idp_write_refused(refusal: team_membership::NotWritten) -> ApiError {
+    ApiError::Internal(format!(
+        "identity-provider reconcile write refused under its locks: {refusal:?}"
+    ))
 }
 
 /// Record that a reconcile was declined for want of a group signal the IdP was configured to send.

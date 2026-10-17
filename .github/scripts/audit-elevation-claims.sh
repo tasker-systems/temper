@@ -355,6 +355,24 @@ current_gates() {
 #     admin (R6)" (check 7 of the rank rule) and "a system admin's invitation rests on their
 #     governance" (`inviter_ceiling`'s admin arm reads `is_system_admin`, i.e. governance). Each
 #     holds.
+# REVIEWED 2026-10-16 (tasks 01a14592-3f83 and 01a14592-708c, PR #1156) — `machine`
+# 1dcae7eff1d9 -> 5b84b025e3e9 and `team_membership` afbb42768b4e -> 560e379006e7: machine reach
+# re-checks its registrar under the team lock. `AuthorizedReach` carries the `HumanPrincipal` it
+# was authorized for (`authorize_registration` takes it for the reach's lifetime), and
+# `from_reach` takes that principal's `ResolvedMembership`, resolved on the transaction after
+# `locked`, refusing 403 unless it `manages()` the team — the same bar `contain_reach` applies on
+# the pool, the admin arm included. `membership_write` became a wrapper over
+# `try_membership_write`, which returns the writer's refusals typed for SAML reconcile; the
+# refusals every other writer answers with are unchanged. Each only narrows; no arm widened and
+# no member-act decision moved. Claims bound to both gates were re-read: `machine_authz`'s "Full,
+# unchecked reach (Phase A D5)" for a system admin still holds, since `resolve`'s admin arm
+# `manages()` every team. Claim moved: `machine_registration_service.rs` 7 -> 8 — a test doc, "A
+# system admin — on a team where they hold no row, so only the admin arm admits them": the
+# `SystemAdmin` arm of `MembershipAuthority::resolve`, the `team_membership` gate. It holds.
+# REVIEWED 2026-10-17 (PR #1156 review round) — `team_membership` 560e379006e7 -> fa44bdaf7329:
+# the `idp` constructor's doc names `reconcile_pass` as where its token is now minted, and
+# `ALREADY_A_MEMBER` / `MEMBERSHIP_CHANGED` lose `pub(crate)` now that SAML reconcile matches on
+# `NotWritten` rather than on their text. No arm, check or refusal moved; no claim moved.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -407,7 +425,7 @@ claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_syste
 claim crates/temper-services/src/services/invitation_service.rs 5 team_membership
 claim crates/temper-services/src/services/machine_authz.rs 8 machine,team_membership
 claim crates/temper-services/src/services/machine_client_service.rs 7 machine
-claim crates/temper-services/src/services/machine_registration_service.rs 7 machine
+claim crates/temper-services/src/services/machine_registration_service.rs 8 machine
 claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
 claim crates/temper-services/src/services/saml_provisioning_service.rs 1 team_membership
 claim crates/temper-services/src/services/subscription_service.rs 6 subscription
@@ -417,7 +435,7 @@ gate audit_gate 05a9b61226c4
 gate connection 586029b73345
 gate context_admin bce45d31795d
 gate grant 2aa83e237c3e
-gate machine 1dcae7eff1d9
+gate machine 5b84b025e3e9
 gate reconcile_regime 76ead78c03ac
 gate read_gates 7d576b5dacc8
 gate ledger_subject c6758faabe32
@@ -426,7 +444,7 @@ gate two_sided 7822960e4ffa
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership afbb42768b4e
+gate team_membership fa44bdaf7329
 EOF
 
 CURRENT="$(current_claims; current_gates)"

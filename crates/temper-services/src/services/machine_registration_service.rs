@@ -47,13 +47,15 @@ use crate::services::profile_service;
 /// Team memberships are recorded acts (plan C3): each team is locked in ascending id order
 /// (the multi-writer lock order) and the row goes through `from_reach` +
 /// `membership_write`, so a reach lands as a `machine_reach` event naming the registrar as
-/// actor. The role ceiling was enforced at mint (D4b) and again by `from_reach`; the machine row
-/// is inserted after the reach, and the database's machine-cap trigger holds the ceiling then.
-/// The grant half keeps `insert_grant` — its own sealed `GrantWarrant` authority, authored by
-/// the caller's resolved emitter.
+/// actor. Under each team lock the registrar's membership authority is resolved again on the
+/// transaction and `from_reach` re-applies the bar the pool check applied (task `01a14592-3f83`),
+/// so the decision reads current state, as every member act's does (plan P1). The role ceiling
+/// was enforced at mint (D4b) and again by `from_reach`; the machine row is inserted after the
+/// reach, and the database's machine-cap trigger holds the ceiling then. The grant half keeps
+/// `insert_grant` — its own sealed `GrantWarrant` authority, authored by the registrar's resolved
+/// emitter.
 async fn apply_reach(
     conn: &mut sqlx::PgConnection,
-    caller: ProfileId,
     profile_id: Uuid,
     reach: AuthorizedReach<'_>,
     // `Some` iff `reach` carries at least one grant (the caller resolves one only when there is a
@@ -62,14 +64,19 @@ async fn apply_reach(
     // writer ties the emitter to the recorded actor, which is this registrar.
     emitter: Option<EntityId>,
 ) -> ApiResult<()> {
+    let registrar = reach.registrar();
     let mut teams: Vec<_> = reach.teams().iter().collect();
     teams.sort_by_key(|team| team.team_id);
     for team in teams {
         let role = machine_authz::parse_team_role(&team.role)?;
         let target =
             team_membership::locked(&mut *conn, team.team_id, ProfileId::from(profile_id)).await?;
-        let change =
-            team_membership::AuthorizedMembershipChange::from_reach(&reach, caller, &target, role)?;
+        let resolved =
+            team_membership::MembershipAuthority::resolve(&mut *conn, registrar, team.team_id)
+                .await?;
+        let change = team_membership::AuthorizedMembershipChange::from_reach(
+            &reach, resolved, &target, role,
+        )?;
         team_membership::membership_write(&mut *conn, emitter, change).await?;
     }
 
@@ -87,7 +94,7 @@ async fn apply_reach(
                 can_write: grant.can_write(),
                 can_delete: false,
                 can_grant: false,
-                granted_by_profile_id: *caller,
+                granted_by_profile_id: *registrar.profile_id(),
             },
             emitter
                 .expect("a grant implies a resolved emitter (Some iff reach.grants() non-empty)"),
@@ -236,7 +243,7 @@ pub async fn provision(
             .map_err(|e| map_duplicate_from_conflict(e, &req.client_id))?;
 
     profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
-    apply_reach(&mut tx, caller, profile_id, reach, emitter).await?;
+    apply_reach(&mut tx, profile_id, reach, emitter).await?;
 
     let id = sqlx::query_scalar!(
         r#"INSERT INTO kb_machine_clients
@@ -336,7 +343,7 @@ pub async fn issue(
         .map_err(|e| map_duplicate_from_conflict(e, &client_id))?;
 
     profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
-    apply_reach(&mut tx, caller, profile_id, reach, emitter).await?;
+    apply_reach(&mut tx, profile_id, reach, emitter).await?;
 
     let id = sqlx::query_scalar!(
         r#"INSERT INTO kb_machine_clients
@@ -1352,6 +1359,159 @@ mod tests {
             .fetch_one(pool)
             .await
             .expect("count machines")
+    }
+
+    /// [`seed_team_owner`], with the `<handle>@web` emitter a registrar's `machine_reach` event is
+    /// authored by.
+    async fn seed_registrar(pool: &PgPool, handle: &str) -> (Uuid, Uuid) {
+        let (owner, team) = seed_team_owner(pool, handle).await;
+        let mut conn = pool.acquire().await.expect("acquire");
+        crate::services::profile_service::provision_profile_entities(&mut conn, owner, handle)
+            .await
+            .expect("provision registrar emitters");
+        (owner, team)
+    }
+
+    /// An `issue` request (temper's own AS) for a machine `team` owns, reaching it as `member`.
+    fn issue_onto(team: Uuid) -> IssueMachineRequest {
+        IssueMachineRequest {
+            label: "worker".to_string(),
+            owner_team_id: Some(team),
+            teams: vec![TeamSpec {
+                team_id: team,
+                role: "member".to_string(),
+            }],
+            grants: vec![],
+        }
+    }
+
+    async fn machine_reach_events(pool: &PgPool) -> Vec<serde_json::Value> {
+        sqlx::query_scalar(
+            "SELECT e.payload FROM kb_events e \
+               JOIN kb_event_types t ON t.id = e.event_type_id \
+              WHERE t.name = 'team_membership_changed' AND e.payload->>'via' = 'machine_reach' \
+              ORDER BY e.id",
+        )
+        .fetch_all(pool)
+        .await
+        .expect("machine reach events")
+    }
+
+    /// Task `01a14592-3f83`, BITE: the registrar's bar is decided under the team lock, not on the
+    /// pool. R is the team's owner when the registration passes `authorize_registration`; an admin
+    /// demotes R to `member` and holds the team lock with that write uncommitted; R's registration
+    /// is shown to BLOCK on the team-row lock; the admin commits. Re-resolved under the lock, R no
+    /// longer manages the team, so the registration is the pool check's 403: no machine, no
+    /// `machine_reach` event naming R. Before the fix, the pool's verdict stood and the machine
+    /// landed on the team with R recorded as actor.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_registrar_demoted_while_waiting_on_the_team_lock_is_refused(pool: PgPool) {
+        use crate::authz::team_membership::{self, MembershipAct, MembershipAuthority};
+        use temper_core::types::team::TeamRole;
+
+        let (registrar, team) = seed_registrar(&pool, "registrar").await;
+        let admin = seed_admin(&pool).await;
+        // A second owner, so the demotion is not refused as the last owner's (C6).
+        let (co_owner, _) = seed_team_owner(&pool, "co-owner").await;
+        sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner')",
+            team,
+            co_owner,
+        )
+        .execute(&pool)
+        .await
+        .expect("co-owner");
+        let admin_principal = crate::test_support::human_principal_for(&pool, admin.uuid()).await;
+        let registrar_principal = crate::test_support::human_principal_for(&pool, registrar).await;
+
+        // Holder: the admin demotes the registrar, through the routed path, written and held open.
+        let mut holder = pool.begin().await.unwrap();
+        let target = team_membership::locked(&mut holder, team, ProfileId::from(registrar))
+            .await
+            .unwrap();
+        let resolved = MembershipAuthority::resolve(&mut holder, &admin_principal, team)
+            .await
+            .unwrap();
+        let change = team_membership::authorize(
+            resolved,
+            MembershipAct::Change {
+                role: TeamRole::Member,
+            },
+            &target,
+        )
+        .unwrap();
+        team_membership::membership_write(&mut holder, None, change)
+            .await
+            .unwrap();
+
+        // Contender: the registrar, still the owner as the pool sees it.
+        let contender_pool = pool.clone();
+        let contender = tokio::spawn(async move {
+            svc::issue(
+                &contender_pool,
+                &registrar_principal,
+                &issue_onto(team),
+                crate::auth_config::AuthMode::TemperAs,
+            )
+            .await
+        });
+        crate::test_support::await_team_lock_waiter(&pool).await;
+        holder.commit().await.unwrap();
+
+        let err = contender
+            .await
+            .unwrap()
+            .expect_err("a registrar demoted under the lock cannot land the reach");
+        assert!(
+            matches!(err, crate::error::ApiError::Forbidden),
+            "the pool check's refusal, got {err:?}"
+        );
+        assert_eq!(machine_count(&pool).await, 0, "nothing was registered");
+        assert!(
+            machine_reach_events(&pool).await.is_empty(),
+            "no machine_reach event names the demoted registrar"
+        );
+    }
+
+    /// Task `01a14592-3f83`, PIN: the re-check under the lock admits who the pool check admitted.
+    /// A system admin — on a team where they hold no row, so only the admin arm admits them — and
+    /// a team's owner each land their reach, each recorded as the actor.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn an_admin_and_an_owner_still_land_their_reach_under_the_lock(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let (registrar, owned) = seed_registrar(&pool, "registrar").await;
+        let (_, elsewhere) = seed_team_owner(&pool, "elsewhere").await;
+        let mode = crate::auth_config::AuthMode::TemperAs;
+
+        let by_admin = svc::issue(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
+            &issue_onto(elsewhere),
+            mode,
+        )
+        .await
+        .expect("an admin's registration");
+        let by_owner = svc::issue(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, registrar).await,
+            &issue_onto(owned),
+            mode,
+        )
+        .await
+        .expect("an owner's registration");
+
+        let events = machine_reach_events(&pool).await;
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(events[0]["actor"], serde_json::json!(admin.uuid()));
+        assert_eq!(
+            events[0]["profile_id"],
+            serde_json::json!(by_admin.client.profile_id)
+        );
+        assert_eq!(events[1]["actor"], serde_json::json!(registrar));
+        assert_eq!(
+            events[1]["profile_id"],
+            serde_json::json!(by_owner.client.profile_id)
+        );
     }
 
     /// Under an external IdP only a system admin registers a client id. A team owner who could
