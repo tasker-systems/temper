@@ -30,7 +30,7 @@ fn main() {
     if std::env::var("PROBE_MODE").as_deref() == Ok("dylib") {
         println!("pointer_probe[dylib]: ort::init_from({path}) — a pointer-as-.so");
         let t = Instant::now();
-        let result = ort::init_from(&path).map(|b| b.commit());
+        let result = ort::init_from(&path).map(|b| b.build());
         let elapsed = t.elapsed().as_secs_f64();
         match result {
             Ok(_) => println!("RESULT: Ok (loaded as a shared library!?) in {elapsed:.2}s"),
@@ -40,8 +40,10 @@ fn main() {
     }
 
     let dylib = std::env::var("ORT_DYLIB_PATH").expect("set ORT_DYLIB_PATH (the bench bed does)");
-    let committed = ort::init_from(dylib).expect("ort init_from").commit();
-    assert!(committed, "ort runtime failed to commit");
+    let environment = ort::init_from(dylib)
+        .expect("ort init_from")
+        .build()
+        .expect("ort environment");
     let bytes = std::fs::read(&path).expect("read PROBE_BYTES");
     let head = String::from_utf8_lossy(&bytes[..bytes.len().min(48)]).replace('\n', " ");
     println!(
@@ -50,7 +52,7 @@ fn main() {
     );
 
     let t = Instant::now();
-    let result = Session::builder()
+    let result = Session::builder(&environment)
         .expect("session builder")
         .commit_from_memory(&bytes);
     let elapsed = t.elapsed().as_secs_f64();
