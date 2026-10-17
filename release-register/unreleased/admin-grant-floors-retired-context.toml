@@ -1,0 +1,19 @@
+title    = "A system admin's grant on a context requires a live context; revoking on a retired one remains available and leaves it retired"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+Grant administration on a `kb_contexts` subject now applies the same subject-liveness floor on
+the system-admin arm that `can()` applies on the delegated arm (migration `20260902000010`): an
+admin's grant on a retired context, or on an id no context backs, is refused with the existing
+`403`. Revocation is unchanged: an admin can still withdraw a grant from a retired context, and
+doing so leaves the context retired (ruled 2026-10-17). The resource arm's liveness floor is
+unchanged.
+
+Who observes: system administrators granting on a context subject through
+`access_service::grant_capability`. No HTTP route, MCP tool or CLI command takes a context
+subject today, so no wire caller sees a difference. Witness:
+`crates/temper-services/tests/retired_context_grant_floor_test.rs`. Release relevance:
+signal-only; rides 0.6.1.
+'''

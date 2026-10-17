@@ -186,8 +186,13 @@ impl From<&GrantCapabilityRequest> for RequestedCapabilities {
 /// principal holding write they could never hold themselves. Laundering by proxy. Hence one helper.
 ///
 /// Semantics:
-/// - **SystemAdmin** — unrestricted. Bootstrap and repair would otherwise deadlock: there would be
-///   no way to mint the first holder of any capability.
+/// - **SystemAdmin** — unrestricted in what it confers. Bootstrap and repair would otherwise
+///   deadlock: there would be no way to mint the first holder of any capability. A `kb_contexts`
+///   subject must be live: an admin grant on a retired or absent context is refused, the answer
+///   `can()`'s floor already gives the delegated arm (migration `20260902000010`). The floor is
+///   here rather than in `GrantAuthority::resolve` because it is the grant's alone: revocation
+///   resolves the same authority without this function, so an admin can still withdraw a grant
+///   from a retired context, and doing so leaves the context retired (ruled 2026-10-17).
 /// - **Delegated** — attenuating: every capability conferred must be one the caller already holds
 ///   on this subject (`conferred ⊆ held`). Self-grant is neutralized by the same rule, since the
 ///   check never consults who the principal is.
@@ -216,7 +221,12 @@ pub(crate) async fn authorize_capability_grant(
         // Unreachable: `authorize` refused it above. Enumerated rather than `_ =>` so a future
         // arm cannot land here silently permissive.
         GrantAuthority::None => Err(ApiError::Forbidden),
-        GrantAuthority::SystemAdmin => Ok(proof),
+        GrantAuthority::SystemAdmin => {
+            if subject.kind == AnchorTable::Contexts && !context_is_live(pool, subject.id).await? {
+                return Err(ApiError::Forbidden);
+            }
+            Ok(proof)
+        }
         GrantAuthority::Delegated => {
             for (requested, action) in [
                 (caps.read, AccessAction::Read),
@@ -240,6 +250,18 @@ pub(crate) async fn authorize_capability_grant(
             Ok(proof)
         }
     }
+}
+
+/// Is `context_id` a live (`is_active`) context? The predicate `can()`'s subject-liveness floor
+/// applies to a `kb_contexts` subject, so an id with no row reads "not live" too.
+async fn context_is_live(pool: &PgPool, context_id: Uuid) -> ApiResult<bool> {
+    Ok(sqlx::query_scalar!(
+        "SELECT EXISTS (SELECT 1 FROM kb_contexts WHERE id = $1 AND is_active)",
+        context_id,
+    )
+    .fetch_one(pool)
+    .await?
+    .unwrap_or(false))
 }
 
 /// Raw `can_grant` capability probe (NO `is_system_admin` OR) — the reusable primitive. Callers that
