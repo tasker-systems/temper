@@ -79,7 +79,7 @@ syn = { version = "2", features = ["full", "visit"] }
 # Macro bodies are token streams; the gates read their identifiers.
 proc-macro2 = "1"
 # The manifest gate reads this crate's own Cargo.toml.
-toml = "0.8"
+toml = "1.1"
 # `resources_read_error_test` serves a canned answer from a real listener.
 axum = "0.8"
 # `declarations_test` drives the mounted service through rmcp's real client over an in-memory
