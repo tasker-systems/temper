@@ -43,7 +43,7 @@ utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 # sessions cannot reach), so `emit-openapi`, clippy, and the pre-commit hook all build
 # offline. The pinned assets track the crate version, same as the download would.
 utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
-utoipa-axum = "0.2"
+utoipa-axum = "0.3"
 
 [features]
 # Forwards to temper-services/test-db so DB-backed integration tests can reach the shared
