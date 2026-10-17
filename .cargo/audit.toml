@@ -51,4 +51,14 @@ ignore = [
     # quinn-proto 0.11.14 → >=0.11.15 (remote memory exhaustion, transitive
     # under the HTTP stack).
     "RUSTSEC-2026-0185",
+
+    # ── FIX-PENDING (upstream) — build-time only, trusted input ─────────────
+    # zip 3.0.0 → >=9.0.0 (symlink escape, setuid bits, permissions through a
+    # symlink on extract). Only a build-dependency of utoipa-swagger-ui, whose
+    # build script unpacks the crate-vendored Swagger UI zip; nothing extracts an
+    # untrusted archive and zip is not linked at runtime. No utoipa-swagger-ui
+    # release takes zip >= 9 yet (10.x pins ^8.6). Delete when one does.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
 ]
