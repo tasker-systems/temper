@@ -1,0 +1,17 @@
+title    = "`temperkb-client`'s `ClientError` is `#[non_exhaustive]`, so a new variant is additive from here on"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+Rust API only: no wire shape, no HTTP or MCP behavior, and no rendered message changes. A
+downstream crate that matches `ClientError` exhaustively now needs a wildcard arm (Rust-API break
+for the release notes; 0.x carries no Cargo semver promise). It lands in the same window that
+added `ClientError::AmbientRefused` (#1140), which already broke exhaustive matches, so the
+release costs downstream callers one change rather than two, and every later variant is additive.
+Who observes: Rust callers of `temperkb-client`; the known one outside this workspace is the
+desktop app in `temper-contrib`, which constructs only `ClientError::Other` and already has a
+fallthrough arm (read 2026-10-14; ruled 2026-10-08 to update it in step). The other half of the
+same correction, the authorship query params, shipped earlier in this window as
+`actinput-authorship-query-params`. Release relevance: signal-only; rides 0.6.1.
+'''
