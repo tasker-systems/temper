@@ -36,14 +36,14 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tracing = "0.1"
 uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
+utoipa = { version = "6", features = ["axum_extras", "uuid", "chrono"] }
 # `vendored` bundles the Swagger UI assets via `utoipa-swagger-ui-vendored` instead
 # of having the build script fetch them from GitHub at compile time. Keeps the build
 # hermetic — no network dependency on github.com (which sandboxed/proxied CI and web
 # sessions cannot reach), so `emit-openapi`, clippy, and the pre-commit hook all build
 # offline. The pinned assets track the crate version, same as the download would.
-utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
-utoipa-axum = "0.2"
+utoipa-swagger-ui = { version = "10", features = ["axum", "vendored"] }
+utoipa-axum = "0.3"
 
 [features]
 # Forwards to temper-services/test-db so DB-backed integration tests can reach the shared
