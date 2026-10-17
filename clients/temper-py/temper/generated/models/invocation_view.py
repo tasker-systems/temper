@@ -31,7 +31,7 @@ class InvocationView(BaseModel):
     """
     The full show projection of an invocation envelope: the `kb_invocations` row plus its acts. Internal ledger pointers (`opened_by_event_id`, `closed_by_event_id`) are NOT exposed — they are dereferenced into `acts` and the open/closed timestamps.
     """ # noqa: E501
-    acts: List[InvocationActRow] = Field(description="The acts (stamped events) that occurred under this envelope.")
+    acts: List[InvocationActRow] = Field(description="The acts (stamped events) under this envelope that the caller can read. An act on an element the caller cannot read is omitted, so a reader of the cogmap alone may see fewer acts than occurred.")
     closed_at: Optional[datetime] = Field(default=None, description="When the invocation closed; `None` while still open.")
     correlation_id: Optional[UUID] = Field(default=None, description="The dispatch tick that spawned this run, inherited server-side at open from the active claimed job for `originating_cogmap_id`. `None` for a manual open with no active job. This is the run→tick join; an individual act joins through its `invocation_id`, not by carrying the tick.")
     disposition: Optional[Disposition] = Field(default=None, description="The terminal disposition, derived from `status`. `None` while the invocation is open.  There is no `disposition` column. `invocation_close` writes the disposition into `status`; `outcome` holds only the caller's opaque payload, despite what the comment on `kb_invocations.outcome` in the canonical schema migration claims. Surfacing it under its own name here makes \"did the close take?\" answerable without knowing that.")

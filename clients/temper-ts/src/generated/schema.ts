@@ -7313,7 +7313,11 @@ export interface components {
          *     and the open/closed timestamps.
          */
         InvocationView: {
-            /** @description The acts (stamped events) that occurred under this envelope. */
+            /**
+             * @description The acts (stamped events) under this envelope that the caller can read. An act on an element
+             *     the caller cannot read is omitted, so a reader of the cogmap alone may see fewer acts than
+             *     occurred.
+             */
             acts: components["schemas"]["InvocationActRow"][];
             /**
              * Format: date-time
