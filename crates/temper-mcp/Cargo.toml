@@ -52,7 +52,7 @@ temperkb-core = { workspace = true, features = ["mcp"] }
 temperkb-workflow = { workspace = true, features = ["mcp"] }
 
 # Blob commit/read carry bytes over the JSON-only MCP transport as base64.
-base64 = "0.22"
+base64 = "0.23"
 # Collecting the read-through `ByteStream` into a whole tool result.
 futures = "0.3"
 

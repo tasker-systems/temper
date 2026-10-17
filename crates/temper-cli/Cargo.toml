@@ -17,7 +17,7 @@ anstream = "1.0"
 anstyle = "1"
 askama = "0.12"
 async-trait = "0.1"
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 dialoguer = "0.12"

@@ -51,7 +51,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.10"
 sha2 = "0.10"
-base64 = "0.22"
+base64 = "0.23"
 # The Slack grant vault seals each stored refresh/access token with XChaCha20-Poly1305 (24-byte
 # random nonce per row, so nonce reuse is a non-issue). Pure Rust, no OpenSSL — matches the
 # rustls-only posture. `getrandom` backs the nonce/key RNG (`OsRng`).
