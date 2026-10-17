@@ -530,6 +530,40 @@ vocab_probe '.components.schemas.Reason.oneOf |= (.[0:2] + [{"type":"string","en
 vocab_probe '.components.schemas.Reason.oneOf |= ([.[0] | .enum = ["alpha_renamed"]] + .[1:2] + [{"type":"string","enum":["gamma"]}] + .[2:])' \
   moved "open-vocabulary growth beside a renamed member computes as moved"
 
+# 15v–15z — the UNORDERED-oneOf arm (2026-10-17): a `oneOf` is a set, so its arm order is not
+# shape. utoipa 6 emits a nullable reference as `[$ref, {type: null}]` where 5 emitted
+# `[{type: null}, $ref]`. Response-reachable, so the input-side tolerance cannot pass it.
+cat > "${WORK}/set_base.json" <<'JSON'
+{"paths":{"/api/thing":{"get":{"responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Holder"}}}}}}}},
+ "components":{"schemas":{
+   "Holder":{"type":"object","properties":{
+     "one":{"oneOf":[{"type":"null"},{"$ref":"#/components/schemas/Inner","description":"the inner one"}]},
+     "any":{"anyOf":[{"type":"null"},{"$ref":"#/components/schemas/Inner"}]}}},
+   "Inner":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]},
+   "Other":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}}}}
+JSON
+set_probe() { # $1 = jq mutation, $2 = expected verdict, $3 = label
+  jq -S "$1" "${WORK}/set_base.json" > "${WORK}/set_head.json"
+  v="$(derive_with "${WORK}/set_base.json" "${WORK}/set_head.json")"
+  if [ "$v" = "$2" ]; then ok "derivation: $3"; else bad "derivation: $3" "verdict=$v (want $2)"; fi
+}
+# 15v — the utoipa 6 reorder itself: grew. BITE-PROVEN: without the arm in wire-shape-lib.jq this
+# computes `moved` (index-pairing compares `null` against `$ref`).
+set_probe '.components.schemas.Holder.properties.one.oneOf |= reverse' \
+  grew "a oneOf whose arms only reorder computes as grew"
+# 15w — reorder plus a prose edit on an arm: grew — the pairing ignores prose.
+set_probe '.components.schemas.Holder.properties.one.oneOf |= (reverse | .[0].description = "reworded")' \
+  grew "a oneOf reorder beside an arm prose edit computes as grew"
+# 15x — reorder while an arm retargets its $ref: moved — the set changed, not just its order.
+set_probe '.components.schemas.Holder.properties.one.oneOf |= (reverse | .[0]["$ref"] = "#/components/schemas/Other")' \
+  moved "a oneOf reorder that also retargets an arm computes as moved"
+# 15y — a oneOf losing its null arm: moved — the count changed, so the set arm never runs.
+set_probe '.components.schemas.Holder.properties.one.oneOf |= [.[1]]' \
+  moved "a oneOf losing an arm computes as moved"
+# 15z — an anyOf reorder: moved — anyOf stays index-paired (first-match deserializers).
+set_probe '.components.schemas.Holder.properties.any.anyOf |= reverse' \
+  moved "an anyOf whose arms only reorder still computes as moved"
+
 # ── 16. DEPENDENCY-ONLY — manifest/lockfile bumps under wire trees owe no row ───────────────────
 # The fixture seam: paths named by --dependency-only are set aside; a row is owed only for the
 # rest. A mixed PR (a bump plus a code edit) still fails presence, naming only the code file.
