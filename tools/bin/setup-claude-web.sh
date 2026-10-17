@@ -123,11 +123,12 @@ ENVEOF
 generate_env
 
 # ---------------------------------------------------------------------------
-# Phase 3a: git-lfs (required by pre-push hook + onnxruntime binary assets)
+# Phase 3a: git-lfs (required by pre-push hook + the embed path's LFS assets)
 # ---------------------------------------------------------------------------
 # The repo's `githooks/pre-push` invokes `git lfs pre-push`, so git-lfs must
 # be installed for any session that intends to push. Separately,
-# onnxruntime-node ships model binaries through LFS — another hard requirement.
+# temper-ingest's bundled libonnxruntime.so and ONNX model are LFS-tracked — another hard
+# requirement for any build or test that embeds.
 # Cheap to install (~2s apt), safe to skip silently if already present.
 ensure_git_lfs() {
   if command_exists git-lfs; then
