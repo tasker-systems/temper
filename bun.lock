@@ -30,7 +30,7 @@
         "postgres": "^3.4.9",
         "typescript": "^5.8",
         "vitest": "^4.1.11",
-        "xml-crypto": "^6.3.3",
+        "xml-crypto": "^6.4.0",
       },
     },
     "packages/temper-ui": {
@@ -41,7 +41,7 @@
         "@fontsource-variable/source-serif-4": "^5.3.1",
         "@opentelemetry/api": "^1.9.1",
         "@tasker-systems/temper-telemetry-ts": "file:../../clients/temper-telemetry-ts",
-        "@vercel/functions": "^3.10.0",
+        "@vercel/functions": "^3.10.1",
         "d3-force": "^3",
         "d3-hierarchy": "^3",
         "d3-polygon": "^3",
@@ -68,7 +68,7 @@
         "@types/d3-selection": "^3",
         "@types/d3-zoom": "^3",
         "jsdom": "^30",
-        "playwright": "^1.64.0",
+        "playwright": "^1.64.1",
         "svelte": "^5",
         "svelte-check": "^4",
         "tailwindcss": "^4",
@@ -441,13 +441,13 @@
 
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
 
-    "@vercel/blob": ["@vercel/blob@2.8.1", "", { "dependencies": { "@vercel/oidc": "^3.6.1", "async-retry": "^1.3.3", "is-buffer": "^2.0.5", "is-node-process": "^1.2.0", "throttleit": "^2.1.0", "undici": "^6.23.0" } }, "sha512-QFX17sMRoBnPuNyHsQsY5GsYRg9HoE8yGKKbfB/V/JK9QuyQp10R5qeNntT6EgUJ4cQ3R+sH26n5l/LacfzzEw=="],
+    "@vercel/blob": ["@vercel/blob@2.8.2", "", { "dependencies": { "@vercel/oidc": "^3.6.1", "async-retry": "^1.3.3", "is-buffer": "^2.0.5", "is-node-process": "^1.2.0", "throttleit": "^2.1.0", "undici": "^6.23.0" } }, "sha512-ZUUWO2VA00r9ZTRtKgH4va7FGOUxUtge2FaRr9WZmeeX2s3C3qVe2tOTLTbv/tkcd+L+ijxaI2eP9S1/mGHc9Q=="],
 
     "@vercel/cli-config": ["@vercel/cli-config@0.2.1", "", { "dependencies": { "xdg-app-paths": "5", "zod": "4.1.11" } }, "sha512-RhfyXmRLHdbnry8RJqHDc+5rGxMZ0bu+fpysZjtv3bE+BubpuwxTancHOKiH5zKQREsdwFVr3mOI2kOvxlOyxA=="],
 
     "@vercel/cli-exec": ["@vercel/cli-exec@1.0.0", "", { "dependencies": { "execa": "5.1.1" } }, "sha512-kQF8LGie/Hbdq9/psJxLE7owRTcqMQMhgybU04gCeR7cbQAr5t8OrjefDNColJv1QSSucFt4pLwRiARVmlOnug=="],
 
-    "@vercel/functions": ["@vercel/functions@3.10.0", "", { "dependencies": { "@vercel/oidc": "4.0.0" }, "peerDependencies": { "@aws-sdk/credential-provider-web-identity": "*", "ws": ">=8" }, "optionalPeers": ["@aws-sdk/credential-provider-web-identity", "ws"] }, "sha512-WAt0QuZBy5tLQlqVeUrC+SATkyngZWz5IBl6dvmw8hxFfGPmfWN06mkpiwXY22Ys1Dnxmcu9KlZDQV3vPP0hjQ=="],
+    "@vercel/functions": ["@vercel/functions@3.10.1", "", { "dependencies": { "@vercel/oidc": "4.0.1" }, "peerDependencies": { "@aws-sdk/credential-provider-web-identity": "*", "ws": ">=8" }, "optionalPeers": ["@aws-sdk/credential-provider-web-identity", "ws"] }, "sha512-Ca7peSyID6CW5a9Pyu6rDK2AC3n9hyJD0aTBuO74x9eL50Z+rgXIR0H0umI6j0gb9NMG7jvrx7DUhMGuuOFxsg=="],
 
     "@vercel/nft": ["@vercel/nft@0.30.4", "", { "dependencies": { "@mapbox/node-pre-gyp": "^2.0.0", "@rollup/pluginutils": "^5.1.3", "acorn": "^8.6.0", "acorn-import-attributes": "^1.9.5", "async-sema": "^3.1.1", "bindings": "^1.4.0", "estree-walker": "2.0.2", "glob": "^10.5.0", "graceful-fs": "^4.2.9", "node-gyp-build": "^4.2.2", "picomatch": "^4.0.2", "resolve-from": "^5.0.0" }, "bin": { "nft": "out/cli.js" } }, "sha512-wE6eAGSXScra60N2l6jWvNtVK0m+sh873CpfZW4KI2v8EHuUQp+mSEi4T+IcdPCSEDgCdAS/7bizbhQlkjzrSA=="],
 
@@ -767,9 +767,9 @@
 
     "pino-std-serializers": ["pino-std-serializers@7.1.0", "", {}, "sha512-BndPH67/JxGExRgiX1dX0w1FvZck5Wa4aal9198SrRhZjH3GxKQUKIBnYJTdj2HDN3UQAS06HlfcSbQj2OHmaw=="],
 
-    "playwright": ["playwright@1.64.0", "", { "dependencies": { "playwright-core": "1.64.0" }, "bin": { "playwright": "cli.js" } }, "sha512-kVzTnYFYEyQ9RGzBjNCd2+yEqWmVbxl3AHPynv3qQ6JTjv4a+kwRcnqQwIpuP3NnrnIrE/Q6wWAIAvMfIE2/Yg=="],
+    "playwright": ["playwright@1.64.1", "", { "dependencies": { "playwright-core": "1.64.1" }, "bin": { "playwright": "cli.js" } }, "sha512-HCrVhHr5QQuwYoswEUGTb7gGp522yflbv/ST8nF4sFWGuLjQCt17Q/EubpGGSNKYn1tsTCPZxqHhHCfVURu7UA=="],
 
-    "playwright-core": ["playwright-core@1.64.0", "", { "bin": { "playwright-core": "cli.js" } }, "sha512-T9r+MZkTECl2+oUcZ26YgZzTrYidTsIhYYkJix+6iDOymOb1FB2RLLSOxRGnZGv5DStt+aduIVbt+E8WygXYpg=="],
+    "playwright-core": ["playwright-core@1.64.1", "", { "bin": { "playwright-core": "cli.js" } }, "sha512-BC4s8y6SEVA6Q1rSxZTto8hI1KUI3xXlHGZgvGqP4IqPdI/a6FX9H29IDNz7vKo9l21b6LfYosScPL6M3xxyDQ=="],
 
     "postcss": ["postcss@8.5.29", "", { "dependencies": { "nanoid": "^3.3.19", "picocolors": "^1.1.1", "source-map-js": "^1.2.2" } }, "sha512-49cGhUbXj8Qenv0iTMxA1cFBzxXoctpC9Ujd77t1WcbJIr6nF/eI7g/8MgxrYldFRuAXvja7xQRwavoW7kgrxQ=="],
 
@@ -935,7 +935,7 @@
 
     "xml": ["xml@1.0.1", "", {}, "sha512-huCv9IH9Tcf95zuYCsQraZtWnJvBtLVE0QHMOs8bWyZAFZNDcYjsPq1nEx8jKA9y+Beo9v+7OBPRisQTjinQMw=="],
 
-    "xml-crypto": ["xml-crypto@6.3.3", "", { "dependencies": { "@xmldom/is-dom-node": "^1.0.1", "@xmldom/xmldom": "^0.8.15", "xpath": "^0.0.33" } }, "sha512-qJnp4Dv5tH8CPzXKitFcLiCxPcy3SnPVQ9eY4qKKsHahf7/Ri7zDwjWaBACarMkT0T6FP+LWzdibO+19b136rg=="],
+    "xml-crypto": ["xml-crypto@6.4.0", "", { "dependencies": { "@xmldom/is-dom-node": "^1.0.1", "@xmldom/xmldom": "^0.8.15", "xpath": "^0.0.33" } }, "sha512-d21ModhBO/+QWWAmOjyDeQJuHNmsR/HtOxyBchiTbKfGNKuHYwQNd+SlLhwyyrwoAGLp4Qc6BQ7nAtnM47dHSQ=="],
 
     "xml-encryption": ["xml-encryption@3.1.0", "", { "dependencies": { "@xmldom/xmldom": "^0.8.5", "escape-html": "^1.0.3", "xpath": "0.0.32" } }, "sha512-PV7qnYpoAMXbf1kvQkqMScLeQpjCMixddAKq9PtqVrho8HnYbBOWNfG0kA4R7zxQDo7w9kiYAyzS/ullAyO55Q=="],
 
@@ -1017,7 +1017,7 @@
 
     "@vercel/cli-config/zod": ["zod@4.1.11", "", {}, "sha512-WPsqwxITS2tzx1bzhIKsEs19ABD5vmCVa4xBo2tq/SrV4RNZtfws1EnCWQXM6yh8bD08a1idvkB5MZSBiZsjwg=="],
 
-    "@vercel/functions/@vercel/oidc": ["@vercel/oidc@4.0.0", "", { "dependencies": { "@vercel/cli-config": "0.3.1", "@vercel/cli-exec": "1.0.1", "jose": "^5.9.6" } }, "sha512-ko6ATeRUlHZMB5hLFdC7+/Q1dI2f3NX3gZHxtpALdkxurwjD5HFHGWYF+4o+4SF0E47jg6KzcHknmRpHcKgJ5A=="],
+    "@vercel/functions/@vercel/oidc": ["@vercel/oidc@4.0.1", "", { "dependencies": { "@vercel/cli-config": "0.3.1", "@vercel/cli-exec": "1.0.1", "jose": "^5.9.6" } }, "sha512-l//xMmDTj2WR6EMtfA2BEF2oR7ViKCD1SCxqFKCn1/8wOZBxgxhxkegSGi90ICTc1rB50ZbKuPIslc8aJxAqew=="],
 
     "@vercel/nft/picomatch": ["picomatch@4.0.4", "", {}, "sha512-QP88BAKvMam/3NxH6vj2o21R6MjxZUAd6nlwAS/pnGvN9IVLocLHxGYIzFhg6fUQ+5th6P4dv4eW9jX3DSIj7A=="],
 
