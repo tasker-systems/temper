@@ -138,8 +138,8 @@ impl AuthorizedGrant {
 ///
 /// `registrar` is the person the reach was authorized FOR. It rides in the proof, not beside it, so
 /// `apply_reach` re-checks the membership bar under each team lock for exactly that person
-/// (task `01a14592-3f83`) and records exactly them as actor — there is no second spelling of the
-/// registrar a call site could get wrong.
+/// (task `01a14592-3f83`) and records exactly them as actor. The membership write cannot be handed
+/// a different registrar from the one the reach was authorized for.
 #[derive(Debug)]
 pub(crate) struct AuthorizedReach<'a> {
     registrar: &'a HumanPrincipal,

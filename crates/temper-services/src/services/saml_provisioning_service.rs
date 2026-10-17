@@ -75,10 +75,10 @@ struct DesiredMembership {
 /// ascending id order FIRST and `current` is re-read under the locks, so a native row inserted
 /// mid-reconcile is skipped rather than written over (S1), and the identity provider wins over
 /// the last-owner guard (R8) — a reconcile that leaves a team ownerless records
-/// `left_ownerless` on the event and in the counts. Runs in one transaction so a failure
-/// leaves membership state unchanged (fail-open at the caller).
+/// `left_ownerless` on the event and in the counts. Each pass runs in one transaction, so a
+/// failure leaves membership state unchanged (fail-open at the caller).
 ///
-/// The set to lock comes from an unlocked pre-read, so a row on a team outside it can commit
+/// The set to lock comes from an unlocked pre-read, so an idp row on a team outside it can commit
 /// before the locked re-read. The pass then rolls back and the next one locks the widened set from
 /// the start, rather than lock that team late and out of order. After two passes it gives up.
 ///
@@ -155,7 +155,7 @@ pub async fn reconcile_idp_memberships(
     // 2–5, in passes (task `01a14592-708c`). A pass locks every team it will touch, in ascending
     // id order, BEFORE any write. If its locked re-read finds a row on a team it did not lock, it
     // rolls back and the next pass locks the widened set from the start, so no team lock is ever
-    // taken out of order — and none after `membership_write` has locked and revoked invitation
+    // taken out of order — and none after `try_membership_write` has locked and revoked invitation
     // rows on an earlier team (task `01a14591`). `to_lock` only grows across passes.
     let mut to_lock: Vec<Uuid> = desired.keys().copied().collect();
     for _ in 0..RECONCILE_PASSES {
@@ -226,12 +226,15 @@ async fn reconcile_pass(
     .fetch_all(&mut *tx)
     .await?;
 
-    // 2c. A row on a team the pre-read did not see — a concurrent reconcile's idp row, or a
-    //     derived writer's native one — committed before the re-read. Every team step 3 or 4 can
-    //     touch is in `desired` or in `current`, and `desired` is all locked, so this is the only
-    //     way a write could need a lock taken after the others. Widen and start again instead.
+    // 2c. An idp row on a team the pre-read did not see — a concurrent reconcile's — committed
+    //     before the re-read. Step 3 writes only `desired` teams, all locked, and step 4 only idp
+    //     rows, so this is the only way a write could need a lock taken after the others. Widen
+    //     and start again instead. A native row on an unlocked team is never written, so it never
+    //     restarts a pass: a user creating teams mid-login cannot run the passes out and keep
+    //     their idp rows past a revocation.
     let unlocked: Vec<Uuid> = current
         .iter()
+        .filter(|c| c.source.as_deref() != Some("native"))
         .map(|c| c.team_id)
         .filter(|t| to_lock.binary_search(t).is_err())
         .collect();

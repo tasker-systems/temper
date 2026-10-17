@@ -369,6 +369,10 @@ current_gates() {
 # `manages()` every team. Claim moved: `machine_registration_service.rs` 7 -> 8 — a test doc, "A
 # system admin — on a team where they hold no row, so only the admin arm admits them": the
 # `SystemAdmin` arm of `MembershipAuthority::resolve`, the `team_membership` gate. It holds.
+# REVIEWED 2026-10-17 (PR #1156 review round) — `team_membership` 560e379006e7 -> fa44bdaf7329:
+# the `idp` constructor's doc names `reconcile_pass` as where its token is now minted, and
+# `ALREADY_A_MEMBER` / `MEMBERSHIP_CHANGED` lose `pub(crate)` now that SAML reconcile matches on
+# `NotWritten` rather than on their text. No arm, check or refusal moved; no claim moved.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -440,7 +444,7 @@ gate two_sided 7822960e4ffa
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership 560e379006e7
+gate team_membership fa44bdaf7329
 EOF
 
 CURRENT="$(current_claims; current_gates)"

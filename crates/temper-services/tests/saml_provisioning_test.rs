@@ -584,6 +584,66 @@ async fn a_row_on_an_unlocked_team_restarts_the_reconcile_in_lock_order(pool: Pg
     }
 }
 
+/// Task `01a14592-708c`, BITE: a native row on a team outside the lock set never restarts a pass.
+/// Reconcile never writes it (step 3 writes only `desired` teams, step 4 only idp rows), so it
+/// needs no lock. A restart on it would let a user who creates teams during their own login run
+/// the passes out, take the 409, and keep idp rows the login should have revoked.
+///
+/// The same shape as the race above, but holder B adds a NATIVE row on `mid`. W then holds `mid`
+/// for the rest of the test. The reconcile must complete without waiting on it, revoking `lo` and
+/// `hi` and leaving the native row alone. Restarting on the native row would have it block on W's
+/// `mid` until the timeout.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_native_row_on_an_unlocked_team_does_not_restart_the_reconcile(pool: PgPool) {
+    let (profile, _, _) = seed(&pool).await;
+    let [lo, mid, hi] = three_teams_in_lock_order(&pool).await;
+    let mut conn = pool.acquire().await.unwrap();
+    idp_row(&mut conn, lo, profile).await;
+    idp_row(&mut conn, hi, profile).await;
+    drop(conn);
+
+    let mut b = pool.begin().await.unwrap();
+    let b_pid = backend_pid(&mut b).await;
+    lock_team(&mut b, lo).await;
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role, source) \
+         VALUES ($1, $2, 'owner', 'native')",
+    )
+    .bind(mid)
+    .bind(profile)
+    .execute(&mut *b)
+    .await
+    .unwrap();
+
+    let pool2 = pool.clone();
+    let reconcile =
+        tokio::spawn(
+            async move { reconcile_idp_memberships(&pool2, profile, "acme", Some(&[])).await },
+        );
+    await_team_lock_waiter_on(&pool, b_pid).await;
+
+    let mut w = pool.begin().await.unwrap();
+    lock_team(&mut w, mid).await;
+    b.commit().await.unwrap();
+
+    let c = counts(
+        tokio::time::timeout(std::time::Duration::from_secs(10), reconcile)
+            .await
+            .expect("the reconcile never waits on the native row's team")
+            .unwrap()
+            .expect("the reconcile completes"),
+    );
+    w.commit().await.unwrap();
+    assert_eq!(c.revoked, 2, "{c:?}");
+    assert_eq!(membership(&pool, lo, profile).await, None);
+    assert_eq!(membership(&pool, hi, profile).await, None);
+    assert_eq!(
+        membership(&pool, mid, profile).await,
+        Some(("Owner".to_string(), "native".to_string())),
+        "the native row stands untouched"
+    );
+}
+
 /// C4/R8, pin: `left_ownerless` counts the teams THIS reconcile left without an owner, not the
 /// teams it touched that already had none. `seed`'s teams have no owner from the start; adding
 /// and re-ranking idp members on them lowers no owner, so the count stays zero and no event says

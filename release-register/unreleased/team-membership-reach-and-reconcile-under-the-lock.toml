@@ -12,14 +12,14 @@ registration waits on that lock is refused with the same 403 the earlier check g
 registered, and no `machine_reach` event names them.
 
 SAML reconcile locks every team it will touch, in ascending order, before it writes anything. A
-row can appear on a team it has not locked before it re-reads under its locks: a concurrent
-reconcile's identity-provider row, or a derived writer's native row. Until now it locked that team
-afterwards, out of order, and could deadlock with another writer; Postgres then aborted one of
-them. Now it rolls back and starts again with the wider set. If a second pass meets the same race,
-it gives up with a 409 and leaves membership unchanged, the same fail-open as the deadlock abort,
-and the next login reconciles. It also no longer counts a refused write (`stale`, `absent`, or a
-last-owner refusal, none of which can happen under its locks) as a skipped native row. Each now
-fails the reconcile.
+concurrent reconcile can commit an identity-provider row on a team this one has not locked before
+it re-reads under its locks. Until now it locked that team afterwards, out of order, and could
+deadlock with another writer; Postgres then aborted one of them. Now it rolls back and starts
+again with the wider set. If a second pass meets the same race, it gives up with a 409 and leaves
+membership unchanged, the same fail-open as the deadlock abort, and the next login reconciles. A
+native row on an unlocked team never restarts a pass, because reconcile never writes it. It also no
+longer counts a `stale` refusal, which cannot happen under its locks, as a skipped native row; that
+now fails the reconcile, as `absent` and a last-owner refusal already did.
 
 Who observes: a team owner whose registration races their own demotion, and SAML operators, who
 see fewer reconcile failures under concurrent logins. User-visible: rarely, and only in races.

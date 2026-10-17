@@ -265,7 +265,7 @@ impl MembershipTarget {
 }
 
 /// The refusal for an add over an existing row (#1070), naming the operation that exists.
-pub(crate) const ALREADY_A_MEMBER: &str = "already a member of this team; change their role with \
+const ALREADY_A_MEMBER: &str = "already a member of this team; change their role with \
      `temper team set-role` (PATCH /api/teams/{id}/members/{profile_id})";
 /// The refusal for an act on an identity-provider row (C7).
 pub(crate) const PROVISIONED_BY_SAML: &str =
@@ -296,7 +296,7 @@ pub(crate) const GATING_SELF_CHANGE: &str =
 pub(crate) const LAST_OWNER: &str =
     "cannot remove or demote the team's last owner; grant `owner` to another member first";
 /// The refusal when the target's row changed between authorization and write.
-pub(crate) const MEMBERSHIP_CHANGED: &str = "membership changed; retry";
+const MEMBERSHIP_CHANGED: &str = "membership changed; retry";
 
 /// What [`decide`] admits, before it is sealed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -797,7 +797,7 @@ impl AuthorizedMembershipChange {
 
     /// An identity-provider reconcile write (plan C4, R8): the IdP wins over the last-owner
     /// guard, the system is the actor, and the row's source stays (or becomes) `idp`. `token` is
-    /// minted only inside `saml_provisioning_service::reconcile_idp_memberships`. `target` is a
+    /// minted only inside `saml_provisioning_service::reconcile_pass`. `target` is a
     /// [`locked`] read under the team lock; an add or a change per the row as it stood.
     ///
     /// A native row is REFUSED: reconcile skips native rows on its locked re-read (S1, C7), so a
