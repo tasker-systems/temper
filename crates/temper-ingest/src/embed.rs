@@ -47,6 +47,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use ndarray::{Array2, ArrayView3};
+use ort::environment::Environment;
 use ort::session::Session;
 use ort::value::TensorRef;
 use tokenizers::{Encoding, Tokenizer};
@@ -131,15 +132,17 @@ fn xdg_data_candidates() -> Vec<std::path::PathBuf> {
     ]
 }
 
-static ORT_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+/// The process's one ORT environment. `ort` keeps only a weak handle to it and refuses to build a
+/// second, so this static is what keeps it alive: drop it and no session could be built again.
+static ORT_INIT: OnceLock<std::result::Result<Environment, String>> = OnceLock::new();
 
-/// Initialize the ORT runtime.
+/// Initialize the ORT runtime and return the environment every session is built in.
 ///
 /// On Linux: write the bundled `.so` to `/tmp` and load it explicitly.
 /// On other platforms: let ORT's `load-dynamic` search system paths
 /// (`ORT_DYLIB_PATH`, Homebrew, etc.).
-fn init_ort_runtime() -> std::result::Result<(), String> {
-    ORT_INIT.get_or_init(|| {
+fn init_ort_runtime() -> std::result::Result<&'static Environment, String> {
+    let init = ORT_INIT.get_or_init(|| {
         // Bundled Linux deploy: write the bundled .so to /tmp and load it.
         #[cfg(all(
             target_os = "linux",
@@ -158,7 +161,8 @@ fn init_ort_runtime() -> std::result::Result<(), String> {
             }
             ort::init_from(lib_path)
                 .map_err(|e| format!("ort::init_from: {e}"))?
-                .commit();
+                .build()
+                .map_err(|e| format!("ort environment: {e}"))
         }
 
         // All other cases (macOS, Linux with embed-download): search system paths.
@@ -197,23 +201,18 @@ fn init_ort_runtime() -> std::result::Result<(), String> {
             if let Some(path) = dylib_path {
                 ort::init_from(path)
                     .map_err(|e| format!("ort::init_from: {e}"))?
-                    .commit();
+                    .build()
+                    .map_err(|e| format!("ort environment: {e}"))
             } else {
-                return Err(
+                Err(
                     "ONNX Runtime not found. Install via `brew install onnxruntime` \
                      or set ORT_DYLIB_PATH to the library location."
                         .to_owned(),
-                );
+                )
             }
         }
-
-        Ok(())
     });
-    match ORT_INIT.get() {
-        Some(Ok(())) => Ok(()),
-        Some(Err(e)) => Err(e.clone()),
-        None => Err("ORT_INIT not initialized".to_owned()),
-    }
+    init.as_ref().map_err(Clone::clone)
 }
 
 // ---- ONNX intra-op thread count ----
@@ -462,7 +461,7 @@ fn load_model() -> Result<&'static Model> {
             "embed cold-load: entering ORT runtime init"
         );
         let t = Instant::now();
-        init_ort_runtime().map_err(|e| format!("ort runtime init: {e}"))?;
+        let environment = init_ort_runtime().map_err(|e| format!("ort runtime init: {e}"))?;
         tracing::info!(
             phase = "ort_init",
             elapsed_ms = t.elapsed().as_millis() as u64,
@@ -474,7 +473,7 @@ fn load_model() -> Result<&'static Model> {
             "embed cold-load: entering ORT session build"
         );
         let t = Instant::now();
-        let session = build_session()?;
+        let session = build_session(environment)?;
         tracing::info!(
             phase = "build_session",
             elapsed_ms = t.elapsed().as_millis() as u64,
@@ -517,8 +516,8 @@ fn load_model() -> Result<&'static Model> {
 /// configurations are selected by Cargo feature unification, which is not something a caller setting an
 /// env var can see.
 #[cfg(all(feature = "embed", not(feature = "embed-download")))]
-fn build_session() -> std::result::Result<Session, String> {
-    let mut builder = Session::builder()
+fn build_session(environment: &Environment) -> std::result::Result<Session, String> {
+    let mut builder = Session::builder(environment)
         .map_err(|e| format!("ort session builder: {e}"))?
         .with_intra_threads(resolve_intra_op_threads())
         .map_err(|e| format!("ort threads: {e}"))?;
@@ -652,7 +651,7 @@ fn model_candidates_for(
 /// could never have produced the right artifact. Failing loudly with a fixable message beats
 /// silently embedding with the wrong model.
 #[cfg(feature = "embed-download")]
-fn build_session() -> std::result::Result<Session, String> {
+fn build_session(environment: &Environment) -> std::result::Result<Session, String> {
     let model_path = match model_path_override()? {
         Some(path) => path,
         None => model_candidates()
@@ -671,7 +670,7 @@ fn build_session() -> std::result::Result<Session, String> {
 
     verify_model_file(&model_path)?;
 
-    Session::builder()
+    Session::builder(environment)
         .map_err(|e| format!("ort session builder: {e}"))?
         .with_intra_threads(resolve_intra_op_threads())
         .map_err(|e| format!("ort threads: {e}"))?

@@ -1,0 +1,14 @@
+title    = "utoipa 6: nullable references list their arms `[$ref, null]`; the contract is otherwise unchanged"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "clients"]
+status   = "signal-only"
+body = '''
+utoipa 6 (with utoipa-axum 0.3 and utoipa-swagger-ui 10) emits every nullable reference in
+openapi.json as `oneOf: [$ref, {type: null}]` where utoipa 5 emitted `[{type: null}, $ref]`. That is
+the only movement: the document is identical once oneOf arms are compared as the set they are, the
+temper-rb gem and temper-py package regenerate byte-identical, and temper-ts's schema.ts writes
+`T | null` for `null | T`, the same union. Declared additive because the shape comparator, now
+oneOf-order-insensitive, computes the movement as non-breaking; nothing grew. Behavioral: the
+dependency upgrade itself. Who observes: nobody on the wire. Release relevance: dependency-only.
+'''

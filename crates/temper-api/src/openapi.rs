@@ -369,8 +369,12 @@ impl Modify for SurfaceHeaderAddon {
         for item in openapi.paths.paths.values_mut() {
             let params = item.parameters.get_or_insert_with(Vec::new);
             // Idempotent: `modify` must not double-insert if ever applied twice.
-            if !params.iter().any(|p| p.name == name) {
-                params.push(surface_header_parameter());
+            // A `$ref` entry names a component, not a header, so only inline parameters can match.
+            let present = params
+                .iter()
+                .any(|p| matches!(p, utoipa::openapi::RefOr::T(p) if p.name == name));
+            if !present {
+                params.push(utoipa::openapi::RefOr::T(surface_header_parameter()));
             }
         }
     }
@@ -412,6 +416,17 @@ impl Modify for ApidogFolderAddon {
 
 #[cfg(test)]
 mod tests {
+    use utoipa::openapi::{path::Parameter, RefOr};
+
+    /// The router derives every parameter inline, so a `$ref` here is a spec this module's guards
+    /// have never seen. Fail on it rather than skip it: a skipped parameter is a hole in the guard.
+    fn inline(param: &RefOr<Parameter>) -> &Parameter {
+        match param {
+            RefOr::T(param) => param,
+            RefOr::Ref(r) => panic!("parameter is a `$ref` ({}), not inline", r.ref_location),
+        }
+    }
+
     #[test]
     fn openapi_spec_is_valid() {
         // Drive the router-derived spec, not `ApiDoc::openapi()` directly: `ApiDoc`
@@ -627,7 +642,7 @@ mod tests {
                 .as_ref()
                 .unwrap_or_else(|| panic!("{path} has no path-level parameters"));
             assert!(
-                params.iter().any(|p| p.name == SURFACE_HEADER),
+                params.iter().any(|p| inline(p).name == SURFACE_HEADER),
                 "{path} does not document {SURFACE_HEADER}",
             );
         }
@@ -692,7 +707,7 @@ mod tests {
                 .flatten()
                 .filter_map(|op| op.parameters.as_ref())
                 .flatten();
-            for param in path_params.chain(op_params) {
+            for param in path_params.chain(op_params).map(inline) {
                 assert!(
                     param.parameter_in != ParameterIn::Path,
                     "{path} documents path parameter `{}`; the invitation family must take none",
@@ -730,7 +745,7 @@ mod tests {
                 .flatten()
                 .filter_map(|op| op.parameters.as_ref())
                 .flatten();
-            for param in path_params.chain(op_params) {
+            for param in path_params.chain(op_params).map(inline) {
                 if param.parameter_in != ParameterIn::Path {
                     continue;
                 }
@@ -764,6 +779,7 @@ mod tests {
             .as_ref()
             .expect("path-level parameters")
             .iter()
+            .map(inline)
             .find(|p| p.name == SURFACE_HEADER)
             .expect("surface header parameter");
 

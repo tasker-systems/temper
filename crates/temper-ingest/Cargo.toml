@@ -11,7 +11,7 @@ dirs = "5"
 html-to-markdown-rs = "3.1.0"
 kreuzberg = { version = "4.10.4", features = ["tokio-runtime", "bundled-pdfium"], optional = true }
 ndarray = { version = "0.17", optional = true }
-ort = { version = "2.0.0-rc.12", default-features = false, features = [
+ort = { version = "2.0.0-rc.14", default-features = false, features = [
   "api-18",
   "load-dynamic",
   "ndarray",

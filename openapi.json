@@ -1540,10 +1540,10 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "type": "null"
+                      "$ref": "#/components/schemas/JoinRequest"
                     },
                     {
-                      "$ref": "#/components/schemas/JoinRequest"
+                      "type": "null"
                     }
                   ]
                 }
@@ -10941,10 +10941,10 @@
             "schema": {
               "oneOf": [
                 {
-                  "type": "null"
+                  "$ref": "#/components/schemas/ResourceSortField"
                 },
                 {
-                  "$ref": "#/components/schemas/ResourceSortField"
+                  "type": "null"
                 }
               ]
             }
@@ -10956,10 +10956,10 @@
             "schema": {
               "oneOf": [
                 {
-                  "type": "null"
+                  "$ref": "#/components/schemas/SortOrder"
                 },
                 {
-                  "$ref": "#/components/schemas/SortOrder"
+                  "type": "null"
                 }
               ]
             }
@@ -15233,33 +15233,33 @@
           "confidence": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ConfidenceBand",
                 "description": "Graded self-assessed confidence band. Required whenever any other authorship field is set."
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "correlation_id": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/CorrelationId",
                 "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship."
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "invocation_id": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/InvocationId",
                 "description": "The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a\ncorrelation aid, never a substitute for authn/authz."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -15307,10 +15307,10 @@
           "edge_filter": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/EdgeFilter"
               },
               {
-                "$ref": "#/components/schemas/EdgeFilter"
+                "type": "null"
               }
             ]
           },
@@ -15325,11 +15325,11 @@
           "intention": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/Intention",
                 "description": "The question this act asks: its text, and the caller's vector when there is one.\n\n**A parameter of the act, exactly like [`Self::terms`] and [`Self::resource_filter`]**\n`[decided — 2026-08-12, Pete]`, spec ⟨7⟩. It lived on the composition envelope until then,\nwhich made a DAG able to ask only one question — every find stage reading the same string.\n\n`None` for an act that asks nothing (`follow-from`, `survey`, the combinators). `None` on a\nfind act is `MissingIntention`, refused by the shape pass: `find-exact` sources its\n`p_query` from here and there is nowhere else to get it."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -15347,11 +15347,11 @@
           "resource_filter": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ResourceFilter",
                 "description": "Narrowing by what a thing IS. At most one slot applies per act; supplying the other is\n`RefusalReason::FilterNotApplicable`."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -15785,20 +15785,20 @@
           "open_join_request": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AdminOpenJoinRequest"
               },
               {
-                "$ref": "#/components/schemas/AdminOpenJoinRequest"
+                "type": "null"
               }
             ]
           },
           "open_reconsideration": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AdminOpenReviewRequest"
               },
               {
-                "$ref": "#/components/schemas/AdminOpenReviewRequest"
+                "type": "null"
               }
             ]
           },
@@ -16059,11 +16059,11 @@
           "emptiness": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ShapeEmptiness",
                 "description": "Why `regions` is empty; `None` when it is not."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -16163,11 +16163,11 @@
               "kind_owner": {
                 "oneOf": [
                   {
-                    "type": "null"
-                  },
-                  {
                     "$ref": "#/components/schemas/KindOwnerInput",
                     "description": "Override the namespace half of the family name. Omit to let the server default it."
+                  },
+                  {
+                    "type": "null"
                   }
                 ]
               },
@@ -17323,21 +17323,21 @@
           "plan": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/BlockHistoryScrubPlan"
               },
               {
-                "$ref": "#/components/schemas/BlockHistoryScrubPlan"
+                "type": "null"
               }
             ]
           },
           "refusal": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ResourceErasureRefusalReason",
                 "description": "The refusal the act would record now."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -18413,11 +18413,11 @@
           "managed_meta": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ManagedMeta",
                 "description": "Typed server-side managed_meta from kb_resource_manifests — the closed\nProperty vocabulary. Only the named `temper-*` keys are represented;\nthere is no catch-all. Used by CLI sync pull to reconstruct complete\nfrontmatter (identity/type/home come from the resource row, not here)."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -18445,11 +18445,11 @@
           "owner": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ContextOwnerRef",
                 "description": "Who owns the new context. `None` (the default) creates a context owned by\nthe calling profile, preserving pre-Chunk-3 behavior. `Team(slug)` creates\na team-owned context (role-gated server-side to `owner`/`maintainer`)."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -18699,10 +18699,10 @@
           "telos": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ReconcileTelos"
               },
               {
-                "$ref": "#/components/schemas/ReconcileTelos"
+                "type": "null"
               }
             ]
           },
@@ -19081,11 +19081,11 @@
           "address_resolution": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/AnchorAddressResolution",
                 "description": "For an `anchored-at` row: how the row's address resolved — `live`, `folded` (with the\ngated disposition), or `absent`. `null` for every other facet row."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -19126,11 +19126,11 @@
           "verdict": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/AnchorVerdict",
                 "description": "For an `anchored-at` row resolving `live`: whether the anchored block's own live\nattribution corroborates the qualification (`corroborated`), disagrees with it\n(`divergent`), or is absent (`unattributed`). `null` when the row is not\n`anchored-at`, its address did not resolve `live`, or the edge declares no verdict\ndirection for the row's anchored side."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -19381,21 +19381,21 @@
           "join_request_status": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/JoinRequestStatus"
               },
               {
-                "$ref": "#/components/schemas/JoinRequestStatus"
+                "type": "null"
               }
             ]
           },
           "standing": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/Standing",
                 "description": "The caller's own standing, **as stored** — all five states, not a narrowed subset.\n\nReporting `revoked` and `deactivated` is deliberate and matches the rest of the system.\nSpec D15 grants a revoked principal the right to request reconsideration\n(`Act::RequestReview` is legal from `Revoked` and nothing else), so the refusal path names\nthe state on purpose and routes it to a different remedy than `denied`. A narrowed\nthree-variant version of this field was built and reverted: it contradicted that design\nwhile five other surfaces still disclosed the state, and it hid legitimate *rejections*,\nsince rejection returns standing to `denied`.\n\n**`None` means the server predates this field — never \"no standing\".** Absence of a\nstanding row denies, and the producer reports that as `Denied`, so `None` carries exactly\none meaning: this instance is older than the client asking. That matters because a CLI\nupgrades independently of the instance it talks to; a required field here would cost such a\nclient the whole object, `system_access` included, which older servers answer correctly.\n\nThe `Option` alone buys that — serde's derive already reads a missing `Option` field as\n`None`, so no `#[serde(default)]` is needed and one here would be inert. Verified by probe:\nremoving it changed nothing. `crates/temper-client/tests/profile_entitlements_test.rs`\ncovers the absent-field case against a real body rather than a constructed value.\n\n`Deactivated` is unreachable through `GET /api/profile`: a deactivated principal fails\nauthentication outright (`temper-services/src/auth/mod.rs` Level-1 kill-switch) and never\nreaches a handler. It is in the type because the type is the stored state, not this\nendpoint's reachable subset."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -19630,11 +19630,11 @@
           "details": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ErrorDetails",
                 "description": "Present on `SYSTEM_ACCESS_REQUIRED`, where it carries the typed access refusal, and on\n`PLAN_REFUSED`, where it carries every static refusal of a composition; absent on every\nother error."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -20165,11 +20165,11 @@
           "family": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/EventId",
                 "description": "The family's handle, for `property`: the id of the first event still carrying its key text\n(the `doc_type` family's is the resource's `resource_created`). Absent for the title and\norigin URI, which need none."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -20180,11 +20180,11 @@
           "first_by": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ProfileId",
                 "description": "The profile behind the first event's emitter."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -20350,21 +20350,21 @@
           "plan": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/FieldScrubPlan"
               },
               {
-                "$ref": "#/components/schemas/FieldScrubPlan"
+                "type": "null"
               }
             ]
           },
           "refusal": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/FieldScrubRefusalReason",
                 "description": "The refusal the act would record now."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -20764,11 +20764,11 @@
           "provenance": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/IdProvenance",
                 "description": "Required for `region`; absent for every other kind today."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -20945,11 +20945,11 @@
               "segmented": {
                 "oneOf": [
                   {
-                    "type": "null"
-                  },
-                  {
                     "$ref": "#/components/schemas/SegmentedBegin",
                     "description": "When set, this create is the **begin** of a segmented (multi-block) ingest: `content`\ncarries only segment 0's text, and the ingest handler returns a\n[`SegmentedBeginResponse`] instead of the one-shot `ResourceView`. `None` (the default) is\nthe unchanged one-shot path — every existing small-body caller is unaffected."
+                  },
+                  {
+                    "type": "null"
                   }
                 ]
               },
@@ -21208,11 +21208,11 @@
           "authorship": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/AgentAuthorship",
                 "description": "The graded agent authorship of this act (decoded from `kb_events.metadata`); `None` for an\nact with no authorship attached."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -21359,11 +21359,11 @@
           "disposition": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/Disposition",
                 "description": "The terminal disposition, derived from `status`. `None` while the invocation is open.\n\nThere is no `disposition` column. `invocation_close` writes the disposition into\n`status`; `outcome` holds only the caller's opaque payload, despite what the comment\non `kb_invocations.outcome` in the canonical schema migration claims. Surfacing it\nunder its own name here makes \"did the close take?\" answerable without knowing that."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -22368,11 +22368,11 @@
           "stage": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/StageName",
                 "description": "The stage it attaches to, when it attaches to one.\n\n`None` for a refusal about the composition as a whole — a cycle, a dangling reference, a\nduplicate name."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -22513,10 +22513,10 @@
           "vault_config": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/VaultConfig"
               },
               {
-                "$ref": "#/components/schemas/VaultConfig"
+                "type": "null"
               }
             ]
           }
@@ -23374,10 +23374,10 @@
           "telos": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ReconcileTelos"
               },
               {
-                "$ref": "#/components/schemas/ReconcileTelos"
+                "type": "null"
               }
             ]
           }
@@ -23764,10 +23764,10 @@
               "from": {
                 "oneOf": [
                   {
-                    "type": "null"
+                    "$ref": "#/components/schemas/Standing"
                   },
                   {
-                    "$ref": "#/components/schemas/Standing"
+                    "type": "null"
                   }
                 ]
               },
@@ -24816,10 +24816,10 @@
           "plan": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ResourceErasurePlan"
               },
               {
-                "$ref": "#/components/schemas/ResourceErasurePlan"
+                "type": "null"
               }
             ]
           },
@@ -25075,11 +25075,11 @@
           "located_at": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/MatchLocation",
                 "description": "Where in the resource the match was — the closest chunk's block.\n\n**Filled only by the wide arm**, and its absence is declared in advance rather than\ndiscovered here: [`super::act::ActDeclaration::discloses`] says which acts can report it.\nThe wide arm matches at CHUNK grain and already computes which chunk was closest, then\ndiscards it collapsing to a per-resource score; recovering it is an argmin beside an\naggregate that already runs.\n\n`find-exact` structurally cannot: its index is one tsvector per RESOURCE, built by\nconcatenating every chunk into a single blob, so the block boundary is gone before the query\nis asked. `follow-from` has no match position at all — it returns nodes reached by walking.\n\nIt sits on this type rather than on [`Scoring`] because `Scoring` is shared with\n[`RegionHit`], and a region is not somewhere inside a resource.\n\n**`None` serializes as an explicit `\"located_at\": null`** (F4, ruled): the contract's prose\nis load-bearing on the null — every `located_at` is null today and the null unambiguously\nmeans *not declared* — and omitting the key made the resource-hit null indistinguishable\nfrom a shape with no such field, which is exactly the distinction [`RegionHit`] exists to\ndraw."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -25287,11 +25287,11 @@
               "managed_meta": {
                 "oneOf": [
                   {
-                    "type": "null"
-                  },
-                  {
                     "$ref": "#/components/schemas/ManagedMeta",
                     "description": "Partial managed_meta — only fields with `Some` apply.\nUntouched fields preserve their stored value. There is no in-band\nsignal for \"clear this field\"; field-clearing is reserved for a\nfuture PUT endpoint."
+                  },
+                  {
+                    "type": "null"
                   }
                 ]
               },
@@ -25353,11 +25353,11 @@
           "body_storage": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/BodyStorage",
                 "description": "Do the bytes read back exactly, or only approximately? `Option` purely for\nversion skew, as with `ingest_state`."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -25420,11 +25420,11 @@
           "embedding_status": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/EmbeddingStatus",
                 "description": "Derived embedding-readiness — the `embedding-status` section.\n\nAbsent means **not requested**, never \"not embedded\": whenever the section was\nasked for, the value is `Some` and names one of [`EmbeddingStatus`]'s three\nstates. It rides the view rather than a response envelope (B1) so the wire shape\nstays the one view: the standalone `GET /api/embed/status` read this field\nreplaced could not be made oracle-free — gating it leaked readability through map\npresence, leaving it ungated leaked pipeline state past the gate — while a gated\nread carrying the field discloses nothing about any row the gate did not\nalready admit."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -25434,22 +25434,22 @@
           "ingest_ended": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/IngestEnded",
                 "description": "Why the ingest stopped. Present only when the ingest ended before its body was whole\n(`ingest_state` then reads `in_progress`); absent otherwise."
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "ingest_state": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/IngestState",
                 "description": "Are all the bytes here? `Option` purely for version skew — the column is\n`NOT NULL` server-side, so `None` means the server predates W2 PR 1. Do not\nread `None` as \"incomplete\"."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -25459,11 +25459,11 @@
           "kb_context_id": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ContextId",
                 "description": "`Some` for a context-homed resource, `None` when homed in a cognitive map\n(Surface B). Mutually exclusive with the `cogmap_*` fields."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -25894,10 +25894,10 @@
           "family": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/EventId"
               },
               {
-                "$ref": "#/components/schemas/EventId"
+                "type": "null"
               }
             ]
           },
@@ -26247,11 +26247,11 @@
               "kind_owner": {
                 "oneOf": [
                   {
-                    "type": "null"
-                  },
-                  {
                     "$ref": "#/components/schemas/KindOwnerInput",
                     "description": "Override the namespace half of the family name. Omit to let the server default it."
+                  },
+                  {
+                    "type": "null"
                   }
                 ]
               },
@@ -26714,11 +26714,11 @@
           "orders_by": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ActQuantity",
                 "description": "Echoed from this act's declaration. Present iff the act orders anything.\n\n**Once per stage, rather than once per row.** The row keeps a literal field name so two\nacts' numbers cannot be summed by accident; this carries the RANGE so a reader is not left\nto assume `[0,1]`. Assuming `[0,1]` is the live mistake in this family, not a hypothetical\none: `vec_norm` rescales a cosine distance as `1 - d/2` into `[0,1]` while `region_score`\nspans `[-0.6, 1.0]`, and neither column name says so."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -26729,11 +26729,11 @@
           "refusal": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ActRefusal",
                 "description": "Present iff `disposition` is `refused` — the reason and standing-aware detail of the\nruntime refusal (`embedding_unavailable` is the only current case; the vocabulary is open).\nRuled ADJ-3 `[2026-08-10, Pete]`: the contract's \"one behaviour\" promise requires the\nreason to reach the reader, so [`super::disposition::ActRefusal`] is resurrected from\ndeclared-unreachable to the carrier.\n\n**The pair rule**: [`super::trace::StageTrace`] carries an identical field, and the two must\nstay identical for the same reason as the input numbers — the trace covers every stage and\nthe results only the returned ones, so disagreeing copies would leave a reader with no way\nto tell which was right."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -26827,11 +26827,11 @@
           "refusal": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ActRefusal",
                 "description": "Present iff `disposition` is `refused` — the reason and standing-aware detail. The trace\ncovers every stage while results cover only returned ones, so this is the ONLY refusal\nrecord for an intermediate stage. **The pair rule**: identical to\n[`super::envelope::StageResult::refusal`], for the same reason as the input numbers."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -27003,10 +27003,10 @@
           "merge_policy": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/MergePolicy"
               },
               {
-                "$ref": "#/components/schemas/MergePolicy"
+                "type": "null"
               }
             ]
           }
@@ -27180,10 +27180,10 @@
           "auto_join_role": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/TeamRole"
               },
               {
-                "$ref": "#/components/schemas/TeamRole"
+                "type": "null"
               }
             ]
           },
@@ -27218,10 +27218,10 @@
           "auto_join_role": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/TeamRole"
               },
               {
-                "$ref": "#/components/schemas/TeamRole"
+                "type": "null"
               }
             ]
           },
@@ -27393,11 +27393,11 @@
           "auto_join_role": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TeamRole",
                 "description": "NULL = not an auto-join (\"everyone\") team; otherwise the role new\nmembers are enrolled at. Admin-gated to set."
+              },
+              {
+                "type": "null"
               }
             ]
           },

@@ -256,6 +256,18 @@ def broke_node($b; $h; $side):
           then ($h[$k] != $b[$k])
           elif $k == "oneOf" and open_vocabulary_grew($b[$k]; $h[$k])
           then false
+          # A `oneOf` is a set: exactly one arm must match, so arm ORDER means nothing to a
+          # validator or to any generated client. utoipa 6 emits a nullable reference as
+          # `[$ref, {type: null}]` where 5 emitted `[{type: null}, $ref]`; index-pairing read
+          # that as every arm changing. Pair arms by their prose-stripped content instead and
+          # recurse on each pair, so a reorder is no break while any real arm change (or a
+          # change in arm count, which this branch never takes) still computes as moved.
+          # `anyOf` stays index-paired: some generators deserialize into the FIRST matching
+          # arm, so its order can be observable.
+          elif $k == "oneOf" and (($b[$k] | type) == "array") and (($h[$k] | type) == "array")
+            and (($b[$k] | length) == ($h[$k] | length))
+          then ( def arm_key: if type == "object" then sans_prose else . end;
+                 broke_node($b[$k] | sort_by(arm_key); $h[$k] | sort_by(arm_key); child_side($k; $side)) )
           elif $k == "description" or $k == "title" or $k == "summary"
             or $k == "example" or $k == "examples"
           then false

@@ -3520,9 +3520,9 @@ export interface components {
          *     authorship field is supplied" — in a single place, so MCP/API/CLI can never drift on it.
          */
         ActInput: {
-            confidence?: null | components["schemas"]["ConfidenceBand"];
-            correlation_id?: null | components["schemas"]["CorrelationId"];
-            invocation_id?: null | components["schemas"]["InvocationId"];
+            confidence?: components["schemas"]["ConfidenceBand"] | null;
+            correlation_id?: components["schemas"]["CorrelationId"] | null;
+            invocation_id?: components["schemas"]["InvocationId"] | null;
             /** @description The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes. */
             model?: string | null;
             /**
@@ -3546,7 +3546,7 @@ export interface components {
          */
         ActInvocation: {
             act: components["schemas"]["ActName"];
-            edge_filter?: null | components["schemas"]["EdgeFilter"];
+            edge_filter?: components["schemas"]["EdgeFilter"] | null;
             /**
              * @description Where this stage's sets come from, and what this act does with each: caller-supplied ids or
              *     an upstream stage, each carrying its own [`super::stage::StageRelation`]. Empty for a root
@@ -3581,7 +3581,7 @@ export interface components {
              *     At most two, one per relation (`list_too_long` past that).
              */
             inputs?: components["schemas"]["StageInput"][];
-            intention?: null | components["schemas"]["Intention"];
+            intention?: components["schemas"]["Intention"] | null;
             /** @description This node's name, referenced by downstream stages and by `returns`. */
             name: components["schemas"]["StageName"];
             /**
@@ -3615,7 +3615,7 @@ export interface components {
              *     the price of deleting the type.
              */
             properties?: components["schemas"]["PropertyPredicate"][];
-            resource_filter?: null | components["schemas"]["ResourceFilter"];
+            resource_filter?: components["schemas"]["ResourceFilter"] | null;
             /**
              * @description Act-level bound terms. A term this act does not admit is refused STATICALLY
              *     (`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.
@@ -3804,8 +3804,8 @@ export interface components {
             /** @description The existing enablement commands, as copy-runnable text. */
             hints: string[];
             is_system_admin: boolean;
-            open_join_request?: null | components["schemas"]["AdminOpenJoinRequest"];
-            open_reconsideration?: null | components["schemas"]["AdminOpenReviewRequest"];
+            open_join_request?: components["schemas"]["AdminOpenJoinRequest"] | null;
+            open_reconsideration?: components["schemas"]["AdminOpenReviewRequest"] | null;
             pending_invitations: components["schemas"]["AdminProfileInvitation"][];
             /** Format: uuid */
             profile_id: string;
@@ -3942,7 +3942,7 @@ export interface components {
          *     It is a denominator, not a restatement of the row count.
          */
         AnchorShape: {
-            emptiness?: null | components["schemas"]["ShapeEmptiness"];
+            emptiness?: components["schemas"]["ShapeEmptiness"] | null;
             /**
              * Format: date-time
              * @description When the anchor was last clustered. `None` means never — or that the caller cannot read it.
@@ -4009,7 +4009,7 @@ export interface components {
             intent: string;
             /** @description The bare family name, qualified by `kind_owner` (or defaulted from the resource's home). */
             kind: string;
-            kind_owner?: null | components["schemas"]["KindOwnerInput"];
+            kind_owner?: components["schemas"]["KindOwnerInput"] | null;
             /**
              * Format: double
              * @description Ordering among peers. Meaningful for `member`; carried for all. Default: `0.0`.
@@ -4684,8 +4684,8 @@ export interface components {
         BlockHistoryScrubSurvey: {
             /** @description The refusal's fixed evidence (a charter's map-grain task). */
             detail?: string | null;
-            plan?: null | components["schemas"]["BlockHistoryScrubPlan"];
-            refusal?: null | components["schemas"]["ResourceErasureRefusalReason"];
+            plan?: components["schemas"]["BlockHistoryScrubPlan"] | null;
+            refusal?: components["schemas"]["ResourceErasureRefusalReason"] | null;
             resource: components["schemas"]["ResourceId"];
         };
         /**
@@ -5434,7 +5434,7 @@ export interface components {
         };
         /** @description Response body for resource content. */
         ContentResponse: {
-            managed_meta?: null | components["schemas"]["ManagedMeta"];
+            managed_meta?: components["schemas"]["ManagedMeta"] | null;
             markdown: string;
             /**
              * @description Server-side open_meta from kb_resource_manifests. Intentionally
@@ -5449,7 +5449,7 @@ export interface components {
         /** @description Request body for POST /api/contexts. */
         ContextCreateRequest: {
             name: string;
-            owner?: null | components["schemas"]["ContextOwnerRef"];
+            owner?: components["schemas"]["ContextOwnerRef"] | null;
         };
         /**
          * Format: uuid
@@ -5638,7 +5638,7 @@ export interface components {
             /** Format: uuid */
             cogmap_id?: string | null;
             name: string;
-            telos?: null | components["schemas"]["ReconcileTelos"];
+            telos?: components["schemas"]["ReconcileTelos"] | null;
             /** Format: uuid */
             telos_resource_id?: string | null;
             telos_title: string;
@@ -5877,7 +5877,7 @@ export interface components {
          *     a masked surrogate whose id a replay re-mints, exactly as an audit's is.
          */
         EdgeFacetRow: {
-            address_resolution?: null | components["schemas"]["AnchorAddressResolution"];
+            address_resolution?: components["schemas"]["AnchorAddressResolution"] | null;
             authored_by_display_name?: string | null;
             /**
              * Format: uuid
@@ -5900,7 +5900,7 @@ export interface components {
              */
             property_key: string;
             value: unknown;
-            verdict?: null | components["schemas"]["AnchorVerdict"];
+            verdict?: components["schemas"]["AnchorVerdict"] | null;
             /** Format: double */
             weight: number;
         };
@@ -6131,8 +6131,8 @@ export interface components {
          */
         Entitlements: {
             is_admin: boolean;
-            join_request_status?: null | components["schemas"]["JoinRequestStatus"];
-            standing?: null | components["schemas"]["Standing"];
+            join_request_status?: components["schemas"]["JoinRequestStatus"] | null;
+            standing?: components["schemas"]["Standing"] | null;
             system_access: boolean;
         };
         /**
@@ -6271,7 +6271,7 @@ export interface components {
         };
         ErrorDetail: {
             code: string;
-            details?: null | components["schemas"]["ErrorDetails"];
+            details?: components["schemas"]["ErrorDetails"] | null;
             message: string;
         };
         /**
@@ -6579,10 +6579,10 @@ export interface components {
              * @description How many events carry the field.
              */
             events: number;
-            family?: null | components["schemas"]["EventId"];
+            family?: components["schemas"]["EventId"] | null;
             /** @description `title`, `origin_uri` or `property`. */
             field: components["schemas"]["ScrubFieldKind"];
-            first_by?: null | components["schemas"]["ProfileId"];
+            first_by?: components["schemas"]["ProfileId"] | null;
             /** Format: date-time */
             first_seen: string;
             /**
@@ -6668,8 +6668,8 @@ export interface components {
             /** @description The refusal's fixed evidence (a charter's map-grain task). */
             detail?: string | null;
             families?: components["schemas"]["FieldScrubFamily"][] | null;
-            plan?: null | components["schemas"]["FieldScrubPlan"];
-            refusal?: null | components["schemas"]["FieldScrubRefusalReason"];
+            plan?: components["schemas"]["FieldScrubPlan"] | null;
+            refusal?: components["schemas"]["FieldScrubRefusalReason"] | null;
             resource: components["schemas"]["ResourceId"];
         };
         /** @description Declare a segmented ingest complete — `POST /api/resources/{id}/finalize`. */
@@ -6875,7 +6875,7 @@ export interface components {
              */
             ids: string[];
             kind: components["schemas"]["IdKind"];
-            provenance?: null | components["schemas"]["IdProvenance"];
+            provenance?: components["schemas"]["IdProvenance"] | null;
         };
         /**
          * @description What happened to the stored grant at the identity provider.
@@ -7027,7 +7027,7 @@ export interface components {
             /** @description Open frontmatter (user-owned fields) as JSON. */
             open_meta?: unknown;
             origin_uri: string;
-            segmented?: null | components["schemas"]["SegmentedBegin"];
+            segmented?: components["schemas"]["SegmentedBegin"] | null;
             /**
              * @description Block-provenance sources this body was distilled from — recorded against the
              *     created resource's body block, position → accretion `seq`. Resource refs only
@@ -7233,7 +7233,7 @@ export interface components {
          *     the envelope's show projection.
          */
         InvocationActRow: {
-            authorship?: null | components["schemas"]["AgentAuthorship"];
+            authorship?: components["schemas"]["AgentAuthorship"] | null;
             /**
              * Format: uuid
              * @description The entity that emitted this act.
@@ -7327,7 +7327,7 @@ export interface components {
              *     run→tick join; an individual act joins through its `invocation_id`, not by carrying the tick.
              */
             correlation_id?: string | null;
-            disposition?: null | components["schemas"]["Disposition"];
+            disposition?: components["schemas"]["Disposition"] | null;
             /**
              * Format: uuid
              * @description `kb_invocations.id` — the envelope's stable identity.
@@ -7909,7 +7909,7 @@ export interface components {
             /** @description Human-readable, at the depth the asker's standing allows. */
             detail: string;
             reason: components["schemas"]["RefusalReason"];
-            stage?: null | components["schemas"]["StageName"];
+            stage?: components["schemas"]["StageName"] | null;
         };
         /**
          * @description Every static reason a composition is not executable, in one payload.
@@ -7995,7 +7995,7 @@ export interface components {
         ProfileUpdateRequest: {
             display_name?: string | null;
             preferences?: unknown;
-            vault_config?: null | components["schemas"]["VaultConfig"];
+            vault_config?: components["schemas"]["VaultConfig"] | null;
         };
         /**
          * @description `GET /api/profile` — the caller's own profile with their system-level entitlements.
@@ -8453,7 +8453,7 @@ export interface components {
             entries: components["schemas"]["ReconcileEntry"][];
             fold_edges?: components["schemas"]["ReconcileEdgeTombstone"][];
             fold_resources?: components["schemas"]["ReconcileTombstone"][];
-            telos?: null | components["schemas"]["ReconcileTelos"];
+            telos?: components["schemas"]["ReconcileTelos"] | null;
         };
         /**
          * @description An outgoing edge from a kernel landmark, keyed by the target landmark's stable `id` (the same
@@ -8639,7 +8639,7 @@ export interface components {
             kind: "deactivated";
         } | {
             act: string;
-            from?: null | components["schemas"]["Standing"];
+            from?: components["schemas"]["Standing"] | null;
             /** @enum {string} */
             kind: "illegal_transition";
         } | {
@@ -9137,7 +9137,7 @@ export interface components {
              *     from a server that predates it.
              */
             deriver_fingerprints?: components["schemas"]["DeriverFingerprint"][];
-            plan?: null | components["schemas"]["ResourceErasurePlan"];
+            plan?: components["schemas"]["ResourceErasurePlan"] | null;
             resource: components["schemas"]["ResourceId"];
         };
         /** @description The survey door's request: the resource and nothing else (a survey requests nothing). */
@@ -9343,7 +9343,7 @@ export interface components {
          *     and nothing else.
          */
         ResourceHit: {
-            located_at: null | components["schemas"]["MatchLocation"];
+            located_at: components["schemas"]["MatchLocation"] | null;
             resource: components["schemas"]["ResourceView"];
             scoring: components["schemas"]["Scoring"];
             /**
@@ -9547,7 +9547,7 @@ export interface components {
              *     Forwarded from the CLI `--goal <ref>` flag (resolved client-side).
              */
             goal?: string | null;
-            managed_meta?: null | components["schemas"]["ManagedMeta"];
+            managed_meta?: components["schemas"]["ManagedMeta"] | null;
             /**
              * @description Partial open_meta — incoming keys win; absent keys preserved. An explicit **`null`
              *     value deletes the key** (the in-band verb: the same in-band shape `{"tags": []}` has
@@ -9629,7 +9629,7 @@ export interface components {
              *     manifest row exists.
              */
             body_hash?: string | null;
-            body_storage?: null | components["schemas"]["BodyStorage"];
+            body_storage?: components["schemas"]["BodyStorage"] | null;
             /**
              * Format: uuid
              * @description Set when the resource is homed in a cognitive map. Mutually exclusive with
@@ -9661,12 +9661,12 @@ export interface components {
             /** Format: date-time */
             created: string;
             doc_type_name: string;
-            embedding_status?: null | components["schemas"]["EmbeddingStatus"];
+            embedding_status?: components["schemas"]["EmbeddingStatus"] | null;
             id: components["schemas"]["ResourceId"];
-            ingest_ended?: null | components["schemas"]["IngestEnded"];
-            ingest_state?: null | components["schemas"]["IngestState"];
+            ingest_ended?: components["schemas"]["IngestEnded"] | null;
+            ingest_state?: components["schemas"]["IngestState"] | null;
             is_active: boolean;
-            kb_context_id?: null | components["schemas"]["ContextId"];
+            kb_context_id?: components["schemas"]["ContextId"] | null;
             /**
              * @description Typed managed (`temper-*`) frontmatter — the closed Property vocabulary.
              *
@@ -9935,7 +9935,7 @@ export interface components {
          *     an admin payload (resource erasure D1).
          */
         ScrubbedField: {
-            family?: null | components["schemas"]["EventId"];
+            family?: components["schemas"]["EventId"] | null;
             kind: components["schemas"]["ScrubFieldKind"];
         };
         /** @description Request body for POST /api/search. */
@@ -10157,7 +10157,7 @@ export interface components {
             enforcement: components["schemas"]["EnforcementMode"];
             /** @description The bare family name, qualified by `kind_owner` (or defaulted from the home). */
             kind: string;
-            kind_owner?: null | components["schemas"]["KindOwnerInput"];
+            kind_owner?: components["schemas"]["KindOwnerInput"] | null;
             /** @description The JSON Schema (draft 2020-12) governing this family. Validated Rust-side. */
             schema: unknown;
         };
@@ -10514,13 +10514,13 @@ export interface components {
              */
             input_unusable: number;
             narrowed_by: components["schemas"]["NarrowedBy"][];
-            orders_by?: null | components["schemas"]["ActQuantity"];
+            orders_by?: components["schemas"]["ActQuantity"] | null;
             /**
              * @description What this stage produced, as a tagged union. Declared kind, so contract chaining compares
              *     kinds rather than inferring them — through [`StageOutput::kind`] rather than a bare field.
              */
             produced: components["schemas"]["StageOutput"];
-            refusal?: null | components["schemas"]["ActRefusal"];
+            refusal?: components["schemas"]["ActRefusal"] | null;
             /**
              * @description The APPLIED value of every admitted term, beside what was asked. Generalizes the
              *     `regions_effective` pattern the audit calls "a model of an honest knob" — which existed
@@ -10639,7 +10639,7 @@ export interface components {
              *     and only the gap between them is interesting.
              */
             produced_ids: number;
-            refusal?: null | components["schemas"]["ActRefusal"];
+            refusal?: components["schemas"]["ActRefusal"] | null;
             stage: components["schemas"]["StageName"];
             /**
              * @description The APPLIED value of every admitted term: the page this stage actually RAN with, clamped to
@@ -10808,7 +10808,7 @@ export interface components {
         SubscriptionOverride: {
             auto_sync?: boolean | null;
             local_paths?: string[] | null;
-            merge_policy?: null | components["schemas"]["MergePolicy"];
+            merge_policy?: components["schemas"]["MergePolicy"] | null;
         };
         /**
          * @description Which of a connection's events a subscription matches, per provider. The `kind` field names
@@ -10886,7 +10886,7 @@ export interface components {
          *     `owner`/`maintainer` on the parent. `auto_join_role` is admin-gated.
          */
         TeamCreateRequest: {
-            auto_join_role?: null | components["schemas"]["TeamRole"];
+            auto_join_role?: components["schemas"]["TeamRole"] | null;
             name?: string | null;
             parent?: string | null;
             slug: string;
@@ -10896,7 +10896,7 @@ export interface components {
          *     `GET /api/teams/{id}`.
          */
         TeamDetail: {
-            auto_join_role?: null | components["schemas"]["TeamRole"];
+            auto_join_role?: components["schemas"]["TeamRole"] | null;
             /** Format: date-time */
             created: string;
             description?: string | null;
@@ -11000,7 +11000,7 @@ export interface components {
         TeamRole: "owner" | "maintainer" | "member" | "watcher";
         /** @description Response row for team endpoints — matches the real `kb_teams` columns. */
         TeamRow: {
-            auto_join_role?: null | components["schemas"]["TeamRole"];
+            auto_join_role?: components["schemas"]["TeamRole"] | null;
             /** Format: date-time */
             created: string;
             /** @description Optional human description; NULL until set via `PATCH /api/teams/{id}`. */
@@ -12211,7 +12211,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": null | components["schemas"]["JoinRequest"];
+                    "application/json": components["schemas"]["JoinRequest"] | null;
                 };
             };
             /** @description Unauthorized */
@@ -18238,8 +18238,8 @@ export interface operations {
                  *     signal about its artifacts either way.
                  */
                 has_artifacts?: boolean | null;
-                sort?: null | components["schemas"]["ResourceSortField"];
-                order?: null | components["schemas"]["SortOrder"];
+                sort?: components["schemas"]["ResourceSortField"] | null;
+                order?: components["schemas"]["SortOrder"] | null;
                 limit?: number | null;
                 offset?: number | null;
                 /**

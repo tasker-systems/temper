@@ -43,13 +43,15 @@ calls `ort::init_from` before any session is created:
 static ORT_LIB_BYTES: &[u8] =
     include_bytes!("../lib/x86_64-unknown-linux-gnu/libonnxruntime.so");
 
-fn init_ort_runtime() -> std::result::Result<(), String> {
-    // write .so to /tmp on first call, then init_from
+fn init_ort_runtime() -> std::result::Result<&'static Environment, String> {
+    // write .so to /tmp on first call, then init_from(..)?.build()
 }
 ```
 
-`ort::init_from(path)` returns `Result<EnvironmentBuilder>` and `.commit()` returns
-`bool` (true = committed, false = already set by a prior call). Both outcomes are fine.
+`ort::init_from(path)` returns `Result<EnvironmentBuilder>`, and `.build()` returns the
+`Environment` every `Session::builder(&environment)` takes. `ort` holds only a weak handle to it
+and refuses to build a second one per process, so the `OnceLock` that owns it must live as long as
+the process does.
 
 ### Vendored library
 
@@ -60,7 +62,8 @@ fn init_ort_runtime() -> std::result::Result<(), String> {
 - glibc requirement: glibc 2.17+ (compatible with Amazon Linux 2 / glibc 2.26)
 
 The version 1.24.2 matches the pyke CDN artifacts (`ms@1.24.2`) that ort-sys
-v2.0.0-rc.12 uses for its `download-binaries` feature.
+v2.0.0-rc.12 used for its `download-binaries` feature. `load-dynamic` with `api-18` accepts any
+runtime from 1.18 up, so later `ort` release candidates load it unchanged.
 
 ### Build-time requirements
 

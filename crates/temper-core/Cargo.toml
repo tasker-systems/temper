@@ -55,7 +55,7 @@ ts-rs = { version = "10", features = [
   "serde-json-impl",
   "uuid-impl"
 ], optional = true }
-utoipa = { version = "5", features = ["uuid"], optional = true }
+utoipa = { version = "6", features = ["uuid"], optional = true }
 uuid = { version = "1", features = ["serde", "v7"] }
 validator = { version = "0.21", features = ["derive"] }
 
