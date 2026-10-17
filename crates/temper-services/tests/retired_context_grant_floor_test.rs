@@ -187,6 +187,13 @@ async fn a_system_admin_may_revoke_but_not_grant_on_a_retired_context(pool: PgPo
 async fn a_system_admin_cannot_grant_on_a_context_that_does_not_exist(pool: PgPool) {
     let admin = profile_with_emitters(&pool, "absent-floor-admin").await;
     test_support::approved_admin(&pool, admin).await;
+    // Without this the delegated arm's own refusal would pass the test for the wrong reason.
+    assert!(
+        access_service::is_system_admin(&pool, admin.into())
+            .await
+            .unwrap(),
+        "fixture: the admin is a real system admin"
+    );
     let holder = team(&pool, "absent-floor-holder").await;
     let absent = Uuid::now_v7();
     let principal = test_support::human_principal_for(&pool, admin).await;

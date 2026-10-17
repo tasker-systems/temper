@@ -88,7 +88,8 @@ impl ScopedAuthority for GrantAuthority {
 ///
 /// Other subject kinds pass here. `can()`'s floor (migration `20260902000010`) also covers
 /// `kb_contexts`, and the admin arm's floor for a context is grant-only, so it lives in
-/// `authorize_capability_grant` rather than in this resolve, which revocation shares.
+/// `authorize_capability_grant` rather than in this resolve, which revocation and
+/// `can_administer_grant` (the admin ledger's read gate) share.
 async fn admin_subject_is_live(
     pool: &PgPool,
     caller: ProfileId,
