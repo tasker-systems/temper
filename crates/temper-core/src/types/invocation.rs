@@ -120,7 +120,9 @@ pub struct InvocationView {
     /// run→tick join; an individual act joins through its `invocation_id`, not by carrying the tick.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<Uuid>,
-    /// The acts (stamped events) that occurred under this envelope.
+    /// The acts (stamped events) under this envelope that the caller can read. An act on an element
+    /// the caller cannot read is omitted, so a reader of the cogmap alone may see fewer acts than
+    /// occurred.
     pub acts: Vec<InvocationActRow>,
 }
 

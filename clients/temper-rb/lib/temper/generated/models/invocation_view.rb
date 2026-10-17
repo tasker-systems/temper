@@ -16,7 +16,7 @@ require 'time'
 module Temper::Generated
   # The full show projection of an invocation envelope: the `kb_invocations` row plus its acts. Internal ledger pointers (`opened_by_event_id`, `closed_by_event_id`) are NOT exposed — they are dereferenced into `acts` and the open/closed timestamps.
   class InvocationView < ApiModelBase
-    # The acts (stamped events) that occurred under this envelope.
+    # The acts (stamped events) under this envelope that the caller can read. An act on an element the caller cannot read is omitted, so a reader of the cogmap alone may see fewer acts than occurred.
     attr_accessor :acts
 
     # When the invocation closed; `None` while still open.
