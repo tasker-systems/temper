@@ -20,7 +20,11 @@ fn render_refusals(refusals: &[PlanRefusal]) -> String {
         .collect()
 }
 
+/// `#[non_exhaustive]`: this is published surface (`temperkb-client`), and a new variant must be an
+/// additive release. A downstream `match` needs a wildcard arm; inside this workspace nothing
+/// changes for `temper-client` itself, and the other crates already fall through to `Display`.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ClientError {
     #[error("not authenticated — run `temper auth login`")]
     NotAuthenticated,
