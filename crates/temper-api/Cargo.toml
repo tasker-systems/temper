@@ -94,6 +94,6 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tower = { version = "0.5", features = ["util"] }
 # `internal_saml_test` builds the retired v1 internal-signature construction itself, to show the
 # reconcile door refuses it; nothing in temper-core signs it any more.
-hmac = "0.12"
+hmac = "0.13"
 sha2 = "0.10"
 hex = "0.4"
