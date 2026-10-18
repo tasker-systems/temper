@@ -36,8 +36,8 @@ pub struct CogmapAuditWork {
 /// Sweep the principal's cogmap-homed findings with incomplete audit coverage or stale citations
 /// (spec §6.3). `cap` is a **finding** budget — `audit_drift_sweep`'s `p_limit` — resolved through
 /// [`clamp_auditor_cap`], which supplies the default AND bounds the request. The bound is
-/// load-bearing, not hygiene: the sweep's `scored` CTE calls `resource_citation_magnitude` and
-/// `resource_audit_coverage` for **every** candidate before `p_limit` applies, and the raw `as i32`
+/// load-bearing, not hygiene: the sweep's `scored` CTE counts every candidate's readable citations
+/// and their coverage before `p_limit` applies, and the raw `as i32`
 /// this replaced wrapped a large `cap` into a negative `LIMIT` (a 500 from user input).
 ///
 /// Auth: the gate is inside the SQL. `audit_drift_sweep` routes through
@@ -427,8 +427,8 @@ mod tests {
         }
     }
 
-    /// A finding homed in `cogmap` citing `n` live, unaudited resource-kind sources from ONE block
-    /// → `magnitude = n`, `coverage = 0`, so `audit_drift_sweep` returns it with `uncovered = n`.
+    /// A finding homed in `cogmap` citing `n` live, unaudited resource-kind sources from ONE block,
+    /// each readable by the seeding team → `magnitude = n`, `coverage = 0`, so `audit_drift_sweep` returns it with `uncovered = n`.
     ///
     /// One block with `n` provenance rows rather than `n` blocks: `resource_live_citations` returns
     /// `DISTINCT (block_id, source_id)`, so the citation count is the pair count either way, and the
@@ -476,6 +476,20 @@ mod tests {
             )
             .bind(format!("{slug}-source-{i}"))
             .fetch_one(pool)
+            .await
+            .unwrap();
+            // Homed beside the finding, so the seeding team can read it: the sweep counts only
+            // sources the sweeping principal can read (`20261101400000`). A source has no
+            // citations of its own, so it never appears as a swept finding.
+            sqlx::query(
+                "INSERT INTO kb_resource_homes \
+                   (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+                 VALUES ($1, 'kb_cogmaps', $2, $3, $3)",
+            )
+            .bind(source)
+            .bind(s.cogmap)
+            .bind(s.principal)
+            .execute(pool)
             .await
             .unwrap();
             sqlx::query(

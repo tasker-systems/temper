@@ -1220,6 +1220,20 @@ async fn join_principal_to_cogmap(
     join_team_to_cogmap(pool, team, cogmap).await;
 }
 
+/// A context `reader` can read on its own account: owned by a fresh team `reader` belongs to,
+/// returned with that team so a test can add (or remove) further readers. Cited sources are homed
+/// here because the sweep gates the cited source as well as the finding (`20261101400000`), and this
+/// path is independent of the cogmap join that admits the finding, so a test that detaches the
+/// cogmap still observes the finding gate alone.
+async fn readable_source_home(pool: &sqlx::PgPool, reader: Uuid, slug: &str) -> (ContextId, Uuid) {
+    let team = common::create_team(pool, &format!("{slug}-readers")).await;
+    common::add_team_member(pool, team, reader).await;
+    let home = common::insert_context(pool, "kb_teams", team, slug, slug)
+        .await
+        .unwrap();
+    (ContextId::from(home), team)
+}
+
 /// A cogmap-homed finding (spec §6.2's boundary) optionally citing one `source` at create time.
 /// Mirrors `make_resource` above but homes `AnchorRef::cogmap(cogmap)` instead of a context.
 async fn make_cogmap_finding(
@@ -1272,6 +1286,8 @@ struct CogmapFindingSeed<'a> {
     owner: ProfileId,
     emitter: EntityId,
     cogmap: CogmapId,
+    /// The sweeping principal, who must be able to read the cited sources.
+    reader: Uuid,
     home_slug: &'a str,
     title: &'a str,
     uri: &'a str,
@@ -1283,7 +1299,7 @@ async fn seed_cogmap_finding_with_n_citations(
     pool: &sqlx::PgPool,
     p: CogmapFindingSeed<'_>,
 ) -> ResourceId {
-    let src_home = make_home(pool, p.owner, p.home_slug).await;
+    let (src_home, _) = readable_source_home(pool, p.reader, p.home_slug).await;
     let mut sources = Vec::with_capacity(p.n);
     for i in 0..p.n {
         let src = make_resource(
@@ -1344,7 +1360,7 @@ async fn sweep_returns_a_finding_with_uncovered_citations(pool: sqlx::PgPool) {
     let principal = common::create_profile(&pool, "ads-basic-principal@example.com").await;
     join_principal_to_cogmap(&pool, principal, cogmap, "ads-basic-team").await;
 
-    let src_home = make_home(&pool, owner, "ads-basic-src-home").await;
+    let (src_home, _) = readable_source_home(&pool, principal, "ads-basic-src-home").await;
     let source = make_resource(
         &pool,
         owner,
@@ -1386,7 +1402,7 @@ async fn sweep_omits_a_fully_covered_finding(pool: sqlx::PgPool) {
     let principal = common::create_profile(&pool, "ads-covered-principal@example.com").await;
     join_principal_to_cogmap(&pool, principal, cogmap, "ads-covered-team").await;
 
-    let src_home = make_home(&pool, owner, "ads-covered-src-home").await;
+    let (src_home, _) = readable_source_home(&pool, principal, "ads-covered-src-home").await;
     let source = make_resource(
         &pool,
         owner,
@@ -1524,7 +1540,7 @@ async fn sweep_omits_a_deleted_or_in_progress_finding(pool: sqlx::PgPool) {
     join_principal_to_cogmap(&pool, principal, cogmap, "ads-liveness-team").await;
     let cogmap_id = CogmapId::from(cogmap);
 
-    let src_home = make_home(&pool, owner, "ads-liveness-src-home").await;
+    let (src_home, _) = readable_source_home(&pool, principal, "ads-liveness-src-home").await;
 
     let deleted_source = make_resource(
         &pool,
@@ -1632,7 +1648,7 @@ async fn sweep_omits_a_finding_whose_only_source_is_in_progress(pool: sqlx::PgPo
     join_principal_to_cogmap(&pool, principal, cogmap, "ads-src-ip-team").await;
     let cogmap_id = CogmapId::from(cogmap);
 
-    let src_home = make_home(&pool, owner, "ads-src-ip-home").await;
+    let (src_home, _) = readable_source_home(&pool, principal, "ads-src-ip-home").await;
 
     let in_flight_source = make_resource(
         &pool,
@@ -1715,7 +1731,7 @@ async fn sweep_omits_a_finding_the_principal_cannot_read(pool: sqlx::PgPool) {
     let principal = common::create_profile(&pool, "ads-unreachable-principal@example.com").await;
     join_principal_to_cogmap(&pool, principal, reachable_cogmap, "ads-unreachable-team").await;
 
-    let src_home = make_home(&pool, owner, "ads-unreachable-src-home").await;
+    let (src_home, _) = readable_source_home(&pool, principal, "ads-unreachable-src-home").await;
     let source = make_resource(
         &pool,
         owner,
@@ -1755,7 +1771,7 @@ async fn sweep_orders_by_uncovered_descending(pool: sqlx::PgPool) {
     join_principal_to_cogmap(&pool, principal, cogmap, "ads-order-team").await;
     let cogmap_id = CogmapId::from(cogmap);
 
-    let low_home = make_home(&pool, owner, "ads-order-low-src-home").await;
+    let (low_home, _) = readable_source_home(&pool, principal, "ads-order-low-src-home").await;
     let low_source = make_resource(
         &pool,
         owner,
@@ -1782,6 +1798,7 @@ async fn sweep_orders_by_uncovered_descending(pool: sqlx::PgPool) {
             owner,
             emitter,
             cogmap: cogmap_id,
+            reader: principal,
             home_slug: "ads-order-high-src-home",
             title: "high-finding",
             uri: "temper://ads/order-high",
@@ -1820,6 +1837,12 @@ async fn sweep_orders_by_uncovered_descending(pool: sqlx::PgPool) {
 // fixtures above audit as the `system` actor while sweeping as a separate `principal`, which is fine
 // for coverage — coverage is global — but would make EVERY staleness assertion below vacuously false.
 // So these fixtures audit with the sweeping principal's own entity, via `make_auditor`.
+//
+// WHY THE CITED SOURCE IS READABLE BY THE SWEEPING PRINCIPAL. Since `20261101400000` a citation is
+// stale for a principal only when it can read the cited source too. So `stale_fixture` homes the
+// source in a context the sweeping principal reads through a team of its own (`readable_source_home`),
+// and a test that adds a second principal adds it to that team as well. The source gate's own
+// witnesses are in the section after the citation-grain one.
 
 /// The shape every tier-1 staleness witness needs: a cogmap the sweeping principal can reach, that
 /// principal's own entity, one source, and one finding citing it.
@@ -1831,6 +1854,11 @@ struct StaleFixture {
     /// The `system` actor, which creates the resources (authorship is not under test here).
     owner: ProfileId,
     emitter: EntityId,
+    /// Where the cited source lives: a context the sweeping principal can read, for the reason in
+    /// this section's header. Further sources go here too.
+    src_home: ContextId,
+    /// The team that owns `src_home`. A second principal joins it to read the source as well.
+    src_readers: Uuid,
     source: ResourceId,
     finding: ResourceId,
 }
@@ -1843,7 +1871,8 @@ async fn stale_fixture(pool: &sqlx::PgPool, slug: &str) -> StaleFixture {
     let (principal, auditor) = make_auditor(pool, &format!("{slug}-principal")).await;
     join_principal_to_cogmap(pool, principal.uuid(), cogmap, &format!("{slug}-team")).await;
 
-    let src_home = make_home(pool, owner, &format!("{slug}-src-home")).await;
+    let (src_home, src_readers) =
+        readable_source_home(pool, principal.uuid(), &format!("{slug}-src-home")).await;
     let source = make_resource(
         pool,
         owner,
@@ -1869,6 +1898,8 @@ async fn stale_fixture(pool: &sqlx::PgPool, slug: &str) -> StaleFixture {
         auditor,
         owner,
         emitter,
+        src_home,
+        src_readers,
         source,
         finding,
     }
@@ -2097,6 +2128,7 @@ async fn sweep_stale_is_scoped_to_the_sweeping_principal(pool: sqlx::PgPool) {
         "ads-stale-principal-b-team",
     )
     .await;
+    common::add_team_member(&pool, f.src_readers, b_principal.uuid()).await;
 
     let block = first_block(&pool, f.finding).await;
     fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
@@ -2197,12 +2229,11 @@ async fn sweep_ordering_gives_stale_findings_slots_under_a_stuck_backlog(pool: s
     // Four never-audited findings, each `uncovered = 1` — the permanently-stuck class, and more of
     // them than the cap below.
     for i in 0..4 {
-        let home = make_home(&pool, f.owner, &format!("ads-stale-order-stuck-home{i}")).await;
         let src = make_resource(
             &pool,
             f.owner,
             f.emitter,
-            home,
+            f.src_home,
             &format!("stuck-src{i}"),
             &format!("temper://ads-stale-order/stuck-src{i}"),
         )
@@ -2251,6 +2282,7 @@ async fn sweep_omits_a_finding_for_a_principal_who_never_audited_it(pool: sqlx::
         "ads-stale-unengaged-b-team",
     )
     .await;
+    common::add_team_member(&pool, f.src_readers, b_principal.uuid()).await;
 
     let block = first_block(&pool, f.finding).await;
     fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
@@ -2449,12 +2481,11 @@ async fn second_source(
     block: Uuid,
     slug: &str,
 ) -> ResourceId {
-    let home = make_home(pool, f.owner, &format!("{slug}-src2-home")).await;
     let source = make_resource(
         pool,
         f.owner,
         f.emitter,
-        home,
+        f.src_home,
         "source",
         &format!("temper://{slug}/source2"),
     )
@@ -2514,6 +2545,7 @@ async fn another_principal_is_still_offered_a_citation_this_one_weighed(pool: sq
 
     let (other, _other_entity) = make_auditor(&pool, "auditable-cross-other").await;
     join_principal_to_cogmap(&pool, other.uuid(), f.cogmap, "auditable-cross-other-team").await;
+    common::add_team_member(&pool, f.src_readers, other.uuid()).await;
 
     assert_eq!(
         auditable_citations(&pool, f.finding, other).await,
@@ -2563,6 +2595,9 @@ async fn a_weighed_citation_re_enters_once_it_goes_stale(pool: sqlx::PgPool) {
 async fn an_unreadable_finding_offers_no_auditable_citations(pool: sqlx::PgPool) {
     let f = stale_fixture(&pool, "auditable-gated").await;
     let (stranger, _entity) = make_auditor(&pool, "auditable-gated-stranger").await;
+    // The stranger CAN read the source, so the only thing between it and the citation is the
+    // finding gate, which is what this test is about.
+    common::add_team_member(&pool, f.src_readers, stranger.uuid()).await;
 
     assert!(
         !auditable_citations(&pool, f.finding, f.principal)
@@ -2714,9 +2749,10 @@ async fn the_sweep_evaluates_staleness_once_not_once_per_candidate(pool: sqlx::P
     mutate_block(&pool, stale_block, f.emitter, "revised after the audit").await;
 
     // VACUITY GUARD. This is the array the sweep builds — `magnitude > 0 AND coverage >= magnitude`
-    // is verbatim the set `20260828000020` passes down, and verbatim the set the old definition
-    // called the scalar predicate on. If it were 1, a per-call and a per-candidate implementation
-    // would be indistinguishable and this test would assert nothing.
+    // is the set `20260828000020` passes down (counted over readable sources since
+    // `20261101400000`, which here is every source), and the set the old definition called the
+    // scalar predicate on. If it were 1, a per-call and a per-candidate implementation would be
+    // indistinguishable and this test would assert nothing.
     let fully_covered: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_resource_homes h \
            JOIN kb_resources r ON r.id = h.resource_id \
@@ -2787,5 +2823,198 @@ async fn the_sweep_evaluates_staleness_once_not_once_per_candidate(pool: sqlx::P
         "the sweep must enter the staleness predicate ONCE for the whole candidate set; {calls} \
          entries against {fully_covered} fully-covered candidates is the per-row shape \
          `20260828000020` removed"
+    );
+}
+
+// ── The cited-source gate — `20261101400000` ────────────────────────────────────────────────────
+//
+// A citation is auditor work for a principal only when it can read the cited SOURCE as well as the
+// finding. Three functions carry that gate and each has its own witness below: the sweep's
+// `uncovered` arm, the staleness set, and the per-citation unit of work. Every unreadable source
+// here is homed by `make_home` under the `system` actor, which the sweeping principal cannot read.
+
+/// A source in a context the fixture's principal cannot read.
+async fn unreadable_source(pool: &sqlx::PgPool, f: &StaleFixture, slug: &str) -> ResourceId {
+    let home = make_home(pool, f.owner, &format!("{slug}-hidden-home")).await;
+    make_resource(
+        pool,
+        f.owner,
+        f.emitter,
+        home,
+        "hidden source",
+        &format!("temper://{slug}/hidden-source"),
+    )
+    .await
+}
+
+/// LOAD-BEARING (the `uncovered` arm). `uncovered` counts only sources the principal can read, a
+/// finding whose every source is unreadable is not offered at all, and coverage is counted over the
+/// same readable set. The three assertions pin the gate in `scored` on magnitude and on coverage
+/// separately: an audit of the unreadable citation must not make the readable one look covered.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_sweep_counts_only_citations_whose_source_the_principal_can_read(pool: sqlx::PgPool) {
+    let f = stale_fixture(&pool, "src-gate-uncovered").await;
+    let block = first_block(&pool, f.finding).await;
+    let hidden = unreadable_source(&pool, &f, "src-gate-uncovered").await;
+    cite(&pool, block, hidden.uuid()).await;
+
+    let only_hidden = make_cogmap_finding(
+        &pool,
+        f.owner,
+        f.emitter,
+        CogmapId::from(f.cogmap),
+        "cites only a hidden source",
+        "temper://src-gate-uncovered/only-hidden",
+        Some(hidden),
+    )
+    .await;
+
+    let rows = sweep(&pool, f.principal.uuid(), 10).await;
+    let hit = rows
+        .iter()
+        .find(|(_, fid, _)| *fid == f.finding.uuid())
+        .expect("the finding still has one readable, unaudited citation and must be offered");
+    assert_eq!(
+        hit.2, 1,
+        "one readable source and one unreadable, neither audited: uncovered counts the readable one \
+         only: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|(_, fid, _)| *fid == only_hidden.uuid()),
+        "every source of this finding is unreadable to the principal, so none of it is its work: \
+         {rows:?}"
+    );
+
+    // Readable coverage, first half: someone who CAN read the hidden source audits it. That covers
+    // a citation this principal cannot read, so the readable citation is still its work.
+    fire_audit(&pool, f.emitter, block, hidden.uuid(), 0.5)
+        .await
+        .unwrap();
+    let rows = sweep(&pool, f.principal.uuid(), 10).await;
+    let hit = rows
+        .iter()
+        .find(|(_, fid, _)| *fid == f.finding.uuid())
+        .expect("an audit of the unreadable citation must not cover the readable one");
+    assert_eq!(
+        hit.2, 1,
+        "coverage counts only readable sources, so the readable citation is still uncovered: \
+         {rows:?}"
+    );
+
+    // Second half: auditing the readable citation leaves nothing this principal can do, so the
+    // finding drops out.
+    fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+    assert!(
+        !sweep_offers(&pool, f.principal, f.cogmap, f.finding).await,
+        "readable coverage equals readable magnitude, so the finding is quiet for this principal"
+    );
+}
+
+/// LOAD-BEARING (the staleness set). A citation whose cited source the principal cannot read is
+/// never stale for it, however that source changes. The principal audits both citations while it
+/// can read both sources, one source changes, and then it loses read on that source only.
+///
+/// The second, still-readable source keeps readable magnitude and readable coverage at 1, so the
+/// finding reaches the staleness set rather than dropping out at `magnitude > 0`. That is what lets
+/// the sweep assertion pin the gate in `resource_stale_citations_multi`, alongside the three direct
+/// assertions on the staleness arities and the unit of work.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_citation_whose_source_the_principal_cannot_read_is_never_stale_for_it(
+    pool: sqlx::PgPool,
+) {
+    let f = stale_fixture(&pool, "src-gate-stale").await;
+    let block = first_block(&pool, f.finding).await;
+    let (other_home, _) =
+        readable_source_home(&pool, f.principal.uuid(), "src-gate-stale-other-home").await;
+    let other = make_resource(
+        &pool,
+        f.owner,
+        f.emitter,
+        other_home,
+        "other source",
+        "temper://src-gate-stale/other-source",
+    )
+    .await;
+    cite(&pool, block, other.uuid()).await;
+    for source in [f.source, other] {
+        fire_audit(&pool, f.auditor, block, source.uuid(), 0.5)
+            .await
+            .unwrap();
+    }
+
+    let source_block = first_block(&pool, f.source).await;
+    mutate_block(
+        &pool,
+        source_block,
+        f.emitter,
+        "the source no longer says that",
+    )
+    .await;
+    assert!(
+        sweep_offers(&pool, f.principal, f.cogmap, f.finding).await,
+        "precondition: while the principal can read the changed source, the finding is stale for it"
+    );
+
+    // The principal loses read on `f.source` and keeps the finding (through the cogmap) and `other`.
+    sqlx::query("DELETE FROM kb_team_members WHERE team_id = $1 AND profile_id = $2")
+        .bind(f.src_readers)
+        .bind(f.principal.uuid())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let stale: bool = sqlx::query_scalar("SELECT resource_has_stale_citation($1, $2)")
+        .bind(f.finding.uuid())
+        .bind(f.principal.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        !stale,
+        "the only stale citation's source is unreadable to this principal"
+    );
+    let via_multi: Vec<(Uuid, Uuid, Uuid)> = sqlx::query_as(
+        "SELECT finding_id, block_id, source_id \
+           FROM resource_stale_citations_multi(ARRAY[$1]::uuid[], $2)",
+    )
+    .bind(f.finding.uuid())
+    .bind(f.principal.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        via_multi.is_empty(),
+        "the set form carries the same source gate: {via_multi:?}"
+    );
+    assert!(
+        auditable_citations(&pool, f.finding, f.principal)
+            .await
+            .is_empty(),
+        "the unit of work's stale arm is source-gated too"
+    );
+    assert!(
+        !sweep_offers(&pool, f.principal, f.cogmap, f.finding).await,
+        "the sweep must not re-offer a finding because a source this principal cannot read changed"
+    );
+}
+
+/// LOAD-BEARING (the unit of work). The job payload carries only the citations whose source the
+/// principal can read, and the finding is still dispatched with them. Pins the gate on
+/// `resource_auditable_citations`' first arm (its stale arm is pinned by the test above).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_unit_of_work_omits_a_citation_whose_source_the_principal_cannot_read(
+    pool: sqlx::PgPool,
+) {
+    let f = stale_fixture(&pool, "src-gate-work").await;
+    let block = first_block(&pool, f.finding).await;
+    let hidden = unreadable_source(&pool, &f, "src-gate-work").await;
+    cite(&pool, block, hidden.uuid()).await;
+
+    assert_eq!(
+        auditable_citations(&pool, f.finding, f.principal).await,
+        vec![(block, f.source.uuid())],
+        "only the readable citation is this principal's work"
     );
 }

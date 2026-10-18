@@ -1,0 +1,26 @@
+title    = "The citation auditor's queue offers a principal only the citations whose cited source it can read"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "clients", "schema"]
+status   = "signal-only"
+body = '''
+The audit sweep now gates each citation on the cited source as well as the finding, through the
+same `resources_visible_to` predicate (migration `20261101400000`). The gate covers the three
+per-principal functions the queue is built from. In `audit_drift_sweep`, `uncovered` counts only
+the sources the principal can read, and a finding none of whose sources it can read is not offered.
+In `resource_stale_citations_multi`, and so in `resource_stale_citations` and
+`resource_has_stale_citation`, a citation whose source the principal cannot read is never stale for
+it. In `resource_auditable_citations`, the job payload, both arms carry the gate.
+
+The evidential-standing aggregates (`resource_live_citations`, `resource_citation_magnitude`,
+`resource_audit_coverage`) keep their bodies and stay reader-independent. For a principal who can
+read every cited source, the sweep's rows and order are unchanged.
+
+Who observes: the auditor principal, through `GET /api/auditor/sweep` and the jobs
+`POST /api/auditor/dispatch` enqueues. Response shapes are unchanged; `uncovered` can be smaller.
+The `AuditSweepRow` description now says so (openapi.json and the three SDKs regenerated,
+description text only). `additive` is declared because the gate computes any openapi.json movement
+as `grew` and requires a shape class for it; nothing actually grew. Witnesses: the cited-source
+section of `crates/temper-substrate/tests/citation_audits.rs`. Release relevance: signal-only;
+rides 0.6.1.
+'''
