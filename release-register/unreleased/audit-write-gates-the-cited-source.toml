@@ -1,0 +1,29 @@
+title    = "Recording a citation audit requires read on the cited source as well as the finding"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "clients", "cli-stdout", "schema"]
+status   = "signal-only"
+body = '''
+`AuditAuthority` now asks `readback::is_resource_visible` about the cited source after the finding,
+through the same predicate. A caller who can read the finding but not the source is refused with the
+same `404` and the same `FINDING_REFUSAL` body as every other finding-shaped refusal, so the
+response carries nothing a caller could not already learn. The admitting arm is unchanged for a
+caller who reads both.
+
+This matches the auditor's queue, which since `20261101400000` offers only citations whose source
+the principal can read. The auditor's instructions now say to write no verdict for an entry whose
+source comes back not found, and the steward playbook's reach note says the auditor needs read on
+the contexts its findings cite.
+
+Who observes: callers of `POST /api/resources/{id}/citation-audits`, `POST /api/citation-audits`,
+the `record_citation_audit` tool, and `temper resource audit-citation` (whose help text now names
+the case). Request and response shapes are unchanged, and there is no
+migration. Both routes' `404` descriptions now name the unreadable source (openapi.json and the
+TypeScript SDK regenerated, description text only). `additive` is declared because the gate
+computes any openapi.json movement as `grew` and requires a shape class for it; nothing actually
+grew. Witnesses:
+`a_reader_of_the_finding_who_cannot_read_the_source_is_refused` (`authz/audit_gate.rs`) and
+`posting_when_the_cited_source_is_unreadable_returns_404` plus the byte-identical refusal set in
+`crates/temper-api/tests/citation_audit_handler_test.rs`. Release relevance: signal-only; rides
+0.6.1.
+'''

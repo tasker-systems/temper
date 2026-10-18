@@ -443,6 +443,19 @@ async fn seed_finding(m: &Machine) -> (Uuid, Uuid) {
         .execute(pool)
         .await
         .expect("insert source");
+    // The gate asks for read on the cited source as well as the finding.
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+             (subject_table, subject_id, principal_table, principal_id, can_read, can_write, \
+              granted_by_profile_id) \
+          VALUES ('kb_resources', $1, 'kb_profiles', $2, true, false, $3)",
+    )
+    .bind(source)
+    .bind(m.profile)
+    .bind(m.admin)
+    .execute(pool)
+    .await
+    .expect("read-only grant on the source to the machine");
     sqlx::query(
         "INSERT INTO kb_block_provenance \
              (block_id, source_kind, source_id, contributed_by_event_id, accretion_seq) \

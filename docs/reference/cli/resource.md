@@ -768,7 +768,7 @@ Options:
 ```text
 Record a citation-audit verdict against one (block, source) citation — the block-addressed door (`POST /api/citation-audits`).
 
-The authorization subject is the finding that owns the block, resolved server-side — the caller never names a finding. Append-only: a later audit never erases an earlier one. Only Resource-kind sources are auditable; the value is the signed defensibility verdict in [-1.0, 1.0]. 404 collapses unreadable finding / self-audit / absent block into one sentence; 409 when --invocation names a closed run.
+The authorization subject is the finding that owns the block, resolved server-side — the caller never names a finding. Append-only: a later audit never erases an earlier one. Only Resource-kind sources are auditable; the value is the signed defensibility verdict in [-1.0, 1.0]. 404 collapses unreadable finding / unreadable cited source / self-audit / absent block into one sentence; 409 when --invocation names a closed run.
 
 Usage: temper resource audit-citation [OPTIONS] --source <SOURCE> --value <VALUE> <BLOCK>
 

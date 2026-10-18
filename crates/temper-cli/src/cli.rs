@@ -989,8 +989,8 @@ pub enum ResourceAction {
     /// server-side — the caller never names a finding. Append-only: a later audit
     /// never erases an earlier one. Only Resource-kind sources are auditable; the
     /// value is the signed defensibility verdict in [-1.0, 1.0]. 404 collapses
-    /// unreadable finding / self-audit / absent block into one sentence; 409 when
-    /// --invocation names a closed run.
+    /// unreadable finding / unreadable cited source / self-audit / absent block into
+    /// one sentence; 409 when --invocation names a closed run.
     AuditCitation {
         /// The audited citation's block id (from `resource show --provenance`).
         block: uuid::Uuid,

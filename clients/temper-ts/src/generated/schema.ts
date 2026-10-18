@@ -14051,7 +14051,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Not found — the finding is unreadable, the caller authored it (self-audit), the block does not exist (all three the same sentence), or the invocation correlator names no invocation the caller can read ("invocation … not found") */
+            /** @description Not found — the finding or the cited source is unreadable, the caller authored it (self-audit), the block does not exist (all the same sentence), or the invocation correlator names no invocation the caller can read ("invocation … not found") */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -19098,7 +19098,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Not found — the finding is unreadable, the caller authored it (self-audit), or the block belongs to a different finding than {id} */
+            /** @description Not found — the finding or the cited source is unreadable, the caller authored it (self-audit), or the block belongs to a different finding than {id} */
             404: {
                 headers: {
                     [name: string]: unknown;

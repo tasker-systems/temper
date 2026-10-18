@@ -431,7 +431,7 @@ claim crates/temper-services/src/services/saml_provisioning_service.rs 1 team_me
 claim crates/temper-services/src/services/subscription_service.rs 6 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
 claim crates/temper-services/src/services/team_service.rs 12 require_manage_on_team,can_manage,team_membership
-gate audit_gate 05a9b61226c4
+gate audit_gate 021f87ca4bed
 gate connection 586029b73345
 gate context_admin bce45d31795d
 gate grant 2aa83e237c3e

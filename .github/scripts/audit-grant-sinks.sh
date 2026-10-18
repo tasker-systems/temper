@@ -139,7 +139,7 @@ MIGRATIONS_DIR="${MIGRATIONS_DIR:-migrations}"
 #   ATTENUATION — `can_read=true` and nothing else; the other capability columns keep their
 #                 `false` defaults. Not a self-grant: grantee and granter are distinct profiles.
 read -r -d '' BASELINE <<'EOF' || true
-2 crates/temper-services/src/authz/audit_gate.rs
+3 crates/temper-services/src/authz/audit_gate.rs
 1 crates/temper-services/src/authz/context_admin.rs
 1 crates/temper-services/src/backend/db_backend.rs
 1 crates/temper-services/src/backend/write_floor.rs

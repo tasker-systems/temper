@@ -9,7 +9,8 @@
 //!
 //! Every other authored write in temper gates on `can_modify_resource`. An audit must **not**: an
 //! auditor that may only assess findings it owns is not an auditor. So the admitting predicate is
-//! **readability** — a deliberate widening (a write authorized by a read predicate), spec §7.
+//! **readability**, of the finding and of the cited source — a deliberate widening (a write
+//! authorized by a read predicate), spec §7.
 //!
 //! Readability alone is not sufficient, and spec §7 names **both** of the conjuncts that narrow it
 //! back: *"can read the finding — the full canonical visibility predicate — plus being a registered,
@@ -123,18 +124,20 @@ use crate::services::machine_client_service;
 /// two reads beside it.
 ///
 /// Five sites must be indistinguishable to a caller: an unknown block ([`finding_of_block`]), an
-/// unreadable or absent finding ([`AuditAuthority::denial`]), the path/block transposition guard
+/// unreadable or absent finding or cited source ([`AuditAuthority::denial`]), the path/block
+/// transposition guard
 /// and the audit-trail read (`citation_audit_service`), and the evidence read
 /// (`evidential_standing_service`). If any one of them names its own cause, the set stops being an
 /// equivalence class and a prober can diff the refusals to learn which of "no such finding",
-/// "exists but you may not read it", and "you may read it but you wrote it" applies — the exact
-/// disclosure the 404-in-place-of-403 choice exists to prevent.
+/// "exists but you may not read it", "you may read it but not its source", and "you may read it
+/// but you wrote it" applies — the exact disclosure the 404-in-place-of-403 choice exists to
+/// prevent.
 ///
 /// Deliberately a shared constant rather than five string literals. Five literals is not the same
 /// defence written five times; it is five defences that will drift, silently, the first time one
 /// of them is "improved". `citation_audit_trail_test` asserts the equality directly.
 ///
-/// The wording covers all three causes without electing between them — it is ambiguous *by
+/// The wording covers every cause without electing between them — it is ambiguous *by
 /// construction*, which is the point.
 pub(crate) const FINDING_REFUSAL: &str = "finding not found or not readable";
 
@@ -217,8 +220,8 @@ pub(crate) async fn finding_of_block(pool: &PgPool, block: BlockId) -> ApiResult
 ///
 /// The finding alone is not enough. `AuditAuthority`'s self-audit arm asks *"did you contribute
 /// **this citation**?"*, which is a `(block, source)` question — the same grain
-/// `kb_block_provenance` and `kb_citation_audits` are keyed on — while readability is a question
-/// about the finding. Carrying all three inside the sealed proof keeps the act from re-naming any
+/// `kb_block_provenance` and `kb_citation_audits` are keyed on — and readability is asked of both
+/// the finding and the source. Carrying all three inside the sealed proof keeps the act from re-naming any
 /// of them: the tick reads `finding` back out of `proof.subject()` rather than re-deriving it.
 ///
 /// `source` is a bare `Uuid` because only **resource-kind** citations are auditable (spec §6.2), so
@@ -257,7 +260,7 @@ pub(crate) async fn citation_subject(
 
 /// Who may record a citation audit on a finding.
 ///
-/// One admitting arm and two denials. The denials are named arms, never an absence and never an
+/// One admitting arm and three denials. The denials are named arms, never an absence and never an
 /// `Err` out of `resolve` — an error short-circuits `authorize` before [`ScopedAuthority::denial`]
 /// runs, which would bypass this domain's chosen refusal dialect (`mod.rs:69-74`).
 ///
@@ -267,14 +270,18 @@ pub(crate) async fn citation_subject(
 /// speak for the queue, not for a citation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AuditAuthority {
-    /// A principal that can read the finding and did not contribute the citation. **The only arm
-    /// that admits an audit** — machine or human alike.
+    /// A principal that can read the finding and the cited source, and did not contribute the
+    /// citation. **The only arm that admits an audit** — machine or human alike.
     Auditor,
     /// DENIAL — the caller contributed this citation (or can still modify the finding, the
     /// belt-and-braces proxy). The self-audit prohibition of spec §7: enforced here or nowhere.
     Author,
     /// DENIAL — the caller cannot see the finding at all.
     Unreadable,
+    /// DENIAL — the caller can see the finding but not the cited source. A verdict weighs a source
+    /// against a claim, so a caller who cannot read the source has nothing to weigh. Same refusal
+    /// as `Unreadable`: the caller already knows whether it can read the source.
+    UnreadableSource,
 }
 
 #[async_trait]
@@ -283,19 +290,20 @@ impl ScopedAuthority for AuditAuthority {
     /// carries all three ids and [`citation_subject`] for where they come from.
     type Subject = CitationSubject;
 
-    /// Three probes, in the only order that can short-circuit safely.
+    /// Four probes, in the only order that can short-circuit safely.
     ///
-    /// Readability runs FIRST and that placement is a leak decision, not a cost one: every later
-    /// arm refuses in the same `NotFound` dialect, so ordering them differently would not leak — but
-    /// a principal who cannot read the finding must not pay for, or be distinguishable by, probes
-    /// about a subject it may not know exists. The two authorship probes are last, and both must run
-    /// for the admitting arm.
+    /// Readability runs FIRST, finding then source, and that placement is a leak decision, not a
+    /// cost one: every later arm refuses in the same `NotFound` dialect, so ordering them
+    /// differently would not leak — but a principal who cannot read the finding must not pay for,
+    /// or be distinguishable by, probes about a subject it may not know exists. The two authorship
+    /// probes are last, and both must run for the admitting arm.
     ///
     /// Every probe is a **call into a SQL predicate, never a restatement** of one (`mod.rs:65-66`):
     ///
-    /// * Readability is [`readback::is_resource_visible`], extracted by Task 4 for exactly this
-    ///   reason — the standing read this gate sits beside asks the same question through the same
-    ///   function, so the two cannot drift (`readback/mod.rs:133-162`).
+    /// * Readability, of the finding and of the cited source, is [`readback::is_resource_visible`],
+    ///   extracted by Task 4 for exactly this reason — the standing read this gate sits beside asks
+    ///   the same question through the same function, so the two cannot drift
+    ///   (`readback/mod.rs:133-162`).
     /// * Citation authorship is `citation_contributed_by_profile`
     ///   (`20260724000110_citation_audits.sql`) — the exact historical fact, see the module doc.
     /// * The authorship proxy is `can_modify_resource`, the same call and the same query text as
@@ -311,6 +319,13 @@ impl ScopedAuthority for AuditAuthority {
             .map_err(|e| ApiError::Internal(e.to_string()))?
         {
             return Ok(AuditAuthority::Unreadable);
+        }
+        // The cited source, through the same predicate: the verdict is about it.
+        if !readback::is_resource_visible(pool, caller, ResourceId::from(subject.source))
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+        {
+            return Ok(AuditAuthority::UnreadableSource);
         }
 
         // The exact question (historical): did this principal emit the event that contributed this
@@ -347,11 +362,14 @@ impl ScopedAuthority for AuditAuthority {
         })
     }
 
-    /// **Both** non-admitting arms. `Author` is as much a refusal as `Unreadable`; collapsing
-    /// either into the admitting side — or forgetting one here — silently restores self-grading or
-    /// admits a principal that cannot even read the finding.
+    /// **Every** non-admitting arm. `Author` is as much a refusal as `Unreadable` and
+    /// `UnreadableSource`; collapsing any of them into the admitting side — or forgetting one here —
+    /// silently restores self-grading or admits a principal that cannot read what it would weigh.
     fn is_denial(&self) -> bool {
-        matches!(self, AuditAuthority::Author | AuditAuthority::Unreadable)
+        matches!(
+            self,
+            AuditAuthority::Author | AuditAuthority::Unreadable | AuditAuthority::UnreadableSource
+        )
     }
 
     /// `NotFound`, not `Forbidden` — and deliberately so on every arm.
@@ -462,9 +480,9 @@ mod tests {
     use sqlx::PgPool;
     use uuid::Uuid;
 
-    /// A finding with one block citing one source, and the four principals whose answers these
+    /// A finding with one block citing one source, and the five principals whose answers these
     /// gates must separate: the citer that contributed the citation, a registered machine auditor,
-    /// a registered machine principal that has read but did not contribute, and an outsider.
+    /// a human reader that did not contribute, a reader of the finding alone, and an outsider.
     struct Seeded {
         /// Owner of the finding's home AND emitter of the citation → refused as `Author`.
         author: Uuid,
@@ -474,6 +492,9 @@ mod tests {
         /// Same grant as `auditor`, but NOT registered in `kb_machine_clients` — admitted anyway,
         /// since the machine conjunct is deliberately not enforced (see the module doc).
         human_reader: Uuid,
+        /// Registered machine with a read grant on the finding and none on the cited source →
+        /// refused as `UnreadableSource`.
+        finding_only_reader: Uuid,
         /// No home, no grant, no team → not visible at all.
         outsider: Uuid,
         finding: Uuid,
@@ -512,7 +533,9 @@ mod tests {
         let auditor = insert_profile(pool, "auditor").await;
         let human_reader = insert_profile(pool, "human-reader").await;
         let outsider = insert_profile(pool, "stranger").await;
+        let finding_only_reader = insert_profile(pool, "finding-only-reader").await;
         register_machine(pool, auditor, "auditor@clients").await;
+        register_machine(pool, finding_only_reader, "finding-only@clients").await;
 
         // A profile-owned context, so `context_authorable_by_profile` (the container-write cascade
         // arm of `can_modify_resource`) admits the author and nobody else. A team-owned context
@@ -538,28 +561,38 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
-        sqlx::query(
-            "INSERT INTO kb_resource_homes \
-               (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
-             VALUES ($1, 'kb_contexts', $2, $3, $3)",
-        )
-        .bind(finding)
-        .bind(ctx)
-        .bind(author)
-        .execute(pool)
-        .await
-        .unwrap();
+        for resource in [finding, source] {
+            sqlx::query(
+                "INSERT INTO kb_resource_homes \
+                   (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+                 VALUES ($1, 'kb_contexts', $2, $3, $3)",
+            )
+            .bind(resource)
+            .bind(ctx)
+            .bind(author)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
 
         // Read WITHOUT write — the shape the whole feature depends on existing. The table's
-        // coherence CHECK ((can_write OR can_delete OR can_grant) <= can_read) permits it.
-        for reader in [auditor, human_reader] {
+        // coherence CHECK ((can_write OR can_delete OR can_grant) <= can_read) permits it. The
+        // auditors read both ends of the citation; `finding_only_reader` reads only the finding.
+        let read_grants = [
+            (finding, auditor),
+            (source, auditor),
+            (finding, human_reader),
+            (source, human_reader),
+            (finding, finding_only_reader),
+        ];
+        for (resource, reader) in read_grants {
             sqlx::query(
                 "INSERT INTO kb_access_grants \
                    (subject_table, subject_id, principal_table, principal_id, can_read, can_write, \
                     granted_by_profile_id) \
                  VALUES ('kb_resources', $1, 'kb_profiles', $2, true, false, $3)",
             )
-            .bind(finding)
+            .bind(resource)
             .bind(reader)
             .bind(author)
             .execute(pool)
@@ -612,6 +645,7 @@ mod tests {
             author,
             auditor,
             human_reader,
+            finding_only_reader,
             outsider,
             finding,
             block,
@@ -780,6 +814,19 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
+        // Readable by the auditor, so only authorship separates the two citations.
+        sqlx::query(
+            "INSERT INTO kb_access_grants \
+               (subject_table, subject_id, principal_table, principal_id, can_read, can_write, \
+                granted_by_profile_id) \
+             VALUES ('kb_resources', $1, 'kb_profiles', $2, true, false, $3)",
+        )
+        .bind(other_source)
+        .bind(s.auditor)
+        .bind(s.author)
+        .execute(&pool)
+        .await
+        .unwrap();
         let auditor_entity: Uuid = sqlx::query_scalar(
             "INSERT INTO kb_entities (profile_id, name) VALUES ($1, 'auditor@mcp') RETURNING id",
         )
@@ -911,6 +958,33 @@ mod tests {
         .is_err());
     }
 
+    /// A verdict weighs the cited source, so reading the finding is not enough: a registered
+    /// machine with a read grant on the finding and none on the source is refused. Asserts the arm,
+    /// and the precondition that the finding alone would have admitted it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_reader_of_the_finding_who_cannot_read_the_source_is_refused(pool: PgPool) {
+        let s = seed(&pool).await;
+        let subject = subject_of(&pool, &s).await;
+        let caller = ProfileId::from(s.finding_only_reader);
+
+        assert!(
+            readback::is_resource_visible(&pool, caller, subject.finding())
+                .await
+                .unwrap(),
+            "the caller CAN read the finding — so the finding check alone would have admitted it"
+        );
+        assert_eq!(
+            AuditAuthority::resolve(&pool, Principal::Bare(caller), subject)
+                .await
+                .unwrap(),
+            AuditAuthority::UnreadableSource
+        );
+        let err = authorize::<AuditAuthority>(&pool, Principal::Bare(caller), subject)
+            .await
+            .expect_err("a caller who cannot read the cited source may not weigh it");
+        assert!(matches!(err, ApiError::NotFound(_)));
+    }
+
     /// Every denial arm refuses in the same dialect, and every one is a denial at all.
     ///
     /// This guards a specific future change: a "let's make the denials consistent" pass that
@@ -926,12 +1000,17 @@ mod tests {
 
         assert!(AuditAuthority::Author.is_denial());
         assert!(AuditAuthority::Unreadable.is_denial());
+        assert!(AuditAuthority::UnreadableSource.is_denial());
         assert!(!AuditAuthority::Auditor.is_denial());
 
         // `human reader` is deliberately NOT in this list: with the machine conjunct gone it is an
-        // ADMITTED principal, covered by `a_human_reader_who_is_not_the_author_may_audit`. The two
-        // arms that remain are the two that deny.
-        for (label, caller) in [("author", s.author), ("outsider", s.outsider)] {
+        // ADMITTED principal, covered by `a_human_reader_who_is_not_the_author_may_audit`. The
+        // three arms that remain are the three that deny.
+        for (label, caller) in [
+            ("author", s.author),
+            ("outsider", s.outsider),
+            ("finding-only reader", s.finding_only_reader),
+        ] {
             let err = authorize::<AuditAuthority>(
                 &pool,
                 Principal::Bare(ProfileId::from(caller)),

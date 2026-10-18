@@ -48,7 +48,7 @@
 //! answers `200 []` the two cases stop being separable **for the honest caller** while remaining
 //! separable for the probing one through any future divergence. Rather than reason case-by-case
 //! about which diffs leak, this read takes the refusal dialect its own path already speaks:
-//! `AuditAuthority` renders **both** of its denial arms as `NotFound` precisely so the `POST` never
+//! `AuditAuthority` renders **every** denial arm as `NotFound` precisely so the `POST` never
 //! becomes an existence oracle (`crate::authz::audit_gate`), and [`record_citation_audit`] answers a
 //! path/block mismatch the same way. A `GET` on that path that refused in a different dialect than
 //! the `POST` would be the drift.

@@ -214,16 +214,17 @@ async fn seed_auditor(pool: &PgPool) -> ProfileId {
     ProfileId::from(profile_id)
 }
 
-/// Read WITHOUT write on the finding — the shape that admits the caller as `Auditor` (it can
-/// read, contributed nothing, cannot modify). Cribbed from `authz/audit_gate.rs`'s inline seed.
-async fn grant_read(pool: &PgPool, finding: Uuid, reader: ProfileId, author: ProfileId) {
+/// Read WITHOUT write on a resource. Granted on the finding and on its cited source, it is the
+/// shape that admits the caller as `Auditor` (it can read both, contributed nothing, cannot
+/// modify). Cribbed from `authz/audit_gate.rs`'s inline seed.
+async fn grant_read(pool: &PgPool, resource: Uuid, reader: ProfileId, author: ProfileId) {
     sqlx::query(
         "INSERT INTO kb_access_grants \
            (subject_table, subject_id, principal_table, principal_id, can_read, can_write, \
             granted_by_profile_id) \
          VALUES ('kb_resources', $1, 'kb_profiles', $2, true, false, $3)",
     )
-    .bind(finding)
+    .bind(resource)
     .bind(reader.uuid())
     .bind(author.uuid())
     .execute(pool)
@@ -277,6 +278,7 @@ async fn an_audit_of_a_folded_citation_is_refused_as_not_found(pool: sqlx::PgPoo
     let auditor = seed_auditor(&pool).await;
     let auditor_authed = temperament_minted(&pool, auditor).await;
     grant_read(&pool, finding.uuid(), auditor, author).await;
+    grant_read(&pool, source, auditor, author).await;
 
     // Fold the cited block (filler-append geometry: A's section re-creates, the incumbent
     // folds, its citation row survives verbatim ON THE FOLDED ROW).
@@ -352,6 +354,7 @@ async fn an_audit_of_a_live_citation_proceeds(pool: sqlx::PgPool) {
     let auditor = seed_auditor(&pool).await;
     let auditor_authed = temperament_minted(&pool, auditor).await;
     grant_read(&pool, finding.uuid(), auditor, author).await;
+    grant_read(&pool, source, auditor, author).await;
 
     let audit_id = citation_audit_service::record_citation_audit(
         &pool,

@@ -73,10 +73,10 @@
 //!   sentence (`relationships.rs:115-119`).
 //!
 //! **citation_audits**
-//! - *The three-cause equivalence class* — unknown block, unreadable finding, and
-//!   self-authored render ONE fixed sentence, because `authz::audit_gate`'s
-//!   `FINDING_REFUSAL` is one string by construction
-//!   (`audit_gate.rs:139`, both denial arms → `NotFound`) and the tool's NotFound arm
+//! - *The four-cause equivalence class* — unknown block, unreadable finding,
+//!   self-authored, and unreadable cited source render ONE fixed sentence, because
+//!   `authz::audit_gate`'s `FINDING_REFUSAL` is one string by construction
+//!   (every denial arm → `NotFound`) and the tool's NotFound arm
 //!   deliberately does NOT carry the service message — post-swap it renders its OWN
 //!   fixed sentence keyed on the 404 status, never the body. Pinned byte-exact.
 //! - *Remote-kind source* — the caller-fault guard at the command boundary
@@ -84,7 +84,7 @@
 //!   through bare (`citation_audits.rs`'s 400 arm).
 //! - *Out-of-range value* — the range guard
 //!   (`db_backend.rs:2896-2901`) → the API's 400, same pass-through.
-//! - *Happy* — a gate-admitted auditor (readable finding, did not author) records
+//! - *Happy* — a gate-admitted auditor (readable finding and source, did not author) records
 //!   the audit; the response is the BARE audit Uuid, no wrapping ack.
 //!
 //! # The declared parity deltas (flipped at the swap, named here and in the tool
@@ -264,8 +264,8 @@ mod parity {
     }
 
     /// Seed a finding (`kb_resources` + `kb_resource_homes`) owned by `owner`, homed
-    /// in `ctx`, with one content block that cites one live source resource — the
-    /// citation_audit handler test's own fixture
+    /// in `ctx`, with one content block that cites one live source resource, homed in
+    /// `ctx` too — the citation_audit handler test's own fixture
     /// (`crates/temper-api/tests/citation_audit_handler_test.rs:63-126`), so the
     /// audit gate's `citation_is_live` predicate has a real `(block, source)` pair to
     /// read. Returns `(finding_id, block_id, source_id)`.
@@ -320,6 +320,17 @@ mod parity {
             .await
             .expect("insert cited source");
         sqlx::query(
+            "INSERT INTO kb_resource_homes \
+                 (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+              VALUES ($1, 'kb_contexts', $2, $3, $3)",
+        )
+        .bind(source)
+        .bind(ctx)
+        .bind(owner)
+        .execute(pool)
+        .await
+        .expect("home cited source");
+        sqlx::query(
             "INSERT INTO kb_block_provenance \
                  (block_id, source_kind, source_id, contributed_by_event_id, accretion_seq) \
               VALUES ($1, 'resource', $2, $3, 0)",
@@ -335,15 +346,16 @@ mod parity {
     }
 
     /// The harness principal's read-without-write grant on a resource — the fixture
-    /// `AuditAuthority` depends on to admit a reader who is not the author.
-    pub async fn grant_read_only(pool: &PgPool, finding: Uuid, reader: Uuid, granted_by: Uuid) {
+    /// `AuditAuthority` depends on to admit a reader who is not the author, granted on
+    /// the finding and on its cited source.
+    pub async fn grant_read_only(pool: &PgPool, resource: Uuid, reader: Uuid, granted_by: Uuid) {
         sqlx::query(
             "INSERT INTO kb_access_grants \
                  (subject_table, subject_id, principal_table, principal_id, can_read, can_write, \
                   granted_by_profile_id) \
               VALUES ('kb_resources', $1, 'kb_profiles', $2, true, false, $3)",
         )
-        .bind(finding)
+        .bind(resource)
         .bind(reader)
         .bind(granted_by)
         .execute(pool)
@@ -1595,12 +1607,13 @@ async fn an_assert_from_a_foreign_resource_speaks_the_forbidden_arm(pool: PgPool
 // ── citation_audits ─────────────────────────────────────────────────
 
 /// The finding-shaped refusal is ONE sentence for every cause: an unknown block, a
-/// finding the caller cannot READ, and the author auditing its own citation all render
+/// finding the caller cannot READ, the author auditing its own citation, and a
+/// cited source the caller cannot read all render
 /// "record_citation_audit: finding not found, unreadable, or self-authored" —
 /// byte-exact, because `FINDING_REFUSAL` is one string by construction and the tool's
 /// NotFound arm deliberately re-states the equivalence locally
-/// (`citation_audits.rs:60-72`). All three causes are driven here, the third through a
-/// SECOND identity's own bearer, so the equivalence claim is load-bearing at the MCP
+/// (`citation_audits.rs:60-72`). All four causes are driven here, the last two through
+/// their own identities' bearers, so the equivalence claim is load-bearing at the MCP
 /// level, not argued from the gate.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_finding_shaped_refusals_are_one_indistinguishable_sentence(pool: PgPool) {
@@ -1609,7 +1622,6 @@ async fn the_finding_shaped_refusals_are_one_indistinguishable_sentence(pool: Pg
     let ctx = parity::default_context_id(&app.pool).await;
     let (finding, block, source) =
         parity::seed_finding_with_block(&app.pool, harness_id, ctx, "Own finding").await;
-    let _ = finding;
 
     let unknown = run_record_citation_audit(
         &svc,
@@ -1653,6 +1665,23 @@ async fn the_finding_shaped_refusals_are_one_indistinguishable_sentence(pool: Pg
     .await
     .expect_err("a finding the caller cannot read refuses");
 
+    // The fourth cause: a reader of the finding with no read on the cited source.
+    let (token, _sub, email) = parity::second_identity(&app, &app.pool, "source-blind").await;
+    let source_blind = parity::profile_id_by_email(&app.pool, &email).await;
+    parity::grant_read_only(&app.pool, finding, source_blind, harness_id).await;
+    let source_blind_parts = app.relay_parts_for(&token);
+    let unreadable_source = run_record_citation_audit(
+        &svc,
+        &source_blind_parts,
+        json!({
+            "block_id": block.to_string(),
+            "source": {"kind": "resource", "value": source.to_string()},
+            "value": 0.8,
+        }),
+    )
+    .await
+    .expect_err("a cited source the caller cannot read refuses");
+
     const EXPECTED: &str = "record_citation_audit: finding not found, unreadable, or self-authored";
     assert_eq!(code_of(&unknown), -32602, "{unknown}");
     assert_eq!(code_of(&self_audit), -32602, "{self_audit}");
@@ -1660,6 +1689,11 @@ async fn the_finding_shaped_refusals_are_one_indistinguishable_sentence(pool: Pg
     assert_eq!(unknown.message, EXPECTED, "byte-exact: {unknown}");
     assert_eq!(self_audit.message, EXPECTED, "byte-exact: {self_audit}");
     assert_eq!(unreadable.message, EXPECTED, "byte-exact: {unreadable}");
+    assert_eq!(code_of(&unreadable_source), -32602, "{unreadable_source}");
+    assert_eq!(
+        unreadable_source.message, EXPECTED,
+        "byte-exact: {unreadable_source}"
+    );
 }
 
 /// A DIFFERENT approved principal, granted read on a finding it did not author,
@@ -1675,13 +1709,9 @@ async fn an_approved_reader_who_did_not_author_the_citation_records_an_audit(poo
         parity::seed_finding_with_block(&app.pool, harness_id, ctx, "Audited finding").await;
 
     let (token, _sub, email) = parity::second_identity(&app, &app.pool, "auditor").await;
-    parity::grant_read_only(
-        &app.pool,
-        _finding,
-        parity::profile_id_by_email(&app.pool, &email).await,
-        harness_id,
-    )
-    .await;
+    let auditor = parity::profile_id_by_email(&app.pool, &email).await;
+    parity::grant_read_only(&app.pool, _finding, auditor, harness_id).await;
+    parity::grant_read_only(&app.pool, source, auditor, harness_id).await;
     // The second identity is its own parts: its real bearer crosses the door.
     let other_parts = app.relay_parts_for(&token);
 
@@ -1745,6 +1775,7 @@ async fn an_authored_citation_audit_under_a_real_open_invocation_lands(pool: PgP
         parity::seed_finding_with_block(&app.pool, author_id, author_ctx, "Correlated finding")
             .await;
     parity::grant_read_only(&app.pool, finding, harness_id, author_id).await;
+    parity::grant_read_only(&app.pool, source, harness_id, author_id).await;
 
     let invocation = open_invocation_for_harness(&app).await;
     let res = run_record_citation_audit(

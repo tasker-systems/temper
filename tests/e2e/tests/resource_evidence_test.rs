@@ -311,29 +311,33 @@ async fn citation_audit_moves_audit_coverage_and_citation_quality(pool: sqlx::Pg
     // A second, distinct profile audits the citation. It must NOT be the finding's author: the
     // audit gate refuses the author with 404 (`AuditAuthority::Author`,
     // `crates/temper-api/tests/citation_audit_handler_test.rs:211-239`), and it must be able to
-    // READ the finding, which — unlike the author's own writes — is not ambient for a second
-    // profile until explicitly granted (`resource_grant_e2e.rs:174-179`).
+    // READ the finding and the cited source, which — unlike the author's own writes — are not
+    // ambient for a second profile until explicitly granted (`resource_grant_e2e.rs:174-179`).
     let auditor_profile_id = common::provision_and_approve_second(&app).await;
-    app.client
-        .resources()
-        .grant(
-            finding_id.parse().expect("finding id is a uuid"),
-            &ResourceGrantBody {
-                principal_table: "kb_profiles".to_string(),
-                principal_id: auditor_profile_id,
-                can_read: true,
-                can_write: false,
-                can_delete: false,
-                can_grant: false,
-            },
-        )
-        .await
-        .expect("grant read access to the auditor");
+    for resource in [
+        finding_id.parse().expect("finding id is a uuid"),
+        cited_uuid,
+    ] {
+        app.client
+            .resources()
+            .grant(
+                resource,
+                &ResourceGrantBody {
+                    principal_table: "kb_profiles".to_string(),
+                    principal_id: auditor_profile_id,
+                    can_read: true,
+                    can_write: false,
+                    can_delete: false,
+                    can_grant: false,
+                },
+            )
+            .await
+            .expect("grant read access to the auditor");
+    }
 
-    // …and it must be a REGISTERED MACHINE PRINCIPAL. Spec §7 gates the audit write on readability
-    // AND `kb_machine_clients` membership: an audit is an agent act, and the trail it appends to is
-    // permanent, unattributed at the read surface, and unbounded. Without this row the call below
-    // 404s (`AuditAuthority::NotMachine`). A raw allowlist insert rather than
+    // Registered as a machine principal, as the auditor persona is. The write gate does not
+    // require it (a human may audit; `authz/audit_gate.rs`), so the row only keeps this test on
+    // the production auditor's shape. A raw allowlist insert rather than
     // `temper admin machine provision`, because the reach this test needs is the grant above —
     // all this row carries is "is a registered agent".
     sqlx::query(

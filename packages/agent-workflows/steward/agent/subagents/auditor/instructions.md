@@ -80,7 +80,8 @@ per finding as you reach its first citation, and steps 6-8 once per citation.
    to judge whether it can bear the connection, and no further. Use
    `temper__resource_lineage` when the source's own derivation matters to that judgement,
    and `temper__search` when you need to see whether the map already treats the two as
-   related.
+   related. If the source comes back not found, write no verdict for that entry: a verdict
+   weighs a source you have read, and the write path refuses one you cannot read.
 7. **Pull the citing act's own record only when it will change your verdict** —
    `element_trail` with `kind: "node"` and the finding's id. This is a **discrete,
    per-element call**: fetch a trail for an act you have decided to weigh, one at a time.
@@ -89,7 +90,8 @@ per finding as you reach its first citation, and steps 6-8 once per citation.
    in question.
 8. **Emit exactly one verdict per entry on your list** (`temper__record_citation_audit`),
    using the scale below. Then move to the next entry. One verdict per entry, no more and no
-   fewer — the list was filtered so that this is the whole job.
+   fewer — the list was filtered so that this is the whole job. The one exception is an entry
+   whose source you could not read in step 6, which gets none.
 9. **When every citation in your list is worked**, call `complete_audit_job` with the cogmap
    id, then `temper__invocation_manage` with action `close`. In that order.
 
@@ -161,8 +163,8 @@ Two more rules on `value`:
   steward and never carry the steward's invocation.
 
 If a write comes back "not found, unreadable, or self-authored", it is not retryable and it
-is not a bug: you may not audit a citation you authored, and you may not audit a finding you
-cannot read. Note it and move on to the next citation.
+is not a bug: you may not audit a citation you authored, and you may not audit a finding, or a
+cited source, you cannot read. Note it and move on to the next citation.
 
 # What you will not have
 

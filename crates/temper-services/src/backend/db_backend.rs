@@ -3494,10 +3494,10 @@ impl Backend for DbBackend {
         //    block resolves to server-side. The command deliberately carries no finding id, so a
         //    caller cannot authorize over one finding while writing onto a block of another
         //    (`authz/audit_gate.rs`, `CitationSubject`). `AuditAuthority` admits a principal that
-        //    can READ the finding and did NOT contribute this citation — the deliberate widening of
-        //    spec §7, narrowed back by the self-audit arm alone; the machine conjunct was removed by
-        //    product decision so a human may audit (`audit_gate.rs`'s module doc carries the
-        //    decision and the open risk it accepts). Both denial arms render `NotFound`, which
+        //    can READ the finding and the cited source and did NOT contribute this citation — the
+        //    deliberate widening of spec §7, narrowed back by the self-audit arm; the machine
+        //    conjunct was removed by product decision so a human may audit (`audit_gate.rs`'s
+        //    module doc carries the decision). Every denial arm renders `NotFound`, which
         //    `From<ApiError>` carries through as `TemperError::NotFound` (`error.rs:158-168`) — no
         //    existence oracle beside the leak-safe evidence read.
         let subject = citation_subject(&self.pool, cmd.block, source_id).await?;
