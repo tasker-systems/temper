@@ -365,6 +365,11 @@ auditor needs — `resources_visible_to`'s cogmap arm admits resources homed in 
 to a reachable team), and reach for `--cogmap <ref>:ro` only if a specific map is not
 team-joined.
 
+The auditor also needs read on the **cited sources**, not only the findings: the sweep offers a
+citation only when the auditor can read its source, and the audit write refuses one it cannot
+read (with the same 404). Sources are usually homed in contexts rather than in the map, so the
+auditor needs membership, at any role, in the team that owns each cited context.
+
 Note that the steward's own command above passes a bare `--cogmap <cogmap-ref>` — correct for
 the steward, which *writes* into its map, and exactly what the auditor must not copy.
 

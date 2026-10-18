@@ -124,18 +124,20 @@ use crate::services::machine_client_service;
 /// two reads beside it.
 ///
 /// Five sites must be indistinguishable to a caller: an unknown block ([`finding_of_block`]), an
-/// unreadable or absent finding ([`AuditAuthority::denial`]), the path/block transposition guard
+/// unreadable or absent finding or cited source ([`AuditAuthority::denial`]), the path/block
+/// transposition guard
 /// and the audit-trail read (`citation_audit_service`), and the evidence read
 /// (`evidential_standing_service`). If any one of them names its own cause, the set stops being an
 /// equivalence class and a prober can diff the refusals to learn which of "no such finding",
-/// "exists but you may not read it", and "you may read it but you wrote it" applies — the exact
-/// disclosure the 404-in-place-of-403 choice exists to prevent.
+/// "exists but you may not read it", "you may read it but not its source", and "you may read it
+/// but you wrote it" applies — the exact disclosure the 404-in-place-of-403 choice exists to
+/// prevent.
 ///
 /// Deliberately a shared constant rather than five string literals. Five literals is not the same
 /// defence written five times; it is five defences that will drift, silently, the first time one
 /// of them is "improved". `citation_audit_trail_test` asserts the equality directly.
 ///
-/// The wording covers all three causes without electing between them — it is ambiguous *by
+/// The wording covers every cause without electing between them — it is ambiguous *by
 /// construction*, which is the point.
 pub(crate) const FINDING_REFUSAL: &str = "finding not found or not readable";
 
@@ -218,8 +220,8 @@ pub(crate) async fn finding_of_block(pool: &PgPool, block: BlockId) -> ApiResult
 ///
 /// The finding alone is not enough. `AuditAuthority`'s self-audit arm asks *"did you contribute
 /// **this citation**?"*, which is a `(block, source)` question — the same grain
-/// `kb_block_provenance` and `kb_citation_audits` are keyed on — while readability is a question
-/// about the finding. Carrying all three inside the sealed proof keeps the act from re-naming any
+/// `kb_block_provenance` and `kb_citation_audits` are keyed on — and readability is asked of both
+/// the finding and the source. Carrying all three inside the sealed proof keeps the act from re-naming any
 /// of them: the tick reads `finding` back out of `proof.subject()` rather than re-deriving it.
 ///
 /// `source` is a bare `Uuid` because only **resource-kind** citations are auditable (spec §6.2), so

@@ -1,7 +1,7 @@
 title    = "Recording a citation audit requires read on the cited source as well as the finding"
 pr       = "self"
 classes  = ["additive", "behavioral"]
-surfaces = ["http", "mcp", "clients", "schema"]
+surfaces = ["http", "mcp", "clients", "cli-stdout", "schema"]
 status   = "signal-only"
 body = '''
 `AuditAuthority` now asks `readback::is_resource_visible` about the cited source after the finding,
@@ -12,10 +12,12 @@ caller who reads both.
 
 This matches the auditor's queue, which since `20261101400000` offers only citations whose source
 the principal can read. The auditor's instructions now say to write no verdict for an entry whose
-source does not resolve.
+source comes back not found, and the steward playbook's reach note says the auditor needs read on
+the contexts its findings cite.
 
 Who observes: callers of `POST /api/resources/{id}/citation-audits`, `POST /api/citation-audits`,
-and the `record_citation_audit` tool. Request and response shapes are unchanged, and there is no
+the `record_citation_audit` tool, and `temper resource audit-citation` (whose help text now names
+the case). Request and response shapes are unchanged, and there is no
 migration. Both routes' `404` descriptions now name the unreadable source (openapi.json and the
 TypeScript SDK regenerated, description text only). `additive` is declared because the gate
 computes any openapi.json movement as `grew` and requires a shape class for it; nothing actually

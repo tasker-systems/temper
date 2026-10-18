@@ -151,6 +151,11 @@ Why each one, because none is arbitrary:
   `AuditAuthority::Author` for every finding in that map via `can_modify_resource`, and
   **404s every audit it attempts** — with nothing failing at deploy time and nothing in the
   logs naming the cause. `:ro`, or nothing. See `machine-token-contract.md` §C.
+  The auditor weighs a citation only when it can read the cited source as well as the
+  finding: its queue offers only those citations, and the audit write requires both. Sources
+  usually live in contexts rather than in the map, so give the auditor read on the contexts
+  its findings cite — membership in the team that owns them, at any role (`watcher` is
+  enough).
 
 > **Connect is not an option for the auditor, structurally.** A Vercel Connect connector is
 > *deployment*-scoped, and both agents share one deployment — so a Connect token would
