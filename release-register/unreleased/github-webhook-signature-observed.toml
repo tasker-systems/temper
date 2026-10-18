@@ -1,0 +1,23 @@
+title    = "`GITHUB_WEBHOOK_SECRET`: each verified GitHub webhook receipt logs whether GitHub's own signature verifies"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+`POST /api/intake/webhook` logs one `github webhook signature` line per GitHub receipt whose Vercel
+Connect attestation verifies and names a provisioned connection, carrying `hub_signature` =
+`valid`, `invalid`, `present` or `absent`. When the new optional variable `GITHUB_WEBHOOK_SECRET`
+holds the GitHub App's webhook secret (the value set on the App and its connector), the forwarded
+`X-Hub-Signature-256` is checked as HMAC-SHA256 over the exact bytes received, compared in constant
+time. Unset, the line says only whether the header arrived (`present` or `absent`). The line is
+written before any later step can refuse or fail the receipt. Logging only: request handling and
+responses are unchanged. The secret and the signature value are never logged, and the config dump
+shows only whether the secret is set.
+
+When set, the variable joins the boot's shared-secret checks: the API refuses to start when it is
+under 16 characters or equals another shared secret it holds, naming the variable, never the value.
+Unset, it changes nothing at boot. Request and response shapes are unchanged. Who observes:
+operators reading the intake log (`docs/playbooks/github-connection.md`, Steps 7c and 7d), and a
+deployment that sets the variable to a short value or another secret's value, which will not start.
+User-visible: no. Release relevance: additive (the env var), behavioral (the boot checks).
+'''

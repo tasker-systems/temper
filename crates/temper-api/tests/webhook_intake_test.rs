@@ -711,3 +711,203 @@ async fn an_enforced_binding_remembers_an_attestation_through_its_leeway(pool: P
     );
     assert_eq!(webhook_event_count(&pool, conn).await, 2);
 }
+
+// ── GitHub's own signature, observed ────────────────────────────────────────
+
+/// Collects every line the server logs while a guard is held.
+#[derive(Clone, Default)]
+struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl Capture {
+    fn contents(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().expect("poisoned")).into_owned()
+    }
+}
+
+impl std::io::Write for Capture {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("poisoned").extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'w> tracing_subscriber::fmt::MakeWriter<'w> for Capture {
+    type Writer = Self;
+    fn make_writer(&'w self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+/// The `hub_signature` value of every line in `log`, in order.
+fn hub_signatures(log: &str) -> Vec<String> {
+    log.lines()
+        .filter_map(|line| line.split("hub_signature=").nth(1))
+        .map(|rest| {
+            rest.split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .trim_matches('"')
+                .to_string()
+        })
+        .collect()
+}
+
+/// GitHub's `X-Hub-Signature-256` value for `body` under `secret`.
+fn hub_signature_for(secret: &str, body: &[u8]) -> String {
+    use hmac::{Hmac, KeyInit, Mac};
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()).expect("hmac key");
+    mac.update(body);
+    format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+}
+
+const WEBHOOK_SECRET: &str = "the-github-apps-webhook-secret";
+
+/// Post one PR webhook under a fresh attestation, with `signature` as `X-Hub-Signature-256`.
+async fn post_signed(
+    app: &common::TestApp,
+    iat: i64,
+    body: &str,
+    signature: Option<&str>,
+) -> StatusCode {
+    let mut req = app
+        .client
+        .post(app.url(INTAKE_PATH))
+        .header(
+            "authorization",
+            attestation_issued(CONNECTOR_UID, PROJECT_ID, iat),
+        )
+        .header("x-github-event", "pull_request");
+    if let Some(signature) = signature {
+        req = req.header("x-hub-signature-256", signature);
+    }
+    req.body(body.to_string())
+        .send()
+        .await
+        .expect("post webhook")
+        .status()
+}
+
+/// Each verified GitHub receipt logs what its `X-Hub-Signature-256` says, checked against the
+/// configured `GITHUB_WEBHOOK_SECRET` over the exact bytes received, and handling is unchanged:
+/// valid, invalid and absent all land. The body is pretty-printed JSON, which no serializer
+/// reproduces from the parsed value, so a check over re-serialized JSON would log `invalid`. The
+/// capture reaches the server's lines for the reason `admin_field_scrub_surface_test` gives: the
+/// server polls on this test's thread.
+///
+/// FAILS IF a receipt is not classified, is classified over anything but the bytes received, or is
+/// refused on its signature.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn each_github_receipt_logs_its_signature_and_none_is_refused(pool: PgPool) {
+    let (_team, conn) = seed_world(&pool, Some(pr_selector())).await;
+    let app = common::setup_test_app_with_state(pool.clone(), |s| {
+        s.broker = real_broker();
+        std::sync::Arc::make_mut(&mut s.config).github_webhook_secret =
+            Some(WEBHOOK_SECRET.to_string());
+    })
+    .await;
+    let body = serde_json::to_string_pretty(&github_pr_payload(GITHUB_REPO)).expect("pretty json");
+
+    let captured = Capture::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(captured.clone())
+        .with_max_level(tracing::Level::INFO)
+        .with_ansi(false)
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+
+    let valid = hub_signature_for(WEBHOOK_SECRET, body.as_bytes());
+    let other_key = hub_signature_for("not-the-apps-secret", body.as_bytes());
+    let statuses = [
+        post_signed(&app, 1_750_000_001, &body, Some(&valid)).await,
+        post_signed(&app, 1_750_000_002, &body, Some(&other_key)).await,
+        post_signed(&app, 1_750_000_003, &body, None).await,
+    ];
+    drop(guard);
+
+    assert_eq!(
+        statuses,
+        [StatusCode::ACCEPTED; 3],
+        "the signature is observed, never enforced"
+    );
+    assert_eq!(webhook_event_count(&pool, conn).await, 3);
+    let log = captured.contents();
+    assert_eq!(hub_signatures(&log), ["valid", "invalid", "absent"]);
+    assert!(
+        !log.contains(WEBHOOK_SECRET),
+        "the webhook secret is in a log line"
+    );
+    assert!(
+        !log.contains(&valid["sha256=".len()..]),
+        "a signature value is in a log line"
+    );
+}
+
+/// The line is written before any later step can refuse the receipt, over the raw bytes: a validly
+/// signed body that is not JSON logs `valid` and is still refused exactly as before (`400`).
+///
+/// FAILS IF the line moves after a refusing step, or the MAC is taken over parsed content.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_signed_receipt_refused_downstream_still_logs_its_signature(pool: PgPool) {
+    let (_team, conn) = seed_world(&pool, Some(pr_selector())).await;
+    let app = common::setup_test_app_with_state(pool.clone(), |s| {
+        s.broker = real_broker();
+        std::sync::Arc::make_mut(&mut s.config).github_webhook_secret =
+            Some(WEBHOOK_SECRET.to_string());
+    })
+    .await;
+    let body = "not json, but signed";
+
+    let captured = Capture::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(captured.clone())
+        .with_max_level(tracing::Level::INFO)
+        .with_ansi(false)
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+    let status = post_signed(
+        &app,
+        1_750_000_001,
+        body,
+        Some(&hub_signature_for(WEBHOOK_SECRET, body.as_bytes())),
+    )
+    .await;
+    drop(guard);
+
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a non-JSON body is refused as before"
+    );
+    assert_eq!(webhook_event_count(&pool, conn).await, 0);
+    assert_eq!(hub_signatures(&captured.contents()), ["valid"]);
+}
+
+/// Without `GITHUB_WEBHOOK_SECRET`, a signed receipt logs only that the header arrived.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn without_a_secret_a_signed_receipt_logs_present(pool: PgPool) {
+    seed_world(&pool, Some(pr_selector())).await;
+    let app = common::setup_test_app_with_state(pool.clone(), |s| s.broker = real_broker()).await;
+    let body = github_pr_payload(GITHUB_REPO).to_string();
+
+    let captured = Capture::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(captured.clone())
+        .with_max_level(tracing::Level::INFO)
+        .with_ansi(false)
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+    let status = post_signed(
+        &app,
+        1_750_000_001,
+        &body,
+        Some(&hub_signature_for(WEBHOOK_SECRET, body.as_bytes())),
+    )
+    .await;
+    drop(guard);
+
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(hub_signatures(&captured.contents()), ["present"]);
+}

@@ -223,6 +223,7 @@ fn limited_reconcile_app(pool: sqlx::PgPool) -> axum::Router {
         sensitivity_sweep_enabled: false,
         mcp_service_secret: None,
         vercel_connect: None,
+        github_webhook_secret: None,
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: Some(RateLimitConfig {
@@ -334,6 +335,7 @@ async fn an_unconfigured_layer_neither_refuses_nor_counts(pool: sqlx::PgPool) {
         sensitivity_sweep_enabled: false,
         mcp_service_secret: None,
         vercel_connect: None,
+        github_webhook_secret: None,
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: None,
@@ -454,6 +456,7 @@ async fn an_unsigned_caller_spends_no_budget(pool: sqlx::PgPool) {
         sensitivity_sweep_enabled: false,
         mcp_service_secret: None,
         vercel_connect: None,
+        github_webhook_secret: None,
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: Some(RateLimitConfig {

@@ -37,6 +37,13 @@
 //! - Everything temper cannot do — an ambiguous connector, a provider with no event-name rule — is
 //!   a **500**, because the system is unable to act rather than saying no. A retry is then the
 //!   right behaviour: the condition is a misconfiguration someone will fix.
+//!
+//! ## GitHub's own signature, observed
+//!
+//! Each verified receipt for a provisioned GitHub connection logs one `hub_signature` field:
+//! whether the forwarded `X-Hub-Signature-256` arrived, and, when `GITHUB_WEBHOOK_SECRET` is
+//! configured, whether it verifies over the exact bytes received. Logging only; the receipt is
+//! handled the same whichever value it logs. See `intake_service::HubSignature`.
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -116,6 +123,23 @@ pub async fn receive(
         }
         other => other,
     })?;
+
+    // Observe GitHub's own signature on a receipt for a provisioned GitHub connection, before any
+    // later step can refuse or fail it, so each such receipt produces one line. Logging only.
+    if verified.provider == "github" {
+        let hub_signature = intake_service::classify_hub_signature(
+            state.config.github_webhook_secret.as_deref(),
+            headers
+                .get(intake_service::GITHUB_SIGNATURE_HEADER)
+                .map(|v| v.as_bytes()),
+            &body,
+        );
+        tracing::info!(
+            provider = %verified.provider,
+            hub_signature = hub_signature.as_str(),
+            "github webhook signature"
+        );
+    }
 
     // 3. Read the provider's own event name. `provider` comes from the signed `trigger` claim, so
     //    the *dispatch* is attested even though the value it selects is not.

@@ -660,6 +660,7 @@ mod tests {
             sensitivity_sweep_enabled: false,
             mcp_service_secret: None,
             vercel_connect: None,
+            github_webhook_secret: None,
             slack_link: None,
             slack_mint_secret: None,
             rate_limit: None,

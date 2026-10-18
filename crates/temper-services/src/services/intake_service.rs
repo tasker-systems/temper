@@ -31,6 +31,8 @@
 //! unavailable here: the halves read only the payload (`canonical_schema.sql:473`) and this
 //! payload is the remote's verbatim body, which does not carry the matched set.
 
+use hmac::{Hmac, KeyInit, Mac};
+use sha2::Sha256;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -138,6 +140,69 @@ pub fn event_type_header(provider: &str) -> Option<&'static str> {
     match provider {
         "github" => Some("x-github-event"),
         _ => None,
+    }
+}
+
+/// The header GitHub signs each delivery in, with the App's webhook secret (`GITHUB_WEBHOOK_SECRET`).
+/// GitHub-only by name: the format ([`classify_hub_signature`]) and the secret are GitHub's, so
+/// another provider's signature needs its own constant, format and secret rather than an entry here.
+/// The receipt handler reads it to log a [`HubSignature`].
+pub const GITHUB_SIGNATURE_HEADER: &str = "x-hub-signature-256";
+
+/// What a GitHub receipt's `X-Hub-Signature-256` says, as logged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HubSignature {
+    /// The header did not arrive.
+    Absent,
+    /// The header arrived and no `GITHUB_WEBHOOK_SECRET` is configured to check it against.
+    Present,
+    /// The header verifies over the bytes received.
+    Valid,
+    /// The header arrived and does not verify: a different key, different bytes, or a value that
+    /// is not `sha256=` and a hex tag.
+    Invalid,
+}
+
+impl HubSignature {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HubSignature::Absent => "absent",
+            HubSignature::Present => "present",
+            HubSignature::Valid => "valid",
+            HubSignature::Invalid => "invalid",
+        }
+    }
+}
+
+/// Classify a GitHub receipt's signature header against `secret`, over the raw `body` as received.
+///
+/// The MAC is computed over the buffered bytes, never over re-serialized JSON, because those are
+/// the bytes GitHub signed. `verify_slice` compares in constant time (the `internal_sig` idiom).
+pub fn classify_hub_signature(
+    secret: Option<&str>,
+    header: Option<&[u8]>,
+    body: &[u8],
+) -> HubSignature {
+    let Some(header) = header else {
+        return HubSignature::Absent;
+    };
+    let Some(secret) = secret else {
+        return HubSignature::Present;
+    };
+    let Some(presented) = std::str::from_utf8(header)
+        .ok()
+        .and_then(|v| v.strip_prefix("sha256="))
+        .and_then(|hex_tag| hex::decode(hex_tag).ok())
+    else {
+        return HubSignature::Invalid;
+    };
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+    mac.update(body);
+    if mac.verify_slice(&presented).is_ok() {
+        HubSignature::Valid
+    } else {
+        HubSignature::Invalid
     }
 }
 
