@@ -299,8 +299,9 @@ impl ScopedAuthority for AuditAuthority {
     /// Every probe is a **call into a SQL predicate, never a restatement** of one (`mod.rs:65-66`):
     ///
     /// * Readability, of the finding and of the cited source, is [`readback::is_resource_visible`],
-    ///   extracted by Task 4 for exactly this reason — the standing read this gate sits beside asks the same question through the same
-    ///   function, so the two cannot drift (`readback/mod.rs:133-162`).
+    ///   extracted by Task 4 for exactly this reason — the standing read this gate sits beside asks
+    ///   the same question through the same function, so the two cannot drift
+    ///   (`readback/mod.rs:133-162`).
     /// * Citation authorship is `citation_contributed_by_profile`
     ///   (`20260724000110_citation_audits.sql`) — the exact historical fact, see the module doc.
     /// * The authorship proxy is `can_modify_resource`, the same call and the same query text as

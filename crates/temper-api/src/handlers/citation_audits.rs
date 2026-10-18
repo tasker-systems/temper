@@ -45,7 +45,7 @@ use temper_workflow::operations::{Backend, RecordCitationAudit};
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (
             status = 404,
-            description = "Not found — the finding is unreadable, the caller authored it (self-audit), or the block belongs to a different finding than {id}",
+            description = "Not found — the finding or the cited source is unreadable, the caller authored it (self-audit), or the block belongs to a different finding than {id}",
             body = ErrorBody
         ),
     )
@@ -112,7 +112,7 @@ pub async fn record(
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (
             status = 404,
-            description = "Not found — the finding is unreadable, the caller authored it (self-audit), the block does not exist (all three the same sentence), or the invocation correlator names no invocation the caller can read (\"invocation … not found\")",
+            description = "Not found — the finding or the cited source is unreadable, the caller authored it (self-audit), the block does not exist (all the same sentence), or the invocation correlator names no invocation the caller can read (\"invocation … not found\")",
             body = ErrorBody
         ),
         (
