@@ -194,6 +194,7 @@ async fn setup_slack_app_with(
         sensitivity_sweep_enabled: false,
         mcp_service_secret: None,
         vercel_connect: None,
+        github_webhook_secret: None,
         slack_link: Some(SlackLinkConfig {
             client_id: CLIENT_ID.to_string(),
             hmac_secret: SLACK_SECRET.to_string(),

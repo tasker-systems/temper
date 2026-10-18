@@ -232,6 +232,7 @@ run.
 | `VERCEL_CONNECT_TEAM_ID` | Your Vercel team ID | `team_...` from `vercel teams ls` |
 | `VERCEL_CONNECT_TEAM_SLUG` | Your Vercel team slug | from `vercel teams ls` |
 | `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING` | Optional. `true` refuses an inbound attestation issued to another project, or presented again more than 10 seconds after it was first accepted. Unset, both are logged as would-be refusals and the webhook still lands | Leave unset at first; see *Enforcing the attestation binding* below |
+| `GITHUB_WEBHOOK_SECRET` | Optional. The GitHub App's webhook secret, the same value as the App and the connector (Step 7c). When set, each verified receipt logs whether GitHub's own signature verifies | Leave unset at first; see Step 7c |
 
 **Set them on the temper-api Vercel project:**
 
@@ -453,6 +454,23 @@ Connect does not display the secret again after saving it, so if the two ever
 disagree the fix is a fresh value on both sides rather than a recovery of the
 stored one.
 
+**Optionally, give temper the same value.** Set it as `GITHUB_WEBHOOK_SECRET` on
+the temper-api project (**Sensitive**) and redeploy, then confirm the redeploy
+serves before moving on. temper then checks GitHub's own `X-Hub-Signature-256`
+on each verified receipt for this connection, over the exact bytes it received
+(after any `Content-Encoding` is decoded), and logs the result as
+`hub_signature` (see 7d). Logging only; request handling is unchanged. Unset,
+temper logs only whether the header arrived.
+
+- Paste the value with no surrounding whitespace on either side. temper trims
+  what it reads; GitHub signs with exactly what was saved, so a stray space on
+  the App makes every receipt read `invalid`.
+- It must be at least 16 characters and differ from every other temper secret.
+  The API refuses to boot otherwise, naming the variable, never the value.
+- This puts the App's webhook secret in a third place. Keep it set only while
+  you need the reading, or while a later step uses it; to take it back, unset
+  it and redeploy, or rotate the value on the App and the connector.
+
 ### 7d — verify the ingest path, on both sides
 
 Fire one event. A label add/remove on any pull request — open or closed — emits
@@ -499,6 +517,16 @@ reachable when the provider's event-name header actually arrived. The event's
 `metadata` records both the name and where it came from
 (`provider_event_type_source: "header"`), so a later rule that reads the name
 from somewhere else cannot be confused with this one.
+
+Each verified receipt for this connection also logs one `github webhook signature`
+line with a `hub_signature` field:
+
+| `hub_signature` | Meaning |
+|---|---|
+| `valid` | GitHub's signature arrived and verifies against `GITHUB_WEBHOOK_SECRET` over the bytes temper received. |
+| `invalid` | It arrived and does not verify: the secret differs from the App's (check for surrounding whitespace on either side), or the bytes differ from those GitHub signed. |
+| `present` | It arrived; `GITHUB_WEBHOOK_SECRET` is not set, so it was not checked. |
+| `absent` | No `X-Hub-Signature-256` reached temper. |
 
 **Re-testing is free.** Each delivery has a **Redeliver** button that replays
 the identical payload under the *current* configuration — so after changing a

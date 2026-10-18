@@ -77,6 +77,12 @@ pub struct ApiConfig {
     /// set — the deployment then has a `NullBroker` and mints fail clearly. Never
     /// hardcoded; a self-hosted operator sets their own.
     pub vercel_connect: Option<VercelConnectConfig>,
+    /// The GitHub App's webhook secret (`GITHUB_WEBHOOK_SECRET`): the value set on the App and on
+    /// its Connect connector. With it, each verified GitHub receipt logs whether the forwarded
+    /// `X-Hub-Signature-256` verifies over the bytes received. It gates nothing. `None` logs only
+    /// whether the header arrived. Its own variable, not a field on [`VercelConnectConfig`], so it
+    /// never depends on that config's all-or-nothing parse.
+    pub github_webhook_secret: Option<String>,
     /// Slack account-link configuration. `None` when the three env vars are not all
     /// set — the link flow's endpoints are then disabled rather than half-configured.
     pub slack_link: Option<SlackLinkConfig>,
@@ -268,6 +274,10 @@ impl std::fmt::Debug for ApiConfig {
             )
             .field("sensitivity_sweep_enabled", &self.sensitivity_sweep_enabled)
             .field("vercel_connect", &self.vercel_connect)
+            .field(
+                "github_webhook_secret",
+                &self.github_webhook_secret.as_ref().map(|_| "redacted"),
+            )
             .field("slack_link", &self.slack_link)
             .field(
                 "slack_mint_secret",
@@ -341,6 +351,7 @@ impl ApiConfig {
             sensitivity_sweep_salt: shared_secret(&lookup, "SENSITIVITY_SWEEP_SALT"),
             sensitivity_sweep_enabled: parse_sensitivity_sweep_enabled(&lookup),
             vercel_connect: parse_vercel_connect(&lookup),
+            github_webhook_secret: shared_secret(&lookup, "GITHUB_WEBHOOK_SECRET"),
             slack_link: parse_slack_link(&lookup),
             slack_mint_secret: shared_secret(&lookup, "SLACK_MINT_SECRET"),
             rate_limit: crate::rate_limit::parse_rate_limit(&lookup)?,
@@ -668,10 +679,11 @@ fn parse_retired_vault_keys(raw: Option<String>, current: &VaultKey) -> RetiredK
 }
 
 /// Every variable whose plaintext value is a standalone credential: hold the string, exercise the
-/// capability. Five gate a surface; the sixth decrypts what one of them protects; the salt keys the
-/// sensitivity sweep's stored hashes; the edge-proxy marker exempts a request from the edge
+/// capability. Most gate a surface; the vault key decrypts what one of them protects; the salt keys
+/// the sensitivity sweep's stored hashes; the edge-proxy marker exempts a request from the edge
 /// firewall's per-IP rules. The API never reads the marker, but it is in this process's
-/// environment, so it is held here to the same distinctness.
+/// environment, so it is held here to the same distinctness. The GitHub webhook secret is the key
+/// GitHub signs deliveries with, and it is also stored in the GitHub App and the Connect connector.
 ///
 /// | Variable                    | Capability it confers                                          |
 /// | --------------------------- | -------------------------------------------------------------- |
@@ -683,6 +695,7 @@ fn parse_retired_vault_keys(raw: Option<String>, current: &VaultKey) -> RetiredK
 /// | `SLACK_VAULT_ENC_KEY`       | decrypt **every** vaulted refresh token                           |
 /// | `SENSITIVITY_SWEEP_SALT`    | confirm a guessed value against any stored sensitivity fingerprint |
 /// | `TEMPER_EDGE_PROXY_SECRET`  | skip the edge firewall's per-IP rate limits on the API's host     |
+/// | `GITHUB_WEBHOOK_SECRET`     | sign a body as the GitHub App                                     |
 ///
 /// The order is load-bearing only in that it fixes which pair a multi-way collision reports, so the
 /// error is deterministic rather than dependent on iteration order.
@@ -694,7 +707,7 @@ fn parse_retired_vault_keys(raw: Option<String>, current: &VaultKey) -> RetiredK
 /// stored grant. And `openssl rand -base64 32` is the documented generator for the vault key
 /// (`parse_slack_link` above says so), which makes "generate once, paste everywhere" the exact
 /// operator error this guards.
-const SHARED_SECRET_VARS: [&str; 9] = [
+const SHARED_SECRET_VARS: [&str; 10] = [
     "INTERNAL_RECONCILE_SECRET",
     "EMBED_DISPATCH_SECRET",
     "SLACK_LINK_SECRET",
@@ -704,18 +717,20 @@ const SHARED_SECRET_VARS: [&str; 9] = [
     "TEMPER_MCP_SERVICE_SECRET",
     "SENSITIVITY_SWEEP_SALT",
     "TEMPER_EDGE_PROXY_SECRET",
+    "GITHUB_WEBHOOK_SECRET",
 ];
 
 /// The gate secrets this process reads, each held to `temper_auth::config`'s strength floor.
 /// Only the secrets in this arc's scope are refused — the e2e harness's `e2e-mcp-relay-service-
 /// credential` constant is excluded from every check by being a *harness* constant, but
 /// a production deployment pasting it would now refuse to boot, as it should.
-const STRENGTH_CHECKED_SECRETS: [&str; 5] = [
+const STRENGTH_CHECKED_SECRETS: [&str; 6] = [
     "TEMPER_MCP_SERVICE_SECRET",
     "INTERNAL_RECONCILE_SECRET",
     "EMBED_DISPATCH_SECRET",
     "SLACK_MINT_SECRET",
     "TEMPER_EDGE_PROXY_SECRET",
+    "GITHUB_WEBHOOK_SECRET",
 ];
 
 fn check_shared_secret_strength(
@@ -853,8 +868,8 @@ mod tests {
     // --- the invariant, over the whole pair space ---
 
     // FAILS IF: any two shared secrets may hold the same value. Exhaustive over the pairs rather
-    // than hand-listing them, so a SIXTH entry in SHARED_SECRET_VARS is covered against all five
-    // incumbents the moment it is added — with no test edit, which is exactly the edit that would
+    // than hand-listing them, so a new entry in SHARED_SECRET_VARS is covered against every
+    // incumbent the moment it is added — with no test edit, which is exactly the edit that would
     // be forgotten. (A hand-written pair list is also how you end up asserting the pair you already
     // thought of and none of the ones you didn't.)
     #[test]
@@ -1087,6 +1102,42 @@ mod tests {
         assert!(
             dump.contains(r#"sensitivity_sweep_salt: Some("redacted")"#),
             "the config dump does not report the salt as present and redacted"
+        );
+    }
+
+    // FAILS IF: the GitHub webhook secret is not read, or a config dump prints it.
+    #[test]
+    fn the_github_webhook_secret_is_read_and_redacted() {
+        let secret = "9f2c4e6a8b0d1f3e5a7c9b1d3f5e7a9c";
+        let pairs = with_secrets(&[("GITHUB_WEBHOOK_SECRET", secret.to_string())]);
+        let config = ApiConfig::from_lookup(lookup_of(&pairs)).expect("boots");
+        assert_eq!(config.github_webhook_secret.as_deref(), Some(secret));
+        let dump = format!("{config:?}");
+        assert!(!dump.contains(secret), "the secret is in the config dump");
+        assert!(
+            dump.contains(r#"github_webhook_secret: Some("redacted")"#),
+            "the config dump does not report the secret as present and redacted"
+        );
+
+        let unset = ApiConfig::from_lookup(lookup_of(&with_secrets(&[]))).expect("boots");
+        assert_eq!(unset.github_webhook_secret, None);
+    }
+
+    // FAILS IF: a short GitHub webhook secret boots, or the refusal quotes it. Unset, it boots
+    // (the test above): the floor applies only to a value that is set.
+    #[test]
+    fn a_short_github_webhook_secret_refuses_to_boot_without_quoting_it() {
+        let pairs = with_secrets(&[("GITHUB_WEBHOOK_SECRET", "changeme".to_string())]);
+        let err = check_shared_secret_strength(&lookup_of(&pairs)).unwrap_err();
+        assert_eq!(
+            err,
+            ConfigError::Auth(crate::auth_config::AuthConfigError::WeakSharedSecret(
+                "GITHUB_WEBHOOK_SECRET"
+            ))
+        );
+        assert!(
+            !err.to_string().contains("changeme"),
+            "must NEVER print a secret: {err}"
         );
     }
 
