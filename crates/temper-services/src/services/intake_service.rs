@@ -76,13 +76,11 @@ pub fn webhook_body(
 /// Where the provider's event name came from — recorded on the event so the ledger row says
 /// where its own routing input originated.
 ///
-/// The event name steers the coarse radius (`GitHubRepository { event_types }`), and the
-/// attestation covers **neither** the body nor the headers: `verify_inbound` returns
-/// `payload: req.body.to_vec()` with no claim binding content, and the live-captured claim set
-/// is `iss/aud/sub/kid/client_id/trigger/exp/iat` (research `019f62e6`). So "an unverified
-/// header steering the radius, versus the verified payload" is a false contrast — the
-/// attestation authenticates the **connector**, not the content, and header and body are
-/// equally the sender's word.
+/// The event name steers the coarse radius (`GitHubRepository { event_types }`). The attestation
+/// authenticates the **connector** (claim set `iss/aud/sub/kid/client_id/trigger/exp/iat`, research
+/// `019f62e6`), and the event name and the payload are both read from the request it forwarded. So
+/// "a header steering the radius, versus the payload" is a false contrast: the two are inputs of
+/// the same standing.
 ///
 /// What is therefore worth recording is not a trust level but a **provenance**: which of the
 /// provider's conventions answered. Today only [`Self::Header`] is reachable, so the field is a
@@ -234,9 +232,8 @@ pub async fn receive_webhook(
 /// Connect sends one attestation for several distinct deliveries sent close together: a merge-queue
 /// merge's `pull_request` `closed` and `dequeued` arrive under the same one, with different bodies.
 /// Observed bursts span under a second (task `01a12e27`); the rest of the window covers instances
-/// whose clocks disagree. A repeat after the window is a captured attestation presented again, and
-/// is a replay. Inside the window a repeat is accepted whatever the binding says, so the window is
-/// the whole of what a capture used at once can still do.
+/// whose clocks disagree. A repeat after the window is a replay. A repeat inside it is part of the
+/// burst, and is accepted whatever the binding says.
 pub const ATTESTATION_REPEAT_WINDOW_SECS: i64 = 10;
 
 /// The inbound attestation a receipt arrived under. See [`receive_attested_webhook`].
