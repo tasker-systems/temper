@@ -380,7 +380,7 @@ pub async fn attach_credential(
 
     // Mint once to verify. Auth is already checked; this is a read against the
     // broker, before any persistence. Only a proven-bad credential blocks.
-    let verification = verify_by_minting(broker, credential).await?;
+    let verification = verify_by_minting(broker, id, credential).await?;
 
     let value = serde_json::to_value(credential)
         .map_err(|e| ApiError::Internal(format!("failed to serialize credential: {e}")))?;
@@ -408,9 +408,8 @@ pub async fn attach_credential(
 const REJECTED_CREDENTIAL: &str = "connector rejected the credential";
 
 /// The note an attach carries when the broker failed for a reason that says nothing about the
-/// credential. The broker's error is in the server log.
-const UNVERIFIED_NOTE: &str =
-    "could not verify the credential; the broker's error is in the server log";
+/// credential.
+const UNVERIFIED_NOTE: &str = "not verified — the broker's error is in the server log";
 
 /// Mint once and classify the outcome. `Err` here means the attach must be
 /// rejected (the credential was proven bad); `Ok(verification)` means persist,
@@ -421,6 +420,7 @@ const UNVERIFIED_NOTE: &str =
 /// log, never to the response: [`REJECTED_CREDENTIAL`], [`UNVERIFIED_NOTE`].
 async fn verify_by_minting(
     broker: &dyn CredentialBroker,
+    connection: Uuid,
     credential: &ConnectionCredential,
 ) -> ApiResult<CredentialVerification> {
     let outcome = broker
@@ -438,9 +438,11 @@ async fn verify_by_minting(
             note: None,
         },
         // The ONE blocking case: the broker proved the credential bad.
-        Err(BrokerError::Unauthorized(msg)) => {
+        Err(e @ BrokerError::Unauthorized(_)) => {
             tracing::warn!(
-                broker_error = %msg,
+                %connection,
+                connector = %credential.connector,
+                error = %e,
                 "credential attach: the broker rejected the credential"
             );
             return Err(ApiError::BadRequest(REJECTED_CREDENTIAL.to_string()));
@@ -462,7 +464,9 @@ async fn verify_by_minting(
         },
         Err(e) => {
             tracing::warn!(
-                broker_error = %e,
+                %connection,
+                connector = %credential.connector,
+                error = %e,
                 "credential attach: the credential could not be verified"
             );
             CredentialVerification {
@@ -1506,32 +1510,6 @@ mod tests {
         );
     }
 
-    /// Capture what `tracing` emits while `fut` runs, on this thread.
-    async fn captured_logs<F: std::future::Future>(fut: F) -> (F::Output, String) {
-        #[derive(Clone, Default)]
-        struct Buf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-        impl std::io::Write for Buf {
-            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().expect("log buffer").extend_from_slice(b);
-                Ok(b.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let buf = Buf::default();
-        let sink = buf.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(move || sink.clone())
-            .with_ansi(false)
-            .finish();
-        let guard = tracing::subscriber::set_default(subscriber);
-        let out = fut.await;
-        drop(guard);
-        let logs = String::from_utf8(buf.0.lock().expect("log buffer").clone()).expect("utf8 logs");
-        (out, logs)
-    }
-
     /// The broker's own error text, as a Vercel Connect rejection carries it.
     const BROKER_DETAIL: &str =
         r#"broker returned 403: {"error":{"code":"forbidden","message":"team_detail_7f3a"}}"#;
@@ -1546,7 +1524,7 @@ mod tests {
             .expect("provision");
 
         let broker = crate::broker::FakeBroker::rejecting_with(BROKER_DETAIL);
-        let (out, logs) = captured_logs(svc::attach_credential(
+        let (out, logs) = crate::test_support::captured_logs(svc::attach_credential(
             &pool,
             &broker,
             &caller,
@@ -1577,7 +1555,7 @@ mod tests {
             .expect("provision");
 
         let broker = crate::broker::FakeBroker::failing_with(BROKER_DETAIL);
-        let (out, logs) = captured_logs(svc::attach_credential(
+        let (out, logs) = crate::test_support::captured_logs(svc::attach_credential(
             &pool,
             &broker,
             &caller,
@@ -1590,7 +1568,7 @@ mod tests {
         let note = out.verification.note.expect("an unverified attach says so");
         assert_eq!(
             note,
-            "could not verify the credential; the broker's error is in the server log"
+            "not verified — the broker's error is in the server log"
         );
         assert!(
             logs.contains("team_detail_7f3a"),
