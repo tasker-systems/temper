@@ -122,7 +122,7 @@ pub struct InboundRequest<'a> {
     /// The `Authorization` header value (the attestation bearer). **Not**
     /// `x-vercel-oidc-token` — that is the receiver's own ambient identity.
     pub authorization: Option<&'a str>,
-    /// The raw request body — the provider's event, trusted only after verify.
+    /// The raw request body — the provider's event.
     pub body: &'a [u8],
 }
 
@@ -137,7 +137,7 @@ pub struct VerifiedInbound {
     pub connector_uid: String,
     /// The connector id from the signed `trigger` claim (e.g. `scl_…`).
     pub connector_id: String,
-    /// The event body, now trusted.
+    /// The event body as forwarded under the verified attestation.
     pub payload: Vec<u8>,
     /// What identifies this attestation for single use: the lowercase-hex SHA-256 of the bearer as
     /// presented. A replay presents the same bearer, so it carries the same key; the bearer itself
@@ -147,10 +147,10 @@ pub struct VerifiedInbound {
     /// clock-skew leeway (it accepts the token that long past `exp`), plus the leeway again for API
     /// instances whose clocks disagree. A replay key need not be remembered past this.
     pub expires_at: i64,
-    /// Whether the broker's binding checks refuse, or only report. While `false`, a replayed
-    /// attestation (a repeat after its burst window) or one issued to another project is logged as
-    /// a would-be refusal and still accepted (`VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING`). A
-    /// repeat inside the window is accepted either way.
+    /// Whether the broker's binding checks refuse, or only report
+    /// (`VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING`). While `false`, the checks run in observe
+    /// mode and log each would-be refusal. A repeat inside the burst window is recorded as part of
+    /// the burst either way.
     pub binding_enforced: bool,
 }
 

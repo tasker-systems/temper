@@ -16,12 +16,11 @@
 //!
 //! ## What the attestation establishes
 //!
-//! The attestation authenticates the **connector**: its claim set is
-//! `iss/aud/sub/kid/client_id/trigger/exp/iat` (research `019f62e6`), and `trigger` names which
-//! connector forwarded the request. The event name read from `X-GitHub-Event` and
-//! `repository.full_name` read from the body both come from that forwarded request, so neither is a
-//! stronger input than the other. What the ledger records is therefore the **provenance** of the
-//! steering value, not a trust level: see `intake_service::EventTypeSource`.
+//! The attestation authenticates the **connector**: its claims
+//! (`iss/aud/sub/client_id/trigger/project_id/exp/iat`, header `kid`; research `019f62e6`) name the
+//! connector it was issued for and the project it was issued to. For the event name, read from
+//! `X-GitHub-Event`, the ledger records which provider convention supplied it (its
+//! **provenance**), not a trust level: see `intake_service::EventTypeSource`.
 //!
 //! ## Refusal vs. failure, which is the whole of this handler's status mapping
 //!
@@ -141,7 +140,7 @@ pub async fn receive(
     }
 
     // 3. Read the provider's own event name. `provider` comes from the signed `trigger` claim, so
-    //    the *dispatch* is attested even though the value it selects is not.
+    //    the dispatch is attested.
     //
     //    A provider with a rule whose header is absent is a FAILURE, not a refusal: the event name
     //    steers the coarse radius, and landing the event without it would compute a radius from

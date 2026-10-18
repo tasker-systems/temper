@@ -155,10 +155,9 @@ async fn verify_inbound_impl(
     //    signed `trigger` claim.
     let trigger = verify_attestation_claims(&data.claims, expected_iss, expected_aud)?;
 
-    // 5. The project binding. `aud` is team-wide, so a token Connect issued to a sibling project
-    //    in the same team passes everything above; its `project_id` claim is what names the
-    //    receiving project (identical to this deployment's own ambient token, research
-    //    `019f62e6`). Reported until enforced: see `VerifiedInbound::binding_enforced`.
+    // 5. The project binding: the `project_id` claim must name this project (the same value as
+    //    this deployment's own ambient token, research `019f62e6`). See
+    //    `VerifiedInbound::binding_enforced`.
     let attested_project = data.claims.get("project_id").and_then(|v| v.as_str());
     if attested_project != Some(binding.project_id) {
         if binding.enforce {
@@ -174,8 +173,8 @@ async fn verify_inbound_impl(
 
     // How long a repeat must be recognised: as long as this verifier would still accept the
     // token, which is past `exp` by the store's clock-skew leeway, and the leeway again for API
-    // instances whose clocks disagree. Remembering it only until `exp` left the leeway window open:
-    // the row was pruned while the token still verified, and a replay claimed it afresh.
+    // instances whose clocks disagree, so a repeat is recognised for as long as this verifier
+    // accepts the token.
     let leeway = JwksKeyStore::CLOCK_SKEW_LEEWAY_SECONDS as i64;
     let expires_at = data
         .claims
@@ -486,8 +485,8 @@ mod verify_inbound_tests {
         assert!(v.binding_enforced);
     }
 
-    /// A token Connect issued to a sibling project in the same team passes iss, aud and
-    /// client_id; enforced, the project binding refuses it.
+    /// Enforced, the project binding refuses an attestation issued to a sibling project in the
+    /// same team.
     #[tokio::test]
     async fn an_enforced_binding_refuses_another_projects_attestation() {
         let mut claims = valid_attestation();
@@ -502,7 +501,7 @@ mod verify_inbound_tests {
             .unwrap_err();
         assert!(matches!(err, BrokerError::Verification(_)), "got {err:?}");
 
-        // Observed only: the same attestation is accepted, and reported in the log.
+        // Observe mode: reported in the log.
         let v = verify_inbound_impl(&store(), ISS, AUD, OBSERVE, req())
             .await
             .expect("reported, not refused");
@@ -615,7 +614,7 @@ pub(crate) fn parse_mint_response(body: &serde_json::Value) -> Result<Minted, Br
 const CONNECT_CLIENT_ID: &str = "api-connex";
 
 /// The signed connector identity extracted from a verified attestation, before
-/// the (already-authenticated) payload is attached.
+/// the forwarded payload is attached.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct VerifiedTrigger {
     pub provider: String,
