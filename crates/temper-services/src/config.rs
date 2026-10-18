@@ -1108,7 +1108,7 @@ mod tests {
     // FAILS IF: the GitHub webhook secret is not read, or a config dump prints it.
     #[test]
     fn the_github_webhook_secret_is_read_and_redacted() {
-        let secret = "9f2c4e6a8b0d1f3e5a7c9b1d3f5e7a9c";
+        let secret = "the-github-apps-webhook-secret-for-this-test";
         let pairs = with_secrets(&[("GITHUB_WEBHOOK_SECRET", secret.to_string())]);
         let config = ApiConfig::from_lookup(lookup_of(&pairs)).expect("boots");
         assert_eq!(config.github_webhook_secret.as_deref(), Some(secret));
