@@ -53,7 +53,7 @@ mod streaming_test_support {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(text.as_bytes());
-        let content_hash = format!("{:x}", hasher.finalize());
+        let content_hash = hex::encode(hasher.finalize());
         vec![IncomingChunk {
             chunk_index: 0,
             content_hash,
@@ -329,7 +329,7 @@ async fn concurrent_appends_preserve_body_hash(pool: sqlx::PgPool) {
         use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
         h.update(text.as_bytes());
-        format!("{:x}", h.finalize())
+        hex::encode(h.finalize())
     }
 
     let ctx = streaming_test_support::seed_resource_with_block0(&pool).await;

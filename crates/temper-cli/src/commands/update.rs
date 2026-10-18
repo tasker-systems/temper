@@ -514,7 +514,7 @@ fn sha256_of_file(path: &Path) -> CliResult<String> {
     let bytes = std::fs::read(path).map_err(|e| {
         CliError::Install(format!("reading downloaded file {}: {e}", path.display()))
     })?;
-    Ok(format!("{:x}", Sha256::digest(&bytes)))
+    Ok(hex::encode(Sha256::digest(&bytes)))
 }
 
 /// Extract `archive_path` (a downloaded `.tar.gz`) into `extract_dir` and
@@ -1221,7 +1221,7 @@ mod tests {
             target: "x86_64-unknown-linux-gnu".to_string(),
             files: vec![manifest::ManifestEntry {
                 path: "temper".to_string(),
-                sha256: format!("{:x}", Sha256::digest(b"binary-bytes")),
+                sha256: hex::encode(Sha256::digest(b"binary-bytes")),
                 size: 12,
             }],
         };

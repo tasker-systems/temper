@@ -104,7 +104,7 @@ async fn world(pool: &PgPool) -> World {
     );
     let chunk = IncomingChunk {
         chunk_index: 0,
-        content_hash: format!("{:x}", sha2::Sha256::digest(PROSE.trim())),
+        content_hash: hex::encode(sha2::Sha256::digest(PROSE.trim())),
         content: PROSE.to_string(),
         embedding: vec![0.1; 768],
         embedded_with: Some("model-sha-1".to_string()),

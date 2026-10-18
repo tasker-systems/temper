@@ -213,7 +213,7 @@ async fn seed_headed_resource(
 ) -> (Uuid, String) {
     let chunk_hash = {
         use sha2::Digest;
-        format!("{:x}", sha2::Sha256::digest(prose.trim()))
+        hex::encode(sha2::Sha256::digest(prose.trim()))
     };
     let chunk = IncomingChunk {
         chunk_index: 0,
@@ -260,7 +260,7 @@ fn blob_params(
     bytes: &[u8],
 ) -> (CommitBlobParams<'static>, String, String) {
     use sha2::Digest;
-    let hash = format!("{:x}", sha2::Sha256::digest(bytes));
+    let hash = hex::encode(sha2::Sha256::digest(bytes));
     let pathname = blob_pathname(&hash);
     (
         CommitBlobParams {

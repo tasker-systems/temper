@@ -228,7 +228,7 @@ async fn an_mcp_relation_is_attributed_to_the_mcp_emitter(pool: PgPool) {
                 chunk_index: 0,
                 content_hash: {
                     use sha2::Digest as _;
-                    format!("{:x}", sha2::Sha256::digest(b"prose".as_slice()))
+                    hex::encode(sha2::Sha256::digest(b"prose".as_slice()))
                 },
                 content: "prose".to_string(),
                 embedding: vec![0.1; 768],

@@ -107,7 +107,7 @@ const CLEAN: &str = "clean replacement prose";
 const URL: &str = "https://leak.example/internal/jane-smith";
 
 fn chunk_hash(prose: &str) -> String {
-    format!("{:x}", sha2::Sha256::digest(prose.trim()))
+    hex::encode(sha2::Sha256::digest(prose.trim()))
 }
 
 fn chunk(prose: &str, header: &str) -> IncomingChunk {
@@ -2514,7 +2514,7 @@ async fn the_operator_listed_blob_strike_verifies_and_strikes(pool: sqlx::PgPool
     let bytes = b"blob bytes under erasure".to_vec();
     let hash = {
         use sha2::Digest as _;
-        format!("{:x}", sha2::Sha256::digest(&bytes))
+        hex::encode(sha2::Sha256::digest(&bytes))
     };
     let pathname = temper_substrate::blob_store::blob_pathname(&hash);
     let store = InMemoryBlobStore::default().with_object(pathname.clone());

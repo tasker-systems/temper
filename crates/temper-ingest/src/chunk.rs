@@ -46,7 +46,7 @@ fn bold_line_re() -> &'static Regex {
 pub(crate) fn sha256_hex(s: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(s.as_bytes());
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Maximum tokens per chunk.  bge-base-en-v1.5 accepts 512 tokens including

@@ -1604,7 +1604,7 @@ mod tests {
         related: &[ResourceId],
     ) -> (BlobId, String) {
         let bytes = format!("blob bytes {}", Uuid::now_v7());
-        let hash = format!("{:x}", sha2::Sha256::digest(bytes.as_bytes()));
+        let hash = hex::encode(sha2::Sha256::digest(bytes.as_bytes()));
         let pathname = blob_pathname(&hash);
         store.insert(pathname.clone());
         let blob = writes::commit_blob(

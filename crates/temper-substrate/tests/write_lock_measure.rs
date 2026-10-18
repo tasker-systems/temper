@@ -44,7 +44,7 @@ fn knob(name: &str, default: usize) -> usize {
 fn chunk(i: usize, prose: &str, header: &str) -> IncomingChunk {
     IncomingChunk {
         chunk_index: i as i32,
-        content_hash: format!("{:x}", sha2::Sha256::digest(prose.trim())),
+        content_hash: hex::encode(sha2::Sha256::digest(prose.trim())),
         content: prose.to_string(),
         embedding: vec![0.1; 768],
         embedded_with: Some("model-sha-1".to_string()),

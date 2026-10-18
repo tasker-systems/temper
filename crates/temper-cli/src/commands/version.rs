@@ -116,7 +116,7 @@ pub fn compute_self_checksum() -> Result<(String, String)> {
         .map_err(|e| TemperError::Config(format!("cannot resolve current executable: {e}")))?;
     let bytes = std::fs::read(&exe)
         .map_err(|e| TemperError::Config(format!("cannot read {}: {e}", exe.display())))?;
-    let digest = format!("{:x}", Sha256::digest(&bytes));
+    let digest = hex::encode(Sha256::digest(&bytes));
     Ok((digest, exe.display().to_string()))
 }
 
@@ -590,7 +590,7 @@ fn unmapped_host_reason(os: &str, arch: &str) -> String {
 /// unit-tested without a network call.
 fn manifest_attestation_identity(manifest_bytes: &[u8]) -> (String, String) {
     (
-        format!("{:x}", Sha256::digest(manifest_bytes)),
+        hex::encode(Sha256::digest(manifest_bytes)),
         format!("v{VERSION}"),
     )
 }
@@ -1076,7 +1076,7 @@ mod tests {
             target: "x86_64-unknown-linux-gnu".to_string(),
             files: vec![manifest::ManifestEntry {
                 path: "temper".to_string(),
-                sha256: format!("{:x}", Sha256::digest(b"binary-bytes")),
+                sha256: hex::encode(Sha256::digest(b"binary-bytes")),
                 size: 12,
             }],
         };
@@ -1101,7 +1101,7 @@ mod tests {
             target: "x86_64-unknown-linux-gnu".to_string(),
             files: vec![manifest::ManifestEntry {
                 path: "temper".to_string(),
-                sha256: format!("{:x}", Sha256::digest(b"binary-bytes")),
+                sha256: hex::encode(Sha256::digest(b"binary-bytes")),
                 size: 12,
             }],
         };
@@ -1127,7 +1127,7 @@ mod tests {
             target: "x86_64-unknown-linux-gnu".to_string(),
             files: vec![manifest::ManifestEntry {
                 path: "temper".to_string(),
-                sha256: format!("{:x}", Sha256::digest(b"binary-bytes")),
+                sha256: hex::encode(Sha256::digest(b"binary-bytes")),
                 size: 12,
             }],
         })
@@ -1472,7 +1472,7 @@ mod tests {
     fn manifest_attestation_identity_hashes_the_exact_bytes_compared() {
         let bytes = br#"{"version":"0.3.0","target":"x86_64-unknown-linux-gnu","files":[]}"#;
         let (digest, tag) = manifest_attestation_identity(bytes);
-        assert_eq!(digest, format!("{:x}", Sha256::digest(bytes)));
+        assert_eq!(digest, hex::encode(Sha256::digest(bytes)));
         assert_eq!(tag, format!("v{VERSION}"));
 
         let (other_digest, _) = manifest_attestation_identity(b"a completely different manifest");
@@ -1551,7 +1551,7 @@ mod tests {
             target: "x86_64-unknown-linux-gnu".to_string(),
             files: vec![manifest::ManifestEntry {
                 path: "temper".to_string(),
-                sha256: format!("{:x}", Sha256::digest(b"binary-bytes")),
+                sha256: hex::encode(Sha256::digest(b"binary-bytes")),
                 size: 12,
             }],
         };
@@ -1586,7 +1586,7 @@ mod tests {
         // The digest bound to this exact byte buffer, for the record — this
         // is what `online_verdict` passes to the attestation lookup.
         let (digest, _) = manifest_attestation_identity(&bytes);
-        assert_eq!(digest, format!("{:x}", Sha256::digest(&bytes)));
+        assert_eq!(digest, hex::encode(Sha256::digest(&bytes)));
     }
 
     /// The `--verify --online` brew boundary bites and reaches no network: a

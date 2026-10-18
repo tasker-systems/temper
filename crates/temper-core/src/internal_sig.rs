@@ -33,7 +33,7 @@
 //! reads it; the tests that prove it is refused build it themselves. Its public items remain below,
 //! deprecated, only so this crate's 0.6.x line keeps its API; they are removed in 0.7.0.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;

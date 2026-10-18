@@ -44,7 +44,7 @@ pub const MINTED_CLIENT_ID_PREFIXES: [&str; 2] = [CLIENT_ID_PREFIX, DCR_CLIENT_I
 pub fn sha256_hex(input: &str) -> String {
     let mut h = Sha256::new();
     h.update(input.as_bytes());
-    format!("{:x}", h.finalize())
+    hex::encode(h.finalize())
 }
 
 /// A freshly minted secret: the plaintext (returned once, never stored) and its stored hash.

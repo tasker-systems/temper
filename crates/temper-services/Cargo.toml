@@ -50,7 +50,8 @@ thiserror = "2"
 uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.10"
-sha2 = "0.10"
+hex = "0.4"
+sha2 = "0.11"
 base64 = "0.23"
 # The Slack grant vault seals each stored refresh/access token with XChaCha20-Poly1305 (24-byte
 # random nonce per row, so nonce reuse is a non-issue). Pure Rust, no OpenSSL — matches the
@@ -59,7 +60,7 @@ chacha20poly1305 = "0.10"
 # Derives the vault key's non-secret fingerprint (HMAC-SHA256 under the key, truncated), which
 # each vault row records so an open failure can say which key sealed it. Already in the graph via
 # temper-core's internal signatures.
-hmac = "0.12"
+hmac = "0.13"
 # Path-segment encoding for the Connect mint URL — a connector uid is one
 # url-encoded path segment (`github/acme` → `github%2Facme`).
 percent-encoding = "2"
@@ -104,6 +105,3 @@ opentelemetry = "0.33"
 serde_yaml = "0.9"
 wiremock = "0.6"
 trybuild = "1"
-# The internal-signature refusal tests build the retired v1 construction themselves, to show it is
-# refused; `hmac` and `sha2` are regular dependencies already.
-hex = "0.4"

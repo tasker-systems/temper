@@ -132,7 +132,7 @@ pub fn component_fingerprint(
 
     let mut h = Sha256::new();
     h.update(s.as_bytes());
-    format!("{:x}", h.finalize())
+    hex::encode(h.finalize())
 }
 
 #[cfg(test)]

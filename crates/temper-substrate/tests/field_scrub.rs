@@ -34,7 +34,7 @@ use uuid::Uuid;
 const TAG_TERM: &str = "alpharhythm";
 
 fn chunk_hash(prose: &str) -> String {
-    format!("{:x}", sha2::Sha256::digest(prose.trim()))
+    hex::encode(sha2::Sha256::digest(prose.trim()))
 }
 
 fn chunk(prose: &str) -> IncomingChunk {

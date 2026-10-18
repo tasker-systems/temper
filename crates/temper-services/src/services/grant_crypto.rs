@@ -145,7 +145,7 @@ impl VaultKey {
     /// This key's [`KeyFingerprint`]. The vault stamps it on every row it seals, and boot logs it so
     /// an operator can name the key when retiring it.
     pub fn fingerprint(&self) -> KeyFingerprint {
-        let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(&self.0)
+        let mut mac = <Hmac<sha2::Sha256> as hmac::KeyInit>::new_from_slice(&self.0)
             .expect("HMAC accepts any key length");
         mac.update(FINGERPRINT_DOMAIN);
         let digest = mac.finalize().into_bytes();

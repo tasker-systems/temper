@@ -10,7 +10,7 @@ mod common;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use reqwest::RequestBuilder;
 use sha2::Sha256;
 use sqlx::PgPool;
