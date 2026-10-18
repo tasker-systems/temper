@@ -32,11 +32,12 @@ use uuid::Uuid;
 
 /// One row of `audit_drift_sweep` — a single cogmap-homed finding with incomplete audit coverage.
 ///
-/// `uncovered` is `citation_magnitude - audit_coverage`, the size of the remainder the auditor has
-/// not yet weighed. It ranks the uncovered findings — most-cited/least-audited first — but it is no
-/// longer the whole ordering: since `20260726000010` the sweep interleaves the uncovered and stale
-/// classes by rank, because a stale finding is fully covered by construction and a plain
-/// `uncovered DESC` would park it behind every stuck finding forever (spec §6.3).
+/// `uncovered` is the number of distinct cited sources this principal can read that no audit has
+/// yet weighed: the remainder of the readable citations. It ranks the uncovered findings —
+/// most-cited/least-audited first — but it is no longer the whole ordering: since `20260726000010`
+/// the sweep interleaves the uncovered and stale classes by rank, because a stale finding is fully
+/// covered by construction and a plain `uncovered DESC` would park it behind every stuck finding
+/// forever (spec §6.3).
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditSweepRow {
@@ -44,7 +45,8 @@ pub struct AuditSweepRow {
     pub cogmap_id: Uuid,
     /// The finding with uncovered citations — the auditor's grain.
     pub finding_id: Uuid,
-    /// Distinct live cited sources this finding carries that no audit has yet weighed.
+    /// Distinct live cited sources of this finding that the caller can read and no audit has yet
+    /// weighed.
     pub uncovered: i32,
 }
 

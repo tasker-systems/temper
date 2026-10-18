@@ -55,8 +55,8 @@ pub const DEFAULT_AUDITOR_LEASE_SECONDS: i32 = 600;
 pub const DEFAULT_AUDITOR_DISPATCH_CAP: i64 = 50;
 
 /// The ceiling on a caller-supplied auditor `cap`. Bounds the work ONE tick may ask the database
-/// for: `audit_drift_sweep` scores every candidate finding (two producers, each a multi-table join)
-/// before `p_limit` applies, and the same number is the claim's batch limit.
+/// for: `audit_drift_sweep` scores every candidate finding (a multi-table join over its readable
+/// citations) before `p_limit` applies, and the same number is the claim's batch limit.
 ///
 /// Generous rather than tight — a real backlog after an outage should drain in a few ticks, not
 /// hundreds — but finite, which the shipped code was not.
