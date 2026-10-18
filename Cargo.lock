@@ -6114,7 +6114,7 @@ dependencies = [
 
 [[package]]
 name = "temper-agents"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6124,7 +6124,7 @@ dependencies = [
 
 [[package]]
 name = "temper-api"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6163,7 +6163,7 @@ dependencies = [
 
 [[package]]
 name = "temper-cli"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anstream",
  "anstyle",
@@ -6213,7 +6213,7 @@ dependencies = [
 
 [[package]]
 name = "temper-cloud"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "sqlx",
  "temper-api",
@@ -6273,7 +6273,7 @@ dependencies = [
 
 [[package]]
 name = "temper-ingest"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -6300,11 +6300,11 @@ dependencies = [
 
 [[package]]
 name = "temper-macros"
-version = "0.6.0"
+version = "0.6.1"
 
 [[package]]
 name = "temper-mcp-server"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "axum",
  "flate2",
@@ -6335,7 +6335,7 @@ dependencies = [
 
 [[package]]
 name = "temper-migrate"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -6346,7 +6346,7 @@ dependencies = [
 
 [[package]]
 name = "temper-services"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6391,7 +6391,7 @@ dependencies = [
 
 [[package]]
 name = "temper-substrate"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6418,7 +6418,7 @@ dependencies = [
 
 [[package]]
 name = "temperkb-auth"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64 0.23.1",
  "rand 0.10.3",
@@ -6430,7 +6430,7 @@ dependencies = [
 
 [[package]]
 name = "temperkb-client"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -6461,7 +6461,7 @@ dependencies = [
 
 [[package]]
 name = "temperkb-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -6490,7 +6490,7 @@ dependencies = [
 
 [[package]]
 name = "temperkb-mcp"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -6515,7 +6515,7 @@ dependencies = [
 
 [[package]]
 name = "temperkb-principal"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "serde",
  "ts-rs",
@@ -6524,7 +6524,7 @@ dependencies = [
 
 [[package]]
 name = "temperkb-telemetry"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "axum",
  "http",
@@ -6549,7 +6549,7 @@ dependencies = [
 
 [[package]]
 name = "temperkb-workflow"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "chrono",
