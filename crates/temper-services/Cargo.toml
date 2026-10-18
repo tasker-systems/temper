@@ -50,7 +50,8 @@ thiserror = "2"
 uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.10"
-sha2 = "0.10"
+hex = "0.4"
+sha2 = "0.11"
 base64 = "0.23"
 # The Slack grant vault seals each stored refresh/access token with XChaCha20-Poly1305 (24-byte
 # random nonce per row, so nonce reuse is a non-issue). Pure Rust, no OpenSSL — matches the
@@ -104,6 +105,3 @@ opentelemetry = "0.33"
 serde_yaml = "0.9"
 wiremock = "0.6"
 trybuild = "1"
-# The internal-signature refusal tests build the retired v1 construction themselves, to show it is
-# refused; `hmac` and `sha2` are regular dependencies already.
-hex = "0.4"

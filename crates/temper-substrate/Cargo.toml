@@ -26,6 +26,7 @@ web-api = ["temperkb-core/web-api"]
 
 [dependencies]
 temperkb-core.workspace = true
+hex = "0.4"
 # The readback degradation log (a folded map that fails to parse resolves unrecorded, and
 # says so) — workspace-pinned, logging-only.
 tracing = "0.1"
@@ -47,7 +48,7 @@ serde_json = "1"
 serde_yaml = "0.9"
 schemars = { version = "1", features = ["uuid1"], optional = true }
 anyhow = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 # Object-safe async for the BlobStore seam (the CredentialBroker shape): the surfaces
 # task's consumers hold `Arc<dyn BlobStore>` (AppState, handler injection).
 async-trait = "0.1"

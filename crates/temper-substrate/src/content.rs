@@ -313,7 +313,7 @@ pub fn prepare_block_deferred_with_prefix(
 pub(crate) fn sha256_hex(s: &str) -> String {
     let mut h = Sha256::new();
     h.update(s.as_bytes());
-    format!("{:x}", h.finalize())
+    hex::encode(h.finalize())
 }
 
 /// The resource `body_hash` for the live single-block create path, computed Rust-side so a dedup

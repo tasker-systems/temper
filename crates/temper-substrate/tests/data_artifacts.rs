@@ -109,7 +109,7 @@ fn payload(
         "resource_id":   resource.uuid(),
         "artifact_kind": kind,
         "intent":        intent,
-        "content_hash":  format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(raw.as_bytes())),
+        "content_hash":  hex::encode(<sha2::Sha256 as sha2::Digest>::digest(raw.as_bytes())),
         "content_bytes": raw.len() as i64,
         "supersedes":    supersedes,
         // Carried here ONLY so `commit` can lift it back out into the separate argument. The

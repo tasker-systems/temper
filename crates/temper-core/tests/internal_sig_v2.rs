@@ -6,7 +6,7 @@
 //! `.github/codeql/codeql-config.yml` excludes `crates/*/tests/**` for exactly this reason: in a test,
 //! every secret and nonce is a fixture the test wrote. A known-answer vector cannot be anything else.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use temper_core::internal_sig::{
     nonce_is_well_formed, sign_v2, verify_v2, DOOR_PRINCIPAL_RESOLVE, DOOR_SAML_RECONCILE,

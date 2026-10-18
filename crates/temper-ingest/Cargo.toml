@@ -18,8 +18,9 @@ ort = { version = "2.0.0-rc.14", default-features = false, features = [
   "std",
   "tracing"
 ], optional = true }
+hex = "0.4"
 regex = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 similar = "2"
 temperkb-core.workspace = true
 thiserror = "2"
@@ -37,7 +38,7 @@ libc = "0.2"
 [build-dependencies]
 # Derives the expected model sha256 at compile time (see build.rs) — from the LFS pointer when the
 # blob is not smudged, from the file itself when it is. Same hash either way.
-sha2 = "0.10"
+sha2 = "0.11"
 
 [dev-dependencies]
 # `getrusage` for the embed_bench example's peak-RSS number. Unconditional here (unlike the

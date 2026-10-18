@@ -5,7 +5,7 @@
 //! suppression, and `.github/codeql/codeql-config.yml` excludes `crates/*/tests/**` for this case.
 //! None of these reach a database.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use temper_core::internal_sig::MAX_SKEW_SECS;
 use temper_core::internal_sig::{sign_v2, DOOR_PRINCIPAL_RESOLVE, DOOR_SAML_RECONCILE};

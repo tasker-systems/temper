@@ -233,7 +233,7 @@ async fn append_second_block(
     hasher.update(text.as_bytes());
     let chunk = IncomingChunk {
         chunk_index: 0,
-        content_hash: format!("{:x}", hasher.finalize()),
+        content_hash: hex::encode(hasher.finalize()),
         content: text.to_owned(),
         embedding: vec![0.1_f32; 768],
         embedded_with: None,

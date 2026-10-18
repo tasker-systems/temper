@@ -38,7 +38,7 @@ use uuid::Uuid;
 
 fn sha(bytes: &[u8]) -> String {
     use sha2::Digest;
-    format!("{:x}", sha2::Sha256::digest(bytes))
+    hex::encode(sha2::Sha256::digest(bytes))
 }
 
 async fn system_actor(pool: &sqlx::PgPool) -> (ProfileId, EntityId) {

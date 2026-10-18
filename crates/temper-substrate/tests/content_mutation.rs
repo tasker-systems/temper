@@ -1462,7 +1462,7 @@ async fn an_out_of_order_chunk_array_derives_and_suppresses_in_array_order(pool:
 /// (temper-ingest/src/chunk.rs), so the fixture hash is exactly what `block_mutate` receives.
 fn prose_hash(prose: &str) -> String {
     use sha2::Digest;
-    format!("{:x}", sha2::Sha256::digest(prose.trim()))
+    hex::encode(sha2::Sha256::digest(prose.trim()))
 }
 
 /// The erasure's embedding shape for every chunk of `block`: vector and provenance nulled

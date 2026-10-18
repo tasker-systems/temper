@@ -1131,7 +1131,7 @@ fn remove_legacy_guidance_duplicates(skill_dir: &Path) -> Result<Vec<String>> {
             // ours to judge by hash anyway.
             Err(_) => continue,
         };
-        let hash = format!("{:x}", Sha256::digest(&bytes));
+        let hash = hex::encode(Sha256::digest(&bytes));
         if hash == legacy_hash {
             std::fs::remove_file(&path).map_err(|e| {
                 TemperError::Config(format!("cannot remove {}: {}", path.display(), e))
@@ -1420,7 +1420,7 @@ fn compute_config_hash() -> Result<String> {
     let config_path = config::global_config_path();
     let config_content = std::fs::read_to_string(&config_path)
         .map_err(|e| TemperError::Config(format!("cannot read config: {}", e)))?;
-    Ok(format!("{:x}", Sha256::digest(config_content.as_bytes())))
+    Ok(hex::encode(Sha256::digest(config_content.as_bytes())))
 }
 
 /// Format contexts as sorted markdown list items.

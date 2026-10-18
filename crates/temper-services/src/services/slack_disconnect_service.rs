@@ -429,7 +429,7 @@ async fn revoke_as_refresh_token(
     use sha2::{Digest, Sha256};
 
     let digest = Sha256::digest(refresh_token.as_bytes());
-    let token_hash = format!("{digest:x}");
+    let token_hash = hex::encode(digest);
 
     let affected = sqlx::query!(
         r#"
@@ -1129,7 +1129,7 @@ mod tests {
 
         let digest = Sha256::digest(b"as-refresh-token-sample");
         assert_eq!(
-            format!("{digest:x}"),
+            hex::encode(digest),
             "9d16e5d809978fbc29ae240d1b95273fc1ff0de968d8e4f98cadfa0b5802e199",
             "Rust's digest must equal Node's sha256 hex, or AS-mode revocation \
              matches no row and fails silently"

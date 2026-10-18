@@ -162,7 +162,7 @@ pub struct VerifiedInbound {
 /// `is_supported_key_refuses_ecdsa_because_replay_keys_assume_one_signature_per_token` holds the line.
 pub fn replay_key(bearer: &str) -> String {
     use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(bearer.as_bytes()))
+    hex::encode(Sha256::digest(bearer.as_bytes()))
 }
 
 /// Why a broker operation failed. Models the actionable cases distinctly — a

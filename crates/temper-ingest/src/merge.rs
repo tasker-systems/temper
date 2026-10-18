@@ -125,7 +125,7 @@ pub fn diff_paragraphs(local: &str, remote: &str) -> Vec<DiffRegion> {
 pub fn sha2_short(text: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(text.as_bytes());
-    format!("{:x}", hasher.finalize())[..8].to_string()
+    hex::encode(hasher.finalize())[..8].to_string()
 }
 
 /// Format a conflict annotation using HTML comments.

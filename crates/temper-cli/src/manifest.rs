@@ -234,7 +234,7 @@ pub fn verify_dir(manifest: &ReleaseManifest, dir: &Path) -> Verdict {
         }
         match std::fs::read(dir.join(&entry.path)) {
             Ok(bytes) => {
-                let actual = format!("{:x}", Sha256::digest(&bytes));
+                let actual = hex::encode(Sha256::digest(&bytes));
                 if actual != entry.sha256 {
                     mismatches.push(Mismatch {
                         path: entry.path.clone(),
@@ -269,7 +269,7 @@ mod tests {
 
     fn sha_of(bytes: &[u8]) -> String {
         use sha2::{Digest, Sha256};
-        format!("{:x}", Sha256::digest(bytes))
+        hex::encode(Sha256::digest(bytes))
     }
 
     /// A directory whose files match every manifest entry verifies clean.

@@ -141,7 +141,7 @@ async fn seed_resource(pool: &PgPool, home: Uuid, owner: Uuid, emitter: Uuid, ti
             properties: &[],
             chunks: Some(vec![IncomingChunk {
                 chunk_index: 0,
-                content_hash: format!("{:x}", sha2::Sha256::digest(prose)),
+                content_hash: hex::encode(sha2::Sha256::digest(prose)),
                 content: prose.to_string(),
                 embedding: vec![0.1; 768],
                 embedded_with: Some("model-sha-1".to_string()),

@@ -752,7 +752,7 @@ mod tests {
         bytes: &[u8],
     ) -> (Uuid, String, String) {
         use sha2::Digest;
-        let hash = format!("{:x}", sha2::Sha256::digest(bytes));
+        let hash = hex::encode(sha2::Sha256::digest(bytes));
         let pathname = blob_pathname(&hash);
         store.insert(&pathname);
         let blob = writes::commit_blob(
