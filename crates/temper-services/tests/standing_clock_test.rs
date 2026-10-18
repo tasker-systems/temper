@@ -264,20 +264,23 @@ async fn recording_an_audit_moves_quality_off_zero(pool: PgPool) {
         .value;
 
     // Read WITHOUT write — the shape the whole feature depends on existing. `AuditAuthority` admits
-    // a principal who can read the finding and cannot modify it, and refuses one who can
-    // (`authz/audit_gate.rs`); the grants table's coherence CHECK permits read-only.
-    sqlx::query(
-        "INSERT INTO kb_access_grants \
-           (subject_table, subject_id, principal_table, principal_id, can_read, can_write, \
-            granted_by_profile_id) \
-         VALUES ('kb_resources', $1, 'kb_profiles', $2, true, false, $3)",
-    )
-    .bind(finding.id.uuid())
-    .bind(auditor)
-    .bind(citer)
-    .execute(&pool)
-    .await
-    .expect("grant the auditor read on the finding");
+    // a principal who can read the finding and the cited source and cannot modify the finding, and
+    // refuses one who can (`authz/audit_gate.rs`); the grants table's coherence CHECK permits
+    // read-only.
+    for resource in [finding.id.uuid(), source.id.uuid()] {
+        sqlx::query(
+            "INSERT INTO kb_access_grants \
+               (subject_table, subject_id, principal_table, principal_id, can_read, can_write, \
+                granted_by_profile_id) \
+             VALUES ('kb_resources', $1, 'kb_profiles', $2, true, false, $3)",
+        )
+        .bind(resource)
+        .bind(auditor)
+        .bind(citer)
+        .execute(&pool)
+        .await
+        .expect("grant the auditor read on the finding and its source");
+    }
 
     // An audit is an AGENT act (spec §7, §5.2): the write gate admits only a registered, unrevoked
     // machine principal. One allowlist row — no provisioning side effects, since the reach this

@@ -47,7 +47,7 @@ async fn open_invocation_for(pool: &PgPool, profile: Uuid) -> Uuid {
 // ─── Fixture helpers ─────────────────────────────────────────────────────────
 
 /// Seed a finding (`kb_resources` + `kb_resource_homes`) owned/authored by `owner`, homed in
-/// `ctx`, with one content block that cites one live source resource. Returns
+/// `ctx`, with one content block that cites one live source resource, homed in `ctx` too. Returns
 /// `(finding_id, block_id, source_id)`.
 ///
 /// The citation is not decoration: `citation_audit` refuses a `(block, source)` pair that is not a
@@ -111,6 +111,17 @@ async fn seed_finding_with_block(
         .await
         .expect("insert cited source");
     sqlx::query(
+        "INSERT INTO kb_resource_homes \
+             (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+         VALUES ($1, 'kb_contexts', $2, $3, $3)",
+    )
+    .bind(source)
+    .bind(ctx)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("home cited source");
+    sqlx::query(
         "INSERT INTO kb_block_provenance \
              (block_id, source_kind, source_id, contributed_by_event_id, accretion_seq) \
          VALUES ($1, 'resource', $2, $3, 0)",
@@ -146,15 +157,16 @@ async fn register_machine(pool: &PgPool, profile: Uuid) {
 }
 
 /// A direct, profile-anchored read-without-write `kb_access_grants` row — the shape `AuditAuthority`
-/// depends on to admit a reader who is not the author (`audit_gate.rs`'s own fixture, `:241-254`).
-async fn grant_read_only(pool: &PgPool, finding: Uuid, reader: Uuid, granted_by: Uuid) {
+/// depends on to admit a reader who is not the author (`audit_gate.rs`'s own fixture). The gate
+/// asks for read on the finding AND the cited source, so an admitted reader is granted both.
+async fn grant_read_only(pool: &PgPool, resource: Uuid, reader: Uuid, granted_by: Uuid) {
     sqlx::query(
         "INSERT INTO kb_access_grants \
              (subject_table, subject_id, principal_table, principal_id, can_read, can_write, \
               granted_by_profile_id) \
          VALUES ('kb_resources', $1, 'kb_profiles', $2, true, false, $3)",
     )
-    .bind(finding)
+    .bind(resource)
     .bind(reader)
     .bind(granted_by)
     .execute(pool)
@@ -192,6 +204,7 @@ async fn posting_an_audit_returns_the_audit_id(pool: PgPool) {
     let (reader, _) =
         common::fixtures::create_test_profile_with_context(&pool, &email_reader).await;
     grant_read_only(&pool, finding, reader, author).await;
+    grant_read_only(&pool, source, reader, author).await;
     register_machine(&pool, reader).await;
     let token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
 
@@ -320,6 +333,48 @@ async fn posting_as_the_author_returns_404(pool: PgPool) {
     );
 }
 
+// ─── Test 4b: a reader of the finding who cannot read the cited source → 404 ──
+
+/// A verdict weighs the cited source against the claim, so read on the finding alone does not
+/// admit an audit. The reader holds test 1's grant on the finding, none on the source, and is
+/// registered, so the source check is the only thing that can refuse it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn posting_when_the_cited_source_is_unreadable_returns_404(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+
+    let email_author = format!("cah-author-{}@example.com", Uuid::new_v4());
+    let (author, ctx) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_author).await;
+    let (finding, block, source) = seed_finding_with_block(&pool, author, ctx, "Finding").await;
+
+    let email_reader = format!("cah-reader-{}@example.com", Uuid::new_v4());
+    let (reader, _) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_reader).await;
+    grant_read_only(&pool, finding, reader, author).await;
+    register_machine(&pool, reader).await;
+    let token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
+
+    let resp = app
+        .client
+        .post(app.url(&format!("/api/resources/{finding}/citation-audits")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&valid_body(block, source))
+        .send()
+        .await
+        .expect("request failed");
+
+    assert_eq!(
+        resp.status().as_u16(),
+        404,
+        "a caller who cannot read the cited source must be refused with 404"
+    );
+    let audited: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_citation_audits")
+        .fetch_one(&pool)
+        .await
+        .expect("count audits");
+    assert_eq!(audited, 0, "and nothing may land");
+}
+
 // ─── Test 5: block from a DIFFERENT finding than the path → 404 (transposition) ──
 
 /// Both findings are readable by the caller and authored by neither — isolating the mismatch
@@ -350,6 +405,7 @@ async fn posting_a_block_of_another_finding_returns_404(pool: PgPool) {
     // why this is refused.
     grant_read_only(&pool, finding_a, reader, owner_a).await;
     grant_read_only(&pool, finding_b, reader, owner_b).await;
+    grant_read_only(&pool, source_b, reader, owner_b).await;
     register_machine(&pool, reader).await;
     let token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
 
@@ -393,6 +449,7 @@ async fn posting_an_out_of_range_value_returns_400(pool: PgPool) {
     let (reader, _) =
         common::fixtures::create_test_profile_with_context(&pool, &email_reader).await;
     grant_read_only(&pool, finding, reader, author).await;
+    grant_read_only(&pool, source, reader, author).await;
     register_machine(&pool, reader).await;
     let token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
 
@@ -447,6 +504,7 @@ async fn posting_an_audit_of_a_non_citation_returns_400(pool: PgPool) {
     let (reader, _) =
         common::fixtures::create_test_profile_with_context(&pool, &email_reader).await;
     grant_read_only(&pool, finding, reader, author).await;
+    grant_read_only(&pool, other_source, reader, author).await;
     register_machine(&pool, reader).await;
     let token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
 
@@ -500,6 +558,7 @@ async fn posting_as_an_unregistered_human_reader_succeeds(pool: PgPool) {
     let (reader, _) =
         common::fixtures::create_test_profile_with_context(&pool, &email_reader).await;
     grant_read_only(&pool, finding, reader, author).await;
+    grant_read_only(&pool, source, reader, author).await;
     // …and deliberately NO `register_machine`.
     let token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
 
@@ -563,6 +622,7 @@ async fn posting_an_audit_by_block_address_records_the_verdict_and_keeps_the_act
     let (reader, _) =
         common::fixtures::create_test_profile_with_context(&pool, &email_reader).await;
     grant_read_only(&pool, _finding, reader, author).await;
+    grant_read_only(&pool, source, reader, author).await;
     let invocation = open_invocation_for(&pool, reader).await;
     let token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
 
@@ -663,6 +723,7 @@ async fn posting_an_audit_by_block_address_returns_400_for_an_out_of_range_value
     let (reader, _) =
         common::fixtures::create_test_profile_with_context(&pool, &email_reader).await;
     grant_read_only(&pool, finding, reader, author).await;
+    grant_read_only(&pool, source, reader, author).await;
     let token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
 
     let body = json!({
@@ -702,6 +763,7 @@ async fn posting_an_audit_by_block_address_of_a_non_citation_returns_400(pool: P
     let (reader, _) =
         common::fixtures::create_test_profile_with_context(&pool, &email_reader).await;
     grant_read_only(&pool, finding, reader, author).await;
+    grant_read_only(&pool, other_source, reader, author).await;
     let token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
 
     let resp = app
@@ -721,24 +783,31 @@ async fn posting_an_audit_by_block_address_of_a_non_citation_returns_400(pool: P
     );
 }
 
-/// The three finding-shaped refusals through the block-addressed route — unknown block, unreadable
-/// finding, self-authored — answer with the SAME status AND the SAME body, byte for byte. The
+/// The finding-shaped refusals through the block-addressed route — unknown block, unreadable
+/// finding, self-authored, unreadable cited source — answer with the SAME status AND the SAME
+/// body, byte for byte. The
 /// equivalence class is the gate's leak-safety guarantee; this pins it at the route so no future
 /// dispatch-path change can let one arm distinguish itself.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn the_three_finding_shaped_refusals_are_indistinguishable_by_block_address(pool: PgPool) {
+async fn the_finding_shaped_refusals_are_indistinguishable_by_block_address(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
 
     let email_author = format!("cah-author-{}@example.com", Uuid::new_v4());
     let (author, ctx) =
         common::fixtures::create_test_profile_with_context(&pool, &email_author).await;
-    let (_finding, block, source) = seed_finding_with_block(&pool, author, ctx, "Finding").await;
+    let (finding, block, source) = seed_finding_with_block(&pool, author, ctx, "Finding").await;
 
     let email_stranger = format!("cah-stranger-{}@example.com", Uuid::new_v4());
     let (stranger, _) =
         common::fixtures::create_test_profile_with_context(&pool, &email_stranger).await;
     let stranger_token = common::generate_test_jwt(&format!("test|{stranger}"), &email_stranger);
     let author_token = common::generate_test_jwt(&format!("test|{author}"), &email_author);
+
+    let email_reader = format!("cah-reader-{}@example.com", Uuid::new_v4());
+    let (reader, _) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_reader).await;
+    grant_read_only(&pool, finding, reader, author).await;
+    let reader_token = common::generate_test_jwt(&format!("test|{reader}"), &email_reader);
 
     // Arm 1 — unknown block: the id addresses nothing.
     let unknown = app
@@ -770,6 +839,16 @@ async fn the_three_finding_shaped_refusals_are_indistinguishable_by_block_addres
         .await
         .expect("request failed");
 
+    // Arm 4 — unreadable source: the reader holds read on the finding and none on the source.
+    let source_unreadable = app
+        .client
+        .post(app.url("/api/citation-audits"))
+        .header("Authorization", format!("Bearer {reader_token}"))
+        .json(&block_body(block, source))
+        .send()
+        .await
+        .expect("request failed");
+
     let (unknown_status, unknown_body) =
         (unknown.status(), unknown.text().await.unwrap_or_default());
     let (unreadable_status, unreadable_body) = (
@@ -780,11 +859,16 @@ async fn the_three_finding_shaped_refusals_are_indistinguishable_by_block_addres
         self_audit.status(),
         self_audit.text().await.unwrap_or_default(),
     );
+    let (source_status, source_body) = (
+        source_unreadable.status(),
+        source_unreadable.text().await.unwrap_or_default(),
+    );
 
     for (name, status) in [
         ("unknown", unknown_status),
         ("unreadable", unreadable_status),
         ("self-audit", self_status),
+        ("unreadable-source", source_status),
     ] {
         assert_eq!(
             status.as_u16(),
@@ -800,5 +884,9 @@ async fn the_three_finding_shaped_refusals_are_indistinguishable_by_block_addres
         unknown_body, self_body,
         "the self-audit denial must be indistinguishable from an unknown block — byte for byte, \
          or the route becomes an authorship oracle"
+    );
+    assert_eq!(
+        unknown_body, source_body,
+        "an unreadable cited source must be indistinguishable from an unknown block"
     );
 }

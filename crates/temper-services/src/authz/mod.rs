@@ -427,12 +427,14 @@ mod tests {
         assert_one_voice("TwoSidedAuthority", TwoSidedAuthority::None);
     }
 
-    /// Two denial arms, and both are asserted: `Author` is as much a refusal as `Unreadable`, and a
-    /// `Forbidden` distinguishable from the unreadable case would leak the authorship relation.
+    /// Three denial arms, and all are asserted: `Author` is as much a refusal as `Unreadable` and
+    /// `UnreadableSource`, and a `Forbidden` distinguishable from the unreadable case would leak the
+    /// authorship relation.
     #[test]
     fn audit_authority_denies_in_one_voice() {
         assert_one_voice("AuditAuthority", AuditAuthority::Author);
         assert_one_voice("AuditAuthority", AuditAuthority::Unreadable);
+        assert_one_voice("AuditAuthority", AuditAuthority::UnreadableSource);
     }
 
     /// Two denial arms again — "not a registered machine" and "no such readable cogmap" must be

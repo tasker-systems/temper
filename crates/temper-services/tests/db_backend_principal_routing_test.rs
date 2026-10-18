@@ -164,14 +164,14 @@ async fn seed_source_resource(pool: &PgPool) -> Uuid {
     .unwrap()
 }
 
-async fn grant_read(pool: &PgPool, finding: Uuid, reader: ProfileId, author: ProfileId) {
+async fn grant_read(pool: &PgPool, resource: Uuid, reader: ProfileId, author: ProfileId) {
     sqlx::query(
         "INSERT INTO kb_access_grants \
            (subject_table, subject_id, principal_table, principal_id, can_read, can_write, \
             granted_by_profile_id) \
          VALUES ('kb_resources', $1, 'kb_profiles', $2, true, false, $3)",
     )
-    .bind(finding)
+    .bind(resource)
     .bind(reader.uuid())
     .bind(author.uuid())
     .execute(pool)
@@ -360,6 +360,7 @@ async fn proof_holding_and_bare_spellings_reach_the_same_gate_decision(pool: sql
     let (cited_block, _) = blocks_of(&pool, finding).await[0];
     let auditor = seeded_authed(&pool, "routing-auditor").await;
     grant_read(&pool, finding.uuid(), auditor.profile_id(), author).await;
+    grant_read(&pool, source, auditor.profile_id(), author).await;
 
     // Arm 1 — the proof-holding spelling (what every HTTP handler and MCP tool builds).
     let proof_backend = DbBackend::with_proof(pool.clone(), &auditor);
