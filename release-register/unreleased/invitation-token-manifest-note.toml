@@ -1,0 +1,18 @@
+title    = "The sensitivity manifest describes `kb_team_invitations.token` as an invitation locator that redeems only for the invitee"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["erasure-policy"]
+status   = "signal-only"
+body = '''
+`policy/erasure/sensitivity-scan.toml` now notes `kb_team_invitations.token` as an invitation
+locator that redeems only for the invitee's verified account, which reads it back from
+`GET /api/invitations/mine`. The `credential` class definition is reworded to match ("hashed, or
+a short-lived plaintext value a flow reads back"). This brings the manifest in line with the
+invitee binding declared in this window as `invitation-redeems-only-for-invitee`.
+
+Description only: the column's disposition stays `credential`, so what the sensitivity sweep reads
+and never echoes is unchanged, and no code, schema or wire shape moves. `additive` is declared
+because an erasure-policy entry needs a class and this follows the `erasure-policy-manifest-toml`
+precedent; nothing grew. Who observes: readers of the manifest. Release relevance: signal-only;
+rides 0.6.1.
+'''
