@@ -76,15 +76,12 @@ pub fn webhook_body(
 /// Where the provider's event name came from — recorded on the event so the ledger row says
 /// where its own routing input originated.
 ///
-/// The event name steers the coarse radius (`GitHubRepository { event_types }`), and the
-/// attestation covers **neither** the body nor the headers: `verify_inbound` returns
-/// `payload: req.body.to_vec()` with no claim binding content, and the live-captured claim set
-/// is `iss/aud/sub/kid/client_id/trigger/exp/iat` (research `019f62e6`). So "an unverified
-/// header steering the radius, versus the verified payload" is a false contrast — the
-/// attestation authenticates the **connector**, not the content, and header and body are
-/// equally the sender's word.
+/// The event name steers the coarse radius (`GitHubRepository { event_types }`). The attestation
+/// authenticates the **connector** (claims `iss/aud/sub/client_id/trigger/project_id/exp/iat`,
+/// research `019f62e6`); it says nothing different about a header than about the payload.
 ///
-/// What is therefore worth recording is not a trust level but a **provenance**: which of the
+/// What is worth recording about the event name is therefore not a trust level but a
+/// **provenance**: which of the
 /// provider's conventions answered. Today only [`Self::Header`] is reachable, so the field is a
 /// constant — and that is exactly why it is written now. When a second rule lands, the events
 /// that predate it must not be retro-indistinguishable from the ones that used it.
@@ -234,9 +231,8 @@ pub async fn receive_webhook(
 /// Connect sends one attestation for several distinct deliveries sent close together: a merge-queue
 /// merge's `pull_request` `closed` and `dequeued` arrive under the same one, with different bodies.
 /// Observed bursts span under a second (task `01a12e27`); the rest of the window covers instances
-/// whose clocks disagree. A repeat after the window is a captured attestation presented again, and
-/// is a replay. Inside the window a repeat is accepted whatever the binding says, so the window is
-/// the whole of what a capture used at once can still do.
+/// whose clocks disagree. A repeat after the window is a replay. A repeat inside it is recorded as
+/// part of the burst.
 pub const ATTESTATION_REPEAT_WINDOW_SECS: i64 = 10;
 
 /// The inbound attestation a receipt arrived under. See [`receive_attested_webhook`].
@@ -249,7 +245,7 @@ pub struct AttestationSeen<'a> {
     /// it, a first acceptance is stamped with it, and a repeat's age is measured on it.
     pub now: i64,
     /// Whether a replay (a repeat after [`ATTESTATION_REPEAT_WINDOW_SECS`]) is refused, or only
-    /// reported. A repeat inside the window is never refused.
+    /// reported. A repeat inside the window is recorded as part of the burst.
     pub enforced: bool,
 }
 
@@ -1153,7 +1149,7 @@ mod tests {
         assert_eq!(event_count_for_connection(&pool, conn).await, 3);
     }
 
-    /// Observing, a replay past the window is reported and still lands.
+    /// Observe mode: a replay past the window is recorded and reported.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn an_observing_receipt_records_a_replay_past_the_window(pool: PgPool) {
         let admin = seed_admin(&pool).await;

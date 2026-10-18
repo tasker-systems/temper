@@ -14,15 +14,13 @@
 //! plus the anti-decoy `client_id` assertion, both inside
 //! [`CredentialBroker::verify_inbound`](temper_services::broker::CredentialBroker::verify_inbound).
 //!
-//! ## What is and is not attested
+//! ## What the attestation establishes
 //!
-//! The attestation authenticates the **connector**, not the content. `verify_inbound` returns
-//! `payload: req.body.to_vec()` with no claim binding the body, and the live-captured claim set is
-//! `iss/aud/sub/kid/client_id/trigger/exp/iat` (research `019f62e6`). So the body and the headers
-//! are equally the sender's word, and the event name read from `X-GitHub-Event` is no weaker an
-//! input than `repository.full_name` read from the body — both are claims by a party that has
-//! proven only *which connector it is*. What the ledger records is therefore the **provenance** of
-//! the steering value, not a trust level: see `intake_service::EventTypeSource`.
+//! The attestation authenticates the **connector**: its claims
+//! (`iss/aud/sub/client_id/trigger/project_id/exp/iat`, header `kid`; research `019f62e6`) name the
+//! connector it was issued for and the project it was issued to. For the event name, read from
+//! `X-GitHub-Event`, the ledger records which provider convention supplied it (its
+//! **provenance**), not a trust level: see `intake_service::EventTypeSource`.
 //!
 //! ## Refusal vs. failure, which is the whole of this handler's status mapping
 //!
@@ -142,7 +140,7 @@ pub async fn receive(
     }
 
     // 3. Read the provider's own event name. `provider` comes from the signed `trigger` claim, so
-    //    the *dispatch* is attested even though the value it selects is not.
+    //    the dispatch is attested.
     //
     //    A provider with a rule whose header is absent is a FAILURE, not a refusal: the event name
     //    steers the coarse radius, and landing the event without it would compute a radius from
@@ -153,9 +151,8 @@ pub async fn receive(
     //    makes that assumption fail loudly on the first real forward rather than quietly.
     let event_type = provider_event_type(&verified.provider, &headers)?;
 
-    // 4. Hand over, recording the attestation. A captured attestation verifies until past its
-    //    `exp` (twelve hours), so the receipt records it in the same transaction as the event: it
-    //    is recorded exactly when a receipt lands, and a receipt that fails or is cut off never
+    // 4. Hand over, recording the attestation in the same transaction as the event: it is
+    //    recorded exactly when a receipt lands, and a receipt that fails or is cut off never
     //    records it. Connect sends one attestation for every delivery in a burst, so a repeat
     //    within `ATTESTATION_REPEAT_WINDOW_SECS` of the first lands; a later one is a replay.
     //    Whether a replay is refused or only reported is the broker's binding flag; refused, it

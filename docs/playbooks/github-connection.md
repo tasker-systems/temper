@@ -231,7 +231,7 @@ run.
 | `VERCEL_CONNECT_PROJECT_ID` | The Vercel project ID the broker mints on behalf of | `prj_...` from `vercel project ls` or the project settings page |
 | `VERCEL_CONNECT_TEAM_ID` | Your Vercel team ID | `team_...` from `vercel teams ls` |
 | `VERCEL_CONNECT_TEAM_SLUG` | Your Vercel team slug | from `vercel teams ls` |
-| `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING` | Optional. `true` refuses an inbound attestation issued to another project, or presented again more than 10 seconds after it was first accepted. Unset, both are logged as would-be refusals and the webhook still lands | Leave unset at first; see *Enforcing the attestation binding* below |
+| `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING` | Optional. `true` binds each inbound attestation to this project and to a 10-second window after its first acceptance, and refuses one that fails either check. Unset, the checks run in observe mode and log each would-be refusal | Leave unset at first; see *Enforcing the attestation binding* below |
 | `GITHUB_WEBHOOK_SECRET` | Optional. The GitHub App's webhook secret, the same value as the App and the connector (Step 7c). When set, each verified receipt logs whether GitHub's own signature verifies | Leave unset at first; see Step 7c |
 
 **Set them on the temper-api Vercel project:**
@@ -853,23 +853,19 @@ event landing with an empty radius. It means the forwarding path stopped
 carrying a header it previously did; it is not something to work around by
 guessing the event name from the payload.
 
-**Enforcing the attestation binding.** An inbound attestation is valid for twelve hours and
-names the whole Vercel team in `aud`, so two more checks bind it to this project and to one
-moment: its `project_id` must be `VERCEL_CONNECT_PROJECT_ID`, and the same attestation is accepted
-again only within 10 seconds of its first acceptance (temper records a hash of it, never the token,
-until it expires). The window exists because Connect sends one attestation for several deliveries
-sent close together: a merge-queue merge's `pull_request` `closed` and `dequeued` arrive under the
-same one, under a second apart. A repeat inside the window logs
-`inbound attestation: repeated within its burst window; recorded` and is never refused. The
-attestation does not cover the body, so inside the window a captured attestation still lands any
-body, as many times as it is presented; the window bounds that exposure to about ten seconds after
-first use, it does not remove it. With
-`VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING` unset (the startup log says
+**Enforcing the attestation binding.** Two checks bind each inbound attestation to this project
+and to a short window: its `project_id` must be `VERCEL_CONNECT_PROJECT_ID`, and the same
+attestation is accepted again only within 10 seconds of its first acceptance (temper records a hash
+of it, never the token, until it expires). The window exists because Connect sends one attestation
+for several deliveries sent close together: a merge-queue merge's `pull_request` `closed` and
+`dequeued` arrive under the same one, under a second apart. A repeat inside the window logs
+`inbound attestation: repeated within its burst window; recorded` and is recorded as part of the
+burst. With `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING` unset (the startup log says
 `inbound attestation binding: observing`), a failed check logs
 `inbound attestation: would refuse once binding is enforced` with `reason` = `project_mismatch` or
-`replayed`, and the webhook still lands. Let real traffic run for a day or so: if no such line
-appears, set the variable to `true` and redeploy; the startup log then says `enforced`. A value the
-API cannot read as a boolean also enforces, and logs an error saying so.
+`replayed`. Let real traffic run for a day or so: if no such line appears, set the variable to
+`true` and redeploy; the startup log then says `enforced`. A value the API cannot read as a
+boolean also enforces, and logs an error saying so.
 
 A `project_mismatch` line means `VERCEL_CONNECT_PROJECT_ID` is not the project Connect forwards
 to. A `replayed` line (it carries `age_secs`, the seconds since the first acceptance) on ordinary

@@ -585,8 +585,7 @@ async fn age_recorded_attestations(pool: &PgPool) {
 
 /// Enforced, the same attestation again straight away is one of Connect's bursts (a queue merge's
 /// `closed` and `dequeued`, distinct events under one attestation) and lands. Presented after the
-/// burst window, it is a capture replayed with any body: refused with the uniform 401, landing
-/// nothing.
+/// burst window, it is a replay: refused with the uniform 401, landing nothing.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn an_enforced_binding_lands_a_burst_and_refuses_a_later_replay(pool: PgPool) {
     let (_team, conn) = seed_world(&pool, Some(pr_selector())).await;

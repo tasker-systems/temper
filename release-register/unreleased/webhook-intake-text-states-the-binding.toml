@@ -1,0 +1,14 @@
+title    = "The webhook-intake playbook and doc comments describe the attestation binding by what it establishes"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+Wording only. `docs/playbooks/github-connection.md`, the `webhook_intake` handler's module doc and
+step comment, the broker's and `intake_service`'s doc comments, test doc comments, and the two
+attestation-binding register entries now say that the attestation authenticates the connector,
+that `VERCEL_CONNECT_ENFORCE_ATTESTATION_BINDING` binds each attestation to this project and to a
+10-second window after its first acceptance, and what each log line means. The operator procedure
+for enforcing the binding is unchanged. No code, shape or behaviour changes; declared because a
+wire-touched path moved. Release relevance: signal-only; rides 0.6.1.
+'''
