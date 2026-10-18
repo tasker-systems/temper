@@ -34,9 +34,10 @@
 //!
 //! # Transparency log: kept, not skipped
 //!
-//! `VerificationPolicy::default()` verifies Rekor transparency-log inclusion
-//! proofs. The spike proved real SLSA build-provenance bundles (the kind our
-//! release pipeline emits) carry them, so `skip_tlog()` is never called here —
+//! Every `VerificationPolicy` verifies Rekor transparency-log inclusion
+//! proofs unless told otherwise. The spike proved real SLSA build-provenance
+//! bundles (the kind our release pipeline emits) carry them, so
+//! `skip_tlog_unsafe()` is never called here —
 //! doing so would silently discard a real part of the guarantee for no
 //! reason.
 //!
@@ -220,9 +221,7 @@ pub fn verify_release_attestation(
         ))
     })?;
 
-    let policy = VerificationPolicy::default()
-        .require_issuer(GITHUB_ACTIONS_OIDC_ISSUER)
-        .require_identity(expected_identity());
+    let policy = VerificationPolicy::new(expected_identity(), GITHUB_ACTIONS_OIDC_ISSUER);
 
     sigstore_verify::verify(digest, &bundle, &policy, &trusted_root)
         .map_err(classify_verify_error)?;
@@ -330,22 +329,33 @@ fn verify_predicate_workflow_path(bundle_json: &str) -> Result<(), AttestError> 
 
 /// Route a `sigstore-verify` failure into one of our two recovery classes.
 ///
-/// `sigstore-verify` reports everything through a handful of string-carrying
-/// variants (mostly [`sigstore_verify::Error::Verification`]), so this
-/// classification is necessarily a text match rather than a matched enum
-/// variant. Chain-to-root failures ("certificate chain validation failed",
-/// which is how webpki's `UnknownIssuer`/expired-anchor errors surface here,
-/// and Fulcio-anchor/SCT extraction failures) are about **our** pinned root's
-/// material, not this bundle's binding to an artifact — everything else
-/// (identity mismatch, issuer mismatch, bad signature, digest mismatch,
-/// malformed structure) means this specific bundle does not vouch for this
-/// specific artifact.
+/// Failures that point at **our** pinned root's material rather than at this
+/// bundle's binding to an artifact are [`AttestError::TrustRootUnusable`]: the
+/// signing certificate does not chain to a Fulcio authority in the root, no
+/// authority in it was valid at the signing time, the SCT does not verify
+/// against its CT logs, the bundle's transparency log is not in it, or the root
+/// itself is unusable. A newer binary carrying a fresher root fixes those.
+///
+/// Everything else (identity or issuer mismatch, bad signature, digest
+/// mismatch, a leaf certificate outside its own validity window, malformed or
+/// unsupported structure) means this specific bundle does not vouch for this
+/// specific artifact. `sigstore_verify::Error` is `#[non_exhaustive]`, so a
+/// variant added upstream lands here too: "cannot tell" fails closed as
+/// [`AttestError::NotOurs`], never as "reinstall to fix".
 fn classify_verify_error(err: sigstore_verify::Error) -> AttestError {
+    use sigstore_verify::{CertificateError, Error, TransparencyLogError};
+    let is_root_problem = matches!(
+        err,
+        Error::Certificate(
+            CertificateError::ChainInvalid(_)
+                | CertificateError::NoValidAuthority { .. }
+                | CertificateError::Sct(_)
+        ) | Error::TransparencyLog(TransparencyLogError::UnknownLog { .. })
+            | Error::InvalidTrustRoot(_)
+            | Error::TrustRoot(_)
+            | Error::TrustedCertificate(_)
+    );
     let msg = err.to_string();
-    let is_root_problem = msg.contains("certificate chain validation failed")
-        || msg.contains("Fulcio certificates")
-        || msg.contains("trust anchors")
-        || msg.contains(" SCT");
     if is_root_problem {
         AttestError::TrustRootUnusable(msg)
     } else {
@@ -387,7 +397,7 @@ mod tests {
         let result = sigstore_verify::verify(
             digest,
             &bundle,
-            &VerificationPolicy::default(),
+            &VerificationPolicy::any_identity(),
             &trusted_root,
         );
 
@@ -436,15 +446,30 @@ mod tests {
     /// failure unactionable.
     #[test]
     fn trust_root_and_identity_failures_are_distinguishable() {
-        let root_err = classify_verify_error(sigstore_verify::Error::Verification(
-            "certificate chain validation failed: UnknownIssuer".to_string(),
+        let root_err = classify_verify_error(sigstore_verify::Error::Certificate(
+            sigstore_verify::CertificateError::ChainInvalid("UnknownIssuer".to_string()),
         ));
-        let identity_err = classify_verify_error(sigstore_verify::Error::Verification(
-            "identity mismatch: expected a, got b".to_string(),
-        ));
+        let identity_err = classify_verify_error(sigstore_verify::Error::IdentityMismatch {
+            expected: "a".into(),
+            actual: None,
+        });
 
         assert!(matches!(root_err, AttestError::TrustRootUnusable(_)));
         assert!(matches!(identity_err, AttestError::NotOurs(_)));
+
+        // A transparency log our pinned root does not know is a stale-root
+        // symptom, like an unknown Fulcio issuer; a bad signature is this
+        // bundle's problem.
+        let unknown_log = classify_verify_error(sigstore_verify::Error::TransparencyLog(
+            sigstore_verify::TransparencyLogError::UnknownLog {
+                log_id: "c0d23d6a".to_string(),
+            },
+        ));
+        let bad_signature = classify_verify_error(sigstore_verify::Error::SignatureInvalid(
+            "signature does not verify".to_string(),
+        ));
+        assert!(matches!(unknown_log, AttestError::TrustRootUnusable(_)));
+        assert!(matches!(bad_signature, AttestError::NotOurs(_)));
 
         let root_msg = root_err.to_string();
         assert!(

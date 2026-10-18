@@ -37,9 +37,9 @@ serde_json = "1"
 serde_yaml = "0.9"
 sha2 = "0.11"
 shell-words = "1"
-sigstore-trust-root = "0.11"
+sigstore-trust-root = "0.15"
 sigstore-types = "0.15"
-sigstore-verify = "0.11"
+sigstore-verify = "0.15"
 similar = "2"
 temperkb-client = { workspace = true, features = ["telemetry"] }
 temperkb-core.workspace = true
