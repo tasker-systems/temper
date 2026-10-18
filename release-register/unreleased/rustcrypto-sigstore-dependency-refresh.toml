@@ -1,0 +1,17 @@
+title    = "Cargo refresh: hmac 0.13 with sha2 0.11, and sigstore 0.15 for release attestation"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["internal", "cli-stdout"]
+status   = "signal-only"
+body = '''
+hmac 0.13 rides digest 0.11, so sha2 moves to 0.11 in every crate; digests are now printed with
+hex::encode instead of `{:x}`, the same lowercase hex byte for byte, so no stored hash, signature
+or content address changes. The only temper-api edit is a test import. sigstore-types,
+sigstore-verify and sigstore-trust-root move to 0.15 together: the CLI's release-attestation check
+keeps the same identity, issuer and transparency-log requirements, and now tells "the pinned trust
+root is stale" from "this artifact is not ours" by matching sigstore's typed errors instead of
+its message text. Who observes: CLI users whose self-update or version check fails attestation —
+the sigstore detail inside that error message is worded differently, and a transparency log the
+pinned root does not know now reads as a trust-root problem rather than "not ours". Release
+relevance: behavioral, dependency-driven; no route, response shape or client surface changes.
+'''
