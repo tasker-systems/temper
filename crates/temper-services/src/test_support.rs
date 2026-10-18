@@ -299,3 +299,31 @@ async fn await_team_lock(pool: &PgPool, holder: Option<i32>) {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
 }
+
+/// Capture what `tracing` emits while `fut` runs, on this thread. A `sqlx::test` runs on a
+/// current-thread runtime, so the thread-local default subscriber sees every line.
+#[cfg(test)]
+pub(crate) async fn captured_logs<F: std::future::Future>(fut: F) -> (F::Output, String) {
+    #[derive(Clone, Default)]
+    struct Buf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Buf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log buffer").extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buf = Buf::default();
+    let sink = buf.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || sink.clone())
+        .with_ansi(false)
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+    let out = fut.await;
+    drop(guard);
+    let logs = String::from_utf8(buf.0.lock().expect("log buffer").clone()).expect("utf8 logs");
+    (out, logs)
+}

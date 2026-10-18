@@ -1396,32 +1396,6 @@ mod tests {
         .expect("seed client row");
     }
 
-    /// Capture what `tracing` emits while `fut` runs, on this thread.
-    async fn captured_logs<F: std::future::Future>(fut: F) -> (F::Output, String) {
-        #[derive(Clone, Default)]
-        struct Buf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-        impl std::io::Write for Buf {
-            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().expect("log buffer").extend_from_slice(b);
-                Ok(b.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let buf = Buf::default();
-        let sink = buf.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(move || sink.clone())
-            .with_ansi(false)
-            .finish();
-        let guard = tracing::subscriber::set_default(subscriber);
-        let out = fut.await;
-        drop(guard);
-        let logs = String::from_utf8(buf.0.lock().expect("log buffer").clone()).expect("utf8 logs");
-        (out, logs)
-    }
-
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn human_claims_with_no_client_row_classify_human(pool: PgPool) {
         let authed = authenticate(
@@ -1468,7 +1442,8 @@ mod tests {
         let profile_id = authed.profile.id;
         seed_client_row(&pool, profile_id, false).await;
 
-        let (caller, logs) = captured_logs(classify_caller(&pool, authed)).await;
+        let (caller, logs) =
+            crate::test_support::captured_logs(classify_caller(&pool, authed)).await;
         let caller = caller.expect("classify");
 
         assert!(matches!(caller, Caller::Machine(_)), "got {caller:?}");

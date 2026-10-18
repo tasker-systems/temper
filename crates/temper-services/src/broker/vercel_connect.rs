@@ -229,10 +229,28 @@ fn map_mint_error(status: u16, body: &str) -> BrokerError {
             });
         return BrokerError::NeedsConsent { authorize_url: url };
     }
+    // The body reaches only the server log. Escaped and capped, so one response is one line of
+    // bounded length there.
+    let body = clip_for_log(body);
     match status {
-        400..=499 => BrokerError::Unauthorized(format!("broker returned {status}: {body}")),
-        _ => BrokerError::Transport(format!("broker returned {status}: {body}")),
+        400..=499 => BrokerError::Unauthorized(format!("broker returned {status}: {body:?}")),
+        _ => BrokerError::Transport(format!("broker returned {status}: {body:?}")),
     }
+}
+
+/// The longest broker error body [`map_mint_error`] carries, in bytes.
+const LOGGED_BODY_LIMIT: usize = 2048;
+
+/// `body` cut to at most [`LOGGED_BODY_LIMIT`] bytes, on a char boundary.
+fn clip_for_log(body: &str) -> &str {
+    if body.len() <= LOGGED_BODY_LIMIT {
+        return body;
+    }
+    let mut end = LOGGED_BODY_LIMIT;
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    &body[..end]
 }
 
 impl VercelConnectBroker {
@@ -379,6 +397,22 @@ mod mint_helper_tests {
             map_mint_error(401, r#"{"error":{"code":"forbidden"}}"#),
             BrokerError::Unauthorized(_)
         ));
+    }
+
+    #[test]
+    fn a_broker_error_body_is_carried_on_one_line_of_bounded_length() {
+        let body = format!("{{\"error\":\"line one\nline two\"}}{}", "é".repeat(4096));
+        let err = map_mint_error(403, &body);
+        let BrokerError::Unauthorized(text) = err else {
+            panic!("expected Unauthorized, got {err:?}");
+        };
+        assert!(!text.contains('\n'), "the body is escaped: {text}");
+        assert!(text.contains("line one"));
+        assert!(
+            text.len() < 2 * LOGGED_BODY_LIMIT,
+            "the body is capped: {}",
+            text.len()
+        );
     }
 
     #[test]

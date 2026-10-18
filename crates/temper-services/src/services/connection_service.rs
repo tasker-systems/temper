@@ -380,7 +380,7 @@ pub async fn attach_credential(
 
     // Mint once to verify. Auth is already checked; this is a read against the
     // broker, before any persistence. Only a proven-bad credential blocks.
-    let verification = verify_by_minting(broker, credential).await?;
+    let verification = verify_by_minting(broker, id, credential).await?;
 
     let value = serde_json::to_value(credential)
         .map_err(|e| ApiError::Internal(format!("failed to serialize credential: {e}")))?;
@@ -404,11 +404,23 @@ pub async fn attach_credential(
     })
 }
 
+/// The `400` an attach answers when the broker rejects the credential.
+const REJECTED_CREDENTIAL: &str = "connector rejected the credential";
+
+/// The note an attach carries when the broker failed for a reason that says nothing about the
+/// credential.
+const UNVERIFIED_NOTE: &str = "not verified — the broker's error is in the server log";
+
 /// Mint once and classify the outcome. `Err` here means the attach must be
 /// rejected (the credential was proven bad); `Ok(verification)` means persist,
 /// carrying what was (or could not be) observed.
+///
+/// The caller is told which outcome, in a fixed sentence. The broker's own error text (for Vercel
+/// Connect, its response body about a mint made with this deployment's token) goes to the server
+/// log, never to the response: [`REJECTED_CREDENTIAL`], [`UNVERIFIED_NOTE`].
 async fn verify_by_minting(
     broker: &dyn CredentialBroker,
+    connection: Uuid,
     credential: &ConnectionCredential,
 ) -> ApiResult<CredentialVerification> {
     let outcome = broker
@@ -426,10 +438,14 @@ async fn verify_by_minting(
             note: None,
         },
         // The ONE blocking case: the broker proved the credential bad.
-        Err(BrokerError::Unauthorized(msg)) => {
-            return Err(ApiError::BadRequest(format!(
-                "connector rejected the credential: {msg}"
-            )));
+        Err(e @ BrokerError::Unauthorized(_)) => {
+            tracing::warn!(
+                %connection,
+                connector = %credential.connector,
+                error = %e,
+                "credential attach: the broker rejected the credential"
+            );
+            return Err(ApiError::BadRequest(REJECTED_CREDENTIAL.to_string()));
         }
         // Everything else records the credential but says, out loud, that it is
         // not verified and why.
@@ -446,11 +462,19 @@ async fn verify_by_minting(
             observed_reach: None,
             note: Some("not verified — no credential broker is configured".into()),
         },
-        Err(e) => CredentialVerification {
-            verified: false,
-            observed_reach: None,
-            note: Some(format!("could not verify — {e}")),
-        },
+        Err(e) => {
+            tracing::warn!(
+                %connection,
+                connector = %credential.connector,
+                error = %e,
+                "credential attach: the credential could not be verified"
+            );
+            CredentialVerification {
+                verified: false,
+                observed_reach: None,
+                note: Some(UNVERIFIED_NOTE.to_string()),
+            }
+        }
     };
     Ok(verification)
 }
@@ -1483,6 +1507,72 @@ mod tests {
         assert!(
             reloaded.needs_credential(),
             "a rejected attach must write nothing — the credential stays NULL"
+        );
+    }
+
+    /// The broker's own error text, as a Vercel Connect rejection carries it.
+    const BROKER_DETAIL: &str =
+        r#"broker returned 403: {"error":{"code":"forbidden","message":"team_detail_7f3a"}}"#;
+
+    /// A rejection answers a fixed sentence. The broker's error text goes to the server log only.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_rejected_attach_answers_a_fixed_sentence_and_logs_the_brokers_error(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let caller = crate::test_support::human_principal_for(&pool, admin.uuid()).await;
+        let c = svc::provision(&pool, &caller, &req("Rejected Detail", None))
+            .await
+            .expect("provision");
+
+        let broker = crate::broker::FakeBroker::rejecting_with(BROKER_DETAIL);
+        let (out, logs) = crate::test_support::captured_logs(svc::attach_credential(
+            &pool,
+            &broker,
+            &caller,
+            c.id,
+            &credential(),
+        ))
+        .await;
+        match out {
+            Err(ApiError::BadRequest(msg)) => {
+                assert_eq!(msg, "connector rejected the credential");
+            }
+            other => panic!("expected a 400, got {other:?}"),
+        }
+        assert!(
+            logs.contains("team_detail_7f3a"),
+            "the broker's error is logged: {logs}"
+        );
+    }
+
+    /// A broker failure that says nothing about the credential attaches with a fixed note. The
+    /// broker's error text goes to the server log only.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn an_unverified_attach_notes_a_fixed_sentence_and_logs_the_brokers_error(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let caller = crate::test_support::human_principal_for(&pool, admin.uuid()).await;
+        let c = svc::provision(&pool, &caller, &req("Unverified Detail", None))
+            .await
+            .expect("provision");
+
+        let broker = crate::broker::FakeBroker::failing_with(BROKER_DETAIL);
+        let (out, logs) = crate::test_support::captured_logs(svc::attach_credential(
+            &pool,
+            &broker,
+            &caller,
+            c.id,
+            &credential(),
+        ))
+        .await;
+        let out = out.expect("an unverifiable credential still attaches");
+        assert!(!out.verification.verified);
+        let note = out.verification.note.expect("an unverified attach says so");
+        assert_eq!(
+            note,
+            "not verified — the broker's error is in the server log"
+        );
+        assert!(
+            logs.contains("team_detail_7f3a"),
+            "the broker's error is logged: {logs}"
         );
     }
 

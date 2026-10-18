@@ -22,6 +22,10 @@ pub enum FakeMint {
     Grants(serde_json::Value),
     /// The broker rejects the credential.
     Rejected,
+    /// The broker rejects the credential with this message (e.g. a provider's error body).
+    RejectedWith(String),
+    /// The broker fails for a reason that says nothing about the credential, with this message.
+    FailsWith(String),
     /// The connector exists but needs an OAuth consent first.
     NeedsConsent,
 }
@@ -94,6 +98,14 @@ impl FakeBroker {
     pub fn needs_consent() -> Self {
         Self::with_mint(FakeMint::NeedsConsent)
     }
+    /// Rejects every mint, carrying `message` as the broker's own error text.
+    pub fn rejecting_with(message: &str) -> Self {
+        Self::with_mint(FakeMint::RejectedWith(message.to_string()))
+    }
+    /// Fails every mint with a transport error carrying `message`.
+    pub fn failing_with(message: &str) -> Self {
+        Self::with_mint(FakeMint::FailsWith(message.to_string()))
+    }
 
     /// The mint-configured constructors share one body so a new field cannot be added to two of
     /// the three.
@@ -118,6 +130,8 @@ impl CredentialBroker for FakeBroker {
                 reach: MintedReach { raw: reach.clone() },
             }),
             FakeMint::Rejected => Err(BrokerError::Unauthorized("fake rejection".into())),
+            FakeMint::RejectedWith(message) => Err(BrokerError::Unauthorized(message.clone())),
+            FakeMint::FailsWith(message) => Err(BrokerError::Transport(message.clone())),
             FakeMint::NeedsConsent => Err(BrokerError::NeedsConsent {
                 authorize_url: None,
             }),

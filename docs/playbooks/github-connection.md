@@ -362,6 +362,7 @@ and the service compared them against the declared
 | `true` | write scopes | The App has write permissions — the token is NOT read-only. Go back to Step 1 and fix the App. |
 | `false` | `"note": "not verified — no credential broker is configured"` | The broker env vars are missing on the temper-api project, or it wasn't redeployed. See Step 4. |
 | `false` | `"note": "needs consent"` | The App isn't installed on any repos, or the installation ID is wrong. See Step 3. |
+| `false` | `"note": "not verified — the broker's error is in the server log"` | The broker failed for a reason that says nothing about the credential. Find the `credential attach: the credential could not be verified` line in the temper-api log; its `error` field carries the broker's answer. |
 
 The trailing line names any gap between declared and observed reach:
 
@@ -823,6 +824,16 @@ argument is a UUID, not the slug. Use the `id` from the `provision` response
 **`not verified — no credential broker is configured`** — the
 `VERCEL_CONNECT_*` env vars are missing on the temper-api project, or it wasn't
 redeployed after setting them. See Step 4.
+
+**`400 connector rejected the credential`** — the broker refused the connector. Find the
+`credential attach: the broker rejected the credential` line in the temper-api log (it carries the
+`connection` and `connector`); its `error` field carries the broker's answer. Check the connector
+uid against Step 2 and the `VERCEL_CONNECT_*` values against Step 4.
+
+**`not verified — the broker's error is in the server log`** — the credential was recorded, but the
+broker failed before it could say anything about it. The temper-api log line
+`credential attach: the credential could not be verified` carries the reason. Re-run the attach
+once the broker is reachable.
 
 **`needs consent`** — the App isn't installed on any repos, or the installation
 ID is wrong. Re-install at `https://github.com/apps/<app-slug>/installations/new`

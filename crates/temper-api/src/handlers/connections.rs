@@ -136,7 +136,7 @@ pub async fn revoke(
     post,
     operation_id = "attach_connection_credential",
     summary = "Attach a connection credential",
-    description = "Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent or an unconfigured broker is reported in `verification.note`. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
+    description = "Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent, an unconfigured broker, or a broker failure is reported in `verification.note`. The broker's own error text goes to the server log, never to the response. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
     path = "/api/connections/{id}/credential",
     tag = "Connections",
     params(("id" = Uuid, Path, description = "Connection ID")),

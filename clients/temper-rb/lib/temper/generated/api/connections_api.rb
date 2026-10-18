@@ -20,7 +20,7 @@ module Temper::Generated
       @api_client = api_client
     end
     # Attach a connection credential
-    # Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent or an unconfigured broker is reported in `verification.note`. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+    # Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent, an unconfigured broker, or a broker failure is reported in `verification.note`. The broker's own error text goes to the server log, never to the response. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
     # @param id [String] Connection ID
     # @param connection_credential [ConnectionCredential] 
     # @param [Hash] opts the optional parameters
@@ -32,7 +32,7 @@ module Temper::Generated
     end
 
     # Attach a connection credential
-    # Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent or an unconfigured broker is reported in &#x60;verification.note&#x60;. Requires a system admin or the owner of the connection&#39;s owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+    # Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent, an unconfigured broker, or a broker failure is reported in &#x60;verification.note&#x60;. The broker&#39;s own error text goes to the server log, never to the response. Requires a system admin or the owner of the connection&#39;s owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
     # @param id [String] Connection ID
     # @param connection_credential [ConnectionCredential] 
     # @param [Hash] opts the optional parameters
