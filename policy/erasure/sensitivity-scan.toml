@@ -42,8 +42,8 @@ declared_count = 157
 # disposition
 #   scan          authored or user-supplied free text; the sweep reads it
 #   structural    hash, enum, discriminator, surrogate, vocabulary, or a value derived from one
-#   credential    secret material by design (hashed, or a short-lived plaintext bearer value); not
-#                 a PII surface, and a sweep must never echo it
+#   credential    secret material by design (hashed, or a short-lived plaintext value a flow reads
+#                 back); not a PII surface, and a sweep must never echo it
 #   out-of-scope  anything else, with the reason in the note (a note is REQUIRED for this class)
 #
 # Remediability is not a column here. It comes from the sibling's `ceiling` for the surfaces the
@@ -204,7 +204,7 @@ declared_count = 157
 "kb_oauth_flow.relay_state"                       = { disposition = "credential", note = "SAML RelayState nonce" }
 "kb_slack_link_intents.state_nonce"               = { disposition = "credential", note = "OAuth state nonce" }
 "kb_slack_link_intents.code_verifier"             = { disposition = "credential", note = "PKCE verifier, plaintext for the redirect's lifetime" }
-"kb_team_invitations.token"                       = { disposition = "credential", note = "invitation bearer token, plaintext, 7-day expiry" }
+"kb_team_invitations.token"                       = { disposition = "credential", note = "invitation locator, plaintext, 7-day expiry; redeems only for the invitee's verified account, which reads it back from GET /api/invitations/mine" }
 
 # ── out of scope, each with its reason ──────────────────────────────────────────────────────
 "kb_saml_idp.idp_cert"                            = { disposition = "out-of-scope", note = "a public X.509 certificate: not secret, not personal" }

@@ -1,0 +1,15 @@
+title    = "The sensitivity manifest describes `kb_team_invitations.token` as the invitation locator it has always been"
+pr       = "self"
+classes  = ["spec-correction"]
+surfaces = ["erasure-policy"]
+status   = "signal-only"
+body = '''
+`policy/erasure/sensitivity-scan.toml` now notes `kb_team_invitations.token` as an invitation
+locator that redeems only for the invitee's verified account, which reads it back from
+`GET /api/invitations/mine`. The `credential` class definition is reworded to match ("hashed, or
+a short-lived plaintext value a flow reads back"). Both are description only: the column's
+disposition stays `credential`, so what the sensitivity sweep reads and never echoes is unchanged,
+and no code, schema or wire shape moves. Accept and decline have always required the caller to be
+the invitee (`vw_invitee_invitations`); this brings the manifest's wording to that. Who observes:
+readers of the manifest. Release relevance: signal-only; rides 0.6.1.
+'''
