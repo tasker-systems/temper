@@ -22,7 +22,9 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 # Stub `npm`, logging every invocation. `view` exits per $STUB_VIEW_RESULT (0 = version exists,
 # 1 = E404). `pack --pack-destination D` writes D/<scope-name>-<version>.tgz holding the cwd's
-# package.json as package/package.json, as npm does. Everything else succeeds.
+# package.json as package/package.json, as npm does. `publish` refuses a spec that npm would not
+# read as a local file: a bare `dir/file.tgz` is GitHub shorthand to npm, which tries to clone it.
+# Everything else succeeds.
 STUB_DIR="$TMP/bin"
 mkdir -p "$STUB_DIR"
 cat > "$STUB_DIR/npm" <<'STUB'
@@ -30,6 +32,12 @@ cat > "$STUB_DIR/npm" <<'STUB'
 echo "npm $*" >> "$NPM_CALLS"
 if [ "$1" = "view" ]; then
     exit "${STUB_VIEW_RESULT:-1}"
+fi
+if [ "$1" = "publish" ]; then
+    case "$2" in
+        /*|./*|../*) ;;
+        *) echo "npm error command git ls-remote ssh://git@github.com/$2.git" >&2; exit 128 ;;
+    esac
 fi
 if [ "$1" = "pack" ]; then
     dest=""
@@ -122,6 +130,22 @@ PUBLISH_LINE=$(grep -n "publish .*temper-ts-9.9.9.tgz" "$CALLS_PUB" | head -1 | 
     || fail "publish ran before the duplicate probe — the probe is decorative: $(cat "$CALLS_PUB")"
 
 echo "PASS: the publish stage probes, then publishes each packed tarball and runs nothing else"
+
+# --- 2b. Publish stage, relative directory: the tarball still reaches npm as a local file ----
+# release.yml passes `--from dist`, relative to the checkout. A bare `dist/<name>.tgz` is GitHub
+# shorthand to npm, which the stub refuses as npm does.
+rm -rf "$REPO/dist"
+cp -R "$OUT" "$REPO/dist"
+CALLS_REL="$TMP/calls-rel"
+run_target "$CALLS_REL" "9.9.9" --from dist > "$TMP/rel.log" 2>&1 \
+    || fail "a publish from a relative directory failed: $(cat "$TMP/rel.log")"
+for d in "${BOTH_DIRS[@]}"; do
+    grep -q "npm publish ./dist/tasker-systems-$(basename "$d")-9.9.9.tgz --access public" "$CALLS_REL" \
+        || fail "@tasker-systems/$(basename "$d") was not published as a local file: $(cat "$CALLS_REL")"
+done
+rm -rf "$REPO/dist"
+
+echo "PASS: a relative --from directory publishes each tarball as a local file, not a git spec"
 
 # --- 3. Already-published version: both stages skip loudly, nothing runs ----------------
 # The bite. The stub can't vary its answer per package, so this runs with the probe reporting
