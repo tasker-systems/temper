@@ -11,6 +11,7 @@
 #   update_ruby_version        — clients/temper-rb skin version
 #   update_python_version      — clients/temper-py skin version
 #   update_package_json_version — temper-ts / temper-ui / temper-cloud npm packages
+#   update_lockfile_version    — the bun.lock / package-lock.json record of those packages
 #   register_window_rows       — release-verdict register parser (spec §4.1)
 #
 # Source this from other release scripts:
@@ -204,6 +205,82 @@ update_package_json_version() {
         fi
         log_info "Updated $file -> $version"
     fi
+}
+
+# A package's version is also recorded in the lockfile that resolves it: the root bun.lock for a
+# workspace member (packages/temper-ui, packages/temper-cloud), its own package-lock.json for a
+# client (clients/temper-ts, clients/temper-telemetry-ts). `bun install --frozen-lockfile` and
+# `npm ci` both accept a stale record, so the bump has to move it; check-lockfile-versions.sh
+# holds the tree to it.
+#
+# lockfile_of DIR — the lockfile that records the package in DIR (repo-relative): bun.lock when it
+# carries a workspace entry for DIR, else DIR/package-lock.json. A workspace member is always read
+# from bun.lock, so a stray package-lock.json beside it is never mistaken for the record.
+lockfile_of() {
+    local dir="$1"
+    if [[ -f "${REPO_ROOT}/bun.lock" ]] && grep -qxF "    \"${dir}\": {" "${REPO_ROOT}/bun.lock"; then
+        echo "${REPO_ROOT}/bun.lock"
+    else
+        echo "${REPO_ROOT}/${dir}/package-lock.json"
+    fi
+}
+
+# _lockfile_versions FILE DIR [VERSION] — the one place the lockfile shapes are written down.
+# Without VERSION, print each version FILE records for DIR, one per line. With VERSION, print FILE
+# with exactly those values replaced. The sites: bun.lock's `workspaces` entry keyed by DIR; a
+# package-lock.json's top-level "version" and its root package's (packages[""]) "version".
+_lockfile_versions() {
+    local file="$1" dir="$2" version="${3:-}" kind=npm
+    [[ "$file" == */bun.lock ]] && kind=bun
+    awk -v kind="$kind" -v key="$dir" -v v="$version" '
+        function site(line) {
+            if (v == "") { split(line, f, "\""); print f[4]; return line }
+            sub(/"version": "[^"]*"/, "\"version\": \"" v "\"", line)
+            return line
+        }
+        kind == "bun" && $0 == "    \"" key "\": {" { scope = 1 }
+        kind == "npm" && /^  "version": "/ { $0 = site($0) }
+        kind == "npm" && /^    "": \{$/ { scope = 1 }
+        scope && /^      "version": "/ { $0 = site($0); scope = 0 }
+        scope && /^    \}/ { scope = 0 }
+        v != "" { print }
+    ' "$file"
+}
+
+# lockfile_recorded_versions DIR — print every version the lockfile records for the package in
+# DIR, one per line; nothing if no lockfile records it.
+lockfile_recorded_versions() {
+    local file
+    file="$(lockfile_of "$1")"
+    [[ -f "$file" ]] || return 0
+    _lockfile_versions "$file" "$1"
+}
+
+# update_lockfile_version DIR VERSION — move the lockfile's record of the package in DIR to
+# VERSION, then read it back.
+update_lockfile_version() {
+    local dir="$1" version="$2" file
+    file="$(lockfile_of "$dir")"
+
+    local recorded
+    recorded="$(lockfile_recorded_versions "$dir")"
+    [[ -n "$recorded" ]] || die "No lockfile records ${dir}'s version — the lockfile moved or changed shape; update this writer."
+
+    if [[ "${DRY_RUN:-false}" == "true" ]]; then
+        log_info "Would update ${file#"${REPO_ROOT}/"} record of ${dir}: $(sort -u <<< "$recorded" | tr '\n' ' ')-> ${version}"
+        return
+    fi
+
+    local tmp
+    tmp="$(mktemp)"
+    _lockfile_versions "$file" "$dir" "$version" > "$tmp" || { rm -f "$tmp"; die "rewriting ${file#"${REPO_ROOT}/"} failed"; }
+    cat "$tmp" > "$file"
+    rm -f "$tmp"
+
+    local stale
+    stale="$(lockfile_recorded_versions "$dir" | grep -vxF "$version" || true)"
+    [[ -z "$stale" ]] || die "${file#"${REPO_ROOT}/"} still records ${dir} at ${stale} after the bump to ${version}"
+    log_info "Updated ${file#"${REPO_ROOT}/"} record of ${dir} -> ${version}"
 }
 
 # ---------------------------------------------------------------------------
