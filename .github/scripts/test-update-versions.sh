@@ -21,14 +21,15 @@
 # repository's own package.json files and lockfiles: each package's version must
 # move in its package.json and in the lockfile that records it (bun.lock for the
 # workspace members, package-lock.json for the clients), and the lockfiles must
-# change in nothing but those lines. `bun install --frozen-lockfile` accepts a
-# stale workspace version, so a lockfile the bump leaves behind fails nothing
-# else. The --rb/--py floats are not exercised: their writers are covered by
-# their own read-backs.
+# change in nothing but those values. `bun install --frozen-lockfile` and
+# `npm ci` both accept a stale record, so the harness also feeds
+# check-lockfile-versions.sh each kind of stale record and expects it to fail.
+# The --rb/--py floats are not exercised.
 #
 # Bite direction: restoring the old closing-brace-anchored pattern (`(" \})`)
 # reds the bump arm on today's manifest; dropping the update_lockfile_version
-# calls from update-versions.sh reds the lockfile arms.
+# calls from update-versions.sh reds the lockfile arms; a reader that skips a
+# lockfile site reds that site's drift-check arm.
 #
 #   bash .github/scripts/test-update-versions.sh
 
@@ -148,13 +149,17 @@ for pkg in "${NPM_PACKAGES[@]}"; do
     fi
 done
 
-CHANGED="$(for lock in bun.lock clients/temper-ts/package-lock.json clients/temper-telemetry-ts/package-lock.json; do
-    diff "${REPO}/${lock}" "${WORK}/sb/${lock}" | grep '^[<>]' || true
-done | grep -vcE '^[<>] +"version": "' || true)"
-if [[ "$CHANGED" == "0" ]]; then
-    ok "the lockfiles change only their version lines"
+# Masking every version value, each lockfile reads exactly as before: the writer changed values,
+# never the shape of a line or any other line.
+mask() { sed -E 's/"version": "[^"]*"/"version": "X"/' "$1"; }
+SHAPE_DIFF=""
+for lock in bun.lock clients/temper-ts/package-lock.json clients/temper-telemetry-ts/package-lock.json; do
+    cmp -s <(mask "${REPO}/${lock}") <(mask "${WORK}/sb/${lock}") || SHAPE_DIFF="${SHAPE_DIFF} ${lock}"
+done
+if [[ -z "$SHAPE_DIFF" ]]; then
+    ok "the lockfiles change only their version values"
 else
-    bad "the lockfiles change only their version lines" "${CHANGED} other lines changed"
+    bad "the lockfiles change only their version values" "changed beyond a value:${SHAPE_DIFF}"
 fi
 
 if (cd "${WORK}/sb" && bash .github/scripts/check-lockfile-versions.sh > /dev/null 2>&1); then
@@ -163,14 +168,45 @@ else
     bad "check-lockfile-versions passes after the bump" "$(cd "${WORK}/sb" && bash .github/scripts/check-lockfile-versions.sh 2>&1 | grep error | head -4)"
 fi
 
-# The check reds a package.json the lockfile did not follow.
-sandbox
-sed -i -E '0,/"version": "[^"]+"/s//"version": "9.9.3"/' "${WORK}/sb/packages/temper-cloud/package.json"
-if (cd "${WORK}/sb" && bash .github/scripts/check-lockfile-versions.sh > /dev/null 2>&1); then
-    bad "check-lockfile-versions fails on a package.json its lockfile did not follow"
-else
-    ok "check-lockfile-versions fails on a package.json its lockfile did not follow"
-fi
+# --- the drift check reds each kind of stale record --------------------------
+# Each mutation is written here with its own pattern, not through the writer's, so a reader that
+# stops looking at a site cannot agree with a writer that stopped writing it.
+# set_first FILE PATTERN — set the first "version" value on a line matching PATTERN to 9.9.3.
+set_first() {
+    awk -v pat="$2" '!done && $0 ~ pat { sub(/"version": "[^"]*"/, "\"version\": \"9.9.3\""); done = 1 } { print }' \
+        "$1" > "$1.tmp" && cat "$1.tmp" > "$1" && rm -f "$1.tmp"
+}
+# set_root_package FILE — the same, on packages[""]'s own "version" in a package-lock.json.
+set_root_package() {
+    awk '/^    "": \{$/ { root = 1 } root && /^      "version": "/ { sub(/"version": "[^"]*"/, "\"version\": \"9.9.3\""); root = 0 } { print }' \
+        "$1" > "$1.tmp" && cat "$1.tmp" > "$1" && rm -f "$1.tmp"
+}
+expect_red() { # $1 = what was made stale
+    if (cd "${WORK}/sb" && bash .github/scripts/check-lockfile-versions.sh > /dev/null 2>&1); then
+        bad "check-lockfile-versions fails on ${1}"
+    else
+        ok "check-lockfile-versions fails on ${1}"
+    fi
+}
+
+sandbox; set_first "${WORK}/sb/packages/temper-cloud/package.json" '"version": "'
+expect_red "a workspace package.json its bun.lock entry did not follow"
+
+sandbox; awk '/^    "packages\/temper-ui": \{$/ { ws = 1 } ws && /^      "version": "/ { sub(/"version": "[^"]*"/, "\"version\": \"9.9.3\""); ws = 0 } { print }' \
+    "${WORK}/sb/bun.lock" > "${WORK}/sb/bun.lock.tmp" && mv "${WORK}/sb/bun.lock.tmp" "${WORK}/sb/bun.lock"
+expect_red "a stale bun.lock workspace entry"
+
+sandbox; set_first "${WORK}/sb/clients/temper-ts/package-lock.json" '^  "version": "'
+expect_red "a stale package-lock.json top-level version"
+
+sandbox; set_root_package "${WORK}/sb/clients/temper-telemetry-ts/package-lock.json"
+expect_red "a stale package-lock.json packages[\"\"] version"
+
+# A stray package-lock.json beside a workspace member is not its record: bun.lock still is.
+sandbox; cp "${REPO}/clients/temper-ts/package-lock.json" "${WORK}/sb/packages/temper-ui/package-lock.json"
+awk '/^    "packages\/temper-ui": \{$/ { ws = 1 } ws && /^      "version": "/ { sub(/"version": "[^"]*"/, "\"version\": \"9.9.3\""); ws = 0 } { print }' \
+    "${WORK}/sb/bun.lock" > "${WORK}/sb/bun.lock.tmp" && mv "${WORK}/sb/bun.lock.tmp" "${WORK}/sb/bun.lock"
+expect_red "a stale bun.lock entry beside a stray package-lock.json"
 
 # --- the dry run writes nothing ----------------------------------------------
 sandbox

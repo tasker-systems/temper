@@ -5,12 +5,11 @@
 # workspace entry for packages/temper-ui and packages/temper-cloud, the package-lock.json
 # top-level and root-package entries for clients/temper-ts and clients/temper-telemetry-ts.
 #
-# `bun install --frozen-lockfile` accepts a stale workspace version, and the clients' lockfiles
-# are only read by `npm ci` in their own test jobs, so a release bump that moves package.json and
-# leaves the lockfile behind passes everything else. The release's version writer
-# (tools/scripts/release/update-versions.sh) moves both; this check holds the tree to it. It reads
-# the lockfiles through the writer's own reader, so the two cannot disagree about where a version
-# lives.
+# `bun install --frozen-lockfile` and `npm ci` both accept a stale record, so a release bump that
+# moves package.json and leaves the lockfile behind passes everything else. The release's version
+# writer (tools/scripts/release/update-versions.sh) moves both; this check holds the tree to it.
+# It reads the lockfiles through `lockfile_recorded_versions` in the release tooling's common.sh,
+# where the writer's rewrite and the reader share one statement of each lockfile's version sites.
 #
 #   bash .github/scripts/check-lockfile-versions.sh
 

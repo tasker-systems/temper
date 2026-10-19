@@ -543,11 +543,12 @@ jobs:
       - name: Guard test — roll-register
         run: bash .github/scripts/test-roll-register.sh
 
-      # The release's version writer, run against the repository's own Cargo.toml: every
-      # temperkb-* [workspace.dependencies] spec must move with the anchor whatever keys follow
-      # its version. `release-check`'s dry run never exercises the rewrite, so a manifest shape the
-      # pattern misses otherwise surfaces only when the real bump dies at its read-back.
-      - name: Guard test — update-versions (core bump on the real manifest)
+      # The release's version writer, run against the repository's own Cargo.toml, npm
+      # package.json files and lockfiles: every temperkb-* [workspace.dependencies] spec must move
+      # with the anchor whatever keys follow its version, and each npm package's lockfile record
+      # must move with its package.json. `release-check`'s dry run never exercises the rewrite, so
+      # a shape the pattern misses otherwise surfaces only when the real bump dies at its read-back.
+      - name: Guard test — update-versions (core and npm bumps on the real manifests)
         run: bash .github/scripts/test-update-versions.sh
 
       # Each npm package's lockfile records the version its package.json declares (bun.lock for
