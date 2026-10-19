@@ -650,7 +650,7 @@ jobs:
 
   update-homebrew-tap:
     name: Update the homebrew tap
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 15
     needs: [determine-version, release-summary]
     # Blocking by ruling (E): a tap that silently lags its release is the

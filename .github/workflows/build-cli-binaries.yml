@@ -56,7 +56,7 @@ jobs:
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os, sys
           targets = {
-              "darwin-arm64": {"name": "darwin-arm64", "runner": "macos-14", "triple": "aarch64-apple-darwin",
+              "darwin-arm64": {"name": "darwin-arm64", "runner": "macos-15", "triple": "aarch64-apple-darwin",
                                "ort_archive": "onnxruntime-osx-arm64", "ort_archive_ext": "tgz",
                                "ort_sha256": "0af4fa503e8ea285245b47ee42d0a7461b8156a81270857da0c1d4ecf858abde",
                                "lib_name": "libonnxruntime.dylib", "lib_dest_dir": "lib", "archive_ext": "tar.gz"},
@@ -121,7 +121,7 @@ jobs:
       - name: Install Rust toolchain
         shell: bash
         run: |
-          # rustup is preinstalled on all three runner images (macos-14,
+          # rustup is preinstalled on all three runner images (macos-15,
           # ubuntu-22.04, windows-2022). Used directly rather than
           # `dtolnay/rust-toolchain@stable` because that action resolves a
           # MUTABLE BRANCH ref inside the job whose output gets signed — and
@@ -195,7 +195,7 @@ jobs:
           # sha256sum on Linux and on the Windows runner's Git Bash, shasum on
           # macOS — the same branch as emit-manifest.sh's `sha_of` (:23-29) and
           # install.sh's `sha_of_file` (:233-239). Never assume one: this matrix
-          # spans macos-14, ubuntu-22.04, AND windows-2022, and this step runs on
+          # spans macos-15, ubuntu-22.04, AND windows-2022, and this step runs on
           # all three. Witnesses for the Windows leg are already in this file —
           # the zip-only archive step (`archive_ext == 'zip'`, i.e. windows-x64
           # alone) calls `sha256sum` under `shell: bash`, and the unconditional
