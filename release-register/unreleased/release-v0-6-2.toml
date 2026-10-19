@@ -1,0 +1,10 @@
+title    = "This release — the 0.6.2 fleet alignment: VERSION 0.6.1 → 0.6.2 across crates, packages, and clients"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "clients"]
+status   = "signal-only"
+body = '''
+The release train's own wire delta is none: version fields and the generated
+cores re-stale with the bump (the D-S3 baseline — no shape movement); the
+P floor rides the additive entries already in this window.
+'''
