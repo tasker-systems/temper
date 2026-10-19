@@ -11,6 +11,7 @@
 #   update_ruby_version        — clients/temper-rb skin version
 #   update_python_version      — clients/temper-py skin version
 #   update_package_json_version — temper-ts / temper-ui / temper-cloud npm packages
+#   update_lockfile_version    — the bun.lock / package-lock.json record of those packages
 #   register_window_rows       — release-verdict register parser (spec §4.1)
 #
 # Source this from other release scripts:
@@ -204,6 +205,80 @@ update_package_json_version() {
         fi
         log_info "Updated $file -> $version"
     fi
+}
+
+# A package's version is also recorded in the lockfile that resolves it: the root bun.lock for a
+# workspace member (packages/temper-ui, packages/temper-cloud), its own package-lock.json for a
+# client (clients/temper-ts, clients/temper-telemetry-ts). `bun install --frozen-lockfile` accepts
+# a stale workspace version, so nothing downstream catches a lockfile the bump left behind.
+#
+# lockfile_recorded_versions DIR — print every version the lockfile records for the package in
+# DIR (repo-relative), one per line; nothing if no lockfile records it.
+lockfile_recorded_versions() {
+    local dir="$1"
+
+    if [[ -f "${REPO_ROOT}/${dir}/package-lock.json" ]]; then
+        # The top-level "version" and the root package's (packages[""]) entry.
+        awk -F'"' '
+            /^  "version": "/ { print $4 }
+            /^    "": \{$/ { root = 1; next }
+            root && /^      "version": "/ { print $4; root = 0 }
+            root && /^    \}/ { root = 0 }
+        ' "${REPO_ROOT}/${dir}/package-lock.json"
+    elif [[ -f "${REPO_ROOT}/bun.lock" ]]; then
+        awk -F'"' -v key="$dir" '
+            $0 == "    \"" key "\": {" { ws = 1; next }
+            ws && /^      "version": "/ { print $4; ws = 0 }
+            ws && /^    \}/ { ws = 0 }
+        ' "${REPO_ROOT}/bun.lock"
+    fi
+}
+
+# update_lockfile_version DIR VERSION — move the lockfile's record of the package in DIR to
+# VERSION, then read it back.
+update_lockfile_version() {
+    local dir="$1" version="$2" file
+
+    if [[ -f "${REPO_ROOT}/${dir}/package-lock.json" ]]; then
+        file="${REPO_ROOT}/${dir}/package-lock.json"
+    else
+        file="${REPO_ROOT}/bun.lock"
+    fi
+
+    local recorded
+    recorded="$(lockfile_recorded_versions "$dir")"
+    [[ -n "$recorded" ]] || die "No lockfile records ${dir}'s version — the lockfile moved or changed shape; update this writer."
+
+    if [[ "${DRY_RUN:-false}" == "true" ]]; then
+        log_info "Would update ${file#"${REPO_ROOT}/"} record of ${dir}: $(sort -u <<< "$recorded" | tr '\n' ' ')-> ${version}"
+        return
+    fi
+
+    local tmp
+    tmp="$(mktemp)"
+    if [[ "$file" == */package-lock.json ]]; then
+        awk -v v="$version" '
+            /^  "version": "/ { sub(/"version": "[^"]*"/, "\"version\": \"" v "\"") }
+            /^    "": \{$/ { root = 1 }
+            root && /^      "version": "/ { sub(/"version": "[^"]*"/, "\"version\": \"" v "\""); root = 0 }
+            root && /^    \}/ { root = 0 }
+            { print }
+        ' "$file" > "$tmp"
+    else
+        awk -v key="$dir" -v v="$version" '
+            $0 == "    \"" key "\": {" { ws = 1 }
+            ws && /^      "version": "/ { sub(/"version": "[^"]*"/, "\"version\": \"" v "\""); ws = 0 }
+            ws && /^    \}/ { ws = 0 }
+            { print }
+        ' "$file" > "$tmp"
+    fi
+    cat "$tmp" > "$file"
+    rm -f "$tmp"
+
+    local stale
+    stale="$(lockfile_recorded_versions "$dir" | grep -vxF "$version" || true)"
+    [[ -z "$stale" ]] || die "${file#"${REPO_ROOT}/"} still records ${dir} at ${stale} after the bump to ${version}"
+    log_info "Updated ${file#"${REPO_ROOT}/"} record of ${dir} -> ${version}"
 }
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,8 @@
 #   clients/temper-telemetry-ts/package.json   — skin float (--telemetry)
 #   packages/temper-ui/package.json            — npm float (--ui)
 #   packages/temper-cloud/package.json         — npm float (--cloud)
+#   bun.lock, clients/*/package-lock.json      — each package's recorded version moves with
+#                                                its package.json (update_lockfile_version)
 #
 # openapi.json's info.version is NOT written here — beat 3 derives it from
 # VERSION at emit time (spec D-S3). Inter-crate =x.y.z dep pins and registry
@@ -150,11 +152,13 @@ fi
 if [[ -n "$TS_VERSION" ]]; then
     log_section "temper-ts (client skin)"
     update_package_json_version "clients/temper-ts/package.json" "$TS_VERSION"
+    update_lockfile_version "clients/temper-ts" "$TS_VERSION"
 fi
 
 if [[ -n "$TELEMETRY_VERSION" ]]; then
     log_section "temper-telemetry-ts (client skin)"
     update_package_json_version "clients/temper-telemetry-ts/package.json" "$TELEMETRY_VERSION"
+    update_lockfile_version "clients/temper-telemetry-ts" "$TELEMETRY_VERSION"
 fi
 
 # ---------------------------------------------------------------------------
@@ -163,9 +167,11 @@ fi
 if [[ -n "$UI_VERSION" ]]; then
     log_section "temper-ui (npm package)"
     update_package_json_version "packages/temper-ui/package.json" "$UI_VERSION"
+    update_lockfile_version "packages/temper-ui" "$UI_VERSION"
 fi
 
 if [[ -n "$CLOUD_VERSION" ]]; then
     log_section "temper-cloud (npm package)"
     update_package_json_version "packages/temper-cloud/package.json" "$CLOUD_VERSION"
+    update_lockfile_version "packages/temper-cloud" "$CLOUD_VERSION"
 fi
