@@ -143,7 +143,12 @@ for DIR in "${PACKAGES[@]}"; do
     fi
 
     echo "==> publish ${NAME}@${VERSION} from ${FROM_DIR} (dry-run: ${DRY_RUN})"
-    TARBALL_PATH="${FROM_DIR}/${TARBALL}"
+    # npm reads a bare `dir/file.tgz` as GitHub shorthand (`owner/repo`) and tries to clone it, so
+    # a relative path must start with `./` to name a local tarball.
+    case "$FROM_DIR" in
+        /*|./*|../*) TARBALL_PATH="${FROM_DIR}/${TARBALL}" ;;
+        *) TARBALL_PATH="./${FROM_DIR}/${TARBALL}" ;;
+    esac
     if [[ ! -s "$TARBALL_PATH" ]]; then
         echo "ERROR: ${TARBALL} is not in ${FROM_DIR}, and ${NAME}@${VERSION} is not published." >&2
         exit 1
