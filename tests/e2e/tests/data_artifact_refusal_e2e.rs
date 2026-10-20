@@ -492,7 +492,11 @@ async fn cli_declare_refuses_with_vocabulary_then_succeeds_with_the_flag(pool: P
 // A shape's schema is compiled when it is declared, with a compiler that never fetches. A schema
 // whose `$ref` names a host is refused with one fixed sentence that names neither the host nor the
 // compiler's text, no `kb_data_artifact_shapes` row is written, and the listener the `$ref` names
-// sees no connection. The server runs in-process, so the listener observes the server's compile.
+// sees no connection. The connection count guards against a regression and is not the fetch
+// witness: the server runs in-process on an async runtime, where a fetching compiler's blocking
+// fetch panics before it connects. The witnesses are the synchronous `shape_schema_no_fetch` tests
+// in temper-substrate and the `audit-shape-schema-compile.sh` tripwire; these tests pin that each
+// door refuses with the fixed sentence and writes no row.
 
 /// The fixed sentence's distinctive words — what a declarer is told to change.
 const UNCOMPILABLE_VOCAB: &str = "never fetched";
@@ -641,9 +645,9 @@ async fn an_uncompilable_schema_is_refused_at_declare_over_mcp(pool: PgPool) {
     .await
     .expect_err("a schema that needs a fetch must be refused over MCP");
 
-    assert!(
-        err.code.0 != -32603,
-        "the refusal must not arrive as an internal error: {err:?}"
+    assert_eq!(
+        err.code.0, -32602,
+        "the refusal must arrive as invalid_params, not an internal error: {err:?}"
     );
     assert_fixed_sentence(&err.message, &probe);
     assert_eq!(

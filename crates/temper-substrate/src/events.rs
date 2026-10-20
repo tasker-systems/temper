@@ -1579,6 +1579,9 @@ pub async fn fire_with(
                         Err(_) => {
                             tracing::warn!(
                                 shape_id = ?row.shape_id,
+                                kind = kind,
+                                kind_owner_table = %ko_table,
+                                kind_owner_id = %ko_id,
                                 "shape in force cannot be compiled; the advisory commit is \
                                  recorded without a verdict"
                             );

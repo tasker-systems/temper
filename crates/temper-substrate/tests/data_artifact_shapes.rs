@@ -649,7 +649,10 @@ async fn a_commit_with_no_shape_in_force_stays_never_declared(pool: sqlx::PgPool
 
 /// A schema that cannot compile without a fetch: its `$ref` names the probe's listener. The
 /// service's declare refuses this schema, so it is stored here through the substrate write, which
-/// does not compile — the state a shape declared before declare compiled is in.
+/// does not compile — the state a shape declared before declare compiled is in. The tests below
+/// read the probe's connection count as a regression guard, not as the fetch witness (a fetching
+/// compiler panics in this async runtime before it connects); the witnesses are the synchronous
+/// `shape_schema_no_fetch` tests and the tripwire.
 fn remote_ref_schema(probe: &FetchProbe) -> serde_json::Value {
     serde_json::json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",

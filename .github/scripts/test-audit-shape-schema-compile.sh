@@ -59,6 +59,15 @@ else bad "real repo: the allowlist matches" "exit=${RC}" "output: ${OUT}"; fi
 
 # --- 1. THE BITE: validator_for under crates/*/src fails the guard and names the file ---
 mkdir -p "${PROBE_CRATE}/src"
+# A valid manifest, so a concurrent cargo or rust-analyzer workspace load (members are
+# `crates/*`) does not fail on a member without one while the probe exists.
+cat > "${PROBE_CRATE}/Cargo.toml" <<'TOML'
+[package]
+name = "zz-shape-schema-compile-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+TOML
 cat > "${PROBE_CRATE}/src/lib.rs" <<'RS'
 pub fn compile(schema: &serde_json::Value) {
     let _ = jsonschema::validator_for(schema);
@@ -91,6 +100,31 @@ expect_sites "Validator::new via the full path: detected" \
 expect_sites "single-line import of an entry point: detected" \
     "$(new_src import a.rs 'use jsonschema::{validator_for, Draft};')" 1
 
+expect_sites "evaluate(): detected" \
+    "$(new_src evaluate a.rs 'fn f() { let _ = jsonschema::evaluate(&s, &i); }')" 1
+expect_sites "bundle(): detected" \
+    "$(new_src bundle a.rs 'fn f() { let _ = jsonschema::bundle(&s); }')" 1
+expect_sites "async_bundle(): detected" \
+    "$(new_src asyncbundle a.rs 'async fn f() { let _ = jsonschema::async_options().async_bundle(&s).await; }')" 1
+expect_sites "ValidationOptions::default(): detected" \
+    "$(new_src vodefault a.rs 'fn f() { let _ = ValidationOptions::default(); }')" 1
+expect_sites "ValidationOptions::<R>::default(): detected" \
+    "$(new_src vodefaultgen a.rs 'fn f() { let _ = ValidationOptions::<Arc<dyn Retrieve>>::default(); }')" 1
+expect_sites "Registry::try_new: detected" \
+    "$(new_src registry a.rs 'fn f() { let _ = Registry::try_new(uri, res); }')" 1
+expect_sites "Registry::options: detected" \
+    "$(new_src registryopts a.rs 'fn f() { let _ = Registry::options().build(pairs); }')" 1
+expect_sites "bare Validator::new (no jsonschema:: prefix): detected" \
+    "$(new_src barenew a.rs 'fn f() { let _ = Validator::new(&s); }')" 1
+expect_sites "bare Validator::options: detected" \
+    "$(new_src bareopts a.rs 'fn f() { let _ = Validator::options().build(&s); }')" 1
+expect_sites "use jsonschema as alias: detected" \
+    "$(new_src alias a.rs 'use jsonschema as js;')" 1
+expect_sites "use jsonschema::* glob: detected" \
+    "$(new_src glob a.rs 'use jsonschema::*;')" 1
+expect_sites "extern crate jsonschema: detected" \
+    "$(new_src externcrate a.rs 'extern crate jsonschema as js;')" 1
+
 # --- 3. what the guard says it ignores ---
 expect_sites "a whole-line comment naming an entry point: ignored" \
     "$(new_src comment a.rs '// jsonschema::validator_for is forbidden here')" 0
@@ -98,6 +132,10 @@ expect_sites "a doc comment naming an entry point: ignored" \
     "$(new_src doc a.rs '/// Never call `jsonschema::options()` directly.')" 0
 expect_sites "an import of only the types: ignored" \
     "$(new_src types a.rs 'use jsonschema::{Resource, Validator};')" 0
+expect_sites "a Validator type annotation (no constructor call): ignored" \
+    "$(new_src typeann a.rs 'fn f(v: &Validator) -> Option<Validator> { None }')" 0
+expect_sites "an unrelated type ending in Validator::new: ignored" \
+    "$(new_src otherval a.rs 'fn f() { let _ = JwtValidator::new(); }')" 0
 TESTS_ONLY="${FIXTURE_DIR}/testsdir/crates/demo"
 mkdir -p "${TESTS_ONLY}/tests"
 printf '%s\n' 'fn f() { let _ = jsonschema::validator_for(&s); }' > "${TESTS_ONLY}/tests/t.rs"

@@ -7,6 +7,11 @@
 //! to race the assertion. Also included, by path, from `temper-services`' reconcile test and the
 //! e2e door tests: the suites must agree on what a connection is.
 
+// `allow`, not `expect` (code-quality-best-practices §1.7, the cfg-conditional exception): this file
+// is compiled into several test binaries, each using a different subset of `FetchProbe` (the A1
+// witnesses use all of it; a door test reads only `url`, `port` and `connections`; a binary that
+// pulls it in through `common` may use none), so the lint fires in some builds and not others and
+// an `expect` would be unfulfilled in whichever binary uses everything.
 #![allow(dead_code)]
 
 use std::net::TcpListener;

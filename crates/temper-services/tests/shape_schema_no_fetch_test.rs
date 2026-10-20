@@ -3,8 +3,12 @@
 //!
 //! The substrate's `writes::declare_shape` does not compile, so a shape whose schema needs a fetch
 //! is stored here through it: that is the state of a shape declared before the service's declare
-//! compiled. Every test that touches such a schema also reads the connection count of a loopback
-//! listener the schema's `$ref` names, so "nothing was fetched" is observed.
+//! compiled. Tests that touch such a schema also read the connection count of a loopback listener
+//! the schema's `$ref` names. That count guards against a regression; it is not the fetch witness,
+//! because a fetching compiler's blocking fetch panics inside this async runtime before it
+//! connects. The witnesses are the synchronous `shape_schema_no_fetch` tests in `temper-substrate`
+//! and the `audit-shape-schema-compile.sh` tripwire. What these tests pin is the behaviour: the
+//! refusal, the absence of writes, and reconcile's skip.
 #![cfg(feature = "test-db")]
 
 use sqlx::PgPool;

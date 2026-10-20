@@ -2,16 +2,24 @@
 //! fetch would have returned (task `01a15661-8460-739d-9ed3-f1e8ccbf9b69`).
 //!
 //! A shape's schema is written by any author of its home, so every compile of it is a fetch
-//! trigger unless the compiler is configured not to. Each witness here is written so that it fails
-//! against `jsonschema::validator_for` (default options, which resolve `http(s)` and `file:`):
+//! trigger unless the compiler is configured not to. The three bites are written so that they fail
+//! against `jsonschema::validator_for` with the resolver features enabled (default options resolve
+//! `http(s)` and `file:`); `jsonschema` is now built without those features, so to run the bite
+//! re-enable `resolve-http` and `resolve-file` as well as swapping the compile:
 //!
 //! - the connection count is read from a real loopback listener, so "nothing was fetched" is
 //!   observed rather than inferred from an error;
 //! - the `file:` witness compiles under the defaults and is refused here;
 //! - the sentinel the file carries must appear in no error text.
 //!
-//! Two tests are controls rather than bites — local `#/$defs` refs still compile, and an unknown
-//! `$schema` is refused — pinning that the refusing retriever did not narrow what compiles.
+//! The rest are controls or property pins, not bites. Local `#/$defs` refs still compile and an
+//! unknown `$schema` is refused, pinning that the refusing retriever did not narrow what compiles.
+//! Two witnesses pin that a custom `$schema` the schema defines for itself is refused too, which
+//! `jsonschema` alone would compile under a guessed draft.
+//!
+//! These are plain `#[test]`s on purpose: the blocking fetch a default compile makes panics inside
+//! a tokio runtime instead of connecting, so the async suites' zero-connection assertions are not
+//! fetch witnesses. This file and the tripwire are.
 //!
 //! Needs no database: runs in the Unit CI job.
 
@@ -164,6 +172,80 @@ fn a_draft_07_schema_with_local_definitions_refs_still_compiles() {
     let validator = compile(&schema).expect("a self-contained draft-07 schema compiles");
     assert!(validator.is_valid(&json!({ "name": "ok" })));
     assert!(!validator.is_valid(&json!({ "name": "" })));
+}
+
+/// A `$schema` the schema defines for itself is still a custom meta-schema, and is refused. The
+/// schema registers `urn:example:m` as its own `$id`, so `jsonschema`'s own check ("is the
+/// meta-schema one of the document's resources?") passes and the root compiles under a guessed
+/// draft; `compile` refuses it first.
+#[test]
+fn a_custom_schema_uri_the_schema_registers_for_itself_is_refused() {
+    let schema = json!({
+        "$id": "urn:example:m",
+        "$schema": "urn:example:m",
+        "type": "object",
+    });
+
+    assert!(
+        compile(&schema).is_err(),
+        "a self-registered custom meta-schema must not compile under a guessed draft"
+    );
+}
+
+/// The same, with the meta-schema's URI carried by an embedded `$defs` subschema instead of the
+/// root.
+#[test]
+fn a_custom_schema_uri_an_embedded_subschema_registers_is_refused() {
+    let schema = json!({
+        "$schema": "urn:example:m",
+        "type": "object",
+        "$defs": { "meta": { "$id": "urn:example:m", "type": "object" } },
+    });
+
+    assert!(
+        compile(&schema).is_err(),
+        "a meta-schema registered by an embedded $defs subschema must not compile"
+    );
+}
+
+/// An embedded subschema that names a custom `$schema` of its own is refused although the root
+/// names a standard draft: the subschema is a resource of its own and would compile under a guessed
+/// draft once it registers itself.
+#[test]
+fn an_embedded_subschema_naming_a_custom_schema_uri_is_refused() {
+    let schema = json!({
+        "$schema": DRAFT_2020_12,
+        "type": "object",
+        "properties": {
+            "inner": {
+                "$id": "urn:example:inner",
+                "$schema": "urn:example:inner",
+                "type": "string",
+            },
+        },
+    });
+
+    assert!(
+        compile(&schema).is_err(),
+        "an embedded resource with a custom $schema must not compile"
+    );
+}
+
+/// Control: a property merely NAMED `$schema` is data, not a meta-schema declaration, and a
+/// standard `$schema` inside a subschema is fine. The walk visits subschemas only.
+#[test]
+fn a_property_named_schema_is_not_mistaken_for_a_meta_schema_declaration() {
+    let schema = json!({
+        "$schema": DRAFT_2020_12,
+        "type": "object",
+        "properties": {
+            "$schema": { "type": "string" },
+            "nested": { "$schema": DRAFT_2020_12, "type": "integer" },
+        },
+    });
+
+    let validator = compile(&schema).expect("a property named $schema compiles");
+    assert!(validator.is_valid(&json!({ "$schema": "x", "nested": 1 })));
 }
 
 /// Control: a `$schema` the server does not recognise is not guessed at.

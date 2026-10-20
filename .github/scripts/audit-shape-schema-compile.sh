@@ -21,11 +21,20 @@
 # FIELD OF VIEW (named, because a guard whose coverage quietly narrows is worse than none)
 #   * `crates/*/src` only; `tests/` directories are not scanned. A test may build a validator.
 #   * A hit inside a `#[cfg(test)]` module counts, as in the sibling sink guards.
-#   * Matches `jsonschema::<entry point>` paths and single-line `use jsonschema::{..}` imports of
-#     an entry point. A multi-line import, or `Validator::new(..)` called on a type imported by
-#     name, is NOT seen — keep imports to `use jsonschema::Validator;` and call `jsonschema::`
-#     paths, which is the form this repo uses.
+#   * Sees: `jsonschema::<entry point>` paths (validator_for, options, validate, is_valid,
+#     evaluate, bundle, draft*, meta, and the async twins); `ValidationOptions::default`;
+#     `Registry::(try_new|try_from_resources|options)`; bare `Validator::(new|options|async_*)`;
+#     single-line `use jsonschema::{..}` imports of an entry point; and the aliasing imports
+#     `use jsonschema as ..`, `use jsonschema::*` and `extern crate jsonschema`, since each one
+#     hides the `jsonschema::` prefix every other pattern keys on.
 #   * Whole-line `//` comments are excluded, so doc prose may name an entry point.
+#   * RESIDUAL BLIND SPOTS, stated so nobody reads green as proof: a `use jsonschema::{..}` whose
+#     braces span lines; a call assembled by a macro (the textual forms above are seen wherever
+#     they appear in a macro body, but a name built with `paste!`/`concat!`/`stringify!` is not);
+#     a type reached through a re-export from another crate; and `Default::default()` where the
+#     type is inferred to be `ValidationOptions`. A reviewer of a new `jsonschema` dependency edge
+#     is the backstop for those. The second layer is `default-features = false` on every
+#     `jsonschema` dependency, which compiles the http and file resolvers out.
 #
 # USAGE
 #   .github/scripts/audit-shape-schema-compile.sh            # verify against the allowlist (CI mode)
@@ -43,6 +52,8 @@ SCAN_ROOT="${SCAN_ROOT:-crates}"
 # The reviewed allowlist: <count> <path>, sorted by path.
 #
 # REVIEWED 2026-10-20 (task 01a15661-8460-739d-9ed3-f1e8ccbf9b69, PR A) — initial allowlist.
+#   Re-run 2026-10-20 after the patterns were widened (evaluate, bundle, ValidationOptions::default,
+#   Registry::*, bare Validator::*, aliasing imports): the three files' counts did not move.
 #   crates/temper-substrate/src/shape_schema.rs (1) — THE constructor: `jsonschema::options()`
 #     with a retriever that refuses every URI. This is the allowlisted entry because it is the
 #     thing every other compile must call.
@@ -58,16 +69,23 @@ read -r -d '' BASELINE <<'EOS' || true
 EOS
 
 # Every `jsonschema` entry point that compiles or validates a schema: the free functions, the
-# options builders (sync and async), and the bundled-draft modules.
-ENTRY_POINTS='validator_for|async_validator_for|options|async_options|validate|is_valid|bundle|draft[0-9]+|meta'
+# options builders (sync and async), the bundlers and the bundled-draft modules. Prefix-matched on
+# purpose (`bundle` also catches `bundle_with_..`): over-matching only costs a review.
+ENTRY_POINTS='validator_for|async_validator_for|options|async_options|validate|is_valid|evaluate|(async_)?bundle|draft[0-9]+|meta'
 
 # Current set: <count> <path> per file, sorted by path. `|| true` keeps a legitimately empty scan
 # from tripping `set -e` before the canary below can report it.
 current() {
   grep -rnE --include='*.rs' \
-     -e "jsonschema::(${ENTRY_POINTS})([^[:alnum:]_]|$)" \
-     -e "jsonschema::Validator::(new|options|async_new|async_options)([^[:alnum:]_]|$)" \
-     -e "use[[:space:]]+jsonschema::\{[^}]*(validator_for|async_validator_for|options|async_options|validate|is_valid)" \
+     -e "jsonschema::(${ENTRY_POINTS})" \
+     -e "jsonschema::Validator::(new|options|async_new|async_options)" \
+     -e "(^|[^[:alnum:]_])Validator::(new|options|async_new|async_options)([^[:alnum:]_]|$)" \
+     -e "ValidationOptions(::<.*>)?::default" \
+     -e "Registry::(try_new|try_from_resources|options)" \
+     -e "use[[:space:]]+jsonschema::\{[^}]*(validator_for|async_validator_for|options|async_options|validate|is_valid|evaluate|bundle|async_bundle)" \
+     -e "use[[:space:]]+jsonschema[[:space:]]+as([^[:alnum:]_]|$)" \
+     -e "use[[:space:]]+jsonschema::\*" \
+     -e "extern[[:space:]]+crate[[:space:]]+jsonschema" \
      "$SCAN_ROOT" 2>/dev/null \
   | grep -E '^[^:]*/src/[^:]*\.rs:' \
   | grep -vE '^[^:]*:[0-9]+:[[:space:]]*//' \
