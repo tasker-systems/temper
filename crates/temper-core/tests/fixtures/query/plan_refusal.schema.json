@@ -1,7 +1,7 @@
 {
   "$defs": {
     "AskOperator": {
-      "description": "The name of a [`PropertyOp`](crate::types::query::PropertyOp) operator, for a vocabulary to\nlist. Not a second operator type: it carries no value, and binds nothing.",
+      "description": "The name of a `PropertyOp` operator, for a vocabulary to\nlist. Not a second operator type: it carries no value, and binds nothing.",
       "enum": [
         "has_key",
         "contains",
@@ -40,22 +40,22 @@
       "oneOf": [
         {
           "const": "depth",
-          "description": "[`WalkBounds::max_depth`] — the path is deeper than the walk descends.",
+          "description": "The path is deeper than the walk descends.",
           "type": "string"
         },
         {
           "const": "paths",
-          "description": "[`WalkBounds::max_paths`] — the vocabulary has more paths than are advertised.",
+          "description": "The vocabulary has more paths than are advertised.",
           "type": "string"
         },
         {
           "const": "schema_bytes",
-          "description": "[`WalkBounds::max_schema_bytes`] — the schema is larger than the walk reads.",
+          "description": "The schema is larger than the walk reads.",
           "type": "string"
         },
         {
           "const": "work",
-          "description": "[`WalkBounds::max_visits`] — the walk spent its work budget before it could say.",
+          "description": "Reading the shape spent its work budget — schema visits, or enum membership steps —\nbefore it could say.",
           "type": "string"
         }
       ]
@@ -85,7 +85,7 @@
               "type": "null"
             }
           ],
-          "description": "What an element of an array at this path declares. `None`: elements are unconstrained.\nNested at most [`MAX_WALK_DEPTH`] arrays deep."
+          "description": "What an element of an array at this path declares. `None`: elements are unconstrained.\nReported at most as many arrays deep as the walk's depth bound."
         },
         "types": {
           "description": "The declared JSON types. `None`: no `type` constrains the path. An empty set: the branches\nthat apply here declare types with nothing in common, so no value is admissible.",
@@ -412,7 +412,7 @@
               "type": "null"
             }
           ],
-          "description": "The shape's askable paths — the same structure as a shape's `askable` — narrowed to what the\nrefusal is about, and held to [`MAX_TEACHING_BYTES`]."
+          "description": "The shape's askable paths — the same structure as a shape's `askable` — narrowed to what the\nrefusal is about, and held to a bounded size."
         }
       },
       "type": "object"

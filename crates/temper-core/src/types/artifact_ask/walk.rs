@@ -8,9 +8,10 @@
 //! `dependentSchemas` are **not walked**, so a path reachable only through them is not declared —
 //! the declared hole of spec §11, refused as `path_outside_shape` rather than guessed at.
 //!
-//! **A `$ref` the walk does not follow is `true`, under every draft.** An anchor, a reference
-//! resolved against an embedded `$id`, or a remote one: the walk cannot see what it says, so the
-//! subschema it stands for is declared and unconstrained. That never refuses a declared path; a
+//! **A `$ref` the walk does not follow is `true`, under every draft.** An anchor, a remote one, or
+//! any reference made inside a resource the schema embeds under its own `$id` (where `#` means that
+//! resource, not the root): the walk cannot see what it says, so the subschema it stands for is
+//! declared and unconstrained. That never refuses a declared path; a
 //! value admitted there may then match nothing, which is an honest empty.
 //!
 //! **The walk sees only schemas that compiled.** The loader (spec §2.4) compiled the schema with
@@ -36,13 +37,19 @@
 //!   [`PathFacts`] value built, whose `items` nesting is held to the depth bound.
 //! - **Memoised per walk** by `(subschema, path position)`, so a definition referenced many times
 //!   at one position is evaluated once.
+//! - **Values cost what they carry.** An `enum` / `const` member is read once per walk and charged
+//!   by its size; value sets are shared rather than copied, intersect and union by member id in
+//!   linear time, and are charged by their sizes each time; and copying them into an answer is
+//!   charged by size again. So a wide `allOf` over a large enum stops at the work budget instead of
+//!   holding millions of values or comparing them pairwise.
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::reference::jsonb_eq;
+use super::reference::canonical;
 use crate::types::query::filter::json_bytes;
 
 /// The deepest path, in object-key segments, the walk descends to. A deeper ask is
@@ -122,13 +129,14 @@ impl WalkBounds {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum BoundKind {
-    /// [`WalkBounds::max_depth`] — the path is deeper than the walk descends.
+    /// The path is deeper than the walk descends.
     Depth,
-    /// [`WalkBounds::max_paths`] — the vocabulary has more paths than are advertised.
+    /// The vocabulary has more paths than are advertised.
     Paths,
-    /// [`WalkBounds::max_schema_bytes`] — the schema is larger than the walk reads.
+    /// The schema is larger than the walk reads.
     SchemaBytes,
-    /// [`WalkBounds::max_visits`] — the walk spent its work budget before it could say.
+    /// Reading the shape spent its work budget — schema visits, or enum membership steps —
+    /// before it could say.
     Work,
 }
 
@@ -193,18 +201,13 @@ pub struct PathFacts {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values: Option<Vec<Value>>,
     /// What an element of an array at this path declares. `None`: elements are unconstrained.
-    /// Nested at most [`MAX_WALK_DEPTH`] arrays deep.
+    /// Reported at most as many arrays deep as the walk's depth bound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "web-api", schema(no_recursion))]
     pub items: Option<Box<PathFacts>>,
 }
 
 impl PathFacts {
-    /// Whether nothing at all is declared — the facts of `{}` or `true`.
-    fn is_unconstrained(&self) -> bool {
-        self.types.is_none() && self.values.is_none() && self.items.is_none()
-    }
-
     /// Whether `compare` is feasible here: the path declares `number`, `integer` or `string`, or
     /// declares no type (spec §3.4, the `compare` row).
     pub fn admits_compare(&self) -> bool {
@@ -226,7 +229,7 @@ impl PathFacts {
     }
 }
 
-/// The name of a [`PropertyOp`](crate::types::query::PropertyOp) operator, for a vocabulary to
+/// The name of a `PropertyOp` operator, for a vocabulary to
 /// list. Not a second operator type: it carries no value, and binds nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -360,31 +363,90 @@ impl Draft {
     fn has_prefix_items(self) -> bool {
         matches!(self, Draft::D2020)
     }
+
+    /// Whether a schema object opens a resource of its own: an `$id` (`id` in draft-04) that is a
+    /// URI rather than a plain-name fragment, which in draft-06/07 is an anchor and changes no base.
+    fn opens_resource(self, schema: &Map<String, Value>) -> bool {
+        let keyword = if self == Draft::D4 { "id" } else { "$id" };
+        schema
+            .get(keyword)
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.starts_with('#'))
+    }
 }
 
-/// The visits one walk may still make. Shared by everything one `resolve` or one `enumerate` does.
+/// How many bytes of a value's canonical text one visit of the budget pays for. A member of an
+/// `enum` or `const` costs one visit, plus one per this many bytes, when the walk first reads it
+/// and each time it is copied into an answer.
+///
+/// # 64
+///
+/// An `enum` of short codes costs about one visit a member, so a five-thousand-code enum is well
+/// inside [`MAX_WALK_VISITS`]; a single member of 200 KB costs over three thousand, so no walk can
+/// copy more than about [`MAX_WALK_VISITS`] × 64 bytes — 4 MiB — of declared values.
+pub const VALUE_BYTES_PER_VISIT: usize = 64;
+
+/// What one walk may still spend, and the members it has already read. Shared by everything one
+/// `resolve` or one `enumerate` does.
 #[derive(Debug)]
 struct Budget {
     left: usize,
+    /// Canonical text → member id: jsonb-equal members share an id.
+    ids: HashMap<String, usize>,
+    /// A member value in the schema → its id and weight, so each is read once per walk.
+    read: HashMap<usize, (usize, usize)>,
 }
 
 impl Budget {
     fn new(visits: usize) -> Budget {
-        Budget { left: visits }
+        Budget {
+            left: visits,
+            ids: HashMap::new(),
+            read: HashMap::new(),
+        }
     }
 
     fn spend(&mut self, visits: usize) -> Result<(), BoundKind> {
         self.left = self.left.checked_sub(visits).ok_or(BoundKind::Work)?;
         Ok(())
     }
+
+    /// One `enum` or `const` member, read once per walk and charged by its size.
+    fn member<'s>(&mut self, value: &'s Value) -> Result<Member<'s>, BoundKind> {
+        let node = identity(value);
+        if let Some(&(id, weight)) = self.read.get(&node) {
+            return Ok(Member { id, weight, value });
+        }
+        let text = canonical(value);
+        let weight = 1 + text.len() / VALUE_BYTES_PER_VISIT;
+        self.spend(weight)?;
+        let next = self.ids.len();
+        let id = *self.ids.entry(text).or_insert(next);
+        self.read.insert(node, (id, weight));
+        Ok(Member { id, weight, value })
+    }
+
+    /// A value set: every member read, and the set itself charged once per member.
+    fn members<'s>(&mut self, values: &'s [Value]) -> Result<Values<'s>, BoundKind> {
+        self.spend(values.len())?;
+        let members = values
+            .iter()
+            .map(|v| self.member(v))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Rc::new(members))
+    }
 }
 
-/// One schema, measured and its draft selected, ready to resolve paths against.
+/// One schema, measured, its draft selected, and its embedded resources found, ready to resolve
+/// paths against.
 #[derive(Debug)]
 pub(super) struct Walk<'s> {
     root: &'s Value,
     draft: Draft,
     bounds: WalkBounds,
+    /// Schema objects inside a resource the schema embeds (a non-root `$id`), whose `$ref`s
+    /// resolve against that resource rather than the root, and are not followed.
+    embedded: HashSet<usize>,
 }
 
 impl<'s> Walk<'s> {
@@ -393,10 +455,12 @@ impl<'s> Walk<'s> {
         if json_bytes(schema) > bounds.max_schema_bytes {
             return Err(BoundKind::SchemaBytes);
         }
+        let draft = Draft::of(schema);
         Ok(Walk {
             root: schema,
-            draft: Draft::of(schema),
+            draft,
             bounds: *bounds,
+            embedded: embedded_resources(schema, draft),
         })
     }
 
@@ -409,16 +473,21 @@ impl<'s> Walk<'s> {
         if path.len() > self.bounds.max_depth {
             return PathResolution::BeyondBound(BoundKind::Depth);
         }
-        let mut resolver = Resolver {
+        let reached = Resolver {
             walk: self,
             path,
-            budget,
+            budget: &mut *budget,
             memo: HashMap::new(),
             active: HashSet::new(),
+        }
+        .run();
+        let facts = match reached {
+            Ok(Reach::Declared(facts)) => facts,
+            Ok(Reach::Silent | Reach::Forbidden) => return PathResolution::NotDeclared,
+            Err(bound) => return PathResolution::BeyondBound(bound),
         };
-        match resolver.run() {
-            Ok(Reach::Declared(facts)) => PathResolution::Declared(facts),
-            Ok(Reach::Silent | Reach::Forbidden) => PathResolution::NotDeclared,
+        match into_wire(&facts, budget) {
+            Ok(facts) => PathResolution::Declared(facts),
             Err(bound) => PathResolution::BeyondBound(bound),
         }
     }
@@ -502,7 +571,7 @@ impl<'s> Walk<'s> {
                 continue;
             }
             budget.spend(1)?;
-            if let Some(target) = map.get("$ref").and_then(|r| self.target(r)) {
+            if let Some(target) = map.get("$ref").and_then(|r| self.target(node, r)) {
                 stack.push(target);
             }
             if self.draft.ref_overrides_siblings() && map.contains_key("$ref") {
@@ -523,14 +592,62 @@ impl<'s> Walk<'s> {
         Ok(out)
     }
 
-    /// The subschema a local `$ref` names: the fragment of a `#`-prefixed reference,
+    /// The subschema a local `$ref` on `from` names: the fragment of a `#`-prefixed reference,
     /// percent-decoded, read as a JSON pointer from the root (`~0`/`~1` unescaped by
-    /// `Value::pointer`). `#` alone is the root. Anything else — an anchor, a remote or `file:`
-    /// URI — is not followed (§3.3, the remote-`$ref` row).
-    fn target(&self, reference: &Value) -> Option<&'s Value> {
+    /// `Value::pointer`). `#` alone is the root.
+    ///
+    /// Not followed: an anchor, a remote or `file:` URI (§3.3, the remote-`$ref` row), and any
+    /// reference made from inside an embedded resource, where `#` means that resource and not the
+    /// root.
+    fn target(&self, from: &Value, reference: &Value) -> Option<&'s Value> {
+        if self.embedded.contains(&identity(from)) {
+            return None;
+        }
         let fragment = reference.as_str()?.strip_prefix('#')?;
         self.root.pointer(&percent_decode(fragment)?)
     }
+}
+
+/// The schema objects inside a resource the schema embeds: a non-root object that opens one, and
+/// every schema object beneath it. One pass from an explicit stack, bounded like the byte
+/// measurement beside it by [`MAX_SCHEMA_BYTES`].
+///
+/// It descends schema positions only. The values of `enum`, `const`, `default` and `examples` are
+/// data, and the values of `properties`, `patternProperties`, `$defs`, `definitions`,
+/// `dependentSchemas` and `dependencies` are maps of name to schema — so a property named `$id`, or
+/// an `enum` member carrying one, is not a resource.
+fn embedded_resources(root: &Value, draft: Draft) -> HashSet<usize> {
+    let mut marked = HashSet::new();
+    // (node, inside an embedded resource, a map of name to schema rather than a schema)
+    let mut stack = vec![(root, false, false)];
+    while let Some((node, inside, names)) = stack.pop() {
+        match node {
+            Value::Object(map) if names => {
+                stack.extend(map.values().map(|schema| (schema, inside, false)));
+            }
+            Value::Object(map) => {
+                let inside = inside || (!std::ptr::eq(node, root) && draft.opens_resource(map));
+                if inside {
+                    marked.insert(identity(node));
+                }
+                for (keyword, child) in map {
+                    match keyword.as_str() {
+                        "enum" | "const" | "default" | "examples" => {}
+                        "properties" | "patternProperties" | "$defs" | "definitions"
+                        | "dependentSchemas" | "dependencies" => {
+                            stack.push((child, inside, true));
+                        }
+                        _ => stack.push((child, inside, false)),
+                    }
+                }
+            }
+            Value::Array(schemas) => {
+                stack.extend(schemas.iter().map(|schema| (schema, inside, false)));
+            }
+            _ => {}
+        }
+    }
+    marked
 }
 
 /// A URI fragment with its `%XX` escapes decoded, or `None` if an escape is malformed or the
@@ -571,71 +688,159 @@ fn identity(node: &Value) -> usize {
     std::ptr::from_ref(node) as usize
 }
 
+/// One `enum` / `const` member as the walk carries it: an id equal for jsonb-equal members, so
+/// sets intersect and union by id in linear time; its weight in visits; and the schema value.
+#[derive(Debug, Clone, Copy)]
+struct Member<'s> {
+    id: usize,
+    weight: usize,
+    value: &'s Value,
+}
+
+/// A value set, shared rather than copied when a result is memoised or reused.
+type Values<'s> = Rc<Vec<Member<'s>>>;
+
+/// What the walk has found at a path so far: [`PathFacts`], with its values as members of the
+/// schema and every part shared, so carrying it costs nothing per value.
+#[derive(Debug, Clone, Default)]
+struct Facts<'s> {
+    types: Option<BTreeSet<JsonType>>,
+    values: Option<Values<'s>>,
+    items: Option<Rc<Facts<'s>>>,
+}
+
+impl Facts<'_> {
+    /// Whether nothing at all is declared — the facts of `{}` or `true`.
+    fn is_unconstrained(&self) -> bool {
+        self.types.is_none() && self.values.is_none() && self.items.is_none()
+    }
+}
+
+/// The facts as the wire carries them, each value copied once and charged by its weight.
+fn into_wire(facts: &Facts<'_>, budget: &mut Budget) -> Result<PathFacts, BoundKind> {
+    let values = match &facts.values {
+        Some(members) => {
+            budget.spend(members.iter().map(|m| m.weight).sum())?;
+            Some(members.iter().map(|m| m.value.clone()).collect())
+        }
+        None => None,
+    };
+    let items = match &facts.items {
+        Some(element) => Some(Box::new(into_wire(element, budget)?)),
+        None => None,
+    };
+    Ok(PathFacts {
+        types: facts.types.clone(),
+        values,
+        items,
+    })
+}
+
 /// What one subschema says about the remaining path.
 #[derive(Debug, Clone)]
-enum Reach {
+enum Reach<'s> {
     /// The path can never be present (`false`, or every branch of a union forbids it).
     Forbidden,
     /// This subschema does not reach the path; it neither declares nor constrains it.
     Silent,
-    Declared(PathFacts),
+    Declared(Facts<'s>),
 }
 
 /// Both hold — `allOf`, and keywords beside a `$ref` under 2019-09 / 2020-12.
-fn conjoin(a: Reach, b: Reach) -> Reach {
-    match (a, b) {
+fn conjoin<'s>(a: Reach<'s>, b: Reach<'s>, budget: &mut Budget) -> Result<Reach<'s>, BoundKind> {
+    Ok(match (a, b) {
         (Reach::Forbidden, _) | (_, Reach::Forbidden) => Reach::Forbidden,
         (Reach::Silent, other) | (other, Reach::Silent) => other,
-        (Reach::Declared(x), Reach::Declared(y)) => Reach::Declared(conjoin_facts(x, y)),
-    }
+        (Reach::Declared(x), Reach::Declared(y)) => Reach::Declared(conjoin_facts(&x, &y, budget)?),
+    })
 }
 
 /// One of them holds — `anyOf` / `oneOf` (§3.3 row 6). A branch that does not declare the path
 /// takes no part; if none declares it the union is silent, unless every branch forbids it.
-fn disjoin(branches: Vec<Reach>) -> Reach {
+fn disjoin<'s>(branches: Vec<Reach<'s>>, budget: &mut Budget) -> Result<Reach<'s>, BoundKind> {
     let all_forbidden =
         !branches.is_empty() && branches.iter().all(|b| matches!(b, Reach::Forbidden));
-    let declared = branches.into_iter().filter_map(|b| match b {
-        Reach::Declared(facts) => Some(facts),
-        Reach::Silent | Reach::Forbidden => None,
-    });
-    match declared.reduce(disjoin_facts) {
+    let mut union: Option<Facts<'s>> = None;
+    for branch in branches {
+        if let Reach::Declared(facts) = branch {
+            union = Some(match union {
+                Some(acc) => disjoin_facts(&acc, &facts, budget)?,
+                None => facts,
+            });
+        }
+    }
+    Ok(match union {
         Some(facts) => Reach::Declared(facts),
         None if all_forbidden => Reach::Forbidden,
         None => Reach::Silent,
-    }
+    })
 }
 
-fn conjoin_facts(a: PathFacts, b: PathFacts) -> PathFacts {
-    PathFacts {
-        types: both(a.types, b.types, intersect_types),
-        values: both(a.values, b.values, |x, y| {
-            x.into_iter()
-                .filter(|v| y.iter().any(|w| jsonb_eq(v, w)))
-                .collect()
-        }),
-        items: both(a.items, b.items, |x, y| Box::new(conjoin_facts(*x, *y))),
-    }
+fn conjoin_facts<'s>(
+    a: &Facts<'s>,
+    b: &Facts<'s>,
+    budget: &mut Budget,
+) -> Result<Facts<'s>, BoundKind> {
+    let values = match (&a.values, &b.values) {
+        (Some(x), Some(y)) => Some(intersect(x, y, budget)?),
+        (x, None) | (None, x) => x.clone(),
+    };
+    let items = match (&a.items, &b.items) {
+        (Some(x), Some(y)) => Some(Rc::new(conjoin_facts(x, y, budget)?)),
+        (x, None) | (None, x) => x.clone(),
+    };
+    Ok(Facts {
+        types: both(a.types.clone(), b.types.clone(), intersect_types),
+        values,
+        items,
+    })
 }
 
 /// A union's facts: unconstrained if either side is — so a value one branch admits is never
 /// refused because another branch enumerates (§3.3 row 6).
-fn disjoin_facts(a: PathFacts, b: PathFacts) -> PathFacts {
-    PathFacts {
-        types: either(a.types, b.types, |mut x, y| {
+fn disjoin_facts<'s>(
+    a: &Facts<'s>,
+    b: &Facts<'s>,
+    budget: &mut Budget,
+) -> Result<Facts<'s>, BoundKind> {
+    let values = match (&a.values, &b.values) {
+        (Some(x), Some(y)) => Some(union(x, y, budget)?),
+        _ => None,
+    };
+    let items = match (&a.items, &b.items) {
+        (Some(x), Some(y)) => Some(Rc::new(disjoin_facts(x, y, budget)?)),
+        _ => None,
+    };
+    Ok(Facts {
+        types: either(a.types.clone(), b.types.clone(), |mut x, y| {
             x.extend(y);
             x
         }),
-        values: either(a.values, b.values, |mut x, y| {
-            for v in y {
-                if !x.iter().any(|w| jsonb_eq(&v, w)) {
-                    x.push(v);
-                }
-            }
-            x
-        }),
-        items: either(a.items, b.items, |x, y| Box::new(disjoin_facts(*x, *y))),
-    }
+        values,
+        items,
+    })
+}
+
+/// The members of `x` some member of `y` equals, in `x`'s order. Linear, and charged by both sizes.
+fn intersect<'s>(
+    x: &Values<'s>,
+    y: &Values<'s>,
+    budget: &mut Budget,
+) -> Result<Values<'s>, BoundKind> {
+    budget.spend(x.len() + y.len())?;
+    let keep: HashSet<usize> = y.iter().map(|m| m.id).collect();
+    Ok(Rc::new(
+        x.iter().filter(|m| keep.contains(&m.id)).copied().collect(),
+    ))
+}
+
+/// `x`, then the members of `y` it lacks. Linear, and charged by both sizes.
+fn union<'s>(x: &Values<'s>, y: &Values<'s>, budget: &mut Budget) -> Result<Values<'s>, BoundKind> {
+    budget.spend(x.len() + y.len())?;
+    let mut seen: HashSet<usize> = x.iter().map(|m| m.id).collect();
+    let mut out: Vec<Member<'s>> = x.to_vec();
+    out.extend(y.iter().filter(|m| seen.insert(m.id)).copied());
+    Ok(Rc::new(out))
 }
 
 /// Both constraints apply: an absent one leaves the other.
@@ -687,7 +892,7 @@ type Child<'s> = (&'s Value, usize, Role);
 /// children's results once they are all on the value stack.
 enum Task<'s> {
     Eval(&'s Value, usize),
-    Combine(&'s Map<String, Value>, usize, usize),
+    Combine(&'s Value, &'s Map<String, Value>, usize),
 }
 
 /// One path's walk: an explicit-stack evaluation, memoised by `(subschema, position)` and
@@ -704,26 +909,27 @@ struct Resolver<'w, 's> {
     walk: &'w Walk<'s>,
     path: &'w [String],
     budget: &'w mut Budget,
-    memo: HashMap<(usize, usize), Reach>,
+    memo: HashMap<(usize, usize), Reach<'s>>,
     active: HashSet<(usize, usize)>,
 }
 
 impl<'s> Resolver<'_, 's> {
-    fn run(&mut self) -> Result<Reach, BoundKind> {
+    fn run(mut self) -> Result<Reach<'s>, BoundKind> {
         self.budget.spend(1)?;
         let mut tasks = vec![Task::Eval(self.walk.root, 0)];
-        let mut values: Vec<Reach> = Vec::new();
+        let mut values: Vec<Reach<'s>> = Vec::new();
         while let Some(task) = tasks.pop() {
             match task {
                 Task::Eval(node, at) => self.eval(node, at, &mut tasks, &mut values)?,
-                Task::Combine(map, at, id) => {
-                    let children = self.children(map, at);
+                Task::Combine(node, map, at) => {
+                    let children = self.children(node, map, at);
                     // Each child's evaluation pushed exactly one value, after this task was pushed
                     // and before it is popped.
                     let results = values.split_off(values.len() - children.len());
-                    let reached = self.combine(map, at, &children, results);
-                    self.active.remove(&(id, at));
-                    self.memo.insert((id, at), reached.clone());
+                    let reached = self.combine(map, at, &children, results)?;
+                    let key = (identity(node), at);
+                    self.active.remove(&key);
+                    self.memo.insert(key, reached.clone());
                     values.push(reached);
                 }
             }
@@ -738,7 +944,7 @@ impl<'s> Resolver<'_, 's> {
         node: &'s Value,
         at: usize,
         tasks: &mut Vec<Task<'s>>,
-        values: &mut Vec<Reach>,
+        values: &mut Vec<Reach<'s>>,
     ) -> Result<(), BoundKind> {
         let reached = match node {
             Value::Bool(false) => Reach::Forbidden,
@@ -750,10 +956,10 @@ impl<'s> Resolver<'_, 's> {
                 } else if self.active.contains(&key) {
                     Reach::Silent
                 } else {
-                    let children = self.children(map, at);
+                    let children = self.children(node, map, at);
                     self.budget.spend(children.len())?;
                     self.active.insert(key);
-                    tasks.push(Task::Combine(map, at, key.0));
+                    tasks.push(Task::Combine(node, map, at));
                     tasks.extend(
                         children
                             .iter()
@@ -771,18 +977,18 @@ impl<'s> Resolver<'_, 's> {
 
     /// `true`, or a `$ref` the walk does not follow: declared and unconstrained where it sits, and
     /// declaring nothing below it — a deeper segment is not reached through `properties`.
-    fn unconstrained(&self, at: usize) -> Reach {
+    fn unconstrained(&self, at: usize) -> Reach<'s> {
         if at >= self.path.len() {
-            Reach::Declared(PathFacts::default())
+            Reach::Declared(Facts::default())
         } else {
             Reach::Silent
         }
     }
 
     /// The subschemas an object applies at a position, in a fixed order the combination relies on.
-    fn children(&self, map: &'s Map<String, Value>, at: usize) -> Vec<Child<'s>> {
+    fn children(&self, node: &'s Value, map: &'s Map<String, Value>, at: usize) -> Vec<Child<'s>> {
         let mut out = Vec::new();
-        if let Some(target) = map.get("$ref").and_then(|r| self.walk.target(r)) {
+        if let Some(target) = map.get("$ref").and_then(|r| self.walk.target(node, r)) {
             out.push((target, at, Role::Ref));
         }
         if self.walk.draft.ref_overrides_siblings() && map.contains_key("$ref") {
@@ -834,23 +1040,23 @@ impl<'s> Resolver<'_, 's> {
     /// the reference alone; otherwise its own facts (or its `properties` step) are conjoined with
     /// the reference, every `allOf` branch, and each union.
     fn combine(
-        &self,
+        &mut self,
         map: &'s Map<String, Value>,
         at: usize,
         children: &[Child<'s>],
-        results: Vec<Reach>,
-    ) -> Reach {
+        results: Vec<Reach<'s>>,
+    ) -> Result<Reach<'s>, BoundKind> {
         if self.walk.draft.ref_overrides_siblings() && map.contains_key("$ref") {
-            return results
+            return Ok(results
                 .into_iter()
                 .next()
-                .unwrap_or_else(|| self.unconstrained(at));
+                .unwrap_or_else(|| self.unconstrained(at)));
         }
         let mut step = Reach::Silent;
         let mut items = None;
         let mut conjuncts = Vec::new();
-        let mut any_of: Option<Vec<Reach>> = None;
-        let mut one_of: Option<Vec<Reach>> = None;
+        let mut any_of: Option<Vec<Reach<'s>>> = None;
+        let mut one_of: Option<Vec<Reach<'s>>> = None;
         for ((_, _, role), reach) in children.iter().zip(results) {
             match role {
                 Role::Property => step = reach,
@@ -861,22 +1067,27 @@ impl<'s> Resolver<'_, 's> {
             }
         }
         let mut acc = if at >= self.path.len() {
-            Reach::Declared(self.local_facts(map, items))
+            Reach::Declared(self.local_facts(map, items)?)
         } else {
             step
         };
         for conjunct in conjuncts {
-            acc = conjoin(acc, conjunct);
+            acc = conjoin(acc, conjunct, self.budget)?;
         }
-        for union in [any_of, one_of].into_iter().flatten() {
-            acc = conjoin(acc, disjoin(union));
+        for branches in [any_of, one_of].into_iter().flatten() {
+            let union = disjoin(branches, self.budget)?;
+            acc = conjoin(acc, union, self.budget)?;
         }
-        acc
+        Ok(acc)
     }
 
     /// What one schema object itself declares at the path's end: `type`, `enum` / `const`, and
     /// what its element schema reached.
-    fn local_facts(&self, map: &'s Map<String, Value>, items: Option<Reach>) -> PathFacts {
+    fn local_facts(
+        &mut self,
+        map: &'s Map<String, Value>,
+        items: Option<Reach<'s>>,
+    ) -> Result<Facts<'s>, BoundKind> {
         let types = map.get("type").map(|t| match t {
             Value::String(name) => JsonType::from_keyword(name).into_iter().collect(),
             Value::Array(names) => names
@@ -885,29 +1096,33 @@ impl<'s> Resolver<'_, 's> {
                 .collect(),
             _ => BTreeSet::new(),
         });
-        let enumerated = map.get("enum").and_then(Value::as_array).cloned();
-        let constant = map
-            .get("const")
-            .filter(|_| self.walk.draft.has_const())
-            .map(|c| vec![c.clone()]);
-        PathFacts {
+        let enumerated = match map.get("enum").and_then(Value::as_array) {
+            Some(members) => Some(self.budget.members(members)?),
+            None => None,
+        };
+        let constant = match map.get("const").filter(|_| self.walk.draft.has_const()) {
+            Some(value) => Some(self.budget.members(std::slice::from_ref(value))?),
+            None => None,
+        };
+        let values = match (enumerated, constant) {
+            (Some(x), Some(y)) => Some(intersect(&x, &y, self.budget)?),
+            (x, None) | (None, x) => x,
+        };
+        let items = match items {
+            None | Some(Reach::Silent) => None,
+            // `items: false` admits no element at all.
+            Some(Reach::Forbidden) => Some(Rc::new(Facts {
+                types: Some(BTreeSet::new()),
+                ..Facts::default()
+            })),
+            Some(Reach::Declared(facts)) if facts.is_unconstrained() => None,
+            Some(Reach::Declared(facts)) => Some(Rc::new(facts)),
+        };
+        Ok(Facts {
             types,
-            values: both(enumerated, constant, |x, y| {
-                x.into_iter()
-                    .filter(|v| y.iter().any(|w| jsonb_eq(v, w)))
-                    .collect()
-            }),
-            items: match items {
-                None | Some(Reach::Silent) => None,
-                // `items: false` admits no element at all.
-                Some(Reach::Forbidden) => Some(Box::new(PathFacts {
-                    types: Some(BTreeSet::new()),
-                    ..PathFacts::default()
-                })),
-                Some(Reach::Declared(facts)) if facts.is_unconstrained() => None,
-                Some(Reach::Declared(facts)) => Some(Box::new(facts)),
-            },
-        }
+            values,
+            items,
+        })
     }
 }
 
@@ -1432,6 +1647,89 @@ mod tests {
                 paths: vec![],
                 truncated: BTreeSet::from([BoundKind::Work]),
             }
+        );
+    }
+
+    /// `$defs.E` is an enum of 8,000 numbers; `a` is a union or intersection of 9,000 references
+    /// to it. About 230 KB and 18,000 subschema visits, so it fits both the byte and the visit
+    /// bound.
+    fn wide_enum_references(keyword: &str) -> Value {
+        let members: Vec<Value> = (0..8_000).map(|i| json!(i)).collect();
+        let references: Vec<Value> = (0..9_000).map(|_| json!({ "$ref": "#/$defs/E" })).collect();
+        json!({
+            "$defs": { "E": { "enum": members } },
+            "properties": { "a": { keyword: references } }
+        })
+    }
+
+    /// Catches the regression where values were cloned per reference and intersected pairwise
+    /// outside the budget (round-3 review N1): ~72M `Value`s held at once and ~10¹¹ comparisons
+    /// for this schema, under every bound the walk then had.
+    #[test]
+    fn values_carried_through_a_wide_all_of_or_any_of_are_charged_and_stop_at_the_work_budget() {
+        for keyword in ["allOf", "anyOf"] {
+            let s = wide_enum_references(keyword);
+            assert!(
+                json_bytes(&s) <= MAX_SCHEMA_BYTES,
+                "{keyword}: under the byte bound"
+            );
+            assert_eq!(
+                at(&s, &["a"]),
+                PathResolution::BeyondBound(BoundKind::Work),
+                "{keyword}"
+            );
+            assert_eq!(
+                enumerate(&s, &WalkBounds::BUILD),
+                Vocabulary {
+                    paths: vec![],
+                    truncated: BTreeSet::from([BoundKind::Work]),
+                },
+                "{keyword}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_ref_inside_an_embedded_resource_is_not_resolved_against_the_root() {
+        // `#/$defs/x` inside `child` means child's own `$defs/x` (an integer), not the root's (a
+        // string). The walk does not follow it, so it says nothing it cannot see.
+        let s = json!({
+            "$defs": { "x": { "type": "string" } },
+            "properties": {
+                "child": {
+                    "$id": "https://example.com/child",
+                    "$defs": { "x": { "type": "integer" } },
+                    "properties": { "y": { "$ref": "#/$defs/x" }, "self": { "$ref": "#" } }
+                },
+                "z": { "$ref": "#/$defs/x" }
+            }
+        });
+        assert_eq!(at(&s, &["child", "y"]), untyped());
+        assert_eq!(at(&s, &["child", "self"]), untyped());
+        assert_eq!(at(&s, &["child", "self", "y"]), PathResolution::NotDeclared);
+        // Outside the resource the root's definition still applies.
+        assert_eq!(at(&s, &["z"]), typed(&[JsonType::String]));
+    }
+
+    #[test]
+    fn data_and_name_maps_carrying_an_id_open_no_resource() {
+        // A property named `$id`, and an `$id` inside an `enum` member, are not resources: the
+        // references beside them still resolve against the root.
+        let s = json!({
+            "$defs": { "x": { "type": "string" } },
+            "properties": {
+                "$id": { "$ref": "#/$defs/x" },
+                "e": { "enum": [{ "$id": "https://example.com/data" }], "$ref": "#/$defs/x" }
+            }
+        });
+        assert_eq!(at(&s, &["$id"]), typed(&[JsonType::String]));
+        assert_eq!(
+            at(&s, &["e"]),
+            PathResolution::Declared(PathFacts {
+                types: types(&[JsonType::String]),
+                values: Some(vec![json!({ "$id": "https://example.com/data" })]),
+                items: None,
+            })
         );
     }
 

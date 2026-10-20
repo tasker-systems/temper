@@ -34,7 +34,7 @@ pub use reference::matches;
 pub use validate::{
     validate_ask, validate_ask_form, RefusalTeaching, TeachingElision, ValidatedAsk,
     MAX_ARTIFACT_PATH_DEPTH, MAX_ARTIFACT_PATH_SEGMENT_BYTES, MAX_ASK_PREDICATES, MAX_ASK_PROBES,
-    MAX_TEACHING_BYTES,
+    MAX_MEMBERSHIP_STEPS, MAX_TEACHING_BYTES,
 };
 pub use walk::{
     enumerate, resolve, AskOperator, AskablePath, BoundKind, JsonType, PathFacts, PathResolution,
@@ -60,11 +60,11 @@ pub const ASKABLE_SHAPE_STATES: [&str; 3] = [
 
 /// One ask: a governing shape, and what the asker holds about artifacts it governs (§2.1).
 ///
-/// `intent` and `shape_states` are **strings**, validated by [`validate_ask`] into
+/// `intent` and `shape_states` are **strings**, validated by `validate_ask` into
 /// `unknown_artifact_intent` / `unknown_shape_state` with `teaches` naming the vocabulary — never
 /// serde enums, whose unknown-variant failure would land before validation, in the deserializer's
 /// words, and outside the every-refusal-at-once body. Empty means the default, applied by the
-/// validator: [`DEFAULT_ARTIFACT_INTENTS`] and [`ASKABLE_SHAPE_STATES`].
+/// validator: `current` and `member`, and every askable state.
 ///
 /// **Strict**, like `ActInvocation`: an unknown field is a deserialization error, never a field
 /// that silently narrows nothing.
@@ -95,7 +95,7 @@ pub struct ArtifactAsk {
 }
 
 /// One predicate: a path of object-key segments into the content, and an operator from the closed
-/// [`PropertyOp`] set — reused, not copied (§3.2). There is no `eq`, regex, prefix or text-search
+/// `PropertyOp` set — reused, not copied (§3.2). There is no `eq`, regex, prefix or text-search
 /// operator, so a resemblance-shaped question has no way to be written down.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]

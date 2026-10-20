@@ -20,7 +20,7 @@ from typing_extensions import Self
 
 class AskOperator(str, Enum):
     """
-    The name of a [`PropertyOp`](crate::types::query::PropertyOp) operator, for a vocabulary to list. Not a second operator type: it carries no value, and binds nothing.
+    The name of a `PropertyOp` operator, for a vocabulary to list. Not a second operator type: it carries no value, and binds nothing.
     """
 
     """

@@ -36,7 +36,7 @@ class RefusalTeaching(BaseModel):
     non_closure: Optional[StrictStr] = Field(default=None, description="That stored content is not closed by its shape, and the route to values it does not declare (spec §3.4).")
     successor: Optional[ShapeSuccessor] = Field(default=None, description="The version now in force, for a folded shape that has one.")
     terms: Optional[List[StrictStr]] = Field(default=None, description="A closed vocabulary of terms: the intents, or the askable shape states.")
-    vocabulary: Optional[Vocabulary] = Field(default=None, description="The shape's askable paths — the same structure as a shape's `askable` — narrowed to what the refusal is about, and held to [`MAX_TEACHING_BYTES`].")
+    vocabulary: Optional[Vocabulary] = Field(default=None, description="The shape's askable paths — the same structure as a shape's `askable` — narrowed to what the refusal is about, and held to a bounded size.")
     __properties: ClassVar[List[str]] = ["beyond_bound", "elided", "non_closure", "successor", "terms", "vocabulary"]
 
     model_config = ConfigDict(

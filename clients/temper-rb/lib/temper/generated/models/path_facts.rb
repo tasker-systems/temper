@@ -16,7 +16,7 @@ require 'time'
 module Temper::Generated
   # What the schema declares at one path. Each field is `None` when the schema leaves it unconstrained, so an absent field never reads as \"nothing is admitted\".
   class PathFacts < ApiModelBase
-    # What an element of an array at this path declares. `None`: elements are unconstrained. Nested at most [`MAX_WALK_DEPTH`] arrays deep.
+    # What an element of an array at this path declares. `None`: elements are unconstrained. Reported at most as many arrays deep as the walk's depth bound.
     attr_accessor :items
 
     # The declared JSON types. `None`: no `type` constrains the path. An empty set: the branches that apply here declare types with nothing in common, so no value is admissible.

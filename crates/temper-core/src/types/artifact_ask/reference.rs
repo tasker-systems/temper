@@ -88,30 +88,82 @@ fn get<'v>(content: &'v Value, path: &[String]) -> Option<&'v Value> {
         .try_fold(content, |at, segment| at.as_object()?.get(segment))
 }
 
-/// `stored @> probe`, with the top-level exception: an array contains a primitive. What a `contains`
-/// predicate asks of content, and what an enum member must do for a container value to be one it
-/// could match.
-pub(super) fn jsonb_contains(stored: &Value, probe: &Value) -> bool {
+/// `stored @> probe`, as `matches` evaluates a `contains` predicate over content.
+fn jsonb_contains(stored: &Value, probe: &Value) -> bool {
+    // `usize::MAX` steps cannot run out: each step is one node of a value already held in memory.
+    let mut unbounded = usize::MAX;
+    jsonb_contains_within(stored, probe, &mut unbounded).unwrap_or(false)
+}
+
+/// `stored @> probe`, with the top-level exception — an array contains a primitive — spending one
+/// step per node compared. `None` when the steps run out before it can say.
+///
+/// One definition for both callers: the evaluator above, unbounded, and the validator's enum
+/// membership, which holds a caller's probes to a budget.
+pub(super) fn jsonb_contains_within(
+    stored: &Value,
+    probe: &Value,
+    steps: &mut usize,
+) -> Option<bool> {
     match (stored, probe) {
-        (Value::Array(elements), p) if !is_container(p) => elements.iter().any(|e| scalar_eq(e, p)),
-        _ => deep_contains(stored, probe),
+        (Value::Array(elements), p) if !is_container(p) => {
+            for element in elements {
+                take(steps)?;
+                if scalar_eq(element, p) {
+                    return Some(true);
+                }
+            }
+            Some(false)
+        }
+        _ => nested_contains_within(stored, probe, steps),
     }
 }
 
-/// jsonb's containment below the top level: an object contains an object whose every key it has
-/// with a contained value; an array contains an array each of whose elements some element of it
-/// contains; a scalar contains only an equal scalar; and nothing else contains anything.
-fn deep_contains(stored: &Value, probe: &Value) -> bool {
-    match (stored, probe) {
-        (Value::Object(s), Value::Object(p)) => p
-            .iter()
-            .all(|(key, pv)| s.get(key).is_some_and(|sv| deep_contains(sv, pv))),
+/// jsonb's containment below the top level, where the primitive exception does not apply: an
+/// object contains an object whose every key it has with a contained value; an array contains an
+/// array each of whose elements some element of it contains; a scalar contains only an equal
+/// scalar; and nothing else contains anything. One step per node compared.
+pub(super) fn nested_contains_within(
+    stored: &Value,
+    probe: &Value,
+    steps: &mut usize,
+) -> Option<bool> {
+    take(steps)?;
+    Some(match (stored, probe) {
+        (Value::Object(s), Value::Object(p)) => {
+            for (key, pv) in p {
+                let Some(sv) = s.get(key) else {
+                    return Some(false);
+                };
+                if !nested_contains_within(sv, pv, steps)? {
+                    return Some(false);
+                }
+            }
+            true
+        }
         (Value::Array(s), Value::Array(p)) => {
-            p.iter().all(|pe| s.iter().any(|se| deep_contains(se, pe)))
+            for pe in p {
+                let mut held = false;
+                for se in s {
+                    if nested_contains_within(se, pe, steps)? {
+                        held = true;
+                        break;
+                    }
+                }
+                if !held {
+                    return Some(false);
+                }
+            }
+            true
         }
         (s, p) if is_container(s) || is_container(p) => false,
         (s, p) => scalar_eq(s, p),
-    }
+    })
+}
+
+fn take(steps: &mut usize) -> Option<()> {
+    *steps = steps.checked_sub(1)?;
+    Some(())
 }
 
 fn is_container(value: &Value) -> bool {
@@ -129,20 +181,59 @@ fn scalar_eq(a: &Value, b: &Value) -> bool {
     }
 }
 
-/// jsonb equality of two whole values: what an `enum` member is, and what the walk intersects and
-/// unions value sets by. `5` equals `5.0`; object keys are unordered; array order matters.
-pub(super) fn jsonb_eq(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Array(x), Value::Array(y)) => {
-            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| jsonb_eq(p, q))
+/// A text equal for two values exactly when they are jsonb-equal: `5` and `5.0` alike, object keys
+/// in byte order, array order kept. The walk keys `enum` members by it, so value sets intersect and
+/// union in linear time.
+pub(super) fn canonical(value: &Value) -> String {
+    let mut out = String::new();
+    write_canonical(value, &mut out);
+    out
+}
+
+fn write_canonical(value: &Value, out: &mut String) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::Number(n) => Decimal::parse(&n.to_string()).write(out),
+        Value::String(s) => write_string(s, out),
+        Value::Array(elements) => {
+            out.push('[');
+            for (i, element) in elements.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_canonical(element, out);
+            }
+            out.push(']');
         }
-        (Value::Object(x), Value::Object(y)) => {
-            x.len() == y.len()
-                && x.iter()
-                    .all(|(k, v)| y.get(k).is_some_and(|w| jsonb_eq(v, w)))
+        Value::Object(members) => {
+            let mut keys: Vec<&String> = members.keys().collect();
+            keys.sort();
+            out.push('{');
+            for (i, key) in keys.into_iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_string(key, out);
+                out.push(':');
+                write_canonical(&members[key], out);
+            }
+            out.push('}');
         }
-        _ => scalar_eq(a, b),
     }
+}
+
+/// A string quoted, with the quote and the escape character escaped — enough that the text ends
+/// where the string does, so distinct strings stay distinct.
+fn write_string(s: &str, out: &mut String) {
+    out.push('"');
+    for c in s.chars() {
+        if matches!(c, '"' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('"');
 }
 
 /// `jsonb_typeof`'s classes, in jsonb's btree order:
@@ -264,6 +355,20 @@ impl Decimal {
             digits,
             exponent,
         }
+    }
+
+    /// The decimal's one spelling: `0`, or `-?digits e exponent`.
+    fn write(&self, out: &mut String) {
+        if self.digits.is_empty() {
+            out.push('0');
+            return;
+        }
+        if self.negative {
+            out.push('-');
+        }
+        out.extend(self.digits.iter().map(|d| char::from(b'0' + d)));
+        out.push('e');
+        out.push_str(&self.exponent.to_string());
     }
 
     /// The power of ten of the most significant digit, plus one — the magnitude's order.
@@ -603,12 +708,37 @@ mod tests {
     }
 
     #[test]
-    fn jsonb_equality_ignores_key_order_and_number_spelling() {
-        assert!(jsonb_eq(
-            &json!({ "a": 1, "b": [2.0] }),
-            &json!({ "b": [2], "a": 1.0 })
+    fn canonical_text_is_equal_exactly_for_jsonb_equal_values() {
+        let same = |a: Value, b: Value| canonical(&a) == canonical(&b);
+        assert!(same(
+            json!({ "a": 1, "b": [2.0] }),
+            json!({ "b": [2], "a": 1.0 })
         ));
-        assert!(!jsonb_eq(&json!([1, 2]), &json!([2, 1])));
-        assert!(!jsonb_eq(&json!("1"), &json!(1)));
+        assert!(same(json!(-0.0), json!(0)));
+        assert!(same(json!(50), json!(5e1)));
+        assert!(!same(json!([1, 2]), json!([2, 1])));
+        assert!(!same(json!("1"), json!(1)));
+        assert!(!same(json!(null), json!("null")));
+        // The quote and the escape are escaped, so a string cannot pose as two.
+        assert!(!same(json!(["a\",\"b"]), json!(["a", "b"])));
+        assert!(!same(json!({ "a\":1,\"b": 2 }), json!({ "a": 1, "b": 2 })));
+    }
+
+    #[test]
+    fn counted_containment_stops_when_its_steps_run_out() {
+        let stored = json!([1, 2, 3, 4]);
+        let mut plenty = 100;
+        assert_eq!(
+            jsonb_contains_within(&stored, &json!(4), &mut plenty),
+            Some(true)
+        );
+        let mut few = 2;
+        assert_eq!(jsonb_contains_within(&stored, &json!(4), &mut few), None);
+        // Below the top level an array never contains a primitive.
+        let mut steps = 100;
+        assert_eq!(
+            nested_contains_within(&stored, &json!(4), &mut steps),
+            Some(false)
+        );
     }
 }

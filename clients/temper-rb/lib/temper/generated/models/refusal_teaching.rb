@@ -31,7 +31,7 @@ module Temper::Generated
     # A closed vocabulary of terms: the intents, or the askable shape states.
     attr_accessor :terms
 
-    # The shape's askable paths — the same structure as a shape's `askable` — narrowed to what the refusal is about, and held to [`MAX_TEACHING_BYTES`].
+    # The shape's askable paths — the same structure as a shape's `askable` — narrowed to what the refusal is about, and held to a bounded size.
     attr_accessor :vocabulary
 
     class EnumAttributeValidator

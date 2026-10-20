@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::reference::{is_integral, jsonb_contains, jsonb_eq};
+use super::reference::{is_integral, jsonb_contains_within, nested_contains_within};
 use super::walk::{
     AskablePath, BoundKind, JsonType, PathFacts, PathResolution, Vocabulary, Walk, WalkBounds,
     MAX_SCHEMA_BYTES, MAX_WALK_DEPTH, MAX_WALK_PATHS, MAX_WALK_VISITS,
@@ -82,6 +82,19 @@ pub const MAX_ARTIFACT_PATH_SEGMENT_BYTES: usize = MAX_FILTER_STRING_BYTES;
 /// the shape of a real vocabulary; a pathological one is cut, visibly.
 pub const MAX_TEACHING_BYTES: usize = 16 * 1024;
 
+/// The most containment steps one ask may spend checking its `contains` values against the enums
+/// the shape declares — one step per node compared. Past it the predicate is refused
+/// `path_outside_shape` with `teaches.beyond_bound: work`, never admitted unchecked.
+///
+/// # 1,048,576
+///
+/// Membership is a containment test against every member, so its cost is the product of the
+/// probes and the members. A real ask names a few values against an enum of tens or thousands; a
+/// five-thousand-member enum checked against two hundred probes fits. The worst an ask can bring —
+/// [`MAX_ASK_PROBES`] probes of [`MAX_PROPERTY_VALUE_NODES`] nodes against the most a walk can
+/// carry — stops here after milliseconds rather than running for seconds.
+pub const MAX_MEMBERSHIP_STEPS: usize = 1 << 20;
+
 /// What a refusal teaches, as data an agent reads without parsing English (spec §3.5).
 ///
 /// **Open, by being a struct of optional fields** rather than a tagged enum: a later refusal that
@@ -102,7 +115,7 @@ pub const MAX_TEACHING_BYTES: usize = 16 * 1024;
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct RefusalTeaching {
     /// The shape's askable paths — the same structure as a shape's `askable` — narrowed to what the
-    /// refusal is about, and held to [`MAX_TEACHING_BYTES`].
+    /// refusal is about, and held to a bounded size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vocabulary: Option<Vocabulary>,
     /// The walk bound an asked path lies beyond.
@@ -521,10 +534,12 @@ fn well_formed(predicates: &[ArtifactPredicate], errs: &mut Vec<PlanRefusal>) ->
         .collect()
 }
 
-/// Why a declared path refuses a predicate (§3.4, the "Refused as" column).
+/// Why a declared path refuses a predicate (§3.4, the "Refused as" column), or that checking it
+/// ran out of membership steps first.
 enum Fault {
     Operator,
     Value,
+    Work,
 }
 
 /// The well-formed predicates checked against the shape, one walk per path: bound, or refused.
@@ -580,6 +595,7 @@ fn sort(
     walk: &Result<Walk<'_>, BoundKind>,
 ) -> Sorted {
     let mut sorted = Sorted::default();
+    let mut steps = MAX_MEMBERSHIP_STEPS;
     for (i, predicate) in predicates.iter().enumerate() {
         if !formed[i] {
             continue;
@@ -601,13 +617,17 @@ fn sort(
             }
         };
         let described = || AskablePath::new(predicate.path.clone(), facts.clone());
-        match bind(&predicate.op, &facts) {
+        match bind(&predicate.op, &facts, &mut steps) {
             Ok(op) => sorted.bound.push(ArtifactPredicate {
                 path: predicate.path.clone(),
                 op,
             }),
             Err(Fault::Operator) => sorted.outside_operator.push((i, described())),
             Err(Fault::Value) => sorted.outside_value.push((i, described())),
+            Err(Fault::Work) => {
+                sorted.outside_path.push(i);
+                sorted.beyond.get_or_insert(BoundKind::Work);
+            }
         }
     }
     sorted
@@ -673,7 +693,10 @@ fn bound_said(at: BoundKind) -> String {
         BoundKind::SchemaBytes => {
             format!("the walk reads a schema of at most {MAX_SCHEMA_BYTES} bytes")
         }
-        BoundKind::Work => format!("the walk makes at most {MAX_WALK_VISITS} visits"),
+        BoundKind::Work => format!(
+            "the shape is read within a bounded amount of work — at most {MAX_WALK_VISITS} \
+             visits and {MAX_MEMBERSHIP_STEPS} membership steps"
+        ),
     }
 }
 
@@ -709,14 +732,14 @@ fn teaching(vocabulary: Vocabulary, shape: ShapeId) -> RefusalTeaching {
 // ── §3.4, the feasibility table ─────────────────────────────────────────────────────────────────
 
 /// The operator as the SQL binds it, or why the declared path refuses it.
-fn bind(op: &PropertyOp, facts: &PathFacts) -> Result<PropertyOp, Fault> {
+fn bind(op: &PropertyOp, facts: &PathFacts, steps: &mut usize) -> Result<PropertyOp, Fault> {
     match op {
         PropertyOp::HasKey => Ok(PropertyOp::HasKey),
         // Every `contains` refusal is the value's (§3.4: the contains rows refuse
         // `value_outside_shape`), including at a path whose branches declare no common type.
         PropertyOp::Contains { values } => values
             .iter()
-            .map(|v| bind_contains(facts, v).ok_or(Fault::Value))
+            .map(|v| bind_contains(facts, v, steps))
             .collect::<Result<Vec<_>, _>>()
             .map(|values| PropertyOp::Contains { values }),
         PropertyOp::Compare { value, .. } if compare_admits(facts, value) => Ok(op.clone()),
@@ -725,21 +748,27 @@ fn bind(op: &PropertyOp, facts: &PathFacts) -> Result<PropertyOp, Fault> {
 }
 
 /// The `contains` rows. A value whose own type the path declares is bound as it is — the scalar
-/// row or the object row, each then held to the path's enum. Otherwise, at a path declaring
-/// `array`, the value is an **element**: admissible under `items` and bound wrapped as `[v]`. An
-/// untyped path binds every value unwrapped, with the incumbent `PropertyOp` semantics, and is
-/// still held to its enum.
-fn bind_contains(facts: &PathFacts, value: &Value) -> Option<Value> {
-    let Some(types) = &facts.types else {
-        return member(facts.values.as_deref(), value).then(|| value.clone());
+/// row or the object row. Otherwise, at a path declaring `array`, the value is an **element**:
+/// admissible under `items` and bound wrapped as `[v]`. An untyped path binds every value
+/// unwrapped, with the incumbent `PropertyOp` semantics. Whatever is bound is then held to the
+/// path's enum.
+fn bind_contains(facts: &PathFacts, value: &Value, steps: &mut usize) -> Result<Value, Fault> {
+    let bound = match &facts.types {
+        None => value.clone(),
+        Some(types) if !value.is_array() && admits_type(types, value) => value.clone(),
+        Some(types) if types.contains(&JsonType::Array) => {
+            if !element_admitted(facts.items.as_deref(), value, steps)? {
+                return Err(Fault::Value);
+            }
+            Value::Array(vec![value.clone()])
+        }
+        Some(_) => return Err(Fault::Value),
     };
-    if !value.is_array() && admits_type(types, value) {
-        return member(facts.values.as_deref(), value).then(|| value.clone());
+    if member(facts.values.as_deref(), &bound, steps)? {
+        Ok(bound)
+    } else {
+        Err(Fault::Value)
     }
-    if types.contains(&JsonType::Array) && element_admitted(facts.items.as_deref(), value) {
-        return Some(Value::Array(vec![value.clone()]));
-    }
-    None
 }
 
 /// Whether a value's JSON type is among the declared ones. A number is an `integer` only when it is
@@ -755,26 +784,46 @@ fn admits_type(types: &BTreeSet<JsonType>, value: &Value) -> bool {
 }
 
 /// Whether a value may be an element of the array: its type admissible under `items` and, under an
-/// `items` enum, a member.
-fn element_admitted(items: Option<&PathFacts>, value: &Value) -> bool {
+/// `items` enum, contained by a member as an element is — below the top level, so an array member
+/// never holds a primitive.
+fn element_admitted(
+    items: Option<&PathFacts>,
+    value: &Value,
+    steps: &mut usize,
+) -> Result<bool, Fault> {
     let Some(items) = items else {
-        return true;
+        return Ok(true);
     };
-    items.types.as_ref().is_none_or(|t| admits_type(t, value))
-        && member(items.values.as_deref(), value)
+    if !items.types.as_ref().is_none_or(|t| admits_type(t, value)) {
+        return Ok(false);
+    }
+    within_enum(items.values.as_deref(), |m| {
+        nested_contains_within(m, value, steps)
+    })
 }
 
-/// Whether a value can match under an enum. A scalar must equal a member (jsonb equality, so `5` is
-/// `5.0`). A container probe matches by containment, which is partial, so it must be contained by
-/// some member — a member of the same kind holding it; otherwise no conforming value contains it.
-fn member(values: Option<&[Value]>, value: &Value) -> bool {
-    values.is_none_or(|members| {
-        if value.is_array() || value.is_object() {
-            members.iter().any(|m| jsonb_contains(m, value))
-        } else {
-            members.iter().any(|m| jsonb_eq(m, value))
+/// Whether a bound value can match conforming content under the path's enum: some member, as stored
+/// content, contains it — jsonb's `@>` at the top level, so a scalar must equal a member or be an
+/// element of an array member, and a container must be held by a member of its own kind.
+fn member(values: Option<&[Value]>, bound: &Value, steps: &mut usize) -> Result<bool, Fault> {
+    within_enum(values, |m| jsonb_contains_within(m, bound, steps))
+}
+
+/// Whether some member passes a containment test, or `Ok(true)` with no enum. The tests spend
+/// membership steps; running out is [`Fault::Work`].
+fn within_enum(
+    values: Option<&[Value]>,
+    mut holds: impl FnMut(&Value) -> Option<bool>,
+) -> Result<bool, Fault> {
+    let Some(members) = values else {
+        return Ok(true);
+    };
+    for m in members {
+        if holds(m).ok_or(Fault::Work)? {
+            return Ok(true);
         }
-    })
+    }
+    Ok(false)
 }
 
 /// The `compare` row: a number where `number` or `integer` is declared (a non-integral bound at an
@@ -936,8 +985,13 @@ mod tests {
                   contains: [A, A, A, A, A, A, A], compare: [A, A, A, A, A, A, A] },
             Row { declared: json!({ "enum": ["z", 7] }), has_key: A,
                   contains: [V, V, V, V, V, V, V], compare: [A, A, A, A, A, A, A] },
+            // `"a"` matches stored `["a","b"]` by jsonb's top-level exception, so it is admitted
             Row { declared: json!({ "enum": [{ "k": 1 }, ["a", "b"]] }), has_key: A,
-                  contains: [V, V, V, V, V, A, A], compare: [A, A, A, A, A, A, A] },
+                  contains: [A, V, V, V, V, A, A], compare: [A, A, A, A, A, A, A] },
+            // a string-or-array path whose one member is an array: a string the member holds is
+            // admitted as written; anything else becomes an element `[v]` the member must hold
+            Row { declared: json!({ "type": ["string", "array"], "enum": [["a", "b"]] }), has_key: A,
+                  contains: [A, V, V, V, V, V, V], compare: [A, O, O, O, O, O, O] },
         ]
     }
 
@@ -1048,6 +1102,30 @@ mod tests {
                 "no {reason:?} row fails the stand-in"
             );
         }
+    }
+
+    #[test]
+    fn membership_against_a_large_enum_stops_at_its_step_budget() {
+        // Bites the step budget: with it removed, every probe here is admitted and the ask
+        // validates. Catches the regression where enum membership ran every probe against every
+        // member unbounded (round-3 review N1).
+        //
+        // The probes are members, matched late. A probe outside the enum refuses the whole
+        // `contains` at the first miss, so misses cost one probe's scan; the expensive ask is one
+        // whose every probe is admissible. Each probe `v` here costs `v + 1` steps (one per member
+        // compared, in order), so the 256 probes 4,744..=4,999 cost 1,247,360 — past the budget.
+        let members: Vec<Value> = (0..5_000).map(|i| json!(i)).collect();
+        let shape = shape_of(json!({ "properties": { "n": { "enum": members } } }));
+        let late: Vec<Value> = (5_000 - MAX_ASK_PROBES..5_000).map(|i| json!(i)).collect();
+        let rs = refusals(&ask(vec![at(&["n"], contains(late))]), &shape);
+        assert_eq!(reasons(&rs), vec![RefusalReason::PathOutsideShape]);
+        assert_eq!(
+            rs[0].teaches.as_ref().and_then(|t| t.beyond_bound),
+            Some(BoundKind::Work)
+        );
+        // A handful of probes against the same enum is checked in full.
+        let few = ask(vec![at(&["n"], contains(vec![json!(4_999), json!(7)]))]);
+        assert!(validate_ask(&few, &shape).is_ok());
     }
 
     #[test]

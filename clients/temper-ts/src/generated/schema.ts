@@ -4057,7 +4057,7 @@ export interface components {
             shape_state: string;
         };
         /**
-         * @description The name of a [`PropertyOp`](crate::types::query::PropertyOp) operator, for a vocabulary to
+         * @description The name of a `PropertyOp` operator, for a vocabulary to
          *     list. Not a second operator type: it carries no value, and binds nothing.
          * @enum {string}
          */

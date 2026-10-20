@@ -6,11 +6,11 @@ import type { ShapeId } from "./ShapeId";
 /**
  * One ask: a governing shape, and what the asker holds about artifacts it governs (§2.1).
  *
- * `intent` and `shape_states` are **strings**, validated by [`validate_ask`] into
+ * `intent` and `shape_states` are **strings**, validated by `validate_ask` into
  * `unknown_artifact_intent` / `unknown_shape_state` with `teaches` naming the vocabulary — never
  * serde enums, whose unknown-variant failure would land before validation, in the deserializer's
  * words, and outside the every-refusal-at-once body. Empty means the default, applied by the
- * validator: [`DEFAULT_ARTIFACT_INTENTS`] and [`ASKABLE_SHAPE_STATES`].
+ * validator: `current` and `member`, and every askable state.
  *
  * **Strict**, like `ActInvocation`: an unknown field is a deserialization error, never a field
  * that silently narrows nothing.
@@ -41,7 +41,7 @@ shape_states: Array<string>, };
 
 /**
  * One predicate: a path of object-key segments into the content, and an operator from the closed
- * [`PropertyOp`] set — reused, not copied (§3.2). There is no `eq`, regex, prefix or text-search
+ * `PropertyOp` set — reused, not copied (§3.2). There is no `eq`, regex, prefix or text-search
  * operator, so a resemblance-shaped question has no way to be written down.
  */
 export type ArtifactPredicate = { 
@@ -52,7 +52,7 @@ export type ArtifactPredicate = {
 path: Array<string>, op: PropertyOp, };
 
 /**
- * The name of a [`PropertyOp`](crate::types::query::PropertyOp) operator, for a vocabulary to
+ * The name of a `PropertyOp` operator, for a vocabulary to
  * list. Not a second operator type: it carries no value, and binds nothing.
  */
 export type AskOperator = "has_key" | "contains" | "compare";
@@ -90,7 +90,7 @@ types: Array<JsonType> | null,
 values: Array<JsonValue> | null, 
 /**
  * What an element of an array at this path declares. `None`: elements are unconstrained.
- * Nested at most [`MAX_WALK_DEPTH`] arrays deep.
+ * Reported at most as many arrays deep as the walk's depth bound.
  */
 items: PathFacts | null, };
 
@@ -112,7 +112,7 @@ items: PathFacts | null, };
 export type RefusalTeaching = { 
 /**
  * The shape's askable paths — the same structure as a shape's `askable` — narrowed to what the
- * refusal is about, and held to [`MAX_TEACHING_BYTES`].
+ * refusal is about, and held to a bounded size.
  */
 vocabulary: Vocabulary | null, 
 /**

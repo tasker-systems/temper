@@ -16272,7 +16272,7 @@
       },
       "AskOperator": {
         "type": "string",
-        "description": "The name of a [`PropertyOp`](crate::types::query::PropertyOp) operator, for a vocabulary to\nlist. Not a second operator type: it carries no value, and binds nothing.",
+        "description": "The name of a `PropertyOp` operator, for a vocabulary to\nlist. Not a second operator type: it carries no value, and binds nothing.",
         "enum": [
           "has_key",
           "contains",
@@ -22394,7 +22394,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/PathFacts",
-                "description": "What an element of an array at this path declares. `None`: elements are unconstrained.\nNested at most [`MAX_WALK_DEPTH`] arrays deep."
+                "description": "What an element of an array at this path declares. `None`: elements are unconstrained.\nReported at most as many arrays deep as the walk's depth bound."
               },
               {
                 "type": "null"
@@ -24320,7 +24320,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Vocabulary",
-                "description": "The shape's askable paths — the same structure as a shape's `askable` — narrowed to what the\nrefusal is about, and held to [`MAX_TEACHING_BYTES`]."
+                "description": "The shape's askable paths — the same structure as a shape's `askable` — narrowed to what the\nrefusal is about, and held to a bounded size."
               },
               {
                 "type": "null"
