@@ -14,9 +14,12 @@
 //!
 //! The rest are controls or property pins, not bites. Local `#/$defs` refs still compile and an
 //! unknown `$schema` is refused, pinning that the refusing retriever did not narrow what compiles.
-//! Several witnesses pin that a custom `$schema` is refused wherever the compiler would descend to
-//! it, including when the schema defines it for itself, which `jsonschema` alone would compile
-//! under a guessed draft; one control pins that a `$schema` key inside a `const` is data.
+//! Several witnesses pin that a custom `$schema` string is refused wherever it sits in the
+//! document, including when the schema defines it for itself (which `jsonschema` alone would
+//! compile under a guessed draft) and wherever a reference of any spelling could make it a schema.
+//! One pins the accepted cost: a custom `$schema` inside a `const` value is refused too. Controls
+//! pin that a standard `$schema` inside a `const`, a property named `$schema` and a recursive
+//! `$ref` still compile.
 //!
 //! These are plain `#[test]`s on purpose: the blocking fetch a default compile makes panics inside
 //! a tokio runtime instead of connecting, so the async suites' zero-connection assertions are not
@@ -364,8 +367,8 @@ fn escaped_pointer_refs_are_followed() {
     }
 }
 
-/// Control: a recursive schema (a `$ref` cycle through `$defs`) compiles, so the walk terminates
-/// on cycles and a legitimate pointer reference is not refused.
+/// Control: a recursive schema (a `$ref` cycle through `$defs`) compiles and applies its `$ref`, so
+/// a legitimate self-referencing schema is not refused.
 #[test]
 fn a_recursive_pointer_ref_schema_still_compiles() {
     let schema = json!({
@@ -384,22 +387,113 @@ fn a_recursive_pointer_ref_schema_still_compiles() {
     assert!(!validator.is_valid(&json!({ "next": 1 })));
 }
 
-/// Control: a `$schema` key inside a `const` is data, not a meta-schema declaration. The walk
-/// reads subschema positions only, so this schema compiles and its `const` is enforced.
+/// A reference written relative to the document root (`/#/x-custom`) names the same document, so
+/// its target is compiled as a schema.
 #[test]
-fn a_schema_key_inside_a_const_value_is_data_and_still_compiles() {
+fn a_custom_schema_uri_under_a_root_relative_ref_is_refused() {
+    let schema = json!({
+        "$ref": "/#/x-custom",
+        "x-custom": { "$schema": "urn:custom", "type": "string" },
+    });
+
+    assert!(
+        compile(&schema).is_err(),
+        "a custom $schema on a /#/ reference target must not compile"
+    );
+}
+
+/// The root's default base URI (`json-schema:///`) spelled out names the same document too.
+#[test]
+fn a_custom_schema_uri_under_the_default_base_uri_ref_is_refused() {
+    let schema = json!({
+        "$ref": "json-schema:///#/x-custom",
+        "x-custom": { "$schema": "urn:custom", "type": "string" },
+    });
+
+    assert!(
+        compile(&schema).is_err(),
+        "a custom $schema on a json-schema:/// reference target must not compile"
+    );
+}
+
+/// A reference through a resource's own `$id` (`urn:r#/x-custom`), whether the root or an
+/// embedded subschema carries that `$id`.
+#[test]
+fn a_custom_schema_uri_under_an_id_qualified_ref_is_refused() {
+    let schemas = [
+        json!({
+            "$id": "urn:r",
+            "$ref": "urn:r#/x-custom",
+            "x-custom": { "$schema": "urn:custom", "type": "string" },
+        }),
+        json!({
+            "$ref": "urn:r#/x-custom",
+            "$defs": {
+                "r": {
+                    "$id": "urn:r",
+                    "x-custom": { "$schema": "urn:custom", "type": "string" },
+                },
+            },
+        }),
+    ];
+    for schema in schemas {
+        assert!(
+            compile(&schema).is_err(),
+            "a custom $schema on an $id-qualified reference target must not compile: {schema}"
+        );
+    }
+}
+
+/// `referencing` parses an array index in a pointer with `str::parse::<usize>`, so `01` and `+1`
+/// name element 1, although `serde_json::Value::pointer` rejects both spellings.
+#[test]
+fn a_custom_schema_uri_under_a_loosely_spelled_array_index_is_refused() {
+    for reference in ["#/x-custom/01", "#/x-custom/+1"] {
+        let schema = json!({
+            "$ref": reference,
+            "x-custom": [{}, { "$schema": "urn:custom", "type": "string" }],
+        });
+        assert!(
+            compile(&schema).is_err(),
+            "{reference} must not reach a custom $schema"
+        );
+    }
+}
+
+/// The accepted cost of the document-wide rule: a custom `$schema` string inside a `const` value
+/// is refused too, although `const` holds data. Position cannot tell data from schema, because a
+/// reference can make any position a schema, so the rule fails closed with the same fixed error.
+#[test]
+fn a_custom_schema_uri_inside_a_const_value_is_refused_too() {
     let schema = json!({
         "$schema": DRAFT_2020_12,
         "const": { "$schema": "urn:x", "kind": "example" },
     });
 
-    let validator = compile(&schema).expect("a const holding a $schema key compiles");
-    assert!(validator.is_valid(&json!({ "$schema": "urn:x", "kind": "example" })));
+    assert_eq!(
+        compile(&schema).err(),
+        Some(ShapeSchemaUncompilable),
+        "a custom $schema inside a const is refused with the fixed error"
+    );
+}
+
+/// Control: a `const` holding a STANDARD-draft `$schema` string compiles, and the `const` is
+/// enforced. The rule refuses only `$schema` strings no standard draft answers to.
+#[test]
+fn a_standard_schema_uri_inside_a_const_value_still_compiles() {
+    let schema = json!({
+        "$schema": DRAFT_2020_12,
+        "const": { "$schema": DRAFT_2020_12, "kind": "example" },
+    });
+
+    let validator = compile(&schema).expect("a const holding a standard $schema compiles");
+    assert!(validator.is_valid(&json!({ "$schema": DRAFT_2020_12, "kind": "example" })));
     assert!(!validator.is_valid(&json!({ "kind": "other" })));
 }
 
-/// Control: a property merely NAMED `$schema` is data, not a meta-schema declaration, and a
-/// standard `$schema` inside a subschema is fine. The walk visits subschemas only.
+/// Control: a property merely NAMED `$schema` is not a meta-schema declaration, because the value
+/// under that key in `properties` is an object, not a string; and a standard `$schema` inside a
+/// subschema is fine.
 #[test]
 fn a_property_named_schema_is_not_mistaken_for_a_meta_schema_declaration() {
     let schema = json!({

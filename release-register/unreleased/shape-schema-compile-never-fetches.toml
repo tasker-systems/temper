@@ -8,8 +8,9 @@ Hardening. Before this change a remote `$ref` in a stored shape could panic the 
 commit (the compiler's blocking fetch runs inside the async runtime). Every server-side compile of
 a data-artifact shape's JSON Schema (commit, reconcile and declare) now goes through one
 constructor that never fetches: a `$ref` or `$schema` naming an http(s) or `file:` URI is refused
-rather than followed, a `$schema` outside the five standard drafts is refused even when the schema
-defines it itself, and no refusal carries remote or file content. Declaring a shape (`POST /api/contexts/{id}/shapes`, `POST /api/cognitive-maps/{id}/shapes`,
+rather than followed, a `$schema` string outside the five standard drafts is refused wherever it
+appears in the document (even when the schema defines it itself, and even inside a `const` or `enum`
+value), and no refusal carries remote or file content. Declaring a shape (`POST /api/contexts/{id}/shapes`, `POST /api/cognitive-maps/{id}/shapes`,
 the MCP `declare_data_artifact_shape` tool and `temper data-artifact schema declare`) now compiles
 the schema after the home's write gate and before any write; one that cannot compile is refused with
 the existing data-artifact refusal (`400`, code `DATA_ARTIFACT_REFUSAL`, MCP `invalid_params`)
